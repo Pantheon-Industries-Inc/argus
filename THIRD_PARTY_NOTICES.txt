@@ -1,0 +1,33 @@
+Third-party material in robot-data-audit
+
+The repository is licensed under Apache-2.0 (LICENSE). The files listed here contain material that keeps its own
+license. Everything else the pipeline uses (the datasets, the ACE-Ego-Hand code and checkpoints, Wan2.2-Fun-5B-Control,
+VideoX-Fun, smplx, MANO and the Python packages) is downloaded when you run it, is not included here, and is listed with
+its license in the README under Licenses.
+
+label/fonts/DejaVuSans-Bold.ttf
+    DejaVu Sans Bold, version 2.37, unmodified. Bitstream Vera Fonts Copyright (c) 2003 by Bitstream, Inc., Arev Fonts
+    Copyright (c) 2006 by Tavmjong Bah; DejaVu changes are in the public domain. The license is in
+    label/fonts/LICENSE-DejaVu.txt.
+
+checks/vendor/public_dataset_adapter_qc.py
+    Written by Sambhav Gupta at Pantheon for public-dataset-adapter (commit 99d0a9e) and released here under
+    Apache-2.0. The file's header lists every change made to the original.
+
+configs/examples/example_ego_head.json
+    Pantheon's annotation of the Open-AoE clip raw_334438_seg_1. Source attribution as the Open-AoE Dataset License
+    asks, Open-AoE / OpenAoE-2000h (dataset inclusionAI/OpenAoE-2000h,
+    https://huggingface.co/datasets/inclusionAI/OpenAoE-2000h; paper "Open-AoE: An Open Egocentric Manipulation
+    Dataset and Toolchain for Embodied Learning", https://arxiv.org/abs/2607.14183). This does not imply endorsement
+    by, sponsorship by or affiliation with the licensor.
+
+configs/examples/example_handheld_gripper.json
+    Pantheon's annotation of the 10Kh-RealOmin episode Shoes_Handling_lace_up_shoes_with_both_hands_00001_00123,
+    whose instruction it quotes. 10Kh-RealOmin-OpenData is published by GenRobot
+    (https://huggingface.co/datasets/genrobot2025/10Kh-RealOmin-OpenData) under CC BY-SA 4.0
+    (https://creativecommons.org/licenses/by-sa/4.0/), provided as is, without warranties.
+
+configs/examples/example_teleop_arms.json
+    Pantheon's annotation of the MolmoAct2-BimanualYAM episode 017777, whose instruction it quotes.
+    MolmoAct2-BimanualYAM-Dataset is published by Ai2 (https://huggingface.co/datasets/allenai/MolmoAct2-BimanualYAM-Dataset)
+    under Apache-2.0 (the text is in LICENSE).
