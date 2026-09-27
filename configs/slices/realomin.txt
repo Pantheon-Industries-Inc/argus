@@ -1,0 +1,285 @@
+# genrobot2025/10Kh-RealOmin-OpenData, 280 episodes, 5.51 h, from 5 top-level task folders. One MCAP repo
+# path per line. Drawn with python -m prepare realomin sample --out FOLDER --hours 5.5 --seed 61, which takes
+# clips round robin across the top-level task folders. The draw also picked
+# Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00046.mcap, which is not in this list. A stream it
+# needs is empty, so it cannot be prepared.
+Clutter Tidy-Up [Stage2]/00001/01751.mcap
+Clutter Tidy-Up [Stage2]/00001/01755.mcap
+Clutter Tidy-Up [Stage2]/00001/01856.mcap
+Clutter Tidy-Up [Stage2]/00001/01922.mcap
+Clutter Tidy-Up [Stage2]/00001/01929.mcap
+Clutter Tidy-Up [Stage2]/00002/00104.mcap
+Clutter Tidy-Up [Stage2]/00002/00106.mcap
+Clutter Tidy-Up [Stage2]/00002/00119.mcap
+Clutter Tidy-Up [Stage2]/00002/00264.mcap
+Clutter Tidy-Up [Stage2]/00002/00286.mcap
+Clutter Tidy-Up [Stage2]/00002/00641.mcap
+Clutter Tidy-Up [Stage2]/00002/01910.mcap
+Clutter Tidy-Up [Stage2]/00003/00095.mcap
+Clutter Tidy-Up [Stage2]/00003/00174.mcap
+Clutter Tidy-Up [Stage2]/00003/00500.mcap
+Clutter Tidy-Up [Stage2]/00003/00612.mcap
+Clutter Tidy-Up [Stage2]/00003/01944.mcap
+Clutter Tidy-Up [Stage2]/00004/00139.mcap
+Clutter Tidy-Up [Stage2]/00004/00151.mcap
+Clutter Tidy-Up [Stage2]/00004/00331.mcap
+Clutter Tidy-Up [Stage2]/00004/00409.mcap
+Clutter Tidy-Up [Stage2]/00004/00686.mcap
+Clutter Tidy-Up [Stage2]/00004/00722.mcap
+Clutter Tidy-Up [Stage2]/00004/00752.mcap
+Clutter Tidy-Up [Stage2]/00004/00939.mcap
+Clutter Tidy-Up [Stage2]/00004/00940.mcap
+Clutter Tidy-Up [Stage2]/00005/00290.mcap
+Clutter Tidy-Up [Stage2]/00005/00998.mcap
+Clutter Tidy-Up [Stage2]/00006/00241.mcap
+Clutter Tidy-Up [Stage2]/00006/00242.mcap
+Clutter Tidy-Up [Stage2]/00006/00301.mcap
+Clutter Tidy-Up [Stage2]/00006/00482.mcap
+Clutter Tidy-Up [Stage2]/00006/00795.mcap
+Clutter Tidy-Up [Stage2]/00007/00001.mcap
+Clutter Tidy-Up [Stage2]/00007/00012.mcap
+Clutter Tidy-Up [Stage2]/00007/00492.mcap
+Clutter Tidy-Up [Stage2]/00008/00708.mcap
+Clutter Tidy-Up [Stage2]/00008/00784.mcap
+Clutter Tidy-Up [Stage2]/00008/00788.mcap
+Clutter Tidy-Up [Stage2]/00008/00892.mcap
+Clutter Tidy-Up [Stage2]/00008/00910.mcap
+Clutter Tidy-Up [Stage2]/00008/01447.mcap
+Clutter Tidy-Up [Stage2]/00009/00037.mcap
+Clutter Tidy-Up [Stage2]/00009/00047.mcap
+Clutter Tidy-Up [Stage2]/00009/00083.mcap
+Clutter Tidy-Up [Stage2]/00009/00094.mcap
+Clutter Tidy-Up [Stage2]/00009/00121.mcap
+Clutter Tidy-Up [Stage2]/00009/00152.mcap
+Clutter Tidy-Up [Stage2]/00009/00161.mcap
+Clutter Tidy-Up [Stage2]/00009/00232.mcap
+Clutter Tidy-Up [Stage2]/00009/00240.mcap
+Clutter Tidy-Up [Stage2]/00009/00632.mcap
+Clutter Tidy-Up [Stage2]/00019/00993.mcap
+Clutter Tidy-Up [Stage2]/00019/01076.mcap
+Clutter Tidy-Up [Stage2]/00019/01087.mcap
+Clutter Tidy-Up [Stage2]/00019/01234.mcap
+Clutter Tidy-Up [Stage2]/00019/01608.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00007.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00058.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00091.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00093.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00110.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00118.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00183.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00245.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00276.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00441.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00445.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00459.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00479.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00507.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00520.mcap
+Cooking_and_Kitchen_Clean/clean_bowl/00001/00574.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00032.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00102.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00126.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00138.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00251.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00327.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00351.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00435.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00464.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00523.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00543.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00548.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00755.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00767.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00809.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00823.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00846.mcap
+Cooking_and_Kitchen_Clean/clean_container/00001/00864.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00019.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00021.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00027.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00032.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00038.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00075.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00088.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00111.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00119.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00123.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00133.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00164.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00165.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00173.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00178.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00186.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00197.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00198.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00201.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00223.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00227.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00233.mcap
+Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00240.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00001/00756.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00003/00825.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00004/00395.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00004/00587.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00004/00827.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00007/00975.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00008/00202.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00008/00319.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00010/00666.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00012/00410.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00013/00460.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00013/00471.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00013/00677.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00014/00366.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00014/00377.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00014/00826.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00016/00033.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00016/00353.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00016/00498.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00017/00026.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00018/00212.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00018/00867.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00018/00965.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00019/00039.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00019/00108.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00019/00120.mcap
+Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00019/00399.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00008.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00015.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00020.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00021.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00026.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00039.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00041.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00048.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00049.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00050.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00055.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00060.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00076.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00078.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00079.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00084.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00086.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00092.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00101.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00103.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00107.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00111.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00116.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00124.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00133.mcap
+Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00143.mcap
+Organize_Clutter/desktop_object_sorting/00001/00066.mcap
+Organize_Clutter/desktop_object_sorting/00003/01697.mcap
+Organize_Clutter/desktop_object_sorting/00003/01705.mcap
+Organize_Clutter/desktop_object_sorting/00007/01980.mcap
+Organize_Clutter/desktop_object_sorting/00008/00638.mcap
+Organize_Clutter/desktop_object_sorting/00010/00084.mcap
+Organize_Clutter/desktop_object_sorting/00012/00973.mcap
+Organize_Clutter/desktop_object_sorting/00013/00107.mcap
+Organize_Clutter/desktop_object_sorting/00015/00012.mcap
+Organize_Clutter/desktop_object_sorting/00015/00284.mcap
+Organize_Clutter/drawer_to_place_items/00001/00030.mcap
+Organize_Clutter/drawer_to_place_items/00001/00033.mcap
+Organize_Clutter/drawer_to_place_items/00001/00036.mcap
+Organize_Clutter/drawer_to_place_items/00001/00067.mcap
+Organize_Clutter/drawer_to_place_items/00001/00112.mcap
+Organize_Clutter/drawer_to_place_items/00001/00128.mcap
+Organize_Clutter/drawer_to_place_items/00001/00157.mcap
+Organize_Clutter/drawer_to_place_items/00001/00216.mcap
+Organize_Clutter/drawer_to_place_items/00001/00262.mcap
+Organize_Clutter/drawer_to_place_items/00001/00281.mcap
+Organize_Clutter/drawer_to_place_items/00001/00293.mcap
+Organize_Clutter/drawer_to_place_items/00001/00319.mcap
+Organize_Clutter/drawer_to_place_items/00001/00350.mcap
+Organize_Clutter/drawer_to_place_items/00001/00374.mcap
+Organize_Clutter/drawer_to_place_items/00001/00421.mcap
+Organize_Clutter/drawer_to_place_items/00001/00437.mcap
+Organize_Clutter/drawer_to_place_items/00001/00450.mcap
+Organize_Clutter/drawer_to_place_items/00001/00460.mcap
+Organize_Clutter/drawer_to_take_items/00001/00059.mcap
+Organize_Clutter/drawer_to_take_items/00001/00061.mcap
+Organize_Clutter/drawer_to_take_items/00001/00097.mcap
+Organize_Clutter/drawer_to_take_items/00001/00166.mcap
+Organize_Clutter/drawer_to_take_items/00001/00203.mcap
+Organize_Clutter/drawer_to_take_items/00001/00227.mcap
+Organize_Clutter/drawer_to_take_items/00001/00232.mcap
+Organize_Clutter/drawer_to_take_items/00001/00233.mcap
+Organize_Clutter/drawer_to_take_items/00001/00277.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00008.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00084.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00087.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00092.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00102.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00140.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00165.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00167.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00194.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00200.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00215.mcap
+Organize_Clutter/fold_and_store_shopping_bag/00001/00244.mcap
+Organize_Clutter/fold_towel/00001/00022.mcap
+Organize_Clutter/fold_towel/00001/00248.mcap
+Organize_Clutter/fold_towel/00001/00271.mcap
+Organize_Clutter/fold_towel/00001/00315.mcap
+Organize_Clutter/fold_towel/00001/00471.mcap
+Organize_Clutter/fold_towel/00001/00522.mcap
+Organize_Clutter/fold_towel/00001/00546.mcap
+Organize_Clutter/fold_towel/00001/00550.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00009.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00024.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00027.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00028.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00032.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00045.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00060.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00070.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00072.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00079.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00119.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00121.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00123.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00126.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00146.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00162.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00168.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00209.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00216.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00223.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00226.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00235.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00236.mcap
+Shoes_Handling/lace_up_shoes_with_both_hands/00001/00237.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00006.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00008.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00016.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00017.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00026.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00031.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00048.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00051.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00083.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00094.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00128.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00146.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00166.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00173.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00204.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00218.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00266.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00273.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00284.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00317.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00334.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00355.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00363.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00370.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00378.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00387.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00426.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00430.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00441.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00450.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00464.mcap
+Shoes_Handling/organize_scattered_shoes/00001/00478.mcap

@@ -1,0 +1,401 @@
+"""Build a board from exactly the runs its manifest names.
+
+    python -m board build BOARD          BOARD/manifest.json in; BOARD/qa/, BOARD/BUILT.json out
+
+A board serves the episode files in BOARD/qa. Those files are derived: every build regenerates them from the runs
+listed in BOARD/manifest.json and nothing else, so a board never shows a stale or mixed set of labels. Each file is
+the run's label (board/to_board.py) with its provenance (`_run`: run id, code commit, kind, slice), the episode's
+rig and length, the deterministic dataset checks and the dataset's own labels from its context.json, where the
+footage comes from and its license (`dataset_source`, from board/dataset_sources.json, for the public datasets
+prepare/ reads), the manifest's rules applied, and the label consistency check (checks/label_consistency.py:
+annotations that contradict themselves are reported in label_consistency, never used to edit a label).
+
+manifest.json. Paths are absolute or relative to the board folder; a run given as RUNS/<dataset>/latest is that
+dataset's newest finished run that is not a dry run (run ids start with their start time).
+
+    {"board": "quickstart",                                   the board's name
+     "datasets": [                                            one entry per dataset, in tab order
+       {"dataset": "molmo",                                   the dataset's short name on the board
+        "run": "../../runs/molmo/latest",                     a run folder: run.json and out/
+        "episodes": "../../episodes/molmo/quickstart",        the prepared episodes the run labelled
+        "rules": [...],                                       optional: definitions applied after labelling
+        "file_prefix": "..."},                                optional: a prefix for its board file names
+       ...],
+     "comparisons": [...],                                    optional: other models' runs (compare/metrics.py)
+     "hands": {"src": KEYPOINT_RUN, "clips": CLIPS}}          optional: hand pose overlay (board/hands.py)
+
+configs/quickstart/board.json is a complete manifest for the quickstart runs.
+
+Rules change how a label is shown and counted without any model call. Nothing is deleted: an issue a rule
+excludes moves to "_excluded" with the rule's reason, and a capped issue keeps its own severity as
+"model_severity". The rules every dataset of a rig needs are in board/rules.py (rules_for); a manifest lists them
+explicitly, so the board's inputs are all in one file.
+  {"kind": "cap_when", "list": "operator_mistakes", "tags": [...], "severity": "low", "reason": "...",
+   "when_tags": [...] | "when_outcome": [...]}
+      caps those tags in an episode that also has a medium or high data issue in when_tags (a task "left
+      unfinished" judged against an instruction the footage does not match: the instruction mismatch already
+      counts the episode), or whose outcome is one of when_outcome (a goal "undone" in an episode whose outcome
+      success_then_undone already counts it as a data issue). "when_list" names another list to look in.
+  {"kind": "severity_cap", "tags": [...], "severity": "low", "reason": "..."}
+      caps those data issue tags on a rig where they are normal (a head-camera wearer pausing between tasks).
+  {"kind": "no_task_text", "pattern": REGEX, "reason": "..."}
+      in an episode given no task text, moves data issues whose tag matches REGEX (a missing instruction) to
+      "_excluded": the model inferred the task, and the missing text is not a fault of the recording.
+  {"kind": "drop_check", "check": "gripper_channels", "reason": "..."}
+      withholds a deterministic check whose flags are not defects on this dataset, keeping its result under
+      "_withheld_checks".
+  {"kind": "fixed_window", "tags": [...], "window_s": 180, "tolerance_s": 2.5}
+      for a dataset whose recorder cuts continuous footage into fixed-length files (Egocentric-100K's 3-minute
+      clips): on an episode within tolerance of the window, issues with those tags (a clip starting or ending
+      mid-task) describe how the dataset is packaged, so they move to "_excluded".
+
+"file_prefix" is for a dataset whose episode names repeat another dataset's on the same board (HABIT and
+MolmoAct2 both have episode_000494): its board files become episode_<prefix>000494.json, and `board clips
+--name-prefix` names its clips the same way.
+
+"comparisons" lists other models' runs over some of the board's episodes, in the format compare/metrics.py
+describes (python -m compare writes the entries). Their labels go to BOARD/compare/, never into qa/, so nothing
+the board counts or exports includes them; the page's "Labels by" control switches the board to one of those
+models' labels, marked as a comparison, and its comparison view shows BOARD/compare/metrics.json. The reference
+every model is measured against is the board's own label of each episode (label_sources), so every number
+compares a model with what the board shows.
+
+"hands" names a folder of 2D hand keypoints of head-camera episodes (board/hand_pose/ makes it) and the clips
+folder the board plays. They go to BOARD/hands/, one file per label file, timed against the board's clip, which
+the episode page draws over the footage, and to BOARD/hand_keypoints/, a download in the dataset video's own
+pixels and frame times (board/hands.py). Neither goes into qa/, so nothing the board counts or exports as labels
+includes them. The keypoints are for non-commercial use only, which every file says.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+from board.to_board import convert, label_outputs
+from checks import label_consistency
+
+SEVERITIES = ["low", "medium", "high"]
+# the deterministic checks copied from context.json into the episode's dataset_checks
+CONTEXT_CHECKS = ("stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")
+# the public datasets' publishers and licenses, by the Hub repository an episode's context.json names
+SOURCES = {k: v for k, v in json.loads((Path(__file__).resolve().parent / "dataset_sources.json").read_text()).items()
+           if not k.startswith("_")}
+
+
+def episode_seconds(ctx: dict, ep_dir: Path | None = None) -> float | None:
+    """The episode's length: the sidecar's own duration (from the video's timestamps) when it has one, then
+    the span of its real per-frame capture times (ABC-130k stations record below the 30 fps their files
+    declare, so frame count over fps understates them), otherwise its frame count over its frame rate."""
+    if ctx.get("duration_s"):
+        return float(ctx["duration_s"])
+    if ep_dir is not None and ctx.get("real_times") and (ep_dir / ctx["real_times"]).exists():
+        import numpy as np
+        z = np.load(ep_dir / ctx["real_times"])
+        cam = next((k for k in ("exo", "left", "right") if k in z.files), None)
+        if cam is not None and len(z[cam]) > 1:
+            t = z[cam].astype(float)
+            return float(t[-1] - t[0] + np.median(np.diff(t)))
+    fps = ctx.get("fps")
+    n = ctx.get("n_state_frames")
+    return n / fps if fps and n else None
+
+
+def _cap(issues: list, tags: list, cap: str, reason: str) -> list:
+    """Issues with one of these tags above the cap, lowered to it; the model's own severity kept."""
+    return [{**iss, "severity": cap, "model_severity": iss.get("severity"), "capped_by": reason}
+            if (iss or {}).get("category") in tags and iss.get("severity") in SEVERITIES
+            and SEVERITIES.index(iss["severity"]) > SEVERITIES.index(cap) else iss
+            for iss in issues or []]
+
+
+def _exclude(d: dict, match, kind: str, reason: str) -> None:
+    """Moves the data issues match() selects to d["_excluded"], each with the rule and its reason."""
+    keep = []
+    for iss in d.get("data_issues") or []:
+        if match(iss or {}):
+            d.setdefault("_excluded", []).append({**iss, "excluded_by": kind, "reason": reason})
+        else:
+            keep.append(iss)
+    d["data_issues"] = keep
+
+
+def apply_rules(d: dict, ctx: dict, rules: list) -> None:
+    """The manifest entry's rules on one board file, in order (the module docstring describes each kind)."""
+    for rule in rules:
+        kind = rule.get("kind")
+        if kind == "no_task_text":
+            if not ((d.get("_meta") or {}).get("given_prompt") or "").strip():
+                rx = re.compile(rule["pattern"], re.I)
+                _exclude(d, lambda i: bool(rx.search(str(i.get("category") or ""))), kind, rule["reason"])
+        elif kind == "drop_check":
+            dc = d.get("dataset_checks") or {}
+            if rule["check"] in dc:
+                d.setdefault("_withheld_checks", {})[rule["check"]] = {"reason": rule["reason"],
+                                                                        "result": dc.pop(rule["check"])}
+        elif kind == "cap_when":
+            outcome = str((d.get("completion") or {}).get("task_completed") or "").lower()
+            when = outcome in (rule.get("when_outcome") or []) or any(
+                (i or {}).get("category") in (rule.get("when_tags") or []) and i.get("severity") in ("medium", "high")
+                for i in d.get(rule.get("when_list", "data_issues")) or [])
+            if when:
+                key = rule.get("list", "operator_mistakes")
+                d[key] = _cap(d.get(key), rule["tags"], rule["severity"], rule["reason"])
+        elif kind == "severity_cap":
+            d["data_issues"] = _cap(d.get("data_issues"), rule["tags"], rule["severity"], rule["reason"])
+        elif kind == "fixed_window":
+            secs = episode_seconds(ctx)
+            if secs is None or abs(secs - rule["window_s"]) > rule.get("tolerance_s", 2.5):
+                continue
+            d["_packaging"] = {"fixed_window_s": rule["window_s"]}
+            _exclude(d, lambda i: i.get("category") in rule["tags"], kind,
+                     f"the dataset cuts continuous footage into {rule['window_s']:g} s files; "
+                     "a file starting or ending mid-task is how it is packaged")
+        else:
+            raise ValueError(f"unknown rule kind {kind!r}")
+
+
+def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
+    """What the episode's context.json adds to its label: the rig, the real length, the deterministic checks, the
+    dataset's own labels (timed segments, as OpenAoE, Galaxea and Gen-HumanEgo ship them, and episode-level status
+    and spans, as HABIT does), so a claim that they disagree with the footage can be judged on the board, and the
+    dataset's publisher and license, which travel with its labels into every download."""
+    d["_rig"] = ctx.get("profile")
+    if ctx.get("dataset") in SOURCES:
+        d["dataset_source"] = SOURCES[ctx["dataset"]]
+    # the sampled timesteps end before the last frame and are sparse in still spans, so the length comes from
+    # the episode itself
+    secs = episode_seconds(ctx, ep_dir)
+    if secs:
+        d["duration_s"] = round(secs, 3)
+    for key in CONTEXT_CHECKS:
+        if ctx.get(key) is not None:
+            d["dataset_checks"] = d.get("dataset_checks") or {}
+            d["dataset_checks"][key] = ctx[key]
+    subs = [s for s in ctx.get("annotation_subtasks") or [] if s.get("label") and s.get("t1") is not None]
+    if subs:
+        d["dataset_labels"] = [{"t0": float(s["t0"]), "t1": float(s["t1"]), "label": s["label"]} for s in subs]
+        if ctx.get("annotation_note"):
+            d["dataset_labels_note"] = ctx["annotation_note"]
+    if isinstance(ctx.get("publisher_labels"), dict):
+        d["dataset_episode_labels"] = ctx["publisher_labels"]
+
+
+# the episode's context a comparison label carries from the board's own label, so the page lays out the same player
+# (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
+CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
+                "dataset_episode_labels", "dataset_source", "camera_views", "camera_labels", "timesteps_s",
+                "task_label")
+
+
+def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict) -> dict:
+    """Other models' labels of some of the board's episodes, kept apart from the board's own. Written to
+    BOARD/compare.new, renamed to compare/ with qa/:
+      <key>/<episode file>   one model's labels of one episode, converted like the board's; a response that did
+                             not parse, was cut off or never came is a file too, saying so
+      index.json             the reference (the model of the board's own labels) and every other model, and per
+                             episode which of them were asked to label it and how each response came out
+      metrics.json           compare.metrics.compute: every chart of the comparison view, with the reference
+                             measured on the board's own labels (board_src: the run output each one was built from)
+    The reference has no files here: its label of every episode is the board's own, in qa/. Nothing the board
+    counts reads these: its lists, filters, exports and downloads read qa/ only."""
+    from compare import metrics as mc
+    out = board / "compare.new"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir()
+    models = [m for m in mc.load_models(manifest, board) if not m["reference"]]
+    metrics = mc.compute(manifest, board, board_src)
+    rows = metrics.pop("_rows")
+    index = {"reference": next(m for m in metrics["models"] if m["reference"]),
+             "models": [m for m in metrics["models"] if not m["reference"]], "episodes": {}}
+    written = {m["key"]: 0 for m in models}
+    for row in rows.values():
+        f = row["file"]
+        bd = json.loads((qa_new / f).read_text())
+        ctx = {k: bd[k] for k in CONTEXT_KEYS if k in bd}
+        bmeta = bd.get("_meta") or {}
+        meta = {k: bmeta[k] for k in ("episode_id", "run_episode", "given_prompt", "prompt_mode")
+                if bmeta.get(k) is not None}
+        srcs = {}
+        for m in models:
+            if m["key"] not in row["by"]:
+                continue
+            r = mc.response(m, row["name"])
+            if r["status"] == "pending":
+                continue
+            if r["status"] == "parsed":
+                d = convert(json.loads(r["path"].read_text()), bd.get("dataset"))
+                d.update(ctx)
+                d["_meta"] = {**(d.get("_meta") or {}), **meta}
+            else:
+                d = {**ctx, "episode_prompt": "", "event_labels": [], "_meta": dict(meta)}
+                if r.get("cost") is not None:
+                    d["_usage"] = {"est_cost_usd": r.get("cost"), "latency_s": r.get("latency"),
+                                   "completion_tokens": r.get("out_tokens")}
+            info = {"key": m["key"], "name": m["episode_name"], "status": r["status"], "model": m["model"],
+                    "run_id": m["run_id"], "code": m["code"], "example": m["example"]}
+            if r["status"] == "unparsed":
+                info.update({"parse_error": r.get("error"), "raw_head": (r.get("raw") or "")[:3000],
+                             "raw_chars": len(r.get("raw") or "")})
+            if r["status"] == "cut_off":
+                info.update({"out_tokens": r.get("out_tokens"), "tail": (r.get("tail") or "")[-1500:]})
+            d["_compare"] = info
+            (out / m["key"]).mkdir(exist_ok=True)
+            (out / m["key"] / f).write_text(json.dumps(d))
+            srcs[m["key"]] = r["status"]
+            written[m["key"]] += 1
+        if srcs:
+            index["episodes"][f] = srcs
+    (out / "index.json").write_text(json.dumps(index, separators=(",", ":")))
+    (out / "metrics.json").write_text(json.dumps(mc.public(metrics), separators=(",", ":")))
+    return {"models": {m["key"]: {"run_id": m["run_id"], "files": written[m["key"]]} for m in models},
+            "episodes": len(index["episodes"])}
+
+
+def build_hands(board: Path, spec: dict, qa_new: Path, episodes: dict) -> dict:
+    """The hand pose of the head-camera episodes (board/hands.py): the drawing, written to BOARD/hands.new, and the
+    download in the dataset video's own pixels and frame times, written to BOARD/hand_keypoints.new; both renamed
+    into place with qa/. episodes maps a board file to its prepared episode folder. Nothing that reads qa/ reads
+    these."""
+    from board import hands as hands_overlay
+    out, kout = board / "hands.new", board / "hand_keypoints.new"
+    for d in (out, kout):
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir()
+    here = board.resolve()
+    src, clips = (Path(p) if Path(p).is_absolute() else (here / p).resolve() for p in (spec["src"], spec["clips"]))
+    res = hands_overlay.build(src, qa_new, clips, out)
+    for sk in res["skipped"]:
+        print(f"hands: skipped {sk['key']}: {sk['skip']}", file=sys.stderr)
+    kres = hands_overlay.build_keypoints(src, qa_new, episodes, kout)
+    for sk in kres["skipped"]:
+        print(f"hand keypoints: skipped {sk['key']}: {sk['skip']}", file=sys.stderr)
+    return {"src": spec["src"], "written": res["written"], "skipped": len(res["skipped"]),
+            "head_camera_files_without_keypoints": len(res["head_camera_files_without_keypoints"]),
+            "bytes": res["bytes"],
+            "keypoints": {"written": kres["written"], "skipped": len(kres["skipped"]), "bytes": kres["bytes"]}}
+
+
+def resolve_run(p: Path) -> Path:
+    """A run folder; RUNS/<dataset>/latest (when no folder has that name) is the newest finished run that is
+    not a dry run."""
+    if p.name != "latest" or p.exists():
+        return p
+    done = []
+    for rj in p.parent.glob("*/run.json"):
+        info = json.loads(rj.read_text())
+        if info.get("status") == "done" and info.get("kind") != "dry":
+            done.append(rj.parent)
+    if not done:
+        raise SystemExit(f"no finished run under {p.parent}")
+    return sorted(done)[-1]
+
+
+def _path(p: str, here: Path) -> Path:
+    """A manifest path: absolute, or relative to the board folder."""
+    return Path(p) if Path(p).is_absolute() else (here / p).resolve()
+
+
+def entry_labels(entry: dict, here: Path) -> tuple[Path, dict]:
+    """A manifest entry's run folder and {board file: (the run's episode name, output file, output)} for every
+    label it holds (board/to_board.py label_outputs). here is the board folder, resolved."""
+    run = resolve_run(_path(entry["run"], here))
+    pre = entry.get("file_prefix") or ""
+    outs, _ = label_outputs(run / "out")
+    return run, {(name.replace("episode_", f"episode_{pre}", 1) if pre else name) + ".json": (name, f, r)
+                 for name, (f, r) in outs.items()}
+
+
+def label_sources(manifest: dict, board: Path) -> dict:
+    """{board file: the run output its label is built from} for every episode of the board. build() builds exactly
+    these, and compare/metrics.py measures the reference from them, so the comparison's reference is the board's
+    own label of each episode."""
+    here = Path(board).resolve()
+    return {f: out for e in manifest.get("datasets", []) for f, (_, out, _) in entry_labels(e, here)[1].items()}
+
+
+def _swap(board: Path, name: str, keep: bool) -> None:
+    """Replaces BOARD/<name> with BOARD/<name>.new (derived files only; the runs they came from are untouched).
+    Without keep, the old folder is removed and nothing replaces it."""
+    old, new = board / name, board / f"{name}.new"
+    if old.exists():
+        shutil.rmtree(old)
+    if keep:
+        new.rename(old)
+
+
+def build(board: Path) -> dict:
+    manifest = json.loads((board / "manifest.json").read_text())
+    here = board.resolve()
+    new = board / "qa.new"
+    if new.exists():
+        shutil.rmtree(new)
+    new.mkdir(parents=True)
+    counts, built_entries = {}, []
+    board_src = {}      # board file -> the run output its label came from
+    episodes = {}       # board file -> its prepared episode folder
+    for entry in manifest.get("datasets", []):
+        run, labels = entry_labels(entry, here)
+        info = json.loads((run / "run.json").read_text())
+        eps = _path(entry["episodes"], here)
+        for fname, (name, src, r) in sorted(labels.items()):
+            d = convert(r, entry["dataset"])
+            d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"],
+                         "slice": info.get("slice")}
+            ctx_p = eps / name / "context.json"
+            ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
+            if ctx:
+                add_context(d, ctx, eps / name)
+                episodes[fname] = eps / name
+            # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
+            apply_rules(d, ctx, entry.get("rules") or [])
+            d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))
+            if "duration_s" not in d and d.get("timesteps_s"):
+                # no context: the last sampled time plus one sampling step, marked as an estimate
+                ts = [float(t) for t in d["timesteps_s"]]
+                step = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 0.0
+                d["duration_s"], d["duration_estimated"] = round(ts[-1] + step, 3), True
+            dest = new / fname
+            if fname != name + ".json":
+                # the board finds clips by episode_id; the run's own name stays for the hand pose keypoints
+                d["_meta"] = {**(d.get("_meta") or {}), "episode_id": dest.stem, "run_episode": name}
+            if dest.exists():
+                raise RuntimeError(f"{dest.name} comes from two manifest entries; a board holds one label per "
+                                   "episode (file_prefix separates datasets whose episode names repeat)")
+            dest.write_text(json.dumps(d))
+            board_src[fname] = src
+        counts[entry["dataset"]] = {"run_id": info["run_id"], "episodes": len(labels)}
+        # BUILT.json names the run that was used, so the board's inputs stay traceable
+        built_entries.append(dict(entry, run=os.path.relpath(run, here)) if run != _path(entry["run"], here)
+                             else entry)
+    compared = build_comparisons(board, manifest, new, board_src) if manifest.get("comparisons") else None
+    hands = build_hands(board, manifest["hands"], new, episodes) if manifest.get("hands") else None
+    _swap(board, "qa", True)
+    _swap(board, "compare", compared is not None)
+    _swap(board, "hands", hands is not None)
+    _swap(board, "hand_keypoints", hands is not None)
+    built = {"manifest": {**manifest, "datasets": built_entries}, "counts": counts,
+             **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {})}
+    (board / "BUILT.json").write_text(json.dumps(built, indent=1))
+    return built
+
+
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="python -m board build", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("board", type=Path, help="the board folder, with manifest.json")
+    a = ap.parse_args()
+    print(json.dumps(build(a.board)["counts"], indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

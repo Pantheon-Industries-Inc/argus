@@ -1,0 +1,150 @@
+{
+ "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, completion the outcomes that raise it, and datasets limits a family to those datasets.",
+ "families": [
+  {
+   "slug": "privacy-blur",
+   "list": "data",
+   "name": "Privacy blur hides task objects",
+   "names": [
+    "Privacy blur over the scene"
+   ],
+   "text": "blur(red)? (patch|mask)|rectangular blur|bounded blur|anonymi[sz]"
+  },
+  {
+   "slug": "instruction-mismatch",
+   "list": "data",
+   "name": "Instruction or labels do not match footage",
+   "names": [
+    "Instruction or labels do not match footage"
+   ]
+  },
+  {
+   "slug": "streams-crossed",
+   "list": "data",
+   "name": "Camera files swapped",
+   "names": [
+    "Camera files swapped"
+   ],
+   "tags": [
+    "camera_swap",
+    "stream_swap",
+    "camera_label_swap"
+   ],
+   "checks": [
+    "stream_pairing.crossed"
+   ]
+  },
+  {
+   "slug": "sped-up",
+   "list": "data",
+   "name": "Plays faster than real time",
+   "checks": [
+    "timebase.sped_up_recording"
+   ]
+  },
+  {
+   "slug": "undone",
+   "list": "data",
+   "name": "Success then undone",
+   "names": [
+    "Scene reset recorded"
+   ],
+   "completion": [
+    "success_then_undone"
+   ]
+  },
+  {
+   "slug": "motion-disagrees",
+   "list": "data",
+   "name": "Recorded motion disagrees with video",
+   "names": [
+    "Recorded motion disagrees with video"
+   ]
+  },
+  {
+   "slug": "recorded-jump",
+   "list": "data",
+   "name": "Recorded leap the camera never saw",
+   "checks": [
+    "recorded_jumps.flagged"
+   ]
+  },
+  {
+   "slug": "gripper-flat",
+   "list": "data",
+   "name": "Gripper channel never changes",
+   "checks": [
+    "gripper_channels.flagged"
+   ],
+   "datasets": [
+    "fastumi",
+    "realomin"
+   ],
+   "why": "counted only where flagged episodes were confirmed on the frames as grippers that moved without recording"
+  },
+  {
+   "slug": "out-of-view",
+   "list": "data",
+   "name": "Task leaves every camera",
+   "names": [
+    "Task leaves every camera"
+   ]
+  },
+  {
+   "slug": "camera-fault",
+   "list": "data",
+   "name": "Camera fault",
+   "names": [
+    "Camera fault",
+    "Recording fault"
+   ]
+  },
+  {
+   "slug": "low-light",
+   "list": "data",
+   "name": "Too dark to see",
+   "names": [
+    "Too dark to see"
+   ],
+   "tags": [
+    "exposure",
+    "underexposure"
+   ]
+  },
+  {
+   "slug": "truncated",
+   "list": "data",
+   "name": "Starts or ends mid-task",
+   "names": [
+    "Starts or ends mid-task"
+   ],
+   "tags": [
+    "incomplete_demonstration"
+   ]
+  },
+  {
+   "slug": "idle",
+   "list": "data",
+   "name": "Long idle stretch",
+   "names": [
+    "Long idle stretch"
+   ]
+  },
+  {
+   "slug": "person-in-scene",
+   "list": "data",
+   "name": "Person changes the scene",
+   "names": [
+    "Person changes the scene"
+   ]
+  },
+  {
+   "slug": "readout",
+   "list": "data",
+   "name": "Readout not legible",
+   "names": [
+    "Readout not legible"
+   ]
+  }
+ ]
+}

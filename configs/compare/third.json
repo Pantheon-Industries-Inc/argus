@@ -1,0 +1,90 @@
+{
+ "seed": 20260928,
+ "rule": "A seeded third of each dataset in main.json (at least 2 episodes), for the runs given an example annotation.",
+ "subset_of": "main",
+ "episodes": {
+  "molmo": [
+   "episode_000209",
+   "episode_017769",
+   "episode_001140",
+   "episode_020921"
+  ],
+  "abc130k": [
+   "episode_306766b3-dd86-4827-9986-a8d3f1410d90",
+   "episode_0e9c12c9-332e-4c54-afc1-e2c552dd19e6"
+  ],
+  "galaxea": [
+   "episode_Put_Shoes_Into_The_Shoe_Box_20250801_012_000002",
+   "episode_Organize_Toys_20250628_002_000044",
+   "episode_Desktop_Garbage_Organizing20250721_008_000020"
+  ],
+  "habit": [
+   "episode_habit_005709",
+   "episode_habit_004790",
+   "episode_habit_004148",
+   "episode_habit_005182",
+   "episode_habit_001904"
+  ],
+  "fastumi": [
+   "episode_single_arm__open_toilet_lid__000931",
+   "episode_single_arm__make_sandwich__001925",
+   "episode_dual_arm__Put_Food_into_Electric_Oven__000946",
+   "episode_dual_arm__Fold_the_T-shirt__002131",
+   "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001163",
+   "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__001785",
+   "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__002091",
+   "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__001510",
+   "episode_single_arm__iron_clothes__002368",
+   "episode_dual_arm__Dispose_of_Desktop_Debris__001704",
+   "episode_single_arm__heat_food_in_microwave__000046",
+   "episode_single_arm__get_plate_and_spoon_from_dish_rack__002492",
+   "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__003207",
+   "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001618",
+   "episode_dual_arm__Pack_Skincare_Products__000319",
+   "episode_single_arm__open_toilet_lid__001613",
+   "episode_dual_arm__Put_Books_into_Schoolbag__001176",
+   "episode_single_arm__wash_clothes__000172",
+   "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__002153",
+   "episode_single_arm__Prepare_tableware__002571",
+   "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001549",
+   "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001112",
+   "episode_dual_arm__Clean_Desktop__001947",
+   "episode_dual_arm__Add_Rice_to_Rice_Cooker__002088",
+   "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__000443",
+   "episode_single_arm__make_sandwich__002822",
+   "episode_single_arm__take_items_out_of_drawer__002004",
+   "episode_single_arm__Prepare_tableware__002526",
+   "episode_dual_arm__Open_Double_Door_Cabinet__000962",
+   "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001578",
+   "episode_single_arm__pour_water_into_cup__000127",
+   "episode_dual_arm__Put_Books_into_Schoolbag__000740",
+   "episode_single_arm__iron_clothes__002081",
+   "episode_dual_arm__Pour_Water_into_Teacup__002381"
+  ],
+  "realomin": [
+   "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00015",
+   "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00009",
+   "episode_Cooking_and_Kitchen_Clean_clean_container_00001_00032",
+   "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00048",
+   "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00119",
+   "episode_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_00017_00026",
+   "episode_Organize_Clutter_drawer_to_take_items_00001_00166",
+   "episode_Shoes_Handling_organize_scattered_shoes_00001_00017",
+   "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00235",
+   "episode_Shoes_Handling_organize_scattered_shoes_00001_00450"
+  ],
+  "egocentric100k": [
+   "episode_factory_007_worker_012_0173",
+   "episode_factory_130_worker_020_0025"
+  ],
+  "openaoe": [
+   "episode_raw_357824_seg_360881",
+   "episode_raw_364604_seg_364806"
+  ],
+  "genhumanego": [
+   "episode_a07b1c7d31e74cc4921ab40a0d8ad3c8",
+   "episode_e31acd5925c64471b7f578454f5337dd",
+   "episode_a66163ac929b40de87f6d2ab708ba30a"
+  ]
+ }
+}

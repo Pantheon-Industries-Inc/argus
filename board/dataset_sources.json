@@ -1,0 +1,66 @@
+{
+ "_doc": "Where the footage of each public dataset prepare/ reads comes from, and the license its footage and annotations are shown under. Keyed by the Hugging Face repository the adapter reads, which every prepared episode records as \"dataset\" in its context.json. board/build.py copies the entry into each episode file as dataset_source, so the page names the dataset, its publisher and its license under the episode and every download carries them. An episode of any other dataset (your own) gets no entry and the page shows no such line. hub links the publisher's own release, also for Galaxea, whose adapter reads a re-upload of it.",
+ "allenai/MolmoAct2-BimanualYAM-Dataset": {
+  "name": "MolmoAct2",
+  "hub": "https://huggingface.co/datasets/allenai/MolmoAct2-BimanualYAM-Dataset",
+  "publisher": "Ai2",
+  "license": "Apache-2.0",
+  "license_url": "https://www.apache.org/licenses/LICENSE-2.0"
+ },
+ "XDOF/ABC-130k": {
+  "name": "ABC-130k",
+  "hub": "https://huggingface.co/datasets/XDOF/ABC-130k",
+  "publisher": "XDOF",
+  "license": "Apache-2.0",
+  "license_url": "https://www.apache.org/licenses/LICENSE-2.0"
+ },
+ "RogersPyke/Galaxea-Open-World-Dataset_10K_20260123": {
+  "name": "Galaxea Open-World",
+  "hub": "https://huggingface.co/datasets/OpenGalaxea/Galaxea-Open-World-Dataset",
+  "publisher": "Galaxea",
+  "license": "CC BY-NC-SA 4.0",
+  "license_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+ },
+ "configinc/HABIT": {
+  "name": "HABIT",
+  "hub": "https://huggingface.co/datasets/configinc/HABIT",
+  "publisher": "Config",
+  "license": "CC BY 4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/"
+ },
+ "IPEC-COMMUNITY/FastUMI_100k_lerobot": {
+  "name": "FastUMI-100K",
+  "hub": "https://huggingface.co/datasets/IPEC-COMMUNITY/FastUMI_100k_lerobot",
+  "publisher": "IPEC-COMMUNITY",
+  "license": "Apache-2.0",
+  "license_url": "https://www.apache.org/licenses/LICENSE-2.0"
+ },
+ "genrobot2025/10Kh-RealOmin-OpenData": {
+  "name": "10Kh-RealOmin",
+  "hub": "https://huggingface.co/datasets/genrobot2025/10Kh-RealOmin-OpenData",
+  "publisher": "GenRobot",
+  "license": "CC BY-SA 4.0",
+  "license_url": "https://creativecommons.org/licenses/by-sa/4.0/"
+ },
+ "builddotai/Egocentric-100K": {
+  "name": "Egocentric-100K",
+  "hub": "https://huggingface.co/datasets/builddotai/Egocentric-100K",
+  "publisher": "Build AI",
+  "license": "Apache-2.0",
+  "license_url": "https://www.apache.org/licenses/LICENSE-2.0"
+ },
+ "genrobot2025/Gen-HumanEgo": {
+  "name": "Gen-HumanEgo",
+  "hub": "https://huggingface.co/datasets/genrobot2025/Gen-HumanEgo",
+  "publisher": "GenRobot",
+  "license": "CC BY-SA 4.0",
+  "license_url": "https://creativecommons.org/licenses/by-sa/4.0/"
+ },
+ "inclusionAI/OpenAoE-2000h": {
+  "name": "OpenAoE-2000h",
+  "hub": "https://huggingface.co/datasets/inclusionAI/OpenAoE-2000h",
+  "publisher": "inclusionAI",
+  "license": "Open-AoE Dataset License",
+  "license_url": "https://huggingface.co/datasets/inclusionAI/OpenAoE-2000h/blob/main/LICENSE"
+ }
+}

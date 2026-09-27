@@ -1,0 +1,3 @@
+# One allenai/MolmoAct2-BimanualYAM-Dataset episode, given as its episode index. Two YAM arms push four wooden
+# blocks into a row and then push it apart (37 s).
+1213

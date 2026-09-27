@@ -1,0 +1,29 @@
+{
+ "about": "The pinned model settings. Every model gets the same harness, prompt, images, reasoning effort and output limit. No temperature, top_p or seed is sent (see the README's Determinism section).",
+ "reasoning": "medium",
+ "max_tokens": 64000,
+ "reference": "astra",
+ "models": {
+  "astra": {
+   "model": "openai/gpt-6-astra",
+   "name": "Astra"
+  },
+  "opus55": {
+   "model": "anthropic/claude-opus-5.5",
+   "name": "Claude Opus 5.5"
+  },
+  "sol6": {
+   "model": "openai/gpt-6-sol",
+   "name": "GPT-6 Sol"
+  },
+  "dsv41f": {
+   "model": "deepseek/deepseek-v4.1-flash",
+   "name": "DeepSeek v4.1 flash"
+  }
+ },
+ "with_example": [
+  "opus55",
+  "sol6",
+  "dsv41f"
+ ]
+}

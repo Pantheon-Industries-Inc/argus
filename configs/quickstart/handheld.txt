@@ -1,0 +1,3 @@
+# One IPEC-COMMUNITY/FastUMI_100k_lerobot episode, given as <embodiment>/<task>/<episode index>. A person
+# opens a toilet lid with one handheld gripper (11.5 s).
+single_arm/open_toilet_lid/1638

@@ -1,0 +1,120 @@
+"""Which problem each flagged issue is: the classification behind the board's problem filter.
+
+families.json lists the families. Every flagged issue (a data issue or an operator mistake) belongs to exactly one
+family: the first listed family whose tags, plain names (tag_names.json) or text it matches, else a family named
+after its tag's plain name ("d:<name>" or "m:<name>"). A family can also be raised by one of the deterministic
+checks or by the episode's outcome, and then counts at any severity. A family limited to some datasets
+("datasets") is only matched on those.
+
+What counts (Families.counts, the one statement of the rule):
+  - a data issue at medium or high severity;
+  - an operator mistake that changes the outcome (its tag's kind in tag_names.json is "outcome") at medium or high;
+  - any operator mistake at high.
+Everything else is minor: kept and shown on the episode, left out of the counts and the filter.
+
+    fam = Families()
+    c = fam.classify(episode)      # {"counted": {slug: [issues]}, "minor": {slug: [issues]}}
+"""
+from __future__ import annotations
+
+import collections
+import json
+import re
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+LISTS = {"data_issues": "data", "operator_mistakes": "mistake"}
+
+
+def _sev(i: dict) -> str:
+    return str(i.get("severity") or "low").lower()
+
+
+def union_seconds(spans) -> float:
+    """Seconds covered by a set of (start, end) spans, overlaps counted once."""
+    total, end = 0.0, None
+    for a, b in sorted((a, b) for a, b in spans if b > a):
+        if end is None or a > end:
+            total += b - a
+            end = b
+        elif b > end:
+            total += b - end
+            end = b
+    return total
+
+
+def check_hit(d: dict, key: str) -> bool:
+    """key is "check.field": the deterministic check's flag on this episode."""
+    name, field = key.split(".")
+    return bool(((d.get("dataset_checks") or {}).get(name) or {}).get(field))
+
+
+class Families:
+    def __init__(self, path: Path | None = None, tag_names_path: Path | None = None):
+        spec = json.loads(Path(path or HERE / "families.json").read_text())
+        tn_path = Path(tag_names_path or HERE / "tag_names.json")
+        tn = json.loads(tn_path.read_text()) if tn_path.exists() else {}
+        self.plain = {k: {t: v.get("name") for t, v in d.items()} for k, d in tn.items() if not k.startswith("_")}
+        self.kinds = {t: v.get("kind") for t, v in tn.get("operator_mistakes", {}).items()}
+        self.defs = spec["families"]
+        self._re = {f["slug"]: re.compile(f["text"], re.I) for f in self.defs if f.get("text")}
+
+    def tag_name(self, key: str, tag: str | None) -> str:
+        """The tag's plain name (tag_names.json), else its words with the first letter capitalised."""
+        n = self.plain.get(key, {}).get(tag or "")
+        if n:
+            return n
+        w = (tag or "untagged").replace("_", " ")
+        return w[:1].upper() + w[1:]
+
+    def catalog(self) -> dict:
+        """The listed families, in order, for a page: slug -> name, list, and whether only a check raises it."""
+        return {f["slug"]: {"name": f["name"], "list": f["list"],
+                            "check": bool(f.get("checks")) and not (f.get("names") or f.get("tags") or f.get("text"))}
+                for f in self.defs}
+
+    def counts(self, key: str, i: dict) -> bool:
+        """Whether an issue of this list ("data_issues" or "operator_mistakes") counts (the module docstring)."""
+        s = _sev(i)
+        if key == "data_issues":
+            return s in ("medium", "high")
+        return s == "high" or (s == "medium" and self.kinds.get(i.get("category")) == "outcome")
+
+    def family_of(self, key: str, i: dict, dataset: str | None = None) -> str:
+        lst = LISTS[key]
+        cat = i.get("category") or ""
+        plain = self.tag_name(key, cat)
+        text = f"{i.get('issue') or ''} {i.get('evidence') or ''}"
+        for f in self.defs:
+            if f["list"] != lst or (f.get("datasets") and dataset not in f["datasets"]):
+                continue
+            if (cat in (f.get("tags") or []) or plain in (f.get("names") or [])
+                    or (f["slug"] in self._re and self._re[f["slug"]].search(text))):
+                return f["slug"]
+        return ("d:" if lst == "data" else "m:") + plain
+
+    def classify(self, d: dict) -> dict:
+        """The episode's families: counted ones with the issues that count under each (empty when a check or the
+        outcome raised it), and minor ones that nothing counted."""
+        counted, minor = collections.defaultdict(list), collections.defaultdict(list)
+        ds = d.get("dataset")
+        for key in LISTS:
+            for i in d.get(key) or []:
+                if i and i.get("issue"):
+                    (counted if self.counts(key, i) else minor)[self.family_of(key, i, ds)].append(i)
+        outcome = str((d.get("completion") or {}).get("task_completed") or "").lower()
+        for f in self.defs:
+            if f.get("datasets") and ds not in f["datasets"]:
+                continue
+            if (any(check_hit(d, k) for k in f.get("checks") or [])
+                    or (outcome and outcome in (f.get("completion") or []))):
+                counted.setdefault(f["slug"], [])
+        return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted}}
+
+    def hands_hidden_seconds(self, d: dict) -> float | None:
+        """For head-camera footage, the seconds in which the wearer's hands are out of view (the dense timeline marks
+        each segment); None for any other rig, where the question does not apply."""
+        if d.get("_rig") != "ego_head":
+            return None
+        return union_seconds([(float(e["t_s"]), float(e["end_s"])) for e in d.get("event_labels") or []
+                              if e.get("hands_visible") is False and e.get("end_s") is not None])

@@ -1,0 +1,134 @@
+{
+ "board": "quickstart",
+ "datasets": [
+  {
+   "dataset": "molmo",
+   "run": "../../runs/molmo/latest",
+   "episodes": "../../episodes/molmo/quickstart",
+   "rules": [
+    {
+     "kind": "cap_when",
+     "list": "operator_mistakes",
+     "tags": [
+      "incomplete_task"
+     ],
+     "when_tags": [
+      "instruction_mismatch",
+      "annotation_mismatch",
+      "phase_annotation_mismatch"
+     ],
+     "severity": "low",
+     "reason": "judged unfinished against an instruction the footage does not match; the instruction mismatch already counts this episode"
+    },
+    {
+     "kind": "cap_when",
+     "list": "operator_mistakes",
+     "tags": [
+      "goal_undone",
+      "task_undone",
+      "incomplete_task"
+     ],
+     "when_outcome": [
+      "success_then_undone"
+     ],
+     "severity": "low",
+     "reason": "the goal was reached and then taken apart; the outcome already counts the episode as a data issue (success then undone), and neither the set-down after the goal nor a task left unfinished after it is a demonstration mistake"
+    },
+    {
+     "kind": "no_task_text",
+     "pattern": "^(missing|no|absent|lacking)_?(task_)?(instruction|annotation|task_text|task_description|label)s?$",
+     "reason": "the episode ships no task text; the task is inferred from the footage, and a missing task text is not a fault in the recording"
+    }
+   ]
+  },
+  {
+   "dataset": "fastumi",
+   "run": "../../runs/fastumi/latest",
+   "episodes": "../../episodes/fastumi/quickstart",
+   "rules": [
+    {
+     "kind": "cap_when",
+     "list": "operator_mistakes",
+     "tags": [
+      "incomplete_task"
+     ],
+     "when_tags": [
+      "instruction_mismatch",
+      "annotation_mismatch",
+      "phase_annotation_mismatch"
+     ],
+     "severity": "low",
+     "reason": "judged unfinished against an instruction the footage does not match; the instruction mismatch already counts this episode"
+    },
+    {
+     "kind": "cap_when",
+     "list": "operator_mistakes",
+     "tags": [
+      "goal_undone",
+      "task_undone",
+      "incomplete_task"
+     ],
+     "when_outcome": [
+      "success_then_undone"
+     ],
+     "severity": "low",
+     "reason": "the goal was reached and then taken apart; the outcome already counts the episode as a data issue (success then undone), and neither the set-down after the goal nor a task left unfinished after it is a demonstration mistake"
+    },
+    {
+     "kind": "no_task_text",
+     "pattern": "^(missing|no|absent|lacking)_?(task_)?(instruction|annotation|task_text|task_description|label)s?$",
+     "reason": "the episode ships no task text; the task is inferred from the footage, and a missing task text is not a fault in the recording"
+    }
+   ]
+  },
+  {
+   "dataset": "openaoe",
+   "run": "../../runs/openaoe/latest",
+   "episodes": "../../episodes/openaoe/quickstart",
+   "rules": [
+    {
+     "kind": "cap_when",
+     "list": "operator_mistakes",
+     "tags": [
+      "incomplete_task"
+     ],
+     "when_tags": [
+      "instruction_mismatch",
+      "annotation_mismatch",
+      "phase_annotation_mismatch"
+     ],
+     "severity": "low",
+     "reason": "judged unfinished against an instruction the footage does not match; the instruction mismatch already counts this episode"
+    },
+    {
+     "kind": "cap_when",
+     "list": "operator_mistakes",
+     "tags": [
+      "goal_undone",
+      "task_undone",
+      "incomplete_task"
+     ],
+     "when_outcome": [
+      "success_then_undone"
+     ],
+     "severity": "low",
+     "reason": "the goal was reached and then taken apart; the outcome already counts the episode as a data issue (success then undone), and neither the set-down after the goal nor a task left unfinished after it is a demonstration mistake"
+    },
+    {
+     "kind": "no_task_text",
+     "pattern": "^(missing|no|absent|lacking)_?(task_)?(instruction|annotation|task_text|task_description|label)s?$",
+     "reason": "the episode ships no task text; the task is inferred from the footage, and a missing task text is not a fault in the recording"
+    },
+    {
+     "kind": "severity_cap",
+     "tags": [
+      "idle_stretch",
+      "excessive_idle"
+     ],
+     "severity": "low",
+     "reason": "a head-camera wearer pausing between activities is the normal rhythm of the recording, not a defect in the footage"
+    }
+   ]
+  }
+ ]
+}
