@@ -1,0 +1,3 @@
+# One RogersPyke/Galaxea-Open-World-Dataset_10K_20260123 episode, given as <collection folder>/<episode
+# index>. A Galaxea R1 Lite plugs a device into a power strip (38 s).
+Plug_Into_A_Fixed_Socket_20250710_006/69

@@ -1,0 +1,566 @@
+"""One episode's request: which frames, decoded exactly, and a prompt that states only facts we are sure of.
+
+An episode is a sidecar folder written by a preparer (prepare/): context.json (the dataset's facts: rig, state
+kind, fps, cameras and what each one is, the instruction or annotation), sources.json (per camera, the video
+file, the episode's offset in it and its frame count), state.npz (recorded state and action, absent for
+video-only rigs) and, where the dataset keeps real capture times, times.npz and a kmap per camera paired to the
+anchor camera by time. Nothing about the data is changed: the model sees the episode as the dataset ships it.
+
+What the model is told about the episode, and where each fact comes from:
+- dataset, robot type, fps, camera names and resolution: the dataset's own metadata (context.json).
+- what each camera is: checked by eye on the dataset's frames at prepare time, stated as the dataset's
+  camera identity, and the model is told to verify it against the pixels.
+- the instruction or annotation: the dataset's per-episode text, as a claim to check.
+- still spans: from the recorded state, true by construction (state.still_spans), as the recording's claim.
+- recorded motion between consecutive instants: from the recorded state, as a claim to check.
+- sampling: exactly what state.sample_frames did.
+Nothing is said about field of view, lens, lighting, object identities, or what a gripper reading implies.
+
+Layout (fixed, not flags):
+- Grid cells are GRID_CELL_W_BY_RIG wide. Teleop cells are 448 px: at 256 px a wrist camera's oblique view
+  could not show which face of an object is up, and the model read a change of viewing direction as a
+  change of state (MolmoAct2 episode 1346: 0 of 3 right at 256 px, 3 of 3 at 448 px), at about $37 per
+  footage hour on a cold cache. Handheld and head-camera cells stay 256 px: no measured gain there, and
+  handheld would pass $40 per hour. An episode whose grids at the rig's width would pass the request's
+  image-size cap (a long ABC-130k episode at 448 px) is sent at the largest of CELL_W_STEPS that fits,
+  instead of being refused.
+- After the grids, the episode's first and last instant are sent again larger (all cameras stacked, at most
+  DETAIL_MAX_W wide each), because completion is judged on the end state and small detail (lettering, a
+  display, fine alignment) only reads at native resolution.
+"""
+from __future__ import annotations
+
+import base64
+import io
+import json
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import numpy as np
+
+from checks import timebase
+from label import frames as mf
+from label import prompts
+from label import state as ms
+
+FPS = 30
+VIEW_ORDER = ("exo", "left", "right")          # harness view keys
+CAM_NAME = {"exo": "top", "left": "left", "right": "right"}   # dataset camera names
+GRID_CELL_W_BY_RIG = {"teleop_arms": 448, "handheld_gripper": 256, "ego_head": 256}
+CELL_W_STEPS = (448, 384, 320, 288, 256, 224, 192)   # widths tried, largest first, when a request is too big
+DETAIL_VIEW_BYTES_MAX = 2_000_000   # room kept under the cap for the two full-resolution first and last frames
+# The provider caps a request's total image size at 50 MB. Its counted size is not the raw JPEG bytes: on a
+# measured request 34 MB of JPEG counted as 60.14 MB (about 1.77x, base64 on the wire plus overhead), so the
+# inflated size is bounded with a margin.
+IMAGE_LIMIT_BYTES = 50 * 1024 * 1024
+IMAGE_SIZE_INFLATION = 1.85
+# The first and last instant are also sent larger, for small detail (lettering, a display, fine
+# alignment). Image tokens scale with pixel area, so each camera is capped at this width: 768 px is above
+# MolmoAct2's native 640 px (where lettering and displays read fine), while native 1920 px frames would
+# cost about 6x as much for little gain.
+DETAIL_MAX_W = 768
+GRID_GUTTER = 84
+GRID_HEADER = 30
+
+
+def is_episode_dir(ep_dir: Path) -> bool:
+    return (Path(ep_dir) / "context.json").exists() and (Path(ep_dir) / "sources.json").exists()
+
+
+def load(ep_dir: Path) -> dict:
+    ep_dir = Path(ep_dir)
+    ctx = json.loads((ep_dir / "context.json").read_text())
+    src = json.loads((ep_dir / "sources.json").read_text())
+    for v, d in src.items():
+        if "n_frames" not in d:
+            raise RuntimeError(f"{ep_dir}: sources.json has no n_frames for {v}; prepare the episode again")
+    if ctx.get("state_kind") == "none":
+        # video-only rigs (a head camera on a person): no recorded state; the state array is empty
+        # columns over the anchor camera's frames so frame counts and times work unchanged
+        first = next(v for v in VIEW_ORDER if v in src)
+        state, action = np.zeros((int(src[first]["n_frames"]), 0)), None
+    else:
+        z = np.load(ep_dir / "state.npz")
+        if "state" not in z.files:
+            raise RuntimeError(f"{ep_dir}: state.npz has no state array; prepare the episode again")
+        state, action = z["state"], (z["action"] if "action" in z.files else None)
+    ep = {"dir": ep_dir, "context": ctx, "sources": src, "state": state,
+          "action": action, "times": None, "kmap": {}}
+    if ctx.get("real_times"):
+        # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
+        # each camera's frames are decoded by their exact pts
+        t = np.load(ep_dir / ctx["real_times"])
+        ep["times"] = {k: t[k] for k in t.files}
+    for v, d in src.items():
+        if d.get("kmap"):
+            ep["kmap"][v] = np.load(ep_dir / d["kmap"])
+    return ep
+
+
+def ep_fps(ep: dict) -> float:
+    return float(ep["context"].get("fps") or FPS)
+
+
+def views(ep: dict) -> list[str]:
+    """The episode's cameras in the fixed row order (top, then left, then right gripper)."""
+    have = ep.get("sources") or ep["context"].get("cameras") or dict.fromkeys(VIEW_ORDER)
+    return [v for v in VIEW_ORDER if v in have]
+
+
+def anchor(ep: dict) -> str:
+    return views(ep)[0]
+
+
+def cam_name(ep: dict, v: str) -> str:
+    return ((ep["context"].get("cameras") or {}).get(v) or {}).get("name") or CAM_NAME[v]
+
+
+def frame_time(ep: dict, k: int) -> float:
+    """Seconds from the episode's start for anchor frame k: the real capture time when the dataset
+    has one, otherwise k / fps (MolmoAct2's and FastUMI's timestamps are exactly frame_index / fps)."""
+    if ep.get("times") is not None:
+        return float(ep["times"][anchor(ep)][k])
+    return k / ep_fps(ep)
+
+
+def describe_spans(ep: dict, spans) -> list[dict]:
+    last = len(ep["state"]) - 1
+    return [{"start_s": round(frame_time(ep, a), 2), "end_s": round(frame_time(ep, min(b, last)), 2)} for a, b in spans]
+
+
+# Rigs this harness knows. The episode's context.json declares one as "profile"; nothing is assumed from the
+# dataset name or the camera set.
+RIGS = ("teleop_arms", "handheld_gripper", "ego_head")
+STATE_KINDS = ("joints", "ee_pose", "none")
+# One sampled instant every N s for the whole episode, still spans included (a still span is exactly
+# where a stopped recording would hide). Handheld demonstrations are short and fast, so denser.
+# Egocentric footage has one low-resolution head camera and the hands are the whole point, so it is
+# sampled twice as densely for about the same cost per hour.
+SAMPLE_EVERY_S = {"teleop_arms": 1.0, "handheld_gripper": 1.0, "ego_head": 0.5}
+
+
+def rig(ep: dict) -> str:
+    p = ep["context"].get("profile")
+    if p not in RIGS:
+        raise RuntimeError(f"{ep.get('dir', '?')}: context.json must declare profile as one of {RIGS}, got {p!r}")
+    return p
+
+
+def state_kind(ep: dict) -> str:
+    k = ep["context"].get("state_kind")
+    if k not in STATE_KINDS:
+        raise RuntimeError(f"{ep.get('dir', '?')}: context.json must declare state_kind as one of {STATE_KINDS}, "
+                           f"got {k!r}")
+    return k
+
+
+def plan(ep: dict) -> dict:
+    """Frames to send plus the deterministic checks we report ourselves."""
+    T = int(len(ep["state"]))
+    r, kind, fps = rig(ep), state_kind(ep), ep_fps(ep)
+    windows = {v: int(ep["sources"][v]["n_frames"]) for v in views(ep)}
+    # the state follows the anchor camera's frames; a camera paired to the anchor by real time (kmap) has
+    # its own frame count and is matched through the map, so only unpaired cameras must equal the state
+    a = anchor(ep)
+    paired = {v for v in windows if v != a and v in ep["kmap"] and len(ep["kmap"][v]) >= windows[a]}
+    checks = {"state_frames": T, "camera_frames": windows,
+              "camera_windows_match_state": all(n == T for v, n in windows.items() if v not in paired)}
+    if ep.get("action") is not None and r == "teleop_arms" and kind == "joints":
+        # sped-up recording (the rig's loop ran below the rate its samples are stamped at): a report
+        # field computed from the leader/follower joint lag, not a claim made to the model
+        checks["timebase"] = timebase.timebase_check(ep["state"], ep["action"],
+                                               ep["context"].get("timebase_neighbour_lag_frames"))
+    if kind != "none" and checks["camera_windows_match_state"]:
+        spans = ms.still_spans(ep["state"], fps=fps, kind=kind)
+        n = T
+    else:
+        # video only, or a dataset defect (the cameras do not cover the same frames as the state): label the
+        # video as shipped over the anchor frames every camera not paired to it by time also has, and make no
+        # state claims (the defect is reported in checks)
+        spans = []
+        n = min([windows[a]] + [w for v, w in windows.items() if v != a and v not in paired])
+    if ep["context"].get("stream_checks"):
+        checks["streams"] = ep["context"]["stream_checks"].get("streams")
+    if ep["context"].get("stream_pairing"):
+        # checks/stream_pairing.py: whether each mounted stream follows its own actor's recorded motion (a
+        # report field, never a claim made to the model)
+        checks["stream_pairing"] = ep["context"]["stream_pairing"]
+    every = SAMPLE_EVERY_S[r]
+    ks = ms.sample_frames(n, spans, fps=fps, moving_every_s=every, still_every_s=every)
+    return {"n": n, "ks": ks, "spans": spans, "checks": checks,
+            "state_usable": checks["camera_windows_match_state"]}
+
+
+def actors(ep: dict) -> list[str]:
+    """Names of the arms or grippers in state order (7 values each): left then right, or the one.
+    On a person (ego), the actors are their own two hands."""
+    if rig(ep) == "ego_head":
+        return ["left", "right"]
+    if state_kind(ep) == "none":
+        # video only: the actors are the mounted cameras' own, or both when no single mounted camera names one
+        mounted = [v for v in views(ep) if v != "exo"]
+        return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
+    return ["left", "right"] if ep["state"].shape[1] == 14 else [cam_name(ep, views(ep)[-1])]
+
+
+def _decode_view(ep: dict, v: str, ks: list[int], gate=None):
+    """Frames for anchor indices ks. A camera paired to the anchor by real time (kmap) is decoded at
+    its own frame nearest each anchor frame; results are keyed by the anchor index."""
+    s = ep["sources"][v]
+    km = ep["kmap"].get(v)
+    own = [int(km[k]) for k in ks] if km is not None else list(ks)
+    pts = ep["times"].get(f"{v}_pts") if ep.get("times") is not None else None
+
+    def run():
+        return mf.extract_frames(s["packed"], s["base_s"], int(s["n_frames"]), own, pts=pts, fps=ep_fps(ep))
+    if gate is not None:
+        with gate:
+            got = run()
+    else:
+        got = run()
+    return {k: got[j] for k, j in zip(ks, own)}
+
+
+def frames(ep: dict, pl: dict, gate=None) -> dict:
+    """{view: {k: PIL image}} for every planned k, decoded exactly (raises otherwise)."""
+    vs = views(ep)
+    with ThreadPoolExecutor(max_workers=len(vs)) as ex:
+        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate) for v in vs}
+        return {v: f.result() for v, f in futs.items()}
+
+
+def timesteps(ep: dict, pl: dict, imgs: dict, cell_w: int, quality: int = 90):
+    """[(t_s, [(camera_name, jpeg bytes), ...]), ...] in time order, cameras in a fixed order."""
+    vs = [v for v in VIEW_ORDER if v in imgs]
+    out = []
+    for k in pl["ks"]:
+        out.append((frame_time(ep, k), [(cam_name(ep, v), mf.to_jpeg(imgs[v][k], cell_w, quality)) for v in vs]))
+    return out
+
+
+def detail_size(w: int, h: int) -> tuple[int, int]:
+    if w <= DETAIL_MAX_W:
+        return w, h
+    return DETAIL_MAX_W, int(round(h * DETAIL_MAX_W / w / 2)) * 2
+
+
+def fullres_stack(ep: dict, imgs: dict, k: int, label: str, t_s: float) -> bytes:
+    """All cameras at instant k, at detail size (native, capped at DETAIL_MAX_W wide), stacked top to
+    bottom with a name strip."""
+    from PIL import Image, ImageDraw
+    vs = [v for v in VIEW_ORDER if v in imgs]
+    ims = [imgs[v][k] for v in vs]
+    ims = [im if im.width <= DETAIL_MAX_W else im.resize(detail_size(im.width, im.height), Image.LANCZOS)
+           for im in ims]
+    w = max(i.width for i in ims)
+    strip = 26
+    g = Image.new("RGB", (w, sum(i.height + strip for i in ims)), (18, 18, 20))
+    d = ImageDraw.Draw(g)
+    y = 0
+    for v, im in zip(vs, ims):
+        d.text((6, y + 5), f"{cam_name(ep, v)}   {label}   t={t_s:.2f}s", fill=(255, 220, 0))
+        g.paste(im, (0, y + strip))
+        y += im.height + strip
+    buf = io.BytesIO()
+    g.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _rig_nouns(r: str) -> dict:
+    if r == "ego_head":
+        return {"actor": "hand", "an_actor": "a hand", "actors": "hands", "gripper_of": "hand",
+                "who": "a person wears a camera on their head and works with their own two hands"}
+    if r == "teleop_arms":
+        return {"actor": "arm", "an_actor": "an arm", "actors": "arms", "gripper_of": "arm's gripper",
+                "who": "a person teleoperates the robot arms"}
+    return {"actor": "gripper", "an_actor": "a gripper", "actors": "grippers", "gripper_of": "handheld gripper",
+            "who": "a person holds handheld grippers and does the task with them"}
+
+
+def _camera_line(ep: dict, v: str) -> str:
+    """One camera's facts. A description written at prep time (verified for that dataset) wins; the
+    fallback says only what the camera's slot implies: on the left/right gripper, or not on one."""
+    cam = (ep["context"].get("cameras") or {}).get(v) or {}
+    if cam.get("desc"):
+        return f"- {cam_name(ep, v)}: {cam['desc'].rstrip('.')}."
+    n = _rig_nouns(rig(ep))
+    if v == "exo" and rig(ep) == "ego_head":
+        return f"- {cam_name(ep, v)}: the camera worn on the person's head."
+    if v == "exo":
+        return (f"- {cam_name(ep, v)}: a camera that is not mounted on any {n['actor']}. Use it for the "
+                "scene layout, object locations and where things end up.")
+    side = "" if len(views(ep)) == 1 or v not in ("left", "right") else f"{v.upper()} "
+    return f"- {cam_name(ep, v)}: the camera mounted on the {side}{n['gripper_of']}."
+
+
+def camera_desc(ep: dict) -> str:
+    vs, r = views(ep), rig(ep)
+    n = _rig_nouns(r)
+    cams = ep["context"].get("cameras") or {}
+    res = sorted({f"{c.get('width')}x{c.get('height')}" for c in cams.values() if c.get("width")})
+    rec = f" (recording {', '.join(res)} at {ep_fps(ep):g} fps)" if res else ""
+    count = "There is exactly 1 camera; every grid row and every image strip is labelled with its name" \
+        if len(vs) == 1 else (f"There are exactly {len(vs)}; every grid row and every image strip is labelled "
+                              "with one of these names")
+    s = (f"Cameras in this episode, as named in the dataset{rec}. {count}:\n"
+         + "\n".join(_camera_line(ep, v) for v in vs) + "\n")
+    if "exo" not in vs:
+        mounted = [v for v in vs if v != "exo"]
+        s += (f"No camera in this episode is off the {n['actor'] if len(mounted) == 1 else n['actors']}: the "
+              f"whole scene is seen only through {'that camera' if len(mounted) == 1 else 'those cameras'}, so "
+              "reconstruct the layout and where things end up from what it shows.\n")
+    if r == "ego_head":
+        s += ("This camera description is dataset metadata, not guaranteed truth: check it against the pixels. "
+              "If the stream contradicts it (a view that stays fixed instead of moving with the person's head, "
+              "a black, frozen or corrupted stream), describe what the view actually is and record it as a data "
+              "issue. Where the camera is worn and where it points are read from the frames: a head camera turns "
+              "and tilts with the head, so it shows wherever the person looks, and a camera that is really on the "
+              "chest or held in the hand, or a mount that slips and tilts the view partway through, is worth "
+              "recording.")
+    else:
+        s += ("These camera identities are dataset metadata, not guaranteed truth: check them against the "
+              "pixels. If a stream's content contradicts its name (a mounted camera that shows a fixed view "
+              f"or the reverse, two {n['actor']} streams swapped or identical, a black or frozen stream), "
+              "describe what the view actually is and record it as a data issue.")
+    if r != "ego_head" and any(v != "exo" for v in vs):
+        s += (f" A mounted camera turns with its {n['actor']}, so where it looks changes through the episode: "
+              "sometimes down onto the work, sometimes along or across it. Work out its direction at each instant "
+              "from the frame itself (the perspective of the table or floor, which faces of an object are in view, "
+              f"where walls or the room appear) and from where that {n['actor']} is in the other views at the same "
+              "instant, and read heights, contacts and which face of an object is up from that geometry, never from "
+              "an assumed direction. The "
+              "same object seen from another direction shows other faces although nothing about it changed: a face "
+              "that fills a view looking along the table is a side, and only a view looking down on an object shows "
+              "its top. So an object changed state only when views from comparable directions, or the camera that "
+              "is not mounted, show the change, never because a mounted camera now sees it from elsewhere.")
+    if "left" in vs and "right" in vs:
+        s += (f" In the output, \"left\", \"right\" and \"both\" name the streams: an action is \"left\" when "
+              "the left stream's own gripper makes the contact, \"right\" likewise, "
+              f"\"both\" when the two act together. The other {n['actor']} often appears inside a view, and an "
+              "object lying between open fingers is not yet held, so neither is a contact of that camera's own. "
+              "This naming is bookkeeping only; it does not settle whether the names are right. Whether each "
+              "stream really sits on the side its name says is a separate question for the pixels: where the "
+              f"other {n['actor']} and the scene appear in it once you have worked out from the frame how that camera "
+              "is turned at that instant, and which recorded motion its view follows.")
+    elif r == "ego_head":
+        s += (" In the output, \"left\", \"right\" and \"both\" name the person's own left and right hands, "
+              "as seen from their head. Which hand is which follows the person's body (the forearm it belongs to, "
+              "the thumb side), not which half of the image it is in, because hands cross the midline and reach "
+              "across.")
+    elif len([v for v in vs if v != "exo"]) == 1:
+        s += f" In the output, the \"arm\" field always names the one {n['actor']}: \"{actors(ep)[0]}\"."
+    return s
+
+
+def _detail_desc(native: tuple) -> str:
+    try:
+        w, h = int(native[0]), int(native[1])
+    except (TypeError, ValueError):
+        return "up to 960 px wide"
+    dw, dh = detail_size(w, h)
+    return f"the full {w}x{h}" if (dw, dh) == (w, h) else f"{dw}x{dh} (the recording is {w}x{h})"
+
+
+def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -> str:
+    r, kind = rig(ep), state_kind(ep)
+    n = _rig_nouns(r)
+    names = ", ".join(cam_name(ep, v) for v in views(ep))
+    every = SAMPLE_EVERY_S[r]
+    s = (
+        f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
+        "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
+        "seconds from the episode's first frame. Read each grid left to right and the grids in order. "
+        "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
+        f"downscaled to {cell_w}x{cell_h}. After the grids, the episode's first and last instant are "
+        f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
+        "small detail (lettering, a display, fine alignment).\n"
+        f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
+        "frame.")
+    if kind == "none":
+        what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
+        return s + (f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
+                    + BETWEEN_INSTANTS)
+    if not pl.get("state_usable", True):
+        return s + ("\nRECORDED STATE: not given. This episode's cameras do not cover the same frames "
+                    "as its recorded state, so the state cannot be aligned to the video." + BETWEEN_INSTANTS)
+    src = ("joint encoders" if kind == "joints" else
+           "recorded end-effector poses" if r == "teleop_arms" else "tracked gripper poses")
+    if pl["spans"]:
+        sp = ", ".join(f"{d['start_s']:.2f}-{d['end_s']:.2f}s" for d in describe_spans(ep, pl["spans"]))
+        s += (f"\nRECORDED STILL SPANS, from the dataset's {src}: {sp}. Over each span the recording says "
+              f"no {n['actor']} moved and none opened or closed. This is the recording's claim, not a "
+              f"fact: check it. {'An' if n['actor'][0] in 'aeiou' else 'A'} {n['actor']} that is really still "
+              "shows a steady view in its own camera. If the views show motion during a span, the recording is "
+              f"wrong there. If the views hold steady and the scene still changes, the {n['actors']} did not do it: "
+              "say what you see.")
+    else:
+        s += f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
+    return s + _motion_table(ep, pl) + BETWEEN_INSTANTS
+
+
+BETWEEN_INSTANTS = (
+    "\nBETWEEN INSTANTS: reconstruct, do not smooth. A brief event can fall between two "
+    "instants. When the scene in the frames differs between consecutive instants (something held "
+    "is released, moved or gone; a contact is made or broken), an event happened in that "
+    "interval: place it there and say in its notes that it is inferred. Do not fill an unseen interval with the "
+    "expected, competent version of the task; a change that does not fit smooth progress may "
+    "be a slip, drop, knock or failed grasp, and should be weighed against the frames before "
+    "and after, the other side, and where the object ends up. Where the evidence does not "
+    "settle it, say so in a note instead of defaulting to the charitable "
+    "reading, and never invent an event when consecutive instants are consistent. An event you "
+    "infer between instants but cannot confirm from the frames around it goes in the timeline as "
+    "inferred; it is not by itself an operator mistake or a data issue.")
+
+
+def _motion_table(ep: dict, pl: dict) -> str:
+    """The recorded motion between consecutive sampled instants, as a claim to check against the
+    cameras. Mounted cameras are rigid on their gripper, so a real move shows in that camera."""
+    names, kind, n = actors(ep), state_kind(ep), _rig_nouns(rig(ep))
+    st = ep["state"][:pl["n"]]
+    rows = []
+    if kind == "ee_pose":
+        for r in ms.recorded_motion(st, pl["ks"], names):
+            parts = [f"{a} {g['move_cm']:.1f}, {g['max_step_cm']:.1f}, {g['turn_deg']:.0f}, "
+                     f"{g['open_a']:.2f}>{g['open_b']:.2f}" for a, g in r["grippers"].items()]
+            rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
+        what = ("Each row gives, per gripper: moved (cm, the straight-line distance between the recorded "
+                "positions at the two instants), largest single-frame step (cm, the biggest recorded jump "
+                "between two consecutive frames inside the interval), turned (deg, the recorded rotation "
+                "between the two instants), and the opening at the two instants written start>end")
+        clear = ("a view that clearly shifts or turns over an interval where the recorded move is near 0 cm "
+                 "AND the recorded turn is near 0 deg (the pose stopped updating); a recorded single-frame "
+                 "step of several cm with no jump in the view at that moment")
+    else:
+        for r in ms.recorded_joint_motion(st, pl["ks"], names):
+            parts = [f"{a} {g['max_deg']:.1f}, {g['max_step_deg']:.1f}, {g['grip_a']:.2f}>{g['grip_b']:.2f}"
+                     for a, g in r["arms"].items()]
+            rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
+        what = ("Each row gives, per arm: joints moved up to (deg, the largest change of any one joint "
+                "between the two instants), largest single-frame step (deg, the biggest change of any joint "
+                "between two consecutive frames inside the interval), and the gripper value at the two "
+                "instants written start>end. Joint angles tell you whether and when an arm moved, not where "
+                "its gripper is")
+        clear = ("an arm that clearly moves in the video over an interval where every joint is recorded as "
+                 "near 0 deg (the recording stopped updating), or the reverse; a single-frame joint step "
+                 "of many degrees with no matching jump in the video")
+    step_ms = 1000.0 / ep_fps(ep)
+    grip = (ep["context"].get("gripper_value") or
+            "the dataset's own number (units and direction not documented)").rstrip(".")
+    return (
+        f"\nRECORDED MOTION, from the dataset's state, one row per interval between consecutive instants "
+        f"you receive ({step_ms:.0f} ms per recorded frame). {what}; the gripper/opening value is "
+        f"{grip}. This is the recording's claim, not a "
+        f"fact: check it against the video. A camera mounted on {n['an_actor']} shifts when that "
+        f"{n['actor']} moves. The gripper value is the recorded jaw position; whether anything is held is "
+        "read from the frames, never from the value. A disagreement between the recording and the video is "
+        f"a data issue only when it is clear: {clear}; or fingers that clearly open or close while the value "
+        "stays flat, or a value that swings from open to shut while the fingers stay still. Do not judge "
+        "whether a recorded motion is too small or too large from how much a view changes: apparent motion "
+        "depends on the lens, the distance to the scene and the direction of travel. Likewise never compare "
+        "how open the fingers look with the gripper number: its scale is not a picture of how wide the "
+        "fingers look, so only the timing of a change can be compared with the video.\n"
+        + "\n".join(rows))
+
+
+def ego_annotation_block(ctx: dict) -> str:
+    goal = (ctx.get("instruction") or "").strip()
+    subs = ctx.get("annotation_subtasks") or []
+    if not goal and not subs:
+        return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
+                "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
+    lines = [f"  {x['t0']:.1f}-{x['t1']:.1f}s  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
+             for x in subs]
+    return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE (claims to check, see ABOUT THE DATASET'S ANNOTATION above):\n"
+            + (f"  goal: \"{goal}\"\n" if goal else "")
+            + ("  subtasks, with the times the dataset gives:\n" + "\n".join(lines) + "\n" if lines else "")
+            + (f"  about these annotations: {ctx['annotation_note'].strip()}\n" if ctx.get("annotation_note") else ""))
+
+
+def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None) -> tuple[str, str]:
+    """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
+    identical for every episode of the dataset, then the facts about THIS episode (rig, cameras, frames,
+    recorded state, instruction)."""
+    ctx = ep["context"]
+    r = rig(ep)
+    n = _rig_nouns(r)
+    robot = ctx.get("robot_type")
+    what = f" ({robot})" if robot else ""
+    k = len(actors(ep))
+    who = n["who"] if r in ("teleop_arms", "ego_head") else (
+        "a person holds one handheld gripper and does the task with it" if k == 1
+        else f"a person holds {k} handheld grippers, one per hand, and does the task with them")
+    kind_of = ("one clip of first-person human video from the {d} dataset, collected to train robots and world "
+               "models" if r == "ego_head" else "one episode of a robot-learning demonstration from the {d} dataset{w}")
+    intro = (
+        f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the episode exactly as "
+        "the dataset ships it, from its first recorded frame to its last; nothing was trimmed, cleaned or edited.\n"
+        + (f"How the dataset cuts its recordings into episodes: {ctx['collection_note'].strip()}\n"
+           if ctx.get("collection_note") else "")
+        + "\n" + camera_desc(ep) + "\n")
+    cams = ctx.get("cameras") or {}
+    c0 = cams.get(anchor(ep), {})
+    native = (c0.get("width") or "native", c0.get("height") or "resolution")
+    given = (ctx.get("instruction") or "").strip()
+    label = "; ".join(ctx.get("task_label") or [])
+    given_block = ""
+    if r == "ego_head":
+        given_block = ego_annotation_block(ctx)
+    elif given:
+        # the rules for using the instruction are the same for every episode and live in the cached
+        # instructions (instruction_rules); only the instruction itself belongs to the episode
+        given_block = ("\nTHE TASK FOR THIS EPISODE WAS GIVEN TO YOU as the dataset's per-episode instruction:\n"
+                       f"  \"{given}\"\nHow to use it is set out under ABOUT THE EPISODE'S INSTRUCTION above.\n")
+        if ctx.get("instruction_note"):
+            given_block += ctx["instruction_note"].strip() + "\n"
+        elif label:
+            given_block += (f"The dataset's coarse task label for this episode is \"{label}\"; the "
+                            "instruction above is the dataset's per-episode annotation of it, and "
+                            "the outcome is graded against it.\n")
+    return (prompts.fixed_instructions(r, has_instruction=bool(given)) + prompts.example_block(r, example_dir),
+            EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + "\n" + given_block)
+
+
+EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
+
+
+def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int | None = None,
+                  grid_cols: int = 4, grid_quality: int = 80, example_dir=None) -> dict:
+    """Everything the harness sends for one episode (content parts), and what it records about it."""
+    ep = load(ep_dir)
+    pl = plan(ep)
+    imgs = frames(ep, pl, gate)
+    any_img = next(iter(imgs.values()))[pl["ks"][0]]
+    if len(views(ep)) == 1:
+        # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
+        grid_cols = max(grid_cols, 6)
+    cam_labels = [cam_name(ep, v) for v in VIEW_ORDER if v in imgs]
+    # An explicit cell width is used as given. The rig's default is the largest width whose grids fit the
+    # request's image-size cap: a long episode at 448 px can exceed it, and is then sent at the next step
+    # down rather than refused. Episodes that fit are unchanged.
+    widths = [cell_w] if cell_w else [w for w in CELL_W_STEPS if w <= GRID_CELL_W_BY_RIG[rig(ep)]]
+    budget = IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION - DETAIL_VIEW_BYTES_MAX
+    for cell_w in widths:
+        steps = timesteps(ep, pl, imgs, cell_w)
+        cell_h = int(round(any_img.height * cell_w / any_img.width / 2)) * 2
+        fixed, episode = build_prompt(ep, pl, cell_w=cell_w, cell_h=cell_h, example_dir=example_dir)
+        content, n_grids, grid_bytes = mf.build_content(fixed, episode, steps, cam_labels, grid_cols, detail,
+                                                        grid_quality, gutter=GRID_GUTTER, header=GRID_HEADER)
+        if grid_bytes <= budget:
+            break
+    prompt = fixed + episode
+    extra_bytes = 0
+    for k, name in ((pl["ks"][0], "first frame"), (pl["ks"][-1], "last frame")):
+        jpg = fullres_stack(ep, imgs, k, name, frame_time(ep, k))
+        extra_bytes += len(jpg)
+        content.append({"type": "text", "text": f"=== detail view, {name} of the episode, "
+                        f"t={frame_time(ep, k):.2f}s | cameras {', '.join(cam_labels)} stacked top to bottom ==="})
+        content.append({"type": "image_url", "image_url": {
+            "url": "data:image/jpeg;base64," + base64.b64encode(jpg).decode("ascii"),
+            "detail": detail}})
+    return {"content": content, "prompt": prompt, "plan": pl, "n_grids": n_grids,
+            "n_images": n_grids + 2, "image_bytes": grid_bytes + extra_bytes,
+            "given_prompt": (ep["context"].get("instruction") or "").strip() or None,
+            "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels,
+            "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]],
+            "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
+            "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s"}

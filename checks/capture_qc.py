@@ -1,0 +1,1227 @@
+"""Capture checks from Sambhav Gupta's public-dataset-adapter (commit 99d0a9e), run on episode sidecars as a
+deterministic stage.
+
+    python -m checks.capture_qc [--jobs N] [--force] EPISODES [EPISODES ...]
+
+EPISODES are folders of prepared episode_* folders. For each episode this reads context.json, sources.json,
+state.npz, the real-times file and kmap_*.npy files the sources name, and every camera's video, and writes
+context["capture_qc"]. An episode that already has a result is skipped unless --force. `python -m board build`
+copies the result into the episode's dataset_checks on the board.
+
+The checks themselves are the vendored upstream functions (checks/vendor/public_dataset_adapter_qc.py).
+This module does three things around them:
+
+1. Adapter from our sidecars to their inputs:
+   - End-effector states: handheld ee_pose becomes xyz + rotation vector, the rotation built from our
+     roll/pitch/yaw with the convention of label.state._rot_zyx (R = Rz(yaw) Ry(pitch) Rx(roll), which is
+     scipy's Rotation.from_euler("xyz", rpy) and upstream's euler_xyz_to_rotvec). Joint-state teleop has
+     no forward kinematics in our pipeline, so every check that needs an end-effector pose is reported
+     as not assessed there; the gripper column is still used.
+   - Timestamps: the anchor camera's real capture times from the real-times file, otherwise k / fps.
+   - Actions: derived from the states with the vendored delta_actions, never from state.npz["action"].
+   - Video: every camera is decoded on its own native frames inside the episode window, each frame
+     matched by its exact pts (as label.frames.extract_frames does), to 64x64 grey with the same
+     fast-bilinear scaling upstream uses (PyAV and upstream's ffmpeg command agree within one grey
+     level). Frame statistics (exposure, contrast, duplicates, frozen runs) use those native frames.
+     Checks that compare video with motion aggregate the camera's own frame-to-frame change to anchor
+     intervals through its kmap with cumulative sums, as stream_pairing.stream_motion does; an anchor
+     interval in which that camera recorded no new frame is NaN (no observation), never zero. Nothing is
+     decoded through kmap duplicates.
+   - Gripper unit: an open fraction only where the episode says so (context "gripper_unit", or the
+     verified "gripper_value" text "0 = jaws shut, 1 = fully open"). Otherwise the unit-dependent
+     gripper checks are not assessed.
+   - No native-rate layer: raw_row is never built, so native_rate_qc_unavailable is never emitted.
+2. The stage: assess() runs every upstream check, then DISPOSITION turns the fired checks into flags
+   (shown as issues), notes (quiet facts) or nothing (excluded), with the reason kept in code. The
+   thresholds come from a calibration on our frame-verified datasets (the rule: a check is a flag only if
+   every episode it fires on, on every verified dataset of its rig, is a confirmed defect); the finding
+   behind each decision is written next to it below.
+3. The command line above.
+
+Output, context["capture_qc"]:
+    {"source": "public-dataset-adapter@99d0a9e", "version": 2,
+     "flags": [{"check", "title", "t_s", "camera", "actor", "evidence"}],
+     "notes": [{"check", "text"}],
+     "not_assessed": {check: why},
+     "checks": [{"check", "name", "group", "status", ...}],
+     "metrics": {"cameras": {...}, "actors": {...}, "episode": {...}}}
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import time
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+import numpy as np
+
+from checks.vendor import public_dataset_adapter_qc as up
+from label import episode as me
+from label import frames as mf
+
+SOURCE = up.SOURCE
+VERSION = 2          # the format version of context["capture_qc"]
+GRAY = 64
+
+# ------------------------------------------------------------------------------------------ thresholds
+#
+# Upstream's FilterPolicy defaults stay in the vendored file and are used unchanged. EXTRA holds the few rules
+# upstream does not have, per rig, each one found necessary by the calibration and explained where it is used.
+# EXTRA_DEFAULT is upstream's behaviour for each of them. None of them is a quantile quota.
+
+EXTRA_DEFAULT = {
+    # a pair of consecutive frames counts as a duplicate below this mean absolute grey change
+    # (upstream hard-codes 0.25 inside inspect_processed_video)
+    "duplicate_pair_mad": 0.25,
+    # a clock interval is a gap only if it is also at least this long (upstream: none)
+    "gap_min_s": 0.0,
+    # frames darker / brighter than these means count as extreme exposure (upstream 5 / 250)
+    "black_mean": 5.0,
+    "white_mean": 250.0,
+    # a frame with grey standard deviation below this is low contrast (upstream 3)
+    "low_contrast_std": 3.0,
+    # frozen run: longest run of duplicate pairs in seconds (None: upstream's policy.maximum_frozen_run_s)
+    "frozen_run_s": None,
+    # largest_action_not_in_video: compare each actor's largest step with its own rigidly mounted camera
+    # only (upstream: every camera must agree, so the other hand's camera moving hides every spike)
+    "largest_action_own_camera": False,
+    # duplicates count only where the camera otherwise moves: a run of at most duplicate_max_run repeated
+    # pairs between two frame steps of at least this many grey levels (upstream: 0, every pair counts)
+    "duplicate_motion_mad": 0.0,
+    "duplicate_max_run": 4,
+    # jump_return_event: both leap steps at least this many times the neighbouring steps (upstream: 0, no test)
+    "jump_isolation": 0.0,
+    # video_frozen_run: only while the recorded state says the view must change (upstream: always)
+    "frozen_needs_motion": False,
+}
+
+EXTRA: dict[str, dict] = {
+    "teleop_arms": {"duplicate_pair_mad": 0.1, "duplicate_motion_mad": 3.0, "gap_min_s": 0.25,
+                    "frozen_needs_motion": True},
+    "handheld_gripper": {"duplicate_pair_mad": 0.1, "duplicate_motion_mad": 3.0, "largest_action_own_camera": True,
+                         "jump_isolation": 3.0, "gap_min_s": 0.25, "frozen_needs_motion": True},
+    "ego_head": {"duplicate_pair_mad": 0.1, "duplicate_motion_mad": 3.0, "gap_min_s": 0.25,
+                 "frozen_needs_motion": True},
+}
+
+
+def policy_for(rig: str) -> tuple[up.FilterPolicy, dict]:
+    """Upstream's FilterPolicy and our per-rig rules for this rig."""
+    policy = up.FilterPolicy()
+    extra = {**EXTRA_DEFAULT, **EXTRA.get(rig, {})}
+    if extra["frozen_run_s"] is None:
+        extra["frozen_run_s"] = policy.maximum_frozen_run_s
+    return policy, extra
+
+
+# ------------------------------------------------------------------------------------------ checks
+#
+# Every check upstream's evaluate_episode can emit, the native_* family as one entry and the per-side gripper and
+# correlation reasons merged into one name each. DISPOSITION (below assess) says what is done with each.
+
+CHECKS = [
+    "missing_canonical_signal", "invalid_state_shape", "invalid_action_shape", "state_action_count_mismatch",
+    "nonfinite_signal", "episode_too_short", "invalid_rotation_matrix", "nonprincipal_rotation_state",
+    "normalized_gripper_out_of_range", "gripper_action_integral_out_of_range", "gripper_never_acts",
+    "gripper_sensor_bug", "state_time_non_monotonic_or_duplicate", "action_time_non_monotonic_or_duplicate",
+    "state_timestamp_gap", "native_camera_timestamp_gap", "missing_camera", "camera_state_alignment_mismatch",
+    "video_decode_failure", "video_decode_frame_count_mismatch", "video_extreme_exposure", "video_low_contrast",
+    "video_duplicate_frames", "video_frozen_run", "se3_translation_round_trip_failure",
+    "se3_rotation_round_trip_failure", "state_time_too_short", "action_time_too_short",
+    "action_smoothness_discontinuity", "jump_return_event", "gross_umi_speed", "over_95_percent_static",
+    "largest_action_not_in_video",
+    "visual_change_unexplained_by_action", "pixel_action_corr_mismatch", "native_rate_qc_unavailable",
+    "native_signal_checks", "processing_failure",
+]
+
+
+# ------------------------------------------------------------------------------------------ sidecars
+
+def gripper_unit(ctx: dict) -> str:
+    """normalized_open_fraction only where the episode states it; otherwise the stated unit or unknown."""
+    u = ctx.get("gripper_unit")
+    if isinstance(u, dict):
+        u = u.get("unit")
+    if isinstance(u, str) and u:
+        return u
+    text = str(ctx.get("gripper_value") or "")
+    if re.search(r"\b0\s*=\s*jaws shut,\s*1\s*=\s*fully open", text):
+        return "normalized_open_fraction"
+    if "metre" in text or "meter" in text:
+        return "metres"
+    if text:
+        return "source_units"
+    return "unknown"
+
+
+def anchor_times(ep: dict) -> np.ndarray:
+    """Seconds from the episode start for every anchor frame."""
+    n = len(ep["state"])
+    if ep.get("times") is not None:
+        t = np.asarray(ep["times"][me.anchor(ep)], dtype=np.float64)
+        return t[:n]
+    return np.arange(n, dtype=np.float64) / me.ep_fps(ep)
+
+
+def camera_times(ep: dict, v: str) -> np.ndarray | None:
+    """Real capture times of camera v's own frames, when the dataset has them."""
+    if ep.get("times") is not None and v in ep["times"]:
+        return np.asarray(ep["times"][v], dtype=np.float64)
+    return None
+
+
+def actor_views(ep: dict, names: list[str]) -> list[str | None]:
+    """The camera view mounted on each actor (state order), or None. Two actors ride on the left and
+    right views; a single handheld gripper on the episode's only mounted view (its actor name is the
+    camera's dataset name, e.g. "gripper", not the view key)."""
+    vs = me.views(ep)
+    if len(names) == 2:
+        return [v if v in vs else None for v in ("left", "right")]
+    mounted = [v for v in vs if v != "exo"]
+    return [mounted[-1] if mounted else None]
+
+
+def canonical_states(ep: dict) -> dict:
+    """Upstream's [T,14] layout (x y z m, rotation vector rad, gripper per arm; left then right) with its
+    validity mask. Joint-state rigs get only the gripper column (no forward kinematics here)."""
+    from scipy.spatial.transform import Rotation
+    s = np.asarray(ep["state"], dtype=np.float64)
+    T = len(s)
+    kind = me.state_kind(ep)
+    states = np.zeros((T, 14))
+    valid = np.zeros((T, 14), dtype=bool)
+    names = me.actors(ep)
+    out = {"states": states, "valid": valid, "actors": names, "kind": kind, "nonfinite": [], "shape_ok": True}
+    if kind == "none":
+        return out
+    if s.ndim != 2 or s.shape[1] not in (7, 14):
+        out["shape_ok"] = False
+        return out
+    n_act = s.shape[1] // 7
+    for g in range(n_act):
+        block = s[:, 7 * g:7 * g + 7]
+        finite = np.isfinite(block)
+        if not finite.all():
+            out["nonfinite"].append({"actor": names[g], "rows": int((~finite.all(axis=1)).sum()),
+                                     "first_row": int(np.flatnonzero(~finite.all(axis=1))[0])})
+            continue
+        o = 7 * g
+        if kind == "ee_pose":
+            states[:, o:o + 3] = block[:, 0:3]
+            states[:, o + 3:o + 6] = Rotation.from_euler("xyz", block[:, 3:6]).as_rotvec()
+            valid[:, o:o + 6] = True
+        states[:, o + 6] = block[:, 6]
+        valid[:, o + 6] = True
+    return out
+
+
+# ------------------------------------------------------------------------------------------ video
+
+def _targets(ep: dict, v: str, stream) -> list[int] | None:
+    """Exact pts of camera v's frames 0..n-1 inside its file, or None to take frames in decode order."""
+    s = ep["sources"][v]
+    n = int(s["n_frames"])
+    pts = ep["times"].get(f"{v}_pts") if ep.get("times") is not None else None
+    if pts is not None:
+        return [int(p) for p in pts[:n]]
+    fps = me.ep_fps(ep)
+    try:
+        b0, step = mf.base_frame(float(s.get("base_s") or 0.0), fps), mf.frame_pts_step(stream.time_base, fps)
+        return [(b0 + k) * step for k in range(n)]
+    except mf.FrameError:
+        if float(s.get("base_s") or 0.0) == 0.0:
+            # the episode's own file, not a packed one: frame k is the k-th decoded frame
+            return None
+        raise
+
+
+def decode_gray(ep: dict, v: str) -> dict:
+    """Camera v's own frames of this episode as [n,64,64] grey ("frames"), with "got" marking the frames that
+    decoded at their recorded times.
+
+    A missing file raises (an infrastructure fault, not a data defect). A decoder error on an existing
+    file is returned as "error" (upstream's video_decode_failure)."""
+    import av
+    s = ep["sources"][v]
+    n = int(s["n_frames"])
+    path = Path(s["packed"])
+    if not path.exists():
+        raise FileNotFoundError(f"camera {v}: {path} not found")
+    frames = np.zeros((n, GRAY, GRAY), dtype=np.uint8)
+    got = np.zeros(n, dtype=bool)
+    info = {"n_expected": n, "error": None}
+    try:
+        with av.open(str(path)) as c:
+            st = c.streams.video[0]
+            st.codec_context.thread_count = 1
+            targets = _targets(ep, v, st)
+            if targets is None:
+                k = 0
+                for fr in c.decode(st):
+                    if k >= n:
+                        break
+                    frames[k] = fr.reformat(width=GRAY, height=GRAY, format="gray",
+                                            interpolation="FAST_BILINEAR").to_ndarray()
+                    got[k] = True
+                    k += 1
+            else:
+                index: dict[int, int] = {}
+                for k, p in enumerate(targets):
+                    index.setdefault(p, k)
+                first, last = min(targets), max(targets)
+                c.seek(first, stream=st, backward=True, any_frame=False)
+                for fr in c.decode(st):
+                    if fr.pts is None or fr.pts < first:
+                        continue
+                    if fr.pts > last:
+                        break
+                    k = index.get(fr.pts)
+                    if k is None:
+                        continue
+                    frames[k] = fr.reformat(width=GRAY, height=GRAY, format="gray",
+                                            interpolation="FAST_BILINEAR").to_ndarray()
+                    got[k] = True
+                    if got[-1] and k == n - 1:
+                        break
+    except FileNotFoundError:
+        raise
+    except Exception as e:  # decoder failure on an existing file
+        info["error"] = f"{type(e).__name__}: {e}"[:300]
+    info["frames"] = frames
+    info["got"] = got
+    return info
+
+
+def cam_fps(ep: dict, v: str, n: int) -> float:
+    """Camera v's frame rate: the mean rate over its window when it has a real clock (a median interval
+    is useless on clocks that stamp frames in bursts: some ABC-130k cameras put half their intervals at
+    1 us and the rest near 150 ms), otherwise the episode fps."""
+    ct = camera_times(ep, v)
+    if ct is not None and len(ct) > 1:
+        m = min(n, len(ct))
+        if ct[m - 1] > ct[0]:
+            return float((m - 1) / (ct[m - 1] - ct[0]))
+    return me.ep_fps(ep)
+
+
+def camera_features(ep: dict, v: str) -> dict:
+    """Everything the video checks need from one camera: per-frame grey mean and standard deviation, and per
+    consecutive pair the mean absolute change and a tile-median change that ignores a global brightness change."""
+    d = decode_gray(ep, v)
+    n = d["n_expected"]
+    got = d["got"]
+    fr = d["frames"].astype(np.float32)
+    means = fr.mean(axis=(1, 2))
+    stds = fr.std(axis=(1, 2))
+    if n > 1:
+        delta = fr[1:] - fr[:-1]
+        pair = np.abs(delta).mean(axis=(1, 2))
+        delta -= np.median(delta, axis=(1, 2), keepdims=True)
+        tiles = np.abs(delta).reshape(-1, 8, 8, 8, 8).mean(axis=(2, 4)).reshape(-1, 64)
+        pchange = 0.75 * np.median(tiles, axis=1) + 0.25 * np.quantile(tiles, 0.75, axis=1)
+        both = got[1:] & got[:-1]
+        pair[~both] = np.nan
+        pchange[~both] = np.nan
+    else:
+        pair = np.zeros(0, np.float32)
+        pchange = np.zeros(0, np.float32)
+    means[~got] = np.nan
+    stds[~got] = np.nan
+    fps = cam_fps(ep, v, n)
+    return {"n": n, "decoded": int(got.sum()), "error": d["error"], "fps": fps,
+            "means": means.astype(np.float32), "stds": stds.astype(np.float32),
+            "pair": pair.astype(np.float32), "pchange": pchange.astype(np.float32)}
+
+
+def to_anchor(ep: dict, v: str, own: np.ndarray, T: int) -> np.ndarray | None:
+    """Per-anchor-interval values (len T-1) from a camera's own per-frame-pair values (len n-1).
+    A camera without a kmap must have exactly the anchor's frames. With a kmap, interval i sums the
+    camera's own changes from frame km[i] to km[i+1]; NaN when the camera has no new frame there."""
+    km = ep["kmap"].get(v)
+    n = len(own) + 1
+    if km is None:
+        return own[:T - 1].astype(np.float64) if n == T else None
+    km = np.asarray(km, dtype=np.int64)[:T]
+    if len(km) < T:
+        return None
+    km = np.clip(km, 0, n - 1)
+    finite = np.isfinite(own)
+    cum = np.concatenate([[0.0], np.cumsum(np.where(finite, own, 0.0))])
+    bad = np.concatenate([[0], np.cumsum(~finite)])
+    a, b = km[:-1], km[1:]
+    out = cum[b] - cum[a]
+    out[(b <= a) | ((bad[b] - bad[a]) > 0)] = np.nan
+    return out
+
+
+def extract(ep_dir: Path) -> dict:
+    """Load the sidecars and decode every camera once. The result is all assess() needs."""
+    ep = me.load(ep_dir)
+    T = len(ep["state"])
+    cams = {v: camera_features(ep, v) for v in me.views(ep)}
+    return {"ep": ep, "T": T, "cams": cams}
+
+
+# ------------------------------------------------------------------------------------------ assess
+
+def _r(status: str, why: str | None = None, events=None, metrics=None) -> dict:
+    return {"status": status, "why": why, "events": events or [], "metrics": metrics or {}}
+
+
+def _na(why: str) -> dict:
+    return _r("not_assessed", why)
+
+
+def _ev(evidence: str, t_s: float | None = None, camera: str | None = None, actor: str | None = None) -> dict:
+    """One firing: where it is (seconds, camera, actor; None when it is the whole episode) and what was measured."""
+    return {"t_s": t_s, "camera": camera, "actor": actor, "evidence": evidence}
+
+
+def _fired(events: list[dict], metrics=None) -> dict:
+    """fired when there is at least one event, else clear."""
+    return _r("fired" if events else "clear", events=events, metrics=metrics)
+
+
+def _t(ts: np.ndarray, i: int) -> float | None:
+    if 0 <= i < len(ts):
+        return round(float(ts[i]), 2)
+    return None
+
+
+def _cam_t(ep: dict, v: str, j: int, fps: float) -> float:
+    ct = camera_times(ep, v)
+    if ct is not None and 0 <= j < len(ct):
+        return round(float(ct[j]), 2)
+    return round(j / fps, 2)
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Inclusive (start, end) index runs where mask is true."""
+    out, start = [], None
+    for i, m in enumerate(mask):
+        if m and start is None:
+            start = i
+        elif not m and start is not None:
+            out.append((start, i - 1))
+            start = None
+    if start is not None:
+        out.append((start, len(mask) - 1))
+    return out
+
+
+def assess(feats: dict) -> dict:
+    """Run every upstream check on one episode (feats from extract()). Returns {"checks": {check: {status, why,
+    events, metrics}}, "cameras", "actors", "episode"}, status one of fired, clear, not_assessed. Each block names
+    the upstream lines it reproduces (filtering.py, processing.py of public-dataset-adapter)."""
+    ep, T, cams = feats["ep"], feats["T"], feats["cams"]
+    ctx = ep["context"]
+    rig = me.rig(ep)
+    kind = me.state_kind(ep)
+    policy, extra = policy_for(rig)
+    R: dict[str, dict] = {}
+    ts = anchor_times(ep)
+    real_times = ep.get("times") is not None
+    unit = gripper_unit(ctx)
+    normalized = "normalized_open_fraction" in unit
+    cs = canonical_states(ep)
+    names = cs["actors"]
+    states, valid = cs["states"], cs["valid"]
+    has_state = kind != "none"
+    has_pose = kind == "ee_pose"
+    no_pose_why = ("no end-effector pose: joint-state teleop has no forward kinematics in our pipeline"
+                   if kind == "joints" else "no recorded state (video-only rig)")
+
+    # constant exclusions: these upstream reasons test upstream's own processing or a layer we do not build
+    R["invalid_action_shape"] = _na("actions are derived here from the states, so their shape cannot be wrong")
+    R["state_action_count_mismatch"] = _na("actions are derived here from the states, so the counts cannot differ")
+    R["se3_translation_round_trip_failure"] = _na("tests upstream's own action derivation, which we reuse unchanged")
+    R["se3_rotation_round_trip_failure"] = _na("tests upstream's own action derivation, which we reuse unchanged")
+    R["action_time_too_short"] = _na("action times are midpoints of the state times, checked there")
+    R["native_rate_qc_unavailable"] = _na("we never build a native-rate row, so this process flag does not apply")
+    R["native_signal_checks"] = _na("no separate native-rate telemetry layer exists in our sidecars")
+    R["processing_failure"] = _na("a failure to process an episode is reported by the stage itself, per episode")
+    R["action_time_non_monotonic_or_duplicate"] = _na("action times are midpoints of the state times, checked there")
+
+    # ---- structure (filtering.py:1461-1488)
+    if not has_state:
+        for c in ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal"):
+            R[c] = _na("no recorded state (video-only rig)")
+    else:
+        shape = np.shape(ep["state"])
+        width = shape[-1] if len(shape) == 2 else list(shape)
+        R["invalid_state_shape"] = _fired([] if cs["shape_ok"] else [_ev(
+            f"the recorded state has {width} values per frame, a layout these checks do not read (they read 7 per "
+            f"arm or gripper), so the state checks were skipped")])
+        R["nonfinite_signal"] = _fired([_ev(f"{e['rows']} frames of the {e['actor']} state contain NaN or infinite "
+                                            f"values", _t(ts, e["first_row"]), actor=e["actor"])
+                                        for e in cs["nonfinite"]])
+        empty = cs["shape_ok"] and T > 1 and not valid.any() and not cs["nonfinite"]
+        R["missing_canonical_signal"] = _fired([_ev("no valid state value in the episode")] if empty else [])
+
+    # ---- duration (filtering.py:1490)
+    last = [float(ts[-1])] if len(ts) else [0.0]
+    for v, c in cams.items():
+        ct = camera_times(ep, v)
+        last.append(float(ct[c["n"] - 1]) if ct is not None and len(ct) >= c["n"] else (c["n"] - 1) / c["fps"])
+    duration = max(last)
+    short = duration < policy.minimum_episode_duration_s
+    R["episode_too_short"] = _fired([_ev(f"the episode lasts {duration:.1f} s; the rule is under "
+                                         f"{policy.minimum_episode_duration_s:g} s")] if short else [],
+                                    metrics={"duration_s": round(duration, 2)})
+
+    # actions (processing.py:1637), from our states on the anchor clock
+    ts_ns = np.round((ts - (ts[0] if len(ts) else 0.0)) * 1e9).astype(np.int64)
+    usable_state = has_state and cs["shape_ok"] and not cs["nonfinite"] and T > 2
+    unusable_why = ("the state layout is not 7 values per arm or gripper" if has_state and not cs["shape_ok"]
+                    else "the state contains NaN or infinite values" if cs["nonfinite"]
+                    else "fewer than 3 state frames")
+    if usable_state:
+        local, global_, avalid, _ = up.delta_actions(states, valid, ts_ns)
+        local = local.astype(np.float64)
+        global_ = global_.astype(np.float64)
+    else:
+        local = global_ = np.zeros((max(T - 1, 0), 14))
+        avalid = np.zeros((max(T - 1, 0), 14), dtype=bool)
+    robot = {"states": states, "state_valid": valid, "actions_local": local, "action_valid_local": avalid,
+             "actions_global": global_, "action_valid_global": avalid, "gripper_unit": unit}
+
+    # ---- rotations (filtering.py:1306-1324)
+    why_rot = "rotations are built here from roll/pitch/yaw, always proper and within pi, so this cannot fire"
+    R["invalid_rotation_matrix"] = _na(why_rot if has_pose else no_pose_why)
+    R["nonprincipal_rotation_state"] = _na(why_rot if has_pose else no_pose_why)
+
+    # ---- grippers (filtering.py:1327-1333, 936-996, 999-1052, 1131-1158)
+    unit_why = ((f"the gripper reading is in {unit}, not a verified 0-1 open fraction" if unit != "unknown"
+                 else "the gripper unit is not verified for this dataset")
+                + "; this check's thresholds are open fractions")
+    gripper_checks = ("normalized_gripper_out_of_range", "gripper_action_integral_out_of_range", "gripper_never_acts",
+                      "gripper_sensor_bug")
+    if not usable_state:
+        for c in gripper_checks:
+            R[c] = _na("no recorded state (video-only rig)" if not has_state else unusable_why)
+    elif not normalized:
+        for c in gripper_checks:
+            R[c] = _na(unit_why)
+    else:
+        ev = []
+        for g, name in enumerate(names):
+            gv = states[:, 7 * g + 6]
+            bad = np.flatnonzero(valid[:, 7 * g + 6] & ((gv < -0.05) | (gv > 1.05)))
+            if len(bad):
+                ev.append(_ev(f"{name} gripper reads {gv.min():.3f} to {gv.max():.3f} ({len(bad)} frames outside "
+                              f"-0.05..1.05 of a 0-1 open fraction)", _t(ts, int(bad[0])), actor=name))
+        R["normalized_gripper_out_of_range"] = _fired(ev)
+
+        smoothed, _ = up.smooth_canonical_trajectory(states, valid, ts_ns)
+        s_local, _, _, _ = up.delta_actions(smoothed.astype(np.float64), valid, ts_ns)
+        robot_i = dict(robot, smoothed_actions_local=s_local.astype(np.float64))
+        integ, _ = up._gripper_integral_checks(robot_i, states, valid, policy)
+        ev = []
+        for key, m in integ.items():
+            variant, arm = key.split("_", 1)
+            g = 0 if arm == "left" else 1
+            if m["out_of_range_count"] and g < len(names):
+                i = int(m["out_of_range_indices"][0])
+                ev.append(_ev(f"replaying the {variant} {names[g]} gripper deltas reaches "
+                              f"{m['minimum_replayed_open_fraction']:.3f} to "
+                              f"{m['maximum_replayed_open_fraction']:.3f}, "
+                              f"outside 0..1 by more than {policy.gripper_integral_tolerance:g} on "
+                              f"{m['out_of_range_count']} steps", _t(ts, i + 1), actor=names[g]))
+        R["gripper_action_integral_out_of_range"] = _fired(ev)
+
+        inactive, _ = up._inactive_gripper_checks(robot, policy)
+        ev = []
+        for arm, m in inactive.items():
+            g = 0 if arm == "left" else 1
+            if m["status"] == "recorded" and m["active_action_count"] == 0 and g < len(names):
+                ev.append(_ev(f"the {names[g]} gripper reading never changes by more than "
+                              f"{policy.static_gripper_delta:g} between frames (largest change "
+                              f"{m['maximum_absolute_delta']:.2g})", actor=names[g]))
+        R["gripper_never_acts"] = _fired(ev)
+
+        _, _, sev = up.gripper_sensor_bug_checks(robot, policy)
+        ev = []
+        for e in sev:
+            g = 0 if e["arm"] == "left" else 1
+            if g < len(names):
+                ev.append(_ev(f"the {names[g]} gripper jumps {e['first_delta']:+.2f} then {e['second_delta']:+.2f} "
+                              f"(open fraction) on consecutive frames; the rule is two opposite steps of at least "
+                              f"{policy.gripper_sensor_bug_minimum_delta:g}", _t(ts, e["pivot_frame"]), actor=names[g]))
+        R["gripper_sensor_bug"] = _fired(ev)
+
+    # ---- clocks (filtering.py:463-504, 1530-1541, 1774-1790)
+    gap_min = float(extra["gap_min_s"])
+
+    def clock(values_s: np.ndarray, label: str, camera: str | None):
+        """Repeat-or-backwards events, gap events and metrics of one clock (seconds per frame)."""
+        dup_ev, gap_ev = [], []
+        tns = np.round(np.asarray(values_s, dtype=np.float64) * 1e9).astype(np.int64)
+        reasons: list[str] = []
+        dts = up._strict_timestamps(tns, label, reasons)
+        if any(r.endswith("_non_monotonic_or_duplicate") for r in reasons):
+            bad = np.flatnonzero(dts <= 0)
+            dup_ev.append(_ev(f"{len(bad)} frame times on the {camera or 'state'} clock repeat or go backwards",
+                              round(float(values_s[bad[0] + 1]), 2), camera))
+        gm = up._gap_metrics(dts)
+        idx = [i for i in gm["gap_interval_indices"] if dts[i] >= gap_min]
+        for i in idx[:5]:
+            floor = f" and at least {gap_min * 1000:.0f} ms" if gap_min > 0 else ""
+            gap_ev.append(_ev(f"{dts[i] * 1000:.0f} ms between frames where the clock's median is "
+                              f"{gm['median_dt_s'] * 1000:.1f} ms (rule: over {gm['gap_threshold_s'] * 1000:.1f} ms"
+                              f"{floor})", round(float(values_s[i]), 2), camera))
+        if len(idx) > 5:
+            gap_ev[-1]["evidence"] += f"; {len(idx)} such gaps in total"
+        mets = {"median_dt_ms": round(gm["median_dt_s"] * 1000, 2) if gm["median_dt_s"] is not None else None,
+                "max_dt_ms": round(gm["maximum_dt_s"] * 1000, 1) if gm["maximum_dt_s"] is not None else None,
+                "gaps": len(idx)}
+        return dup_ev, gap_ev, mets
+
+    R["state_time_too_short"] = _fired([_ev(f"the recording has {len(ts)} frame time{'s' if len(ts) != 1 else ''}, "
+                                            f"fewer than two")] if len(ts) < 2 else [])
+    if real_times:
+        dup, gap, m = clock(ts, "state_time", me.anchor(ep))
+        R["state_time_non_monotonic_or_duplicate"] = _fired(dup, metrics=m)
+        R["state_timestamp_gap"] = _fired(gap, metrics=m)
+        nev, nm = [], {}
+        for v in me.views(ep):
+            if v == me.anchor(ep):
+                continue
+            ct = camera_times(ep, v)
+            if ct is None:
+                continue
+            d2, g2, m2 = clock(ct[:cams[v]["n"]], f"native_camera_{v}", v)
+            nev.extend(d2 + g2)
+            nm[v] = m2
+        R["native_camera_timestamp_gap"] = (_fired(nev, metrics=nm) if nm
+                                            else _na("no camera clock other than the anchor's"))
+    else:
+        why = "frame times are frame_index / fps by construction (the dataset ships no capture clock)"
+        R["state_time_non_monotonic_or_duplicate"] = _na(why)
+        R["state_timestamp_gap"] = _na(why)
+        R["native_camera_timestamp_gap"] = _na(why)
+
+    # ---- cameras (filtering.py:1543-1639), each on its own native frames
+    R["missing_camera"] = _fired([] if cams else [_ev("the episode has no camera")])
+    av_all = actor_views(ep, names) if usable_state else []
+
+    def expected_motion(v: str, t0: float, t1: float) -> str:
+        """Why camera v's picture must change between t0 and t1, from the recorded state, or "" when the
+        recording gives no such reason (video-only rigs, or nothing recorded moving)."""
+        if not usable_state:
+            return ""
+        k = np.flatnonzero((ts >= t0) & (ts <= t1))
+        if len(k) < 2:
+            return ""
+        a, b = int(k[0]), int(k[-1])
+        mounted = [g for g, mv in enumerate(av_all) if mv == v]
+        movers = mounted if mounted else (list(range(len(names))) if v == "exo" and rig == "teleop_arms" else [])
+        s_raw = np.asarray(ep["state"], dtype=np.float64)
+        for g in movers:
+            o = 7 * g
+            if kind == "ee_pose":
+                path = float(np.linalg.norm(np.diff(s_raw[a:b + 1, o:o + 3], axis=0), axis=1).sum())
+                turn = float(np.linalg.norm(global_[a:b, o + 3:o + 6], axis=1).sum())
+                if path >= 0.02 or turn >= 0.1:
+                    return (f"the recorded {names[g]} pose moves {path * 100:.0f} cm and turns "
+                            f"{np.degrees(turn):.0f} deg")
+            elif kind == "joints":
+                jt = float(np.abs(np.diff(s_raw[a:b + 1, o:o + 6], axis=0)).sum())
+                if jt >= 0.1:
+                    return f"the recorded {names[g]} arm joints move {np.degrees(jt):.0f} deg in total"
+        return ""
+
+    align_ev, dec_ev, cnt_ev = [], [], []
+    exp_ev, low_ev, dup_ev, frz_ev = [], [], [], []
+    anchor_pair: dict[str, np.ndarray] = {}
+    anchor_pc: dict[str, np.ndarray] = {}
+    cam_metrics = {}
+    for v, c in cams.items():
+        n = c["n"]
+        km = ep["kmap"].get(v)
+        if km is None and n != T and has_state:
+            align_ev.append(_ev(f"camera {v} has {n} frames and the state {T}, with no time pairing between them",
+                                camera=v))
+        elif km is not None and (len(km) < T or int(np.max(km[:T])) >= n or int(np.min(km[:T])) < 0):
+            align_ev.append(_ev(f"camera {v}'s frame pairing covers {len(km)} of {T} state frames or points outside "
+                                f"its {n} frames", camera=v))
+        if c["error"]:
+            dec_ev.append(_ev(f"camera {v} fails to decode: {c['error']}", camera=v))
+        if c["decoded"] != n:
+            missing = np.flatnonzero(~np.isfinite(c["means"]))
+            cnt_ev.append(_ev(f"camera {v}: {c['decoded']} of its {n} frames decode at their recorded times",
+                              _cam_t(ep, v, int(missing[0]), c["fps"]) if len(missing) else None, v))
+        means, stds, pair = c["means"], c["stds"], c["pair"]
+        ok = np.isfinite(means)
+        if ok.any():
+            black = ok & (means < extra["black_mean"])
+            white = ok & (means > extra["white_mean"])
+            frac = float((black | white)[ok].mean())
+            if frac > policy.maximum_extreme_exposure_fraction:
+                runs = _runs(black | white)
+                longest = max(runs, key=lambda r: r[1] - r[0])
+                exp_ev.append(_ev(f"{frac:.0%} of camera {v}'s frames are nearly black or white (mean grey under "
+                                  f"{extra['black_mean']:g} or over {extra['white_mean']:g}); the rule is over "
+                                  f"{policy.maximum_extreme_exposure_fraction:.0%}; longest run "
+                                  f"{(longest[1] - longest[0] + 1) / c['fps']:.1f} s",
+                                  _cam_t(ep, v, longest[0], c["fps"]), v))
+            low = ok & (stds < extra["low_contrast_std"])
+            lfrac = float(low[ok].mean())
+            if lfrac > policy.maximum_low_contrast_fraction:
+                runs = _runs(low)
+                longest = max(runs, key=lambda r: r[1] - r[0])
+                low_ev.append(_ev(f"{lfrac:.0%} of camera {v}'s frames are nearly uniform (grey standard deviation "
+                                  f"under {extra['low_contrast_std']:g}); the rule is over "
+                                  f"{policy.maximum_low_contrast_fraction:.0%}",
+                                  _cam_t(ep, v, longest[0], c["fps"]), v))
+        pok = np.isfinite(pair)
+        dupm = pok & (pair < extra["duplicate_pair_mad"])
+        if extra["duplicate_motion_mad"]:
+            # count repeats only inside motion: a run of at most duplicate_max_run repeated pairs whose neighbouring
+            # steps on both sides are real motion (at least duplicate_motion_mad grey levels). In a still scene a
+            # repeated picture cannot be told from a live one: a Galaxea wrist camera on an idle arm alternates
+            # 0.04 / 0.6 grey-level steps from encoding alone, a still RealOmin view shows 29 identical frames
+            # between 2.2-level keyframe steps, and MolmoAct2's AV1 top views alternate 0.02 / 1.5 in slow motion.
+            # A short repeat between two clearly moving steps is unambiguous.
+            m = extra["duplicate_motion_mad"]
+            counted = np.zeros_like(dupm)
+            for a_, b_ in _runs(dupm):
+                if b_ - a_ + 1 <= extra["duplicate_max_run"] and a_ > 0 and b_ + 1 < len(pair) \
+                        and pair[a_ - 1] >= m and pair[b_ + 1] >= m:
+                    counted[a_:b_ + 1] = True
+            base = counted | (pok & (pair >= m))
+            dupm_count = counted
+        else:
+            base = pok
+            dupm_count = dupm
+        min_n = max(2, int(2 * c["fps"])) if extra["duplicate_motion_mad"] else 1   # at least 2 s of moving frames
+        dfrac = float(dupm_count[base].mean()) if base.sum() >= min_n else 0.0
+        if dfrac > policy.maximum_duplicate_pair_fraction:
+            where = ("of its frame steps while it moves (a short repeat between two steps that each change by at "
+                     f"least {extra['duplicate_motion_mad']:g} grey levels)" if extra["duplicate_motion_mad"]
+                     else "of consecutive frames")
+            dup_ev.append(_ev(f"camera {v} repeats the same picture on {dfrac:.0%} {where} (mean grey change under "
+                              f"{extra['duplicate_pair_mad']:g}); the rule is over "
+                              f"{policy.maximum_duplicate_pair_fraction:.0%}", camera=v))
+        runs = _runs(dupm)
+        ct = camera_times(ep, v)
+
+        def span_s(r):
+            # pairs a..b cover frames a..b+1: real clock span when there is one, else pairs / fps (upstream)
+            if ct is not None and r[1] + 1 < len(ct):
+                return float(ct[r[1] + 1] - ct[r[0]])
+            return (r[1] - r[0] + 1) / c["fps"]
+        longest_run = max(runs, key=span_s) if runs else None
+        longest_s = span_s(longest_run) if longest_run else 0.0
+        frozen = [r for r in runs if span_s(r) > extra["frozen_run_s"]]
+        if extra["frozen_needs_motion"]:
+            # a still scene can decode to identical frames (a RealOmin view shows 29 identical frames between
+            # keyframes), so a frozen picture is claimed only while the recording says the view must change
+            kept = []
+            for r in frozen:
+                why = expected_motion(v, _cam_t(ep, v, r[0], c["fps"]), _cam_t(ep, v, r[1] + 1, c["fps"]))
+                if why:
+                    kept.append((r, why))
+        else:
+            kept = [(r, "") for r in frozen]
+        if kept:
+            r, why = max(kept, key=lambda x: span_s(x[0]))
+            t0 = _cam_t(ep, v, r[0], c["fps"])
+            frz_ev.append(_ev(f"camera {v} shows the same picture for {span_s(r):.1f} s from {t0:.1f} s (every "
+                              f"consecutive frame changes by under {extra['duplicate_pair_mad']:g} grey levels)"
+                              + (f" while {why}" if why else "") + f"; the rule is over {extra['frozen_run_s']:g} s",
+                              t0, v))
+        extreme = (means < extra["black_mean"]) | (means > extra["white_mean"])
+        cam_metrics[v] = {"frames": n, "decoded": c["decoded"], "fps": round(c["fps"], 2),
+                          "extreme_exposure_fraction": round(float(extreme[ok].mean()), 4) if ok.any() else None,
+                          "low_contrast_fraction": (round(float((stds < extra["low_contrast_std"])[ok].mean()), 4)
+                                                    if ok.any() else None),
+                          "repeated_frame_fraction": round(dfrac, 4),
+                          "longest_still_run_s": round(longest_s, 2),
+                          "mean_grey_p01_p99": ([round(float(np.nanquantile(means, q)), 1) for q in (0.01, 0.99)]
+                                                if ok.any() else None)}
+        ap = to_anchor(ep, v, pair.astype(np.float64), T)
+        pc = to_anchor(ep, v, c["pchange"].astype(np.float64), T)
+        if ap is not None:
+            anchor_pair[v] = ap
+            anchor_pc[v] = np.concatenate([[0.0], pc])
+    R["camera_state_alignment_mismatch"] = _fired(align_ev)
+    R["video_decode_failure"] = _fired(dec_ev)
+    R["video_decode_frame_count_mismatch"] = _fired(cnt_ev)
+    R["video_extreme_exposure"] = _fired(exp_ev)
+    R["video_low_contrast"] = _fired(low_ev)
+    R["video_duplicate_frames"] = _fired(dup_ev)
+    R["video_frozen_run"] = _fired(frz_ev)
+
+    # ---- motion (filtering.py:1654-1700, 1796-1861), end-effector pose only
+    actor_metrics: dict[str, dict] = {}
+    if not has_pose or not usable_state:
+        for c in ("action_smoothness_discontinuity", "jump_return_event", "gross_umi_speed", "over_95_percent_static",
+                  "largest_action_not_in_video", "visual_change_unexplained_by_action", "pixel_action_corr_mismatch"):
+            R[c] = _na(no_pose_why if not has_pose else unusable_why)
+    else:
+        pm = up._motion_metrics(
+            global_, avalid, ts_ns,
+            static_translation_m=policy.static_translation_m, static_rotation_rad=policy.static_rotation_rad,
+            static_gripper_delta=policy.static_gripper_delta, jump_relative_robust_z=policy.jump_relative_robust_z,
+            minimum_jump_translation_m=policy.minimum_jump_translation_m,
+            minimum_jump_rotation_rad=policy.minimum_jump_rotation_rad,
+            maximum_jump_interval_ratio=policy.maximum_jump_interval_ratio,
+            minimum_smoothness_translation_m=policy.minimum_smoothness_translation_m,
+            minimum_smoothness_rotation_rad=policy.minimum_smoothness_rotation_rad,
+            maximum_interleaved_hold_ratio=policy.maximum_interleaved_hold_ratio)
+        hold_ev, jump_ev, speed_ev = [], [], []
+        holds = 0
+        for arm, am in pm["arms"].items():
+            g = 0 if arm == "left" else 1
+            if g >= len(names):
+                continue
+            name = names[g]
+            for sig in ("translation", "rotation"):
+                hi = am[f"{sig}_interleaved_hold_indices"]
+                holds += len(hi)
+                if hi:
+                    hold_ev.append(_ev(f"{len(hi)} times the recorded {name} {sig} steps, nearly stops for one frame "
+                                       f"(under 10% of the steps around it), then steps again in the same direction "
+                                       f"(first at {_t(ts, hi[0])} s)", _t(ts, hi[0]), actor=name))
+                ji = am[f"{sig}_jump_return_indices"]
+                o = 7 * g + (0 if sig == "translation" else 3)
+                mag = np.linalg.norm(global_[:, o:o + 3], axis=1)
+                iso = extra["jump_isolation"]
+                if iso:
+                    # a leap, not fast motion: both steps of the leap-and-return are at least `iso` times the steps
+                    # just before and after it (the rule recorded_jumps uses; upstream has none and fires on the
+                    # back-and-forth of a fast zipping motion in RealOmin)
+                    ji = [i for i in ji if min(mag[i], mag[i + 1]) >= iso * max(
+                        [mag[j] for j in (i - 1, i + 2) if 0 <= j < len(mag)] or [0.0])]
+                if ji:
+                    i = ji[0]
+                    size = (f"{mag[i] * 100:.1f} cm out and {mag[i + 1] * 100:.1f} cm back" if sig == "translation"
+                            else f"{np.degrees(mag[i]):.0f} deg out and {np.degrees(mag[i + 1]):.0f} deg back")
+                    least = (f"{policy.minimum_jump_translation_m * 100:g} cm" if sig == "translation"
+                             else f"{np.degrees(policy.minimum_jump_rotation_rad):.0f} deg")
+                    jump_ev.append(_ev(f"the recorded {name} {sig} leaps {size} within two frames at {_t(ts, i + 1)} s"
+                                       + (f" ({len(ji)} such leaps)" if len(ji) > 1 else "")
+                                       + f"; rule: both steps over {least} and 10 robust deviations above the typical "
+                                         f"step, nearly cancelling"
+                                       + (f", and at least {iso:g} x the steps around them" if iso else ""),
+                                       _t(ts, i + 1), actor=name))
+            dt_s = np.diff(ts_ns) / 1e9
+            tr = np.linalg.norm(global_[:, 7 * g:7 * g + 3], axis=1) / np.maximum(dt_s, 1e-12)
+            rr = np.linalg.norm(global_[:, 7 * g + 3:7 * g + 6], axis=1) / np.maximum(dt_s, 1e-12)
+            ftr = np.flatnonzero(tr > policy.maximum_umi_translation_speed_m_s)
+            frr = np.flatnonzero(rr > policy.maximum_umi_rotation_speed_rad_s)
+            if len(ftr) or len(frr):
+                i = int(ftr[0]) if len(ftr) else int(frr[0])
+                speed_ev.append(_ev(f"the {name} pose moves at up to {tr.max():.2f} m/s and {rr.max():.1f} rad/s "
+                                    f"between two frames (rule: over {policy.maximum_umi_translation_speed_m_s:g} m/s "
+                                    f"or {policy.maximum_umi_rotation_speed_rad_s:g} rad/s in any one interval; "
+                                    f"{len(ftr) + len(frr)} intervals)", _t(ts, i + 1), actor=name))
+            actor_metrics[name] = {"max_speed_m_s": round(float(tr.max()), 3) if len(tr) else None,
+                                   "max_turn_rad_s": round(float(rr.max()), 2) if len(rr) else None}
+        enough = holds >= policy.minimum_interleaved_hold_events
+        R["action_smoothness_discontinuity"] = _fired(hold_ev if enough else [], metrics={"events": holds})
+        R["jump_return_event"] = _fired(jump_ev)
+        R["gross_umi_speed"] = _fired(speed_ev)
+        sf = pm["static_fraction"]
+        still = sf > policy.maximum_static_fraction
+        R["over_95_percent_static"] = _fired([_ev(f"{sf:.1%} of frame steps move under "
+                                                  f"{policy.static_translation_m * 1000:g} mm, "
+                                                  f"{policy.static_rotation_rad * 1000:g} mrad and the gripper under "
+                                                  f"{policy.static_gripper_delta:g}")] if still else [],
+                                             metrics={"static_fraction": round(sf, 4)})
+
+        # largest action vs video (filtering.py:1161-1238), every camera on the anchor interval grid: on handheld rigs
+        # each actor against its own mounted camera only (largest_action_own_camera)
+        av = actor_views(ep, names)
+        if extra["largest_action_own_camera"] and all(v in anchor_pair for v in av):
+            vc = {}
+            for g, v in enumerate(av):
+                part, _ = up._largest_action_video_checks(global_, avalid, {v: anchor_pair[v]}, policy)
+                arm = ("left", "right")[g]
+                vc.update({k: m for k, m in part.items() if k.startswith(arm + "_")})
+        else:
+            vc, _ = up._largest_action_video_checks(global_, avalid, anchor_pair, policy)
+        ev = []
+        for key, m in vc.items():
+            if m.get("status") != "unsupported":
+                continue
+            arm, sig = key.split("_", 1)
+            g = 0 if arm == "left" else 1
+            if g >= len(names):
+                continue
+            i = m["action_index"]
+            mag = m.get("magnitude_m", m.get("magnitude_rad"))
+            unit_s = f"{mag * 100:.1f} cm" if sig == "translation" else f"{np.degrees(mag):.1f} deg"
+            camtxt = ", ".join(f"{cv} {cm['mean_absolute_luma_difference']:.2f}" for cv, cm in m["cameras"].items())
+            ev.append(_ev(f"the {names[g]} gripper's largest single-frame {sig} ({unit_s}, over 10 robust deviations "
+                          f"above its typical step) shows no image change on any camera (mean grey change {camtxt}; "
+                          f"rule: every camera in its lowest {policy.largest_action_visual_percentile:.0%}, under "
+                          f"{policy.largest_action_visual_median_ratio:g} x its median and under "
+                          f"{policy.largest_action_visual_absolute_difference:g})", _t(ts, i + 1), actor=names[g]))
+        R["largest_action_not_in_video"] = _fired(ev)
+
+        uv, _ = up._unexplained_visual_change_checks(global_, avalid, anchor_pair, policy)
+        ev = []
+        for cv, cm in uv["cameras"].items():
+            if cm["flagged_count"]:
+                i = cm["flagged_indices"][0]
+                ev.append(_ev(f"camera {cv} changes by at least {policy.minimum_unexplained_visual_difference:g} grey "
+                              f"levels on {cm['flagged_count']} frame steps while every gripper holds still",
+                              _t(ts, i + 1), cv))
+        R["visual_change_unexplained_by_action"] = _fired(ev)
+
+        # upstream reads these as lists (it tests them with `or []`)
+        row = {"robot": {"actions_global": global_.tolist(), "action_valid_global": avalid.tolist()}}
+        row.update(up.action_intensity_features(row))
+        wrist = {slot: v for slot, v in zip(("left", "right"), av) if v is not None}
+        for slot, v in wrist.items():
+            row[f"{slot}_pixel_change_amount"] = anchor_pc.get(v)
+        row["overhead_pixel_change_amount"] = anchor_pc.get("exo") if rig == "teleop_arms" else None
+        corr, _ = up.visual_action_correlation_checks(row, policy)
+        ev, cm_out = [], {}
+        for slot, rec in corr.items():
+            cm_out[slot] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in rec.items()
+                            if k in ("status", "correlation", "r_squared", "pairs")}
+            if rec.get("status") == "mismatch":
+                cam = wrist.get(slot, "exo")
+                ev.append(_ev(f"camera {cam}'s frame-to-frame change correlates {rec['correlation']:+.2f} (r squared "
+                              f"{rec['r_squared']:.3f}) with the recorded motion; the rule is r <= 0 or r squared "
+                              f"under {policy.minimum_visual_action_r_squared:g}", camera=cam))
+        R["pixel_action_corr_mismatch"] = _fired(ev, metrics=cm_out)
+
+    return {"checks": R, "cameras": cam_metrics, "actors": actor_metrics,
+            "episode": {"duration_s": round(duration, 2), "rig": rig, "state_kind": kind, "gripper_unit": unit,
+                        "clock": "capture times" if real_times else "frame_index / fps"}}
+
+
+# ------------------------------------------------------------------------------------------ disposition
+#
+# What is done with each check when it fires. flag: shown as an issue, on the rigs in "applies" (on any other rig a
+# firing is shown as a note). note: shown as a quiet fact. excluded: never an issue; a firing is shown as a note
+# that says why it does not count (NOT_COUNTED). "reason" is the calibration finding behind the decision, from the
+# check's firings on our frame-verified datasets.
+
+ALL = ("teleop_arms", "handheld_gripper", "ego_head")
+ARMS = ("teleop_arms", "handheld_gripper")
+HANDHELD = ("handheld_gripper",)
+
+
+def _d(disposition: str, reason: str, title: str = "", note: str = "", applies: tuple[str, ...] = ALL) -> dict:
+    return {"disposition": disposition, "reason": reason, "title": title, "note": note, "applies": tuple(applies)}
+
+
+DISPOSITION: dict[str, dict] = {
+    # ---- structure: definitional defects; none fired on our frame-verified datasets
+    "nonfinite_signal": _d(
+        "flag", "a NaN or infinite recorded value is a broken recording by definition; fired on none",
+        "The recorded state contains missing (NaN or infinite) values.", applies=ARMS),
+    "missing_canonical_signal": _d(
+        "flag", "no valid state value at all in an episode that declares a state is a broken recording; fired on none",
+        "The episode declares a recorded state but contains no valid state values.", applies=ARMS),
+    "invalid_state_shape": _d(
+        "note", "fires on 2 Galaxea episodes whose state has 16 values per frame (a different arm variant): a layout "
+                "our checks do not read, not a defect of the data; shown so the skipped state checks are explained",
+        applies=ARMS),
+    "missing_camera": _d(
+        "flag", "an episode with no camera stream is broken by definition; fired on none",
+        "The episode has no camera stream."),
+    "camera_state_alignment_mismatch": _d(
+        "flag", "a camera that covers different frames than the state, with no time pairing, cannot be matched to the "
+                "recording; fired on none (the same fact as dataset_checks.camera_windows_match_state)",
+        "A camera covers a different number of frames than the recorded state and cannot be matched to it."),
+    "video_decode_failure": _d(
+        "flag", "a camera file that fails to decode is broken by definition; fired on none (a missing file is an "
+                "infrastructure fault and fails the episode instead)",
+        "A camera video fails to decode."),
+    "video_decode_frame_count_mismatch": _d(
+        "flag", "frames that do not decode at their recorded times are missing video; fired on none",
+        "Some camera frames are missing: they do not decode at their recorded times."),
+    "state_time_non_monotonic_or_duplicate": _d(
+        "flag", "a capture clock that repeats or runs backwards is broken; fired on none of the datasets with capture "
+                "clocks (ABC-130k, RealOmin, Gen-HumanEgo)",
+        "The capture clock repeats a time or runs backwards."),
+    # ---- video on each camera's native frames
+    "video_duplicate_frames": _d(
+        "flag", "upstream (any pair under 0.25 grey levels on 64 px frames, over 20%) fires on quiet but live scenes "
+                "(Galaxea 16 of 222, MolmoAct2 44 of 78 decoded, RealOmin 9). A still scene can decode to "
+                "near-identical frames: MolmoAct2's AV1 top views alternate 0.02 / 1.5 grey-level steps in slow "
+                "motion, a RealOmin view shows 29 identical frames between keyframes. So we count a repeat only as a "
+                "run of at most 4 pairs under 0.1 between two frame steps of at least 3 grey levels (clear motion), "
+                "over 20% of the camera's moving steps. It then fires only on ABC-130k cameras that deliver the same "
+                "picture several times, stamped 0 ms apart (3 episodes, all checked on the frames: full-resolution "
+                "difference 0.01 to 0.1 grey levels against 3 to 13 for real steps)",
+        "A camera repeats the same picture on many of its frames while the scene is moving (over 20% of its moving "
+        "frame steps)."),
+    "video_frozen_run": _d(
+        "flag", "at upstream's 0.25 it fires on 1 s pauses of a static view (ABC-130k 4, Egocentric-100K 2, live "
+                "pictures); a still scene can even decode to identical frames (RealOmin: 29 identical frames between "
+                "keyframes), so we require a change under 0.1 grey levels on every frame for over 1 s while the "
+                "recorded state says the view must change (the camera's own gripper or arm moves, or any arm moves in "
+                "front of a fixed top camera); the only firing is FastUMI 433's frozen left camera (confirmed camera "
+                "fault, 16.8 s); never claimed on video-only rigs, where a still scene cannot be told from a frozen "
+                "camera",
+        "A camera shows the same frozen picture for over a second while the recording says it was moving.",
+        applies=ARMS),
+    "video_extreme_exposure": _d(
+        "flag", "a camera nearly black or white for over a quarter of the episode; every firing was checked on the "
+                "frames",
+        "A camera is nearly black or nearly white for over a quarter of the episode."),
+    "video_low_contrast": _d(
+        "note", "a wrist camera pressed against cloth or a table, or a head camera facing a blank wall, is uniform "
+                "without any fault; a fact, not a defect claim",
+        note="Low contrast:"),
+    # ---- clocks
+    "state_timestamp_gap": _d(
+        "flag", "upstream's rule alone (over 1.5 x the median interval) fires on 86% of ABC-130k, whose RealSense "
+                "clocks stamp frames in bursts (half the intervals 1 us, the rest 30 to 150 ms), and on 4% of "
+                "RealOmin for single dropped frames (50 to 100 ms); we add a 0.25 s floor, above the longest interval "
+                "of any verified dataset (200 ms), so a firing is a recording that lost at least a quarter second; "
+                "fired on none",
+        "The recording's clock has a gap of at least a quarter second (frames lost)."),
+    "native_camera_timestamp_gap": _d(
+        "flag", "the same rule and 0.25 s floor on each non-anchor camera's own clock (upstream alone: 89% of "
+                "ABC-130k, 1% of RealOmin, all stamping pattern or single dropped frames); fired on none",
+        "A camera's clock has a gap of at least a quarter second (frames lost)."),
+    "action_time_non_monotonic_or_duplicate": _d(
+        "excluded", "action times are midpoints of the state times; checked there"),
+    "episode_too_short": _d(
+        "note", "policy, not a defect (legitimate short demonstrations exist); fired on none",
+        note="Short episode:"),
+    # ---- grippers (only where the unit is a verified 0-1 open fraction: MolmoAct2, ABC-130k)
+    "normalized_gripper_out_of_range": _d(
+        "flag", "a 0-1 open fraction outside -0.05..1.05 is a broken reading; fired on none of MolmoAct2's 1284 or "
+                "ABC-130k's 183 episodes (readings stay in 0.001..1.000)",
+        "The gripper reading goes outside its 0 to 1 range.", applies=ARMS),
+    "gripper_action_integral_out_of_range": _d(
+        "excluded", "for the original deltas this replays the recorded reading exactly, so it is the range check with "
+                    "a 0.01 tolerance (a 1.02 reading at full open would fire without any fault); the smoothed replay "
+                    "tests upstream's own smoothing; fired on none"),
+    "gripper_never_acts": _d(
+        "note", "a gripper that never moves is either unused (one-handed tasks) or not recording; which one needs the "
+                "frames, and our gripper_channels check already reports exact flatness; fired on none",
+        note="Gripper reading never changes:", applies=ARMS),
+    "gripper_sensor_bug": _d(
+        "flag", "two opposite gripper steps of half the range on consecutive frames cannot be a real jaw movement; "
+                "fired on none of MolmoAct2 or ABC-130k",
+        "The gripper reading jumps by half its range and back on consecutive frames (a sensor glitch).",
+        applies=ARMS),
+    # ---- end-effector motion (handheld grippers only; joint teleop has no forward kinematics here)
+    "gross_umi_speed": _d(
+        "excluded", "a single interval over 2 m/s or 8 rad/s: fires on 3% of FastUMI and includes real fast sweeps "
+                    "(Clean_Desktop 001476 and 001452 on the frames: dustpan sweeps with motion blur); the real "
+                    "glitches it finds are also found by jump_return_event and largest_action_not_in_video"),
+    "jump_return_event": _d(
+        "flag", "upstream computes it but does not count it against a stored episode; with our added isolation test "
+                "(both leap steps at least 3 x the steps around them) it fires on 3 FastUMI episodes, each a recorded "
+                "pose that leaps and returns while its camera stays smooth (3 of 3 on the frames); without it, it also "
+                "fires on a fast back-and-forth zipping motion in RealOmin (zip_clothes 00041) and on a FastUMI leap "
+                "inside fast motion",
+        "The recorded gripper pose leaps away and back within two frames while its camera shows no such movement.",
+        applies=HANDHELD),
+    "largest_action_not_in_video": _d(
+        "flag", "each gripper's largest single-frame step, when it is over 2 cm or 0.15 rad and 10 robust deviations "
+                "above its typical step, against its own rigidly mounted camera (upstream requires every camera to "
+                "be still, so the other hand's camera hides the glitch); every firing is a recorded leap the camera "
+                "does not show (FastUMI 1 confirmed by recorded_jumps, RealOmin 2 of 2 on the frames)",
+        "The gripper's recorded pose makes a large single-frame jump that its own camera does not show.",
+        applies=HANDHELD),
+    "visual_change_unexplained_by_action": _d(
+        "excluded", "fires on 51% of RealOmin: its per-frame hold thresholds (0.5 mm, 5 mrad) count a slow handheld "
+                    "drift as still, and a bright window then changes the picture by 8 grey levels "
+                    "(unscrew_bottle_cap 00178 on the frames); on FastUMI all 10 firings were real frozen poses, "
+                    "which pixel_action_corr_mismatch and largest_action_not_in_video report more directly"),
+    "pixel_action_corr_mismatch": _d(
+        "note", "absolute r squared under 0.04 between a camera's frame change and the recorded motion: on FastUMI "
+                "most firings are real (frozen pose, crossed streams) but Open_Double_Door_Shoe_Cabinet 000379 is "
+                "normal content with a weak correlation (0.13), so it is shown as a measured fact next to "
+                "stream_pairing, not as a defect",
+        note="Camera motion follows the recorded motion only weakly:", applies=HANDHELD),
+    "action_smoothness_discontinuity": _d(
+        "note", "fires on 9% of RealOmin, whose state is nearest-sampled onto the camera clock by our prepare step, so "
+                "a pose stream that updates less often than the camera shows as one-frame stops; a true fact about "
+                "the pose stream, not a defect claim; fired on no FastUMI episode",
+        note="The recorded pose updates less often than the camera:", applies=HANDHELD),
+    "over_95_percent_static": _d(
+        "note", "policy, not a defect", note="Almost no recorded motion:", applies=HANDHELD),
+    # ---- upstream reasons that test upstream's own processing or a layer we never build
+    "invalid_action_shape": _d(
+        "excluded", "actions are derived here from the states; their shape cannot be wrong"),
+    "state_action_count_mismatch": _d(
+        "excluded", "actions are derived here from the states; the counts cannot differ"),
+    "invalid_rotation_matrix": _d(
+        "excluded", "rotations are built here from roll/pitch/yaw: always proper, so this tests our conversion"),
+    "nonprincipal_rotation_state": _d(
+        "excluded", "rotation vectors from scipy are always within pi, so this cannot fire"),
+    "se3_translation_round_trip_failure": _d(
+        "excluded", "tests upstream's own action derivation, which we reuse unchanged"),
+    "se3_rotation_round_trip_failure": _d(
+        "excluded", "tests upstream's own action derivation, which we reuse unchanged"),
+    "state_time_too_short": _d(
+        "flag", "a recording with fewer than two frame times has no timeline; broken by definition; fired on none",
+        "The recording has fewer than two frame times."),
+    "action_time_too_short": _d(
+        "excluded", "action times are midpoints of the state times; checked there"),
+    "native_rate_qc_unavailable": _d(
+        "excluded", "a process flag that fires on every episode without a native-rate row; we never build one"),
+    "native_signal_checks": _d(
+        "excluded", "the native_* reasons (native_invalid_rotation_matrix, native_nonprincipal_rotation_state, "
+                    "native_normalized_gripper_out_of_range, native_state_time_* and native_camera_<name>_* clocks, "
+                    "source_stream_<name>_non_monotonic_or_duplicate, native_signal_invalid, "
+                    "native_stream_shape_mismatch, native_stream_nonfinite) need a separate native-rate telemetry "
+                    "layer our sidecars do not have; the camera clocks are checked on their own frames by "
+                    "native_camera_timestamp_gap"),
+    "processing_failure": _d(
+        "excluded", "an episode the stage cannot process is reported by the command line per episode, not as a data "
+                    "issue"),
+}
+
+
+# ------------------------------------------------------------------------------------------ output
+
+# The plain name of each check (after the headings of public-dataset-adapter's docs/data-quality-findings-and-
+# examples.md where it names one) and the group it is shown under.
+NAMES: dict[str, tuple[str, str]] = {
+    "missing_canonical_signal": ("Recorded state missing", "Structure"),
+    "invalid_state_shape": ("State layout these checks read", "Structure"),
+    "invalid_action_shape": ("Action arrays well formed", "Structure"),
+    "state_action_count_mismatch": ("State and action counts agree", "Structure"),
+    "nonfinite_signal": ("Missing (NaN) values in the state", "Structure"),
+    "episode_too_short": ("Too-short episode", "Structure"),
+    "invalid_rotation_matrix": ("Invalid rotation", "Structure"),
+    "nonprincipal_rotation_state": ("Rotation outside its principal range", "Structure"),
+    "se3_translation_round_trip_failure": ("Actions replay to the recorded position", "Structure"),
+    "se3_rotation_round_trip_failure": ("Actions replay to the recorded rotation", "Structure"),
+    "state_time_too_short": ("Too few frame times", "Clocks"),
+    "action_time_too_short": ("Too few action times", "Clocks"),
+    "state_time_non_monotonic_or_duplicate": ("Clock repeats or runs backwards", "Clocks"),
+    "action_time_non_monotonic_or_duplicate": ("Action clock repeats or runs backwards", "Clocks"),
+    "state_timestamp_gap": ("Gap in the recording's clock", "Clocks"),
+    "native_camera_timestamp_gap": ("Gap in a camera's clock", "Clocks"),
+    "missing_camera": ("Missing camera", "Video"),
+    "camera_state_alignment_mismatch": ("Camera not aligned with the state", "Video"),
+    "video_decode_failure": ("Video that cannot be decoded", "Video"),
+    "video_decode_frame_count_mismatch": ("Frames missing from a video", "Video"),
+    "video_extreme_exposure": ("Extreme exposure", "Video"),
+    "video_low_contrast": ("Low contrast", "Video"),
+    "video_duplicate_frames": ("Duplicate adjacent frames", "Video"),
+    "video_frozen_run": ("Frozen camera", "Video"),
+    "normalized_gripper_out_of_range": ("Gripper aperture outside its range", "Grippers"),
+    "gripper_action_integral_out_of_range": ("Replayed gripper leaves its range", "Grippers"),
+    "gripper_never_acts": ("A gripper never acts", "Grippers"),
+    "gripper_sensor_bug": ("Gripper sensor glitch", "Grippers"),
+    "jump_return_event": ("Jump-return in the recorded pose", "Motion"),
+    "largest_action_not_in_video": ("Large action with no camera motion", "Motion"),
+    "visual_change_unexplained_by_action": ("Large visual change while the arms hold", "Motion"),
+    "pixel_action_corr_mismatch": ("Weak camera and motion correlation", "Motion"),
+    "action_smoothness_discontinuity": ("Interleaved action holds", "Motion"),
+    "gross_umi_speed": ("Implausible gripper speed", "Motion"),
+    "over_95_percent_static": ("Mostly static episode", "Motion"),
+    "native_rate_qc_unavailable": ("Native-rate row available", "Pipeline"),
+    "native_signal_checks": ("Native-rate signal checks", "Pipeline"),
+    "processing_failure": ("Processing failure", "Pipeline"),
+}
+
+# Why a check that fired is shown as a note rather than an issue: its firings did not all hold up on the frames
+# of our verified datasets (the disposition reasons above hold the numbers).
+NOT_COUNTED = {
+    "gross_umi_speed": "Not counted as an issue: it also fires on real fast sweeps.",
+    "visual_change_unexplained_by_action": "Not counted as an issue: slow handheld drift reads as holding still, so it "
+                                           "fires on sound recordings.",
+    "gripper_action_integral_out_of_range": "Not counted as an issue: it repeats the aperture range check with a "
+                                            "looser tolerance.",
+}
+
+
+def format_result(a: dict) -> dict:
+    """assess() output -> the compact context["capture_qc"] record. Every check appears in "checks" with its status
+    (fired, clear, not_applicable) and how a firing is shown (issue or note); the rule that a check is an issue only
+    where its firings held up on verified datasets decides the label, never whether the check is listed."""
+    rig = a["episode"]["rig"]
+    flags, notes, not_assessed, listing = [], [], {}, []
+    for check in CHECKS + [c for c in a["checks"] if c not in CHECKS]:
+        r = a["checks"].get(check) or _na("not computed for this episode")
+        d = DISPOSITION.get(check) or _d("excluded", "unknown check")
+        name, group = NAMES.get(check, (check.replace("_", " ").capitalize(), "Other"))
+        row = {"check": check, "name": name, "group": group}
+        if r["status"] == "not_assessed":
+            not_assessed[check] = r["why"]
+            listing.append({**row, "status": "not_applicable", "why": r["why"]})
+            continue
+        if r["status"] != "fired":
+            listing.append({**row, "status": "clear"})
+            continue
+        counted = d["disposition"] == "flag" and rig in d["applies"]
+        if counted:
+            for e in r["events"]:
+                flags.append({"check": check, "title": d["title"], "t_s": e["t_s"], "camera": e["camera"],
+                              "actor": e["actor"], "evidence": e["evidence"]})
+            listing.append({**row, "status": "fired", "shown_as": "issue", "events": len(r["events"])})
+            continue
+        why = NOT_COUNTED.get(check) or ("" if d["disposition"] == "note" else
+                                         f"Not counted as an issue on this kind of rig: its firings were not confirmed "
+                                         f"on the frames of our verified {rig.replace('_', ' ')} datasets.")
+        lead = d["note"] or ((d["title"] or name) + " ")
+        for e in r["events"]:
+            notes.append({"check": check, "text": (lead.rstrip() + " " + e["evidence"]).strip()
+                          + (" " + why if why else "")})
+        listing.append({**row, "status": "fired", "shown_as": "note", "events": len(r["events"]),
+                        **({"why": why} if why else {})})
+    return {"source": SOURCE, "version": VERSION, "flags": flags, "notes": notes, "not_assessed": not_assessed,
+            "checks": listing, "metrics": {"cameras": a["cameras"], "actors": a["actors"], "episode": a["episode"]}}
+
+
+def run_episode(ep_dir: Path | str) -> dict:
+    """Decode, assess and format one episode: its context["capture_qc"] record."""
+    return format_result(assess(extract(Path(ep_dir))))
+
+
+# ------------------------------------------------------------------------------------------ CLI
+
+def _one(d: str) -> tuple[str, dict | None, str | None, float]:
+    t0 = time.time()
+    try:
+        return d, run_episode(Path(d)), None, time.time() - t0
+    except Exception as e:  # reported per episode, never silently skipped
+        return d, None, f"{type(e).__name__}: {e}"[:300], time.time() - t0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="python -m checks.capture_qc", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("roots", nargs="+", type=Path, metavar="EPISODES", help="folders of prepared episode_* folders")
+    ap.add_argument("--jobs", type=int, default=2, help="episodes decoded in parallel")
+    ap.add_argument("--force", action="store_true", help="recompute episodes that already have a result")
+    args = ap.parse_args()
+    eps = []
+    for root in args.roots:
+        for d in sorted(root.glob("episode_*")):
+            if not (d / "context.json").exists():
+                continue
+            if args.force or "capture_qc" not in json.loads((d / "context.json").read_text()):
+                eps.append(str(d))
+    print(f"episodes to check: {len(eps)}", flush=True)
+    done = flagged = failed = 0
+    with ProcessPoolExecutor(args.jobs) as ex:
+        for d, r, err, secs in ex.map(_one, eps, chunksize=1):
+            done += 1
+            if err:
+                failed += 1
+                print(f"FAILED {Path(d).name}: {err}", flush=True)
+                continue
+            p = Path(d) / "context.json"
+            ctx = json.loads(p.read_text())
+            ctx["capture_qc"] = r
+            p.write_text(json.dumps(ctx, indent=1))
+            if r["flags"]:
+                flagged += 1
+                print(f"FLAGGED {Path(d).name} " + "; ".join(f"{f['check']} {f['t_s']}" for f in r["flags"]),
+                      flush=True)
+            if done % 25 == 0:
+                print(f"progress {done}/{len(eps)} flagged={flagged} failed={failed} last={secs:.1f}s", flush=True)
+    print(f"done {done} flagged={flagged} failed={failed}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
