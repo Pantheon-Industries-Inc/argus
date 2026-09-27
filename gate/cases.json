@@ -1,0 +1,107 @@
+{
+ "_doc": "What each gate case's label must say, from facts checked on the episode's frames. A key matches episode names by fnmatch. outcome: the outcome must be one of these. align: the goal alignment's relation must be one of these. issue: a data issue whose category matches one of these patterns, at severity sev or above when sev is given. mistake: an operator mistake whose category matches. named: words that must appear in what the timeline, key events, tasks or summary say is handled. held: named must appear as a handled object and not_named must never be claimed as one. max_issue_sev: no data issue above this severity. why is the fact on the frames.",
+ "episode_001346_r*": {
+  "outcome": ["failure"],
+  "issue": ["instruction_mismatch"],
+  "sev": "high",
+  "why": "The instruction asks to flip three blocks to show different faces; no block ever turns to another face."
+ },
+ "episode_001233": {
+  "outcome": ["success_then_undone"],
+  "why": "The row is completed, then the blocks are stacked into a tower."
+ },
+ "episode_001213": {
+  "outcome": ["success_then_undone"],
+  "why": "The row is complete at 19 s and pushed apart by 34 s."
+ },
+ "episode_008275": {
+  "issue": ["instruction_mismatch"],
+  "why": "A NIKE T-shirt is folded, not the black pants the instruction names."
+ },
+ "episode_001292": {
+  "issue": ["instruction_mismatch"],
+  "why": "A tower is built from a raised row; the instruction asks for rotations."
+ },
+ "episode_017777": {
+  "issue": ["unintended_out_of_view", "out_of_view", "instruction_mismatch"],
+  "why": "The packets are staged past the view of every camera, and the basket is unloaded."
+ },
+ "episode_025892": {
+  "issue": ["human_intervention", "human_tampering", "human_in_frame"],
+  "why": "A person moves the chopsticks during the episode."
+ },
+ "episode_Store_Tableware_20250625_002_000122": {
+  "outcome": ["success_then_undone"],
+  "issue": ["scene_reset", "instruction_mismatch"],
+  "why": "The tableware is stored, then taken back out."
+ },
+ "episode_Steam_Rice_20250711_006_*": {
+  "outcome": ["success"],
+  "align": ["aligned", "narrower"],
+  "why": "Rice (grains dyed mostly green, some white) is poured from the white bowl, water from the pink bowl, the lid is closed and start is pressed; the dataset's own sub-steps say rice."
+ },
+ "episode_habit_005733": {
+  "issue": ["*blur*", "*mask*", "*redact*", "*anonym*", "camera_fault"],
+  "why": "A privacy blur covers the donut, the object of the task."
+ },
+ "episode_habit_000494": {
+  "issue": ["state_video_mismatch"],
+  "why": "The gripper channels stay flat while the grippers grasp."
+ },
+ "episode_3d75a76a-6253-4a49-a071-0d7bddedb738": {
+  "mistake": ["failed_grasp", "prolonged_struggle", "*slip*", "repeated*"],
+  "why": "The scissors slip from the gripper repeatedly."
+ },
+ "episode_dual_arm__Fold_the_Suit__001138": {
+  "issue": ["camera_fault", "*swap*", "*identity*", "*crossed*", "*metadata*", "*label*"],
+  "why": "The left and right camera streams are crossed."
+ },
+ "episode_dual_arm__Fold_the_T-shirt__000433": {
+  "issue": ["camera_fault", "*frozen*", "*freeze*", "recording_fault"],
+  "why": "A camera freezes."
+ },
+ "episode_Clutter_Tidy_Up_Stage2_00002_00264": {
+  "issue": ["state_video_mismatch"],
+  "why": "The right gripper's recorded value stays pinned open while it carries an object."
+ },
+ "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00123": {
+  "issue": ["instruction_mismatch"],
+  "sev": "high",
+  "why": "A bottle is wiped; the episode is filed under lacing shoes."
+ },
+ "episode_single_arm__Prepare_tableware__*": {
+  "held": {"named": "fork", "not_named": "chopstick"},
+  "why": "A fork and a spoon are handled; there are no chopsticks in the frames, although the instruction names them."
+ },
+ "episode_factory_126_worker_012_0181": {
+  "issue": ["camera_fault", "*camera*", "*non_egocentric*", "*viewpoint*"],
+  "why": "The camera is taken off the head."
+ },
+ "episode_factory_101_worker_035_0091": {
+  "issue": ["human_intervention", "other_person_same_object", "*coworker*", "*person*"],
+  "why": "A coworker holds the far end of the strip being worked on."
+ },
+ "episode_raw_334438_seg_1": {
+  "issue": ["instruction_mismatch", "*annotation*"],
+  "why": "The dataset's annotation names the wrong hand."
+ },
+ "episode_f6aa7234c26444b8ba22c6c40e2f04bf": {
+  "issue": ["instruction_mismatch", "*annotation*"],
+  "why": "The dataset's annotation calls the books book stands."
+ },
+ "episode_raw_205689_seg_1": {
+  "named": ["lotus", "potato", "radish", "cabbage"],
+  "max_issue_sev": "low",
+  "why": "A lotus root, a potato and a white radish are peeled over a bin, then a cabbage is unpacked from a bag (frames at 20, 80, 140 and 170 s)."
+ },
+ "episode_factory_042_worker_061_0059": {
+  "named": ["sew"],
+  "max_issue_sev": "low",
+  "why": "Fabric panels are layered and sewn on an industrial sewing machine, one after another; a clean clip (frames at 10, 70, 150 and 178 s)."
+ },
+ "episode_8e27b71252974297b559c45bfd18f8fa": {
+  "named": ["card"],
+  "max_issue_sev": "low",
+  "why": "Pink playing cards are gathered from a small black table and packed into their box, and the box is moved to a wire rack; a clean clip (frames at 10, 40, 95 and 107 s)."
+ }
+}

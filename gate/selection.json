@@ -1,0 +1,865 @@
+{
+ "rule": "The episodes the harness is checked on, per rig. Each has its line in its dataset's episode list (configs/slices), the input of python -m prepare. role is case (a frame-verified fact in gate/cases.json must hold) or cost:<dataset> (a seeded draw of real episodes from the published slices, measured for cost; some also carry a fact). An episode listed under several names (episode_001346_r1 to _r6) is one prepared episode labelled that many times, for cases the model reads differently from sample to sample. HABIT's names carry the dataset's prefix, since its episode names repeat MolmoAct2's.",
+ "rigs": {
+  "teleop": [
+   {
+    "name": "episode_001346_r1",
+    "dataset": "molmo",
+    "episode": "episode_001346",
+    "line": "1346",
+    "role": "case"
+   },
+   {
+    "name": "episode_001346_r2",
+    "dataset": "molmo",
+    "episode": "episode_001346",
+    "line": "1346",
+    "role": "case"
+   },
+   {
+    "name": "episode_001346_r3",
+    "dataset": "molmo",
+    "episode": "episode_001346",
+    "line": "1346",
+    "role": "case"
+   },
+   {
+    "name": "episode_001346_r4",
+    "dataset": "molmo",
+    "episode": "episode_001346",
+    "line": "1346",
+    "role": "case"
+   },
+   {
+    "name": "episode_001346_r5",
+    "dataset": "molmo",
+    "episode": "episode_001346",
+    "line": "1346",
+    "role": "case"
+   },
+   {
+    "name": "episode_001346_r6",
+    "dataset": "molmo",
+    "episode": "episode_001346",
+    "line": "1346",
+    "role": "case"
+   },
+   {
+    "name": "episode_001213",
+    "dataset": "molmo",
+    "episode": "episode_001213",
+    "line": "1213",
+    "role": "case"
+   },
+   {
+    "name": "episode_001233",
+    "dataset": "molmo",
+    "episode": "episode_001233",
+    "line": "1233",
+    "role": "case"
+   },
+   {
+    "name": "episode_habit_000494",
+    "dataset": "habit",
+    "episode": "episode_000494",
+    "line": "494",
+    "role": "case"
+   },
+   {
+    "name": "episode_001292",
+    "dataset": "molmo",
+    "episode": "episode_001292",
+    "line": "1292",
+    "role": "case"
+   },
+   {
+    "name": "episode_habit_005733",
+    "dataset": "habit",
+    "episode": "episode_005733",
+    "line": "5733",
+    "role": "case"
+   },
+   {
+    "name": "episode_008275",
+    "dataset": "molmo",
+    "episode": "episode_008275",
+    "line": "8275",
+    "role": "case"
+   },
+   {
+    "name": "episode_017777",
+    "dataset": "molmo",
+    "episode": "episode_017777",
+    "line": "17777",
+    "role": "case"
+   },
+   {
+    "name": "episode_025892",
+    "dataset": "molmo",
+    "episode": "episode_025892",
+    "line": "25892",
+    "role": "case"
+   },
+   {
+    "name": "episode_3d75a76a-6253-4a49-a071-0d7bddedb738",
+    "dataset": "abc130k",
+    "episode": "episode_3d75a76a-6253-4a49-a071-0d7bddedb738",
+    "line": "data/train/organize_the_medicine_kit/episode_3d75a76a-6253-4a49-a071-0d7bddedb738",
+    "role": "case"
+   },
+   {
+    "name": "episode_Steam_Rice_20250711_006_000050",
+    "dataset": "galaxea",
+    "episode": "episode_Steam_Rice_20250711_006_000050",
+    "line": "Steam_Rice_20250711_006/50",
+    "role": "case"
+   },
+   {
+    "name": "episode_Store_Tableware_20250625_002_000122",
+    "dataset": "galaxea",
+    "episode": "episode_Store_Tableware_20250625_002_000122",
+    "line": "Store_Tableware_20250625_002/122",
+    "role": "case"
+   },
+   {
+    "name": "episode_Steam_Rice_20250711_006_000011",
+    "dataset": "galaxea",
+    "episode": "episode_Steam_Rice_20250711_006_000011",
+    "line": "Steam_Rice_20250711_006/11",
+    "role": "case"
+   },
+   {
+    "name": "episode_000336",
+    "dataset": "molmo",
+    "episode": "episode_000336",
+    "line": "336",
+    "role": "cost:molmo"
+   },
+   {
+    "name": "episode_001429",
+    "dataset": "molmo",
+    "episode": "episode_001429",
+    "line": "1429",
+    "role": "cost:molmo"
+   },
+   {
+    "name": "episode_010402",
+    "dataset": "molmo",
+    "episode": "episode_010402",
+    "line": "10402",
+    "role": "cost:molmo"
+   },
+   {
+    "name": "episode_000561",
+    "dataset": "molmo",
+    "episode": "episode_000561",
+    "line": "561",
+    "role": "cost:molmo"
+   },
+   {
+    "name": "episode_004562",
+    "dataset": "molmo",
+    "episode": "episode_004562",
+    "line": "4562",
+    "role": "cost:molmo"
+   },
+   {
+    "name": "episode_014157",
+    "dataset": "molmo",
+    "episode": "episode_014157",
+    "line": "14157",
+    "role": "cost:molmo"
+   },
+   {
+    "name": "episode_Cooking_Food_In_An_Air_Fryer_20250719_008_000033",
+    "dataset": "galaxea",
+    "episode": "episode_Cooking_Food_In_An_Air_Fryer_20250719_008_000033",
+    "line": "Cooking_Food_In_An_Air_Fryer_20250719_008/33",
+    "role": "cost:galaxea"
+   },
+   {
+    "name": "episode_Clean_The_Sink_20250721_008_000034",
+    "dataset": "galaxea",
+    "episode": "episode_Clean_The_Sink_20250721_008_000034",
+    "line": "Clean_The_Sink_20250721_008/34",
+    "role": "cost:galaxea"
+   },
+   {
+    "name": "episode_Clean_The_Chopping_Board_20250722_008_000023",
+    "dataset": "galaxea",
+    "episode": "episode_Clean_The_Chopping_Board_20250722_008_000023",
+    "line": "Clean_The_Chopping_Board_20250722_008/23",
+    "role": "cost:galaxea"
+   },
+   {
+    "name": "episode_Pour_Out_The_Leftover_Food_20250714_006_000008",
+    "dataset": "galaxea",
+    "episode": "episode_Pour_Out_The_Leftover_Food_20250714_006_000008",
+    "line": "Pour_Out_The_Leftover_Food_20250714_006/8",
+    "role": "cost:galaxea"
+   },
+   {
+    "name": "episode_Steam_Rice_20250721_008_000014",
+    "dataset": "galaxea",
+    "episode": "episode_Steam_Rice_20250721_008_000014",
+    "line": "Steam_Rice_20250721_008/14",
+    "role": "cost:galaxea"
+   },
+   {
+    "name": "episode_habit_004403",
+    "dataset": "habit",
+    "episode": "episode_004403",
+    "line": "4403",
+    "role": "cost:habit"
+   },
+   {
+    "name": "episode_habit_003147",
+    "dataset": "habit",
+    "episode": "episode_003147",
+    "line": "3147",
+    "role": "cost:habit"
+   },
+   {
+    "name": "episode_habit_003875",
+    "dataset": "habit",
+    "episode": "episode_003875",
+    "line": "3875",
+    "role": "cost:habit"
+   },
+   {
+    "name": "episode_habit_008937",
+    "dataset": "habit",
+    "episode": "episode_008937",
+    "line": "8937",
+    "role": "cost:habit"
+   },
+   {
+    "name": "episode_habit_001904",
+    "dataset": "habit",
+    "episode": "episode_001904",
+    "line": "1904",
+    "role": "cost:habit"
+   },
+   {
+    "name": "episode_abc4ad87-badc-44d6-96cd-83b427c0e09b",
+    "dataset": "abc130k",
+    "episode": "episode_abc4ad87-badc-44d6-96cd-83b427c0e09b",
+    "line": "data/train/insert_the_pens_into_the_pen_caps/episode_abc4ad87-badc-44d6-96cd-83b427c0e09b",
+    "role": "cost:abc130k"
+   },
+   {
+    "name": "episode_5bb38e89-0c12-4dee-b53b-4b11ed86c7fa",
+    "dataset": "abc130k",
+    "episode": "episode_5bb38e89-0c12-4dee-b53b-4b11ed86c7fa",
+    "line": "data/train/prepare_the_surgical_pack/episode_5bb38e89-0c12-4dee-b53b-4b11ed86c7fa",
+    "role": "cost:abc130k"
+   },
+   {
+    "name": "episode_c86b672c-f6f4-482e-8b91-0f6974b8ece6",
+    "dataset": "abc130k",
+    "episode": "episode_c86b672c-f6f4-482e-8b91-0f6974b8ece6",
+    "line": "data/train/sort_the_tools_into_containers/episode_c86b672c-f6f4-482e-8b91-0f6974b8ece6",
+    "role": "cost:abc130k"
+   },
+   {
+    "name": "episode_9ef5bc26-69ae-48aa-a2b7-db600fad8d19",
+    "dataset": "abc130k",
+    "episode": "episode_9ef5bc26-69ae-48aa-a2b7-db600fad8d19",
+    "line": "data/train/set_up_the_chess_pieces_on_the_board/episode_9ef5bc26-69ae-48aa-a2b7-db600fad8d19",
+    "role": "cost:abc130k"
+   },
+   {
+    "name": "episode_e210818c-71b9-467f-a924-991fc1aa0dd6",
+    "dataset": "abc130k",
+    "episode": "episode_e210818c-71b9-467f-a924-991fc1aa0dd6",
+    "line": "data/train/erase_the_whiteboard/episode_e210818c-71b9-467f-a924-991fc1aa0dd6",
+    "role": "cost:abc130k"
+   }
+  ],
+  "handheld": [
+   {
+    "name": "episode_Clutter_Tidy_Up_Stage2_00002_00264",
+    "dataset": "realomin",
+    "episode": "episode_Clutter_Tidy_Up_Stage2_00002_00264",
+    "line": "Clutter Tidy-Up [Stage2]/00002/00264.mcap",
+    "role": "case"
+   },
+   {
+    "name": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00123",
+    "dataset": "realomin",
+    "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00123",
+    "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00123.mcap",
+    "role": "case"
+   },
+   {
+    "name": "episode_dual_arm__Fold_the_Suit__001138",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Fold_the_Suit__001138",
+    "line": "dual_arm/Fold_the_Suit/1138",
+    "role": "case"
+   },
+   {
+    "name": "episode_dual_arm__Fold_the_T-shirt__000433",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Fold_the_T-shirt__000433",
+    "line": "dual_arm/Fold_the_T-shirt/433",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000041",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000041",
+    "line": "single_arm/Prepare_tableware/41",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000129",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000129",
+    "line": "single_arm/Prepare_tableware/129",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000350",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000350",
+    "line": "single_arm/Prepare_tableware/350",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000373",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000373",
+    "line": "single_arm/Prepare_tableware/373",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000391",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000391",
+    "line": "single_arm/Prepare_tableware/391",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000678",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000678",
+    "line": "single_arm/Prepare_tableware/678",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000730",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000730",
+    "line": "single_arm/Prepare_tableware/730",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000747",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000747",
+    "line": "single_arm/Prepare_tableware/747",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000770",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000770",
+    "line": "single_arm/Prepare_tableware/770",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000773",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000773",
+    "line": "single_arm/Prepare_tableware/773",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000893",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000893",
+    "line": "single_arm/Prepare_tableware/893",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000950",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000950",
+    "line": "single_arm/Prepare_tableware/950",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__000990",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__000990",
+    "line": "single_arm/Prepare_tableware/990",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__001255",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__001255",
+    "line": "single_arm/Prepare_tableware/1255",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__001372",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__001372",
+    "line": "single_arm/Prepare_tableware/1372",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__001395",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__001395",
+    "line": "single_arm/Prepare_tableware/1395",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__001617",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__001617",
+    "line": "single_arm/Prepare_tableware/1617",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__001768",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__001768",
+    "line": "single_arm/Prepare_tableware/1768",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__001786",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__001786",
+    "line": "single_arm/Prepare_tableware/1786",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__001932",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__001932",
+    "line": "single_arm/Prepare_tableware/1932",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002413",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002413",
+    "line": "single_arm/Prepare_tableware/2413",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002461",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002461",
+    "line": "single_arm/Prepare_tableware/2461",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002504",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002504",
+    "line": "single_arm/Prepare_tableware/2504",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002519",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002519",
+    "line": "single_arm/Prepare_tableware/2519",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002526",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002526",
+    "line": "single_arm/Prepare_tableware/2526",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002532",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002532",
+    "line": "single_arm/Prepare_tableware/2532",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002571",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002571",
+    "line": "single_arm/Prepare_tableware/2571",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002663",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002663",
+    "line": "single_arm/Prepare_tableware/2663",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002830",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002830",
+    "line": "single_arm/Prepare_tableware/2830",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__002917",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__002917",
+    "line": "single_arm/Prepare_tableware/2917",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__003145",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__003145",
+    "line": "single_arm/Prepare_tableware/3145",
+    "role": "case"
+   },
+   {
+    "name": "episode_single_arm__Prepare_tableware__003223",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__Prepare_tableware__003223",
+    "line": "single_arm/Prepare_tableware/3223",
+    "role": "case"
+   },
+   {
+    "name": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001578",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001578",
+    "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1578",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_dual_arm__Fold_the_Suit__000012",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Fold_the_Suit__000012",
+    "line": "dual_arm/Fold_the_Suit/12",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001454",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001454",
+    "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/1454",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_single_arm__take_items_out_of_drawer__003299",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__take_items_out_of_drawer__003299",
+    "line": "single_arm/take_items_out_of_drawer/3299",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_single_arm__iron_clothes__000592",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__iron_clothes__000592",
+    "line": "single_arm/iron_clothes/592",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_single_arm__put_shoes_into_storage_box__002230",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__put_shoes_into_storage_box__002230",
+    "line": "single_arm/put_shoes_into_storage_box/2230",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_single_arm__iron_clothes__000514",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__iron_clothes__000514",
+    "line": "single_arm/iron_clothes/514",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_single_arm__make_sandwich__000003",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__make_sandwich__000003",
+    "line": "single_arm/make_sandwich/3",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_dual_arm__Fold_the_Jeans__001154",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Fold_the_Jeans__001154",
+    "line": "dual_arm/Fold_the_Jeans/1154",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_dual_arm__Clean_Desktop__001488",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Clean_Desktop__001488",
+    "line": "dual_arm/Clean_Desktop/1488",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001713",
+    "dataset": "fastumi",
+    "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001713",
+    "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/1713",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_single_arm__open_toilet_lid__001568",
+    "dataset": "fastumi",
+    "episode": "episode_single_arm__open_toilet_lid__001568",
+    "line": "single_arm/open_toilet_lid/1568",
+    "role": "cost:fastumi"
+   },
+   {
+    "name": "episode_Shoes_Handling_organize_scattered_shoes_00001_00017",
+    "dataset": "realomin",
+    "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00017",
+    "line": "Shoes_Handling/organize_scattered_shoes/00001/00017.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00178",
+    "dataset": "realomin",
+    "episode": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00178",
+    "line": "Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00178.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00039",
+    "dataset": "realomin",
+    "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00039",
+    "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00039.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Clutter_Tidy_Up_Stage2_00003_00095",
+    "dataset": "realomin",
+    "episode": "episode_Clutter_Tidy_Up_Stage2_00003_00095",
+    "line": "Clutter Tidy-Up [Stage2]/00003/00095.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00168",
+    "dataset": "realomin",
+    "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00168",
+    "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00168.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00101",
+    "dataset": "realomin",
+    "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00101",
+    "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00101.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Clutter_Tidy_Up_Stage2_00007_00492",
+    "dataset": "realomin",
+    "episode": "episode_Clutter_Tidy_Up_Stage2_00007_00492",
+    "line": "Clutter Tidy-Up [Stage2]/00007/00492.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00200",
+    "dataset": "realomin",
+    "episode": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00200",
+    "line": "Organize_Clutter/fold_and_store_shopping_bag/00001/00200.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Clutter_Tidy_Up_Stage2_00009_00083",
+    "dataset": "realomin",
+    "episode": "episode_Clutter_Tidy_Up_Stage2_00009_00083",
+    "line": "Clutter Tidy-Up [Stage2]/00009/00083.mcap",
+    "role": "cost:realomin"
+   },
+   {
+    "name": "episode_Shoes_Handling_organize_scattered_shoes_00001_00266",
+    "dataset": "realomin",
+    "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00266",
+    "line": "Shoes_Handling/organize_scattered_shoes/00001/00266.mcap",
+    "role": "cost:realomin"
+   }
+  ],
+  "ego": [
+   {
+    "name": "episode_f6aa7234c26444b8ba22c6c40e2f04bf",
+    "dataset": "genhumanego",
+    "episode": "episode_f6aa7234c26444b8ba22c6c40e2f04bf",
+    "line": "data/domestic_services/study/organization/stand_books_upright/f6/f6aa7234c26444b8ba22c6c40e2f04bf.mcap",
+    "role": "case"
+   },
+   {
+    "name": "episode_factory_101_worker_035_0091",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_101_worker_035_0091",
+    "line": "factory101/worker035/part13623.tar factory_101_worker_035_0091.mp4",
+    "role": "case"
+   },
+   {
+    "name": "episode_factory_126_worker_012_0181",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_126_worker_012_0181",
+    "line": "factory126/worker012/part18181.tar factory_126_worker_012_0181.mp4",
+    "role": "case"
+   },
+   {
+    "name": "episode_raw_334438_seg_1",
+    "dataset": "openaoe",
+    "episode": "episode_raw_334438_seg_1",
+    "line": "raw_334438_seg_1",
+    "role": "case"
+   },
+   {
+    "name": "episode_factory_042_worker_061_0059",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_042_worker_061_0059",
+    "line": "factory042/worker061/part5356.tar factory_042_worker_061_0059.mp4",
+    "role": "cost:egocentric100k"
+   },
+   {
+    "name": "episode_factory_202_worker_006_0017",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_202_worker_006_0017",
+    "line": "factory202/worker006/part27668.tar factory_202_worker_006_0017.mp4",
+    "role": "cost:egocentric100k"
+   },
+   {
+    "name": "episode_factory_114_worker_059_0043",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_114_worker_059_0043",
+    "line": "factory114/worker059/part16416.tar factory_114_worker_059_0043.mp4",
+    "role": "cost:egocentric100k"
+   },
+   {
+    "name": "episode_factory_016_worker_023_0128",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_016_worker_023_0128",
+    "line": "factory016/worker023/part1303.tar factory_016_worker_023_0128.mp4",
+    "role": "cost:egocentric100k"
+   },
+   {
+    "name": "episode_factory_161_worker_019_0017",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_161_worker_019_0017",
+    "line": "factory161/worker019/part22155.tar factory_161_worker_019_0017.mp4",
+    "role": "cost:egocentric100k"
+   },
+   {
+    "name": "episode_factory_127_worker_008_0101",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_127_worker_008_0101",
+    "line": "factory127/worker008/part18239.tar factory_127_worker_008_0101.mp4",
+    "role": "cost:egocentric100k"
+   },
+   {
+    "name": "episode_factory_137_worker_010_0102",
+    "dataset": "egocentric100k",
+    "episode": "episode_factory_137_worker_010_0102",
+    "line": "factory137/worker010/part19272.tar factory_137_worker_010_0102.mp4",
+    "role": "cost:egocentric100k"
+   },
+   {
+    "name": "episode_270f647caed045fc971fb9f3c0b7f2cc",
+    "dataset": "genhumanego",
+    "episode": "episode_270f647caed045fc971fb9f3c0b7f2cc",
+    "line": "data/domestic_services/living_room/organization/wrap_and_tie_cables/27/270f647caed045fc971fb9f3c0b7f2cc.mcap",
+    "role": "cost:genhumanego"
+   },
+   {
+    "name": "episode_8e27b71252974297b559c45bfd18f8fa",
+    "dataset": "genhumanego",
+    "episode": "episode_8e27b71252974297b559c45bfd18f8fa",
+    "line": "data/domestic_services/living_room/organization/store_cards_mahjong/8e/8e27b71252974297b559c45bfd18f8fa.mcap",
+    "role": "cost:genhumanego"
+   },
+   {
+    "name": "episode_0b3c8daeaee44aafbdd48e9596866759",
+    "dataset": "genhumanego",
+    "episode": "episode_0b3c8daeaee44aafbdd48e9596866759",
+    "line": "data/business/fashion/clothes_shop/daily_work/0b/0b3c8daeaee44aafbdd48e9596866759.mcap",
+    "role": "cost:genhumanego"
+   },
+   {
+    "name": "episode_f142a8c9a8a44dd097b7b52197273f74",
+    "dataset": "genhumanego",
+    "episode": "episode_f142a8c9a8a44dd097b7b52197273f74",
+    "line": "data/domestic_services/random/daily_work/daily_work/f1/f142a8c9a8a44dd097b7b52197273f74.mcap",
+    "role": "cost:genhumanego"
+   },
+   {
+    "name": "episode_553e38601cf54f0890c36cb825fe8d1a",
+    "dataset": "genhumanego",
+    "episode": "episode_553e38601cf54f0890c36cb825fe8d1a",
+    "line": "data/domestic_services/random/daily_work/daily_work/55/553e38601cf54f0890c36cb825fe8d1a.mcap",
+    "role": "cost:genhumanego"
+   },
+   {
+    "name": "episode_f2fa4df231a64d63abcbace97a4ca8ab",
+    "dataset": "genhumanego",
+    "episode": "episode_f2fa4df231a64d63abcbace97a4ca8ab",
+    "line": "data/domestic_services/kitchen/organization/refill_toothpick_holder/f2/f2fa4df231a64d63abcbace97a4ca8ab.mcap",
+    "role": "cost:genhumanego"
+   },
+   {
+    "name": "episode_b657e4202c5042acaa50027163251016",
+    "dataset": "genhumanego",
+    "episode": "episode_b657e4202c5042acaa50027163251016",
+    "line": "data/business/automobiles_and_transportation/ebike_repair/daily_work/b6/b657e4202c5042acaa50027163251016.mcap",
+    "role": "cost:genhumanego"
+   },
+   {
+    "name": "episode_raw_338362_seg_338455",
+    "dataset": "openaoe",
+    "episode": "episode_raw_338362_seg_338455",
+    "line": "raw_338362_seg_338455",
+    "role": "cost:openaoe"
+   },
+   {
+    "name": "episode_raw_136776_seg_25",
+    "dataset": "openaoe",
+    "episode": "episode_raw_136776_seg_25",
+    "line": "raw_136776_seg_25",
+    "role": "cost:openaoe"
+   },
+   {
+    "name": "episode_raw_205689_seg_1",
+    "dataset": "openaoe",
+    "episode": "episode_raw_205689_seg_1",
+    "line": "raw_205689_seg_1",
+    "role": "cost:openaoe"
+   },
+   {
+    "name": "episode_raw_247263_seg_1",
+    "dataset": "openaoe",
+    "episode": "episode_raw_247263_seg_1",
+    "line": "raw_247263_seg_1",
+    "role": "cost:openaoe"
+   },
+   {
+    "name": "episode_raw_354392_seg_359323",
+    "dataset": "openaoe",
+    "episode": "episode_raw_354392_seg_359323",
+    "line": "raw_354392_seg_359323",
+    "role": "cost:openaoe"
+   },
+   {
+    "name": "episode_raw_340116_seg_340124",
+    "dataset": "openaoe",
+    "episode": "episode_raw_340116_seg_340124",
+    "line": "raw_340116_seg_340124",
+    "role": "cost:openaoe"
+   },
+   {
+    "name": "episode_raw_242496_seg_5",
+    "dataset": "openaoe",
+    "episode": "episode_raw_242496_seg_5",
+    "line": "raw_242496_seg_5",
+    "role": "cost:openaoe"
+   }
+  ]
+ }
+}
