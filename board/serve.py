@@ -792,6 +792,9 @@ aside.left {
 aside.left .video-wrap {
   position: relative; width: 100%; background: #000;
   border-radius: var(--r-md); overflow: hidden;
+  /* its own stacking context: an overlay's z-index (the fullscreen button, the toasts) ranks only inside the video,
+     so nothing in it paints over the sticky episode header when the video scrolls under it */
+  isolation: isolate;
 }
 /* Cam layout: big exo on top (full width), wrist L+R side-by-side below.
    The exo view is the most useful (third-person workspace); the wrist
