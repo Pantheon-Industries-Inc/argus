@@ -506,8 +506,7 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: 0 10px 34px rgba(0,0,0,0.30); opacity: 0;
   transform: translateY(-4px); pointer-events: none; transition: opacity 120ms ease, transform 120ms ease; }
 .lb.open .lb-menu { opacity: 1; transform: translateY(0); pointer-events: auto; }
-.lb-group { padding: 10px 14px 4px; font: 600 10.5px/1.2 var(--sans); letter-spacing: .06em; text-transform: uppercase;
-  color: var(--fg-3); }
+.lb-group { padding: 10px 14px 4px; font: 500 12px/1.3 var(--sans); color: var(--fg-3); }
 .lb-group + .lb-gnote { margin-top: -1px; }
 .lb-gnote { padding: 0 14px 6px; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
 .lb-sep { border-top: 1px solid var(--border-strong); margin-top: 4px; }
@@ -613,7 +612,7 @@ aside.rail {
 /* one block per group: a header band in the group's colour, then its rows */
 .if-sev { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px 9px 15px;
   border-bottom: 1px solid var(--border-strong); background: var(--surface); }
-.if-sev-k { font: 600 10.5px/1.2 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); }
+.if-sev-k { font: 500 12px/1.3 var(--sans); color: var(--fg-3); }
 .if-sev-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px;
   gap: 2px; }
 .if-sev-seg button { border: 0; background: none; color: var(--fg-2); font: 500 12px/1 var(--sans); padding: 6px 10px;
@@ -1623,8 +1622,7 @@ h3.section { border-top: 1px solid var(--border-strong); }
 .ck-st { font: 500 11px/1 var(--mono); color: var(--fg-3); white-space: nowrap; }
 .ck-row.issue .ck-st { color: var(--danger); }
 .ck-text { grid-column: 2 / -1; font-size: 12px; line-height: 1.45; color: var(--fg-3); }
-.ck-group { font: 600 10.5px/1.2 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3);
-  padding: 12px 0 4px; }
+.ck-group { font: 500 12px/1.3 var(--sans); color: var(--fg-3); padding: 12px 0 4px; }
 .ck-all { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 320ms cubic-bezier(.32,.72,0,1); }
 .ck-all-in { overflow: hidden; min-height: 0; opacity: 0; transition: opacity 240ms ease; }
 .ck-theirs.open .ck-all { grid-template-rows: 1fr; }
@@ -4017,14 +4015,18 @@ function renderEp(d, opts) {
   const progOverlay = document.getElementById('prog-overlay');
   const topHud = document.getElementById('top-hud');
   // The notes that come and go at the top of the image stack under what is always there, so none covers another at
-  // any width or text length: on a head camera the state change goes under the top row; the recovery banner goes
-  // under the progress chip, the top row and a state change that is showing.
+  // any width or text length: a state change goes under the progress chip (on a head camera, under the top row it
+  // sits in), which a narrow image leaves no room beside; the recovery banner goes under both.
   function placeTop() {
     if (!exoCell) return;
     const cr = exoCell.getBoundingClientRect();
     const below = c => c.getBoundingClientRect().bottom - cr.top + 8;
     let top = 8;
-    if (topHud) { top = below(topHud); if (stateToast) stateToast.style.top = top + 'px'; }
+    const anchor = topHud || progOverlay;
+    if (anchor && stateToast && !stateToast.closest('.grip-strip')) {
+      top = below(anchor);
+      stateToast.style.top = Math.max(top, below(fsBtn || anchor)) + 'px';
+    }
     if (!recOverlay) return;
     for (const c of [progOverlay, stateToast]) {
       if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
