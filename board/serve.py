@@ -1760,7 +1760,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   opacity: 0; transition: opacity 120ms ease; }
 .cmp-tip.show { opacity: 1; }
 .cmp-tip b { display: block; font: 600 13px/1.3 var(--mono); }
-@media (max-width: 1099px) {
+@media (max-width: 1229px) {
   main { display: block; }
   .src-bar { position: sticky; top: var(--header-h); }
   aside.left, section.right { height: auto; }
@@ -1780,10 +1780,11 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   .cmpv-head h2 { font-size: 21px; }
 }
 
-/* narrow screens (tablets, phones): the three columns stack. The tabs scroll sideways instead of cutting
-   their names off, the episode list scrolls inside a capped box, and the episode and its timeline follow
-   as part of the page. Wider screens keep the three-column layout above untouched. */
-@media (max-width: 1099px) {
+/* narrow screens (tablets, phones, small laptops): the three columns stack. The tabs scroll sideways instead of
+   cutting their names off, the episode list scrolls inside a capped box, and the episode and its timeline follow
+   as part of the page. Three columns start where the side panel gets at least 300 px (240 + 56vw + 300 <= 1230);
+   narrower, its timeline rows ran the arm name into the contribution chip. */
+@media (max-width: 1229px) {
   .coverage { position: relative; top: 0; height: auto; grid-template-columns: 1fr; }
   .cv-all { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 16px;
     border-right: 0; border-bottom: 1px solid var(--border-strong); }
@@ -1893,7 +1894,9 @@ const currentEp = document.getElementById('current-ep');
 
 function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
 function fmtDur(s) { return s == null ? '' : (s >= 60 ? (s / 60).toFixed(1) + ' min' : Math.round(s) + 's'); }
-function armLabel(a) { return a === 'both' ? 'both arms' : (a || '?'); }
+// what "both" means on the open episode's rig: a head camera films a person's hands, a handheld rig two grippers
+let ARM_NOUN = 'arms';
+function armLabel(a) { return a === 'both' ? `both ${ARM_NOUN}` : (a || '?'); }
 function contribClass(c) {
   c = (c || '').toLowerCase();
   return c === 'advancing' ? 'adv' : (c === 'wasteful' ? 'waste' : (c === 'idle' ? 'idle' : 'none'));
@@ -2979,6 +2982,7 @@ function renderEp(d, opts) {
   // a head camera (the rig board/build.py copies from the episode's context) is a single panel with no mounted
   // cameras beside it
   const isEgo = d._rig === 'ego_head';
+  ARM_NOUN = isEgo ? 'hands' : (/handheld/.test(d._rig || '') ? 'grippers' : 'arms');
   const comp = d.completion || {};
   const inv = d.objects || [];
   const eventLabels = d.event_labels || [];
