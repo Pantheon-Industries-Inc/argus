@@ -1011,7 +1011,7 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 }
 .prompt-banner .gg-badge {
   flex: none; font-size: 10px; font-weight: 700; letter-spacing: 0.03em;
-  text-transform: uppercase; color: var(--bg); background: var(--fg-2);
+  color: var(--bg); background: var(--fg-2);
   padding: 2px 7px; border-radius: 999px; line-height: 1.5;
 }
 .prompt-banner .gg-text {
@@ -1208,7 +1208,7 @@ h3.section .count {
   padding: 1px 6px; border-radius: var(--r-pill); }
 .ip-counts { display: inline-flex; align-items: baseline; gap: 8px; }
 .ip-minor { font: 500 11px/1 var(--mono); color: var(--fg-3); white-space: nowrap; }
-.di-row .di-sev { font-family: var(--mono); font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+.di-row .di-sev { font-family: var(--mono); font-size: 9.5px; font-weight: 700;
   padding: 2px 6px; border-radius: var(--r-pill); text-align: center; }
 .di-row.high .di-sev { color: var(--danger); background: rgba(184,69,47,0.14); border: 1px solid rgba(184,69,47,0.35); }
 .di-row.low .di-sev { color: var(--fg-3); background: rgba(28,28,26,0.050); border: 1px solid var(--border); }
@@ -1449,7 +1449,7 @@ h3.section .count {
 }
 .state-toast.active { opacity: 1; transform: translateY(0); }
 .state-toast .st-badge { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
-  color: #d9dcd2; text-transform: uppercase; }
+  color: #d9dcd2; }
 .state-toast .st-obj { font-size: 12px; font-weight: 700; color: #fff; margin-top: 2px; }
 .state-toast .st-fromto { font-size: 12px; color: rgba(255,255,255,0.85); margin-top: 1px; }
 .state-toast .st-from { color: rgba(255,255,255,0.6); }
@@ -3207,8 +3207,8 @@ function renderEp(d, opts) {
   // data-quality signal. Without one, the model's read is the one line.
   const givenMode = meta.prompt_mode === 'given' && !!meta.given_prompt;
   const bannerLabel = hasTasks ? 'Session summary'
-    : givenMode ? `Goal (given) &amp; ${esc(who)}&rsquo;s read`
-    : `Prompt (conceived by ${esc(who)})`;
+    : givenMode ? `Given goal and ${esc(who)}&rsquo;s read`
+    : `Task, as ${esc(who)} reads it`;
   // alignment chip: how the model's independent read relates to the given goal
   const ga = d.goal_alignment || null;
   let alignHtml = '';
@@ -3218,7 +3218,7 @@ function renderEp(d, opts) {
       : rel === 'different' ? 'diverged'
       : (rel === 'narrower' || rel === 'broader') ? 'minor'
       : 'aligned';
-    const label = cls === 'mislabel' ? 'likely mislabeled'
+    const label = cls === 'mislabel' ? 'likely mislabelled'
       : rel === 'aligned' ? 'matches given goal' : rel;
     alignHtml = `<div class="align-chip ${cls}"><span>${esc(label)}</span>`
       + `${ga.note ? `<span class="ac-note">${esc(ga.note)}</span>` : ''}</div>`;
