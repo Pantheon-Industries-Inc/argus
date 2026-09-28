@@ -39,9 +39,14 @@ def frame_pts_step(time_base: Fraction, fps: float = FPS) -> int:
     return int(step)
 
 
+# LeRobot v3 stores an episode's offset in a packed video in seconds rounded to the microsecond (218.933334 s for
+# frame 6568 at 30 fps), about 2e-5 frames off the grid; a genuinely misplaced offset is a sizeable part of a frame
+GRID_TOLERANCE_FRAMES = 1e-3
+
+
 def base_frame(base_s: float, fps: float = FPS) -> int:
     k = round(base_s * fps)
-    if abs(base_s * fps - k) > 1e-6:
+    if abs(base_s * fps - k) > GRID_TOLERANCE_FRAMES:
         raise FrameError(f"episode offset {base_s} s is not on the {fps} fps frame grid")
     return int(k)
 

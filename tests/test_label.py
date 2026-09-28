@@ -87,6 +87,15 @@ def test_last_frame_is_the_episodes_own(tmp_path):
         mf.extract_frames(p, 0.01, n_a, [0])                     # an off-grid offset is refused
 
 
+def test_offsets_stored_to_the_microsecond_are_on_the_grid():
+    # LeRobot v3 packed files store each episode's offset rounded to 6 decimals of a second
+    for k in (6568, 6977, 8465, 12840, 18869):
+        assert mf.base_frame(round(k / 30, 6)) == k
+    assert mf.base_frame(282.16666599999996) == 8465
+    with pytest.raises(mf.FrameError):
+        mf.base_frame(0.01)                                       # a third of a frame off is still refused
+
+
 # ---------------------------------------------------------------- sampling
 
 def _state(T, still=()):
