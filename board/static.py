@@ -43,7 +43,7 @@ Subcommands (all resumable):
 
 Every subcommand needs ffmpeg and ffprobe. Goal frames are cut by board/serve.py's extract_frame, so
 BOARD_FFMPEG_CONCURRENCY (default 4) also bounds how many are cut at once. OUT (--out) defaults to BOARD/static.
-The page's header shows --title (default "Data Board") and the board's name from BOARD/manifest.json, or the site
+The page's header shows --title (default "Data Dashboard") and the board's name from BOARD/manifest.json, or the site
 header in --header. Test a build with any static server that answers byte ranges, e.g.
 `npx http-server BOARD/static -p 8991`, then open http://localhost:8991/<build_id>/.
 board/publish.sh uploads a build with rclone (to an S3-compatible bucket, for example).
@@ -71,7 +71,7 @@ from board import hands as hands_overlay
 from board import serve as sa
 
 HERE_DIR = Path(__file__).resolve().parent
-TITLE = "Data Board"
+TITLE = "Data Dashboard"
 
 FFMPEG = sa.FFMPEG
 FFPROBE = (str(Path(FFMPEG).with_name("ffprobe")) if FFMPEG and Path(FFMPEG).with_name("ffprobe").exists()

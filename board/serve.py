@@ -1,6 +1,6 @@
 """The board: every episode's cameras synced to its annotation, with the dataset's issue profile and filters.
 
-    python -m board serve --board BOARD --clips CLIPS [--port 8896] [--title "Data Board"] [--header FILE]
+    python -m board serve --board BOARD --clips CLIPS [--port 8896] [--title "Data Dashboard"] [--header FILE]
 
 One Python file, no framework: a threaded HTTP server and a single page (INDEX_HTML below). It reads the
 episode files in BOARD/qa (board/build.py writes them) and plays the per-episode clips in CLIPS
@@ -158,7 +158,7 @@ def _under(base: Path, p: Path) -> bool:
 
 
 PORT = 8896
-PAGE_TITLE = "Data Board"
+PAGE_TITLE = "Data Dashboard"
 HERE = Path.cwd().resolve()           # the episode files (set by main from --board)
 MP4_DIR = HERE / "clips"              # the clips (set by main from --clips)
 COMPARE_DIR = HERE.parent / "compare" # other models' labels, beside qa/ (board/build.py writes them)
@@ -1081,10 +1081,10 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .lane-seg { position: absolute; top: 2px; bottom: 2px; border-radius: 1px; }
 .lane-seg.hands { background: #d9a657; }
 /* the stretches of the hands lane as times: click one to jump there */
-.lane-jumps { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 6px 0 0; }
-.lane-jump { padding: 3px 8px; cursor: pointer; font: 500 11px/1.2 var(--mono); color: var(--fg-2);
-  background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-pill); }
-.lane-jump:hover { color: var(--fg); border-color: var(--fg-3); }
+.lane-jumps { margin: 5px 0 0; font: 500 10.5px/1.5 var(--mono); color: var(--fg-3); }
+.lane-jump { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: var(--fg-2);
+  text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+.lane-jump:hover { color: var(--fg); text-decoration-color: var(--fg-3); }
 .lane-seg.pub { background: rgba(69,129,142,0.45); }
 .lane-seg.pub.alt { background: rgba(69,129,142,0.28); }
 .lane-seg.pub.now { background: #45818e; }
@@ -1908,7 +1908,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
 </style>
 </head><body>
 <header class="page-head"><h1>__PAGE_TITLE__</h1><span class="ph-board">__BOARD_NAME__</span></header>
-<nav class="coverage" id="coverage" aria-label="What is labelled on this board"></nav>
+<nav class="coverage" id="coverage" aria-label="What is labelled on this dashboard"></nav>
 <main>
   <aside class="rail" id="rail">
     <div class="lb" id="lb" hidden>
@@ -1920,7 +1920,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <div class="lb-note off" id="lb-note"><div class="lb-note-in" id="lb-note-in"></div></div>
-      <div class="lb-menu" id="lb-menu" role="listbox" aria-label="Whose labels the board shows"></div>
+      <div class="lb-menu" id="lb-menu" role="listbox" aria-label="Whose labels the dashboard shows"></div>
     </div>
     <div class="rail-ds" id="rail-ds"><span class="rd-name" id="rd-name"></span><span class="rd-sub"
       id="rd-sub"></span></div>
@@ -1935,7 +1935,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
     <div id="issue-filter" class="issue-filter"></div>
     <div id="ep-list"></div>
     <div class="rail-dl" id="rail-dl"><div class="rail-dl-in"><div class="dl-box">
-      <span class="rail-k">Download this list</span>
+      <span class="rail-k" id="dl-k">Download the episodes shown</span>
       <div class="dl-row">
         <button id="export-jsonl" class="rail-export" type="button"
           title="every episode in the list below (dataset, filter and search) as JSON Lines, one episode per line"
@@ -2739,6 +2739,8 @@ function renderRailHead(ds, eps) {
   document.getElementById('rd-sub').innerHTML = !ds ? ''
     : eps.length !== all.length ? `<em>${eps.length.toLocaleString()}</em> of ${all.length.toLocaleString()} episodes`
     : `${all.length.toLocaleString()} ${all.length === 1 ? 'episode' : 'episodes'} &middot; ${h} ${u}`;
+  document.getElementById('dl-k').textContent = eps.length === 1 ? 'Download the 1 episode shown'
+    : `Download the ${eps.length.toLocaleString()} episodes shown`;
 }
 
 function renderRail(ds, keepFile, fromSearch) {
@@ -3348,8 +3350,8 @@ function renderEp(d, opts) {
   if (handSpans.length) laneHtml += lane('lane-hands', handTitle, false, handSpans.map(([a, b]) =>
     `<div class="lane-seg hands" data-t="${a}" title="hands out of view ${fmtT(a)} to ${fmtT(b)}" `
       + `style="left:${lanePct(a)}%;width:max(2px, ${lanePct(b) - lanePct(a)}%)"></div>`).join(''))
-    + `<div class="lane-jumps">${handStretches.map(([a, b]) => `<button type="button" class="lane-jump" data-t="${a}" `
-      + `title="jump to ${fmtT(a)}">${fmtT(a)} to ${fmtT(b)}</button>`).join('')}</div>`;
+    + `<div class="lane-jumps">Jump to ${handStretches.map(([a, b]) => `<button type="button" class="lane-jump" `
+      + `data-t="${a}" title="hands out of view ${fmtT(a)} to ${fmtT(b)}">${fmtT(a)}</button>`).join(', ')}</div>`;
   if (pubLabels.length) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
     `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" title="${esc(fmtT(x.t0) + ' to '
       + fmtT(x.t1) + ': ' + x.label)}" style="left:${lanePct(x.t0)}%;width:max(2px, `
@@ -4296,7 +4298,7 @@ const cmpModel = k => ((CMP && CMP.models) || []).find(m => m.key === k) || null
 const cmpHas = (k, file) => !!(CMP && k && (CMP.episodes[file] || {})[k]);
 const cmpCount = k => CMP ? Object.values(CMP.episodes).filter(e => e[k]).length : 0;
 // the model of the board's own labels, the reference every other model is measured against
-const refName = () => (CMP && CMP.reference && CMP.reference.name) || 'the board';
+const refName = () => (CMP && CMP.reference && CMP.reference.name) || 'the dashboard';
 const withAn = w => (/^[aeiou]/i.test(w) ? 'an ' : 'a ') + w;
 const cap = w => w.charAt(0).toUpperCase() + w.slice(1);
 // a run whose prompt also held one complete annotation of the reference (of another episode of the same rig): the
@@ -4368,7 +4370,7 @@ function renderLabelsBy() {
   document.getElementById('lb-name').innerHTML = lbNameHtml(m);
   const n = m ? cmpCount(BY) : ALL_EPS.length;
   lbBtn.title = m ? `${cmpFullName(BY)}: its labels of the ${n} episodes it was asked to label, shown as a comparison`
-    : `${refName()}, the board’s own labels`;
+    : `${refName()}, the dashboard’s own labels`;
   // a comparison is marked where it is chosen; the text stays while the note folds away, so it never jumps
   if (m) document.getElementById('lb-note-in').innerHTML = `<b>A comparison, not ${ref}&rsquo;s labels.</b> The `
     + `downloads stay ${ref}&rsquo;s.`;
@@ -4381,8 +4383,8 @@ function buildLabelsMenu() {
   const row = (key, name, sub, n, on) => `<button type="button" class="lb-opt${on ? ' on' : ''}" role="option" `
     + `aria-selected="${on}" data-k="${esc(key)}"><span class="lb-o-name">${esc(name)}${sub
       ? `<small>${esc(sub)}</small>` : ''}</span><span class="lb-o-n">${n.toLocaleString()}</span></button>`;
-  lbMenu.innerHTML = `<div class="lb-group">This board</div>`
-    + row('', refName(), 'the board’s own labels', ALL_EPS.length, !BY)
+  lbMenu.innerHTML = `<div class="lb-group">This dashboard</div>`
+    + row('', refName(), 'the dashboard’s own labels', ALL_EPS.length, !BY)
     + `<div class="lb-sep"></div><div class="lb-group">Comparisons</div>`
     + `<div class="lb-gnote">Other models&rsquo; labels of some of the same episodes, from the same prompt and `
       + `frames.</div>`
@@ -4643,8 +4645,9 @@ function buildCompare() {
   const rigs = Object.keys(M.summary);
   const ref = refName(), refH = esc(ref);
   const andJoin = xs => xs.length > 1 ? xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1] : xs.join('');
+  const serialJoin = xs => xs.length > 2 ? xs.slice(0, -1).join(', ') + ', and ' + xs[xs.length - 1] : andJoin(xs);
   // the footage the comparison covers, as its groups are named (teleoperated arms, UMI, human ego)
-  const rigList = andJoin(rigs.filter(r => r !== 'all').map(r => (M.rig_names[r] || r).toLowerCase()
+  const rigList = serialJoin(rigs.filter(r => r !== 'all').map(r => (M.rig_names[r] || r).toLowerCase()
     .replace(/^teleop$/, 'teleoperated arms').replace(/^umi$/, 'UMI')));
   // each model with the reasoning effort it ran at, where the board knows it
   const modelList = andJoin(others.map(n => esc(n) + (BOARD.reasoning ? ` (${esc(BOARD.reasoning)} reasoning)` : '')));
@@ -4660,8 +4663,8 @@ function buildCompare() {
     + `<span class="br-track"><span class="br-bar" style="width:0%">${(c.colors || ['c-ink']).map((col,
       i) => `<i class="${col} seg${i}" style="flex-grow:${i ? 0 : 1}"></i>`).join('')}</span></span>`
     + `<span class="br-val"><span class="bv">no data</span><small></small></span></div>`).join('');
-  const mx = (id, title, def) => `<div class="cc cc-wide" data-mx="${id}"><h4>${esc(title)}</h4><p `
-    + `class="cc-def">${esc(def)}</p><div class="mx-wrap"><table class="mx"><thead><tr><th></th>`
+  const mx = (id, title, def) => `<div class="cc cc-wide" data-mx="${id}"><h4>${esc(title)}</h4>${def ? `<p `
+    + `class="cc-def">${esc(def)}</p>` : ''}<div class="mx-wrap"><table class="mx"><thead><tr><th></th>`
     + order.map(m => `<th class="${m.reference ? 'ref' : ''}">${cmpNameHtml(m)}</th>`).join('') + '</tr></thead><tbody>'
     + order.map(a => `<tr><th class="mx-rh${a.reference ? ' ref' : ''}">${cmpNameHtml(a)}</th>`
       + order.map(b => a.key === b.key ? '<td class="self"></td>'
@@ -4680,25 +4683,21 @@ function buildCompare() {
     <button type="button" class="cmpv-back" id="cmpv-back"><span aria-hidden="true">&larr;</span> Back to the
       episodes</button>
     <div class="cmpv-head"><h2>How the models compare</h2>
-      <p>The comparison uses a ${(all.episodes || 0).toLocaleString()}-episode subset of the board, ${fMin(all.minutes
-        || 0)} of footage spread across ${esc(rigList)}. ${modelList} each labelled these episodes and reported their
-        data issues with the same harness as ${refH}.${exN ? ` On ${exN.toLocaleString()} of them, each labelled the
-        episode a second time with in-context learning, its prompt also holding one complete ${refH} trace to show the
-        density and reasoning expected.` : ''}</p></div>
+      <p>The comparison uses a ${(all.episodes || 0).toLocaleString()}-episode subset of the dashboard, meaning
+        ${fMin(all.minutes || 0)} of footage spread across ${esc(rigList)}. ${modelList} each labelled these episodes and
+        reported their data issues with the same harness as ${refH}.${exN ? ` On ${exN.toLocaleString()} of them, each
+        labelled the episode a second time with in-context learning, its prompt including one complete ${refH} trace to
+        show the density and reasoning expected.` : ''}</p></div>
     <div class="cmpv-bar"><span class="if-sev-seg" role="radiogroup" aria-label="Footage">${rigBtns}</span><span `
       + `class="cmpv-scope" id="cmpv-scope"></span></div>
     <h3 class="section">Each model on the same episodes</h3>
     <div class="cmpv-grid cmpv-main">${MAIN_CHARTS.map(c => card(c, barRows(c))).join('')}</div>
     <h3 class="section">Agreement between models</h3>
-    <p class="cmpv-sub">Every pair of models, on the episodes both of them parsed. Darker is closer agreement; each cell `
-      + `gives its number of episodes.</p>
     <div class="cmpv-grid">${mx('outcome', 'Outcome agreement', 'The share of episodes on which two runs give the task '
       + 'the same outcome (success, success then undone, failure or unclear; a task partly done is a failure). Human ego '
       + 'sessions grade each '
       + 'task separately and have no single outcome, so they are left out.')}
-      ${mx('issues', 'Issue-type agreement', 'Of the kinds of problem either run reported in an episode (data issues '
-        + 'and operator mistakes, every severity, grouped into the board’s issue families), the share both reported, '
-        + 'summed over the episodes.')}</div>
+      ${mx('issues', 'Issue-type agreement', '')}</div>
     ${pairs.length ? `<h3 class="section">${esc(cap(icl()))}</h3>
     <p class="cmpv-sub" id="pr-sub"></p>
     <div class="pr-key"><span><i class="k-open"></i>without the trace</span><span><i class="k-fill"></i>with the `
@@ -5077,7 +5076,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if what in ("index", "metrics"):
                 p = COMPARE_DIR / f"{what}.json"
                 if not p.is_file():
-                    self._send(404, {"error": "no comparison on this board"})
+                    self._send(404, {"error": "no comparison on this dashboard"})
                     return
                 self._send(200, p.read_bytes().decode(), "application/json")
                 return

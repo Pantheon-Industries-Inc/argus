@@ -104,8 +104,8 @@ def test_a_site_header_takes_the_place_of_the_title_bar():
     """A board served as part of a site shows the site's own header (--header): its markup where the title bar was,
     its styles in the page's head, and nothing else of the page changed."""
     header = '<style>.site { height: 76px; } :root { --header-h: 76px; }</style>\n<header class="site">Site</header>'
-    plain = serve.render_index("Data Board", {"mode": "api"}, "trial")
-    page = serve.render_index("Data Board", {"mode": "api"}, "trial", header)
+    plain = serve.render_index("Data Dashboard", {"mode": "api"}, "trial")
+    page = serve.render_index("Data Dashboard", {"mode": "api"}, "trial", header)
     head, body = page.split("</head>", 1)
     assert '<header class="site">Site</header>' in body and 'class="page-head"' not in body
     assert "--header-h: 76px" in head and "<style>.site" not in body
@@ -157,7 +157,7 @@ def test_page_script_parses(tmp_path):
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
-    js = serve.render_index("Data Board", {"mode": "api"}).split("<script>", 1)[1].split("</script>", 1)[0]
+    js = serve.render_index("Data Dashboard", {"mode": "api"}).split("<script>", 1)[1].split("</script>", 1)[0]
     (tmp_path / "page.js").write_text(js)
     r = subprocess.run([node, "--check", str(tmp_path / "page.js")], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -201,7 +201,7 @@ def _get(url: str, headers: dict | None = None, data: bytes | None = None):
 def test_server_endpoints(server):
     code, _, body = _get(server + "/")
     page = body.decode()
-    assert code == 200 and "<h1>Data Board</h1>" in page and "trial &lt;one&gt;" in page
+    assert code == 200 and "<h1>Data Dashboard</h1>" in page and "trial &lt;one&gt;" in page
     assert '"compare":false' in page           # no comparisons on this board, so the page never asks for them
     code, _, body = _get(server + "/api/episodes")
     assert code == 200 and len(json.loads(body)) == 3
@@ -234,11 +234,11 @@ def test_static_site(tmp_path):
     assert set(eps["episode_000001"]["frames"]) >= {"exo|0", "exo|11000"}  # the poster and the goal frame
     a = argparse.Namespace(board=board, qa=board / "qa", clips=clips, compare=None, hands=None, keypoints=None,
                            out=tmp_path / "out", build_id="b1", force=False, public_base="https://example.org/board/",
-                           title="Data Board")
+                           title="Data Dashboard")
     assert static.cmd_site(a) == 0
     site = tmp_path / "out" / "b1"
     page = (site / "index.html").read_text()
-    assert "<h1>Data Board</h1>" in page and '"mode":"static"' in page and '"compare":false' in page
+    assert "<h1>Data Dashboard</h1>" in page and '"mode":"static"' in page and '"compare":false' in page
     assert '"data":"https://example.org/board/b1/data/"' in (site / "index.public.html").read_text()
     index = json.loads((site / "data" / "index.json").read_text())
     assert index["datasets"] == ["galaxea", "my_own_rig", "fastumi"] and len(index["eps"]) == 3
@@ -379,7 +379,7 @@ def test_the_static_page_runs(tmp_path):
     (tmp_path / "clips").mkdir()
     a = argparse.Namespace(board=board, qa=board / "qa", clips=tmp_path / "clips", compare=None, hands=None,
                            keypoints=None, out=tmp_path / "out", build_id="b1", force=False, public_base=None,
-                           title="Data Board")
+                           title="Data Dashboard")
     assert static.cmd_site(a) == 0
     site = tmp_path / "out" / "b1"
     assert json.loads((site / "data" / "compare" / "lists" / "other.json").read_text())[0]["file"] == "episode_000000.json"

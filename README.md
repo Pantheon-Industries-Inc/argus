@@ -2,13 +2,13 @@
 
 Dense annotations and data-quality checks for robot-learning episodes, from Pantheon.
 
-Read the [blog post](https://pantheon.inc/research/we-looked-at-everything), browse every label on the [data board](https://pantheon.inc/data-board), or [label your own data](https://pantheon.inc/data-review).
+Read the [blog post](https://pantheon.inc/research/we-looked-at-everything), browse every label on the [data dashboard](https://pantheon.inc/data-board), or [label your own data](https://pantheon.inc/data-review).
 
 This is the pipeline behind *We Looked at Everything*, where it labelled 3,546 episodes (66.5 hours) from nine public datasets of teleoperated arms, UMI grippers and human ego video. It takes an episode as it was recorded, from a single video with no instruction to a full dataset with instructions and recorded state, and returns a dense timeline with each action judged advancing, wasteful or idle, progress toward the goal, key events and subgoals, operator mistakes, changes a person made to the scene, and the instruction checked against the footage. Deterministic checks run beside the model for what it should not be trusted with, such as recordings that play faster than real time, camera files swapped between arms, a recorded gripper opening that never changes and poor capture.
 
-The labels come from Astra (`openai/gpt-6-astra`) through a harness that tells it what each kind of rig is, what counts as a mistake on it, and how to check the recording against the pixels. Every prompt is in `label/`. The repository also holds the board that plays each episode with its labels, a comparison of four models on the same harness, and the gate, the regression suite the harness is held to.
+The labels come from Astra (`openai/gpt-6-astra`) through a harness that tells it what each kind of setup is, what counts as a mistake on it, and how to check the recording against the pixels. Every prompt is in `label/`. The repository also holds the dashboard that plays each episode with its labels, a comparison of four models on the same harness, and the gate, the regression suite the harness is held to.
 
-![The board, showing a MolmoAct2 episode with its three cameras, the dense timeline and the outcome against the given goal](media/board.jpg)
+![The dashboard, showing a MolmoAct2 episode with its three cameras, the dense timeline and the outcome against the given goal](media/board.jpg)
 
 ## Install
 
@@ -23,7 +23,7 @@ You also need `ffmpeg` 5.1 or newer. Anything in `OPENROUTER_API_KEYS` that is n
 
 ## Quickstart
 
-Each rig takes three commands, which prepare the episode from its public dataset, run the deterministic checks and label it. The three labels cost about $1 together; the MolmoAct2 episode first downloads its three camera packs (about 1.4 GB).
+Each setup takes three commands, which prepare the episode from its public dataset, run the deterministic checks and label it. The three labels cost about $1 together; the MolmoAct2 episode first downloads its three camera packs (about 1.4 GB).
 
 ```bash
 # teleoperated arms: MolmoAct2, two arms push four blocks into a row, then push it apart (37 s)
@@ -42,7 +42,7 @@ uv run python -m checks data/episodes/openaoe/quickstart
 uv run python -m label --dataset openaoe --episodes data/episodes/openaoe/quickstart --kind smoke --cap 2
 ```
 
-Then build a board over the three runs and open it at http://localhost:8896.
+Then build a dashboard over the three runs and open it at http://localhost:8896.
 
 ```bash
 mkdir -p data/boards/quickstart && cp configs/quickstart/board.json data/boards/quickstart/manifest.json
@@ -59,10 +59,10 @@ The MolmoAct2 episode should come out as a success then undone, the row complete
 |---|---|---|
 | `prepare/` | One adapter per dataset and two for your own data, writing episodes as sidecar folders | `python -m prepare <adapter>` |
 | `checks/` | Deterministic checks, written into each episode before labelling, and the label consistency check | `python -m checks` |
-| `label/` | The harness: frame selection, exact decoding, resolution routing, the per-rig prompts, the model call, runs | `python -m label` |
-| `board/` | The board: build, clips, serve or write static files; the hand pose overlay | `python -m board` |
+| `label/` | The harness: frame selection, exact decoding, resolution routing, the per-setup prompts, the model call, runs | `python -m label` |
+| `board/` | The dashboard: build, clips, serve or write static files; the hand pose overlay | `python -m board` |
 | `compare/` | Other models over the same episodes and harness, with and without in-context learning from an Astra trace | `python -m compare` |
-| `gate/` | The regression suite: frame-verified cases and a cost sample per rig | `python -m gate` |
+| `gate/` | The regression suite: frame-verified cases and a cost sample per setup | `python -m gate` |
 | `configs/` | Episode lists, the quickstart, model settings, example annotations | |
 
 Every command takes `--help`, and every module's docstring documents it. `tests/` has one file per stage.
@@ -80,11 +80,11 @@ uv run python -m prepare videos prepare --root path/to/videos --rig ego_head --i
 uv run python -m prepare molmo prepare --episodes configs/slices/molmo.txt --out data/episodes/molmo/slice
 ```
 
-`--rig` is `teleop_arms`, `handheld_gripper` or `ego_head`. The LeRobot adapter assigns the video features to cameras by name, reads `observation.state` and `action` when they have 7 values per arm or gripper, and takes each episode's task as its instruction. The videos adapter takes each file as the one camera of its rig; its instructions file maps a file's path to an instruction, or for human ego video to `{"instruction": ..., "subtasks": [{"t0": 0.0, "t1": 4.5, "label": "..."}]}`, and a file with no entry is labelled without one. For any other format, write the sidecar yourself on top of `prepare/sidecar.py`, which documents every field (`prepare/openaoe.py` is the smallest adapter).
+`--rig` is `teleop_arms`, `handheld_gripper` or `ego_head`. The LeRobot adapter assigns the video features to cameras by name, reads `observation.state` and `action` when they have 7 values per arm or gripper, and takes each episode's task as its instruction. The videos adapter takes each file as the one camera of its setup; its instructions file maps a file's path to an instruction, or for human ego video to `{"instruction": ..., "subtasks": [{"t0": 0.0, "t1": 4.5, "label": "..."}]}`, and a file with no entry is labelled without one. For any other format, write the sidecar yourself on top of `prepare/sidecar.py`, which documents every field (`prepare/openaoe.py` is the smallest adapter).
 
 Every public adapter has `prepare --episodes LIST --out FOLDER [--raw RAW] [--jobs N] [--force]` and downloads exactly the listed episodes. `configs/slices/<adapter>.txt` is the list we audited, with the command and seed that drew it in its header.
 
-| Dataset | Rig | Adapter | `configs/slices` |
+| Dataset | Setup | Adapter | `configs/slices` |
 |---|---|---|---|
 | allenai/MolmoAct2-BimanualYAM-Dataset | teleop | `molmo` | 1,284 episodes, 25.1 h, all 34 tasks |
 | XDOF/ABC-130k | teleop | `abc130k` | 183 episodes, 5.9 h, one per task |
@@ -98,12 +98,12 @@ Every public adapter has `prepare --episodes LIST --out FOLDER [--raw RAW] [--jo
 
 ## Checks
 
-`uv run python -m checks EPISODES` writes each check's result into the episodes' `context.json`, which `board build` copies to the board; none of it reaches the prompt.
+`uv run python -m checks EPISODES` writes each check's result into the episodes' `context.json`, which `board build` copies to the dashboard; none of it reaches the prompt.
 
 - `stream_pairing`: whether each mounted camera's image motion follows its own arm's or gripper's recorded motion, or the other one's (camera files swapped).
 - `recorded_jumps`: single-frame jumps in the recorded pose that the actor's own camera does not show.
 - `gripper_channels`: a recorded gripper opening with the same value at every frame.
-- `capture_qc`: the 38 capture checks of public-dataset-adapter (clock gaps, exposure, frozen or duplicated frames, motion the video does not show), calibrated per rig with the measured reason beside each threshold in `checks/capture_qc.py`.
+- `capture_qc`: the 38 capture checks of public-dataset-adapter (clock gaps, exposure, frozen or duplicated frames, motion the video does not show), calibrated per setup with the measured reason beside each threshold in `checks/capture_qc.py`.
 - `label_consistency`: labels that contradict themselves (success beside a goal alignment that says another task or only part of it was done, "aligned" beside footage that does not show the goal, success then undone with nothing undone, a failure whose progress reaches 1.0, a time past the end). It reads stored labels inside `board build` and never edits one.
 
 MolmoAct2 recordings can play faster than real time, and that rule compares neighbouring episodes, so it scans the whole dataset from its data parquets: `python -m checks.timebase scan --raw data/raw/molmo --out data/molmo_timebase.csv`, then `python -m checks.timebase apply --timebase data/molmo_timebase.csv EPISODES`.
@@ -118,7 +118,7 @@ uv run python -m label --dataset molmo --episodes data/episodes/molmo/slice --ki
 
 What the model receives: one instant every 1.5 s on teleop arms, every second on UMI grippers and every half second on human ego video, plus the first and last frame, four instants to a grid image with one row per camera and each column headed with its exact time. UMI cells are 320 px wide, human ego cells 256 px. A teleop episode's width comes from its task text: a small model (`openai/gpt-6-sol`) reads only that text and says whether the task needs fine detail (lettering or a display, which face of an object is up, small similar objects). Those episodes get 448 px on every camera; the rest get 224 px plus contact views, the scene camera and the acting arm's camera at detail size just after each sharp change of the recorded gripper value. A request over the provider's image-size cap steps down to narrower cells until it fits. The request opens with the shared instructions and the episode's facts (cameras, recorded still spans and motion, the instruction and the objects it names), each as a claim to check; the grids follow, then the first and last instant at up to 768 px with the contact views between them. With no instruction, the model names the task as the most specific end state the demonstrator worked toward. The shared instructions are pinned by hash in `tests/test_label.py`. Measured on first sends of the gate's cost samples, expect about $26 per hour of footage on teleop, $30 on UMI and $19 on human ego video.
 
-## Board
+## Dashboard
 
 ```bash
 mkdir -p data/boards/mine && cp configs/quickstart/board.json data/boards/mine/manifest.json   # then edit it
@@ -129,13 +129,13 @@ uv run python -m board static media --board data/boards/mine --clips data/clips 
 uv run python -m board static site --board data/boards/mine --clips data/clips    # data/boards/mine/static/<build id>
 ```
 
-A board shows the runs its `manifest.json` names, one entry per dataset, `{"dataset": NAME, "run": RUN, "episodes": FOLDER, "rules": [...]}`, paths absolute or relative to the board folder (`../../runs/<dataset>/latest` is the newest finished run). Its rules apply definitions after labelling (`board/rules.py`; `board/build.py` documents every rule and key). An outcome is success or failure. The harness's "partial" (part of the goal left undone) is shown and exported as a failure of the kind partial, as "success then undone" is a kind of success. A problem counts when it is a data issue at medium or high severity or an operator mistake that changes the outcome at medium or high, or is high; the rest stay visible as minor, and each flagged issue belongs to one problem family (`board/families.json`), which the filter lists. Each episode downloads as JSON and any filtered list as JSON Lines, and a dataset in `board/dataset_sources.json` is credited with its publisher and license on the page and in the download. `board/publish.sh` uploads a static build.
+A dashboard shows the runs its `manifest.json` names, one entry per dataset, `{"dataset": NAME, "run": RUN, "episodes": FOLDER, "rules": [...]}`, paths absolute or relative to the dashboard folder (`../../runs/<dataset>/latest` is the newest finished run). Its rules apply definitions after labelling (`board/rules.py`; `board/build.py` documents every rule and key). An outcome is success or failure. The harness's "partial" (part of the goal left undone) is shown and exported as a failure of the kind partial, as "success then undone" is a kind of success. A problem counts when it is a data issue at medium or high severity or an operator mistake that changes the outcome at medium or high, or is high; the rest stay visible as minor, and each flagged issue belongs to one problem family (`board/families.json`), which the filter lists. Each episode downloads as JSON and any filtered list as JSON Lines, and a dataset in `board/dataset_sources.json` is credited with its publisher and license on the page and in the download. `board/publish.sh` uploads a static build.
 
 Human ego episodes can also show 2D hand keypoints (the "Hand pose" switch, on by default) and offer them as a download. They come from [ACE-Ego-Hand](https://github.com/ggxxii/ACE-Ego-Hand), run on Modal GPUs by `board/hand_pose/modal_app.py`, whose docstring has every command; you register for and download MANO yourself. Name the keypoint folder in the manifest, `"hands": {"src": "../../hand_pose/keypoints", "clips": "../../clips"}`, and `board build` writes the overlay and the downloads, apart from the labels. The keypoints are for non-commercial use only, which every file says (see Licenses).
 
 ## Model comparison
 
-Four models run on the same 193 episodes (about an hour per rig, `configs/compare/main.json`) through the same harness, with the same prompt, images, reasoning effort and output limit (`configs/models.json`): Astra (`openai/gpt-6-astra`, the reference), Claude Opus 5.5 (`anthropic/claude-opus-5.5`), GPT-6 Sol (`openai/gpt-6-sol`) and DeepSeek v4.1 flash (`deepseek/deepseek-v4.1-flash`). With `--with-example`, the other three learn in context: each prompt also holds one Astra trace, the complete Astra annotation of a different episode of the same rig (`configs/examples/`), on a seeded third of the episodes (`configs/compare/third.json`).
+Four models run on the same 193 episodes (about an hour per setup, `configs/compare/main.json`) through the same harness, with the same prompt, images, reasoning effort and output limit (`configs/models.json`): Astra (`openai/gpt-6-astra`, the reference), Claude Opus 5.5 (`anthropic/claude-opus-5.5`), GPT-6 Sol (`openai/gpt-6-sol`) and DeepSeek v4.1 flash (`deepseek/deepseek-v4.1-flash`). With `--with-example`, the other three learn in context: each prompt also holds one Astra trace, the complete Astra annotation of a different episode of the same setup (`configs/examples/`), on a seeded third of the episodes (`configs/compare/third.json`).
 
 ```bash
 uv run python -m compare prepare --selection configs/compare/main.json          # HF_TOKEN needed
@@ -146,17 +146,17 @@ uv run python -m board build data/boards/compare
 uv run python -m compare.metrics data/boards/compare
 ```
 
-`prepare` prepares and checks exactly the selected episodes, and each `label` starts one run per model at once, each within its own `--cap`; Astra costs about the figures under Label for these three hours, and in our run Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash cost 34%, 19% and 4% as much per episode. `board` writes a manifest whose labels are the reference model's, with every other run as a comparison under `BOARD/compare/`, never counted or exported; the page's "Labels by" control switches the board to one model's labels and opens the comparison view. `compare/metrics.py` measures, from the run folders alone, parse share, schema violations, density, agreement between models, cost, latency and what in-context learning changes.
+`prepare` prepares and checks exactly the selected episodes, and each `label` starts one run per model at once, each within its own `--cap`; Astra costs about the figures under Label for these three hours, and in our run Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash cost 34%, 19% and 4% as much per episode. `board` writes a manifest whose labels are the reference model's, with every other run as a comparison under `BOARD/compare/`, never counted or exported; the page's "Labels by" control switches the dashboard to one model's labels and opens the comparison view. `compare/metrics.py` measures, from the run folders alone, parse share, schema violations, density, agreement between models, cost, latency and what in-context learning changes.
 
 ## Gate
 
 ```bash
 uv run python -m gate prepare                        # HF_TOKEN needed
-uv run python -m gate label --kind full --cap 40     # one run per rig, about $60 in all
+uv run python -m gate label --kind full --cap 40     # one run per setup, about $60 in all
 uv run python -m gate score data/runs/gate_teleop/RUN data/runs/gate_handheld/RUN data/runs/gate_ego/RUN
 ```
 
-The gate holds 126 episodes (`gate/selection.json`) and what each case's label must say (`gate/cases.json`), every fact checked on the frames. Teleop has MolmoAct2 1346 six times (asked to flip three blocks, none ever turns: a failure with a high instruction mismatch), 1213 and 1233 (a goal reached, then undone), MolmoAct2 008276 three times and 010414 (black polo shirts under an instruction to fold black pants: the shirt must be named, and the task asked for was not done) and ten more, among them Galaxea Steam_Rice 000050 and 000011. UMI has all 32 FastUMI Prepare_tableware episodes (a fork is handled, never chopsticks) and four more. Human ego has four clips with a known data issue and three clean ones whose objects must be named. Each rig also has a cost sample of about 20 real episodes across its datasets, priced as first sends. A harness passes when every reply parses, no label contradicts itself, the cases hold and the cost stays at the figures under Label; this one scores 19 of 22 on teleop (1346 is right in three of six samples), 36 of 36 on UMI and 7 of 7 on human ego.
+The gate holds 126 episodes (`gate/selection.json`) and what each case's label must say (`gate/cases.json`), every fact checked on the frames. Teleop has MolmoAct2 1346 six times (asked to flip three blocks, none ever turns: a failure with a high instruction mismatch), 1213 and 1233 (a goal reached, then undone), MolmoAct2 008276 three times and 010414 (black polo shirts under an instruction to fold black pants: the shirt must be named, and the task asked for was not done) and ten more, among them Galaxea Steam_Rice 000050 and 000011. UMI has all 32 FastUMI Prepare_tableware episodes (a fork is handled, never chopsticks) and four more. Human ego has four clips with a known data issue and three clean ones whose objects must be named. Each setup also has a cost sample of about 20 real episodes across its datasets, priced as first sends. A harness passes when every reply parses, no label contradicts itself, the cases hold and the cost stays at the figures under Label; this one scores 19 of 22 on teleop (1346 is right in three of six samples), 36 of 36 on UMI and 7 of 7 on human ego.
 
 ## Determinism
 
@@ -177,7 +177,7 @@ The capture checks in `checks/vendor/public_dataset_adapter_qc.py` are Sambhav G
 
 The code in this repository is Apache-2.0 (`LICENSE`). A few files contain material under its own license, listed in `THIRD_PARTY_NOTICES.txt`. Everything below is downloaded when you run the pipeline and is not included here.
 
-The labels Pantheon publishes (on the data board, in its downloads and in the release) are licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), so anyone may use them for any purpose with credit to Pantheon. The footage they describe keeps its dataset's license.
+The labels Pantheon publishes (on the data dashboard, in its downloads and in the release) are licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), so anyone may use them for any purpose with credit to Pantheon. The footage they describe keeps its dataset's license.
 
 | Component | License | Source |
 |---|---|---|
