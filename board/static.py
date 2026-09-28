@@ -232,8 +232,9 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
     page syncs its cameras by time).
 
     The board's clips (board/clips.py) already are that, so they are stream-copied into a faststart mp4 and never
-    re-encoded: the static board plays the same pictures as the live one, and a second lossy pass would only cost
-    quality. A clip made some other way (not H.264 4:2:0, or larger than the recipe allows) is encoded with
+    re-encoded: the static board plays the same pictures at the same times as the live one (-copyts keeps a clip
+    that starts after 0, a camera that started recording late, where it is), and a second lossy pass would only
+    cost quality. A clip made some other way (not H.264 4:2:0, or larger than the recipe allows) is encoded with
     board/clips.py's recipe, as the page's main camera or a side one (main)."""
     t0 = time.time()
     sp = probe(src)
@@ -241,7 +242,7 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
     part = dst.with_name("." + dst.name + ".part.mp4")
     if _compliant(sp):
         mode = "copy"
-        cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src),
+        cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-copyts", "-i", str(src),
                "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-movflags", "+faststart", str(part)]
     else:
         mode = "encode"
@@ -554,8 +555,9 @@ def cmd_site(a):
             (stage / "data/compare/lists" / f"{kd.name}.json").write_text(json.dumps(recs, separators=(",", ":")))
     hands_res = None
     if hands is not None:
-        # the hand pose files, each re-timed against the web copy the static page plays (ffmpeg re-bases a copied
-        # clip's timestamps to start at 0); an episode whose web copy is not made yet gets none until the next build
+        # the hand pose files, each re-timed against the web copy the static page plays (the copy keeps the clip's
+        # timestamps, and retime refuses a copy whose frames or size differ); an episode whose web copy is not made
+        # yet gets none until the next build
         (stage / "data/hands").mkdir()
         todo = [(e, a.out / "media" / e["media"]["exo"]["rel"]) for e in eps
                 if (hands / e["rec"]["file"]).exists() and "exo" in e["media"]]

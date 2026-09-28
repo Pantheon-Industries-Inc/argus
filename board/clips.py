@@ -54,7 +54,7 @@ CRF = 20                     # with veryfast, the quality of CRF 22 at medium (V
 PRESET = "veryfast"          # 40% of the time, which the whole board and every Data Review upload pay
 KEY_S = 2                    # a keyframe every 2 s, so a seek decodes at most 2 s of video
 # names the recipe; board/static.py folds it into its media names, so a new recipe gets new names
-ENC_TAG = f"h264-crf{CRF}-{PRESET}-main{MAIN_MIN_W}-{MAIN_BOX[0]}x{MAIN_BOX[1]}-side{SIDE_BOX[0]}x{SIDE_BOX[1]}-kf{KEY_S}s-srcts-v3"
+ENC_TAG = f"h264-crf{CRF}-{PRESET}-main{MAIN_MIN_W}-{MAIN_BOX[0]}x{MAIN_BOX[1]}-side{SIDE_BOX[0]}x{SIDE_BOX[1]}-kf{KEY_S}s-srcts-camclock-v3"
 
 
 def main_cam(sources: dict) -> str:
@@ -93,20 +93,40 @@ def source_size(ffmpeg: str, path: str) -> tuple:
     return int(w), int(h)
 
 
+def start_offsets(ep_dir: Path, sources: dict) -> dict:
+    """Each camera's first frame on the episode's clock, in seconds after the main camera's: from times.npz, the
+    real capture times some datasets keep per camera (ABC-130k, RealOmni). A camera whose recording started later
+    gets its clip's timestamps shifted by that much, so every camera plays on the one clock the page syncs them by
+    (RealOmni's right gripper camera starts up to 2 s after the left one). One that started earlier is left at 0:
+    on this board that is at most 46 ms, under the page's 0.1 s resync tolerance, and its frames before the main
+    camera's first one would otherwise need a negative time."""
+    tp = ep_dir / "times.npz"
+    cams = [c for c in CAMS if c in sources]
+    if not tp.exists() or len(cams) < 2:
+        return {}
+    import numpy as np
+    with np.load(tp) as z:
+        t0 = {c: float(z[c][0]) for c in cams if c in z.files and len(z[c])}
+    ref = t0.get(main_cam(sources))
+    return {c: t - ref for c, t in t0.items() if ref is not None and t - ref > 0}
+
+
 def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
-                ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True) -> None:
+                ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0) -> None:
     """Exactly the episode's n_frames, starting at its first frame. Packed files are on an exact frame grid,
     so seeking half a frame before the episode's offset lands on its first frame whichever way the decimal
     rounds, and -frames:v stops after the last one (never a frame of the next episode). Per-episode files
     (ABC-130k, FastUMI) start at 0. Frame timestamps pass through unchanged, so real capture times stay the
-    playback times. main is the camera the page shows large (main_cam)."""
+    playback times. main is the camera the page shows large (main_cam); offset_s shifts every timestamp, for a
+    camera that started recording after the main one (start_offsets)."""
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
     # a per-process temp name, so two builders on the same clip can never write one file at once
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
     w, h = source_size(ffmpeg, packed)
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), "-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}",
            "-i", packed, "-frames:v", str(int(n_frames)), "-an", "-fps_mode", "passthrough",
-           *video_args(w, h, main, threads), str(tmp)]
+           *video_args(w, h, main, threads),
+           *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     subprocess.run(cmd, check=True, capture_output=True)
     got = clip_frames(tmp)
     if got != int(n_frames):
@@ -143,6 +163,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     fps = float((json.loads(ctx_p.read_text()) if ctx_p.exists() else {}).get("fps") or 30.0)
     outs = clip_paths(mp4_dir, eid)
     big = main_cam(sources) if any(c in sources for c in CAMS) else None
+    offsets = start_offsets(ep_dir, sources)
     jobs = []
     for cam in CAMS:
         if cam not in sources:        # FastUMI has no fixed camera; single-gripper tasks have one camera
@@ -150,7 +171,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
         o = outs[cam]
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
             s = sources[cam]
-            jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big))
+            jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, offsets.get(cam, 0.0)))
     return jobs
 
 
@@ -180,8 +201,8 @@ def main() -> int:
           f"(jobs={args.jobs}, threads={args.clip_threads}) -> {args.out}")
     ok = fail = 0
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main): o
-                for (pk, b, du, o, fps, is_main) in jobs}
+        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off): o
+                for (pk, b, du, o, fps, is_main, off) in jobs}
         for f in as_completed(futs):
             try:
                 f.result()

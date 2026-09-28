@@ -487,3 +487,16 @@ def test_clip_sizes_follow_where_the_page_shows_each_camera():
     args = clips.video_args(1920, 1080, True, 2)
     assert args[args.index("-enc_time_base") + 1] == "demux"
     assert f"expr:gte(t,n_forced*{clips.KEY_S})" in args
+
+
+def test_a_camera_that_started_late_is_shifted_onto_the_episode_clock(tmp_path):
+    from board import clips
+    np.savez(tmp_path / "times.npz", left=np.array([0.0, 0.033, 0.067]), right=np.array([2.031, 2.064]),
+             left_pts=np.array([0, 1, 2]), right_pts=np.array([0, 1]))
+    sources = {"left": {}, "right": {}}
+    assert clips.start_offsets(tmp_path, sources) == {"right": 2.031}
+    # a camera that started first is left at 0, and one camera or no real times means nothing to shift
+    np.savez(tmp_path / "times.npz", left=np.array([0.04, 0.07]), right=np.array([0.0, 0.03]))
+    assert clips.start_offsets(tmp_path, sources) == {}
+    assert clips.start_offsets(tmp_path, {"left": {}}) == {}
+    assert clips.start_offsets(tmp_path / "none", sources) == {}
