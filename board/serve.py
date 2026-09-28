@@ -192,6 +192,16 @@ def board_name(board: Path) -> str:
         return ""
 
 
+def labels_license(board: Path) -> dict | None:
+    """The license the board's owner gives its labels, as its manifest names it ("labels_license": {"name", "url",
+    "by"}), or None: a board states no license for labels it was not told of."""
+    try:
+        lic = json.loads((board / "manifest.json").read_text()).get("labels_license")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return lic if isinstance(lic, dict) and lic.get("name") else None
+
+
 def list_episodes(here: Path | None = None) -> list:
     """The rail records of the board's own labels, or of one model's labels (compare/<key>). Cached per folder and
     rebuilt only when its set of json files or their mtimes change, so concurrent page loads don't each re-parse
@@ -479,16 +489,19 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .rail-dl, .kp-exp, .lb-note, .kp-note { display: grid; grid-template-rows: 1fr;
   transition: grid-template-rows 220ms ease, opacity 200ms ease, margin 220ms ease; }
 /* the downloads of the list sit under it, at the foot of the rail */
-.rail-dl { flex: 0 0 auto; margin: 12px 0 0; }
+/* the rail's two dividers (under "Labels by", over the downloads) run the rail's full width, to its border */
+.rail-dl { flex: 0 0 auto; margin: 12px calc(-1 * var(--rail-pad)) 0; }
 .rail-dl.off { margin-top: 0; }
-.dl-box { padding-top: 12px; border-top: 1px solid var(--border); }
+.dl-box { padding: 12px var(--rail-pad) 0; border-top: 1px solid var(--border-strong); }
 .rail-dl-in, .kp-exp-in, .lb-note-in, .kp-note-in { min-height: 0; overflow: hidden; }
 .rail-dl.off, .kp-exp.off, .lb-note.off, .kp-note.off { grid-template-rows: 0fr; opacity: 0; }
 .kp-exp { flex: 0 0 auto; }
-.kp-lic { margin: 8px 2px 0; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
+.kp-lic, .dl-lic { margin: 8px 2px 0; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
+.dl-lic a { color: inherit; text-underline-offset: 2px; }
 /* whose labels the board shows: its own, or one other model's as a comparison. A comparison turns the button ink,
    the board's mark for labels that are not its own and are never counted */
-.lb { flex: 0 0 auto; position: relative; margin: 0 0 12px; padding: 0 0 12px; border-bottom: 1px solid var(--border); }
+.lb { flex: 0 0 auto; position: relative; margin: 0 calc(-1 * var(--rail-pad)) 12px; padding: 0 var(--rail-pad) 12px;
+  border-bottom: 1px solid var(--border-strong); }
 .lb[hidden] { display: none; }
 .lb-btn { width: 100%; display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 9px 12px;
   cursor: pointer; text-align: left; background: var(--surface); color: var(--fg); border: 1px solid var(--border-strong);
@@ -549,7 +562,7 @@ main {
 /* ---------- episode rail (persistent picker) ---------- */
 aside.rail {
   background: var(--bg); border-right: 1px solid var(--border);
-  padding: 12px 10px;
+  --rail-pad: 10px; padding: 12px var(--rail-pad);
   position: sticky; top: var(--top-h); height: calc(100vh - var(--top-h));
   /* sticky makes the rail its own stacking context; it sits above the main column so the filter menu, which is
      wider than the rail, is drawn over the video instead of under it */
@@ -655,10 +668,14 @@ aside.rail {
 /* what is on this board, at a glance: the board's totals, then one tab per dataset with its episodes and hours. The
    open dataset's tab is lit, and when a filter or search narrows the list it says how much of the dataset is listed. */
 .coverage { position: sticky; top: var(--header-h); z-index: 9; height: var(--cov-h); box-sizing: border-box;
-  display: grid; grid-template-columns: var(--rail-w) 1fr; align-items: stretch;
-  background: var(--bg); border-bottom: 1px solid var(--border); }
-/* board totals: their own segment over the rail, set apart from the per-dataset tabs by a heavy rule that ends where
-   the rail's border begins */
+  display: grid; grid-template-columns: calc(var(--rail-w) + 1px) 1fr; align-items: stretch;
+  background: var(--bg); }
+/* the strip's bottom line, 1px above its edge so the open tab's 3px underline and the totals' 3px rule each sit
+   centred on a 1px line: the underline on this one, the rule on the rail's border below it */
+.coverage::after { content: ""; position: absolute; left: 0; right: 0; bottom: 1px; height: 1px;
+  background: var(--border-strong); pointer-events: none; }
+/* board totals: their own segment over the rail, set apart from the per-dataset tabs by a heavy rule centred on the
+   rail's border (the segment is 1px wider than the rail) */
 .cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 0 24px 0 18px;
   background: var(--surface); border-right: 3px solid var(--border-strong); }
 .cv-all .cv-k { font: 600 11px/1 var(--sans); color: var(--fg-2); letter-spacing: 0.01em; white-space: nowrap; }
@@ -671,11 +688,10 @@ aside.rail {
 .cv-cells { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(max-content, 1fr); min-width: 0;
   overflow-x: auto; scrollbar-width: thin; }
 .cv-cell { display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 0 16px; min-width: 0;
-  border-right: 1px solid var(--border); cursor: pointer; position: relative; transition: background 140ms; }
-.cv-cell:last-child { border-right: 0; }
+  cursor: pointer; position: relative; transition: background 140ms; }
 .cv-cell:hover { background: rgba(28,28,26,0.050); }
 .cv-cell.on { background: rgba(69,129,142,0.08); }
-.cv-cell.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+.cv-cell.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; z-index: 1;
   background: var(--accent); }
 .cv-name { font: 500 12.5px/1 var(--sans); color: var(--fg-3); white-space: nowrap; }
 .cv-cell:hover .cv-name { color: var(--fg-2); }
@@ -824,7 +840,7 @@ aside.left .cam-row-grippers.cam-row-single .cam-cell.cam-exo { grid-column: 1 /
 aside.left .cam-row-grippers .cam-cell video,
 aside.left .cam-row-grippers .cam-cell.cam-wrist video { max-height: 50vh; }
 aside.left .cam-row-grippers.cam-row-single .cam-cell.cam-exo video { max-height: 60vh; }
-aside.left .cam-row-grippers .prog-overlay { top: calc(var(--fx-top, 0px) + 30px);
+aside.left .cam-row-grippers .prog-overlay { top: calc(var(--fx-top, 0px) + 34px);
   left: calc(var(--fx-left, 0px) + 8px); }
 aside.left .grip-strip { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 12px;
   background: #000; }
@@ -843,9 +859,10 @@ aside.left .grip-strip .state-toast.active { position: static; order: 3; transfo
 /* Fullscreen the exo CELL (video + overlays), not the bare <video>, so the
    overlays stay visible. Hide the native fullscreen button (it promotes only the
    video) and use the custom .fs-btn, which fullscreens the cell. */
-#video::-webkit-media-controls-fullscreen-button { display: none; }
+#video::-webkit-media-controls-fullscreen-button, #video-wl::-webkit-media-controls-fullscreen-button,
+  #video-wr::-webkit-media-controls-fullscreen-button { display: none; }
 .cam-exo .fs-btn {
-  position: absolute; top: 4px; right: 6px; z-index: 5;
+  position: absolute; top: calc(var(--fx-top, 0px) + 8px); right: calc(var(--fx-right, 0px) + 8px); z-index: 5;
   width: 26px; height: 26px; padding: 0; cursor: pointer;
   border: 1px solid rgba(255,255,255,0.18); border-radius: 5px;
   background: rgba(0,0,0,0.55); color: #fff; font-size: 15px; line-height: 1;
@@ -858,13 +875,15 @@ aside.left .grip-strip .state-toast.active { position: static; order: 3; transfo
   object-fit: contain; }
 .cam-cell.cam-exo:-webkit-full-screen { background: #000; width: 100vw; height: 100vh; }
 .cam-cell.cam-exo:-webkit-full-screen video { max-height: 100vh; width: 100%; height: 100%; object-fit: contain; }
+/* each camera's label sits 8px in from the image's corner, the same line as the chips over the main camera's image */
 aside.left .cam-label {
-  position: absolute; top: 4px; left: 6px; z-index: 2;
+  position: absolute; top: 8px; left: 8px; z-index: 2;
   padding: 1px 6px;
   font-family: var(--mono); font-size: 10px; white-space: nowrap;
   color: rgba(255,255,255,0.92); background: rgba(0,0,0,0.6);
   border-radius: var(--r-pill); pointer-events: none;
 }
+aside.left .cam-cell.cam-exo .cam-label { top: calc(var(--fx-top, 0px) + 8px); left: calc(var(--fx-left, 0px) + 8px); }
 
 /* on-video subtitle-style overlay - pinned to the bottom of the EXO cell,
    lifted above the native controls bar; shows the currently-active event
@@ -937,7 +956,7 @@ aside.left .cam-label {
   left: calc(var(--fx-left, 0px) + 8px); right: calc(var(--fx-right, 0px) + 8px); container: hud / inline-size;
   pointer-events: none; }
 .top-hud-in { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(26px, 1fr); column-gap: 8px;
-  align-items: center; }
+  align-items: start; }
 .top-hud .prog-overlay { position: static; justify-self: start; }
 @container hud (max-width: 480px) { .top-hud .prog-overlay .po-svg { display: none; } }
 @container hud (max-width: 330px) { .top-hud .prog-overlay .po-sub { display: none; } }
@@ -1060,6 +1079,11 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   border-radius: var(--r-sm); cursor: pointer; }
 .lane-seg { position: absolute; top: 2px; bottom: 2px; border-radius: 1px; }
 .lane-seg.hands { background: #d9a657; }
+/* the stretches of the hands lane as times: click one to jump there */
+.lane-jumps { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 6px 0 0; }
+.lane-jump { padding: 3px 8px; cursor: pointer; font: 500 11px/1.2 var(--mono); color: var(--fg-2);
+  background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-pill); }
+.lane-jump:hover { color: var(--fg); border-color: var(--fg-3); }
 .lane-seg.pub { background: rgba(69,129,142,0.45); }
 .lane-seg.pub.alt { background: rgba(69,129,142,0.28); }
 .lane-seg.pub.now { background: #45818e; }
@@ -1439,9 +1463,9 @@ h3.section .count {
   vector-effect: non-scaling-stroke; }
 .prog-overlay .po-past { fill: none; stroke: #f3f2ec; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .prog-overlay .po-dot { fill: #f3f2ec; }
-/* top-right transient toast: object state changes, below the fullscreen button (.fs-btn, 4 px + 26 px) */
+/* top-right transient toast: object state changes, below the fullscreen button (.fs-btn, 8 px + 26 px) */
 .state-toast {
-  position: absolute; top: calc(var(--fx-top, 0px) + 36px); right: calc(var(--fx-right, 0px) + 8px);
+  position: absolute; top: calc(var(--fx-top, 0px) + 40px); right: calc(var(--fx-right, 0px) + 8px);
   z-index: 4; max-width: 210px;
   padding: 7px 11px; border-radius: var(--r-md); text-align: right;
   background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.22);
@@ -1599,7 +1623,6 @@ h3.section .count {
 .task-variants li { font-size: 12.5px; color: var(--fg-2); line-height: 1.5; margin: 3px 0; }
 
 /* delineation on paper: strong rules between the columns and under the strip, white panels on grey paper */
-.coverage { border-bottom: 1px solid var(--border-strong); }
 .cv-all { border-right: 3px solid var(--fg); }
 aside.rail { border-right: 1px solid var(--border-strong); }
 aside.left { border-right: 1px solid var(--border-strong); background: var(--bg); }
@@ -1617,7 +1640,7 @@ h3.section { border-top: 1px solid var(--border-strong); }
 /* dataset tabs on paper: one clear hours bar per tab, and a single ink underline for the open tab */
 .cv-cell { gap: 8px; }
 .cv-cell.on { background: var(--raised); }
-.cv-cell.on::after { height: 3px; background: var(--fg); bottom: -1px; }
+.cv-cell.on::after { height: 3px; background: var(--fg); bottom: 0; }
 
 /* every check run on the episode: ours, then public-dataset-adapter's, in one separated section */
 .ck { display: grid; gap: 14px; margin-bottom: 22px; }
@@ -1853,7 +1876,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   .cv-num { font-size: 11px; }
   .cv-num .u { display: inline; }
   main { display: block; height: auto; }
-  aside.rail { position: static; height: auto; overflow: visible; padding: 14px 16px; border-right: 0;
+  aside.rail { position: static; height: auto; overflow: visible; --rail-pad: 16px; padding: 14px var(--rail-pad); border-right: 0;
     border-bottom: 1px solid var(--border-strong); }
   #ep-list { max-height: 46vh; }
   .if-menu { width: min(340px, calc(100vw - 32px)); }
@@ -1914,6 +1937,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           title="the hand keypoints of every episode in the list below, one episode per line, in a file of their own"
           >Hand keypoints</button>
       </div>
+      <p class="dl-lic" id="dl-lic" hidden></p>
       <div class="kp-exp off" id="kp-exp"><div class="kp-exp-in">
         <p class="kp-lic"><span id="kp-size"></span>Non-commercial use only. Predicted by <a
           href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank" rel="noreferrer">ACE-Ego-Hand</a>
@@ -1941,7 +1965,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           <a id="dl-json" class="ep-head-dl" download
             title="this episode's full annotation and dataset checks as JSON">Episode JSON</a>
         </div>
-        <div class="kp-note off" id="kp-note"><div class="kp-note-in">Hand keypoints: non-commercial use only. Predicted
+        <div class="kp-note off" id="kp-note"><div class="kp-note-in">Hand keypoints for non-commercial use only. Predicted
           by <a href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank"
           rel="noreferrer">ACE-Ego-Hand</a> (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank"
           rel="noreferrer">CC BY-NC 4.0</a>), which uses <a href="https://mano.is.tue.mpg.de/license.html"
@@ -2220,6 +2244,15 @@ async function setDataset(ds, keepFile) {
   buildIssueFilter(ds);
   return renderRail(ds, keepFile);
 }
+
+// the labels' license, when the board's owner gives one (its manifest), under the list's downloads
+(() => {
+  const lic = BOARD.labels_license, el = document.getElementById('dl-lic');
+  if (!lic || !el) return;
+  const name = lic.url ? `<a href="${esc(lic.url)}" target="_blank" rel="noreferrer">${esc(lic.name)}</a>` : esc(lic.name);
+  el.innerHTML = `Labels${lic.by ? ` by ${esc(lic.by)}` : ''}, licensed ${name}. The footage keeps each dataset's license.`;
+  el.hidden = false;
+})();
 
 // ---- export: the episodes currently listed in the rail, as JSON Lines ----
 document.getElementById('export-jsonl').addEventListener('click', async () => {
@@ -3293,9 +3326,15 @@ function renderEp(d, opts) {
   const handTitle = `Hands out of view <span class="lane-sum">${fmtT(handSecs)} in `
     + `all, ${(100 * handSecs / Math.max(duration, 1e-6)).toFixed(handSecs / Math.max(duration, 1e-6) < 0.1 ? 1
     : 0)}% of the clip</span>`;
+  const handStretches = handSpans.slice().sort((x, y) => x[0] - y[0]).reduce((acc, [a, b]) => {
+    const last = acc[acc.length - 1];
+    if (last && a - last[1] < 1.5) last[1] = Math.max(last[1], b); else acc.push([a, b]);
+    return acc; }, []);
   if (handSpans.length) laneHtml += lane('lane-hands', handTitle, false, handSpans.map(([a, b]) =>
     `<div class="lane-seg hands" data-t="${a}" title="hands out of view ${fmtT(a)} to ${fmtT(b)}" `
-      + `style="left:${lanePct(a)}%;width:max(2px, ${lanePct(b) - lanePct(a)}%)"></div>`).join(''));
+      + `style="left:${lanePct(a)}%;width:max(2px, ${lanePct(b) - lanePct(a)}%)"></div>`).join(''))
+    + `<div class="lane-jumps">${handStretches.map(([a, b]) => `<button type="button" class="lane-jump" data-t="${a}" `
+      + `title="jump to ${fmtT(a)}">${fmtT(a)} to ${fmtT(b)}</button>`).join('')}</div>`;
   if (pubLabels.length) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
     `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" title="${esc(fmtT(x.t0) + ' to '
       + fmtT(x.t1) + ': ' + x.label)}" style="left:${lanePct(x.t0)}%;width:max(2px, `
@@ -3660,8 +3699,8 @@ function renderEp(d, opts) {
         ${isEgo ? '' : sideCams.map(v => `
         <div class="cam-cell cam-wrist">
           <span class="cam-label">${esc(camLabel(v))}</span>
-          <video id="${v === 'left' ? 'video-wl' : 'video-wr'}" preload="auto" muted playsinline${keep ? ''
-            : ` src="${v === 'left' ? videoUrlWL : videoUrlWR}"${posterAttr(eidEnc,
+          <video id="${v === 'left' ? 'video-wl' : 'video-wr'}" preload="auto" muted playsinline${gripOnly
+            ? ' controls' : ''}${keep ? '' : ` src="${v === 'left' ? videoUrlWL : videoUrlWR}"${posterAttr(eidEnc,
             v)}`} onloadedmetadata="this.currentTime=0.03"></video>
         </div>`).join('')}
       </div>
@@ -3827,9 +3866,21 @@ function renderEp(d, opts) {
     if (!vid) return;
     for (const s of slaves) {
       if (Math.abs(s.currentTime - vid.currentTime) > SYNC_TOL) {
-        try { s.currentTime = vid.currentTime; } catch (_) {}
+        try { s._synced = true; s.currentTime = vid.currentTime; } catch (_) {}
       }
     }
+  }
+  // two UMI grippers side by side each carry the player's controls, and either one drives both: a play, pause,
+  // scrub or speed change on the second camera goes to the first, which the second then follows as usual (a seek
+  // the sync itself made is not sent back)
+  if (vid && gripOnly) for (const s of slaves) {
+    on(s, 'play', () => { if (vid.paused) vid.play().catch(()=>{}); });
+    on(s, 'pause', () => { if (!vid.paused && !s.ended) vid.pause(); });
+    on(s, 'seeked', () => {
+      if (s._synced) { s._synced = false; return; }
+      if (Math.abs(s.currentTime - vid.currentTime) > SYNC_TOL) vid.currentTime = s.currentTime;
+    });
+    on(s, 'ratechange', () => { if (vid.playbackRate !== s.playbackRate) vid.playbackRate = s.playbackRate; });
   }
   if (vid) {
     on(vid, 'play', () => {
@@ -3878,7 +3929,7 @@ function renderEp(d, opts) {
   document.querySelectorAll('.key-events .key-ev[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
-  document.querySelectorAll('.lane .lane-seg[data-t], .pub-list .pub-row[data-t]').forEach(r => {
+  document.querySelectorAll('.lane .lane-seg[data-t], .lane-jumps .lane-jump[data-t], .pub-list .pub-row[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
   document.querySelectorAll('.rec [data-t]').forEach(r => {
@@ -5003,7 +5054,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # the page asks for other models' labels, hand pose files and keypoint downloads only when this board has
             # them (no request that can only fail)
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
-                   "keypoints": (KEYPOINTS_DIR / "index.json").is_file()}
+                   "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
             return
         if parsed.path == "/api/episodes":

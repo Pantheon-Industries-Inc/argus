@@ -363,6 +363,8 @@ def build(board: Path) -> dict:
                          "slice": info.get("slice")}
             ctx_p = eps / name / "context.json"
             ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
+            if manifest.get("labels_license"):
+                d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
             if ctx:
                 add_context(d, ctx, eps / name)
                 episodes[fname] = eps / name

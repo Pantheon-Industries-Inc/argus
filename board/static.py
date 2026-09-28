@@ -76,8 +76,12 @@ TITLE = "Data Board"
 FFMPEG = sa.FFMPEG
 FFPROBE = (str(Path(FFMPEG).with_name("ffprobe")) if FFMPEG and Path(FFMPEG).with_name("ffprobe").exists()
            else shutil.which("ffprobe"))
-# the clips' recipe is board/clips.py's; its name is in every media file's name, so a new recipe gets new names
+# the clips' recipe is board/clips.py's (the build records its name)
 ENC_TAG = bc.ENC_TAG
+# every published video's name carries this tag, the recipe's name when the board's media were first built. A static
+# build stream-copies the board's clips, so a later recipe change that leaves their bytes alone must not rename (and
+# upload again) every published file; the tag changes only when the published bytes do
+MEDIA_TAG = "h264-crf20-veryfast-main1280-1920x1080-side1280x1080-kf2s-srcts-camclock-v3"
 FRAME_TAG = "frame-640-v1"   # serve.extract_frame at w=640
 
 
@@ -147,7 +151,7 @@ def q(s: str) -> str:
 
 
 def video_rel(eid: str, key: str, sig: str) -> str:
-    return f"v/{key}/{q(eid)}.{_h(ENC_TAG + '|' + sig, 10)}.mp4"
+    return f"v/{key}/{q(eid)}.{_h(MEDIA_TAG + '|' + sig, 10)}.mp4"
 
 
 def frame_rel(eid: str, key: str, ms: int, sig: str) -> str:
@@ -603,7 +607,7 @@ def cmd_site(a):
     # the page asks for other models' labels, hand pose files and keypoint downloads only when the build has them
     # (no request that can only fail)
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
-           "keypoints": bool(kp_res and kp_res["files"])}
+           "keypoints": bool(kp_res and kp_res["files"]), "labels_license": sa.labels_license(a.board)}
     name = sa.board_name(a.board)
     header = sa.read_header(getattr(a, "header", None))
     (stage / "index.html").write_text(sa.render_index(
