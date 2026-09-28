@@ -31,9 +31,9 @@ from prepare import cli
 from prepare import hub
 from prepare import formats
 
-# Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
-# upload_adapters); this one reads only the published dataset
-UPLOAD = None
+# an uploaded LeRobot dataset with HABIT's own columns (its error, intervention and person's-subtask marks) is read
+# by this adapter, so its end-effector state, instruction, person's parts and publisher labels come along
+UPLOAD = "lerobot"
 
 REPO = "configinc/HABIT"
 META_FILES = ("info.json", "episodes.jsonl", "tasks.jsonl", "subtasks.jsonl", "human_subtasks.jsonl")
@@ -44,6 +44,10 @@ ROLE_NOTE = ("In every HABIT episode a person shares the workspace with the robo
              "such as a handover or holding something together), coworker (each does its own part in a shared space, "
              "without contact), or supervisor (the person directs the robot with gestures or cues). The person's "
              "actions within their part are the task itself, not a data issue.")
+
+
+# the columns only HABIT ships, by which an uploaded copy of it is recognized
+HABIT_COLUMNS = ("is_error_segment", "is_intervention_segment", "human_role_subtask_index")
 
 
 def spans(flags: np.ndarray, fps: float) -> list[list[float]]:
@@ -108,13 +112,31 @@ def prepare_one(eidx: int, rows: dict, root: Path, raw: Path, out: Path, force: 
     if not force and (ep / "context.json").exists():
         return "skip"
     download_episode(root, raw, eidx)
-    info = json.loads((root / "meta" / "info.json").read_text())
-    fps = float(info["fps"])
-    r = rows[eidx]
     # read as Data Review reads a LeRobot dataset: its metadata, then this episode (its files are on disk now)
     plan, _, _, _ = formats.plan_lerobot({"roots": [str(root)]}, root)
     it = next(i for i in plan if i["kind"] == "lerobot" and i["row"]["eidx"] == eidx)
-    ctx = formats.convert_lerobot(it, RIG, out, REPO)
+    write_episode(it, rows[eidx], root, out, REPO)
+    return "ok"
+
+
+def recognizes(r: dict) -> bool:
+    """A LeRobot dataset (prepare/formats.py read_root) with HABIT's own columns."""
+    return all(k in (r.get("features") or {}) for k in HABIT_COLUMNS)
+
+
+def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
+    root = Path(item["root"]["dir"])
+    rows = {int(x["episode_index"]): x for x in formats.read_jsonl(root / "meta" / "episodes.jsonl")}
+    return write_episode(item, rows.get(int(item["row"]["eidx"]), {}), root, out, dataset)
+
+
+def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dict:
+    """One episode read by the LeRobot reader, then HABIT's specifics; returns its context."""
+    eidx = int(it["row"]["eidx"])
+    info = json.loads((root / "meta" / "info.json").read_text())
+    fps = float(info["fps"])
+    ctx = formats.convert_lerobot(it, RIG, out, dataset)
+    ep = out / ctx["episode_id"]
     df = pd.read_parquet(root / info["data_path"].format(episode_chunk=eidx // 1000, episode_index=eidx),
                          columns=["low_level_task_index", "human_role_subtask_index", "is_error_segment",
                                   "is_intervention_segment", "is_high_jerk_segment"])
@@ -130,7 +152,7 @@ def prepare_one(eidx: int, rows: dict, root: Path, raw: Path, out: Path, force: 
                                  "sid": r.get("sid"), "unit_name": r.get("unit_name")})
     ctx.pop("state_note", None)
     (ep / "context.json").write_text(json.dumps(ctx, indent=1))
-    return "ok"
+    return ctx
 
 
 def main() -> int:

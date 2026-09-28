@@ -35,9 +35,11 @@ import numpy as np
 from prepare import cli
 from prepare import hub
 
-# Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
-# upload_adapters); this one reads only the published dataset
-UPLOAD = None
+# an uploaded LeRobot dataset with Galaxea's layout (state split per arm part, coarse and fine task indices, a quality
+# index) is read by this adapter, so its joints, timed sub-steps and quality tag come along
+UPLOAD = "lerobot"
+GALAXEA_COLUMNS = ("observation.state.left_arm", "observation.state.right_arm", "observation.state.left_gripper",
+                   "observation.state.right_gripper", "coarse_task_index", "task_index", "quality_index")
 
 REPO = "RogersPyke/Galaxea-Open-World-Dataset_10K_20260123"
 FPS = 15
@@ -61,15 +63,36 @@ def _dl(rel: str, raw: Path) -> Path:
 
 
 def folder_meta(folder: str, raw: Path) -> dict:
+    return meta_from(lambda rel: _dl(f"{folder}/{rel}", raw), folder)
+
+
+def meta_from(get, folder: str) -> dict:
+    """A collection folder's tasks, episodes and info; get(rel) is the local path of the folder's file rel (downloaded
+    for the published dataset, on disk for an upload)."""
     tasks = {}
-    for line in _dl(f"{folder}/meta/tasks.jsonl", raw).read_text().splitlines():
+    for line in get("meta/tasks.jsonl").read_text().splitlines():
         if line.strip():
             t = json.loads(line)
             tasks[int(t["task_index"])] = t["task"]
-    lines = _dl(f"{folder}/meta/episodes.jsonl", raw).read_text().splitlines()
+    lines = get("meta/episodes.jsonl").read_text().splitlines()
     eps = [json.loads(s) for s in lines if s.strip()]
-    info = json.loads(_dl(f"{folder}/meta/info.json", raw).read_text())
+    info = json.loads(get("meta/info.json").read_text())
     return {"folder": folder, "tasks": tasks, "episodes": eps, "info": info}
+
+
+def recognizes(r: dict) -> bool:
+    """A LeRobot dataset (prepare/formats.py read_root) in Galaxea's layout."""
+    return all(k in (r.get("features") or {}) for k in GALAXEA_COLUMNS)
+
+
+def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
+    from prepare import formats
+    root = Path(item["root"]["dir"])
+    get = lambda rel: formats.inside(root, root / rel)
+    meta = meta_from(get, item["root"]["rel"] or root.name)
+    eidx = int(item["row"]["eidx"])
+    ep = next(e for e in meta["episodes"] if int(e["episode_index"]) == eidx)
+    return write_episode(meta, ep, get, out / formats.episode_name(item["name"]), dataset)
 
 
 def episode_dir_name(folder: str, index: int) -> str:
@@ -88,21 +111,27 @@ def spans(idx: np.ndarray) -> list[tuple[int, int, int]]:
 
 
 def prepare_one(meta: dict, ep: dict, raw: Path, out_root: Path, force: bool = False) -> str:
+    ep_dir = out_root / episode_dir_name(meta["folder"], int(ep["episode_index"]))
+    if not force and (ep_dir / "context.json").exists():
+        return "skip"
+    write_episode(meta, ep, lambda rel: _dl(f"{meta['folder']}/{rel}", raw), ep_dir, REPO)
+    return "ok"
+
+
+def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict:
+    """One episode's sidecar; get(rel) is the local path of the collection folder's file rel. Returns its context."""
     import av
     import pandas as pd
     folder, i = meta["folder"], int(ep["episode_index"])
     info = meta["info"]
     chunk = i // int(info.get("chunks_size") or 1000)
-    name = episode_dir_name(folder, i)
-    ep_dir = out_root / name
-    if not force and (ep_dir / "context.json").exists():
-        return "skip"
+    name = ep_dir.name
     rel = info["data_path"].format(episode_chunk=chunk, episode_index=i)
-    df = pd.read_parquet(_dl(f"{folder}/{rel}", raw))
+    df = pd.read_parquet(get(rel))
     n = len(df)
     sources, checks = {}, {"video_frames": {}}
     for v, key in VIDEO_KEYS.items():
-        p = _dl(f"{folder}/" + info["video_path"].format(episode_chunk=chunk, video_key=key, episode_index=i), raw)
+        p = get(info["video_path"].format(episode_chunk=chunk, video_key=key, episode_index=i))
         with av.open(str(p)) as c:
             s = c.streams.video[0]
             pts = sorted(pk.pts for pk in c.demux(s) if pk.pts is not None)
@@ -131,7 +160,7 @@ def prepare_one(meta: dict, ep: dict, raw: Path, out_root: Path, force: bool = F
     quality = sorted({tasks.get(int(q), str(q)) for q in pd.unique(df["quality_index"])})
     sub_txt = "; ".join(f"{s['t0']:.1f}-{s['t1']:.1f}s \"{s['label']}\"" for s in subs)
     ctx = {
-        "dataset": REPO,
+        "dataset": dataset,
         "profile": "teleop_arms",
         "state_kind": "joints",
         "gripper_value": ("the measured gripper position, about 0 = jaws shut and about 100 = fully open "
@@ -158,7 +187,7 @@ def prepare_one(meta: dict, ep: dict, raw: Path, out_root: Path, force: bool = F
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(coarse + "\n")
     (ep_dir / "context.json").write_text(json.dumps(ctx, indent=2))
-    return "ok"
+    return ctx
 
 
 def drawn(meta: dict, ep: dict, raw: Path, out: Path) -> dict | None:

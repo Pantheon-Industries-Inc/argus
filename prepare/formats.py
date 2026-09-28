@@ -15,11 +15,14 @@ Accepted uploads, in the order they are recognised:
        only if their frame counts add up exactly to every packed video's frame count; otherwise each
        packed video is kept whole, as one recording;
      - no data parquet: the episode is labelled from video.
-   Cameras stored as images inside the parquet are written to H.264 at their frame times.
-2. MCAP, one file per episode. XDOF ABC-130k and GenRobot RealOmin topic layouts get their full
-   adapters (robot state included), and a GenRobot Gen-HumanEgo recording its adapter (its forward camera,
-   and its goal and timed steps). Any other layout is read as video: every compressed-image or
-   compressed-video channel becomes a camera.
+   Cameras stored as images inside the parquet are written to H.264 at their frame times. A dataset an adapter
+   recognizes by its columns goes through that adapter (the prepare/*.py that declare UPLOAD = "lerobot": HABIT
+   and Galaxea), which knows what the columns mean.
+2. MCAP, one file per episode. A layout a dataset adapter recognizes goes through that adapter (the
+   prepare/*.py that declare UPLOAD = "mcap", found by upload_adapters: ABC-130k and RealOmin with their
+   robot state, Gen-HumanEgo with its forward camera, goal and timed steps). Any other layout is read for
+   its cameras (every compressed-image or compressed-video channel) and its text channels (the task topic,
+   and on a head camera a step topic as the timed steps).
 3. Plain video (mp4, mov, mkv, webm, avi). Either one file per episode, or one folder per episode
    holding up to three files (a scene camera plus a left and a right mounted camera, told apart by
    "left" / "right" in the file name). A file is never split: an unsplit recording is one episode, and the
@@ -1361,6 +1364,21 @@ def _stack(col) -> np.ndarray | None:
         return None
 
 
+def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
+    """A LeRobot episode through the adapter that recognizes its dataset (prepare/*.py with UPLOAD = "lerobot", found
+    by upload_adapters), else the generic reading below. Returns its context."""
+    mod = next((m for m in upload_adapters("lerobot") if m.recognizes(item["root"])), None)
+    if mod is None:
+        return convert_lerobot(item, rig, out, dataset)
+    ctx = mod.convert_upload(item, rig, out, dataset)
+    ctx["dataset"] = dataset
+    ctx.setdefault("source", {})["adapter"] = mod.__name__.rsplit(".", 1)[-1]
+    if ctx.get("profile") != rig:
+        ctx["source"]["rig_note"] = f"the upload was marked {rig}; this dataset's layout is {ctx.get('profile')}"
+    (out / ctx["episode_id"] / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    return ctx
+
+
 def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
     r, row = item["root"], item["row"]
     rdir = Path(r["dir"])
@@ -1850,7 +1868,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         unused.append(f"{t} (no readable frames)")
         del vmap[v]
     files = {v: (t, ep / f"{v}.mp4") for v, t in vmap.items()}
-    extra = {"task_label": [item["name"]], "source": {"format": "mcap (camera channels only)", "file": item["name"],
+    extra = {"task_label": [item["name"]], "source": {"format": "mcap (cameras and text channels)", "file": item["name"],
                                                       "unused_cameras": unused}}
     instr, notes = mcap_task_texts(texts, n_text, t0)
     if instr:
@@ -2132,7 +2150,7 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
             break
         try:
             if it["kind"] == "lerobot":
-                ctx = convert_lerobot(it, rig, out, dataset)
+                ctx = convert_lerobot_item(it, rig, out, dataset)
             elif it["kind"] == "recording":
                 ctx = convert_recording(it, rig, out, dataset)
             elif it["kind"] == "mcap":

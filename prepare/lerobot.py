@@ -64,7 +64,7 @@ def main() -> int:
         if not a.force and (a.out / formats.episode_name(n) / "context.json").exists():
             return "skip"
         it = items[n]
-        (formats.convert_lerobot if it["kind"] == "lerobot" else formats.convert_recording)(it, a.rig, a.out, name)
+        (formats.convert_lerobot_item if it["kind"] == "lerobot" else formats.convert_recording)(it, a.rig, a.out, name)
         return "ok"
     return cli.run(picks, one, a.jobs)
 

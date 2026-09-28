@@ -1,5 +1,5 @@
 """The prepare stage on synthetic inputs (no network): list parsing, episode naming, the shared command line,
-the sidecar writers on small mp4s written here, the two adapters for your own data (a LeRobot v2.1 folder and a
+the sidecar writers on small mp4s written here, the lerobot and videos commands for your own data (a LeRobot v2.1 folder and a
 folder of videos) through to a harness request, and the adapters' pure functions (naming, samplers)."""
 from __future__ import annotations
 
