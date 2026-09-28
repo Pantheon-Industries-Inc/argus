@@ -139,7 +139,10 @@
     "Video starts or ends mid-task"
    ],
    "tags": [
-    "incomplete_demonstration"
+    "incomplete_demonstration",
+    "truncated_task",
+    "task_extent",
+    "incomplete_task_coverage"
    ]
   },
   {
