@@ -6,7 +6,8 @@
 
 Each public-dataset adapter downloads exactly the episodes in LIST (one per line, in the adapter's own form; the
 lists in configs/slices and configs/quickstart are examples) into RAW, default data/raw/<adapter>, and writes one
-folder per episode into FOLDER. lerobot and videos read your own data from --root instead and download nothing.
+folder per episode into FOLDER. folder, lerobot and videos read your own data from --root instead and download
+nothing.
 
 Adapters:
 """
@@ -23,6 +24,7 @@ ADAPTERS = {
     "egocentric100k": "builddotai/Egocentric-100K (head camera, 3-minute clips in tar shards)",
     "genhumanego": "genrobot2025/Gen-HumanEgo (head camera, one MCAP per episode)",
     "openaoe": "inclusionAI/OpenAoE-2000h (head-worn phone, one folder per clip)",
+    "folder": "your own folder of data, read as Data Review reads an upload (LeRobot, MCAP, videos, archives)",
     "lerobot": "your own LeRobot dataset on disk (v2.0, v2.1 or v3.0; teleop, handheld or head camera)",
     "videos": "your own folder of video files (one episode per file, video only, any rig)",
 }

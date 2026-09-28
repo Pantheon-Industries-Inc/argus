@@ -39,7 +39,7 @@ import numpy as np
 
 from prepare import cli
 from prepare import hub
-from prepare import sidecar
+from prepare import formats
 
 REPO = "XDOF/ABC-130k"
 TIME_BASE_DEN = 1_000_000   # microseconds: some ABC frames are stamped only 1 us apart
@@ -211,7 +211,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         src = {"packed": str(out.resolve()), "base_s": 0.0, "n_frames": n, "camera_key": topic,
                "codec": vid["format"], "pts_from": "times.npz"}
         if v != "exo":
-            idx = sidecar.nearest(tv, t_top)
+            idx = formats.nearest(tv, t_top)
             off = np.abs(tv[idx] - t_top) / 1e6
             checks["streams"][topic] = {**gaps(vid["t"]), "pair_offset_ms_max": round(float(off.max()), 1),
                                         "pair_offset_ms_median": round(float(np.median(off)), 2)}

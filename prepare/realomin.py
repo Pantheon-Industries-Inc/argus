@@ -36,7 +36,7 @@ import numpy as np
 
 from prepare import cli
 from prepare import hub
-from prepare import sidecar
+from prepare import formats
 
 REPO = "genrobot2025/10Kh-RealOmin-OpenData"
 CAMERA_TOPICS = {"/robot0/sensor/camera0/compressed": "left", "/robot1/sensor/camera0/compressed": "right"}
@@ -135,11 +135,11 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
         pv = np.asarray(pose[v][1], dtype=np.float64)
         gt = np.asarray(grip[v][0], dtype=np.int64)
         gv = np.asarray(grip[v][1], dtype=np.float64)
-        ip, ig = sidecar.nearest(pt, left_t), sidecar.nearest(gt, left_t)
+        ip, ig = formats.nearest(pt, left_t), formats.nearest(gt, left_t)
         state.append(np.concatenate([pv[ip, :3], quat_to_rpy(pv[ip, 3:7]), gv[ig, None]], axis=1))
     state = np.concatenate(state, axis=1).astype(np.float32)
     np.savez(ep / "state.npz", state=state)
-    kmap = sidecar.nearest(cts["right"], left_t).astype(np.int64)
+    kmap = formats.nearest(cts["right"], left_t).astype(np.int64)
     np.save(ep / "kmap_right.npy", kmap)
     np.savez(ep / "times.npz", left=(left_t - t0) / 1e9, left_pts=npts["left"],
              right=(cts["right"] - t0) / 1e9, right_pts=npts["right"])

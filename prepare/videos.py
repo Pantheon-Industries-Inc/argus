@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 
 from prepare import cli
-from prepare import sidecar
+from prepare import formats
 
 # The view one camera fills on each rig: a head camera and a camera watching the arms are the scene view; a
 # handheld gripper's camera is the gripper's own.
@@ -39,7 +39,7 @@ INSTRUCTION_NOTE = "This instruction is the task text the uploader sent with the
 def find_videos(root: Path) -> list[str]:
     """Paths of the video files under root, relative to it, sorted."""
     return sorted(p.relative_to(root).as_posix() for p in Path(root).rglob("*")
-                  if p.is_file() and p.suffix.lower() in sidecar.DEMUXER)
+                  if p.is_file() and p.suffix.lower() in formats.DEMUXER)
 
 
 def read_instructions(path: Path | None, files: list[str]) -> dict[str, dict]:
@@ -67,7 +67,7 @@ def prepare_one(root: Path, rel: str, ep: Path, rig: str, dataset: str, given: d
     if subs:
         extra["annotation_subtasks"] = subs
     stem = rel.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    sidecar.video_views_episode(ep, {VIEW_BY_RIG[rig]: (stem, root / rel)}, rig, dataset, extra)
+    formats.video_views_episode(ep, {VIEW_BY_RIG[rig]: (stem, root / rel)}, rig, dataset, extra)
     return "ok"
 
 
@@ -84,7 +84,7 @@ def main() -> int:
                    help="the dataset name written into context.json (default: the folder's name)")
     a = ap.parse_args()
     files = find_videos(a.root)
-    dirs = dict(zip(files, sidecar.episode_dirs(a.out, [f.rsplit(".", 1)[0] for f in files])))
+    dirs = dict(zip(files, formats.episode_dirs(a.out, [f.rsplit(".", 1)[0] for f in files])))
     picks = cli.read_list(a.episodes) if a.episodes else files
     missing = [f for f in picks if f not in dirs]
     if missing:

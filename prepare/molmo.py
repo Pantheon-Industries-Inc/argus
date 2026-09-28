@@ -42,7 +42,7 @@ import pandas as pd
 
 from prepare import cli
 from prepare import hub
-from prepare.sidecar import scalar
+from prepare.formats import scalar
 
 REPO = "allenai/MolmoAct2-BimanualYAM-Dataset"
 CAM_TO_VIEW = {"top": "exo", "left": "left", "right": "right"}

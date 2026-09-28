@@ -7,7 +7,7 @@ collaboration tasks, LeRobot v2.0, one file per episode) as episode sidecars (ri
 The list has one episode index per line. This downloads into RAW/full the dataset's meta/ files (info.json,
 episodes.jsonl, tasks.jsonl, subtasks.jsonl, human_subtasks.jsonl) and, per listed episode, its parquet and the
 videos of the three cameras used. It writes EPISODES/episode_<index>/ with context.json, sources.json, state.npz and
-instruction.txt (see prepare/sidecar.py, whose LeRobot reader this uses). HABIT specifics set here:
+instruction.txt (see prepare/formats.py, whose LeRobot reader this uses). HABIT specifics set here:
 - observation.state is, per arm, the end effector's x y z (m) and three rotation values followed by the
   gripper opening, so the state kind is "ee_pose" (the LeRobot reader's teleop default, "joints", would read
   poses as joint angles).
@@ -29,7 +29,7 @@ import pandas as pd
 
 from prepare import cli
 from prepare import hub
-from prepare import sidecar
+from prepare import formats
 
 REPO = "configinc/HABIT"
 META_FILES = ("info.json", "episodes.jsonl", "tasks.jsonl", "subtasks.jsonl", "human_subtasks.jsonl")
@@ -90,7 +90,7 @@ def download_episode(root: Path, raw: Path, eidx: int) -> None:
     """The episode's parquet and the videos of the cameras the harness uses."""
     info = json.loads((root / "meta" / "info.json").read_text())
     feats = info.get("features", {})
-    used, _ = sidecar.pick_cameras([k for k, f in feats.items() if f.get("dtype") == "video"], RIG)
+    used, _ = formats.pick_cameras([k for k, f in feats.items() if f.get("dtype") == "video"], RIG)
     chunk = eidx // int(info.get("chunks_size", 1000))
     rels = [info["data_path"].format(episode_chunk=chunk, episode_index=eidx)]
     rels += [info["video_path"].format(episode_chunk=chunk, video_key=k, episode_index=eidx) for k in used.values()]
@@ -100,14 +100,17 @@ def download_episode(root: Path, raw: Path, eidx: int) -> None:
 
 
 def prepare_one(eidx: int, rows: dict, root: Path, raw: Path, out: Path, force: bool) -> str:
-    ep = out / sidecar.episode_name(f"{eidx:06d}")
+    ep = out / formats.episode_name(f"{eidx:06d}")
     if not force and (ep / "context.json").exists():
         return "skip"
     download_episode(root, raw, eidx)
     info = json.loads((root / "meta" / "info.json").read_text())
     fps = float(info["fps"])
     r = rows[eidx]
-    ctx = sidecar.convert_lerobot({"name": f"{eidx:06d}", "row": r}, root, RIG, out, REPO)
+    # read as Data Review reads a LeRobot dataset: its metadata, then this episode (its files are on disk now)
+    plan, _, _, _ = formats.plan_lerobot({"roots": [str(root)]}, root)
+    it = next(i for i in plan if i["kind"] == "lerobot" and i["row"]["eidx"] == eidx)
+    ctx = formats.convert_lerobot(it, RIG, out, REPO)
     df = pd.read_parquet(root / info["data_path"].format(episode_chunk=eidx // 1000, episode_index=eidx),
                          columns=["low_level_task_index", "human_role_subtask_index", "is_error_segment",
                                   "is_intervention_segment", "is_high_jerk_segment"])
@@ -133,7 +136,7 @@ def main() -> int:
     picks = [int(s) for s in cli.read_list(a.episodes)]
     a.out.mkdir(parents=True, exist_ok=True)
     root = download_meta(a.raw)
-    rows = {int(r["episode_index"]): r for r in sidecar.read_jsonl(root / "meta" / "episodes.jsonl")}
+    rows = {int(r["episode_index"]): r for r in formats.read_jsonl(root / "meta" / "episodes.jsonl")}
     return cli.run(picks, lambda e: prepare_one(e, rows, root, a.raw, a.out, a.force), a.jobs)
 
 

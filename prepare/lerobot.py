@@ -9,7 +9,8 @@ it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers c
 (a camera worn on a person's head). --dataset is the name written into context.json and shown to the model
 (default: the folder's name).
 
-Cameras are the features of dtype "video", assigned to the harness views by name (prepare/sidecar.py): a name
+It is read exactly as Data Review reads an uploaded LeRobot dataset (prepare/formats.py). Cameras are the
+features of dtype "video" (or images stored in the data files), assigned to the harness views by name: a name
 with a side and wrist, hand or gripper is that side's mounted camera, and the best-named other camera (top, head,
 overhead, front) is the scene camera; the rest are listed in context["source"]["unused_cameras"]. The state is
 observation.state and the action is action, used when there are 7 values per arm or gripper (6 joints plus
@@ -17,15 +18,15 @@ gripper for teleop arms, x y z roll pitch yaw plus opening for handheld grippers
 from the video alone and the context says so. The instruction is the episode's task text.
 
 Writes EPISODES/episode_<index>/ with context.json, sources.json (pointing at the dataset's own mp4s), state.npz,
-times.npz (only when a v2 video's frames are off the k / fps grid) and instruction.txt. Nothing is downloaded,
-copied or re-encoded.
+times.npz (only when a v2 video's frames are off the k / fps grid) and instruction.txt. Nothing is downloaded or
+copied; only cameras stored as images in the data files are written to H.264, at their frame times.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 from prepare import cli
-from prepare import sidecar
+from prepare import formats
 
 RIGS = ("teleop_arms", "handheld_gripper", "ego_head")
 
@@ -39,22 +40,33 @@ def main() -> int:
     p.add_argument("--dataset", default=None, metavar="NAME",
                    help="the dataset name written into context.json (default: the folder's name)")
     a = ap.parse_args()
-    items = {int(it["name"]): it for it in sidecar.plan_lerobot(a.root)}
-    picks = [int(s) for s in cli.read_list(a.episodes)] if a.episodes else sorted(items)
-    missing = [e for e in picks if e not in items]
-    if missing:
-        raise SystemExit(f"{len(missing)} listed episodes are not in {a.root} or their files are absent, "
-                         f"e.g. {missing[:5]}")
+    det = formats.detect(a.root)
+    if det["format"] != "lerobot":
+        raise SystemExit(f"{a.root} holds no LeRobot dataset (it reads as {det['format']}); "
+                         "python -m prepare folder reads any format")
+    plan, used, missing, _ = formats.plan_lerobot(det, a.root)
+    items = {it["name"]: it for it in plan}
+    for line in used + missing:
+        print(line)
+    if a.episodes:
+        want = [f"{int(s):06d}" if s.strip().isdigit() else s.strip() for s in cli.read_list(a.episodes)]
+        picks = [n for n in items if n in want or n.rsplit("/", 1)[-1] in want]
+        absent = sorted(set(want) - {n.rsplit("/", 1)[-1] for n in picks} - set(picks))
+        if absent:
+            raise SystemExit(f"{len(absent)} listed episodes are not in {a.root} or their files are absent, "
+                             f"e.g. {absent[:5]}")
+    else:
+        picks = list(items)
     name = a.dataset or a.root.resolve().name
     a.out.mkdir(parents=True, exist_ok=True)
 
-    def one(eidx: int) -> str:
-        if not a.force and (a.out / sidecar.episode_name(items[eidx]["name"]) / "context.json").exists():
+    def one(n: str) -> str:
+        if not a.force and (a.out / formats.episode_name(n) / "context.json").exists():
             return "skip"
-        sidecar.convert_lerobot(items[eidx], a.root, a.rig, a.out, name)
+        it = items[n]
+        (formats.convert_lerobot if it["kind"] == "lerobot" else formats.convert_recording)(it, a.rig, a.out, name)
         return "ok"
     return cli.run(picks, one, a.jobs)
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

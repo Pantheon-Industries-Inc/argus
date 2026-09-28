@@ -23,7 +23,7 @@ from prepare import lerobot
 from prepare import molmo
 from prepare import openaoe
 from prepare import realomin
-from prepare import sidecar
+from prepare import formats
 from prepare import videos
 
 av = pytest.importorskip("av")
@@ -109,20 +109,20 @@ def test_every_adapter_has_the_same_prepare_flags(name, downloads, sampler):
 # ---- episode naming ----
 
 def test_episode_name_cleans_to_letters_digits_and_single_underscores():
-    assert sidecar.episode_name("raw_019fd620-0759-42c1_seg_1") == "episode_raw_019fd620_0759_42c1_seg_1"
-    assert sidecar.episode_name("000031") == "episode_000031"
-    assert sidecar.episode_name("episode_7") == "episode_7"
-    assert sidecar.episode_name("--") == "episode_0"
-    assert len(sidecar.episode_name("x" * 500)) == len("episode_") + 120
+    assert formats.episode_name("raw_019fd620-0759-42c1_seg_1") == "episode_raw_019fd620_0759_42c1_seg_1"
+    assert formats.episode_name("000031") == "episode_000031"
+    assert formats.episode_name("episode_7") == "episode_7"
+    assert formats.episode_name("--") == "episode_0"
+    assert len(formats.episode_name("x" * 500)) == len("episode_") + 120
 
 
 def test_episode_dirs_suffixes_collisions_in_list_order_and_is_stable(tmp_path):
     names = ["run-1", "run_1", "other", "run 1"]
-    dirs = sidecar.episode_dirs(tmp_path, names)
+    dirs = formats.episode_dirs(tmp_path, names)
     assert [d.name for d in dirs] == ["episode_run_1", "episode_run_1_2", "episode_other", "episode_run_1_3"]
     for d in dirs:
         d.mkdir()
-    assert sidecar.episode_dirs(tmp_path, names) == dirs     # a rerun maps every source to the same folder
+    assert formats.episode_dirs(tmp_path, names) == dirs     # a rerun maps every source to the same folder
 
 
 def test_adapter_episode_folder_names():
@@ -137,33 +137,33 @@ def test_adapter_episode_folder_names():
 # ---- camera assignment and pairing ----
 
 def test_cameras_are_assigned_to_views_by_name():
-    views, unused = sidecar.assign_views(["observation.images.cam_high", "observation.images.cam_left_wrist",
+    views, unused = formats.assign_views(["observation.images.cam_high", "observation.images.cam_left_wrist",
                                           "observation.images.cam_right_wrist", "observation.images.cam_low"],
                                          "teleop_arms")
     assert views == {"left": "observation.images.cam_left_wrist", "right": "observation.images.cam_right_wrist",
                      "exo": "observation.images.cam_high"}
     assert unused == ["observation.images.cam_low"]
     # a fixed camera that carries a side is not a wrist camera
-    assert sidecar.mounted_side("exterior_image_1_left") is None and sidecar.mounted_side("leftWrist") == "left"
+    assert formats.mounted_side("exterior_image_1_left") is None and formats.mounted_side("leftWrist") == "left"
     # the only camera of a single handheld gripper is the gripper's own
-    assert sidecar.assign_views(["observation.images.camera"], "handheld_gripper")[0] == \
+    assert formats.assign_views(["observation.images.camera"], "handheld_gripper")[0] == \
         {"right": "observation.images.camera"}
-    assert sidecar.pick_cameras(["cam_side", "cam_head"], "ego_head") == ({"exo": "cam_head"}, ["cam_side"])
+    assert formats.pick_cameras(["cam_side", "cam_head"], "ego_head") == ({"exo": "cam_head"}, ["cam_side"])
 
 
 def test_nearest_pairs_each_query_with_the_closest_time_earlier_on_a_tie():
     src = np.array([0, 10, 20, 30])
-    assert sidecar.nearest(src, np.array([-5, 4, 5, 6, 26, 99])).tolist() == [0, 0, 0, 1, 3, 3]
-    assert sidecar.nearest(np.array([7]), np.array([0, 100])).tolist() == [0, 0]
-    assert sidecar.nearest(src, np.array([1])).dtype == np.int32
+    assert formats.nearest(src, np.array([-5, 4, 5, 6, 26, 99])).tolist() == [0, 0, 0, 1, 3, 3]
+    assert formats.nearest(np.array([7]), np.array([0, 100])).tolist() == [0, 0]
+    assert formats.nearest(src, np.array([1])).dtype == np.int32
 
 
 def test_state_layout_reads_seven_values_per_actor_else_video_only():
-    assert sidecar.state_layout(14, "teleop_arms") == ("joints", None)
-    assert sidecar.state_layout(7, "handheld_gripper") == ("ee_pose", None)
-    kind, note = sidecar.state_layout(9, "teleop_arms")
+    assert formats.state_layout(14, "teleop_arms") == ("joints", None)
+    assert formats.state_layout(7, "handheld_gripper") == ("ee_pose", None)
+    kind, note = formats.state_layout(9, "teleop_arms")
     assert kind == "none" and "9 values" in note
-    assert sidecar.state_layout(14, "ego_head") == ("none", None)
+    assert formats.state_layout(14, "ego_head") == ("none", None)
 
 
 # ---- the sidecar writer on a real mp4 ----
@@ -172,7 +172,7 @@ def test_video_views_episode_times_frames_by_their_pts(tmp_path):
     pts = [0, 512, 1024, 2048, 2560, 3072]          # one frame missing after the third
     _mp4(tmp_path / "v" / "a.mp4", len(pts), pts)
     ep = tmp_path / "out" / "episode_a"
-    ctx = sidecar.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "ego_head", "mine",
+    ctx = formats.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "ego_head", "mine",
                                       {"instruction": None})
     t = np.load(ep / "times.npz")
     assert t["exo_pts"].tolist() == pts
@@ -183,7 +183,7 @@ def test_video_views_episode_times_frames_by_their_pts(tmp_path):
     assert json.loads((ep / "context.json").read_text()) == ctx
     assert ctx["real_times"] == "times.npz" and ctx["fps"] == 30.0 and ctx["n_state_frames"] == 6
     assert ctx["duration_s"] == round(3072 / 15360 + 1 / 30, 3)
-    assert ctx["cameras"]["exo"]["name"] == "head" and ctx["cameras"]["exo"]["desc"] == sidecar.EGO_DESC
+    assert ctx["cameras"]["exo"]["name"] == "head" and ctx["cameras"]["exo"]["desc"] == formats.EGO_DESC
     assert not (ep / "state.npz").exists() and (ep / "instruction.txt").read_text() == "\n"
 
 
@@ -191,7 +191,7 @@ def test_video_views_episode_pairs_a_second_camera_by_time(tmp_path):
     _mp4(tmp_path / "top.mp4", 6)
     _mp4(tmp_path / "wrist.mp4", 3, [0, 1536, 3072])  # a third of the rate
     ep = tmp_path / "episode_x"
-    sidecar.video_views_episode(ep, {"exo": ("top", tmp_path / "top.mp4"), "left": ("wrist", tmp_path / "wrist.mp4")},
+    formats.video_views_episode(ep, {"exo": ("top", tmp_path / "top.mp4"), "left": ("wrist", tmp_path / "wrist.mp4")},
                                 "teleop_arms", "mine", {})
     src = json.loads((ep / "sources.json").read_text())
     assert src["left"]["kmap"] == "kmap_left.npy" and "kmap" not in src["exo"]

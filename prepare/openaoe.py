@@ -23,7 +23,7 @@ from pathlib import Path
 
 from prepare import cli
 from prepare import hub
-from prepare import sidecar
+from prepare import formats
 
 REPO = "inclusionAI/OpenAoE-2000h"
 COLLECTION_NOTE = ("crowd contributors record their own activities on a phone worn at the head; each clip is one "
@@ -69,7 +69,7 @@ def prepare_clip(d: Path, clip: str, ep: Path) -> None:
              "source": {"clip": clip, "device": " ".join(x for x in (dev.get("brand"), dev.get("model")) if x),
                         "resolution": (info.get("cameraParams") or {}).get("resolution"),
                         "annotation_segments": len(ann)}}
-    sidecar.video_views_episode(ep, {"exo": ("raw_video", d / "raw_video.mp4")}, "ego_head", REPO, extra)
+    formats.video_views_episode(ep, {"exo": ("raw_video", d / "raw_video.mp4")}, "ego_head", REPO, extra)
 
 
 def prepare_one(clip: str, ep: Path, raw: Path, force: bool) -> str:
@@ -85,7 +85,7 @@ def main() -> int:
     a = ap.parse_args()
     clips = cli.read_list(a.episodes)
     a.out.mkdir(parents=True, exist_ok=True)
-    dirs = dict(zip(clips, sidecar.episode_dirs(a.out, clips)))
+    dirs = dict(zip(clips, formats.episode_dirs(a.out, clips)))
     return cli.run(clips, lambda c: prepare_one(c, dirs[c], a.raw, a.force), a.jobs)
 
 
