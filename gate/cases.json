@@ -18,6 +18,18 @@
   "issue": ["instruction_mismatch"],
   "why": "A NIKE T-shirt is folded, not the black pants the instruction names."
  },
+ "episode_008276_r*": {
+  "held": {"named": "shirt", "not_named": "pants"},
+  "not_outcome": ["success", "success_then_undone"],
+  "issue": ["instruction_mismatch"],
+  "why": "The instruction asks for black pants; the garment is a black polo shirt (two short sleeves when spread at 12 to 18 s, a knit and a buttoned placket in the wrist cameras at 47 to 65 s), so the given task was not done."
+ },
+ "episode_010414": {
+  "held": {"named": "shirt", "not_named": "pants"},
+  "not_outcome": ["success", "success_then_undone"],
+  "issue": ["instruction_mismatch"],
+  "why": "The instruction asks for black pants; the garment is a black polo shirt (a collar and a buttoned placket in the wrist cameras at 23 and 30 s)."
+ },
  "episode_001292": {
   "issue": ["instruction_mismatch"],
   "why": "A tower is built from a raised row; the instruction asks for rotations."

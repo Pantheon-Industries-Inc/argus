@@ -129,6 +129,34 @@
     "role": "case"
    },
    {
+    "name": "episode_008276_r1",
+    "dataset": "molmo",
+    "episode": "episode_008276",
+    "line": "8276",
+    "role": "case"
+   },
+   {
+    "name": "episode_008276_r2",
+    "dataset": "molmo",
+    "episode": "episode_008276",
+    "line": "8276",
+    "role": "case"
+   },
+   {
+    "name": "episode_008276_r3",
+    "dataset": "molmo",
+    "episode": "episode_008276",
+    "line": "8276",
+    "role": "case"
+   },
+   {
+    "name": "episode_010414",
+    "dataset": "molmo",
+    "episode": "episode_010414",
+    "line": "10414",
+    "role": "case"
+   },
+   {
     "name": "episode_000336",
     "dataset": "molmo",
     "episode": "episode_000336",

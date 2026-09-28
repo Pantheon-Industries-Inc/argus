@@ -32,8 +32,8 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
 {
   "scene": {
     "objects": [
-      {"name": "<what it actually is, specific if you can read it>",
-       "attributes": ["<color/size/state>"],
+      {"attributes": ["<the visible features that show what it is: its shape, parts, markings>", "<color/size/state>"],
+       "name": "<what it actually is, specific if you can read it>",
        "location": "<where in the workspace>"}
     ],
     "setting": "<one line describing the workspace>"
@@ -710,6 +710,14 @@ what a policy learns the instruction means, so it follows the instruction:
   A step whose result already holds at the first frame (a cap already off, a plug already in) is
   part of the end state that holds, not part of the goal that never happened: keep the relation
   aligned, and record the step the demonstration never shows as an instruction_mismatch.
+- The objects the instruction names are part of its claim. One instruction is often written once
+  for many recordings, so the object handled in this one can be a different kind of object from the
+  one it names. Identify every object from what the frames show of it (its shape and parts, how it
+  bends, folds or opens, any lettering or markings), as you would if the instruction named no
+  object, and call it that in every field. Then compare it with the instruction. A handled object
+  of a different kind from the one named is part of the end state (which object ends where), and it
+  is an instruction_mismatch; a more specific or differently worded name for the same kind of
+  object (a mug for a cup) is not.
 Use the given goal for the compliance question: completion.task_completed and
 success_predicate are the terminal state of THIS GIVEN goal (did the demo satisfy what was
 ASKED?), so a demo of a different task is a completion "failure" against the given goal even
