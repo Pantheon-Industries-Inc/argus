@@ -9,8 +9,10 @@ The board plays each camera as its own synced <video> and expects one mp4 per ep
 
 Some datasets keep their video packed (MolmoAct2: 12 to 50 episodes per mp4), and some cameras are HEVC or AV1,
 which browsers do not all play. This cuts each episode's own frames out of its source file (sources.json: the
-file, the episode's offset and its exact frame count) into a browser-native H.264 clip, once. It is a viewing
-copy only: labelling decodes the source files directly and never re-encodes. Idempotent and parallel.
+file, the episode's offset and its exact frame count) into a browser-native H.264 clip, once, sized for where the
+page shows that camera (the recipe below) and timed on the episode's clock: every frame keeps its source time, and a
+camera that started recording after the main one starts that much later. It is a viewing copy only: labelling
+decodes the source files directly and never re-encodes. Idempotent and parallel.
 """
 from __future__ import annotations
 
