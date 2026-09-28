@@ -3354,14 +3354,18 @@ function renderEp(d, opts) {
   // task: per-step progress toward the goal. A session of tasks: the per-step progress is relative to the current
   // task, so plotting it raw would sawtooth, and plotting only the tasks done makes a session with one task jump from
   // 0 to 100%. So it folds both: (tasks done before t + the current task's own progress) / tasks.
+  // An idle step (an arm parked while the other works, often the whole episode long) changes nothing about the task,
+  // so it places no point: its progress would be read at its end, and a parked arm's step spanning the episode drew a
+  // drop to its value at the very end. The last level holds to the end of the episode.
   const stepEnd = e => (e.end_s != null && Number(e.end_s) >= e.t_s ? Number(e.end_s) : e.t_s);
+  const changesTask = e => e.contribution !== 'idle';
   let progPts;
   if (hasTasks && taskGoalTimes.length) {
     const M = taskGoalTimes.length;
     const goals = taskGoalTimes.slice().sort((a, b) => a - b);
     const doneBefore = (t) => goals.filter(g => g <= t + 1e-6).length;
     progPts = eventLabels
-      .filter(e => e.t_s != null)
+      .filter(e => e.t_s != null && changesTask(e))
       .map(e => {
         const t = stepEnd(e), done = doneBefore(t);
         const within = (done < M && e.progress != null) ? Math.max(0, Math.min(1, Number(e.progress))) : 0;
@@ -3371,11 +3375,13 @@ function renderEp(d, opts) {
     progPts.unshift({t: 0, p: 0});
   } else {
     progPts = eventLabels
-      .filter(e => e.t_s != null && e.progress != null)
+      .filter(e => e.t_s != null && e.progress != null && changesTask(e))
       .map(e => ({t: stepEnd(e), p: Math.max(0, Math.min(1, Number(e.progress)))}))
       .sort((a, b) => a.t - b.t);
     progPts.unshift({t: 0, p: 0});
   }
+  if (progPts.length >= 2 && progPts[progPts.length - 1].t < duration)
+    progPts.push({t: duration, p: progPts[progPts.length - 1].p});
   const progSubLabel = hasTasks ? 'tasks done' : 'to goal';
   let progOverlayHtml = '';
   if (progPts.length >= 2) {
