@@ -539,3 +539,14 @@ def test_a_camera_that_started_late_is_shifted_onto_the_episode_clock(tmp_path):
     assert clips.start_offsets(tmp_path, sources) == {}
     assert clips.start_offsets(tmp_path, {"left": {}}) == {}
     assert clips.start_offsets(tmp_path / "none", sources) == {}
+
+
+def test_the_progress_readout_reaches_the_goal_when_it_is_reached():
+    """tests/progress_points.js on the page's progressPoints and progressAt: 100% only when the finishing step ends,
+    no drop at the end from a parked arm's whole-episode step, an undone goal keeps its drop, and a session of tasks
+    never counts a finished task twice."""
+    import subprocess
+    here = Path(__file__).resolve().parent
+    r = subprocess.run([shutil.which("node"), str(here / "progress_points.js"), str(here.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

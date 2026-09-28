@@ -3222,6 +3222,56 @@ function alignHeads() {
   if (d > 0.01) short.style.paddingBottom = (parseFloat(getComputedStyle(short).paddingBottom) + d) + 'px';
 }
 
+// The progress chart's points, [{t, p}] in time order from {t: 0, p: 0}. A step's progress is the level the task has
+// reached when the step ends (the step that completes the goal carries 1.0), so each value is plotted at its step's end
+// and the readout moves linearly between points (progressAt): it reaches 100% when the finishing step ends, never while
+// it is still under way. One task: per-step progress toward the goal. A session of tasks (taskGoalTimes, each task's
+// goal frame): the per-step progress is relative to the current task, so plotting it raw would sawtooth, and plotting
+// only the tasks done makes a session with one task jump from 0 to 100%. So it folds both: (tasks done before t + the
+// current task's own progress) / tasks. An idle step (an arm parked while the other works, often the whole episode
+// long) changes nothing about the task, so it places no point: read at its end, a parked arm's step spanning the
+// episode drew a drop to its progress at the very end. The last level holds to the end of the episode.
+// tests/progress_points.js runs this on those cases, and Data Review's QA viewer carries the same function.
+function progressPoints(eventLabels, duration, taskGoalTimes) {
+  const stepEnd = e => (e.end_s != null && Number(e.end_s) >= e.t_s ? Number(e.end_s) : e.t_s);
+  const changesTask = e => e.contribution !== 'idle';
+  let pts;
+  if (taskGoalTimes && taskGoalTimes.length) {
+    const M = taskGoalTimes.length;
+    const goals = taskGoalTimes.slice().sort((a, b) => a - b);
+    const doneBefore = (t) => goals.filter(g => g <= t + 1e-6).length;
+    pts = eventLabels
+      .filter(e => e.t_s != null && changesTask(e))
+      .map(e => {
+        // a step whose end completes a task has its progress counted in the tasks done; its own 1.0 is that task's,
+        // so it adds nothing toward the next one (counted again, it read the next task as done too)
+        const t = stepEnd(e), done = doneBefore(t), completes = done > doneBefore(e.t_s);
+        const within = (done < M && !completes && e.progress != null) ? Math.max(0, Math.min(1, Number(e.progress))) : 0;
+        return {t, p: Math.min(1, (done + within) / M)};
+      });
+  } else {
+    pts = eventLabels
+      .filter(e => e.t_s != null && e.progress != null && changesTask(e))
+      .map(e => ({t: stepEnd(e), p: Math.max(0, Math.min(1, Number(e.progress)))}));
+  }
+  pts.sort((a, b) => a.t - b.t);
+  pts.unshift({t: 0, p: 0});
+  if (pts.length >= 2 && pts[pts.length - 1].t < duration) pts.push({t: duration, p: pts[pts.length - 1].p});
+  return pts;
+}
+
+// The level the progress readout shows at time t: read off the straight line joining the points either side of t.
+function progressAt(pts, t) {
+  let p = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (pts[i].t <= t + 0.05) { p = pts[i].p; continue; }
+    const prev = pts[i - 1];
+    if (prev && pts[i].t > prev.t) p = prev.p + (pts[i].p - prev.p) * Math.max(0, Math.min(1, (t - prev.t) / (pts[i].t - prev.t)));
+    break;
+  }
+  return p;
+}
+
 function renderEp(d, opts) {
   opts = opts || {};
   const meta = d._meta || {};
@@ -3348,40 +3398,7 @@ function renderEp(d, opts) {
   const keyEvents = (d.key_events || []).filter(k => k.t_s != null)
       .slice().sort((a, b) => a.t_s - b.t_s);
 
-  // Progress chart (top-left of the video). A step's progress is the level the task has reached when the step ends
-  // (the step that completes the goal carries 1.0), so each value is plotted at its step's end and the readout moves
-  // linearly between step ends: it reaches 100% when the finishing step ends, never while it is still under way. One
-  // task: per-step progress toward the goal. A session of tasks: the per-step progress is relative to the current
-  // task, so plotting it raw would sawtooth, and plotting only the tasks done makes a session with one task jump from
-  // 0 to 100%. So it folds both: (tasks done before t + the current task's own progress) / tasks.
-  // An idle step (an arm parked while the other works, often the whole episode long) changes nothing about the task,
-  // so it places no point: its progress would be read at its end, and a parked arm's step spanning the episode drew a
-  // drop to its value at the very end. The last level holds to the end of the episode.
-  const stepEnd = e => (e.end_s != null && Number(e.end_s) >= e.t_s ? Number(e.end_s) : e.t_s);
-  const changesTask = e => e.contribution !== 'idle';
-  let progPts;
-  if (hasTasks && taskGoalTimes.length) {
-    const M = taskGoalTimes.length;
-    const goals = taskGoalTimes.slice().sort((a, b) => a - b);
-    const doneBefore = (t) => goals.filter(g => g <= t + 1e-6).length;
-    progPts = eventLabels
-      .filter(e => e.t_s != null && changesTask(e))
-      .map(e => {
-        const t = stepEnd(e), done = doneBefore(t);
-        const within = (done < M && e.progress != null) ? Math.max(0, Math.min(1, Number(e.progress))) : 0;
-        return {t, p: Math.min(1, (done + within) / M)};
-      })
-      .sort((a, b) => a.t - b.t);
-    progPts.unshift({t: 0, p: 0});
-  } else {
-    progPts = eventLabels
-      .filter(e => e.t_s != null && e.progress != null && changesTask(e))
-      .map(e => ({t: stepEnd(e), p: Math.max(0, Math.min(1, Number(e.progress)))}))
-      .sort((a, b) => a.t - b.t);
-    progPts.unshift({t: 0, p: 0});
-  }
-  if (progPts.length >= 2 && progPts[progPts.length - 1].t < duration)
-    progPts.push({t: duration, p: progPts[progPts.length - 1].p});
+  const progPts = progressPoints(eventLabels, duration, hasTasks ? taskGoalTimes : []);
   const progSubLabel = hasTasks ? 'tasks done' : 'to goal';
   let progOverlayHtml = '';
   if (progPts.length >= 2) {
@@ -4340,18 +4357,11 @@ function renderEp(d, opts) {
   const PO_W = 100, PO_H = 24;
   function renderProgress(t) {
     if (!poPct) return;
-    // the level between two step ends is read off the straight line joining them
-    let p = 0;
-    const past = [];
-    for (let i = 0; i < progPts.length; i++) {
-      const pt = progPts[i];
-      if (pt.t <= t + 0.05) { p = pt.p;
-        past.push(`${(pt.t / duration * PO_W).toFixed(2)},${((1 - pt.p) * PO_H).toFixed(2)}`); continue; }
-      const prev = progPts[i - 1];
-      if (prev && pt.t > prev.t) p = prev.p + (pt.p - prev.p) * Math.max(0, Math.min(1, (t - prev.t) / (pt.t - prev.t)));
-      past.push(`${(Math.min(t, duration) / duration * PO_W).toFixed(2)},${((1 - p) * PO_H).toFixed(2)}`);
-      break;
-    }
+    // the level between two step ends is read off the straight line joining them (progressAt)
+    const p = progressAt(progPts, t);
+    const xy = (tt, pp) => `${(tt / duration * PO_W).toFixed(2)},${((1 - pp) * PO_H).toFixed(2)}`;
+    const past = progPts.filter(pt => pt.t <= t + 0.05).map(pt => xy(pt.t, pt.p));
+    if (progPts.some(pt => pt.t > t + 0.05)) past.push(xy(Math.min(t, duration), p));
     const cx = Math.max(0, Math.min(1, duration ? t / duration : 0)) * PO_W;
     if (poPast) poPast.setAttribute('points', past.join(' '));
     if (poDot) { poDot.setAttribute('cx', cx.toFixed(2)); poDot.setAttribute('cy', ((1 - p) * PO_H).toFixed(2)); }
