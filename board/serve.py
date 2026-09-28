@@ -2390,12 +2390,15 @@ function checksSection(d) {
   let theirs = '';
   if (cq) {
     const notes = {};
-    for (const n of cq.notes || []) (notes[n.check] = notes[n.check] || []).push(n.text);
+    // a note's evidence, each firing a sentence, then why the check is a note, once (an older record has only its text)
+    for (const n of cq.notes || []) (notes[n.check] = notes[n.check] || []).push(n.evidence || n.text);
     const flags = {};
     for (const f of cq.flags || []) (flags[f.check] = flags[f.check] || []).push(f.evidence || f.title);
     const all = cq.checks.map(c => ({name: c.name, group: c.group, why: c.why,
       st: c.status === 'fired' ? (c.shown_as === 'issue' ? 'issue' : 'note') : c.status === 'clear' ? 'clear' : 'na',
-      text: c.status === 'fired' ? ((c.shown_as === 'issue' ? flags[c.check] : notes[c.check]) || []).join(' ') : ''}));
+      text: c.status === 'fired' ? [...new Set((c.shown_as === 'issue' ? flags[c.check] : notes[c.check]) || [])]
+        .concat(c.shown_as === 'note' && c.why && (cq.notes || []).some(x => x.check === c.check && x.evidence)
+          ? [c.why] : []).join(' ') : ''}));
     const fired = all.filter(c => c.st === 'issue' || c.st === 'note');
     const n = st => all.filter(c => c.st === st).length;
     const groups = [...new Set(all.map(c => c.group))];

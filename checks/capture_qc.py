@@ -1157,12 +1157,69 @@ NAMES: dict[str, tuple[str, str]] = {
 # Why a check that fired is shown as a note rather than an issue: its firings did not all hold up on the frames
 # of our verified datasets (the disposition reasons above hold the numbers).
 NOT_COUNTED = {
-    "gross_umi_speed": "Not counted as an issue: it also fires on real fast sweeps.",
-    "visual_change_unexplained_by_action": "Not counted as an issue: slow handheld drift reads as holding still, so it "
-                                           "fires on sound recordings.",
-    "gripper_action_integral_out_of_range": "Not counted as an issue: it repeats the aperture range check with a "
-                                            "looser tolerance.",
+    "gross_umi_speed": "It is shown as a note, not an issue, because it also fires on real fast sweeps.",
+    "visual_change_unexplained_by_action": "It is shown as a note, not an issue, because slow handheld drift looks like "
+                                           "holding still to this check, so it also fires on sound recordings.",
+    "gripper_action_integral_out_of_range": "It is shown as a note, not an issue, because it repeats the aperture range "
+                                            "check with a looser tolerance.",
 }
+SETUP_WORDS = {"teleop_arms": "teleoperated-arm", "handheld_gripper": "UMI", "ego_head": "human ego"}
+# where a stored note's reason starts, in its earlier and its current wording (refresh_notes cuts there)
+WHY_STARTS = ("Not counted as an issue", "It is shown as a note")
+
+
+def note_why(check: str, rig: str) -> str:
+    """Why a firing of this check on this setup is shown as a note, or "" for a check that is a note by design."""
+    d = DISPOSITION.get(check) or _d("excluded", "unknown check")
+    if check in NOT_COUNTED:
+        return NOT_COUNTED[check]
+    if d["disposition"] == "note":
+        return ""
+    return ("It is shown as a note, not an issue, because its firings were not confirmed on the frames of our "
+            f"verified {SETUP_WORDS.get(rig, rig.replace('_', ' '))} datasets.")
+
+
+def _sentence(t: str) -> str:
+    """A note's lead or evidence as one sentence: capitalized, its trailing colon or full stop made one full stop."""
+    t = t.strip().rstrip(":.").strip()
+    return t[:1].upper() + t[1:] + "." if t else ""
+
+
+def _lead(check: str) -> str:
+    d = DISPOSITION.get(check) or _d("excluded", "unknown check")
+    return d["note"] or d["title"] or NAMES.get(check, (check.replace("_", " ").capitalize(), ""))[0]
+
+
+def note_record(check: str, evidence: str, rig: str) -> dict:
+    """One firing shown as a note: its evidence as a sentence, and the text a download carries on its own (the
+    check's lead, the evidence and why it is a note)."""
+    ev, why = _sentence(evidence), note_why(check, rig)
+    return {"check": check, "evidence": ev, "text": " ".join(x for x in (_sentence(_lead(check)), ev, why) if x)}
+
+
+def refresh_notes(cq: dict) -> dict:
+    """A stored result with each note's reason worded as note_why words it now, so a reworded reason reaches the
+    board on the next build without rerunning the checks."""
+    rig = ((cq.get("metrics") or {}).get("episode") or {}).get("rig")
+    if not rig:
+        return cq
+    notes = []
+    for n in cq.get("notes") or []:
+        if not (isinstance(n, dict) and isinstance(n.get("text"), str) and n.get("check")):
+            notes.append(n)
+            continue
+        if "evidence" in n:
+            ev = n["evidence"]
+        else:
+            # an earlier record: its text is the lead, the evidence and the reason run together
+            cuts = [n["text"].find(s) for s in WHY_STARTS if s in n["text"]]
+            ev = (n["text"][:min(cuts)] if cuts else n["text"]).strip()
+            lead = _lead(n["check"]).strip()
+            ev = ev[len(lead):] if ev.startswith(lead) else ev
+        notes.append({**n, **note_record(n["check"], ev, rig)})
+    rows = [{**r, "why": note_why(r["check"], rig)} if isinstance(r, dict) and r.get("shown_as") == "note"
+            and r.get("why") else r for r in cq.get("checks") or []]
+    return {**cq, **({"notes": notes} if "notes" in cq else {}), **({"checks": rows} if "checks" in cq else {})}
 
 
 def format_result(a: dict) -> dict:
@@ -1190,13 +1247,9 @@ def format_result(a: dict) -> dict:
                               "actor": e["actor"], "evidence": e["evidence"]})
             listing.append({**row, "status": "fired", "shown_as": "issue", "events": len(r["events"])})
             continue
-        why = NOT_COUNTED.get(check) or ("" if d["disposition"] == "note" else
-                                         f"Not counted as an issue on this kind of rig: its firings were not confirmed "
-                                         f"on the frames of our verified {rig.replace('_', ' ')} datasets.")
-        lead = d["note"] or ((d["title"] or name) + " ")
+        why = note_why(check, rig)
         for e in r["events"]:
-            notes.append({"check": check, "text": (lead.rstrip() + " " + e["evidence"]).strip()
-                          + (" " + why if why else "")})
+            notes.append(note_record(check, e["evidence"], rig))
         listing.append({**row, "status": "fired", "shown_as": "note", "events": len(r["events"]),
                         **({"why": why} if why else {})})
     return {"source": SOURCE, "version": VERSION, "flags": flags, "notes": notes, "not_assessed": not_assessed,

@@ -89,8 +89,9 @@ SOURCES = {k: v for k, v in json.loads((Path(__file__).resolve().parent / "datas
 
 def capture_names(cq: dict) -> dict:
     """A stored capture-check result with each check named and grouped as checks/capture_qc.py names it now, so a
-    renamed check reaches the board on the next build without rerunning the checks."""
-    from checks.capture_qc import NAMES
+    renamed check, or a reworded note, reaches the board on the next build without rerunning the checks."""
+    from checks.capture_qc import NAMES, refresh_notes
+    cq = refresh_notes(cq)
     rows = [{**r, "name": NAMES[r["check"]][0], "group": NAMES[r["check"]][1]}
             if isinstance(r, dict) and r.get("check") in NAMES else r for r in cq.get("checks") or []]
     return {**cq, "checks": rows} if "checks" in cq else cq

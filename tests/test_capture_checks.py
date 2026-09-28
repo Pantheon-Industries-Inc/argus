@@ -137,3 +137,25 @@ def test_disposition_covers_every_check():
         if d["disposition"] == "flag":
             assert d["title"], c
 
+
+
+def test_a_note_reads_as_sentences_and_an_older_record_is_reworded():
+    """A note is its check's lead, its evidence and why it is a note, each a sentence; a stored note in the earlier
+    wording ("... holds still Not counted as an issue: ...") is reworded on the next build, and rewording is stable."""
+    ev = "camera left changes by at least 8 grey levels on 22 frame steps while every gripper holds still"
+    n = cq.note_record("visual_change_unexplained_by_action", ev, "teleop_arms")
+    assert n["evidence"] == "Camera left changes by at least 8 grey levels on 22 frame steps while every gripper holds still."
+    assert n["text"].endswith(n["evidence"] + " " + cq.NOT_COUNTED["visual_change_unexplained_by_action"])
+    assert "Not counted" not in n["text"] and ":" not in n["text"]
+    lead = cq._lead("visual_change_unexplained_by_action")
+    old = {"notes": [{"check": "visual_change_unexplained_by_action", "text": lead + " " + ev
+                      + " Not counted as an issue: slow handheld drift reads as holding still, so it fires on sound recordings."}],
+           "checks": [{"check": "visual_change_unexplained_by_action", "status": "fired", "shown_as": "note",
+                       "why": "Not counted as an issue: slow handheld drift reads as holding still."}],
+           "metrics": {"episode": {"rig": "teleop_arms"}}}
+    new = cq.refresh_notes(old)
+    assert new["notes"][0] == n and new["checks"][0]["why"] == cq.NOT_COUNTED["visual_change_unexplained_by_action"]
+    assert cq.refresh_notes(new) == new
+    other = cq.note_why("nonfinite_signal", "handheld_gripper")
+    assert "UMI datasets" in other
+    assert "rig" not in other and "Not counted" not in other
