@@ -161,37 +161,42 @@ def mcap_task_text_checks() -> int:
     steps = [(0.0, "Pick up the pipe and the elbow"), (0.7, "Press both onto the welding machine"),
              (6.5, "Press both onto the welding machine"), (18.7, "Remove both from the machine"),
              (20.2, "Press the pipe into the elbow"), (25.7, "Turn the assembly to align it with the frame")]
-    sub = []
-    for t, x in steps:                            # as convert_mcap_generic stores them: consecutive repeats collapsed
-        if not sub or sub[-1][1] != rec(x):
-            sub.append((s + int(t * 1e9), rec(x)))
-    texts = {"/task/subtask": sub, "/task": [(s, rec("The person heats a PVC pipe and an elbow, joins them and aligns the assembly"))],
-             "/task/health": [(s + i * 33_333_333, f"timestamp {{ nanos: {i} }}\nvalid: true\n") for i in range(f.TEXT_MSGS_MAX + 1)]}
-    instr, notes = f.mcap_task_texts(texts, {"/task/subtask": 6, "/task": 1, "/task/health": 930}, s)
+    texts, counts = {}, {}                        # as convert_mcap_generic reads them, message by message
+    for t, x in steps:
+        f.add_text(texts, counts, "/task/subtask", s + int(t * 1e9), rec(x))
+    f.add_text(texts, counts, "/task", s, rec("The person heats a PVC pipe and an elbow, joins them and aligns the assembly"))
+    for i in range(f.TEXT_MSGS_MAX + 1):
+        f.add_text(texts, counts, "/task/health", s + i * 33_333_333, f"timestamp {{ nanos: {i} }}\nvalid: true\n")
+    sub = texts["/task/subtask"]
+    if len(sub) != 6:
+        bad += 1
+        print(f"MCAP steps: {len(sub)} of 6 step messages kept (a repeated step was merged)")
+    instr, notes = f.mcap_task_texts(texts, {**counts, "/task/health": 930}, s)
     if instr != "The person heats a PVC pipe and an elbow, joins them and aligns the assembly":
         bad += 1
         print(f"MCAP task text: instruction {instr!r}, want the /task title")
     if notes.get("/task/subtask") != ["0.0 s: Pick up the pipe and the elbow", "0.7 s: Press both onto the welding machine",
-                                      "18.7 s: Remove both from the machine", "20.2 s: Press the pipe into the elbow",
-                                      "25.7 s: Turn the assembly to align it with the frame"]:
+                                      "6.5 s: Press both onto the welding machine", "18.7 s: Remove both from the machine",
+                                      "20.2 s: Press the pipe into the elbow", "25.7 s: Turn the assembly to align it with the frame"]:
         bad += 1
         print(f"MCAP task text: the steps did not reach the notes as a timeline: {notes.get('/task/subtask')}")
     if not str(notes.get("/task/health", "")).endswith("(the first of 930 messages)") or "task record" not in notes:
         bad += 1
         print(f"MCAP task text: heartbeat or task record wrong: {notes.get('/task/health')!r}, {sorted(notes)}")
     instr, notes = f.mcap_task_texts({"/task/subtask": sub}, {"/task/subtask": 6}, s)
-    if instr is not None or len(notes.get("/task/subtask") or []) != 5:
+    if instr is not None or len(notes.get("/task/subtask") or []) != 6:
         bad += 1
         print(f"MCAP task text: steps alone gave the instruction {instr!r}")
     instr, _ = f.mcap_task_texts({"/language_instruction": [(s, "put the cup in the sink")]}, {}, s)
     if instr != "put the cup in the sink":
         bad += 1
         print(f"MCAP task text: a plain instruction topic gave {instr!r}")
-    # a head camera's steps as the dataset's timed subtasks: each until the next begins, the last until the end;
-    # the heartbeat under the same task topic is not a step
+    # a head camera's steps as the dataset's timed subtasks, every message as sent: each until the next begins, the
+    # last until the end; the heartbeat under the same task topic is not a step
     st, subs = f.mcap_step_subtasks(texts, s, 31.0)
     want = [{"t0": 0.0, "t1": 0.7, "label": "Pick up the pipe and the elbow"},
-            {"t0": 0.7, "t1": 18.7, "label": "Press both onto the welding machine"},
+            {"t0": 0.7, "t1": 6.5, "label": "Press both onto the welding machine"},
+            {"t0": 6.5, "t1": 18.7, "label": "Press both onto the welding machine"},
             {"t0": 18.7, "t1": 20.2, "label": "Remove both from the machine"},
             {"t0": 20.2, "t1": 25.7, "label": "Press the pipe into the elbow"},
             {"t0": 25.7, "t1": 31.0, "label": "Turn the assembly to align it with the frame"}]
@@ -201,6 +206,15 @@ def mcap_task_text_checks() -> int:
     if f.mcap_step_subtasks({"/task/health": texts["/task/health"][:5]}, s, 31.0) != (None, []):
         bad += 1
         print("MCAP steps as subtasks: a heartbeat topic was read as steps")
+    # a long fragment's steps (one per 4.5 s window, more than TEXT_MSGS_MAX) are all kept, not cut to a heartbeat
+    long_t, long_c = {}, {}
+    for i in range(f.TEXT_MSGS_MAX + 15):
+        f.add_text(long_t, long_c, "/task/subtask", s + int(i * 4.5e9), rec("Place a yellow anchor into the container"))
+    st, subs = f.mcap_step_subtasks(long_t, s, (f.TEXT_MSGS_MAX + 15) * 4.5)
+    _, notes = f.mcap_task_texts(long_t, long_c, s)
+    if len(subs) != f.TEXT_MSGS_MAX + 15 or subs[1]["t0"] != 4.5 or len(notes.get("/task/subtask") or []) != f.TEXT_MSGS_MAX + 15:
+        bad += 1
+        print(f"MCAP steps: {len(subs)} subtasks and {len(notes.get('/task/subtask') or [])} note lines of {f.TEXT_MSGS_MAX + 15} steps")
     # a task topic whose text changes: its first text is the instruction and every text stays in the notes
     instr, notes = f.mcap_task_texts({"/task": [(s, "open the drawer"), (s + 4 * 10**9, "close the drawer")]}, {"/task": 2}, s)
     if instr != "open the drawer" or notes.get("/task") != ["0.0 s: open the drawer", "4.0 s: close the drawer"]:

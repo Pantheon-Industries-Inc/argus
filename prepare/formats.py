@@ -518,6 +518,20 @@ TEXT_MSGS_MAX = 50           # a text topic with more distinct messages than thi
 TASK_TOPIC_NAME = re.compile(r"(language_)?(instruction|task|task_description|prompt|goal)", re.I)
 # a topic named for the task's timed steps (MicroAGI's /task/subtask)
 STEP_TOPIC_NAME = re.compile(r"sub_?tasks?|steps?", re.I)
+
+
+def _is_step(topic: str) -> bool:
+    return bool(STEP_TOPIC_NAME.fullmatch(topic.rstrip("/").rsplit("/", 1)[-1]))
+
+
+def add_text(texts: dict, counts: dict, topic: str, t_ns: int, x) -> None:
+    """One text message into texts[topic], (log time ns, text) in time order. A step topic keeps every message as the
+    dataset sent it (MicroAGI sends one per short window, so ten windows of the same step are ten steps); any other
+    topic keeps a message repeated until the next one (a re-sent instruction, a heartbeat) once."""
+    seq = texts.setdefault(topic, [])
+    counts[topic] = counts.get(topic, 0) + 1
+    if not seq or seq[-1][1] != x or _is_step(topic):
+        seq.append((t_ns, x))
 # camera channels: compressed images or video (Foxglove, ROS CompressedImage), and raw images, which ROS 2 records
 # by default (sensor_msgs/Image, foxglove.RawImage). read.js mcapSummary, the same schemas.
 RAW_IMAGE_SCHEMA = re.compile(r"(^|/)(msg/)?Image$|RawImage$", re.I)
@@ -1734,12 +1748,12 @@ def _title_of(x):
 
 
 def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | None, dict]:
-    """(instruction, uploader notes) from an MCAP's text topics, each a list of its distinct messages in time order as
-    (log time ns, text). The instruction is the one message of a topic named for the task (/task, /instruction)
-    before any sub-topic (/task/subtask, /task/health); MicroAGI's /task titles the fragment and its /task/subtask
-    names each step, so the first step is never the task. A topic with several messages goes to the notes as a
-    timeline on the episode's clock (the vendor's steps, claims to check); a topic with more than TEXT_MSGS_MAX
-    distinct messages (a heartbeat) keeps only its first, with the count."""
+    """(instruction, uploader notes) from an MCAP's text topics, each a list of its messages in time order as
+    (log time ns, text), as add_text keeps them. The instruction is the one message of a topic named for the task
+    (/task, /instruction) before any sub-topic (/task/subtask, /task/health); MicroAGI's /task titles the fragment
+    and its /task/subtask names each step, so the first step is never the task. A topic with several messages goes
+    to the notes as a timeline on the episode's clock (the vendor's steps, claims to check). A topic other than a
+    step topic with more than TEXT_MSGS_MAX distinct messages (a heartbeat) keeps only its first, with the count."""
     def named(t):
         return bool(TASK_TOPIC_NAME.fullmatch(t.rstrip("/").rsplit("/", 1)[-1]))
     # a timeline of steps (several messages on a sub-topic) is never read as the task: with no task topic the
@@ -1755,7 +1769,7 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | No
             continue                  # the instruction itself (a task topic whose text changes keeps its timeline)
         if len(seq) == 1:
             notes[t] = seq[0][1]
-        elif len(seq) > TEXT_MSGS_MAX:
+        elif len(seq) > TEXT_MSGS_MAX and not _is_step(t):
             notes[t] = f"{_title_of(seq[0][1])} (the first of {counts.get(t, len(seq))} messages)"
         else:
             notes[t] = [f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in seq]
@@ -1775,8 +1789,7 @@ def mcap_step_subtasks(texts: dict, t0: int | None, end_s: float | None) -> tupl
     """(topic, [{t0, t1, label}]) of a topic named for steps (MicroAGI's /task/subtask), in the shape the dataset
     adapters give a head camera's timed subtasks (Gen-HumanEgo's, read by the harness as the dataset's annotation):
     each step lasts until the next one begins, the last until the episode ends."""
-    t = next((t for t in texts if STEP_TOPIC_NAME.fullmatch(t.rstrip("/").rsplit("/", 1)[-1])
-              and 0 < len(texts[t]) <= TEXT_MSGS_MAX and all(isinstance(x, str) for _, x in texts[t])), None)
+    t = next((t for t in texts if _is_step(t) and texts[t] and all(isinstance(x, str) for _, x in texts[t])), None)
     if t is None:
         return None, []
     base = t0 if t0 is not None else texts[t][0][0]
@@ -1813,7 +1826,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     want = set(vmap.values()) | set(text_topics)
     view_of_topic = {t: v for v, t in vmap.items()}
     writers: dict[str, FrameWriter] = {}
-    texts: dict[str, list] = {}               # topic: its distinct messages in time order, (log time ns, text)
+    texts: dict[str, list] = {}               # topic: its messages in time order, (log time ns, text) (add_text)
     n_text: dict[str, int] = {}
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
     ep.mkdir(parents=True, exist_ok=True)
@@ -1822,7 +1835,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             msgs = make_reader(fh).iter_messages(topics=sorted(want), log_time_order=True) if summ is not None \
                 else _mcap_stream(item["file"], want)
             for schema, ch, msg in msgs:
-                if ch.topic in texts and len(texts[ch.topic]) > TEXT_MSGS_MAX:
+                if ch.topic in texts and len(texts[ch.topic]) > TEXT_MSGS_MAX and not _is_step(ch.topic):
                     n_text[ch.topic] += 1
                     continue
                 if ch.id not in decs:
@@ -1845,11 +1858,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         w.add((int(msg.log_time) - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
                 else:
                     d = _field(dec, "data")
-                    x = d if isinstance(d, str) else (dec if isinstance(dec, dict) else str(dec))
-                    seq = texts.setdefault(ch.topic, [])
-                    n_text[ch.topic] = n_text.get(ch.topic, 0) + 1
-                    if not seq or seq[-1][1] != x:          # a message repeated until the next one is one message
-                        seq.append((int(msg.log_time), x))
+                    add_text(texts, n_text, ch.topic, int(msg.log_time),
+                             d if isinstance(d, str) else (dec if isinstance(dec, dict) else str(dec)))
         except Exception as e:
             if not writers:
                 raise
