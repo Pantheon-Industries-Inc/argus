@@ -1,6 +1,6 @@
 """The reader for your own data (prepare/formats.py), on names and synthetic files: which camera fills which view,
-names and paths, fixed-length packaging, packed LeRobot v3 placement, the frame writer, and an MCAP's task text and
-timed steps. Data Review runs these cases too, against its browser pre-flight (its upload/test_formats.py)."""
+names and paths, fixed-length packaging, packed LeRobot v3 placement, the frame writer, an MCAP's task text and
+timed steps, and a recorder's folder of videos with its arm state in MCAP files. Data Review runs these cases too, against its browser pre-flight (its upload/test_formats.py)."""
 from __future__ import annotations
 
 import tempfile
@@ -313,3 +313,99 @@ def _video_folder_adapter(tmp_path: Path):
     (plain / "raw_video.mp4").write_bytes(b"")
     assert not openaoe.recognizes({"dir": plain, "files": [plain / "raw_video.mp4"], "name": "plain"})
     assert openaoe.recognizes({"dir": None, "files": [clip / "raw_video.mp4"], "name": "raw_video"})   # the folder uploaded itself
+
+
+def _clip(path: Path, n: int) -> None:
+    import av
+    import numpy as np
+    c = av.open(str(path), "w")
+    s = c.add_stream("mpeg4", rate=30)
+    s.width, s.height, s.pix_fmt = 64, 36, "yuv420p"
+    for k in range(n):
+        fr = av.VideoFrame.from_ndarray(np.full((36, 64, 3), k * 9 % 256, np.uint8), format="rgb24")
+        fr.pts = k
+        for pkt in s.encode(fr):
+            c.mux(pkt)
+    for pkt in s.encode():
+        c.mux(pkt)
+    c.close()
+
+
+def recorder_folder(root: Path, n: int = 12, t0: float = 1_790_000_000.0) -> Path:
+    """One episode as a capture stack records it: each camera's colour and depth video with a file of its frames'
+    capture times (two frames stamped alike), each arm's joints (follower, joint_pos and gripper_pos) and commands
+    (leader, seven values) as JSON MCAP channels beside a health channel, and a metadata file naming the task.
+    Data Review's upload/test_formats.py reads the same folder with the page's reader."""
+    import json
+    import numpy as np
+    from mcap.writer import Writer
+    d = root / "episode_000001_ab12"
+    d.mkdir(parents=True)
+    for k, cam in enumerate(("exo_cam", "left_wrist_cam", "right_wrist_cam")):
+        for kind in ("rgb", "depth"):
+            _clip(d / f"{cam}-images-{kind}.mp4", n)
+            ts = t0 + 0.01 * k + np.arange(n) / 30
+            ts[3] = ts[2]
+            np.save(d / f"{cam}-{kind}-timestamp.npy", ts)
+    for side in ("left", "right"):
+        for leader in (False, True):
+            name = f"yam_{'leader_' if leader else ''}{side}"
+            with open(d / f"{name}.mcap", "wb") as fh:
+                w = Writer(fh)
+                w.start()
+                sid = w.register_schema(name=name, encoding="jsonschema", data=b"{}")
+                ch = w.register_channel(topic=f"/{name}/{'joint_pos' if leader else 'joint_state'}", message_encoding="json",
+                                        schema_id=sid)
+                hc = w.register_channel(topic=f"/{name}/health", message_encoding="json", schema_id=sid)
+                for i in range(n * 4):
+                    t = int((t0 - 0.05 + i / 120) * 1e9)
+                    g = 0.5 + 0.4 * float(np.sin(i / 20))
+                    msg = {"joint_pos": [0.1 * i / n] * 6 + [g]} if leader else \
+                        {"joint_pos": [0.1 * i / n] * 6, "joint_vel": [0.0] * 6, "gripper_pos": [g]}
+                    w.add_message(ch, log_time=t, publish_time=t, data=json.dumps(msg).encode())
+                    w.add_message(hc, log_time=t, publish_time=t, data=b'{"ok": true, "reason": ""}')
+                w.finish()
+    (d / "session_meta.json").write_text(json.dumps({"prompt": "Pick up the cube", "nodes": [{"name": "exo_cam"}]}))
+    return d
+
+
+def test_a_recorders_folder_is_one_episode_with_its_arm_state():
+    """MCAP files with no camera beside videos are the episode's recorded state, never episodes of their own: a
+    capture folder of three cameras (each also with a depth video) and four arm MCAPs had been read as four
+    episodes of arm data with the footage left out. It is one episode of the three colour videos, placed on the
+    recorder's clock by their frame times, with the followers' joints as its state, the leaders' as its action, and
+    the task from its metadata."""
+    import json
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / "upload"
+        recorder_folder(root)
+        det, items = f.plan(root)
+        assert det["format"] == "video" and len(items) == 1
+        assert sorted(Path(p).name for p in items[0]["files"]) == [
+            "exo_cam-images-rgb.mp4", "left_wrist_cam-images-rgb.mp4", "right_wrist_cam-images-rgb.mp4"]
+        assert len(items[0]["state"]) == 4
+        assert any("3 depth or infrared videos were left out" in u for u in det["used"])
+        rep = f.convert(root, "teleop_arms", Path(t) / "eps", "test", 900)
+        assert not rep["failed"] and len(rep["episodes"]) == 1
+        ep = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
+        ctx = json.loads((ep / "context.json").read_text())
+        assert ctx["state_kind"] == "joints" and ctx["instruction"] == "Pick up the cube" and not ctx.get("state_note")
+        assert ctx["cameras"]["exo"]["name"] == "exo_cam"
+        z = np.load(ep / "state.npz")
+        assert z["state"].shape == (12, 14) and z["action"].shape == (12, 14)
+        tm = np.load(ep / "times.npz")
+        assert abs(float(tm["left"][0]) - 0.01) < 1e-6 and abs(float(tm["right"][0]) - 0.02) < 1e-6
+
+
+def test_joint_state_reads_only_the_layout_the_checks_read():
+    import numpy as np
+    q = np.linspace(0.0, 1.0, 11)
+    arm = lambda dims: {"t": np.linspace(-0.1, 1.1, 30), "pos": np.ones((30, dims))}
+    state, action, note = f.joint_state({"/left/joint_state": arm(7), "/right/joint_state": arm(7),
+                                         "/leader_left/joint_pos": arm(7)}, q)
+    assert state.shape == (11, 14) and action is None and note is None      # a command for one arm only is no action
+    assert f.joint_state({"/arm/joint_state": arm(8)}, q)[2].startswith("Labelled from the cameras, because the recorded arms have 8")
+    assert "does not cover" in f.joint_state({"/arm/joint_state": {"t": np.linspace(5, 6, 30), "pos": np.ones((30, 7))}}, q)[2]
+    assert f.joint_state({"/left/joint_state": arm(7), "/arm/joint_state": arm(7)}, q)[2].endswith("which arm is which.")
+    assert f.joint_state({}, q) == (None, None, None)

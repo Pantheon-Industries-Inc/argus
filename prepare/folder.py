@@ -7,8 +7,9 @@ Galaxea's go through their adapters, recognized by their columns), MCAP files
 (one per episode), or video files (one per episode, or one folder per episode with a scene camera and a left and a
 right mounted camera). Archives (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz) are read as the folders they hold. An
 MCAP in a layout a dataset adapter recognizes goes through that adapter (today ABC-130k and RealOmin, with their
-recorded state, and Gen-HumanEgo, with its goal and timed steps); any other MCAP is read for its cameras and its
-text channels (the task, and on a head camera its timed steps).
+recorded state, and Gen-HumanEgo, with its goal and timed steps); any other MCAP is read for its cameras, its arm
+joint channels and its text channels (the task, and on a head camera its timed steps). MCAP files with no camera
+beside an episode's videos are its recorded arm state.
 
 --rig says what recorded it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers carried by
 a person) or ego_head (a camera worn on a person's head). A .txt or .json beside a video, or instruction.txt or

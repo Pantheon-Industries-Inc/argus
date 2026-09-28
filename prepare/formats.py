@@ -21,11 +21,15 @@ Accepted uploads, in the order they are recognised:
 2. MCAP, one file per episode. A layout a dataset adapter recognizes goes through that adapter (the
    prepare/*.py that declare UPLOAD = "mcap", found by upload_adapters: ABC-130k and RealOmin with their
    robot state, Gen-HumanEgo with its forward camera, goal and timed steps). Any other layout is read for
-   its cameras (every compressed-image or compressed-video channel) and its text channels (the task topic,
-   and on a head camera a step topic as the timed steps).
+   its cameras (every compressed-image or compressed-video channel), its arm joints on a teleoperated rig
+   (joint_state: any channel whose messages carry a joint vector and a gripper reading, its side from the topic,
+   a leader or command channel as the action) and its text channels (the task topic, and on a head camera a
+   step topic as the timed steps).
 3. Plain video (mp4, mov, mkv, webm, avi). Either one file per episode, or one folder per episode
-   holding up to three files (a scene camera plus a left and a right mounted camera, told apart by
-   "left" / "right" in the file name). A file is never split: an unsplit recording is one episode, and the
+   holding the cameras of one episode (group_videos says how names and folders group them). MCAP files with no
+   camera beside the videos are the episode's recorded state, read as in 2 and placed on the frames' capture
+   times from the timestamp file a recorder writes beside each video (frame_times). A depth or infrared video
+   beside a colour one is left out. A file is never split: an unsplit recording is one episode, and the
    pipeline labels a long one in pieces and stitches the labels back into one timeline. When
    many files share one length, the recorder cut continuous footage into fixed-length files; the episodes
    say so, so a file that starts or ends mid-activity is read as packaging, not a truncated episode. A folder
@@ -37,7 +41,8 @@ Review's upload page opens archives in the browser and sends their files; this i
 
 Anything else the uploader sends next to an episode (a .txt or .json with the same name as the
 video, or instruction.txt / annotations.json inside an episode folder) is passed to the model as
-the uploader's own annotation, a claim to check against the video, never as truth.
+the uploader's own annotation, a claim to check against the video, never as truth. A recorder's metadata
+file in an episode folder that names the task (its prompt, instruction or task) gives the instruction.
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
 arms; x y z roll pitch yaw plus opening for handheld grippers). Other layouts are labelled from the
@@ -328,9 +333,12 @@ def detect(root: Path) -> dict:
     if roots:
         return {"format": "lerobot", "roots": roots}
     mcaps = [p for p in files if p.suffix.lower() == ".mcap"]
+    vids = [p for p in files if p.suffix.lower() in VIDEO_EXT]
+    if mcaps and vids and not any(mcap_has_camera(p) for p in mcaps):
+        # MCAP files with no camera (arm joints, grippers) beside videos are the videos' recorded state, not episodes
+        return {"format": "video", "files": [str(p) for p in vids], "state": [str(p) for p in mcaps]}
     if mcaps:
         return {"format": "mcap", "files": [str(p) for p in mcaps]}
-    vids = [p for p in files if p.suffix.lower() in VIDEO_EXT]
     if vids:
         return {"format": "video", "files": [str(p) for p in vids]}
     seen = sorted({p.suffix.lower() or p.name for p in files})[:12]
@@ -614,7 +622,10 @@ def describe(cam: dict, view: str, name: str, rig: str) -> dict:
 def _short(name: str, view: str) -> str:
     base = re.sub(r"^(observation\.images\.|observation\.image\.|/)", "", name)
     base = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_")
-    return base[:32] or view
+    # the words every video file of a camera carries (exo_cam-images-rgb is the camera exo_cam)
+    words = [w for w in base.split("_") if w]
+    kept = [w for w in words if w.lower() not in GENERIC_VIDEO_WORDS]
+    return "_".join(kept or words)[:32] or view
 
 
 def annotation_text(obj) -> str | None:
@@ -683,27 +694,33 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 
 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
-                        prs: dict | None = None) -> dict:
+                        prs: dict | None = None, real: dict | None = None, state=None, action=None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
-    (shared_clock) keep their offsets and are measured from the anchor's first frame."""
+    (shared_clock) keep their offsets and are measured from the anchor's first frame. real gives every view's
+    capture times on one recorder clock (frame_times), which then place the cameras against each other; state and
+    action are rows on the anchor's frames (joint_state)."""
     from label import episode as me
     prs = prs or {v: probe(p) for v, (_, p) in files.items()}
     order = [v for v in me.VIEW_ORDER if v in files]
     anchor = order[0]
-    zero = float(prs[anchor]["pts"][0] * prs[anchor]["time_base"]) if shared_clock else None
+    use_real = bool(real) and all(real.get(v) is not None for v in order)
+    zero = float(real[anchor][0]) if use_real else \
+        float(prs[anchor]["pts"][0] * prs[anchor]["time_base"]) if shared_clock else None
 
-    def seconds_of(pr):
-        t = pr["pts"].astype(np.float64) * float(pr["time_base"])
+    def seconds_of(v):
+        if use_real:
+            return np.asarray(real[v], dtype=np.float64) - zero
+        t = prs[v]["pts"].astype(np.float64) * float(prs[v]["time_base"])
         return t - (zero if shared_clock else t[0])
-    ta = seconds_of(prs[anchor])
+    ta = seconds_of(anchor)
     ep.mkdir(parents=True, exist_ok=True)
     sources, times, cams = {}, {}, {}
     for v in order:
         name, path = files[v]
         pr = prs[v]
-        t = seconds_of(pr)
+        t = seconds_of(v)
         times[v], times[f"{v}_pts"] = t, pr["pts"]
         sources[v] = {"packed": str(Path(path).resolve()), "base_s": 0.0, "n_frames": int(len(pr["pts"])),
                       "camera_key": name}
@@ -720,7 +737,9 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     ctx = {"dataset": dataset, "profile": rig, "state_kind": "none", "episode_id": ep.name,
            "robot_type": None, "fps": round(float(fps), 3), "n_state_frames": int(len(ta)),
            "duration_s": round(float(ta[-1]) + step, 3) if len(ta) else 0.0, "cameras": cams, **extra}
-    return finish_episode(ep, ctx, sources, times=times)
+    if state is not None:
+        ctx["state_kind"] = state_layout(state.shape[1], rig)[0]
+    return finish_episode(ep, ctx, sources, state=state, action=action, times=times)
 
 
 def episode_name(s: str) -> str:
@@ -893,12 +912,59 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
     return eps, unsettled
 
 
+NON_COLOUR = {"depth", "disparity", "confidence", "conf", "mask", "infrared", "ir", "thermal"}
+GENERIC_VIDEO_WORDS = {"images", "image", "video", "videos", "rgb", "color", "colour", "raw"}
+
+
+def colour_videos(rels: list[str]) -> tuple[list[str], list[str]]:
+    """(kept, left out): a folder's depth, infrared and mask videos are left out when a colour video is beside them,
+    since the labeller reads colour footage (exo_cam-images-depth.mkv beside exo_cam-images-rgb.mp4). read.js
+    colourVideos, the same rule."""
+    dirs = lambda r: r.rsplit("/", 1)[0] if "/" in r else ""
+    non = lambda r: bool(set(tokens(r.rsplit("/", 1)[-1].rsplit(".", 1)[0])) & NON_COLOUR)
+    colour_dirs = {dirs(r) for r in rels if not non(r)}
+    out = [r for r in rels if non(r) and dirs(r) in colour_dirs]
+    return [r for r in rels if r not in out], out
+
+
+def frame_times(video: Path, n: int) -> np.ndarray | None:
+    """A video's frames' capture times in seconds on its recorder's clock, from the per-frame timestamp array a
+    recorder writes beside it (exo_cam-rgb-timestamp.npy beside exo_cam-images-rgb.mp4): a .npy in its folder whose
+    name says time and has the video's camera words, holding n rising numbers (seconds, or ms, us or ns, read
+    from their size). Colour over depth when both fit. None when there is none."""
+    cam = set(tokens(video.stem)) - GENERIC_VIDEO_WORDS
+    cands = []
+    for p in sorted(video.parent.glob("*.npy")):
+        tk = set(tokens(p.stem))
+        if not any(t.startswith(("time", "stamp")) for t in tk) or not cam <= tk:
+            continue
+        try:
+            a = np.load(p, allow_pickle=False)
+        except Exception:
+            continue
+        if a.ndim != 1 or len(a) != n or not np.issubdtype(a.dtype, np.number):
+            continue
+        a = a.astype(np.float64)
+        if n > 1 and not (np.all(np.diff(a) >= 0) and a[-1] > a[0]):
+            continue                      # never backwards (a recorder can stamp two frames alike)
+        cands.append((bool(tk & NON_COLOUR), -len(os.path.commonprefix([p.stem, video.stem])), p.name, a))
+    if not cands:
+        return None
+    a = min(cands, key=lambda c: c[:3])[3]
+    return a * (1e-9 if a[0] > 1e17 else 1e-6 if a[0] > 1e14 else 1e-3 if a[0] > 1e11 else 1.0)
+
+
 def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict]:
     """One item per episode, grouped as group_videos says. Files are never split. Fixed-length packaging (a
     recorder that cuts continuous footage into files of one length) is found here and recorded on every item it
-    applies to."""
+    applies to. MCAP files of recorded state (det["state"]) go with the episode of their folder, when the folder
+    holds one episode."""
     root = Path(root)
-    rels = [Path(f).relative_to(root).as_posix() for f in det["files"]]
+    rels, left_out = colour_videos([Path(f).relative_to(root).as_posix() for f in det["files"]])
+    if left_out:
+        det.setdefault("used", []).append(
+            f"{len(left_out)} depth or infrared video{'s were' if len(left_out) != 1 else ' was'} left out, since the "
+            "labeller reads the colour video of each camera.")
     durations = {}
 
     def length_of(r):
@@ -928,6 +994,18 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
             it["seconds"] = max((durations.get(Path(f).relative_to(root).as_posix()) or _duration(f)) for f in it["files"])
         except Exception:
             it["seconds"] = None          # unreadable header: measured on conversion, or reported as unreadable
+    folder = lambda it: Path(it["files"][0]).parent
+    per_folder: dict[Path, int] = {}
+    for it in items:
+        per_folder[folder(it)] = per_folder.get(folder(it), 0) + 1
+    for it in items:
+        it["state"] = [Path(p) for p in det.get("state") or [] if Path(p).parent == folder(it) and per_folder[folder(it)] == 1]
+    if det.get("state"):
+        n = sum(1 for p in det["state"] if any(Path(p) in it["state"] for it in items))
+        det["used"].append(f"{n} MCAP file{'s' if n != 1 else ''} of recorded arm state, read with the videos beside "
+                           f"{'them' if n != 1 else 'it'}." if n else
+                           "The MCAP files hold no camera, and no folder holds them with the videos of one episode, so "
+                           "their recorded state was not read.")
     return items
 
 
@@ -979,6 +1057,10 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             "notes.txt")] + (own if len({f.stem for f in fs}) == 1 else []))
     extra = {"task_label": [item["name"]], "source": {"format": "video files", "upload": item["name"]}}
     instr = instruction_from(ann)
+    if not instr and item["dir"] is not None:
+        # a recorder's own metadata file in the episode folder (session_meta.json) that names the task
+        instr = next((x for x in (instruction_from(_read_json(p)) for p in sorted(item["dir"].glob("*.json"))
+                                  if p.stat().st_size <= 1_000_000) if x), None)
     if instr:
         extra["instruction"] = instr
         extra["instruction_note"] = "This instruction is the task text the uploader sent with the episode."
@@ -987,8 +1069,23 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
+    prs = {v: probe(p) for v, (_, p) in files.items()}
+    real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
+    state = action = None
+    if item.get("state") and rig == "teleop_arms":
+        from label import episode as me
+        anchor = next(v for v in me.VIEW_ORDER if v in files)
+        if real[anchor] is None:
+            extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place the "
+                                   "recorded arm state against.")
+        else:
+            state, action, note = joint_state(mcap_joint_streams(item["state"]), real[anchor])
+            if note:
+                extra["state_note"] = note
+            elif state is not None:
+                extra["source"]["state"] = [p.name for p in item["state"]]
     ep = unique_dir(out, episode_name(item["name"]))
-    return video_views_episode(ep, files, rig, dataset, extra)
+    return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action)
 
 
 # ---------------------------------------------------------------- LeRobot: reading a dataset root
@@ -1707,6 +1804,124 @@ def _mcap_topics_by_scan(path: Path) -> list[str]:
     return [t for t, _ in _mcap_channels_by_scan(path)]
 
 
+def mcap_channels(path: Path) -> list[tuple[str, str]]:
+    """[(topic, schema name)] of an MCAP file, from its summary, or scanned when it has none (a cut-off file)."""
+    from mcap.reader import make_reader
+    try:
+        with open(path, "rb") as fh:
+            s = make_reader(fh).get_summary()
+    except Exception:
+        s = None
+    if s is None:
+        return _mcap_channels_by_scan(path)
+    return sorted({(c.topic, s.schemas[c.schema_id].name if c.schema_id in s.schemas else "") for c in s.channels.values()})
+
+
+def mcap_has_camera(path: Path) -> bool:
+    return any(CAMERA_SCHEMA.search(s) for _, s in mcap_channels(path))
+
+
+# ---------------------------------------------------------------- recorded joint state, from any MCAP
+
+# A channel is an arm's joints when its messages carry a joint vector under one of these names (sensor_msgs/JointState's
+# position included), with the gripper's reading beside it or as the vector's last value. Its topic names the arm's
+# side, and a leader arm or a command channel is the action rather than the state.
+JOINT_KEYS = ("joint_pos", "joint_positions", "joint_position", "positions", "position", "qpos")
+GRIPPER_KEYS = ("gripper_pos", "gripper_position", "gripper", "gripper_width", "gripper_opening")
+ACTION_TOPIC = re.compile(r"leader|action|command|cmd|target|teleop", re.I)
+JOINT_DIMS = 7                     # six joints and a gripper per arm, as state_layout and the checks read state
+
+
+def _vector(x) -> list[float] | None:
+    if x is None or isinstance(x, (str, bytes, dict)):
+        return None
+    try:
+        v = [float(a) for a in (x if hasattr(x, "__len__") else [x])]
+    except (TypeError, ValueError):
+        return None
+    return v or None
+
+
+def _joint_row(msg) -> list[float] | None:
+    joints = next((v for v in (_vector(_field(msg, k)) for k in JOINT_KEYS) if v), None)
+    if joints is None:
+        return None
+    grip = next((v for v in (_vector(_field(msg, k)) for k in GRIPPER_KEYS) if v), None)
+    return joints + grip[:1] if grip else joints
+
+
+def mcap_joint_streams(paths: list[Path]) -> dict:
+    """{topic: {"t": seconds on the recording's clock, "pos": rows}} for every channel of these MCAP files that
+    carries an arm's joints (JOINT_KEYS); cameras and text are not read."""
+    from mcap.reader import make_reader
+    out, facs = {}, _decoders()
+    for p in paths:
+        chans = [(t, s) for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)]
+        decs, skip = {}, set()
+        with open(p, "rb") as fh:
+            try:
+                msgs = make_reader(fh).iter_messages(topics=[t for t, _ in chans], log_time_order=True)
+                for schema, ch, msg in msgs:
+                    if ch.topic in skip:
+                        continue
+                    if ch.id not in decs:
+                        decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
+                    try:
+                        row = _joint_row(decs[ch.id](msg.data)) if decs[ch.id] else None
+                    except Exception:
+                        row = None
+                    s = out.get(ch.topic)
+                    if row is None or (s and len(row) != len(s["pos"][0])):
+                        if s is None:
+                            skip.add(ch.topic)        # not a joint channel (health, status, poses)
+                        continue
+                    s = out.setdefault(ch.topic, {"t": [], "pos": []})
+                    s["t"].append(msg.log_time / 1e9)
+                    s["pos"].append(row)
+            except Exception:
+                pass                                  # a cut-off file: the messages before the cut are kept
+    return {t: {"t": np.asarray(s["t"]), "pos": np.asarray(s["pos"], dtype=np.float64)}
+            for t, s in out.items() if len(s["t"]) > 1}
+
+
+def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
+    """(state, action, note): the arms' joints and grippers interpolated onto the anchor camera's frame times q (the
+    same clock as the streams), 7 values per arm, left arm first; the leader or command channels, when they match, as
+    the action. None with a note when the streams are not a layout the checks read or do not cover the footage."""
+    def arms(role):
+        # per side, a channel of six joints and a gripper when there is one (an arm can also record other vectors)
+        by_side = {}
+        for t in sorted(streams, key=lambda t: (streams[t]["pos"].shape[1] != JOINT_DIMS, t)):
+            if bool(ACTION_TOPIC.search(t)) == role:
+                by_side.setdefault(side_of(t) or "only", t)
+        return by_side
+    st, act = arms(False), arms(True)
+    if not st:
+        return None, None, None
+    order = [s for s in ("left", "right", "only") if s in st]
+    if "only" in order and len(order) > 1:
+        return None, None, "Labelled from the cameras, because the recorded arm channels do not say which arm is which."
+    dims = [streams[st[s]]["pos"].shape[1] for s in order]
+    if any(d != JOINT_DIMS for d in dims):
+        return None, None, (f"Labelled from the cameras, because the recorded arms have {' and '.join(map(str, dims))} "
+                            "values per frame and our checks read six joints and a gripper per arm.")
+    span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
+    for s in order:
+        t = streams[st[s]]["t"]
+        cover = min(float(t[-1]), float(q[-1])) - max(float(t[0]), float(q[0]))
+        if span <= 0 or cover < 0.5 * span:
+            return None, None, "Labelled from the cameras, because the recorded arm state does not cover the footage's time."
+
+    def lerp(topic):
+        x, y = streams[topic]["t"], streams[topic]["pos"]
+        return np.stack([np.interp(q, x, y[:, j]) for j in range(y.shape[1])], axis=1)
+    state = np.concatenate([lerp(st[s]) for s in order], axis=1)
+    action = None
+    if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS for s in order):
+        action = np.concatenate([lerp(act[s]) for s in order], axis=1)
+    return state, action, None
+
+
 def _decoder_for(encoding: str, schema, facs: list):
     """A function decoding one message payload, or None: JSON channels by json, the rest by whichever
     installed factory (protobuf, ROS 2) knows the encoding."""
@@ -1817,7 +2032,7 @@ def mcap_step_subtasks(texts: dict, t0: int | None, end_s: float | None) -> tupl
 def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     """Every compressed-image / compressed-video channel that carries a colour camera is a candidate camera;
     up to three are used (one for a head camera). A text or annotation channel becomes the task text or the
-    uploader's notes. No robot state: the layout is not one we know."""
+    uploader's notes. Channels of arm joints become the recorded state on a teleoperated rig (joint_state)."""
     from mcap.reader import make_reader
     with open(item["file"], "rb") as fh:
         try:
@@ -1909,11 +2124,23 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             extra["annotation_subtasks"] = subs
     if notes:
         extra["uploader_annotation"] = annotation_text({t: x for t, x in notes.items()})
-    # motion the file records but this reader does not use yet (hand, body or camera poses in a human recording,
-    # joints in an unknown robot layout): named on the job page, so a missing check is never a silent gap
+    # the arms' joints, on the cameras' clock, when the file records them (joint_state)
+    state = action = note = None
+    prs = {v: probe(p) for v, (_, p) in files.items()}
+    if rig == "teleop_arms":
+        from label import episode as me
+        pr = prs[next(v for v in me.VIEW_ORDER if v in files)]
+        q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])      # its frames were written from t0
+        state, action, note = joint_state(mcap_joint_streams([item["file"]]), q)
+    # motion the file records but this reader does not use (hand, body or camera poses in a human recording, joints
+    # in a layout the checks do not read): named on the job page, so a missing check is never a silent gap
     motion = [t for t in item["topics"] if re.search(r"hand|pose|slam|body|joint|odom|/tf$", t, re.I)
               and not re.search(r"health|info|meta|static|image|mask", t, re.I)]
-    if item["seconds"] is None and mcap_layout(item["topics"]) != "generic":
+    if state is not None:
+        extra["source"]["state"] = "joint channels"
+    elif note:
+        extra["state_note"] = note
+    elif item["seconds"] is None and mcap_layout(item["topics"]) != "generic":
         extra["state_note"] = ("Labelled from the cameras, because the file ends before the index its robot state is read "
                                "from.")
     elif motion and rig == "ego_head":
@@ -1922,9 +2149,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                                "not read yet.")
     elif motion:
         shown = ", ".join(motion[:4]) + (f" and {len(motion) - 4} more" if len(motion) > 4 else "")
-        extra["state_note"] = (f"Labelled from the cameras. The checks on recorded motion read joint and gripper state from "
-                               f"LeRobot datasets and from ABC-130k and RealOmin recordings, so they did not run on this "
-                               f"file's motion channels ({shown}).")
+        extra["state_note"] = (f"Labelled from the cameras. The checks on recorded motion read six joints and a gripper per "
+                               f"arm, so they did not run on this file's motion channels ({shown}).")
     elif rig != "ego_head":
         extra["state_note"] = "Labelled from the cameras, because the file records no robot state."
     if item.get("notes"):
@@ -1932,7 +2158,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
-    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True)
+    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, state=state, action=action)
 
 
 def nal_units(b: bytes):
