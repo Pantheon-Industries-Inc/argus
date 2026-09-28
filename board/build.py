@@ -87,6 +87,15 @@ SOURCES = {k: v for k, v in json.loads((Path(__file__).resolve().parent / "datas
            if not k.startswith("_")}
 
 
+def capture_names(cq: dict) -> dict:
+    """A stored capture-check result with each check named and grouped as checks/capture_qc.py names it now, so a
+    renamed check reaches the board on the next build without rerunning the checks."""
+    from checks.capture_qc import NAMES
+    rows = [{**r, "name": NAMES[r["check"]][0], "group": NAMES[r["check"]][1]}
+            if isinstance(r, dict) and r.get("check") in NAMES else r for r in cq.get("checks") or []]
+    return {**cq, "checks": rows} if "checks" in cq else cq
+
+
 def episode_seconds(ctx: dict, ep_dir: Path | None = None) -> float | None:
     """The episode's length: the sidecar's own duration (from the video's timestamps) when it has one, then
     the span of its real per-frame capture times (ABC-130k stations record below the 30 fps their files
@@ -175,7 +184,7 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
     for key in CONTEXT_CHECKS:
         if ctx.get(key) is not None:
             d["dataset_checks"] = d.get("dataset_checks") or {}
-            d["dataset_checks"][key] = ctx[key]
+            d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
     subs = [s for s in ctx.get("annotation_subtasks") or [] if s.get("label") and s.get("t1") is not None]
     if subs:
         d["dataset_labels"] = [{"t0": float(s["t0"]), "t1": float(s["t1"]), "label": s["label"]} for s in subs]

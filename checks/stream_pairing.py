@@ -256,7 +256,7 @@ def main():
     ap.add_argument("--force", action="store_true", help="recompute episodes that already have a result")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--jumps", action="store_true", help="find recorded jumps instead of checking stream pairing")
-    mode.add_argument("--grippers", action="store_true", help="find gripper channels that never change instead")
+    mode.add_argument("--grippers", action="store_true", help="find recorded gripper openings that never change instead")
     args = ap.parse_args()
     name = "grippers" if args.grippers else "jumps" if args.jumps else "pairing"
     key, _, field = MODES[name]

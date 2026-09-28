@@ -171,18 +171,37 @@ def test_families_classify_and_the_counting_rule():
                        "m:Dropped object": ["an issue"], "m:Missed grasp": ["missed twice more"],
                        "streams-crossed": [], "undone": []}
     # gripper-flat counts only on the datasets it lists; a family counted elsewhere is not also minor
-    assert set(c["minor"]) == {"privacy-blur", "camera-fault"}
+    assert set(c["minor"]) == {"privacy-blur", "d:Camera fault"}
     assert fam.classify({**d, "dataset": "fastumi"})["counted"]["gripper-flat"] == []
     assert fam.counts("operator_mistakes", _issue("dropped_object", "medium"))
     assert not fam.counts("operator_mistakes", _issue("failed_grasp", "medium"))
     assert fam.counts("operator_mistakes", _issue("failed_grasp", "high"))
     assert fam.counts("data_issues", _issue("anything", "medium")) and not fam.counts("data_issues", _issue("x", "low"))
-    assert fam.catalog()["recorded-jump"] == {"name": "Recorded leap the camera never saw", "list": "data",
+    assert fam.catalog()["recorded-jump"] == {"name": "Recorded pose jumps, video does not", "list": "data",
                                               "check": True}
+    # one tag the model uses for several problems (camera_fault) is split by what the issue says; one that says
+    # none of them keeps the tag's own name
+    cam = lambda text: fam.family_of("data_issues", _issue("camera_fault", "medium", text), "egocentric100k")
+    assert cam("The wearer takes the camera off and sets it down facing the ceiling.") == "camera-fault"
+    assert cam("Fingers cover most of the lens for three seconds.") == "camera-fault"
+    assert cam("The left camera repeats an unchanged image for the whole episode.") == "camera-image"
+    assert cam("The right stream shows No Signal for a second.") == "camera-image"
+    assert cam("Persistent glare obscures the circuit board.") == "low-light"
+    assert cam("an issue") == "d:Camera fault"
+    assert fam.catalog()["camera-fault"]["name"] == "Camera turned away or covered"
     ego = {"_rig": "ego_head", "event_labels": [{"t_s": 0.0, "end_s": 4.0, "hands_visible": False},
                                                 {"t_s": 2.0, "end_s": 6.0, "hands_visible": False},
                                                 {"t_s": 6.0, "end_s": 9.0, "hands_visible": True}]}
     assert fam.hands_hidden_seconds(ego) == 6.0 and fam.hands_hidden_seconds({"_rig": "teleop_arms"}) is None
+
+
+def test_capture_check_names_come_from_the_code():
+    from board.build import capture_names
+    cq = {"checks": [{"check": "jump_return_event", "name": "an older name", "group": "Motion", "status": "fired"},
+                     {"check": "not_a_check", "name": "kept", "group": "Other", "status": "clear"}], "flags": []}
+    rows = capture_names(cq)["checks"]
+    assert rows[0]["name"] == "Recorded pose jumps away and back" and rows[1]["name"] == "kept"
+    assert capture_names({"source": "x"}) == {"source": "x"}
 
 
 # ---------------------------------------------------------------- a board from its manifest

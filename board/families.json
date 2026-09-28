@@ -37,7 +37,7 @@
   {
    "slug": "sped-up",
    "list": "data",
-   "name": "Plays faster than real time",
+   "name": "Recording plays faster than real time",
    "checks": [
     "timebase.sped_up_recording"
    ]
@@ -64,7 +64,7 @@
   {
    "slug": "recorded-jump",
    "list": "data",
-   "name": "Recorded leap the camera never saw",
+   "name": "Recorded pose jumps, video does not",
    "checks": [
     "recorded_jumps.flagged"
    ]
@@ -72,7 +72,7 @@
   {
    "slug": "gripper-flat",
    "list": "data",
-   "name": "Gripper channel never changes",
+   "name": "Recorded gripper opening never changes",
    "checks": [
     "gripper_channels.flagged"
    ],
@@ -85,38 +85,58 @@
   {
    "slug": "out-of-view",
    "list": "data",
-   "name": "Task leaves every camera",
+   "name": "Task object leaves every camera",
    "names": [
-    "Task leaves every camera"
-   ]
-  },
-  {
-   "slug": "camera-fault",
-   "list": "data",
-   "name": "Camera fault",
-   "names": [
-    "Camera fault",
-    "Recording fault"
+    "Task object leaves every camera"
    ]
   },
   {
    "slug": "low-light",
    "list": "data",
-   "name": "Too dark to see",
+   "name": "Too dark or too bright to see",
    "names": [
-    "Too dark to see"
+    "Too dark or too bright to see"
    ],
    "tags": [
     "exposure",
-    "underexposure"
-   ]
+    "underexposure",
+    "overexposure"
+   ],
+   "among": [
+    "Camera fault"
+   ],
+   "text": "glare|washed[- ]out|clipping|clipped|overexpos"
+  },
+  {
+   "slug": "camera-fault",
+   "list": "data",
+   "name": "Camera turned away or covered",
+   "tags": [
+    "camera_adjustment",
+    "camera_obstruction",
+    "view_obstruction"
+   ],
+   "among": [
+    "Camera fault"
+   ],
+   "text": "\\bremov|taken off|\\btakes? (it |the camera )?off|\\bsets? (it |the camera )?down|put down|\\bcarried|\\blifted|displaced|\\bturn(s|ed|ing)? (away|round|around|toward|sideways|back)|\\brotat|sideways|upside|inverted|faces? the (wearer|operator)|\\bpoint(s|ed|ing)? (back|away|up|down)|\\bcover|obscur|obstruct|occlu|finger|\\bhandl|\\badjust|ceases|\\bfills? (the |its |much of the )?(\\w+ )?(camera|view|lens|frame)",
+   "why": "the model files several problems under one tag, camera_fault; each is claimed by its words: glare (low-light, first, since glare also obscures), a camera taken off, turned away or covered (this family), and a frozen or lost image (camera-image). Anything else keeps the tag's own name"
+  },
+  {
+   "slug": "camera-image",
+   "list": "data",
+   "name": "Camera image frozen or lost",
+   "among": [
+    "Camera fault"
+   ],
+   "text": "frozen|\\bfreez|\\bstale\\b|(frames?|images?|views?) (are|is|remain|stay)s? identical|unchang(ed|ing) (image|view|frame)|repeats? (an? |the |a single )?(unchang|same|identical)|no signal|(loses|lost|drops?) (its )?(image|signal|feed|video)|corrupt|streak|black (frame|image|screen)|goes black|completely black|dropout"
   },
   {
    "slug": "truncated",
    "list": "data",
-   "name": "Starts or ends mid-task",
+   "name": "Video starts or ends mid-task",
    "names": [
-    "Starts or ends mid-task"
+    "Video starts or ends mid-task"
    ],
    "tags": [
     "incomplete_demonstration"
@@ -141,9 +161,9 @@
   {
    "slug": "readout",
    "list": "data",
-   "name": "Readout not legible",
+   "name": "Scale or display unreadable",
    "names": [
-    "Readout not legible"
+    "Scale or display unreadable"
    ]
   }
  ]

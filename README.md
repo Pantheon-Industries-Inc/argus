@@ -101,8 +101,8 @@ Every public adapter has `prepare --episodes LIST --out FOLDER [--raw RAW] [--jo
 `uv run python -m checks EPISODES` writes each check's result into the episodes' `context.json`, which `board build` copies to the board; none of it reaches the prompt.
 
 - `stream_pairing`: whether each mounted camera's image motion follows its own arm's or gripper's recorded motion, or the other one's (camera files swapped).
-- `recorded_jumps`: single-frame leaps in the recorded state that the actor's own camera does not show.
-- `gripper_channels`: a gripper channel with the same value at every frame.
+- `recorded_jumps`: single-frame jumps in the recorded pose that the actor's own camera does not show.
+- `gripper_channels`: a recorded gripper opening with the same value at every frame.
 - `capture_qc`: the 38 capture checks of public-dataset-adapter (clock gaps, exposure, frozen or duplicated frames, motion the video does not show), calibrated per rig with the measured reason beside each threshold in `checks/capture_qc.py`.
 - `label_consistency`: labels that contradict themselves (success beside a goal alignment that says another task or only part of it was done, "aligned" beside footage that does not show the goal, success then undone with nothing undone, a failure whose progress reaches 1.0, a time past the end). It reads stored labels inside `board build` and never edits one.
 

@@ -1112,18 +1112,18 @@ DISPOSITION: dict[str, dict] = {
 # ------------------------------------------------------------------------------------------ output
 
 # The plain name of each check (after the headings of public-dataset-adapter's docs/data-quality-findings-and-
-# examples.md where it names one) and the group it is shown under.
+# examples.md where it names one), which names the problem a firing finds, and the group it is shown under.
 NAMES: dict[str, tuple[str, str]] = {
     "missing_canonical_signal": ("Recorded state missing", "Structure"),
-    "invalid_state_shape": ("State layout these checks read", "Structure"),
-    "invalid_action_shape": ("Action arrays well formed", "Structure"),
-    "state_action_count_mismatch": ("State and action counts agree", "Structure"),
+    "invalid_state_shape": ("State in a layout these checks cannot read", "Structure"),
+    "invalid_action_shape": ("Malformed action arrays", "Structure"),
+    "state_action_count_mismatch": ("State and action counts differ", "Structure"),
     "nonfinite_signal": ("Missing (NaN) values in the state", "Structure"),
     "episode_too_short": ("Too-short episode", "Structure"),
     "invalid_rotation_matrix": ("Invalid rotation", "Structure"),
     "nonprincipal_rotation_state": ("Rotation outside its principal range", "Structure"),
-    "se3_translation_round_trip_failure": ("Actions replay to the recorded position", "Structure"),
-    "se3_rotation_round_trip_failure": ("Actions replay to the recorded rotation", "Structure"),
+    "se3_translation_round_trip_failure": ("Actions do not replay to the recorded position", "Structure"),
+    "se3_rotation_round_trip_failure": ("Actions do not replay to the recorded rotation", "Structure"),
     "state_time_too_short": ("Too few frame times", "Clocks"),
     "action_time_too_short": ("Too few action times", "Clocks"),
     "state_time_non_monotonic_or_duplicate": ("Clock repeats or runs backwards", "Clocks"),
@@ -1142,15 +1142,15 @@ NAMES: dict[str, tuple[str, str]] = {
     "gripper_action_integral_out_of_range": ("Replayed gripper leaves its range", "Grippers"),
     "gripper_never_acts": ("A gripper never acts", "Grippers"),
     "gripper_sensor_bug": ("Gripper sensor glitch", "Grippers"),
-    "jump_return_event": ("Jump-return in the recorded pose", "Motion"),
+    "jump_return_event": ("Recorded pose jumps away and back", "Motion"),
     "largest_action_not_in_video": ("Large action with no camera motion", "Motion"),
     "visual_change_unexplained_by_action": ("Large visual change while the arms hold", "Motion"),
     "pixel_action_corr_mismatch": ("Weak camera and motion correlation", "Motion"),
-    "action_smoothness_discontinuity": ("Interleaved action holds", "Motion"),
+    "action_smoothness_discontinuity": ("Recorded pose updates less often than the camera", "Motion"),
     "gross_umi_speed": ("Implausible gripper speed", "Motion"),
     "over_95_percent_static": ("Mostly static episode", "Motion"),
-    "native_rate_qc_unavailable": ("Native-rate row available", "Pipeline"),
-    "native_signal_checks": ("Native-rate signal checks", "Pipeline"),
+    "native_rate_qc_unavailable": ("No native-rate data", "Pipeline"),
+    "native_signal_checks": ("Native-rate signal faults", "Pipeline"),
     "processing_failure": ("Processing failure", "Pipeline"),
 }
 

@@ -8,9 +8,9 @@ None of it goes into the prompt. This runs, in order:
 
   stream_pairing     do the mounted camera streams follow their own arm's or gripper's recorded motion
                      (python -m checks.stream_pairing)
-  recorded_jumps     single-frame leaps in the recorded state that the actor's own camera does not show
+  recorded_jumps     single-frame jumps in the recorded pose that the actor's own camera does not show
                      (python -m checks.stream_pairing --jumps)
-  gripper_channels   gripper channels that never change over the episode
+  gripper_channels   recorded gripper openings that never change over the episode
                      (python -m checks.stream_pairing --grippers)
   capture_qc         the capture checks of public-dataset-adapter (clocks, exposure, frozen or duplicated
                      frames, motion the video does not show), with the per-rig calibration in capture_qc.py

@@ -4,7 +4,9 @@ families.json lists the families. Every flagged issue (a data issue or an operat
 family: the first listed family whose tags, plain names (tag_names.json) or text it matches, else a family named
 after its tag's plain name ("d:<name>" or "m:<name>"). A family can also be raised by one of the deterministic
 checks or by the episode's outcome, and then counts at any severity. A family limited to some datasets
-("datasets") is only matched on those.
+("datasets") is only matched on those. A family with "among" matches its text only on issues whose tag reads as
+one of those plain names, which is how one tag the model uses for several distinct problems (camera_fault: a
+camera turned away, a frozen image, glare) is split by what the issue says.
 
 What counts (Families.counts, the one statement of the rule):
   - a data issue at medium or high severity;
@@ -88,8 +90,10 @@ class Families:
         for f in self.defs:
             if f["list"] != lst or (f.get("datasets") and dataset not in f["datasets"]):
                 continue
-            if (cat in (f.get("tags") or []) or plain in (f.get("names") or [])
-                    or (f["slug"] in self._re and self._re[f["slug"]].search(text))):
+            if cat in (f.get("tags") or []) or plain in (f.get("names") or []):
+                return f["slug"]
+            # a text rule claims an issue by its words; with "among", only issues whose tag reads as one of those names
+            if f["slug"] in self._re and (not f.get("among") or plain in f["among"]) and self._re[f["slug"]].search(text):
                 return f["slug"]
         return ("d:" if lst == "data" else "m:") + plain
 
