@@ -3180,6 +3180,23 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   if (HP_ON) set(true, sameVideo && !!data);
 }
 
+// The rail's "Labels by" block and the episode's header sit side by side from 1230 px up: the divider under each is one
+// line across the page. Their tops are put on one line and both take the taller height, so a header that wraps (a long
+// name, the footage line) never leaves the two dividers at different heights. Stacked, below 1230 px, they are left alone.
+function alignHeads() {
+  const lb = document.querySelector('.lb'), eh = document.querySelector('.ep-head');
+  if (!lb || !eh) return;
+  for (const el of [lb, eh]) { el.style.marginTop = ''; el.style.paddingTop = ''; el.style.paddingBottom = ''; }
+  if (innerWidth < 1230 || lb.hidden || !eh.offsetParent) return;
+  // same top and same inner top padding, so "Labels by" sits on the line of the header's "Episode"
+  lb.style.paddingTop = getComputedStyle(eh).paddingTop;
+  lb.style.marginTop = (eh.getBoundingClientRect().top - lb.getBoundingClientRect().top) + 'px';
+  // the shorter of the two takes the difference at its bottom, so both keep their contents on the top line
+  const hl = lb.getBoundingClientRect().height, he = eh.getBoundingClientRect().height;
+  const short = hl < he ? lb : eh, d = Math.abs(hl - he);
+  if (d > 0.01) short.style.paddingBottom = (parseFloat(getComputedStyle(short).paddingBottom) + d) + 'px';
+}
+
 function renderEp(d, opts) {
   opts = opts || {};
   const meta = d._meta || {};
@@ -3895,9 +3912,11 @@ function renderEp(d, opts) {
   // (all closing over the detached previous video), degrading a long-open session.
   if (window._epCleanup) { for (const fn of window._epCleanup) { try { fn(); } catch (_) {} } }
   window._epCleanup = [];
-  const onResize = layoutFrame;
+  const onResize = () => { layoutFrame(); alignHeads(); };
   const onFs = () => setTimeout(layoutFrame, 60);
   window.addEventListener('resize', onResize);
+  alignHeads();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(alignHeads);
   document.addEventListener('fullscreenchange', onFs);
   document.addEventListener('webkitfullscreenchange', onFs);
   window._epCleanup.push(() => window.removeEventListener('resize', onResize));
