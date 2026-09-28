@@ -17,7 +17,7 @@ page loads is a plain file:
   <out>/<build_id>/data/keypoints/index.json  the head-camera episodes with a hand keypoints download, each with the
                                          path of its file under media/k/
   <out>/<build_id>/BUILD.json            provenance, counts, and which media files are still missing
-  <out>/media/v/<cam>/<eid>.<hash>.mp4   web copies of the clips (H.264, faststart, at most 1280 wide)
+  <out>/media/v/<cam>/<eid>.<hash>.mp4   web copies of the clips (board/clips.py's own files, stream-copied)
   <out>/media/f/<cam>/<eid>/<ms>.<hash>.jpg  goal frames, the same JPEGs the live /api/frame returns
   <out>/media/k/<eid>.<hash>.json        the hand keypoint downloads, byte for byte as board/build.py wrote them
                                          (hand_keypoints/: the dataset video's own pixels and frame times, so no
@@ -66,6 +66,7 @@ import urllib.parse
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from board import clips as bc
 from board import hands as hands_overlay
 from board import serve as sa
 
@@ -75,10 +76,8 @@ TITLE = "Data Board"
 FFMPEG = sa.FFMPEG
 FFPROBE = (str(Path(FFMPEG).with_name("ffprobe")) if FFMPEG and Path(FFMPEG).with_name("ffprobe").exists()
            else shutil.which("ffprobe"))
-MAX_W = 1280
-CRF = 23
-# bump when the encode changes: every video then gets a new name and is re-encoded
-ENC_TAG = f"h264-crf{CRF}-w{MAX_W}-kf2s-cap-copyok-v2"
+# the clips' recipe is board/clips.py's; its name is in every media file's name, so a new recipe gets new names
+ENC_TAG = bc.ENC_TAG
 FRAME_TAG = "frame-640-v1"   # serve.extract_frame at w=640
 
 
@@ -190,7 +189,7 @@ def plan(qa: Path, clips: Path, compare: Path | None = None):
             for cam in cams:
                 src = clip_path(clips, eid, cam)
                 key = media_key(cam)
-                media[key] = {"src": src, "rel": video_rel(eid, key, src_sig(src))}
+                media[key] = {"src": src, "rel": video_rel(eid, key, src_sig(src)), "main": cam == cams[0]}
                 # the camera's first frame, the video's poster: the player shows footage from the first paint
                 frames[f"{key}|0"] = {"src": src, "t": 0.0, "rel": frame_rel(eid, key, 0, src_sig(src))}
             main = cams[0]
@@ -229,37 +228,30 @@ def probe(p: Path) -> dict:
             "audio": any(s.get("codec_type") == "audio" for s in j.get("streams", []))}
 
 
-def transcode(src: Path, dst: Path, threads: int, preset: str = "medium") -> dict:
-    """Web copy of src at dst, H.264 with the index at the front (faststart), at most 1280 wide, every
-    source timestamp kept (the page syncs its cameras by time).
+def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
+    """Web copy of src at dst: H.264 with the index at the front (faststart), every source timestamp kept (the
+    page syncs its cameras by time).
 
-    A source that already meets that (H.264 4:2:0, at most 1280 wide) has its stream copied into a
-    faststart mp4 and is not re-encoded: the sample encodes (measure) showed CRF 23 made every such clip
-    larger than its source, and a second lossy pass only costs quality. Anything else is encoded at
-    CRF 23 with a keyframe every 2 s, its bitrate capped at the source's so downscaling never inflates it."""
+    The board's clips (board/clips.py) already are that, so they are stream-copied into a faststart mp4 and never
+    re-encoded: the static board plays the same pictures at the same times as the live one (-copyts keeps a clip
+    that starts after 0, a camera that started recording late, where it is), and a second lossy pass would only
+    cost quality. A clip made some other way (not H.264 4:2:0, or larger than the recipe allows) is encoded with
+    board/clips.py's recipe, as the page's main camera or a side one (main)."""
     t0 = time.time()
     sp = probe(src)
     dst.parent.mkdir(parents=True, exist_ok=True)
     part = dst.with_name("." + dst.name + ".part.mp4")
-    compliant = sp["codec"] == "h264" and sp["pix_fmt"] == "yuv420p" and sp["w"] <= MAX_W
-    if compliant:
+    if _compliant(sp):
         mode = "copy"
-        cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src),
+        cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-copyts", "-i", str(src),
                "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-movflags", "+faststart", str(part)]
     else:
         mode = "encode"
         amap = ["-map", "0:a:0"] if sp["audio"] else []
         acodec = ["-c:a", "aac", "-b:a", "96k"] if sp["audio"] else []
-        cap = []
-        if sp["v_bps"]:
-            cap = ["-maxrate", str(sp["v_bps"]), "-bufsize", str(2 * sp["v_bps"])]
         cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src),
-               "-map", "0:v:0", *amap,
-               "-c:v", "libx264", "-preset", preset, "-crf", str(CRF), *cap,
-               "-pix_fmt", "yuv420p", "-profile:v", "high",
-               "-vf", f"scale='trunc(min({MAX_W},iw)/2)*2':-2",
-               "-fps_mode", "passthrough", "-force_key_frames", "expr:gte(t,n_forced*2)",
-               *acodec, "-movflags", "+faststart", "-threads", str(threads), str(part)]
+               "-map", "0:v:0", *amap, "-fps_mode", "passthrough",
+               *bc.video_args(sp["w"], sp["h"], main, threads), *acodec, str(part)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg {mode} {src}: {r.stderr.strip()[-300:]}")
@@ -278,17 +270,19 @@ def transcode(src: Path, dst: Path, threads: int, preset: str = "medium") -> dic
 # ---------------------------------------------------------------- measure
 
 def _compliant(pr: dict) -> bool:
-    return pr["codec"] == "h264" and pr["pix_fmt"] == "yuv420p" and pr["w"] <= MAX_W
+    """H.264 4:2:0 within the recipe's largest size: what the clip builder writes, so it is copied, not re-encoded."""
+    return (pr["codec"] == "h264" and pr["pix_fmt"] == "yuv420p"
+            and pr["w"] <= bc.MAIN_BOX[0] and pr["h"] <= bc.MAIN_BOX[1])
 
 
 def cmd_measure(a):
     """Probe every clip, then sample-encode the ones transcode() would encode and sample-copy the rest,
     and project output size and wall time from what the samples measured."""
     eps = plan(a.qa, a.clips, compare_dir(a.qa, a.compare))
-    pairs = []   # (ds, key, rank, src)
+    pairs = []   # (ds, key, rank, src, main)
     for e in eps:
         for key, m in e["media"].items():
-            pairs.append((e["ds"], key, e["rank"], m["src"]))
+            pairs.append((e["ds"], key, e["rank"], m["src"], m["main"]))
     print(f"{len(eps)} episodes, {len(pairs)} clips shown by the page; probing...", flush=True)
     t0 = time.time()
     probes = {}
@@ -310,14 +304,14 @@ def cmd_measure(a):
         ok = [p for p in ps if p[3] in probes]
         n = min(a.samples, len(ok))   # the no-source group has nothing to sample
         for i in range(n):
-            samples.append((g, ok[int(i * (len(ok) - 1) / max(1, n - 1))][3]))
+            samples.append((g, ok[int(i * (len(ok) - 1) / max(1, n - 1))]))
     mdir = a.out / "_measure" / ENC_TAG
-    print(f"sampling {len(samples)} clips ({a.jobs} at a time, {a.threads} threads each, preset {a.preset})",
+    print(f"sampling {len(samples)} clips ({a.jobs} at a time, {a.threads} threads each)",
           flush=True)
     res = defaultdict(list)
     with cf.ThreadPoolExecutor(a.jobs) as ex:
-        futs = {ex.submit(transcode, src, mdir / g[0] / g[1] / src.name, a.threads, a.preset): (g, src)
-                for g, src in samples}
+        futs = {ex.submit(transcode, p[3], mdir / g[0] / g[1] / p[3].name, a.threads, p[4]): (g, p[3])
+                for g, p in samples}
         for f in cf.as_completed(futs):
             g, src = futs[f]
             try:
@@ -362,7 +356,7 @@ def cmd_measure(a):
           f"{int(tot['encode_clips'])} encoded), {tot['hours']:.1f} h of video, source {tot['src_gb']:.1f} GB, "
           f"projected output {tot['out_gb']:.1f} GB, projected wall time {wall_h:.2f} h at {a.jobs} jobs")
     print(f"first {a.first} episodes per dataset: projected {tot['first_out_gb']:.1f} GB, {f_wall_h:.2f} h")
-    report = {"measured_at": dt.datetime.now().isoformat(timespec="seconds"), "enc": ENC_TAG, "preset": a.preset,
+    report = {"measured_at": dt.datetime.now().isoformat(timespec="seconds"), "enc": ENC_TAG,
               "jobs": a.jobs, "threads": a.threads, "groups": rows,
               "total": {**{k: round(v, 3) for k, v in tot.items()}, "wall_hours": round(wall_h, 2),
                         "first_n_wall_hours": round(f_wall_h, 2), "first_n": a.first},
@@ -424,7 +418,7 @@ def cmd_media(a):
     def do_video(j):
         e, key, src, dst = j
         try:
-            r = transcode(src, dst, a.threads, a.preset)
+            r = transcode(src, dst, a.threads, e["media"][key]["main"])
         except Exception as err:   # noqa: BLE001
             with lock:
                 done["fail"] += 1
@@ -562,8 +556,9 @@ def cmd_site(a):
             (stage / "data/compare/lists" / f"{kd.name}.json").write_text(json.dumps(recs, separators=(",", ":")))
     hands_res = None
     if hands is not None:
-        # the hand pose files, each re-timed against the web copy the static page plays (ffmpeg re-bases a copied
-        # clip's timestamps to start at 0); an episode whose web copy is not made yet gets none until the next build
+        # the hand pose files, each re-timed against the web copy the static page plays (the copy keeps the clip's
+        # timestamps, and retime refuses a copy whose frames or size differ); an episode whose web copy is not made
+        # yet gets none until the next build
         (stage / "data/hands").mkdir()
         todo = [(e, a.out / "media" / e["media"]["exo"]["rel"]) for e in eps
                 if (hands / e["rec"]["file"]).exists() and "exo" in e["media"]]
@@ -663,7 +658,6 @@ def main():
     ap.add_argument("--out", type=Path, default=None, help="output root (default BOARD/static)")
     ap.add_argument("--jobs", type=int, default=4, help="parallel ffmpeg processes (default 4)")
     ap.add_argument("--threads", type=int, default=4, help="threads per ffmpeg (default 4)")
-    ap.add_argument("--preset", default="medium", help="x264 preset (default medium)")
     ap.add_argument("--limit-per-dataset", type=int, default=0, help="media: only each dataset's first N rail episodes")
     ap.add_argument("--dataset", action="append", help="media: only this dataset (repeatable)")
     ap.add_argument("--samples", type=int, default=3, help="measure: sample encodes per dataset and camera")

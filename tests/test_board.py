@@ -482,3 +482,40 @@ def test_keypoint_licence_is_the_attribution_wording():
         "2017; https://mano.is.tue.mpg.de/license.html), which is licensed for non-commercial scientific research "
         "only. Credit ACE-Ego-Hand when you use these keypoints. The video belongs to its dataset and is under that "
         "dataset's license (episode.dataset_license).")
+
+
+def test_clip_sizes_follow_where_the_page_shows_each_camera():
+    from board import clips
+    # the main camera: upscaled to 1280 wide when narrower, scaled to fit 1920x1080 when larger
+    assert clips.clip_size(456, 256, True)[:2] == (1280, 718)
+    assert clips.clip_size(640, 480, True)[:2] == (1280, 960)
+    assert clips.clip_size(1920, 1080, True)[:2] == (1920, 1080)
+    assert clips.clip_size(1920, 1200, True)[:2] == (1728, 1080)
+    assert clips.clip_size(1080, 1920, True)[:2] == (608, 1080)
+    # a side camera: never upscaled, at most 1280x1080
+    assert clips.clip_size(640, 360, False)[:2] == (640, 360)
+    assert clips.clip_size(1600, 1300, False)[:2] == (1280, 1040)
+    for w, h in ((456, 256), (1600, 1300), (1920, 1200), (637, 479)):
+        for main in (True, False):
+            cw, ch, _ = clips.clip_size(w, h, main)
+            assert cw % 2 == 0 and ch % 2 == 0
+            assert abs(cw / ch - w / h) <= 0.005 * w / h   # the hand overlay accepts 0.5%
+    assert clips.main_cam({"left": {}, "right": {}}) == "left"
+    assert clips.main_cam({"exo": {}, "left": {}}) == "exo"
+    # a seek decodes from a keyframe at most KEY_S back; every frame keeps its source time
+    args = clips.video_args(1920, 1080, True, 2)
+    assert args[args.index("-enc_time_base") + 1] == "demux"
+    assert f"expr:gte(t,n_forced*{clips.KEY_S})" in args
+
+
+def test_a_camera_that_started_late_is_shifted_onto_the_episode_clock(tmp_path):
+    from board import clips
+    np.savez(tmp_path / "times.npz", left=np.array([0.0, 0.033, 0.067]), right=np.array([2.031, 2.064]),
+             left_pts=np.array([0, 1, 2]), right_pts=np.array([0, 1]))
+    sources = {"left": {}, "right": {}}
+    assert clips.start_offsets(tmp_path, sources) == {"right": 2.031}
+    # a camera that started first is left at 0, and one camera or no real times means nothing to shift
+    np.savez(tmp_path / "times.npz", left=np.array([0.04, 0.07]), right=np.array([0.0, 0.03]))
+    assert clips.start_offsets(tmp_path, sources) == {}
+    assert clips.start_offsets(tmp_path, {"left": {}}) == {}
+    assert clips.start_offsets(tmp_path / "none", sources) == {}
