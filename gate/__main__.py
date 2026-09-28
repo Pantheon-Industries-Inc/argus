@@ -15,7 +15,6 @@ flags and cost per footage hour (gate/score.py).
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path

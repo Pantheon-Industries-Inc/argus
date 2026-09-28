@@ -66,7 +66,7 @@ Expect the MolmoAct2 episode to come out as a success then undone, with the row 
 | `checks/` | Deterministic checks, and the label consistency check | `python -m checks` |
 | `label/` | The harness, with frame selection, exact decoding, resolution routing, per-setup prompts, the model call, runs | `python -m label` |
 | `board/` | The dashboard, served live or written as static files, and the hand pose overlay | `python -m board` |
-| `compare/` | Other models on the same episodes and harness, with and without an Astra example in context | `python -m compare` |
+| `compare/` | Other models on the same episodes and harness, with and without in-context learning from an Astra trace | `python -m compare` |
 | `gate/` | The regression suite, frame-verified cases and a cost sample per setup | `python -m gate` |
 | `configs/` | Episode lists, the quickstart, model settings, example annotations | |
 

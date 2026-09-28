@@ -250,7 +250,6 @@ def open_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
     skipped, as are hidden files and __MACOSX; an upload holds at most UNPACK_MAX_FILES files and
     UNPACK_MAX_BYTES unpacked, counted from what each member really yields, so an archive whose members hold
     more than they declare stops at the limit."""
-    import shutil
     root = Path(root)
     if root.is_file():
         if not ARCHIVE_RE.search(root.name):
@@ -1395,9 +1394,7 @@ def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
 
 def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
     r, row = item["root"], item["row"]
-    rdir = Path(r["dir"])
     eidx = row["eidx"]
-    info = r["info"] or {}
     feats = r["features"]
     ep = out / episode_name(item["name"])
     notes = []
@@ -1409,7 +1406,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
                                                          "timestamp", "task_index", *need_images])
             if not len(df):
                 df = None
-        except Exception as e:
+        except Exception:
             notes.append("Labelled from the video: the episode's data file could not be opened.")
             df = None
     fps = r["fps"]
@@ -1867,7 +1864,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     d = _field(dec, "data")
                     add_text(texts, n_text, ch.topic, int(msg.log_time),
                              d if isinstance(d, str) else (dec if isinstance(dec, dict) else str(dec)))
-        except Exception as e:
+        except Exception:
             if not writers:
                 raise
             # a damaged tail (recording cut off): keep every frame read before it
