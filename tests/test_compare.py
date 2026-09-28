@@ -323,7 +323,7 @@ def test_metrics_command_line(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["python -m compare.metrics", str(tmp_path), "--json", str(tmp_path / "m.json")])
     assert metrics.main() == 0
     out = capsys.readouterr().out
-    assert "== All rigs: 3 episodes, 1 min; every model parsed 1" in out and " 33.3%" in out and "Astra" in out
+    assert "== All footage: 3 episodes, 1 min; every model parsed 1" in out and " 33.3%" in out and "Astra" in out
     assert json.loads((tmp_path / "m.json").read_text())["summary"]["all"]["common"] == 1
     (tmp_path / "manifest.json").write_text("{}")
     with pytest.raises(SystemExit, match="names no comparisons"):

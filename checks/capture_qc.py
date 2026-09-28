@@ -461,7 +461,7 @@ def assess(feats: dict) -> dict:
     states, valid = cs["states"], cs["valid"]
     has_state = kind != "none"
     has_pose = kind == "ee_pose"
-    no_pose_why = ("no end-effector pose: joint-state teleop has no forward kinematics in our pipeline"
+    no_pose_why = ("no end-effector pose. Joint-state teleop has no forward kinematics in our pipeline"
                    if kind == "joints" else "no recorded state (video-only rig)")
 
     # constant exclusions: these upstream reasons test upstream's own processing or a layer we do not build
@@ -1115,7 +1115,7 @@ DISPOSITION: dict[str, dict] = {
 # examples.md where it names one), which names the problem a firing finds, and the group it is shown under.
 NAMES: dict[str, tuple[str, str]] = {
     "missing_canonical_signal": ("Recorded state missing", "Structure"),
-    "invalid_state_shape": ("State in a layout these checks cannot read", "Structure"),
+    "invalid_state_shape": ("State in a layout these checks cannot parse", "Structure"),
     "invalid_action_shape": ("Malformed action arrays", "Structure"),
     "state_action_count_mismatch": ("State and action counts differ", "Structure"),
     "nonfinite_signal": ("Missing (NaN) values in the state", "Structure"),

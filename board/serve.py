@@ -47,7 +47,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from board.families import Families
-from compare.metrics import model_names
+from compare.metrics import model_names, reasoning_effort
 
 
 def _find_ffmpeg() -> str | None:
@@ -607,7 +607,8 @@ aside.rail {
 .if-btn .if-ico { color: var(--fg-3); flex: 0 0 auto; }
 .if-btn .if-lab { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .if-btn .if-ph { font-weight: 500; color: var(--fg-3); }
-.if-btn .if-n { font-size: 12px; color: var(--fg-3); }
+.if-btn .if-n { flex: 0 0 auto; font: 600 11.5px/1 var(--mono); color: var(--accent); padding: 4px 7px;
+  border-radius: var(--r-pill); background: rgba(69,129,142,0.14); font-variant-numeric: tabular-nums; }
 .issue-filter.filtered .if-btn { background: rgba(69,129,142,0.08); border-color: var(--accent); }
 .issue-filter.filtered .if-ico, .issue-filter.filtered .if-lab { color: var(--accent); }
 .if-clear { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
@@ -1025,7 +1026,7 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 }
 
 /* given-goal mode: the dataset's instruction is the anchor, the model's
-   independent read sits beneath it so a divergence is visible at a glance. */
+   own account (what it saw) sits beneath it so a divergence is visible at a glance. */
 .prompt-banner.has-given { border-left-color: var(--fg); }
 .prompt-banner .goal-given {
   display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 12px;
@@ -1047,7 +1048,7 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   color: var(--fg-3); padding-top: 1px;
 }
 .prompt-banner .gr-text { font-size: 14px; line-height: 1.5; color: var(--fg-2); }
-/* alignment chip: how the model's independent read relates to the given goal */
+/* alignment chip: whether what the model saw matches the given goal */
 .align-chip {
   display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin-top: 10px;
   font-size: 12px; font-weight: 600; padding: 7px 10px; border-radius: var(--r-md);
@@ -1056,11 +1057,10 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 /* a chip with only its label stays a compact pill */
 .align-chip:not(:has(.ac-note)) { display: inline-flex; border-radius: 999px; padding: 3px 9px; }
 .align-chip .ac-note { font-weight: 400; color: var(--fg-3); line-height: 1.45; }
-.align-chip.aligned { color: var(--fg-2); border-color: var(--border-strong); }
-.align-chip.minor { color: var(--fg-2); }
-.align-chip.diverged { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
-.align-chip.mislabel { color: var(--danger, #b8452f);
-  border-color: color-mix(in srgb, var(--danger, #b8452f) 45%, transparent); }
+.align-chip.match { color: var(--success); background: rgba(78,194,127,0.10);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent); }
+.align-chip.nomatch { color: var(--danger); background: rgba(184,69,47,0.07);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 
 /* ---------- timeline ---------- */
 .timeline {
@@ -1744,8 +1744,14 @@ body.view-fade #cmp-view, body.view-fade main { opacity: 0; }
 .cc .cc-def { margin: 0 0 14px; font-size: 12px; line-height: 1.45; color: var(--fg-3); }
 .cc .cc-foot { margin: 12px 0 0; font: 500 11px/1.4 var(--mono); color: var(--fg-3); }
 .cc-wide { grid-column: 1 / -1; }
+/* the main charts: each card's title, definition, key, bars and footnote are rows the cards in one grid row share, so
+   two cards side by side start their bars on one line even when one has no definition or key */
+.cmpv-main { row-gap: 0; }
+.cmpv-main > .cc { display: grid; grid-template-rows: subgrid; grid-row: span 5; row-gap: 0; align-content: start;
+  margin-bottom: 20px; }
+.cmpv-main .cc-def:empty, .cmpv-main .cc-key:empty, .cmpv-main .cc-foot:empty { margin: 0; }
 /* bar rows: one row per model, the reference model first and ruled off from the comparisons */
-.br { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) 72px; align-items: center;
+.br { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) 88px; align-items: center;
   column-gap: 12px; padding: 5px 0; }
 .br.ref { padding-bottom: 9px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .br-name { font-size: 12.5px; line-height: 1.3; color: var(--fg-2); overflow-wrap: anywhere; }
@@ -1852,7 +1858,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
 }
 @media (max-width: 599px) {
   .cmpv-grid { grid-template-columns: minmax(0, 1fr); }
-  .br { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) 64px; column-gap: 10px; }
+  .br { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) 84px; column-gap: 10px; }
   .pr { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) 84px; column-gap: 10px; }
   .sb-row { flex-wrap: wrap; gap: 8px 12px; padding: 10px 16px; }
   .sb-note { flex-basis: 100%; order: 3; }
@@ -2359,6 +2365,9 @@ let CHECKS_OPEN = false;       // the full list of capture checks, kept open or 
 // list always say the same thing
 const OUR_CHECKS = [['stream_pairing', 'crossed', 'streams-crossed'], ['recorded_jumps', 'flagged', 'recorded-jump'],
                     ['gripper_channels', 'flagged', 'gripper-flat'], ['timebase', 'sped_up_recording', 'sped-up']];
+// a check's reason as sentences: "no pose: joint-state teleop has none" reads "No pose. Joint-state teleop has none."
+const sentences = (t) => String(t).split(/:\s+/).map(x => x.charAt(0).toUpperCase() + x.slice(1)).join('. ')
+  .replace(/\.?$/, '.');
 function checksSection(d) {
   const dc = d.dataset_checks || {}, rows = [];
   for (const [k, field, fam] of OUR_CHECKS) if (dc[k] && typeof dc[k] === 'object') rows.push({name: famName(fam),
@@ -2387,18 +2396,17 @@ function checksSection(d) {
     const n = st => all.filter(c => c.st === st).length;
     const groups = [...new Set(all.map(c => c.group))];
     theirs = `<div class="ck-block ck-theirs${CHECKS_OPEN ? ' open' : ''}">
-      <div class="ck-head"><span class="ck-title">Capture checks from public-dataset-adapter</span>
+      <div class="ck-head"><span class="ck-title">Deterministic checks from public-dataset-adapter</span>
         <span class="ck-sum">${n('issue')} ${n('issue') === 1 ? 'issue'
           : 'issues'} &middot; ${n('note')} ${n('note') === 1 ? 'note' : 'notes'} &middot; ${n('clear')} clear `
           + `&middot; ${n('na')} not applicable</span></div>
-      <div class="ck-credit">The checks behind <a href="https://pantheon.inc/research/we-looked-at-the-data"
-        target="_blank" rel="noopener">We Looked at the Data</a>, run as written. A firing is an issue where every firing
-        of that check held up on the frames of our verified datasets, and a note otherwise.</div>
+      <div class="ck-credit">As per <a href="https://pantheon.inc/research/we-looked-at-the-data"
+        target="_blank" rel="noopener">We Looked at the Data</a>.</div>
       ${fired.map(row).join('')}
       <div class="ck-all"><div class="ck-all-in">${groups.map(g => `<div class="ck-group">${esc(g)}`
         + `</div>${all.filter(c => c.group === g).map(c => `<div class="ck-row ${c.st}">${dot(c.st)}<span `
         + `class="ck-name">${esc(c.name)}</span><span class="ck-st">${word[c.st]}</span>${c.st === 'na' && c.why
-        ? `<div class="ck-text">${esc(c.why.charAt(0).toUpperCase() + c.why.slice(1))}.</div>`
+        ? `<div class="ck-text">${esc(sentences(c.why))}</div>`
         : ''}</div>`).join('')}`).join('')}</div></div>
       <button class="ck-more" type="button" onclick="CHECKS_OPEN = !CHECKS_OPEN; `
         + `this.closest('.ck-theirs').classList.toggle('open', CHECKS_OPEN); this.textContent = CHECKS_OPEN ? 'Hide `
@@ -2458,7 +2466,7 @@ function buildIssueFilter(ds) {
   const rows = lst => Array.from(counts.entries()).filter(([f]) => famList(f) === lst)
     .map(([f, n]) => [famName(f), f, n]).sort((a, b) => b[2] - a[2]);
   const dataItems = rows('data'), mistakeItems = rows('mistake');
-  const sevNote = INCLUDE_MINOR ? 'every severity, low included' : 'counted at medium or high severity';
+  const sevNote = INCLUDE_MINOR ? 'every severity, low included' : 'medium or high severity';
   if (dataItems.length) groups.push({key: 'data', title: 'Data issues',
     note: `faults in the recording, the scene or the label, ${BY ? `as ${cmpWho(BY)} reported them`
       : 'from the model or our checks'}; ${sevNote}`,
@@ -2477,7 +2485,7 @@ function buildIssueFilter(ds) {
   btn.innerHTML = '<svg class="if-ico" width="16" height="16" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4V13l-2.8 '
     + '1.2V8.4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>'
     + (filtered ? `<span class="if-lab">${esc(cur[0])}</span>` : '<span class="if-lab if-ph">Filter by issue</span>')
-      + `<span class="if-n">${cur[2]}</span>`
+      + (filtered ? `<span class="if-n">${cur[2]}</span>` : '')
     + (filtered ? '<span class="if-clear" title="Clear filter">&times;</span>'
                 : '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" '
                   + 'stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');
@@ -2489,7 +2497,7 @@ function buildIssueFilter(ds) {
   const sevBar = document.createElement('div');
   sevBar.className = 'if-sev';
   sevBar.innerHTML = '<span class="if-sev-k">Severity</span><span class="if-sev-seg" role="radiogroup" '
-    + 'aria-label="Severity counted">'
+    + 'aria-label="Severity shown">'
     + `<button type="button" role="radio" aria-checked="${!INCLUDE_MINOR}" data-minor="0">Medium and high</button>`
     + `<button type="button" role="radio" aria-checked="${INCLUDE_MINOR}" data-minor="1">All, including low</button>`
       + `</span>`;
@@ -3238,30 +3246,32 @@ function renderEp(d, opts) {
   const taskGoalTimes = tasks.map(t => t.completed_at_s).filter(t => t != null);
 
   // Given or inferred. When the dataset ships an instruction, the episode was graded against it (given mode): that
-  // goal is the anchor, with the model's independent read beside it, since a divergence between the two is itself a
-  // data-quality signal. Without one, the model's read is the one line.
+  // goal is the anchor, with what the model saw beside it, since a divergence between the two is itself a
+  // data-quality signal. Without one, what the model saw is the one line.
   const givenMode = meta.prompt_mode === 'given' && !!meta.given_prompt;
   const bannerLabel = hasTasks ? 'Session summary'
-    : givenMode ? `Given goal and ${esc(who)}&rsquo;s read`
-    : `Task, as ${esc(who)} reads it`;
-  // alignment chip: how the model's independent read relates to the given goal
+    : givenMode ? `Given goal and what ${esc(who)} saw`
+    : `Task, as ${esc(who)} saw it`;
+  // alignment chip: whether what the model saw matches the given goal
   const ga = d.goal_alignment || null;
   let alignHtml = '';
   if (givenMode && ga && ga.relation) {
     const rel = String(ga.relation).toLowerCase();
-    const cls = (ga.matches_given === false || rel === 'unrelated') ? 'mislabel'
-      : rel === 'different' ? 'diverged'
-      : (rel === 'narrower' || rel === 'broader') ? 'minor'
-      : 'aligned';
-    const label = cls === 'mislabel' ? 'likely mislabelled'
-      : rel === 'aligned' ? 'matches given goal' : rel;
+    // green when the footage shows the given goal done (alone, or with more besides), red when it shows only part of
+    // it or something else
+    const matches = ga.matches_given !== false && (rel === 'aligned' || rel === 'narrower');
+    const cls = matches ? 'match' : 'nomatch';
+    const label = rel === 'narrower' && matches ? 'matches given goal and does more'
+      : matches ? 'matches given goal'
+      : rel === 'broader' && ga.matches_given !== false ? 'only part of the given goal'
+      : 'does not match given goal';
     alignHtml = `<div class="align-chip ${cls}"><span>${esc(label)}</span>`
       + `${ga.note ? `<span class="ac-note">${esc(ga.note)}</span>` : ''}</div>`;
   }
   const bannerBody = givenMode
     ? `<div class="goal-given"><span class="gg-badge">given goal</span>`
         + `<span class="gg-text">${esc(meta.given_prompt)}</span></div>`
-      + `<div class="goal-read"><span class="gr-badge">${esc(who)}&rsquo;s independent read</span>`
+      + `<div class="goal-read"><span class="gr-badge">what ${esc(who)} saw</span>`
         + `<span class="gr-text">${esc(d.episode_prompt || '(empty)')}</span></div>`
       + alignHtml
     : `<div class="text">${esc(d.episode_prompt || '(empty)')}</div>`;
@@ -3525,7 +3535,7 @@ function renderEp(d, opts) {
         <span class="di-sev">${esc((x.severity || 'flag'))}</span>
         <div class="di-body">
           <div class="di-issue">${esc(x.issue)}</div>
-          <div class="di-tags">${minor ? '<span class="di-minor" title="shown, not counted">minor</span>'
+          <div class="di-tags">${minor ? '<span class="di-minor" title="low severity, left out of the totals">minor</span>'
             : ''}${x.family || x.category ? `<span class="di-cat" title="${esc(x.category || '')}">${esc(x.family
             ? famName(x.family) : tagName(x.category, key))}</span>` : ''}${t != null
             ? `<span class="di-t">@ ${esc(fmtT(t))}</span>` : ''}${verifiedChip(x)}${x.derived_from
@@ -3608,11 +3618,11 @@ function renderEp(d, opts) {
   const nData = dataIssues.filter(countsIssue).length;
   const nOp = opMistakes.filter(countsIssue).length;
   const diHtml = dataIssues.length ? panel('data', 'Data issues', 'Faults in the recording, the scene or the label, '
-    + 'reported by the model. Low severity is shown as minor and not counted.', nData,
+    + 'reported by the model. Low severity is shown as minor and left out of the totals.', nData,
     `<div class="info-block di-block">${issueRows(dataIssues, 'data_issues')}</div>`, dataIssues.length - nData) : '';
   const opHtml = opMistakes.length ? panel('mistake', 'Operator mistakes', 'The recording is faithful; the '
     + 'demonstration went wrong in a way a model could copy. Retries and wasted effort below high severity are shown '
-    + 'as minor and not counted.', nOp, `<div class="info-block di-block op">${issueRows(opMistakes,
+    + 'as minor and left out of the totals.', nOp, `<div class="info-block di-block op">${issueRows(opMistakes,
     'operator_mistakes')}</div>`, opMistakes.length - nOp) : '';
   const problemsHtml = (checksPanel || diHtml || opHtml)
     ? `<h3 class="section">Problems in this episode</h3><div class="ip-stack">${checksPanel}${diHtml}${opHtml}</div>`
@@ -4286,7 +4296,7 @@ const cap = w => w.charAt(0).toUpperCase() + w.slice(1);
 // a run whose prompt also held one complete annotation of the reference (of another episode of the same rig): the
 // model learns in context from that trace
 const icl = () => `in-context learning with ${withAn(refName())} trace`;
-// the model's own name, for "<model>'s read": a run with in-context learning is still that model
+// the model's own name, for "what <model> saw": a run with in-context learning is still that model
 function cmpWho(k) {
   const m = cmpModel(k);
   if (!m) return 'The model';
@@ -4571,62 +4581,47 @@ function cmpNameText(m) {
 }
 const MAIN_CHARTS = [
   {id: 'parse', title: 'Responses that parse', fmt: fPct, max: () => 1,
-   def: 'The share of responses that are valid JSON. A response that does not parse is a result: it is never retried, '
-     + 'repaired or asked again.',
+   def: 'The share of responses that are valid JSON.',
    val: (s, k) => { const p = s.responses[k]; const n = p ? p.parsed + p.unparsed + p.cut_off : 0;
      return p && p.parse_share != null ? {v: p.parse_share, sub: `${p.parsed} of ${n}`,
        tip: `${p.parsed} parsed, ${p.unparsed} did not parse, ${p.cut_off} cut off at the output limit${p.no_response
          ? `; ${p.no_response} calls returned nothing` : ''}${p.pending ? `; ${p.pending} still to run` : ''}`} : null;
          },
-   foot: s => 'Every episode each model was asked to label. A call that returned nothing is not a response and is left '
-     + `out. ${refName()} is the board’s own label of each episode, which is always a response that parsed.`},
-  {id: 'viol', title: 'Schema violations per response', fmt: fNum,
-   def: 'Fields that break the schema every model was given: a missing field, an outcome or severity outside its '
-     + 'allowed values, a segment that ends before it starts.',
-   val: (s, k) => { const p = s.responses[k]; return p && p.violations != null ? {v: p.violations,
-     sub: `${Math.round((p.violations_any || 0) * p.violations_n)} of ${p.violations_n}`,
-       tip: `${Math.round((p.violations_any || 0) * p.violations_n)} of ${p.violations_n} parsed responses break the `
-       + `schema somewhere`} : null; },
-   foot: s => 'Every parsed response of each model; the second figure counts the responses with any violation.'},
-  {id: 'events_per_min', title: 'Labelled events per minute', fmt: fNum, common: true,
-   def: 'Timeline segments per minute of footage: how finely each model divides what happens.'},
+   foot: s => ''},
+  {id: 'events_per_min', title: 'Labelled events per minute', fmt: fNum, common: true},
   {id: 'key_events', title: 'Key events per episode', fmt: fNum, common: true,
    def: 'The milestones a person would mark to judge progress on the task.'},
   {id: 'subgoals', title: 'Subgoals per episode', fmt: fNum, common: true, colors: ['c-grn'],
    def: 'Key events the model marked as a completed subgoal.'},
   {id: 'data_issues', title: 'Data issues per episode', fmt: fNum, common: true, minor: 'data_issues_minor',
     colors: ['c-red', 'c-red-l'],
-   def: 'Faults in the recording, the scene or the label. The solid part is what the board would count (medium or high '
-     + 'severity); the light part is low severity.'},
+   keys: ['medium or high severity', 'low severity'], short: 'low',
+   def: 'Faults in the recording, the scene or the label.'},
   {id: 'operator_mistakes', title: 'Operator mistakes per episode', fmt: fNum, common: true,
     minor: 'operator_mistakes_minor', colors: ['c-amb', 'c-amb-l'],
-   def: 'The recording is faithful but the demonstration went wrong. Solid is what the board would count (a changed '
-     + 'outcome at medium or high severity, anything at high); light is the rest.'},
+   keys: ['changed the outcome or high severity', 'minor'], short: 'minor'},
   {id: 'cost', title: 'Cost per episode', fmt: fUsd,
-   def: 'The billed cost of each call, the calls that did not parse included.',
    val: (s, k) => { const p = s.responses[k]; return p && p.cost != null ? {v: p.cost, sub: `${p.cost_n} calls`} : null;
      },
-   foot: s => 'Every response each model returned.'},
-  {id: 'latency', title: 'Time per episode', fmt: fSec,
-   def: 'Wall-clock time from sending the episode to receiving the whole response.',
+   foot: s => ''},
+  {id: 'latency', title: 'Time to annotate each episode', fmt: fSec,
    val: (s, k) => { const p = s.responses[k]; return p && p.latency != null ? {v: p.latency,
      sub: `${p.latency_n} calls`} : null; },
-   foot: s => 'Every response each model returned with its time recorded.'},
+   foot: s => ''},
 ];
 const ptsDelta = (a, b) => { const d = 100 * (b - a); return Math.abs(d) < 0.05 ? 'no change' : `${d > 0 ? '+'
   : '-'}${Math.abs(d).toFixed(1)} points`; };
 const PAIR_CHARTS = [
   {id: 'parse_share', title: 'Responses that parse', fmt: fPct, max: 1, delta: (a, b) => ptsDelta(a, b)},
-  {id: 'violations', title: 'Schema violations per response', fmt: fNum},
   {id: 'events_per_min', title: 'Labelled events per minute', fmt: fNum, ref: true},
   {id: 'key_events', title: 'Key events per episode', fmt: fNum, ref: true},
   {id: 'subgoals', title: 'Subgoals per episode', fmt: fNum, ref: true},
-  {id: 'data_issues', title: 'Data issues per episode (counted)', fmt: fNum, ref: true},
-  {id: 'operator_mistakes', title: 'Operator mistakes per episode (counted)', fmt: fNum, ref: true},
+  {id: 'data_issues', title: 'Data issues per episode, medium or high severity', fmt: fNum, ref: true},
+  {id: 'operator_mistakes', title: 'Operator mistakes per episode, minor ones left out', fmt: fNum, ref: true},
   {id: 'agree_outcome', title: 'Outcome agreement with {ref}', fmt: fPct, max: 1, delta: (a, b) => ptsDelta(a, b)},
   {id: 'agree_issues', title: 'Issue-type agreement with {ref}', fmt: fPct, max: 1, delta: (a, b) => ptsDelta(a, b)},
   {id: 'cost', title: 'Cost per episode', fmt: fUsd},
-  {id: 'latency', title: 'Time per episode', fmt: fSec},
+  {id: 'latency', title: 'Time to annotate each episode', fmt: fSec},
 ];
 function buildCompare() {
   _cmpBuilt = true;
@@ -4641,18 +4636,19 @@ function buildCompare() {
     || {}).example)).map(e => e.file)).size;
   const rigs = Object.keys(M.summary);
   const ref = refName(), refH = esc(ref);
-  const nRigs = rigs.filter(r => r !== 'all').length;
-  const rigWords = nRigs === 1 ? 'one rig'
-    : `the ${['', '', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][nRigs] || nRigs} rigs`;
+  const andJoin = xs => xs.length > 1 ? xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1] : xs.join('');
+  // the footage the comparison covers, as its groups are named (teleoperated arms, UMI, human ego)
+  const rigList = andJoin(rigs.filter(r => r !== 'all').map(r => (M.rig_names[r] || r).toLowerCase()
+    .replace(/^teleop$/, 'teleoperated arms').replace(/^umi$/, 'UMI')));
+  // each model with the reasoning effort it ran at, where the board knows it
+  const modelList = andJoin(others.map(n => esc(n) + (BOARD.reasoning ? ` (${esc(BOARD.reasoning)} reasoning)` : '')));
   const rigBtns = rigs.map(r => `<button type="button" role="radio" aria-checked="${r === CMP_RIG}" `
-    + `data-rig="${r}">${esc(M.rig_names[r] || r)}</button>`).join('');
-  const nameList = others.length > 1 ? others.slice(0, -1).join(', ') + ' and ' + others[others.length - 1]
-    : others.join('');
+    + `data-rig="${r}">${esc(r === 'all' ? 'All footage' : M.rig_names[r] || r)}</button>`).join('');
   const card = (c, rowsHtml, wide) => `<div class="cc${wide ? ' cc-wide' : ''}" data-chart="${c.id}">`
     + `<h4>${esc(c.title)}</h4><p class="cc-def">${esc(c.def || '')}</p>`
-    + (c.minor ? `<div class="cc-key"><span><i class="${c.colors[0]}"></i>counted</span><span><i `
-      + `class="${c.colors[1]}"></i>low severity</span></div>` : '')
-    + `${rowsHtml}<p class="cc-foot"></p></div>`;
+    + `<div class="cc-key">${c.minor ? `<span><i class="${c.colors[0]}"></i>${esc(c.keys[0])}</span><span><i `
+      + `class="${c.colors[1]}"></i>${esc(c.keys[1])}</span>` : ''}</div>`
+    + `<div class="cc-rows">${rowsHtml}</div><p class="cc-foot"></p></div>`;
   const barRows = (c) => main.map(m => `<div class="br${m.reference ? ' ref' : ''}" data-k="${esc(m.key)}" `
     + `tabindex="0"><span class="br-name">${cmpNameHtml(m)}</span>`
     + `<span class="br-track"><span class="br-bar" style="width:0%">${(c.colors || ['c-ink']).map((col,
@@ -4678,20 +4674,15 @@ function buildCompare() {
     <button type="button" class="cmpv-back" id="cmpv-back"><span aria-hidden="true">&larr;</span> Back to the
       episodes</button>
     <div class="cmpv-head"><h2>How the models compare</h2>
-      <p>${refH}&rsquo;s labels are this board&rsquo;s. On ${(all.episodes || 0).toLocaleString()} of its episodes,
-        about ${fMin(all.minutes || 0)} of footage across ${rigWords}, ${esc(nameList)} labelled the same episodes
-        with the same prompt, frames and output budget.${exN ? ` On ${exN.toLocaleString()} of those episodes each of
-        them labelled the episode a second time with in-context learning: its prompt also held one complete ${refH}
-        trace, the annotation of a different episode of the same rig, to show the density and reasoning expected.`
-        : ''}</p>
-      <p>${refH}&rsquo;s numbers here are the board&rsquo;s own labels of the same episodes. Everything else on this
-        page is a comparison: none of these labels enters the board&rsquo;s counts, filters, downloads or exports.
-        There is no ground truth: agreement says how alike two models are, not which one is right. To read one
-        model&rsquo;s labels episode by episode, choose it under Labels by, beside the episode list.</p></div>
-    <div class="cmpv-bar"><span class="if-sev-seg" role="radiogroup" aria-label="Rig">${rigBtns}</span><span `
+      <p>The comparison uses a ${(all.episodes || 0).toLocaleString()}-episode subset of the board, ${fMin(all.minutes
+        || 0)} of footage spread across ${esc(rigList)}. ${modelList} each labelled these episodes and reported their
+        data issues with the same harness as ${refH}.${exN ? ` On ${exN.toLocaleString()} of them, each labelled the
+        episode a second time with in-context learning, its prompt also holding one complete ${refH} trace to show the
+        density and reasoning expected.` : ''}</p></div>
+    <div class="cmpv-bar"><span class="if-sev-seg" role="radiogroup" aria-label="Footage">${rigBtns}</span><span `
       + `class="cmpv-scope" id="cmpv-scope"></span></div>
     <h3 class="section">Each model on the same episodes</h3>
-    <div class="cmpv-grid">${MAIN_CHARTS.map(c => card(c, barRows(c))).join('')}</div>
+    <div class="cmpv-grid cmpv-main">${MAIN_CHARTS.map(c => card(c, barRows(c))).join('')}</div>
     <h3 class="section">Agreement between models</h3>
     <p class="cmpv-sub">Every pair of models, on the episodes both of them parsed. Darker is closer agreement; each cell `
       + `gives its number of episodes.</p>
@@ -4707,8 +4698,6 @@ function buildCompare() {
       + `trace</span><span><i class="k-ref"></i>${refH} on the same episodes</span></div>
     <div class="cmpv-grid">${PAIR_CHARTS.map(pairCard).join('')}</div>` : ''}
     <h3 class="section">Episodes</h3>
-    <p class="cmpv-sub">Each model&rsquo;s outcome for every episode of the comparison. Choose one to open the `
-      + `episode with that model&rsquo;s labels; the episode name opens ${refH}&rsquo;s.</p>
     <div class="et-wrap" id="et-wrap"></div>
   </div>`;
   cmpView.querySelector('.cmpv-bar').addEventListener('click', (e) => {
@@ -4742,8 +4731,8 @@ function updateCompare(first) {
       const mv = (s.metrics || {})[k];
       if (!mv || mv[c.id] == null) { vals[k] = null; continue; }
       const minor = c.minor ? mv[c.minor] || 0 : 0;
-      vals[k] = {v: mv[c.id], minor, sub: c.minor ? `+ ${fNum(minor)} low` : '',
-        tip: c.minor ? `${fNum(mv[c.id])} counted and ${fNum(minor)} low severity per episode` : ''};
+      vals[k] = {v: mv[c.id], minor, sub: c.minor ? `+ ${fNum(minor)} ${c.short}` : '',
+        tip: c.minor ? `${fNum(mv[c.id])} ${c.keys[0]} and ${fNum(minor)} ${c.keys[1]} per episode` : ''};
     }
     const max = c.max ? c.max() : Math.max(1e-9, ...Object.values(vals).filter(Boolean).map(x => x.v + (x.minor || 0)));
     el.querySelectorAll('.br').forEach(row => {
@@ -4759,9 +4748,7 @@ function updateCompare(first) {
         : `<b>no data</b>${esc(nm(row.dataset.k))}`;
     });
     el.querySelector('.cc-foot').textContent = c.common
-      ? (s.common ? `On the ${s.common} episodes every model's response parsed, ${fMin(s.common_minutes
-        || 0)} of footage.` : 'No episode here was parsed by every model yet.')
-      : c.foot(s);
+      ? (s.common ? '' : 'No episode here was parsed by every model yet.') : c.foot(s);
   }
   for (const id of ['outcome', 'issues']) {
     const card = cmpView.querySelector(`[data-mx="${id}"]`);
@@ -4792,10 +4779,8 @@ function updateCompare(first) {
   const pairs = (M.paired || {})[CMP_RIG] || [];
   const sub = document.getElementById('pr-sub');
   if (sub) sub.textContent = pairs.length
-    ? `Each model with and without one complete ${refName()} trace (the annotation of another episode of the same rig) `
-      + `in its prompt, on the episodes both of its runs parsed: ${pairs.map(p => `${nm(p.base)} ${p.n}`).join(', ')}. `
-      + `Parse share, cost and time use every episode both runs were asked (${pairs.map(p => p.asked).join(', ')}).`
-    : 'No in-context run has episodes on this rig yet.';
+    ? `Each model with and without one complete ${refName()} trace in its prompt.`
+    : 'No in-context run has episodes here yet.';
   for (const c of PAIR_CHARTS) {
     const el = cmpView.querySelector(`[data-pair="${c.id}"]`);
     if (!el) continue;
@@ -4904,7 +4889,7 @@ def render_index(title: str, board: dict, name: str = "", header: str | None = N
     or hand keypoint downloads to ask for. `header` is a site's own header, for a board served as part of a site: its
     markup takes the place of the page's title bar and its <style> blocks go into the page's head (a header of another
     height sets --header-h, which the page's sticky offsets read)."""
-    cfg = {**board, "models": model_names()}
+    cfg = {**board, "models": model_names(), "reasoning": reasoning_effort()}
     page = INDEX_HTML
     if header is not None:
         styles = "".join(re.findall(r"<style>.*?</style>", header, re.S))

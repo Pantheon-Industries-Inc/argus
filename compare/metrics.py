@@ -57,7 +57,7 @@ from label.harness import episode_cost
 FAMILIES = Families()
 MODELS_PATH = Path(__file__).resolve().parent.parent / "configs" / "models.json"
 RIGS ={"teleop_arms": "teleop", "handheld_gripper": "handheld", "ego_head": "head_camera"}
-RIG_NAMES = {"all": "All rigs", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
+RIG_NAMES = {"all": "All footage", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
 RESPONDED = ("parsed", "unparsed", "cut_off")
 OUTCOMES = ("success", "success_then_undone", "failure", "partial", "unclear")
 TASK_OUTCOMES = ("success", "partial", "failure")
@@ -87,6 +87,14 @@ def model_names() -> dict:
     except (OSError, ValueError):
         return {}
     return {m["model"]: m.get("name") or m["model"] for m in (d.get("models") or {}).values() if m.get("model")}
+
+
+def reasoning_effort() -> str | None:
+    """The reasoning effort every model is run with, from configs/models.json (None when it is not there)."""
+    try:
+        return json.loads(MODELS_PATH.read_text()).get("reasoning")
+    except (OSError, ValueError):
+        return None
 
 
 REFERENCE_KEY = "board"
