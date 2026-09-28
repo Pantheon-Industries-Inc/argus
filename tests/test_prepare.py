@@ -257,6 +257,19 @@ def test_lerobot_adapter_prepares_an_episode_the_harness_can_label(tmp_path):
     assert rc != 0
 
 
+def test_a_lerobot_camera_without_its_video_is_listed_as_unused(tmp_path):
+    root = tmp_path / "my_dataset"
+    _lerobot_v21(root)
+    info = json.loads((root / "meta" / "info.json").read_text())
+    info["features"]["observation.images.cam_low"] = dict(info["features"]["observation.images.cam_high"])
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    out = tmp_path / "episodes"
+    rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
+    ctx = json.loads((out / "episode_000000" / "context.json").read_text())
+    assert rc == 0 and set(ctx["cameras"]) == {"exo", "left"}
+    assert ctx["source"]["unused_cameras"] == ["observation.images.cam_low"]
+
+
 # ---- your own data: a folder of videos ----
 
 def test_videos_adapter_prepares_each_file_with_its_instruction(tmp_path):

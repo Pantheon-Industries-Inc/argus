@@ -1441,6 +1441,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if not video_cams and r["image_cams"] and df is not None:
         return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes)
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
+    # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused too
+    unused = unused + [k for k in r["cams"] if k not in video_cams]
     if r["image_cams"]:
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
