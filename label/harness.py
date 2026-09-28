@@ -6,8 +6,10 @@
 Runs normally start through `python -m label` (label/run.py), which gives each run its own folder, records the
 code commit and settings, and enforces a spend cap. This module is what it calls.
 
-Each episode is a sidecar folder (label/episode.py builds the request from it). The request goes to OpenRouter
-and carries the model id, the reasoning effort (medium by default), max_completion_tokens,
+Each episode is a sidecar folder (label/episode.py builds the request from it). The request goes to OpenRouter,
+or straight to OpenAI with an OpenAI key (the same request in OpenAI's fields, with no cache breakpoint, since
+OpenAI caches a repeated prefix itself, and the cost priced from OpenAI's list prices, since OpenAI reports tokens
+but no cost). It carries the model id, the reasoning effort (medium by default), max_completion_tokens,
 response_format json_object, a cache_control breakpoint at the end of the shared instructions, and usage
 include (so the billed cost comes back). No temperature, top_p or seed is sent and no provider is pinned: each
 model runs with its provider's own sampling defaults. Each output records what served the request:
@@ -21,7 +23,8 @@ exact instants), the deterministic checks that ran on the episode (`dataset_chec
 was told about, the instruction it was graded against, and the billed usage and cost. A reply cut off at the
 output limit is kept as failed_<episode>.json for diagnosis and counts as a failure.
 
-Keys: OPENROUTER_API_KEYS, a comma-separated list; keys are used round robin, and a key that runs out of
+Keys: OPENROUTER_API_KEYS, a comma-separated list, or when it holds none OPENAI_API_KEY, which sends every call
+straight to OpenAI and so only runs OpenAI models; keys are used round robin, and a key that runs out of
 credit is retired for the rest of the batch. RDA_DECODE_CONCURRENCY (default 12) bounds the frame decodes
 running at once across the batch. A dry run builds every request exactly as it would be sent (frames decoded,
 grids composed, prompt assembled, caps checked) and writes it with a token estimate, without calling the model.
@@ -45,6 +48,7 @@ from label import episode as me
 from label.route import route_width
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_MODEL = "openai/gpt-6-astra"
 DEFAULT_REASONING = "medium"
 DETAIL = "high"
@@ -53,6 +57,11 @@ GRID_COLS = 4
 # gpt-6-astra list prices (USD per token), used only when a response carries no billed cost.
 PRICE_IN = 1.0e-5
 PRICE_OUT = 5.0e-5
+# OpenAI list prices (USD per token: input, cached input, output), and from LONG_PROMPT_TOKENS prompt tokens the
+# long-context ones, for a call sent straight to OpenAI, whose response carries tokens but no cost
+OPENAI_PRICES = {"gpt-6-astra": ((1.0e-5, 1.0e-6, 5.0e-5), (2.0e-5, 2.0e-6, 7.5e-5)),
+                 "gpt-6-sol": ((2.0e-6, 2.0e-7, 1.0e-5), (4.0e-6, 4.0e-7, 1.5e-5))}
+LONG_PROMPT_TOKENS = 272000
 
 # Requests carry at most 500 images, and at most IMAGE_LIMIT_BYTES of images as the provider counts them
 # (label/episode.py steps the cell width down to fit).
@@ -85,7 +94,25 @@ def is_key_exhausted(code: int, body: str) -> bool:
             or ("credit" in b and code in (402, 403)) or code == 401)
 
 
+def is_openrouter_key(key: str) -> bool:
+    return key.startswith("sk-or-")
+
+
+def openai_list_cost(model: str, usage: dict) -> float | None:
+    """What a call straight to OpenAI costs at list price, cached input at its own price (None for a model not in
+    OPENAI_PRICES)."""
+    tiers = OPENAI_PRICES.get(model.split("/", 1)[-1])
+    if tiers is None:
+        return None
+    n_in = usage.get("prompt_tokens", 0)
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+    p_in, p_cached, p_out = tiers[n_in >= LONG_PROMPT_TOKENS]
+    return (n_in - cached) * p_in + cached * p_cached + usage.get("completion_tokens", 0) * p_out
+
+
 def call_model(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int) -> dict:
+    if not is_openrouter_key(api_key):
+        return _call_openai(content, model, reasoning, api_key, max_tokens, timeout)
     if content and content[0].get("type") == "text" and len(content[0].get("text", "")) > 4000:
         # mark the end of the shared instructions as a cache breakpoint: the provider caches whole prompts up to
         # a breakpoint, so without one, episodes that share only the instructions never hit the cache (measured:
@@ -101,7 +128,26 @@ def call_model(content: list, model: str, reasoning: str, api_key: str, max_toke
         # recorded cost and spend cap uses what was actually charged
         "usage": {"include": True},
     }
-    req = urllib.request.Request(OPENROUTER_URL, data=json.dumps(body).encode(),
+    return _post(OPENROUTER_URL, body, api_key, timeout)
+
+
+def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int) -> dict:
+    """The same request straight to OpenAI. The response is recorded as OpenRouter's is: its provider is OpenAI
+    and its usage carries list_cost, the list-price cost, where OpenRouter's carries the billed cost."""
+    if not model.startswith("openai/"):
+        raise RuntimeError(f"{model} is not an OpenAI model, so it needs an OpenRouter key")
+    body = {"model": model.split("/", 1)[1], "messages": [{"role": "user", "content": content}],
+            "max_completion_tokens": max_tokens, "reasoning_effort": reasoning,
+            "response_format": {"type": "json_object"}}
+    resp = _post(OPENAI_URL, body, api_key, timeout)
+    resp.setdefault("provider", "OpenAI")
+    if isinstance(resp.get("usage"), dict):
+        resp["usage"]["list_cost"] = openai_list_cost(model, resp["usage"])
+    return resp
+
+
+def _post(url: str, body: dict, api_key: str, timeout: int) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
     last = None
     for attempt in range(6):
@@ -281,7 +327,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         "model": model,
         "reasoning_effort": reasoning,
         **fields,
-        "provider": "openrouter",
+        "provider": "openrouter" if is_openrouter_key(api_key) else "openai",
         **_served(resp),
         "finish_reason": finish,
         "parse_ok": parse_ok,
@@ -303,9 +349,12 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
 
 
 def _cost(usage: dict) -> float:
-    """The billed cost of a call, or the list-price estimate when the response carries none."""
+    """The billed cost of a call, or the list-price estimate when the response carries none (list_cost on a call
+    straight to OpenAI)."""
     if usage.get("cost") is not None:
         return float(usage["cost"])
+    if usage.get("list_cost") is not None:
+        return float(usage["list_cost"])
     return usage.get("prompt_tokens", 0) * PRICE_IN + usage.get("completion_tokens", 0) * PRICE_OUT
 
 
@@ -327,9 +376,14 @@ def write_atomic(out_path: Path, result: dict) -> None:
 
 
 def get_keys() -> list[str]:
-    """OpenRouter keys from OPENROUTER_API_KEYS (comma-separated). Anything that is not an OpenRouter key is
-    ignored, so no other provider's key is ever sent to OpenRouter."""
-    return [k.strip() for k in os.environ.get("OPENROUTER_API_KEYS", "").split(",") if k.strip().startswith("sk-or-")]
+    """OpenRouter keys from OPENROUTER_API_KEYS (comma-separated), or when it holds none OpenAI keys from
+    OPENAI_API_KEY (comma-separated). The key decides where a call goes: anything in OPENROUTER_API_KEYS that is
+    not an OpenRouter key is ignored, so no other provider's key is ever sent to OpenRouter, and an OpenRouter key
+    in OPENAI_API_KEY is ignored too."""
+    def split(var):
+        return [k.strip() for k in os.environ.get(var, "").split(",") if k.strip()]
+    return ([k for k in split("OPENROUTER_API_KEYS") if is_openrouter_key(k)]
+            or [k for k in split("OPENAI_API_KEY") if not is_openrouter_key(k)])
 
 
 def discover_episodes(root: Path) -> list[Path]:
@@ -461,7 +515,8 @@ def main() -> int:
     g.add_argument("--episodes-root", type=Path, help="label every episode_* folder under here")
     ap.add_argument("--out", type=Path, help="output JSON with --episode-dir (default EPISODE/labels.json)")
     ap.add_argument("--out-dir", type=Path, help="output folder with --episodes-root, one <episode>.json each")
-    ap.add_argument("--model", default=DEFAULT_MODEL, help=f"OpenRouter model id (default {DEFAULT_MODEL})")
+    ap.add_argument("--model", default=DEFAULT_MODEL, help=f"OpenRouter model id (default {DEFAULT_MODEL}); an "
+                                                          "OpenAI key runs only openai/ models")
     ap.add_argument("--reasoning", default=DEFAULT_REASONING, help="reasoning effort (default medium)")
     ap.add_argument("--max-tokens", type=int, default=64000, help="output tokens per episode (default 64000)")
     ap.add_argument("--timeout", type=int, default=600, help="seconds per request (default 600)")
@@ -482,7 +537,10 @@ def main() -> int:
 
     keys = get_keys() or (["dry-run"] if args.dry_run else [])
     if not keys:
-        print("set OPENROUTER_API_KEYS (comma-separated OpenRouter keys)", file=sys.stderr)
+        print("set OPENROUTER_API_KEYS (comma-separated OpenRouter keys) or OPENAI_API_KEY", file=sys.stderr)
+        return 2
+    if not args.dry_run and not is_openrouter_key(keys[0]) and not args.model.startswith("openai/"):
+        print(f"{args.model} is not an OpenAI model, so it needs OPENROUTER_API_KEYS", file=sys.stderr)
         return 2
     label_kw = dict(model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
                     cell_w=args.cell_w, example_dir=args.example_dir, dry_run=args.dry_run)

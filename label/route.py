@@ -55,6 +55,11 @@ def request(ep: dict) -> list:
     return [{"type": "text", "text": ROUTE_PROMPT + route_text(ep)}]
 
 
+def _call_cost(usage: dict) -> float:
+    """The billed cost, or on a call straight to OpenAI its list-price cost."""
+    return usage.get("cost") or usage.get("list_cost") or 0.0
+
+
 def route_width(ep_dir: Path, api_key: str | None, call_model, timeout: int = 120) -> tuple[int | None, dict]:
     """(widest cell width, record) for an episode of a routed rig; (None, {"routed": False}) for the others.
     call_model is label.harness.call_model; api_key None means a dry run."""
@@ -86,7 +91,7 @@ def route_width(ep_dir: Path, api_key: str | None, call_model, timeout: int = 12
             ans = json.loads(msg[msg.find("{"):msg.rfind("}") + 1])
             fine = ans.get("fine_detail")
             hit = {"fine_detail": fine if isinstance(fine, bool) else None, "why": str(ans.get("why") or "")[:200],
-                   "cost_usd": float(((resp.get("usage") or {}).get("cost")) or 0.0)}
+                   "cost_usd": float(_call_cost(resp.get("usage") or {}))}
         except Exception as e:   # the wide cells are always safe; a failure is not cached, so the next episode retries
             hit = {"fine_detail": None, "why": f"routing failed: {str(e)[:120]}", "cost_usd": 0.0}
         else:

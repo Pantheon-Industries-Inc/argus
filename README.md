@@ -2,11 +2,19 @@
 
 Dense annotations and data-quality checks for robot-learning episodes, from Pantheon.
 
-Read the [blog post](https://pantheon.inc/research/we-looked-at-everything), browse every label on the [data dashboard](https://pantheon.inc/data-board), or [label your own data](https://pantheon.inc/data-review).
+This is the pipeline behind [*We Looked at Everything*](https://pantheon.inc/research/we-looked-at-everything), where it labelled 3,546 episodes (66.5 hours) from nine public datasets. Every label is on the [data dashboard](https://pantheon.inc/data-board), and [Data Review](https://pantheon.inc/data-review) runs the same pipeline on your uploads.
 
-This is the pipeline behind *We Looked at Everything*, where it labelled 3,546 episodes (66.5 hours) from nine public datasets of teleoperated arms, UMI grippers and human ego video. It takes an episode as it was recorded, from a single video with no instruction to a full dataset with instructions and recorded state, and returns a dense timeline with each action judged advancing, wasteful or idle, progress toward the goal, key events and subgoals, operator mistakes, changes a person made to the scene, and the instruction checked against the footage. Deterministic checks run beside the model for what it should not be trusted with, such as recordings that play faster than real time, camera files swapped between arms, a recorded gripper opening that never changes and poor capture.
+It takes episodes from teleoperated arms, UMI grippers and head-worn cameras, recorded as LeRobot, MCAP, plain video or archives of them. Instructions and robot state are used when present and are not required. Each episode is labelled with
 
-The labels come from Astra (`openai/gpt-6-astra`) through a harness that tells it what each kind of setup is, what counts as a mistake on it, and how to check the recording against the pixels. Every prompt is in `label/`. The repository also holds the dashboard that plays each episode with its labels, a comparison of four models on the same harness, and the gate, the regression suite the harness is held to.
+- a timeline of actions, each marked advancing, wasteful or idle
+- progress toward the goal, key events and subgoals
+- the outcome, and whether the instruction matches the footage
+- operator mistakes, and whether and how the operator recovered
+- changes a person made to the scene
+
+Deterministic checks cover what the model should not judge, such as playback faster than real time, camera files swapped between arms, a gripper signal that never changes, and poor capture.
+
+The model is Astra (`openai/gpt-6-astra`). The harness chooses which frames to send and at what resolution, decodes them by exact timestamp, and prompts per setup with what the setup is, what counts as a mistake on it, and how to check the recording against the pixels. Every prompt is in `label/`. The repository also holds the dashboard, a comparison of four models on the same harness, and `gate/`, the regression suite the harness must pass.
 
 ![The dashboard, showing a MolmoAct2 episode with its three cameras, the dense timeline and the outcome against the given goal](media/board.jpg)
 
@@ -16,10 +24,11 @@ The labels come from Astra (`openai/gpt-6-astra`) through a harness that tells i
 git clone git@github.com:Pantheon-Industries-Inc/robot-data-audit.git && cd robot-data-audit
 uv sync --frozen                        # Python 3.11.15 and the exact package versions in uv.lock
 export OPENROUTER_API_KEYS=sk-or-...    # one or more OpenRouter keys, comma-separated
+# export OPENAI_API_KEY=sk-...          # or instead an OpenAI key, which calls OpenAI directly
 uv run pytest                           # no network, no model call
 ```
 
-You also need `ffmpeg` 5.1 or newer. Anything in `OPENROUTER_API_KEYS` that is not an OpenRouter key is ignored. ABC-130k, 10Kh-RealOmin, Egocentric-100K and Gen-HumanEgo ask you to accept their terms on Hugging Face; for those, also `export HF_TOKEN=hf_...`. Everything the pipeline writes goes under `data/`, which git ignores.
+You also need `ffmpeg` 5.1 or newer. OpenRouter keys are used when any are set. An OpenAI key runs the whole pipeline, since Astra and the routing model are both OpenAI models, but not the comparison's other models, and its costs are priced from OpenAI's list prices because OpenAI does not report a billed cost. ABC-130k, 10Kh-RealOmin, Egocentric-100K and Gen-HumanEgo ask you to accept their terms on Hugging Face; for those, also `export HF_TOKEN=hf_...`. Everything the pipeline writes goes under `data/`, which git ignores.
 
 ## Quickstart
 
@@ -162,7 +171,7 @@ The gate holds 126 episodes (`gate/selection.json`) and what each case's label m
 
 ## Determinism
 
-Everything before the model calls is deterministic and the same on any machine: the episode lists are fixed files with their seeds, the adapters write the same sidecars from the same files, and the harness builds byte-identical requests (packages pinned in `uv.lock`, frames decoded by exact timestamp, the grid font shipped in `label/fonts/`). A dry run shows what a paid run sends, with teleop at the wide cells, since it makes no routing call. An episode makes at most two calls, both to OpenRouter with `response_format: {"type": "json_object"}` and the billed usage requested:
+Everything before the model calls is deterministic and the same on any machine: the episode lists are fixed files with their seeds, the adapters write the same sidecars from the same files, and the harness builds byte-identical requests (packages pinned in `uv.lock`, frames decoded by exact timestamp, the grid font shipped in `label/fonts/`). A dry run shows what a paid run sends, with teleop at the wide cells, since it makes no routing call. An episode makes at most two calls, both to OpenRouter (or to OpenAI, with an OpenAI key) with `response_format: {"type": "json_object"}` and the billed usage requested:
 
 - the routing call, teleop only: `openai/gpt-6-sol`, `reasoning: {"effort": "low"}`, `max_completion_tokens: 2000`, one text part with the routing question and the episode's task text (dataset, robot, instruction, task label, timed sub-steps), never a frame. Episodes with the same text share one answer within a run; no task text, a failed call or `--cell-w` means the wide cells.
 - the labelling call: the model id (`openai/gpt-6-astra`, or the comparison's), `reasoning: {"effort": "medium"}`, `max_completion_tokens: 64000`, and a prompt-cache breakpoint closing the shared instructions.

@@ -14,7 +14,7 @@
 - --resume RUN_DIR --why TEXT finishes a run that was killed from outside: same folder, commit, slice and kind,
   and what is left of its cap; episodes already labelled are skipped, the log is appended to, and run.json
   records each resume and why. --dataset, --episodes and --kind must be given again and match run.json.
-- Keys come from OPENROUTER_API_KEYS only.
+- Keys come from OPENROUTER_API_KEYS, or when it holds none from OPENAI_API_KEY (label.harness.get_keys).
 
 Anything after -- goes to the harness (label/harness.py), e.g. -- --model anthropic/claude-opus-5.5.
 """
@@ -29,7 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from label.harness import episode_cost, get_keys
+from label.harness import episode_cost, get_keys, is_openrouter_key
 
 REPO = Path(__file__).resolve().parent.parent
 PY = Path(sys.executable)
@@ -38,7 +38,7 @@ PY = Path(sys.executable)
 def _keys() -> str:
     keys = get_keys()
     if not keys:
-        raise SystemExit("set OPENROUTER_API_KEYS (comma-separated OpenRouter keys)")
+        raise SystemExit("set OPENROUTER_API_KEYS (comma-separated OpenRouter keys) or OPENAI_API_KEY")
     return ",".join(keys)
 
 
@@ -81,7 +81,9 @@ def harness_cmd(slice_dir: Path, run: Path, kind: str, cap: float, concurrency: 
 
 def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> None:
     env = dict(os.environ)
-    env["OPENROUTER_API_KEYS"] = _keys() if info["kind"] != "dry" else ""
+    keys = _keys().split(",") if info["kind"] != "dry" else []
+    env["OPENROUTER_API_KEYS"] = ",".join(k for k in keys if is_openrouter_key(k))
+    env["OPENAI_API_KEY"] = ",".join(k for k in keys if not is_openrouter_key(k))
     env["PYTHONPATH"] = str(REPO) + os.pathsep + env.get("PYTHONPATH", "")
     # few malloc arenas, so a long multithreaded run does not keep freed frame buffers in per-thread heaps
     env.setdefault("MALLOC_ARENA_MAX", "2")

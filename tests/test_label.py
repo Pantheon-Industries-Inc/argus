@@ -349,6 +349,14 @@ def test_only_openrouter_keys_are_used(monkeypatch):
     assert harness.get_keys() == ["sk-or-a", "sk-or-c"]
 
 
+def test_openai_keys_are_used_only_without_openrouter_keys(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-a, sk-or-b")
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "sk-or-c")
+    assert harness.get_keys() == ["sk-or-c"]
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "")
+    assert harness.get_keys() == ["sk-proj-a"]                         # an OpenRouter key never goes to OpenAI
+
+
 def test_key_exhaustion_classification():
     assert harness.is_key_exhausted(402, '{"error":{"message":"Insufficient credits"}}')
     assert harness.is_key_exhausted(429, '{"error":{"code":"insufficient_quota"}}')
@@ -485,6 +493,42 @@ def test_request_body_is_what_the_harness_docstring_says(monkeypatch):
     assert sent[0]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in sent[1]
     assert "cache_control" not in content[0]                                 # the caller's parts are not changed
     assert seen["headers"]["Authorization"] == "Bearer sk-or-x"
+
+
+def test_an_openai_key_sends_the_request_straight_to_openai(monkeypatch):
+    """The same request in OpenAI's fields, no cache breakpoint and no usage field, and the list-price cost
+    recorded with cached input at its own price. A model OpenAI does not serve is refused before any call."""
+    seen = {}
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    usage = {"prompt_tokens": 100000, "completion_tokens": 2000, "prompt_tokens_details": {"cached_tokens": 40000}}
+
+    def fake_urlopen(req, timeout):
+        seen["url"], seen["body"], seen["headers"] = req.full_url, json.loads(req.data), dict(req.header_items())
+        return Resp(json.dumps({"choices": [{"message": {"content": "{}"}}], "usage": dict(usage)}).encode())
+
+    monkeypatch.setattr(harness.urllib.request, "urlopen", fake_urlopen)
+    content = [{"type": "text", "text": "x" * 5000}, {"type": "text", "text": "episode"}]
+    resp = harness.call_model(content, "openai/gpt-6-astra", "medium", "sk-proj-x", 64000, 60)
+    b = seen["body"]
+    assert seen["url"] == harness.OPENAI_URL and seen["headers"]["Authorization"] == "Bearer sk-proj-x"
+    assert set(b) == {"model", "messages", "max_completion_tokens", "reasoning_effort", "response_format"}
+    assert (b["model"], b["reasoning_effort"], b["max_completion_tokens"]) == ("gpt-6-astra", "medium", 64000)
+    assert all("cache_control" not in c for c in b["messages"][0]["content"])
+    assert resp["provider"] == "OpenAI"
+    assert resp["usage"]["list_cost"] == pytest.approx(60000 * 1e-5 + 40000 * 1e-6 + 2000 * 5e-5)
+    assert harness._cost(resp["usage"]) == resp["usage"]["list_cost"]
+    long = dict(usage, prompt_tokens=300000)                            # the long-context prices from 272,000
+    assert harness.openai_list_cost("openai/gpt-6-sol", long) == pytest.approx(260000 * 4e-6 + 40000 * 4e-7
+                                                                                + 2000 * 1.5e-5)
+    with pytest.raises(RuntimeError, match="needs an OpenRouter key"):
+        harness.call_model(content, "anthropic/claude-opus-5.5", "medium", "sk-proj-x", 64000, 60)
 
 
 def test_cut_off_reply_is_kept_beside_the_outputs_and_fails(tmp_path, monkeypatch):
