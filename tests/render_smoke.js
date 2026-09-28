@@ -72,7 +72,7 @@ function makeEl(id) {
 const byId = new Map();
 const doc = {
   getElementById: (id) => { if (!byId.has(id)) byId.set(id, makeEl(id)); return byId.get(id); },
-  createElement: () => makeEl(), querySelector: () => makeEl(), querySelectorAll: () => [],
+  createElement: () => makeEl(), createDocumentFragment: () => makeEl(), querySelector: () => makeEl(), querySelectorAll: () => [],
   addEventListener: noop, removeEventListener: noop, body: makeEl('body'), documentElement: makeEl(),
   exitFullscreen: noop, fullscreenElement: null, activeElement: null,
 };

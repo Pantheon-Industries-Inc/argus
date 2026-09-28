@@ -718,6 +718,8 @@ aside.rail {
   display: block; padding: 10px 12px; margin-bottom: 4px;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r-md); cursor: pointer; transition: all 100ms;
+  /* a card off screen is not laid out or painted; its last size holds its place in the scroll */
+  content-visibility: auto; contain-intrinsic-size: auto 118px;
 }
 .ep-card:hover {
   background: var(--raised); border-color: var(--border-strong);
@@ -2025,6 +2027,11 @@ function fmtT(t) { return (t == null) ? '-' : t.toFixed(1) + 's'; }
 function kindName(k) { return String(k || '').replace(/_/g, ' ').trim(); }
 
 let _activeFile = null;
+// the files the rail lists, in order; the cards themselves are built in batches (renderRail), so anything that needs
+// the whole list (the exports) reads this
+let _railFiles = [];
+let _railJob = 0;
+const RAIL_FIRST = 40, RAIL_BATCH = 120;   // cards built at once, then per idle slice
 let ALL_EPS = [];
 
 // ---- data source ----
@@ -2276,7 +2283,7 @@ async function setDataset(ds, keepFile) {
 
 // ---- export: the episodes currently listed in the rail, as JSON Lines ----
 document.getElementById('export-jsonl').addEventListener('click', async () => {
-  const files = Array.from(epListEl.querySelectorAll('.ep-card')).map(c => c.dataset.file);
+  const files = _railFiles.slice();
   if (!files.length) return;
   const btn = document.getElementById('export-jsonl');
   const label = btn.textContent;
@@ -2291,7 +2298,7 @@ document.getElementById('export-jsonl').addEventListener('click', async () => {
 
 // ---- export: the listed episodes' hand keypoints, as JSON Lines in a file of their own (never in the labels') ----
 function kpListed() {
-  return Array.from(epListEl.querySelectorAll('.ep-card')).map(c => c.dataset.file).filter(f => KP_INDEX && KP_INDEX[f]);
+  return _railFiles.filter(f => KP_INDEX && KP_INDEX[f]);
 }
 const kpBtn = document.getElementById('export-kp');
 let _kpBusy = false;
@@ -2765,6 +2772,7 @@ function renderRail(ds, keepFile, fromSearch) {
   renderCoverage(ds, eps);
   renderRailHead(ds, eps);
   epListEl.innerHTML = '';
+  if (!eps.length) { _railFiles = []; _railJob++; }
   if (!eps.length && terms.length) {
     // the search looks in the dataset shown; nothing here matches, so say so and name the dataset, keep the open
     // episode on screen, and name any other dataset that holds a match rather than leaving a dead end
@@ -2792,7 +2800,11 @@ function renderRail(ds, keepFile, fromSearch) {
     updateKpExport();
     return;
   }
-  for (const ep of eps) {
+  // the first screenful of cards (and the open or asked-for episode's) is built now; the rest follow in idle
+  // batches, so switching dataset or typing a search never stops the page for a thousand cards at once
+  _railFiles = eps.map(e => e.file);
+  const job = ++_railJob;
+  const makeCard = ep => {
     const card = document.createElement('div');
     card.className = 'ep-card';
     card.dataset.file = ep.file;
@@ -2840,8 +2852,24 @@ function renderRail(ds, keepFile, fromSearch) {
       </div>
       ${noteHtml}`;
     card.addEventListener('click', () => selectEp(ep.file));
-    epListEl.appendChild(card);
-  }
+    if (ep.file === _activeFile) card.classList.add('active');
+    return card;
+  };
+  const upTo = f => (f ? _railFiles.indexOf(f) : -1) + 1;
+  let built = Math.min(eps.length, Math.max(RAIL_FIRST, upTo(keepFile) + 8, fromSearch ? upTo(_activeFile) + 8 : 0));
+  const first = document.createDocumentFragment();
+  for (let i = 0; i < built; i++) first.appendChild(makeCard(eps[i]));
+  epListEl.appendChild(first);
+  const later = window.requestIdleCallback ? (fn => requestIdleCallback(fn, {timeout: 120})) : (fn => setTimeout(fn, 16));
+  const more = () => {
+    if (job !== _railJob) return;
+    const frag = document.createDocumentFragment();
+    const end = Math.min(eps.length, built + RAIL_BATCH);
+    for (; built < end; built++) frag.appendChild(makeCard(eps[built]));
+    epListEl.appendChild(frag);
+    if (built < eps.length) later(more);
+  };
+  if (built < eps.length) later(more);
   updateKpExport();
   if (fromSearch && eps.some(e => e.file === _activeFile)) {
     // the open episode is still in the results: keep it, no refetch while typing

@@ -614,8 +614,13 @@ def cmd_site(a):
         a.title, {"mode": "static", "data": "data/", "media": "../media/", **has}, name, header))
     if a.public_base:
         base = a.public_base.rstrip("/") + "/"
-        (stage / "index.public.html").write_text(sa.render_index(
-            a.title, {"mode": "static", "data": f"{base}{bid}/data/", "media": f"{base}media/", **has}, name, header))
+        page = sa.render_index(
+            a.title, {"mode": "static", "data": f"{base}{bid}/data/", "media": f"{base}media/", **has}, name, header)
+        # the data and media come from the public base's own host: open both of its connections while the page
+        # parses (the lists and labels are fetched with CORS, the videos and frames without, and each has its own)
+        origin = "/".join(base.split("/")[:3])
+        hint = f'<link rel="preconnect" href="{origin}" crossorigin>\n<link rel="preconnect" href="{origin}">\n'
+        (stage / "index.public.html").write_text(page.replace("<head>", "<head>\n" + hint, 1))
     st, missing = media_status(eps, a.out / "media")
     build = {"build_id": bid, "built_at": dt.datetime.now().isoformat(timespec="seconds"), "code": _git_commit(),
              "qa": str(a.qa), "clips": str(a.clips), "enc": ENC_TAG, "public_base": a.public_base,
