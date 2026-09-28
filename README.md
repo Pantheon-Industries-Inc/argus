@@ -2,19 +2,19 @@
 
 Dense annotations and data-quality checks for robot-learning episodes, from Pantheon.
 
-This is the pipeline behind [*We Looked at Everything*](https://pantheon.inc/research/we-looked-at-everything), where it labelled 3,546 episodes (66.5 hours) from nine public datasets. Every label is on the [data dashboard](https://pantheon.inc/data-board), and [Data Review](https://pantheon.inc/data-review) runs the same pipeline on your uploads.
+This is the pipeline behind [*We Looked at Everything*](https://pantheon.inc/research/we-looked-at-everything), in which we audited 3,546 episodes (66.5 hours) across nine public datasets. Every annotation can be browsed on the [data dashboard](https://pantheon.inc/data-board), and [Data Review](https://pantheon.inc/data-review) runs the same pipeline on data you upload.
 
-It takes episodes from teleoperated arms, UMI grippers and head-worn cameras, recorded as LeRobot, MCAP, plain video or archives of them. Instructions and robot state are used when present and are not required. Each episode is labelled with
+The pipeline handles teleoperated arms, UMI grippers and head-mounted cameras, and reads LeRobot datasets, MCAP files, plain video and archives of any of these. It draws on instructions and recorded robot state when a dataset provides them, and works from the footage alone when it does not. For each episode it produces a dense timeline with
 
-- a timeline of actions, each marked advancing, wasteful or idle
+- every action marked as advancing the task, wasteful or idle
 - progress toward the goal, key events and subgoals
-- the outcome, and whether the instruction matches the footage
+- the outcome, and whether the instruction matches what was actually done
 - operator mistakes, and whether and how the operator recovered
 - changes a person made to the scene
 
-Deterministic checks cover what the model should not judge, such as playback faster than real time, camera files swapped between arms, a gripper signal that never changes, and poor capture.
+Deterministic checks run alongside the model to catch what a model should not be trusted to judge, such as recordings that play faster than real time, camera streams swapped between arms, gripper signals that never change, and poor capture.
 
-The model is Astra (`openai/gpt-6-astra`). The harness chooses which frames to send and at what resolution, decodes them by exact timestamp, and prompts per setup with what the setup is, what counts as a mistake on it, and how to check the recording against the pixels. Every prompt is in `label/`. The repository also holds the dashboard, a comparison of four models on the same harness, and `gate/`, the regression suite the harness must pass.
+The harness primarily uses Astra (`openai/gpt-6-astra`). For each setup it chooses which frames to send and at what resolution, decodes them at exact timestamps, and prompts the model with what the setup is, what counts as a mistake on it, and how to verify what the recording claims against the pixels. All prompts live in `label/`. The repository also includes the dashboard, a comparison of four models on the same harness, and `gate/`, the regression suite the harness is held to.
 
 ![The dashboard, showing a MolmoAct2 episode with its three cameras, the dense timeline and the outcome against the given goal](media/board.jpg)
 
