@@ -1753,9 +1753,9 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | No
     (/task, /instruction) before any sub-topic (/task/subtask, /task/health); MicroAGI's /task titles the fragment
     and its /task/subtask names each step, so the first step is never the task. A task topic whose text changes is
     the instruction whole, as a timeline, with none of its texts chosen over the others. Any other topic with several
-    messages goes
-    to the notes as a timeline on the episode's clock (the vendor's steps, claims to check). A topic other than a
-    step topic with more than TEXT_MSGS_MAX distinct messages (a heartbeat) keeps only its first, with the count."""
+    messages goes to the notes as a timeline on the episode's clock (the vendor's steps, claims to check). A topic
+    other than a step topic with more than TEXT_MSGS_MAX distinct messages (a heartbeat) keeps only its first, with
+    the count."""
     def named(t):
         return bool(TASK_TOPIC_NAME.fullmatch(t.rstrip("/").rsplit("/", 1)[-1]))
     # a timeline of steps (several messages on a sub-topic) is never read as the task: with no task topic the
