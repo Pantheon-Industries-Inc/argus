@@ -2707,14 +2707,14 @@ function renderCoverage(ds, shown) {
     const num = on && narrowed
       ? `<em>${shown.length.toLocaleString()}</em> of ${p.n.toLocaleString()} &middot; <em>${fmtSpan(shownSec)[0]}`
         + `</em> ${fmtSpan(shownSec)[1]}`
-      : `${p.n.toLocaleString()}<span class="u"> eps</span> &middot; ${fmtSpan(p.sec)[0]} ${fmtSpan(p.sec)[1]}`;
+      : `${p.n.toLocaleString()}<span class="u"> ${p.n === 1 ? 'ep' : 'eps'}</span> &middot; ${fmtSpan(p.sec)[0]} ${fmtSpan(p.sec)[1]}`;
     return `<div class="cv-cell${on ? ' on' : ''}${p.n ? '' : ' none'}" role="tab" aria-selected="${on}" `
       + `aria-disabled="${!p.n}" aria-label="${esc(dsLabel(p.d))}" data-ds="${esc(p.d)}">`
       + `<span class="cv-name">${esc(DS_SHORT[p.d] || dsLabel(p.d))}</span><span class="cv-num">${num}</span>`
       + '</div>';
   }).join('');
   coverageEl.innerHTML = `<div class="cv-all"><span class="cv-k">All datasets</span>`
-    + `<span class="cv-fig"><span><b>${src.length.toLocaleString()}</b><small>episodes</small></span>`
+    + `<span class="cv-fig"><span><b>${src.length.toLocaleString()}</b><small>${src.length === 1 ? 'episode' : 'episodes'}</small></span>`
     + `<span><b>${fmtSpan(sumDur(src), true)[0]}</b><small>${fmtSpan(sumDur(src), true)[1]}</small></span></span>`
     + `</div><div class="cv-cells" role="tablist">${tabs}</div>`;
   coverageEl.querySelectorAll('.cv-cell').forEach(el => {
@@ -2742,7 +2742,7 @@ function renderRailHead(ds, eps) {
   document.getElementById('rd-sub').innerHTML = !ds ? ''
     : eps.length !== all.length ? `<em>${eps.length.toLocaleString()}</em> of ${all.length.toLocaleString()} episodes`
     : `${all.length.toLocaleString()} ${all.length === 1 ? 'episode' : 'episodes'} &middot; ${h} ${u}`;
-  document.getElementById('dl-k').textContent = eps.length === 1 ? 'Download the 1 episode shown'
+  document.getElementById('dl-k').textContent = eps.length === 1 ? 'Download the episode shown'
     : `Download the ${eps.length.toLocaleString()} episodes shown`;
 }
 
