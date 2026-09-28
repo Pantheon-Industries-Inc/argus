@@ -211,6 +211,10 @@ def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict
     models = [m for m in mc.load_models(manifest, board) if not m["reference"]]
     metrics = mc.compute(manifest, board, board_src)
     rows = metrics.pop("_rows")
+    # published with the board: each model by its name and settings, never the run, slice or code it came from
+    for m in metrics["models"]:
+        for k in ("run_id", "code", "slice"):
+            m.pop(k, None)
     index = {"reference": next(m for m in metrics["models"] if m["reference"]),
              "models": [m for m in metrics["models"] if not m["reference"]], "episodes": {}}
     written = {m["key"]: 0 for m in models}
@@ -238,7 +242,7 @@ def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict
                     d["_usage"] = {"est_cost_usd": r.get("cost"), "latency_s": r.get("latency"),
                                    "completion_tokens": r.get("out_tokens")}
             info = {"key": m["key"], "name": m["episode_name"], "status": r["status"], "model": m["model"],
-                    "run_id": m["run_id"], "code": m["code"], "example": m["example"]}
+                    "example": m["example"]}
             if r["status"] == "unparsed":
                 info.update({"parse_error": r.get("error"), "raw_head": (r.get("raw") or "")[:3000],
                              "raw_chars": len(r.get("raw") or "")})

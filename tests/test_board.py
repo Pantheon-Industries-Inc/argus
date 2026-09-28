@@ -401,7 +401,7 @@ def test_hand_pose_files_round_trip(tmp_path):
     assert res["written"] == 1 and not res["skipped"]
     doc = json.loads((out / "episode_x.json").read_text())
     assert doc["left"]["spans"] == [[0, 8], [13, n]] and doc["right"]["spans"] == []
-    assert doc["source"]["run"] == "run"                     # the run's folder name, never a local path
+    assert "run" not in doc["source"]                        # published with the board: no run, no local path
     assert hands.verify(src, qa, out)["max_error_px"] <= doc["tol"]
 
 
@@ -444,7 +444,7 @@ def test_board_build_writes_hand_pose_for_prefixed_head_camera_episodes(tmp_path
         "url": "https://huggingface.co/datasets/inclusionAI/OpenAoE-2000h/blob/main/LICENSE"}
     assert doc["episode"]["board_file"] == "episode_ego_000000.json" and doc["video"]["source"] == {"clip": "raw_0001"}
     assert (doc["video"]["width"], doc["video"]["height"], doc["video"]["frames"]) == (128, 72, n)
-    assert doc["frames"]["t"][:2] == [0.0, pytest.approx(1 / 30, abs=1e-6)] and doc["model"]["run"] == "keypoints"
+    assert doc["frames"]["t"][:2] == [0.0, pytest.approx(1 / 30, abs=1e-6)] and "run" not in doc["model"]
     assert hands.verify_keypoints(tmp_path / "keypoints", board / "qa", {"episode_ego_000000.json": ep},
                                   board / "hand_keypoints") == {"files": 1, "exact": True}
 

@@ -73,6 +73,22 @@ def test_rail_records_and_episode_view(tmp_path):
     assert all(i["family"] for i in view["data_issues"] + view["operator_mistakes"])
 
 
+def test_public_label_leaves_out_how_the_label_was_made():
+    """What the page, the downloads and the exports serve never names a run, a commit, a replaced label or frame
+    verdicts; everything else in the label is kept as it is, and the label file itself is not changed."""
+    d = {"dataset": "molmo", "completion": {"task_completed": "failure"}, "_meta": {"model": "m"}, "_rig": "teleop_arms",
+         "_run": {"run_id": "r", "code": "abc1234"}, "_replaced_label": {"completion": {}}, "_supplements": [1],
+         "_verification": [2], "_withheld_checks": [3], "_carried_verdicts": [4],
+         "_compare": {"key": "k", "name": "N", "run_id": "r2", "code": "def5678", "status": "parsed"}}
+    before = json.dumps(d, sort_keys=True)
+    p = serve.public_label(d)
+    assert not set(serve.PRIVATE_KEYS) & set(p)
+    assert p["_compare"] == {"key": "k", "name": "N", "status": "parsed"}
+    assert p["completion"] == d["completion"] and p["_meta"] == d["_meta"] and p["_rig"] == "teleop_arms"
+    assert json.dumps(d, sort_keys=True) == before
+    assert not set(serve.PRIVATE_KEYS) & set(serve.episode_view(dict(d)))
+
+
 def test_render_index_fills_every_placeholder():
     page = serve.render_index("Data <Board>", {"mode": "api", "compare": False}, "trial <one>")
     assert "<title>Data &lt;Board&gt;</title>" in page and '<span class="ph-board">trial &lt;one&gt;</span>' in page

@@ -176,6 +176,21 @@ def test_collection_note_reaches_the_episode_block_only():
     assert "How the dataset cuts its recordings into episodes: consecutive 3-minute clips" in episode2
 
 
+@pytest.mark.parametrize("rig", ["teleop_arms", "ego_head"])
+def test_uploader_notes_reach_the_episode_block_as_claims(rig):
+    pl = {"n": 900, "spans": [], "ks": ms.sample_frames(900, [])}
+    ep = _ep()
+    ep["context"]["profile"] = rig
+    fixed, episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert "UPLOADER'S OWN NOTES" not in fixed + episode
+    ep["context"]["uploader_annotation"] = '{"operator": "A", "note": "the second block slipped"}\n'
+    fixed2, episode2 = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert fixed2 == fixed                              # the cached instructions stay byte-identical
+    assert episode2.endswith("THE UPLOADER'S OWN NOTES FOR THIS EPISODE, as sent. They are claims to check against "
+                             "the video, not ground truth; where the video contradicts them, record it as a data "
+                             'issue:\n{"operator": "A", "note": "the second block slipped"}\n')
+
+
 def test_no_rig_borrows_another_rigs_hardware():
     ego = prompts.fixed_instructions("ego_head")
     assert "gripper" not in ego.lower() and "teleoperat" not in ego.lower() and "robot arm" not in ego.lower()

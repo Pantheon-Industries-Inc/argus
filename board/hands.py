@@ -336,8 +336,8 @@ def source_video(episode: Path) -> Path | None:
         return None
 
 
-def keypoints_doc(key: str, d: dict, video: Path, label_file: str, eid: str, ctx: dict, dataset_source: dict | None,
-                  run_name: str) -> dict:
+def keypoints_doc(key: str, d: dict, video: Path, label_file: str, eid: str, ctx: dict,
+                  dataset_source: dict | None) -> dict:
     """The download for one episode: the run's keypoints of every frame of the dataset's video, in its own pixels,
     with each frame's timestamp probed from that video. Refused (ValueError) unless the video has exactly the
     keypoints' frames at the keypoints' size. dataset_source is the label file's (board/dataset_sources.json)."""
@@ -388,21 +388,21 @@ def keypoints_doc(key: str, d: dict, video: Path, label_file: str, eid: str, ctx
         },
         "joints": joints, "edges": d["edges"],
         "model": {**{k: v for k, v in (d.get("model") or {}).items() if k != "code_commit"},
-                  "temporal_smoothing": (d.get("temporal") or {}).get("smoothing"), "run": run_name},
+                  "temporal_smoothing": (d.get("temporal") or {}).get("smoothing")},
         "frames": {"pts": pts, "t": [round(float((p - pts[0]) * tb), 6) for p in pts]},
         "hands": {"left": hand(d["hands"]["left"]), "right": hand(d["hands"]["right"])},
     }
 
 
 def keypoints_one(job: tuple) -> dict:
-    key, src_file, label_path, eid, episode, out_dir, run_name = job
+    key, src_file, label_path, eid, episode, out_dir = job
     try:
         video = source_video(episode)
         if video is None or not video.exists():
             return {"key": key, "skip": f"no head-camera video in {episode.name}/sources.json"}
         ctx = json.loads((episode / "context.json").read_text())
         doc = keypoints_doc(key, json.loads(Path(src_file).read_text()), video, label_path.name, eid, ctx,
-                            json.loads(label_path.read_text()).get("dataset_source"), run_name)
+                            json.loads(label_path.read_text()).get("dataset_source"))
         body = json.dumps(doc, separators=(",", ":"))
         tmp = out_dir / f".{label_path.name}.part"
         tmp.write_text(body)
@@ -418,8 +418,8 @@ def build_keypoints(src: Path, qa: Path, episodes: dict, out_dir: Path, jobs: in
     prepared episode folder, whose video the run computed the keypoints on."""
     index = json.loads((src / "index.json").read_text())
     board = head_camera_files(qa)
-    jobs_ = [(key, src / e["hands2d"], qa / board[key][0], board[key][1], Path(episodes[board[key][0]]), out_dir,
-              src.name) for key, e in index.items() if key in board and board[key][0] in episodes]
+    jobs_ = [(key, src / e["hands2d"], qa / board[key][0], board[key][1], Path(episodes[board[key][0]]), out_dir)
+             for key, e in index.items() if key in board and board[key][0] in episodes]
     with cf.ProcessPoolExecutor(max(1, jobs)) as ex:
         res = list(ex.map(keypoints_one, jobs_))
     written = sorted((r for r in res if "file" in r), key=lambda r: r["file"])
@@ -451,8 +451,8 @@ def build(src: Path, qa: Path, clips: Path, out_dir: Path, jobs: int = 8) -> dic
     with its board clip (frame count or scale) is skipped with the reason, never written."""
     index = json.loads((src / "index.json").read_text())
     board = head_camera_files(qa)
-    # the run by its folder name only: these files go wherever the board is served, and a local path means nothing there
-    source = {"model": "ACE-Ego-Hand", "paper": "arXiv:2608.20308", "run": src.name, "licence": LICENCE}
+    # these files are published with the board, so they name the model and its licence, and no run or storage path
+    source = {"model": "ACE-Ego-Hand", "paper": "arXiv:2608.20308", "licence": LICENCE}
     jobs_ = []
     for key, e in index.items():
         if key not in board:

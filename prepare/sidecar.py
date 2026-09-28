@@ -12,7 +12,8 @@ An episode sidecar is one folder per episode holding
 context.json's fields: dataset, profile (the rig: teleop_arms, handheld_gripper or ego_head), state_kind (joints,
 ee_pose or none), fps, n_state_frames, cameras (per view exo, left, right: its name, width, height and desc, what
 the camera is), task_label, and the task text when there is one, instruction or annotation_subtasks (a list of
-{"t0", "t1", "label"}); real_times names times.npz when frames carry real capture times. sources.json gives per
+{"t0", "t1", "label"}); uploader_annotation, notes sent with the episode in whatever form they came (the model is
+shown them as claims to check); real_times names times.npz when frames carry real capture times. sources.json gives per
 view the video file (packed), the episode's offset in it in seconds (base_s), its exact frame count (n_frames) and,
 for a camera paired to the anchor camera by time, its kmap file.
 

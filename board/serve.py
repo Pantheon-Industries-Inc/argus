@@ -47,6 +47,10 @@ from compare.metrics import model_names
 
 
 def _find_ffmpeg() -> str | None:
+    """$FFMPEG (as board/clips.py reads it, so the frames come from the same binary as the clips), else the ffmpeg on
+    PATH, else the usual install places."""
+    if os.environ.get("FFMPEG") and os.access(os.environ["FFMPEG"], os.X_OK):
+        return os.environ["FFMPEG"]
     found = shutil.which("ffmpeg")
     if found:
         return found
@@ -195,10 +199,27 @@ def _families(d: dict) -> dict:
     return {"families": sorted(fams), "minor_families": sorted(minor - fams)}
 
 
+# What a public copy of a label leaves out: how the label was made, rechecked or replaced (the run id and code
+# commit, a replaced earlier label, frame verdicts, supplements, withheld checks). The label file keeps them, since
+# board/build.py reads them; the page, the downloads and the exports never show them.
+PRIVATE_KEYS = ("_run", "_replaced_label", "_supplements", "_verification", "_withheld_checks", "_carried_verdicts")
+PRIVATE_RUN_KEYS = ("run_id", "code")
+
+
+def public_label(d: dict) -> dict:
+    """A label as anyone may see it: every field but PRIVATE_KEYS, and another model's label (_compare) without the
+    run and code it came from."""
+    d = {k: v for k, v in d.items() if k not in PRIVATE_KEYS}
+    if isinstance(d.get("_compare"), dict):
+        d["_compare"] = {k: v for k, v in d["_compare"].items() if k not in PRIVATE_RUN_KEYS}
+    return d
+
+
 def episode_view(d: dict) -> dict:
-    """The episode as the page shows it: each flagged issue carries the family it is counted under and whether it
-    counts (Families.counts), so the episode's own list names and counts a problem exactly as the filter does. The
-    label file itself is not changed."""
+    """The episode as the page shows it: its public fields (public_label), each flagged issue carrying the family it
+    is counted under and whether it counts (Families.counts), so the episode's own list names and counts a problem
+    exactly as the filter does. The label file itself is not changed."""
+    d = public_label(d)
     ds = d.get("dataset")
     for key in ("data_issues", "operator_mistakes"):
         for i in d.get(key) or []:
@@ -4816,7 +4837,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not _under(HERE, p) or not p.is_file() or p.suffix != ".json":
                 self._send(404, {"error": f"no such file: {fname}"})
                 return
-            lines.append(json.dumps(json.loads(p.read_text()), separators=(",", ":")))
+            lines.append(json.dumps(public_label(json.loads(p.read_text())), separators=(",", ":")))
         body = ("\n".join(lines) + "\n").encode()
         gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
         if gz:
@@ -4851,7 +4872,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(404, {"error": "no such file"})
                 return
             if (q.get("download") or [""])[0] == "1":
-                body = p.read_bytes()
+                body = json.dumps(public_label(json.loads(p.read_text())), separators=(",", ":")).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')

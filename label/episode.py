@@ -596,6 +596,12 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
             given_block += (f"The dataset's coarse task label for this episode is \"{label}\"; the "
                             "instruction above is the dataset's per-episode annotation of it, and "
                             "the outcome is graded against it.\n")
+    if ctx.get("uploader_annotation"):
+        # notes the person who uploaded the episode sent with it (a note file beside a video, an annotation
+        # channel in an MCAP), in whatever form they came
+        given_block += ("\nTHE UPLOADER'S OWN NOTES FOR THIS EPISODE, as sent. They are claims to check against the "
+                        "video, not ground truth; where the video contradicts them, record it as a data issue:\n"
+                        + ctx["uploader_annotation"].strip() + "\n")
     return (prompts.fixed_instructions(r, has_instruction=bool(given)) + prompts.example_block(r, example_dir),
             EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + "\n" + given_block)
 
