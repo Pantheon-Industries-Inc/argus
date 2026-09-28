@@ -442,6 +442,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 total_cost += float(info or 0)
             elif status == "skip":
                 skipped += 1
+                print(f"SKIP {ep.name}: {info}", file=sys.stderr, flush=True)
             else:
                 failed += 1
                 fails.append(f"FAIL {ep.name}: {info}")
