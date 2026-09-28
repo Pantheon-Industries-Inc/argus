@@ -3524,7 +3524,7 @@ function renderEp(d, opts) {
         <div class="di-tags"><span class="di-cat">${esc(famName('sped-up'))}</span></div>
         <div class="di-ev">The recorder skipped ${((tb.skipped_frac || 0) * 100).toFixed(1)}% and `
           + `repeated ${((tb.repeated_frac || 0) * 100).toFixed(1)}% of samples and the follower arm trails the `
-          + `operator by only ${tb.follower_lag_frames} frames: the rig's recording loop ran below the 30 Hz its `
+          + `operator by only ${tb.follower_lag_frames} frames, so the recording loop ran below the 30 Hz its `
           + `samples are stamped at. Rule: ${tb.rule || ''}.</div>
       </div></div></div>` : '';
   // the entries that count first, then the minor ones, marked; excluded entries (_excluded) are never shown
