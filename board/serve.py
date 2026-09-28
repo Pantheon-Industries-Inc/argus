@@ -941,18 +941,19 @@ aside.left .cam-label {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
 }
 .ego-status .es-pov, .ego-status .es-hand {
-  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 7px;
   padding: 4px 10px; border-radius: var(--r-pill);
   font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
 }
 .ego-status .es-pov {
-  background: rgba(20, 22, 18, 0.82); border: 1px solid rgba(255,255,255,0.3); color: #e6e8df;
+  background: rgba(20, 22, 18, 0.82); border: 1px solid rgba(255,255,255,0.3); color: #e6e8df; white-space: nowrap;
 }
 .ego-status .es-pov.exo {
   background: rgba(20, 22, 18, 0.85); border-color: rgba(255,255,255,0.4); color: #f3f2ec;
 }
+/* what the hands wear can be a long phrase: it wraps inside the row's middle column, never past the image */
 .ego-status .es-hand {
-  border: 1px solid transparent;
+  border: 1px solid transparent; text-align: center; max-width: 100%;
   opacity: 0; transform: translateY(4px); transition: opacity 140ms ease, transform 140ms ease;
 }
 .ego-status .es-hand.show { opacity: 1; transform: translateY(0); }
@@ -968,6 +969,17 @@ aside.left .cam-label {
   aside.left .cam-cell .video-overlay, aside.left .cam-cell .video-overlay.active {
     position: static; transform: none; min-width: 0; max-width: none; margin: 6px 0 0; box-sizing: border-box;
     min-height: 64px; font-size: 13px; }
+  /* the notes that come and go (a recovery, a state change) follow the caption below the footage, folding open and
+     closed, since the small image has no room for them under its top row */
+  aside.left .cam-cell > .recovery-overlay, aside.left .cam-cell > .state-toast {
+    position: static; order: 3; flex: 1 0 100%; box-sizing: border-box; min-width: 0; max-width: none; margin: 0;
+    transform: none; text-align: left; max-height: 0; overflow: hidden; padding-top: 0; padding-bottom: 0;
+    border-top-width: 0; border-bottom-width: 0; box-shadow: none;
+    transition: max-height 220ms ease, opacity 200ms ease, padding 220ms ease, margin 220ms ease; }
+  aside.left .cam-cell > .state-toast { order: 4; }
+  aside.left .cam-cell > .recovery-overlay.active, aside.left .cam-cell > .state-toast.active {
+    max-height: 220px; margin-top: 6px; padding-top: 7px; padding-bottom: 7px; border-top-width: 1px;
+    border-bottom-width: 1px; }
 }
 section.right { overflow-y: auto; padding: 22px 28px; }
 
