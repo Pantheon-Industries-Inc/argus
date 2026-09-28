@@ -131,6 +131,11 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
                 pkt.stream = ost
                 pkt.time_base = ost.time_base
                 pkt.pts = pkt.dts = int(pts[i])
+                # the step to the next frame, the last repeating the one before: the raw stream's own duration
+                # (0, or a 25 fps guess) could end the mp4's edit list where the last frame starts, and that frame
+                # would not decode
+                pkt.duration = int(pts[i + 1] - pts[i] if i + 1 < len(pts) else
+                                   pts[i] - pts[i - 1] if i else TIME_BASE_DEN // 30)
                 dst.mux(pkt)
                 i += 1
         if i != len(pts):

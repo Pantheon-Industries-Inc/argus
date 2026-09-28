@@ -396,3 +396,29 @@ def test_realomin_quaternion_to_roll_pitch_yaw():
     half = np.sqrt(0.5)
     rpy = realomin.quat_to_rpy(np.array([[0, 0, 0, 1], [half, 0, 0, half], [0, 0, half, half]], dtype=float))
     assert np.allclose(rpy, [[0, 0, 0], [np.pi / 2, 0, 0], [0, 0, np.pi / 2]])
+
+
+def test_an_abc130k_remux_keeps_its_last_frame(tmp_path):
+    """Each copied packet lasts until the next frame's time (the last repeats the step before it), so the mp4's edit
+    list reaches the end of the last frame. Without a duration, a last frame that starts on a whole millisecond is where
+    the edit list ends, and it does not decode."""
+    from prepare import abc130k
+    enc = av.CodecContext.create("libx264", "w")
+    enc.width, enc.height, enc.pix_fmt = 64, 48, "yuv420p"
+    enc.time_base = Fraction(1, 30)
+    enc.options = {"preset": "ultrafast", "bframes": "0", "g": "30"}
+    n, frames = 61, []
+    for i in range(n):
+        fr = av.VideoFrame.from_ndarray(np.full((48, 64, 3), (i * 4) % 256, np.uint8), format="rgb24")
+        fr.pts = i
+        frames += [bytes(p) for p in enc.encode(fr)]
+    frames += [bytes(p) for p in enc.encode()]
+    t = np.arange(n) * 0.033                     # every frame starts on a whole millisecond
+    out = tmp_path / "top.mp4"
+    abc130k.remux(frames, t, "h264", out)
+    with av.open(str(out)) as c:
+        st = c.streams.video[0]
+        durs = [int(p.duration * p.time_base * abc130k.TIME_BASE_DEN) for p in c.demux(st) if p.size]
+    with av.open(str(out)) as c:
+        assert sum(1 for _ in c.decode(video=0)) == n
+    assert durs == [33_000] * n
