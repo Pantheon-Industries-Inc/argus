@@ -42,6 +42,22 @@ Every episode's duration is known before conversion (metadata or container heade
 footage cap is applied before any heavy work: episodes are taken in order until the cap is reached
 and the rest are listed as skipped. The report lists, in plain words, what was read and used and what
 could not be read and what was done instead.
+
+What every adapter writes, one folder per episode (label/episode.py reads it):
+  context.json     the facts the harness may state: dataset, rig (profile), state kind, fps, cameras, instruction
+  sources.json     per camera: the video file (packed), the episode's offset in it (base_s) and its frame count
+  state.npz        state and action, one row per anchor-camera frame (absent when there is no usable state)
+  times.npz        each camera's real frame times and exact pts, when frames are not on the k / fps grid
+  kmap_<view>.npy  for a camera paired to the anchor camera by nearest time, its frame for each anchor frame
+  instruction.txt  the instruction, for reading by eye
+
+context.json's fields: dataset, profile (the rig: teleop_arms, handheld_gripper or ego_head), state_kind (joints,
+ee_pose or none), fps, n_state_frames, cameras (per view exo, left, right: its name, width, height and desc, what
+the camera is), task_label, and the task text when there is one, instruction or annotation_subtasks (a list of
+{"t0", "t1", "label"}, the dataset's timed steps); uploader_annotation, notes sent with the episode in whatever form
+they came (the model is shown them as claims to check); real_times names times.npz when frames carry real capture
+times. sources.json gives per view the video file (packed), the episode's offset in it in seconds (base_s), its
+exact frame count (n_frames) and, for a camera paired to the anchor camera by time, its kmap file.
 """
 from __future__ import annotations
 

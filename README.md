@@ -57,7 +57,7 @@ The MolmoAct2 episode should come out as a success then undone, the row complete
 
 | Folder | What it does | Entry point |
 |---|---|---|
-| `prepare/` | One adapter per dataset and two for your own data, writing episodes as sidecar folders | `python -m prepare <adapter>` |
+| `prepare/` | One adapter per dataset, and one reader for your own data (the one Data Review runs), writing episodes as sidecar folders | `python -m prepare <adapter>` |
 | `checks/` | Deterministic checks, written into each episode before labelling, and the label consistency check | `python -m checks` |
 | `label/` | The harness: frame selection, exact decoding, resolution routing, the per-setup prompts, the model call, runs | `python -m label` |
 | `board/` | The dashboard: build, clips, serve or write static files; the hand pose overlay | `python -m board` |
@@ -72,7 +72,9 @@ Every command takes `--help`, and every module's docstring documents it. `tests/
 An adapter reads a dataset and writes one sidecar folder per episode. Nothing is re-encoded: the sidecar points at the dataset's own video files, and the harness decodes each episode's frames out of them by exact timestamp.
 
 ```bash
-# your own LeRobot dataset (v2.0, v2.1 or v3.0)
+# a folder of your own data, read exactly as Data Review reads an upload: LeRobot, MCAP, videos or archives
+uv run python -m prepare folder prepare --root path/to/data --rig teleop_arms --out data/episodes/mine/all
+# your own LeRobot dataset, with an episode list
 uv run python -m prepare lerobot prepare --root path/to/dataset --rig teleop_arms --out data/episodes/mine/all
 # your own videos, one episode per file, with optional instructions
 uv run python -m prepare videos prepare --root path/to/videos --rig ego_head --instructions instructions.json --out data/episodes/mine/all
@@ -80,7 +82,7 @@ uv run python -m prepare videos prepare --root path/to/videos --rig ego_head --i
 uv run python -m prepare molmo prepare --episodes configs/slices/molmo.txt --out data/episodes/molmo/slice
 ```
 
-`--rig` is `teleop_arms`, `handheld_gripper` or `ego_head`. The LeRobot adapter assigns the video features to cameras by name, reads `observation.state` and `action` when they have 7 values per arm or gripper, and takes each episode's task as its instruction. The videos adapter takes each file as the one camera of its setup; its instructions file maps a file's path to an instruction, or for human ego video to `{"instruction": ..., "subtasks": [{"t0": 0.0, "t1": 4.5, "label": "..."}]}`, and a file with no entry is labelled without one. For any other format, write the sidecar yourself on top of `prepare/sidecar.py`, which documents every field (`prepare/openaoe.py` is the smallest adapter).
+`--rig` is `teleop_arms`, `handheld_gripper` or `ego_head`. All three read your data with `prepare/formats.py`, the reader Data Review runs on every upload, so a folder prepared here gets the episodes, cameras, state and text Data Review would give it. `folder` takes a LeRobot dataset (or a collection of them), MCAP files, video files or archives of them. An MCAP in the ABC-130k or RealOmin layout goes through that dataset's adapter and keeps its recorded state; any other MCAP gives its cameras and its text channels, the task topic as the instruction and, on a head camera, a step topic (`/task/subtask`) as the dataset's timed steps. A `.txt` or `.json` beside a video reaches the model as your annotation. The LeRobot adapter assigns the video features to cameras by name, reads `observation.state` and `action` when they have 7 values per arm or gripper, and takes each episode's task as its instruction. The videos adapter takes each file as the one camera of its setup; its instructions file maps a file's path to an instruction, or for human ego video to `{"instruction": ..., "subtasks": [{"t0": 0.0, "t1": 4.5, "label": "..."}]}`, and a file with no entry is labelled without one. For any other format, write the sidecar yourself with the functions in `prepare/formats.py`, whose docstring documents every file and field (`prepare/openaoe.py` is the smallest adapter).
 
 Every public adapter has `prepare --episodes LIST --out FOLDER [--raw RAW] [--jobs N] [--force]` and downloads exactly the listed episodes. `configs/slices/<adapter>.txt` is the list we audited, with the command and seed that drew it in its header.
 
