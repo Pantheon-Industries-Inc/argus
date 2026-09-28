@@ -26,8 +26,8 @@ from prepare import hub
 from prepare import formats
 
 # Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
-# upload_adapters); this one reads only the published dataset
-UPLOAD = None
+# upload_adapters): a clip folder in this dataset's own layout is read here, with its action segments and device
+UPLOAD = "video"
 
 REPO = "inclusionAI/OpenAoE-2000h"
 COLLECTION_NOTE = ("crowd contributors record their own activities on a phone worn at the head; each clip is one "
@@ -63,17 +63,38 @@ def download(clip: str, raw: Path) -> Path:
     return raw / clip
 
 
-def prepare_clip(d: Path, clip: str, ep: Path) -> None:
+def clip_extra(d: Path, clip: str) -> dict:
+    """The clip's context beyond its video: the action segments as the annotation to check, and its device."""
     ann_p = d / "ego_annotation" / "ego_action_annotation.json"
     ann = json.loads(ann_p.read_text()) if ann_p.exists() else []
     info = json.loads((d / "video_info.json").read_text()) if (d / "video_info.json").exists() else {}
     dev = info.get("deviceInfo") or {}
-    extra = {"task_label": [clip], "instruction": None, "annotation_subtasks": subtasks(ann),
-             "collection_note": COLLECTION_NOTE, "annotation_note": ANNOTATION_NOTE,
-             "source": {"clip": clip, "device": " ".join(x for x in (dev.get("brand"), dev.get("model")) if x),
-                        "resolution": (info.get("cameraParams") or {}).get("resolution"),
-                        "annotation_segments": len(ann)}}
-    formats.video_views_episode(ep, {"exo": ("raw_video", d / "raw_video.mp4")}, "ego_head", REPO, extra)
+    return {"task_label": [clip], "instruction": None, "annotation_subtasks": subtasks(ann),
+            "collection_note": COLLECTION_NOTE, "annotation_note": ANNOTATION_NOTE,
+            "source": {"clip": clip, "device": " ".join(x for x in (dev.get("brand"), dev.get("model")) if x),
+                       "resolution": (info.get("cameraParams") or {}).get("resolution"),
+                       "annotation_segments": len(ann)}}
+
+
+def prepare_clip(d: Path, clip: str, ep: Path) -> None:
+    formats.video_views_episode(ep, {"exo": ("raw_video", d / "raw_video.mp4")}, "ego_head", REPO, clip_extra(d, clip))
+
+
+def recognizes(item: dict) -> bool:
+    """A video upload in this dataset's clip layout: one raw_video.mp4 with its ego_annotation beside it."""
+    fs = item.get("files") or []
+    return (len(fs) == 1 and Path(fs[0]).name == "raw_video.mp4"
+            and (Path(fs[0]).parent / "ego_annotation" / "ego_action_annotation.json").exists())
+
+
+def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
+    d = Path(item["files"][0]).parent          # the clip folder, named raw_<recording>_seg_<n>
+    extra = clip_extra(d, d.name)
+    extra["source"]["upload"] = item["name"]
+    if rig != "ego_head":
+        extra["rig_note"] = f"the upload was marked {rig}; this dataset's clips are from a head-worn phone"
+    ep = formats.unique_dir(out, formats.episode_name(d.name))
+    return formats.video_views_episode(ep, {"exo": ("raw_video", d / "raw_video.mp4")}, "ego_head", dataset, extra)
 
 
 def prepare_one(clip: str, ep: Path, raw: Path, force: bool) -> str:

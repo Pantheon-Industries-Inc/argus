@@ -28,7 +28,9 @@ Accepted uploads, in the order they are recognised:
    "left" / "right" in the file name). A file is never split: an unsplit recording is one episode, and the
    pipeline labels a long one in pieces and stitches the labels back into one timeline. When
    many files share one length, the recorder cut continuous footage into fixed-length files; the episodes
-   say so, so a file that starts or ends mid-activity is read as packaging, not a truncated episode.
+   say so, so a file that starts or ends mid-activity is read as packaging, not a truncated episode. A folder
+   in a layout a dataset adapter recognizes goes through that adapter (the prepare/*.py that declare
+   UPLOAD = "video": OpenAoE's clip, with its action segments and device).
 
 An archive (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz) is read as the folder it holds (open_archives). Data
 Review's upload page opens archives in the browser and sends their files; this is for archives on disk.
@@ -953,6 +955,12 @@ def packaging_note(window: float) -> str:
 
 
 def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
+    mod = next((m for m in upload_adapters("video") if m.recognizes(item)), None)
+    if mod is not None:
+        # a folder in a dataset's own layout (OpenAoE's clip with its action segments) goes through its adapter
+        ctx = mod.convert_upload(item, rig, out, dataset)
+        ctx.setdefault("source", {})["adapter"] = mod.__name__.rsplit(".", 1)[-1]
+        return ctx
     fs = item["files"]
     if item["dir"] is None:
         f = fs[0]
@@ -1597,7 +1605,8 @@ NOT_ADAPTERS = {"__main__", "cli", "folder", "formats", "hub", "lerobot", "video
 
 
 def upload_adapters(kind: str) -> list:
-    """The dataset adapters in prepare/ that read an upload of this kind ("mcap"), found rather than listed: an adapter
+    """The dataset adapters in prepare/ that read an upload of this kind ("mcap", "lerobot" or "video"), found rather
+    than listed: an adapter
     declares UPLOAD = kind with recognizes() and convert_upload(), or UPLOAD = None when it reads only its published
     dataset (tests/test_formats.py holds every adapter to one or the other). Adding a dataset is adding its adapter."""
     import importlib

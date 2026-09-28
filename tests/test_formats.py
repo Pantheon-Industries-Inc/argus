@@ -286,3 +286,25 @@ def test_a_lerobot_upload_goes_to_the_adapter_of_its_dataset():
                                if m.recognizes({"features": {k: {} for k in feats}})), "generic")
     assert [pick(habit), pick(galaxea), pick(yam)] == ["habit", "galaxea", "generic"]
     assert [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("lerobot")] == ["galaxea", "habit"]
+
+
+def test_a_video_folder_in_a_datasets_own_layout_goes_to_its_adapter(tmp_path):
+    """OpenAoE's clip folder (raw_video.mp4 with ego_annotation/ego_action_annotation.json beside it) is read by its
+    adapter, with its action segments; a video folder without that annotation, or with another file, stays generic."""
+    from prepare import openaoe
+    clip = tmp_path / "raw_x_seg_1"
+    (clip / "ego_annotation").mkdir(parents=True)
+    (clip / "raw_video.mp4").write_bytes(b"")
+    (clip / "ego_annotation" / "ego_action_annotation.json").write_text(
+        '[{"start_ts": "0.00", "end_ts": "3.00", "atomic_action": [{"verb": "align", "object": "fabric", "hand": "both"}]}]')
+    item = {"dir": clip, "files": [clip / "raw_video.mp4"], "name": "raw_x_seg_1"}
+    assert [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("video")] == ["openaoe"]
+    assert openaoe.recognizes(item)
+    assert openaoe.clip_extra(clip, clip.name)["annotation_subtasks"] == [
+        {"t0": 0.0, "t1": 3.0, "label": "align fabric (both hand)", "ok": True}]
+    assert not openaoe.recognizes({**item, "files": [clip / "other.mp4"]})
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "raw_video.mp4").write_bytes(b"")
+    assert not openaoe.recognizes({"dir": plain, "files": [plain / "raw_video.mp4"], "name": "plain"})
+    assert openaoe.recognizes({"dir": None, "files": [clip / "raw_video.mp4"], "name": "raw_video"})   # the folder uploaded itself
