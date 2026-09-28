@@ -3629,12 +3629,12 @@ function renderEp(d, opts) {
     <div class="info-block di-block">${gcFlat.map(([name, a]) => `<div class="di-row high">
       <span class="di-sev">check</span>
       <div class="di-body">
-        <div class="di-issue">The ${esc(name)} gripper's recorded value never changes: it is exactly ${a.min} at every `
-          + `frame.</div>
+        <div class="di-issue">The ${esc(name)} gripper's recorded value never changes. It is exactly ${a.min} at `
+          + `every frame.</div>
         <div class="di-tags"><span class="di-cat">${esc(famName('gripper-flat'))}</span></div>
         <div class="di-ev">Either this gripper was not used in the episode, or its sensor did not record. `
-          + `The ${esc(name)} camera shows which: if the fingers open and close, the recorded gripper action is `
-          + `missing. Rule: ${esc(gc.rule || '')}.</div>
+          + `The ${esc(name)} camera shows which. If the fingers open and close, the recorded gripper action `
+          + `is missing. Rule: ${esc(gc.rule || '')}.</div>
       </div></div>`).join('')}</div>` : '';
   // capture checks (checks/capture_qc.py): flags are defects that held up on our verified datasets; notes
   // are quiet facts about the recording, never counted as problems
@@ -3696,7 +3696,7 @@ function renderEp(d, opts) {
     <div class="tasks-summary"><b>${tasks.length}</b> self-directed tasks &nbsp;
       <span class="ts-ok">${tcount.success} success</span> /
       <span class="ts-fail">${tcount.failure} failure${tPartly ? `, ${tPartly} of them partly done` : ''}</span>
-      <div class="tasks-note">No single goal: each task is graded on its own, and a messy final scene is fine.</div>
+      <div class="tasks-note">The episode has no single goal. Each task is graded on its own, and a messy final scene is fine.</div>
     </div>
     ${taskGoalFrameHtml}
     <div class="info-block tasks-panel">${tasksHtml}</div>

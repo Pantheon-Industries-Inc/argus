@@ -845,10 +845,11 @@ def assess(feats: dict) -> dict:
             frr = np.flatnonzero(rr > policy.maximum_umi_rotation_speed_rad_s)
             if len(ftr) or len(frr):
                 i = int(ftr[0]) if len(ftr) else int(frr[0])
+                n_fast = len(np.union1d(ftr, frr))
                 speed_ev.append(_ev(f"the {name} pose moves at up to {tr.max():.2f} m/s and {rr.max():.1f} rad/s "
-                                    f"between two frames (rule: over {policy.maximum_umi_translation_speed_m_s:g} m/s "
-                                    f"or {policy.maximum_umi_rotation_speed_rad_s:g} rad/s in any one interval; "
-                                    f"{len(ftr) + len(frr)} intervals)", _t(ts, i + 1), actor=name))
+                                    f"between two frames, over the limit of {policy.maximum_umi_translation_speed_m_s:g} "
+                                    f"m/s or {policy.maximum_umi_rotation_speed_rad_s:g} rad/s in {n_fast} "
+                                    f"interval{'' if n_fast == 1 else 's'}", _t(ts, i + 1), actor=name))
             actor_metrics[name] = {"max_speed_m_s": round(float(tr.max()), 3) if len(tr) else None,
                                    "max_turn_rad_s": round(float(rr.max()), 2) if len(rr) else None}
         enough = holds >= policy.minimum_interleaved_hold_events
@@ -968,7 +969,7 @@ DISPOSITION: dict[str, dict] = {
         "A camera video fails to decode."),
     "video_decode_frame_count_mismatch": _d(
         "flag", "frames that do not decode at their recorded times are missing video; fired on none",
-        "Some camera frames are missing: they do not decode at their recorded times."),
+        "Some camera frames are missing, because they do not decode at their recorded times."),
     "state_time_non_monotonic_or_duplicate": _d(
         "flag", "a capture clock that repeats or runs backwards is broken; fired on none of the datasets with capture "
                 "clocks (ABC-130k, RealOmin, Gen-HumanEgo)",
@@ -1197,6 +1198,10 @@ def note_record(check: str, evidence: str, rig: str) -> dict:
     return {"check": check, "evidence": ev, "text": " ".join(x for x in (_sentence(_lead(check)), ev, why) if x)}
 
 
+# the pose-speed evidence as it was stored before it was reworded, and its count before it took the right plural
+OLD_SPEED = re.compile(r" \(rule: over ([\d.]+) m/s or ([\d.]+) rad/s in any one interval; (\d+) intervals\)")
+
+
 def refresh_notes(cq: dict) -> dict:
     """A stored result with each note's reason worded as note_why words it now, so a reworded reason reaches the
     board on the next build without rerunning the checks."""
@@ -1216,6 +1221,8 @@ def refresh_notes(cq: dict) -> dict:
             ev = (n["text"][:min(cuts)] if cuts else n["text"]).strip()
             lead = _lead(n["check"]).strip()
             ev = ev[len(lead):] if ev.startswith(lead) else ev
+        ev = OLD_SPEED.sub(lambda m: f", over the limit of {m[1]} m/s or {m[2]} rad/s in {m[3]} "
+                                     f"interval{'' if m[3] == '1' else 's'}", ev)
         notes.append({**n, **note_record(n["check"], ev, rig)})
     rows = [{**r, "why": note_why(r["check"], rig)} if isinstance(r, dict) and r.get("shown_as") == "note"
             and r.get("why") else r for r in cq.get("checks") or []]

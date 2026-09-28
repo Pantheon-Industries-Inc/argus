@@ -159,3 +159,16 @@ def test_a_note_reads_as_sentences_and_an_older_record_is_reworded():
     other = cq.note_why("nonfinite_signal", "handheld_gripper")
     assert "UMI datasets" in other
     assert "rig" not in other and "Not counted" not in other
+
+
+def test_a_stored_speed_note_is_reworded_with_the_right_plural():
+    """The pose-speed evidence stored as "(rule: over 2 m/s or 8 rad/s in any one interval; 1 intervals)" is
+    reworded on the next build, with "interval" singular for one."""
+    old = {"notes": [{"check": "gross_umi_speed", "evidence": "The right pose moves at up to 5.02 m/s and 2.0 rad/s "
+                      "between two frames (rule: over 2 m/s or 8 rad/s in any one interval; 1 intervals).", "text": "x"}],
+           "metrics": {"episode": {"rig": "handheld_gripper"}}}
+    ev = cq.refresh_notes(old)["notes"][0]["evidence"]
+    assert ev == ("The right pose moves at up to 5.02 m/s and 2.0 rad/s between two frames, over the limit of 2 m/s or "
+                  "8 rad/s in 1 interval.")
+    assert "3 intervals." in cq.refresh_notes({**old, "notes": [{**old["notes"][0], "evidence": old["notes"][0][
+        "evidence"].replace("1 intervals", "3 intervals")}]})["notes"][0]["evidence"]
