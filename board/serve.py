@@ -2180,7 +2180,7 @@ function datasetOf(ep) { return ep.dataset || ''; }
 // Names for the datasets prepare/ can fetch; any other name (a user's own dataset) is shown as its words with each
 // first letter capitalised.
 const DS_LABELS = {molmo: 'MolmoAct2 (Molmo)', abc130k: 'ABC-130k (XDOF)', galaxea: 'Galaxea Open-World (R1 Lite)',
-                   fastumi: 'FastUMI-100k', realomin: '10Kh-RealOmin (GenRobot)',
+                   fastumi: 'FastUMI-100K', realomin: '10Kh-RealOmin (GenRobot)',
                    egocentric100k: 'Egocentric-100K (Build AI)', genhumanego: 'Gen-HumanEgo (GenRobot)',
                    habit: 'HABIT (Config)', openaoe: 'OpenAoE-2000h (inclusionAI)'};
 // the tabs' order: these datasets first, then any other, alphabetically
@@ -2628,7 +2628,7 @@ window.addEventListener('popstate', async () => {
 
 // ---- coverage: episodes and hours labelled on this board ----
 const coverageEl = document.getElementById('coverage');
-const DS_SHORT = {molmo: 'MolmoAct2', abc130k: 'ABC-130k', galaxea: 'Galaxea', fastumi: 'FastUMI-100k',
+const DS_SHORT = {molmo: 'MolmoAct2', abc130k: 'ABC-130k', galaxea: 'Galaxea', fastumi: 'FastUMI-100K',
                   realomin: 'RealOmin', egocentric100k: 'Egocentric-100K', genhumanego: 'Gen-HumanEgo',
                   habit: 'HABIT', openaoe: 'OpenAoE'};
 function fmtHours(sec) { const h = sec / 3600; return h >= 100 ? h.toFixed(0) : h.toFixed(1); }
