@@ -17,7 +17,8 @@ Accepted uploads, in the order they are recognised:
      - no data parquet: the episode is labelled from video.
    Cameras stored as images inside the parquet are written to H.264 at their frame times.
 2. MCAP, one file per episode. XDOF ABC-130k and GenRobot RealOmin topic layouts get their full
-   adapters (robot state included). Any other layout is read as video: every compressed-image or
+   adapters (robot state included), and a GenRobot Gen-HumanEgo recording its adapter (its forward camera,
+   and its goal and timed steps). Any other layout is read as video: every compressed-image or
    compressed-video channel becomes a camera.
 3. Plain video (mp4, mov, mkv, webm, avi). Either one file per episode, or one folder per episode
    holding up to three files (a scene camera plus a left and a right mounted camera, told apart by
@@ -1570,6 +1571,9 @@ def mcap_layout(topics: list[str]) -> str:
         return "abc130k"
     if all(t in topics for t in ro.CAMERA_TOPICS) and all(t in topics for t in ro.POSE_TOPICS):
         return "realomin"
+    from prepare import genhumanego as gh
+    if gh.CAMERA_TOPIC in topics and gh.ANNOTATION_TOPIC in topics:
+        return "genhumanego"
     return "generic"
 
 
@@ -1600,6 +1604,15 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
             ctx.pop(k, None)
         ctx["task_label"] = [item["name"]]
         (ep / "instruction.txt").write_text("\n")
+    elif layout == "genhumanego":
+        # a DAS-Ego headset recording: its forward camera, and its own goal and timed steps (claims to check)
+        from prepare import genhumanego as gh
+        gh.extract(Path(item["file"]), ep / "source", item["name"])
+        ctx = gh.write_sidecar(ep / "source", ep)
+        ctx["episode_id"] = ep.name
+        if not any(ctx.get("task_label") or []):
+            ctx["task_label"] = [item["name"]]
+        (ep / "instruction.txt").write_text((ctx.get("instruction") or "") + "\n")
     else:
         return convert_mcap_generic(item, rig, ep, dataset)
     ctx.update({"dataset": dataset, "source": {"format": f"mcap ({layout} layout)", "file": item["name"]}})
@@ -1607,10 +1620,13 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
     # length come from the anchor camera's real capture times, so sampling is one instant per second of
     # real time and the footage cap counts real minutes
     from label import episode as me
-    t = np.load(ep / ctx["real_times"])[next(v for v in me.VIEW_ORDER if v in ctx["cameras"])]
-    step = float(np.median(np.diff(t))) if len(t) > 1 else 1 / 30
-    ctx["fps"] = round(1.0 / step, 3)
-    ctx["duration_s"] = round(float(t[-1] - t[0]) + step, 3)
+    if ctx.get("real_times"):
+        t = np.load(ep / ctx["real_times"])[next(v for v in me.VIEW_ORDER if v in ctx["cameras"])]
+        step = float(np.median(np.diff(t))) if len(t) > 1 else 1 / 30
+        ctx["fps"] = round(1.0 / step, 3)
+        ctx["duration_s"] = round(float(t[-1] - t[0]) + step, 3)
+    else:                                   # frames exactly on the adapter's grid: its rate is the real one
+        ctx["duration_s"] = round(ctx["n_state_frames"] / float(ctx["fps"]), 3)
     if ctx.get("profile") != rig:
         ctx["source"]["rig_note"] = f"the upload was marked {rig}; the {layout} layout is {ctx.get('profile')}"
     (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
@@ -1862,14 +1878,19 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     motion = [t for t in item["topics"] if re.search(r"hand|pose|slam|body|joint|odom|/tf$", t, re.I)
               and not re.search(r"health|info|meta|static|image|mask", t, re.I)]
     if item["seconds"] is None and mcap_layout(item["topics"]) != "generic":
-        extra["state_note"] = ("Labelled from the cameras: the file ends before the index its robot state is read from.")
+        extra["state_note"] = ("Labelled from the cameras, because the file ends before the index its robot state is read "
+                               "from.")
+    elif motion and rig == "ego_head":
+        shown = ", ".join(motion[:4]) + (f" and {len(motion) - 4} more" if len(motion) > 4 else "")
+        extra["state_note"] = (f"Labelled from the camera. The hand, body and camera tracks the file records ({shown}) are "
+                               "not read yet.")
     elif motion:
         shown = ", ".join(motion[:4]) + (f" and {len(motion) - 4} more" if len(motion) > 4 else "")
-        extra["state_note"] = (f"Labelled from the cameras. The checks on recorded motion did not run on its motion channels "
-                               f"({shown}): they read joint and gripper state from LeRobot datasets and from ABC-130k and "
-                               "RealOmin recordings.")
+        extra["state_note"] = (f"Labelled from the cameras. The checks on recorded motion read joint and gripper state from "
+                               f"LeRobot datasets and from ABC-130k and RealOmin recordings, so they did not run on this "
+                               f"file's motion channels ({shown}).")
     elif rig != "ego_head":
-        extra["state_note"] = "Labelled from the cameras: the file records no robot state."
+        extra["state_note"] = "Labelled from the cameras, because the file records no robot state."
     if item.get("notes"):
         extra["source"]["notes"] = item["notes"]
     if item.get("fixed_window_s"):

@@ -28,6 +28,7 @@ from prepare import hub
 REPO = "genrobot2025/Gen-HumanEgo"
 CAMERA_TOPIC = "/robot0/sensor/camera2/compressed"
 CALIB_TOPIC = "/robot0/sensor/camera2/camera_info"
+ANNOTATION_TOPIC = "/robot0/annotation_v2"
 CAMERA_DESC = ("the forward-facing fisheye camera on the headset the person wears (camera2 of the six-camera "
                "DAS-Ego rig), looking out and down at their hands and the work in front of them")
 
@@ -54,7 +55,7 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
         r = make_reader(fh, decoder_factories=[DecoderFactory()])
         summ = r.get_summary()
         started = False
-        for _, ch, msg, d in r.iter_decoded_messages(topics=[CAMERA_TOPIC, CALIB_TOPIC, "/robot0/annotation_v2",
+        for _, ch, msg, d in r.iter_decoded_messages(topics=[CAMERA_TOPIC, CALIB_TOPIC, ANNOTATION_TOPIC,
                                                              "/robot0/time_range_validity", "/robot0/frame_validity"]):
             if ch.topic == CAMERA_TOPIC:
                 if not started:
@@ -69,7 +70,7 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
                 # the head camera's calibration (Double Sphere: fx, fy, cx, cy, xi, alpha), used by the hand pose
                 calib = dict(w=d.width, h=d.height, model=d.distortion_model, D=list(d.D), T=list(d.T_b_c),
                              frame=d.frame_id)
-            elif ch.topic == "/robot0/annotation_v2":
+            elif ch.topic == ANNOTATION_TOPIC:
                 ann = d
             elif ch.topic == "/robot0/time_range_validity":
                 trv = d

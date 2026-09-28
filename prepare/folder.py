@@ -5,8 +5,9 @@
 FOLDER holds one of: a LeRobot dataset (v2.0, v2.1 or v3.0, or a collection of them, one per folder), MCAP files
 (one per episode), or video files (one per episode, or one folder per episode with a scene camera and a left and a
 right mounted camera). Archives (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz) are read as the folders they hold. An
-MCAP in the ABC-130k or RealOmin layout goes through that dataset's adapter, so its recorded state is used; any
-other MCAP is read for its cameras and its text channels (the task, and on a head camera its timed steps).
+MCAP in the ABC-130k or RealOmin layout goes through that dataset's adapter, so its recorded state is used, and a
+Gen-HumanEgo recording through its adapter, so its goal and timed steps are used; any other MCAP is read for its
+cameras and its text channels (the task, and on a head camera its timed steps).
 
 --rig says what recorded it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers carried by
 a person) or ego_head (a camera worn on a person's head). A .txt or .json beside a video, or instruction.txt or
