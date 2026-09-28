@@ -826,6 +826,8 @@ aside.left .cam-row-grippers .prog-overlay { top: calc(var(--fx-top, 0px) + 30px
   left: calc(var(--fx-left, 0px) + 8px); }
 aside.left .grip-strip { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 12px;
   background: #000; }
+aside.left .grip-strip .grip-note { order: 0; margin: 0; padding: 0 12px; text-align: center; font-family: var(--mono);
+  font-size: 10px; color: rgba(255,255,255,0.62); text-wrap: balance; }
 aside.left .grip-strip .recovery-overlay { position: static; order: 1; width: 92%; max-width: 92%; display: none; }
 aside.left .grip-strip .recovery-overlay.active { display: block; }
 aside.left .grip-strip .video-overlay,
@@ -857,7 +859,7 @@ aside.left .grip-strip .state-toast.active { position: static; order: 3; transfo
 aside.left .cam-label {
   position: absolute; top: 4px; left: 6px; z-index: 2;
   padding: 1px 6px;
-  font-family: var(--mono); font-size: 10px;
+  font-family: var(--mono); font-size: 10px; white-space: nowrap;
   color: rgba(255,255,255,0.92); background: rgba(0,0,0,0.6);
   border-radius: var(--r-pill); pointer-events: none;
 }
@@ -3635,8 +3637,7 @@ function renderEp(d, opts) {
       <div class="cam-row${isEgo ? ' cam-row-single' : (!hasTop ? ' cam-row-grippers' + (sideCams.length ? ''
         : ' cam-row-single') : '')}">
         <div class="cam-cell cam-exo">
-          ${isEgo ? '' : `<span class="cam-label">${esc(camLabel(mainCam))}${(!hasTop && !sideCams.length)
-            ? ' &middot; single-arm task: the dataset records one gripper camera' : ''}</span>`}
+          ${isEgo ? '' : `<span class="cam-label">${esc(camLabel(mainCam))}</span>`}
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
           <video id="video" controls preload="auto" playsinline${keep ? '' : ` src="${videoUrl}"${posterAttr(eidEnc,
             mainCam)}`}></video>
@@ -3662,7 +3663,7 @@ function renderEp(d, opts) {
             v)}`} onloadedmetadata="this.currentTime=0.03"></video>
         </div>`).join('')}
       </div>
-      ${gripOnly ? `<div class="grip-strip">${notesHtml}</div>` : ''}
+      ${gripOnly ? `<div class="grip-strip">${sideCams.length ? '' : `<p class="grip-note">A single-arm task: the dataset records one gripper camera.</p>`}${notesHtml}</div>` : ''}
     </div>
     <div class="timeline" id="timeline">
       ${markersHtml}${keyMarkersHtml}${comp.completed_at_s != null ? `<div class="marker goal" `
