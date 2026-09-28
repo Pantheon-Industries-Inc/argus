@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -59,3 +60,36 @@ def run(items: list, prepare_one: Callable[[object], str], jobs: int) -> int:
             if i % 25 == 0 or i == len(futs):
                 print(f"{i}/{len(futs)} {json.dumps(counts)}", flush=True)
     return 1 if counts["failed"] else 0
+
+
+def commit() -> str:
+    """The commit this code is: a vendored copy's COMMIT file, else the checkout's HEAD (with -dirty when a tracked
+    file differs from it), else "unknown"."""
+    root = Path(__file__).resolve().parent.parent
+    try:
+        return json.loads((root / "COMMIT").read_text())["short"]
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+        return git("rev-parse", "--short=7", "HEAD") + ("-dirty" if git("status", "--porcelain", "--untracked-files=no")
+                                                         else "")
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def stamp(out: Path, adapter: str, since: float) -> int:
+    """Record in every episode context under `out` written at or after `since` (a time.time()) which adapter wrote it
+    and at which commit: source.adapter (kept when the adapter already named a more specific one) and
+    source.adapter_commit. Returns how many were stamped."""
+    sha, n = commit(), 0
+    for c in sorted(Path(out).glob("episode_*/context.json")):
+        if c.stat().st_mtime < since:
+            continue                     # prepared by an earlier run and skipped by this one
+        ctx = json.loads(c.read_text())
+        src = ctx.setdefault("source", {})
+        src.setdefault("adapter", adapter)
+        src["adapter_commit"] = sha
+        c.write_text(json.dumps(ctx, indent=1, default=str))
+        n += 1
+    return n

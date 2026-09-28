@@ -13,6 +13,10 @@ Adapters:
 """
 import importlib
 import sys
+import time
+from pathlib import Path
+
+from prepare import cli
 
 ADAPTERS = {
     "molmo": "allenai/MolmoAct2-BimanualYAM-Dataset (teleop, packed LeRobot v3)",
@@ -34,4 +38,11 @@ if len(sys.argv) < 2 or sys.argv[1] not in ADAPTERS:
     raise SystemExit(0 if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help") else 2)
 name = sys.argv.pop(1)
 sys.argv[0] = f"python -m prepare {name}"
-raise SystemExit(importlib.import_module(f"prepare.{name}").main())
+out = next((a.split("=", 1)[1] if "=" in a else (sys.argv[i + 1] if i + 1 < len(sys.argv) else None)
+            for i, a in enumerate(sys.argv) if a == "--out" or a.startswith("--out=")), None)
+since = time.time() - 2                  # some filesystems keep whole-second mtimes
+rc = importlib.import_module(f"prepare.{name}").main()
+if out and Path(out).is_dir():
+    # every episode this run wrote names the adapter and commit that wrote it (prepare/cli.py stamp)
+    cli.stamp(Path(out), name, since)
+raise SystemExit(rc)

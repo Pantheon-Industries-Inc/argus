@@ -79,6 +79,22 @@ def test_read_list_skips_comments_and_blanks_and_keeps_spaces_inside_a_line(tmp_
                                 "factory004/worker025/part268.tar factory_004_worker_025_0045.mp4"]
 
 
+def test_stamp_names_the_adapter_and_commit_in_the_episodes_this_run_wrote(tmp_path):
+    import os
+    import time
+    for name, src in (("old", {}), ("new", {"format": "lerobot v2.1"}), ("upload", {"adapter": "habit"})):
+        (tmp_path / f"episode_{name}").mkdir()
+        (tmp_path / f"episode_{name}" / "context.json").write_text(json.dumps({"source": src}))
+    since = time.time()
+    os.utime(tmp_path / "episode_old" / "context.json", (since - 60, since - 60))
+    assert cli.stamp(tmp_path, "lerobot", since - 1) == 2
+    read = lambda n: json.loads((tmp_path / f"episode_{n}" / "context.json").read_text())["source"]
+    assert read("old") == {}
+    assert read("new")["adapter"] == "lerobot" and read("new")["format"] == "lerobot v2.1"
+    assert read("upload")["adapter"] == "habit"
+    assert read("new")["adapter_commit"] == read("upload")["adapter_commit"] == cli.commit() != ""
+
+
 def test_run_counts_ok_skip_and_failed_and_fails_the_exit_code(capsys):
     def one(x):
         if x == 3:
