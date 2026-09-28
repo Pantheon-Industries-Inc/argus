@@ -4318,7 +4318,7 @@ function buildLabelsMenu() {
     + `<div class="lb-gnote">Other models&rsquo; labels of some of the same episodes, from the same prompt and `
       + `frames.</div>`
     + cmpMenuOrder().map(m => row(m.key, cmpWho(m.key), [m.example ? cap(icl()) : '',
-      here[m.key] ? 'includes this episode' : ''].filter(Boolean).join(' · '), cmpCount(m.key), BY === m.key)).join('')
+      here[m.key] ? 'includes this episode' : ''].filter(Boolean).join(', '), cmpCount(m.key), BY === m.key)).join('')
     + `<button type="button" class="lb-go" data-go="compare"><span>How the models compare<small>Charts of every `
       + `model on the same episodes</small></span><span class="lb-arrow" aria-hidden="true">&rarr;</span></button>`;
 }

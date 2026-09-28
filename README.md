@@ -2,7 +2,7 @@
 
 Dense annotations and data-quality checks for robot-learning episodes, from Pantheon.
 
-[Blog post](https://pantheon.inc/research/we-looked-at-everything) · [Data board](https://pantheon.inc/data-board) · [Label your own data](https://pantheon.inc/data-review)
+Read the [blog post](https://pantheon.inc/research/we-looked-at-everything), browse every label on the [data board](https://pantheon.inc/data-board), or [label your own data](https://pantheon.inc/data-review).
 
 This is the pipeline behind *We Looked at Everything*, where it labelled 3,546 episodes (66.5 hours) from nine public datasets of teleoperated arms, UMI grippers and human ego video. It takes an episode as it was recorded, from a single video with no instruction to a full dataset with instructions and recorded state, and returns a dense timeline with each action judged advancing, wasteful or idle, progress toward the goal, key events and subgoals, operator mistakes, changes a person made to the scene, and the instruction checked against the footage. Deterministic checks run beside the model for what it should not be trusted with, such as recordings that play faster than real time, camera files swapped between arms, a recorded gripper opening that never changes and poor capture.
 
