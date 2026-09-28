@@ -1,6 +1,6 @@
 """The board: every episode's cameras synced to its annotation, with the dataset's issue profile and filters.
 
-    python -m board serve --board BOARD --clips CLIPS [--port 8896] [--title "Data Board"]
+    python -m board serve --board BOARD --clips CLIPS [--port 8896] [--title "Data Board"] [--header FILE]
 
 One Python file, no framework: a threaded HTTP server and a single page (INDEX_HTML below). It reads the
 episode files in BOARD/qa (board/build.py writes them) and plays the per-episode clips in CLIPS
@@ -11,7 +11,8 @@ labels of some episodes (BOARD/compare, when the manifest names comparisons) are
 control switches the whole board to one model's labels, marked as such, and the comparison view sums them up;
 they never enter the board's counts or its downloads. The hand pose files in BOARD/hands, when the manifest names
 them, are drawn over the head-camera footage, and BOARD/hand_keypoints holds the same keypoints as a download of
-their own. The header shows the page title and the board's name from BOARD/manifest.json.
+their own. The header shows the page title and the board's name from BOARD/manifest.json, or, for a board that is part
+of a site, the site's own header (--header, an HTML file).
 
 Endpoints (all GET but the export): / (the page), /api/episodes (one rail record per episode),
 /api/episode?file=F[&download=1], /api/compare/index, /api/compare/metrics, /api/compare/list?key=K (one model's
@@ -23,6 +24,7 @@ Environment:
     BOARD_FRAME_CACHE          frames kept in memory (default 800); raise it so every goal frame of a large board
                                stays cached
     BOARD_FFMPEG_CONCURRENCY   ffmpeg processes cutting frames at once (default 4)
+    BOARD_FRAME_DIR            a folder that keeps every frame cut, so a restarted server does not cut them again
 
 board/static.py renders the same page with a static data source, so a CDN can serve the board with no server.
 """
@@ -30,10 +32,12 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import html
 import http.server
 import json
 import os
+import re
 import shutil
 import socketserver
 import subprocess
@@ -71,6 +75,9 @@ _FRAME_CACHE = OrderedDict()
 _FRAME_CACHE_MAX = int(os.environ.get("BOARD_FRAME_CACHE", 800))
 _FRAME_LOCK = threading.Lock()
 _FFMPEG_SEM = threading.Semaphore(int(os.environ.get("BOARD_FFMPEG_CONCURRENCY", 4)))
+# BOARD_FRAME_DIR keeps every frame cut on disk as well, so a restarted server (a deploy) serves the posters and goal
+# frames it cut before without running ffmpeg again; the key holds the clip's mtime, so a rebuilt clip is cut anew
+_FRAME_DIR = Path(os.environ["BOARD_FRAME_DIR"]) if os.environ.get("BOARD_FRAME_DIR") else None
 
 
 def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
@@ -86,6 +93,11 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
         if hit is not None:
             _FRAME_CACHE.move_to_end(key)
             return hit
+    disk = _FRAME_DIR / (hashlib.sha1(repr(key).encode()).hexdigest() + ".jpg") if _FRAME_DIR else None
+    if disk is not None and disk.is_file():
+        out = disk.read_bytes()
+        _remember_frame(key, out)
+        return out
     # Clips hold exactly the episode's own frames. Snap t to a 30 fps grid and seek half a frame early, so a
     # 4-decimal seek can never round past the intended frame; a time at or past the clip's end (a goal frame on
     # the last instant) falls back to the clip's last frame.
@@ -107,12 +119,24 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
         if out:
             break
     if out:
-        with _FRAME_LOCK:
-            _FRAME_CACHE[key] = out
-            _FRAME_CACHE.move_to_end(key)
-            while len(_FRAME_CACHE) > _FRAME_CACHE_MAX:
-                _FRAME_CACHE.popitem(last=False)
+        _remember_frame(key, out)
+        if disk is not None:
+            try:
+                disk.parent.mkdir(parents=True, exist_ok=True)
+                tmp = disk.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part")
+                tmp.write_bytes(out)
+                tmp.replace(disk)
+            except OSError:
+                pass                      # the disk copy is only a cache
     return out
+
+
+def _remember_frame(key, jpg: bytes) -> None:
+    with _FRAME_LOCK:
+        _FRAME_CACHE[key] = jpg
+        _FRAME_CACHE.move_to_end(key)
+        while len(_FRAME_CACHE) > _FRAME_CACHE_MAX:
+            _FRAME_CACHE.popitem(last=False)
 
 
 def clip_path(clips: Path, eid: str, cam: str) -> Path:
@@ -141,6 +165,7 @@ COMPARE_DIR = HERE.parent / "compare" # other models' labels, beside qa/ (board/
 HANDS_DIR = HERE.parent / "hands"     # the hand pose drawn over head-camera footage (board/build.py)
 KEYPOINTS_DIR = HERE.parent / "hand_keypoints"   # the same keypoints as a download, in the dataset video's pixels
 BOARD_NAME = ""                       # the manifest's "board" (set by main)
+HEADER = None                         # a site header in place of the title bar (--header)
 
 _LIST_CACHE = {}         # folder -> (signature, rail records)
 _LIST_LOCK = threading.Lock()
@@ -189,14 +214,22 @@ def list_episodes(here: Path | None = None) -> list:
 def _families(d: dict) -> dict:
     c = FAMILIES.classify(d)
     fams, minor = set(c["counted"]), set(c["minor"])
-    # capture checks (checks/capture_qc.py): each kind that fired is a family of its own
+    # capture checks (checks/capture_qc.py): each kind that fired is a family of its own, keyed by the check's id so a
+    # renamed check keeps its family (capture_catalog names it)
     cq = (d.get("dataset_checks") or {}).get("capture_qc") or {}
-    plain = {c.get("check"): c.get("name") for c in cq.get("checks") or [] if isinstance(c, dict)}
     for f in cq.get("flags") or []:
         if isinstance(f, dict) and f.get("check"):
-            w = str(f["check"]).replace("_", " ")
-            fams.add("d:" + (plain.get(f["check"]) or (w[:1].upper() + w[1:])))
+            fams.add(CAPTURE_PREFIX + str(f["check"]))
     return {"families": sorted(fams), "minor_families": sorted(minor - fams)}
+
+
+CAPTURE_PREFIX = "cq:"
+
+
+def capture_catalog() -> dict:
+    """The page's entry for each capture check's family: its name as checks/capture_qc.py gives it."""
+    from checks.capture_qc import NAMES
+    return {CAPTURE_PREFIX + k: {"name": name, "list": "data", "check": True} for k, (name, _group) in NAMES.items()}
 
 
 # What a public copy of a label leaves out: how the label was made, rechecked or replaced (the run id and code
@@ -417,43 +450,55 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   }
 .hp-canvas.on { opacity: 1; }
 .hp-canvas.ctl { --hp-band: 0.18; }
-.rail-export { flex: 0 0 auto; margin: 0 0 12px; width: 100%; padding: 9px 12px; text-align: left; cursor: pointer;
-  font: 500 12px/1.2 var(--sans); color: var(--fg-2); background: transparent;
-  border: 1px solid var(--border); border-radius: var(--r-md); }
+/* ---------- the rail's controls ----------
+   Top to bottom: whose labels the whole board shows (Labels by), then the dataset the list below holds, with its
+   search and its issue filter, then the list, and under it the list's downloads. Every control is the same height, border and
+   type, a small plain label names a control only where its own text does not, and teal marks what is chosen. */
+.rail-k { display: block; margin: 0 0 6px; font: 500 12px/1.3 var(--sans); color: var(--fg-3); }
+.rail-ds { flex: 0 0 auto; margin: 0 0 12px; }
+.rd-name { display: block; font: 600 15px/1.25 var(--sans); color: var(--fg); letter-spacing: -0.005em;
+  overflow-wrap: anywhere; }
+.rd-sub { display: block; margin-top: 3px; font: 500 11.5px/1.3 var(--mono); color: var(--fg-3);
+  font-variant-numeric: tabular-nums; }
+.rd-sub em { font-style: normal; color: var(--fg); }
+.dl-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.rail-export { flex: 0 0 auto; height: 32px; padding: 0 11px; cursor: pointer; white-space: nowrap;
+  font: 500 12.5px/1 var(--sans); color: var(--fg-2); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  transition: color 120ms ease, border-color 120ms ease; }
 .rail-export:hover { color: var(--fg); border-color: var(--fg-3); }
-.rail-export:disabled { cursor: default; }
-.rail-export small { display: block; margin-top: 3px; font: 400 11px/1.3 var(--mono); color: var(--fg-3); }
+.rail-export:disabled { cursor: default; color: var(--fg-3); }
+.rail-export small { font: 500 11px/1 var(--mono); color: var(--fg-3); margin-left: 6px; }
 .lb-btn .lb-sub { display: block; margin-top: 2px; font: 400 11.5px/1.3 var(--sans); color: inherit; opacity: 0.8; }
 .cmpv-back { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 18px; padding: 7px 12px; cursor: pointer;
   font: 500 12.5px/1 var(--sans); color: var(--fg-2); background: transparent; border: 1px solid var(--border-strong);
   border-radius: var(--r-md); }
 .cmpv-back:hover { color: var(--fg); border-color: var(--fg-3); }
-/* the downloads under the filter: they fold away (eased) while a comparison is shown, since they are the board's */
+/* the downloads under the list: they fold away (eased) while a comparison is shown, since they are the board's */
 .rail-dl, .kp-exp, .lb-note, .kp-note { display: grid; grid-template-rows: 1fr;
-  transition: grid-template-rows 220ms ease, opacity 200ms ease; }
-.rail-dl { flex: 0 0 auto; }
+  transition: grid-template-rows 220ms ease, opacity 200ms ease, margin 220ms ease; }
+/* the downloads of the list sit under it, at the foot of the rail */
+.rail-dl { flex: 0 0 auto; margin: 12px 0 0; }
+.rail-dl.off { margin-top: 0; }
+.dl-box { padding-top: 12px; border-top: 1px solid var(--border); }
 .rail-dl-in, .kp-exp-in, .lb-note-in, .kp-note-in { min-height: 0; overflow: hidden; }
 .rail-dl.off, .kp-exp.off, .lb-note.off, .kp-note.off { grid-template-rows: 0fr; opacity: 0; }
-.kp-exp .rail-export { margin-bottom: 6px; }
-.kp-lic { margin: 0 2px 12px; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
+.kp-exp { flex: 0 0 auto; }
+.kp-lic { margin: 8px 2px 0; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
 /* whose labels the board shows: its own, or one other model's as a comparison. A comparison turns the button ink,
    the board's mark for labels that are not its own and are never counted */
-.lb { flex: 0 0 auto; position: relative; margin: 0 0 10px; }
+.lb { flex: 0 0 auto; position: relative; margin: 0 0 12px; padding: 0 0 12px; border-bottom: 1px solid var(--border); }
 .lb[hidden] { display: none; }
-.lb-btn { width: 100%; display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer;
-  text-align: left; background: var(--surface); color: var(--fg); border: 1.5px solid var(--border-strong);
-  border-radius: var(--r-md); font: 600 15px/1.2 var(--sans);
+.lb-btn { width: 100%; display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 9px 12px;
+  cursor: pointer; text-align: left; background: var(--surface); color: var(--fg); border: 1px solid var(--border-strong);
+  border-radius: var(--r-md); font: 600 14px/1.25 var(--sans);
   transition: background-color 220ms ease, color 220ms ease, border-color 220ms ease; }
 .lb-btn:hover { border-color: var(--fg-2); }
 .lb-lab { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.lb-k { display: flex; justify-content: space-between; gap: 8px; font-size: 10.5px; font-weight: 600;
-  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); margin-bottom: 3px; transition: color 220ms ease; }
-.lb-n { flex: none; font-weight: 500; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .lb-caret { flex: none; transition: transform 160ms ease; }
 .lb.open .lb-caret { transform: rotate(180deg); }
 .lb.cmp .lb-btn { background: var(--fg); color: #f3f2ec; border-color: var(--fg); }
 .lb.cmp .lb-btn:hover { background: #2e2e2b; }
-.lb.cmp .lb-k { color: rgba(243,242,236,0.72); }
 .lb-note-in { padding: 7px 2px 0; font: 400 11.5px/1.4 var(--sans); color: var(--fg-2); }
 .lb-note-in b { font-weight: 600; color: var(--fg); }
 .lb-menu { position: fixed; left: var(--lb-x, 8px); top: var(--lb-y, 0px); width: var(--lb-w, 340px);
@@ -519,13 +564,13 @@ aside.rail {
 /* data-issue filter: one compact dropdown (current filter + its episode count), whose menu lists
    every filter with its count. It never grows with the number of issue classes, so it cannot
    push into or overlap the episode list. */
-.issue-filter { flex: 0 0 auto; position: relative; margin: 0 0 10px; }
+.issue-filter { flex: 0 0 auto; position: relative; margin: 0 0 12px; }
 /* episode ID search: narrows the rail as you type; every space-separated term must appear in the
    raw ID or the display name, so "1424", "rice 394" or a uuid prefix all work. Enter opens the
    first match. It sits with the other rail controls and never scrolls away. */
-.ep-search { flex: 0 0 auto; position: relative; margin: 0 0 10px; }
-.ep-search input { width: 100%; box-sizing: border-box; padding: 10px 30px 10px 34px; background: rgba(28,28,26,0.050);
-  color: var(--fg); border: 1.5px solid var(--border); border-radius: var(--r-md); font: 500 14px/1.2 var(--sans);
+.ep-search { flex: 0 0 auto; position: relative; margin: 0 0 8px; }
+.ep-search input { width: 100%; box-sizing: border-box; height: 40px; padding: 0 30px 0 34px; background: var(--surface);
+  color: var(--fg); border: 1px solid var(--border-strong); border-radius: var(--r-md); font: 500 14px/1.2 var(--sans);
   outline: none;
   transition: border-color 120ms, background 120ms; }
 .ep-search input::placeholder { color: var(--fg-3); }
@@ -539,17 +584,19 @@ aside.rail {
 .ep-search .es-clear:hover { background: rgba(255,255,255,0.22); }
 .rail-empty .es-jump { color: var(--accent); cursor: pointer; text-decoration: underline; }
 .issue-filter:empty { display: none; }
-.if-btn { width: 100%; display: flex; align-items: center; gap: 9px; padding: 11px 12px;
-  background: rgba(69,129,142,0.08); color: var(--fg); border: 1.5px solid rgba(69,129,142,0.50);
-  border-radius: var(--r-md); font: 600 15px/1.2 var(--sans); cursor: pointer; text-align: left;
+/* the issue filter: a control like the search above it, reading "Filter by issue" until a problem is chosen, then
+   naming it in teal, the colour of what is chosen */
+.if-btn { width: 100%; display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 9px 12px;
+  background: var(--surface); color: var(--fg); border: 1px solid var(--border-strong);
+  border-radius: var(--r-md); font: 600 14px/1.25 var(--sans); cursor: pointer; text-align: left;
   transition: background 120ms, border-color 120ms; }
-.if-btn:hover { background: rgba(69,129,142,0.14); border-color: rgba(69,129,142,0.85); }
-.if-btn .if-ico { color: var(--accent); flex: 0 0 auto; }
+.if-btn:hover { border-color: var(--fg-3); }
+.if-btn .if-ico { color: var(--fg-3); flex: 0 0 auto; }
 .if-btn .if-lab { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.if-btn .if-lab .if-k { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
-  text-transform: uppercase; color: var(--accent); margin-bottom: 3px; }
-.if-btn .if-n { font-size: 13px; color: var(--fg-2); }
-.issue-filter.filtered .if-btn { background: rgba(69,129,142,0.18); border-color: var(--accent); }
+.if-btn .if-ph { font-weight: 500; color: var(--fg-3); }
+.if-btn .if-n { font-size: 12px; color: var(--fg-3); }
+.issue-filter.filtered .if-btn { background: rgba(69,129,142,0.08); border-color: var(--accent); }
+.issue-filter.filtered .if-ico, .issue-filter.filtered .if-lab { color: var(--accent); }
 .if-clear { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
   background: rgba(28,28,26,0.090); color: var(--fg); font-size: 14px; line-height: 1; }
 .if-clear:hover { background: rgba(28,28,26,0.198); }
@@ -650,6 +697,7 @@ aside.rail {
 .rail-empty {
   padding: 18px 10px; color: var(--fg-3); font-size: 12.5px; line-height: 1.5;
 }
+.rail-empty b { font-weight: 600; color: var(--fg-2); }
 .ep-card {
   display: block; padding: 10px 12px; margin-bottom: 4px;
   background: var(--surface); border: 1px solid var(--border);
@@ -877,17 +925,24 @@ aside.left .cam-label {
   animation: handsPulse 1.6s ease-in-out infinite;
 }
 @keyframes handsPulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
-/* head-camera status strip, just below the footage at every width (on top of it, the strip ran into the progress
-   chip wherever the video column is narrow): a persistent POV chip and a hand-state chip that adapts with the
-   playhead (out of view, gloved). */
-aside.left .cam-cell:has(> .ego-status) { flex-wrap: wrap; }
-aside.left .cam-cell:has(> .ego-status) > video { flex: 1 0 100%; }
+/* head camera: one row across the top of the image, with the progress chip at its left, the viewpoint in its middle
+   (centred on the image) and room for the full-screen button at its right. The row's three columns never overlap; a
+   narrow image drops the chip's sparkline, then its caption, so the row fits at every width. The hand-state chip
+   (hands out of view, gloves) fades in under the viewpoint as the playhead moves, and the notes that come and go at
+   the top of the image (a state change, a recovery) are placed below the row (placeTop). */
+.top-hud { position: absolute; z-index: 4; top: calc(var(--fx-top, 0px) + 8px);
+  left: calc(var(--fx-left, 0px) + 8px); right: calc(var(--fx-right, 0px) + 8px); container: hud / inline-size;
+  pointer-events: none; }
+.top-hud-in { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(26px, 1fr); column-gap: 8px;
+  align-items: center; }
+.top-hud .prog-overlay { position: static; justify-self: start; }
+@container hud (max-width: 480px) { .top-hud .prog-overlay .po-svg { display: none; } }
+@container hud (max-width: 330px) { .top-hud .prog-overlay .po-sub { display: none; } }
 .ego-status {
-  order: 1; flex: 1 0 100%; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center;
-  justify-content: flex-start; gap: 8px; margin: 8px 0 2px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
 }
 .ego-status .es-pov, .ego-status .es-hand {
-  display: inline-flex; align-items: center; gap: 7px;
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
   padding: 4px 10px; border-radius: var(--r-pill);
   font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
 }
@@ -906,7 +961,7 @@ aside.left .cam-cell:has(> .ego-status) > video { flex: 1 0 100%; }
   color: #f3f2ec; }
 .ego-status .es-hand.gloved { background: rgba(20, 22, 18, 0.9); border-color: rgba(255,255,255,0.3); color: #e6e8df; }
 /* phones: the video is too small to carry the caption card on top of it, so it moves below the footage (as the
-   handheld grippers' strip already does), after the status strip, its space kept while hidden so nothing jumps */
+   handheld grippers' strip already does), its space kept while hidden so nothing jumps */
 @media (max-width: 600px) {
   aside.left .cam-cell:has(> .video-overlay) { flex-wrap: wrap; }
   aside.left .cam-cell > video { flex: 1 0 100%; }
@@ -1148,6 +1203,8 @@ h3.section .count {
 .di-cat { font-family: var(--mono); font-size: 10px; color: var(--fg-2); background: var(--bg);
   border: 1px solid var(--border); padding: 1px 6px; border-radius: var(--r-pill); }
 .di-t { font-family: var(--mono); font-size: 10.5px; color: var(--accent); }
+.di-verified { font-size: 10px; font-weight: 600; color: var(--fg-2); border: 1px solid var(--border-strong);
+  background: rgba(28,28,26,0.05); padding: 1px 6px; border-radius: var(--r-pill); }
 .di-block .di-row[data-t]:hover { background: rgba(127,127,127,0.06); }
 .di-block.op .di-row .di-sev { color: var(--warning); background: rgba(176,125,42,0.10);
   border: 1px solid rgba(176,125,42,0.30); }
@@ -1348,29 +1405,6 @@ h3.section .count {
 .rec-line .rec-k { color: var(--fg-3); font-weight: 700; margin-right: 7px; }
 .line .t { color: var(--fg-3); font-family: var(--mono); font-size: 11px; margin-right: 6px; }
 
-/* ---------- key-event chapters bar (second timebar) ---------- */
-/* Contiguous labeled phases spanning the whole episode, one per key event,
-   each running from its time to the next. Click to seek; the current chapter
-   lights up during playback. */
-.chapters {
-  display: flex; width: 100%; height: 34px; margin: 0 0 2px;
-  border-radius: var(--r-sm); overflow: hidden;
-  border: 1px solid var(--border);
-}
-.chapters .chap {
-  position: relative; min-width: 0; height: 100%;
-  display: flex; align-items: center; justify-content: center;
-  padding: 0 8px; cursor: pointer;
-  border-right: 1px solid rgba(0,0,0,0.45);
-  transition: filter 100ms;
-}
-.chapters .chap:last-child { border-right: none; }
-.chapters .chap:hover { filter: brightness(1.18); }
-.chapters .chap .cnum {
-  font-family: var(--mono); font-size: 11px; font-weight: 700; color: #0b0b0c;
-}
-.chapters .chap.active { box-shadow: inset 0 0 0 2px #fff, inset 0 0 0 4px rgba(0,0,0,0.25); }
-.chapters-title { font-size: 11px; font-weight: 600; color: var(--fg-2); margin: 34px 0 7px; }
 /* top-left progress-to-goal HUD chip: compact one line, big % + inline
    sparkline + label, so it stays a short corner chip and never fights the
    recovery banner below it. */
@@ -1406,32 +1440,20 @@ h3.section .count {
 .state-toast .st-from { color: rgba(255,255,255,0.6); }
 .state-toast .st-arr { color: #d9dcd2; margin: 0 5px; font-weight: 700; }
 .state-toast .st-to { color: #ffffff; font-weight: 600; }
-/* live caption: the full label of the chapter currently under the playhead
-   (the bar segments only carry a number, so labels are never truncated). */
-.chapters-caption {
-  display: flex; align-items: center; gap: 8px; min-height: 20px;
-  margin: 8px 0 2px; font-size: 12.5px; color: var(--fg);
-}
-.chapters-caption .cc-idx {
-  flex: 0 0 auto; width: 18px; height: 18px; border-radius: 4px;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-family: var(--mono); font-size: 11px; font-weight: 700; color: #0b0b0c;
-}
-.chapters-caption .cc-text { color: var(--fg-2); }
-.chapters-caption .cc-kind { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--fg-2);
-  background: rgba(28,28,26,0.07);
-  border: 1px solid var(--border-strong); border-radius: var(--r-pill); padding: 1px 7px; white-space: nowrap; }
 .key-ev .ke-num {
-  width: 20px; height: 20px; border-radius: 4px;
+  width: 20px; height: 20px; border-radius: 4px; background: #d6d5cc;
   display: inline-flex; align-items: center; justify-content: center;
   font-family: var(--mono); font-size: 11px; font-weight: 700; color: #0b0b0c;
 }
+/* the key event the playhead last passed, updated live during playback, as the dense timeline marks its row */
+.key-ev.now { background: rgba(69,129,142,0.10); box-shadow: inset 0 0 0 1px rgba(69,129,142,0.28); }
+.key-ev.now .ke-time { color: var(--accent); font-weight: 600; }
 
 /* ---------- recovery overlay (top of exo) ----------
    Full-width banner spanning the frame, so verbose text stays SHORT (1-2 lines)
    instead of growing tall and covering the scene. It sits directly below the
    top-corner HUD chips (progress + state); its exact top is set in JS
-   (placeRecovery) so it never overlaps them. The --fx-top value is only a
+   (placeTop) so it never overlaps them. The --fx-top value is only a
    fallback before JS runs. */
 .recovery-overlay {
   position: absolute;
@@ -1572,9 +1594,8 @@ section.right { background: var(--bg); }
 .prompt-banner { background: var(--raised); border: 1px solid var(--border); }
 .ep-head { background: var(--bg); border-bottom: 1px solid var(--border-strong); }
 h3.section { border-top: 1px solid var(--border-strong); }
-.if-btn { border-width: 1.5px; }
 .ep-search input, .rail-export { background: var(--raised); border-color: var(--border-strong); }
-.timeline, .chapters { border: 1px solid var(--border-strong); }
+.timeline { border: 1px solid var(--border-strong); }
 
 /* dataset tabs on paper: one clear hours bar per tab, and a single ink underline for the open tab */
 .cv-cell { gap: 8px; }
@@ -1590,6 +1611,7 @@ h3.section { border-top: 1px solid var(--border-strong); }
 .ck-title { font: 700 13px/1.3 var(--sans); color: var(--fg); }
 .ck-sum { font: 500 11px/1.3 var(--mono); color: var(--fg-3); }
 .ck-credit { font-size: 12px; line-height: 1.45; color: var(--fg-3); margin: 0 0 6px; max-width: 70ch; }
+.ck-credit a { color: inherit; text-underline-offset: 3px; }
 .ck-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: baseline; gap: 2px 8px;
   padding: 5px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
 .ck-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); transform: translateY(-1px); }
@@ -1844,39 +1866,45 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
 <main>
   <aside class="rail" id="rail">
     <div class="lb" id="lb" hidden>
-      <button class="lb-btn" id="lb-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
-        <span class="lb-lab"><span class="lb-k"><span>Labels by</span><span class="lb-n" id="lb-n"></span></span><span
-          id="lb-name"></span></span>
+      <span class="rail-k" id="lb-k">Labels by</span>
+      <button class="lb-btn" id="lb-btn" type="button" aria-haspopup="listbox" aria-expanded="false"
+        aria-labelledby="lb-k lb-name">
+        <span class="lb-lab"><span id="lb-name"></span></span>
         <svg class="lb-caret" width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor"
           stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <div class="lb-note off" id="lb-note"><div class="lb-note-in" id="lb-note-in"></div></div>
       <div class="lb-menu" id="lb-menu" role="listbox" aria-label="Whose labels the board shows"></div>
     </div>
+    <div class="rail-ds" id="rail-ds"><span class="rd-name" id="rd-name"></span><span class="rd-sub"
+      id="rd-sub"></span></div>
     <div class="ep-search" id="ep-search">
       <svg class="es-ico" width="14" height="14" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.8" fill="none"
         stroke="currentColor" stroke-width="1.7"/><path d="M10.6 10.6L14 14" stroke="currentColor" stroke-width="1.7"
         stroke-linecap="round"/></svg>
-      <input id="ep-search-q" type="text" placeholder="Search episode ID" autocomplete="off" spellcheck="false"
-        aria-label="Search episode ID">
+      <input id="ep-search-q" type="text" placeholder="Search by episode ID" autocomplete="off" spellcheck="false"
+        aria-label="Search this dataset by episode ID">
       <button class="es-clear" id="ep-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
     </div>
     <div id="issue-filter" class="issue-filter"></div>
-    <div class="rail-dl" id="rail-dl"><div class="rail-dl-in">
-      <button id="export-jsonl" class="rail-export"
-        title="every episode in the current list (dataset, filter and search) as JSON Lines, one episode per line"
-        >Export this list as JSON Lines</button>
+    <div id="ep-list"></div>
+    <div class="rail-dl" id="rail-dl"><div class="rail-dl-in"><div class="dl-box">
+      <span class="rail-k">Download this list</span>
+      <div class="dl-row">
+        <button id="export-jsonl" class="rail-export" type="button"
+          title="every episode in the list below (dataset, filter and search) as JSON Lines, one episode per line"
+          >JSON Lines</button>
+        <button id="export-kp" class="rail-export" type="button" hidden
+          title="the hand keypoints of every episode in the list below, one episode per line, in a file of their own"
+          >Hand keypoints</button>
+      </div>
       <div class="kp-exp off" id="kp-exp"><div class="kp-exp-in">
-        <button id="export-kp" class="rail-export" type="button"
-          title="the hand keypoints of every episode in the current list, one episode per line, in a file of their own"
-          >Export hand keypoints of this list</button>
-        <p class="kp-lic">Hand keypoints: non-commercial use only. Predicted by <a
+        <p class="kp-lic"><span id="kp-size"></span>Non-commercial use only. Predicted by <a
           href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank" rel="noreferrer">ACE-Ego-Hand</a>
           (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noreferrer">CC BY-NC 4.0</a>),
           which uses <a href="https://mano.is.tue.mpg.de/license.html" target="_blank" rel="noreferrer">MANO</a>.</p>
       </div></div>
-    </div></div>
-    <div id="ep-list"></div>
+    </div></div></div>
   </aside>
   <div class="src-bar" id="src-bar"><div class="sb-in"><div class="sb-row">
     <span class="sb-note" id="sb-note"></span>
@@ -1991,11 +2019,23 @@ async function ensureDataset(ds) {
 function episodeUrl(file) {
   return STATIC ? BOARD.data + 'ep/' + encodeURIComponent(file) : 'api/episode?file=' + encodeURIComponent(file);
 }
-async function fetchEpisode(file) {
+// each episode's labels are fetched once per page view (a dataset tab fetches its first episode ahead, prefetchDataset)
+const _epCache = new Map();          // file -> Promise of the labels, the most recently used last
+const EP_CACHE_MAX = 60;
+async function fetchEpisodeOnce(file) {
   if (!STATIC) return (await fetch(episodeUrl(file), {cache: 'no-store'})).json();
   const rec = ALL_EPS.find(e => e.file === file);
   if (rec) await ensureDataset(datasetOf(rec));
   return (await fetch(episodeUrl(file))).json();
+}
+function fetchEpisode(file) {
+  let p = _epCache.get(file);
+  if (p) { _epCache.delete(file); _epCache.set(file, p); return p; }
+  p = fetchEpisodeOnce(file);
+  p.catch(() => _epCache.delete(file));
+  _epCache.set(file, p);
+  while (_epCache.size > EP_CACHE_MAX) _epCache.delete(_epCache.keys().next().value);
+  return p;
 }
 // other models' labels (compare/, never part of the board's lists or downloads)
 function compareUrl(what) { return STATIC ? BOARD.data + 'compare/' + what + '.json' : 'api/compare/' + what; }
@@ -2045,17 +2085,29 @@ function videoSrc(eidEnc, cam) {
 }
 // the camera's first frame as the video's poster attribute, or nothing where a static build has no such frame
 function posterAttr(eidEnc, cam) {
+  const src = posterSrc(_activeFile, eidEnc, cam);
+  return src ? ` poster="${src}"` : '';
+}
+function posterSrc(file, eidEnc, cam) {
   if (STATIC) {
-    const rec = ALL_EPS.find(e => e.file === _activeFile) || {};
+    const rec = ALL_EPS.find(e => e.file === file) || {};
     if (!(rec._frames || {})[(cam === 'left' || cam === 'right' ? cam : 'exo') + '|0']) return '';
   }
-  return ` poster="${frameSrc(eidEnc, cam, 0)}"`;
+  return frameSrcOf(file, eidEnc, cam, 0);
 }
-function frameSrc(eidEnc, cam, t) {
+function frameSrc(eidEnc, cam, t) { return frameSrcOf(_activeFile, eidEnc, cam, t); }
+function frameSrcOf(file, eidEnc, cam, t) {
   if (!STATIC) return `api/frame?id=${eidEnc}&cam=${cam}&t=${t}&w=640`;
-  const rec = ALL_EPS.find(e => e.file === _activeFile) || {};
+  const rec = ALL_EPS.find(e => e.file === file) || {};
   return BOARD.media + ((rec._frames || {})[(cam === 'left' || cam === 'right' ? cam : 'exo') + '|'
     + Math.round(Number(t) * 1000)] || '');
+}
+// the cameras an episode shows: the main player's (the top camera when there is one, else the first gripper camera)
+// and the side cells' (a head camera is shown alone)
+function episodeCams(d) {
+  const views = (d.camera_views && d.camera_views.length) ? d.camera_views : ['exo', 'left', 'right'];
+  const main = views.includes('exo') ? 'exo' : views[0];
+  return {views, main, side: d._rig === 'ego_head' ? [] : views.filter(v => v !== main && v !== 'exo')};
 }
 // the listed episodes as JSON Lines: the server joins them, a static build fetches and joins them here
 async function exportBlob(files) {
@@ -2159,7 +2211,7 @@ document.getElementById('export-jsonl').addEventListener('click', async () => {
   if (!files.length) return;
   const btn = document.getElementById('export-jsonl');
   const label = btn.textContent;
-  btn.textContent = `Exporting ${files.length}\u2026`;
+  btn.textContent = 'Exporting\u2026';
   try {
     const blob = await exportBlob(files);
     const tag = [currentDataset, ISSUE_FILTER, SEARCH].filter(Boolean).join('_').replace(/[^A-Za-z0-9_.-]+/g, '-');
@@ -2177,10 +2229,12 @@ let _kpBusy = false;
 function updateKpExport() {
   const files = BY ? [] : kpListed();
   document.getElementById('kp-exp').classList.toggle('off', !files.length);
+  kpBtn.hidden = !files.length;
   if (!files.length || _kpBusy) return;
   const bytes = files.reduce((a, f) => a + (KP_INDEX[f].bytes || 0), 0);
-  kpBtn.innerHTML = `Export hand keypoints of this list<small>${files.length.toLocaleString()} `
-    + `${files.length === 1 ? 'episode' : 'episodes'}, ${fmtBytes(bytes)}</small>`;
+  kpBtn.textContent = 'Hand keypoints';
+  document.getElementById('kp-size').textContent = `Hand keypoints of ${files.length.toLocaleString()} `
+    + `${files.length === 1 ? 'episode' : 'episodes'}, ${fmtBytes(bytes)}. `;
 }
 kpBtn.addEventListener('click', async () => {
   const files = kpListed();
@@ -2188,7 +2242,7 @@ kpBtn.addEventListener('click', async () => {
   _kpBusy = true; kpBtn.disabled = true;
   const parts = new Array(files.length);
   let next = 0, done = 0;
-  const show = () => { kpBtn.innerHTML = `Exporting hand keypoints<small>${done.toLocaleString()} of `
+  const show = () => { kpBtn.innerHTML = `Exporting<small>${done.toLocaleString()} of `
     + `${files.length.toLocaleString()}</small>`; };
   show();
   try {
@@ -2252,18 +2306,17 @@ let CHECKS_OPEN = false;       // the full list of capture checks, kept open or 
 // Every check run on this episode, fired or not, in one section: ours (recording and label) and the capture checks
 // of public-dataset-adapter. A firing counted as a problem is also in the problem cards above; here each check
 // shows only its status, so the reader sees what was tested as well as what was found.
-const OUR_CHECKS = [['stream_pairing', 'crossed', 'Crossed camera streams'],
-                    ['recorded_jumps', 'flagged', 'Recorded jump with no camera motion'],
-                    ['gripper_channels', 'flagged', 'Gripper reading that never changes'],
-                    ['timebase', 'sped_up_recording', 'Sped-up recording']];
+// each of our checks is named by the problem it finds, its family (families.json), so the check list and the problem
+// list always say the same thing
+const OUR_CHECKS = [['stream_pairing', 'crossed', 'streams-crossed'], ['recorded_jumps', 'flagged', 'recorded-jump'],
+                    ['gripper_channels', 'flagged', 'gripper-flat'], ['timebase', 'sped_up_recording', 'sped-up']];
 function checksSection(d) {
   const dc = d.dataset_checks || {}, rows = [];
-  for (const [k, field, name] of OUR_CHECKS) if (dc[k] && typeof dc[k] === 'object') rows.push({name, st: dc[k][field]
-    ? 'issue' : 'clear'});
-  const lc = Array.isArray(d.label_consistency) ? d.label_consistency : null;
-  if (lc) rows.push({name: 'Label agrees with itself', st: lc.length ? 'note' : 'clear',
-                     text: lc.map(f => f.note).join(' ')});
-  const cq = dc.capture_qc && Array.isArray(dc.capture_qc.checks) ? dc.capture_qc : null;
+  for (const [k, field, fam] of OUR_CHECKS) if (dc[k] && typeof dc[k] === 'object') rows.push({name: famName(fam),
+    st: dc[k][field] ? 'issue' : 'clear'});
+  // the capture checks test a robot's recording (its state stream, grippers and camera timing); none of them applies to
+  // footage from a person's head camera, so a head-camera episode lists none
+  const cq = d._rig !== 'ego_head' && dc.capture_qc && Array.isArray(dc.capture_qc.checks) ? dc.capture_qc : null;
   if (!rows.length && !cq) return '';
   const dot = st => `<span class="ck-dot ${st}" aria-hidden="true"></span>`;
   const word = {issue: 'fired', note: 'note', clear: 'clear', na: 'not applicable'};
@@ -2285,12 +2338,13 @@ function checksSection(d) {
     const n = st => all.filter(c => c.st === st).length;
     const groups = [...new Set(all.map(c => c.group))];
     theirs = `<div class="ck-block ck-theirs${CHECKS_OPEN ? ' open' : ''}">
-      <div class="ck-head"><span class="ck-title">Capture checks from public-dataset-adapter, by Sambhav Gupta</span>
+      <div class="ck-head"><span class="ck-title">Capture checks from public-dataset-adapter</span>
         <span class="ck-sum">${n('issue')} ${n('issue') === 1 ? 'issue'
           : 'issues'} &middot; ${n('note')} ${n('note') === 1 ? 'note' : 'notes'} &middot; ${n('clear')} clear `
           + `&middot; ${n('na')} not applicable</span></div>
-      <div class="ck-credit">The checks run as written. A firing is an issue where every firing of that check held up on
-        the frames of our verified datasets, and a note otherwise.</div>
+      <div class="ck-credit">The checks behind <a href="https://pantheon.inc/research/we-looked-at-the-data"
+        target="_blank" rel="noopener">We Looked at the Data</a>, run as written. A firing is an issue where every firing
+        of that check held up on the frames of our verified datasets, and a note otherwise.</div>
       ${fired.map(row).join('')}
       <div class="ck-all"><div class="ck-all-in">${groups.map(g => `<div class="ck-group">${esc(g)}`
         + `</div>${all.filter(c => c.group === g).map(c => `<div class="ck-row ${c.st}">${dot(c.st)}<span `
@@ -2370,9 +2424,10 @@ function buildIssueFilter(ds) {
   btn.className = 'if-btn';
   btn.setAttribute('aria-haspopup', 'listbox');
   const filtered = ISSUE_FILTER !== null;
+  btn.setAttribute('aria-label', filtered ? `Filter by issue: ${cur[0]}` : 'Filter by issue');
   btn.innerHTML = '<svg class="if-ico" width="16" height="16" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.4V13l-2.8 '
     + '1.2V8.4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>'
-    + `<span class="if-lab"><span class="if-k">Filter by issue</span>${esc(filtered ? cur[0] : 'All episodes')}</span>`
+    + (filtered ? `<span class="if-lab">${esc(cur[0])}</span>` : '<span class="if-lab if-ph">Filter by issue</span>')
       + `<span class="if-n">${cur[2]}</span>`
     + (filtered ? '<span class="if-clear" title="Clear filter">&times;</span>'
                 : '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" '
@@ -2492,9 +2547,51 @@ async function loadEpisodes() {
   renderLabelsBy();
   if (CMP && q.get('view') === 'compare') { showCompare(true); return; }
   const ds = wantEp ? null : firstDataset(q.get('ds'));
-  if (wantEp) setDataset(datasetOf(wantEp), wantEp.file);
-  else if (ds) setDataset(ds);
+  if (wantEp) await setDataset(datasetOf(wantEp), wantEp.file);
+  else if (ds) await setDataset(ds);
   else renderRail(null);
+  prefetchWhenIdle();
+}
+
+// ---- a dataset tab opens at once: its first episode is fetched ahead ----
+// Once the page is idle, and again as soon as the pointer rests on a tab, each dataset's first episode is fetched
+// ahead: its list (a static build), its labels and the first frame of every camera it shows (the players' posters).
+// A tab click then renders from memory and the browser's cache. About a quarter of a megabyte per dataset; skipped
+// when the browser asks to save data.
+const _prefetched = new Set();
+const _prefetchImgs = [];            // kept, so the browser finishes loading them
+async function prefetchDataset(ds) {
+  if (!ds || _prefetched.has(ds)) return;
+  _prefetched.add(ds);
+  try {
+    await ensureDataset(ds);
+    const terms = searchTerms();
+    const first = railEps().find(e => datasetOf(e) === ds && matchesSearch(e, terms));
+    if (!first) return;
+    const d = BY && cmpHas(BY, first.file) ? await cmpEpisode(BY, first.file) : await fetchEpisode(first.file);
+    if (!d) return;
+    const eidEnc = encodeURIComponent((d._meta || {}).episode_id || '');
+    const {main, side} = episodeCams(d);
+    for (const cam of [main, ...side]) {
+      const src = posterSrc(first.file, eidEnc, cam);
+      if (!src) continue;
+      const im = new Image();
+      im.src = src;
+      _prefetchImgs.push(im);
+    }
+  } catch (e) { _prefetched.delete(ds); }
+}
+function prefetchWhenIdle() {
+  if (((globalThis.navigator || {}).connection || {}).saveData) return;
+  const order = presentDatasets(ALL_EPS);
+  const i = Math.max(0, order.indexOf(currentDataset));
+  // the tabs beside the open one first, then outwards
+  const queue = order.map((d, k) => [Math.abs(k - i), d]).sort((a, b) => a[0] - b[0]).map(x => x[1])
+    .filter(d => d !== currentDataset);
+  const idle = window.requestIdleCallback || (fn => setTimeout(fn, 400));
+  const step = () => { const ds = queue.shift(); if (!ds) return;
+    prefetchDataset(ds).finally(() => idle(step, {timeout: 2000})); };
+  idle(step, {timeout: 2000});
 }
 
 // Back and forward between episodes (and labellers) update the view.
@@ -2556,11 +2653,14 @@ function renderCoverage(ds, shown) {
     + `<span class="cv-fig"><span><b>${src.length.toLocaleString()}</b><small>episodes</small></span>`
     + `<span><b>${fmtSpan(sumDur(src), true)[0]}</b><small>${fmtSpan(sumDur(src), true)[1]}</small></span></span>`
     + `</div><div class="cv-cells" role="tablist">${tabs}</div>`;
-  coverageEl.querySelectorAll('.cv-cell').forEach(el => el.addEventListener('click', () => {
-    if (el.classList.contains('none')) return;
-    if (document.body.classList.contains('view-cmp')) { leaveCompare(el.dataset.ds); return; }
-    if (el.dataset.ds !== currentDataset) setDataset(el.dataset.ds);
-  }));
+  coverageEl.querySelectorAll('.cv-cell').forEach(el => {
+    el.addEventListener('click', () => {
+      if (el.classList.contains('none')) return;
+      if (document.body.classList.contains('view-cmp')) { leaveCompare(el.dataset.ds); return; }
+      if (el.dataset.ds !== currentDataset) setDataset(el.dataset.ds);
+    });
+    if (!el.classList.contains('none')) el.addEventListener('pointerenter', () => prefetchDataset(el.dataset.ds));
+  });
   // when the tabs scroll, the open dataset's tab is always in view (a deep link to the last dataset included)
   const onTab = coverageEl.querySelector('.cv-cell.on'), strip = coverageEl.querySelector('.cv-cells');
   if (onTab && strip && strip.scrollWidth > strip.clientWidth) {
@@ -2570,22 +2670,34 @@ function renderCoverage(ds, shown) {
   }
 }
 
+// the heading over the list: the dataset it holds, and how many of its episodes the filter and the search leave
+function renderRailHead(ds, eps) {
+  const all = ds ? railEps().filter(e => datasetOf(e) === ds) : [];
+  document.getElementById('rd-name').textContent = ds ? (DS_SHORT[ds] || dsLabel(ds)) : '';
+  const [h, u] = fmtSpan(sumDur(all), true);
+  document.getElementById('rd-sub').innerHTML = !ds ? ''
+    : eps.length !== all.length ? `<em>${eps.length.toLocaleString()}</em> of ${all.length.toLocaleString()} episodes`
+    : `${all.length.toLocaleString()} ${all.length === 1 ? 'episode' : 'episodes'} &middot; ${h} ${u}`;
+}
+
 function renderRail(ds, keepFile, fromSearch) {
   const terms = searchTerms();
   const eps = railEps().filter(e => datasetOf(e) === ds && matchesSearch(e, terms) && matchesIssueFilter(e));
   renderCoverage(ds, eps);
+  renderRailHead(ds, eps);
   epListEl.innerHTML = '';
   if (!eps.length && terms.length) {
-    // nothing here matches the search: keep the open episode on screen, and point at any
-    // other dataset that does hold a match rather than leaving a dead end
+    // the search looks in the dataset shown; nothing here matches, so say so and name the dataset, keep the open
+    // episode on screen, and name any other dataset that holds a match rather than leaving a dead end
     const elsewhere = new Map();
     for (const e of railEps()) if (datasetOf(e) !== ds && matchesSearch(e, terms)) elsewhere.set(datasetOf(e),
       (elsewhere.get(datasetOf(e)) || 0) + 1);
     const where = Array.from(elsewhere.entries()).map(([d, n]) => `<span class="es-jump" `
       + `data-ds="${esc(d)}">${esc(DS_SHORT[d] || dsLabel(d))}${n > 1 ? ` (${n})` : ''}</span>`).join(', ');
-    epListEl.innerHTML = '<div class="rail-empty">No episode in ' + esc(DS_SHORT[ds] || dsLabel(ds))
-      + ' matches "' + esc(SEARCH) + '"' + (ISSUE_FILTER ? ' with this issue filter' : '') + '.'
-      + (where ? '<br>Found in ' + where : '') + '</div>';
+    const one = elsewhere.size === 1 && [...elsewhere.values()][0] === 1;
+    epListEl.innerHTML = `<div class="rail-empty"><b>No episode in ${esc(DS_SHORT[ds] || dsLabel(ds))} matches `
+      + `&ldquo;${esc(SEARCH)}&rdquo;${ISSUE_FILTER ? ' with this issue filter' : ''}.</b>`
+      + (where ? `<br>${one ? 'It is an episode of' : 'Episodes that match are in'} ${where}.` : '') + '</div>';
     epListEl.querySelectorAll('.es-jump').forEach(j => j.addEventListener('click', () => setDataset(j.dataset.ds)));
     updateKpExport();
     return;
@@ -3109,23 +3221,6 @@ function renderEp(d, opts) {
   const keyEvents = (d.key_events || []).filter(k => k.t_s != null)
       .slice().sort((a, b) => a.t_s - b.t_s);
 
-  // Key-event chapters: each event spans from its time to the next event
-  // (last runs to the end), giving contiguous labeled phases for the second bar.
-  const CHAP_COLORS = ['#d6d5cc', '#c2c1b7'];
-  const chapters = keyEvents.map((k, i) => ({
-    t0: k.t_s,
-    t1: (i + 1 < keyEvents.length ? keyEvents[i + 1].t_s : duration),
-    label: k.label || '', kind: k.kind || '', outcome: (k.outcome || '').toLowerCase(),
-    color: CHAP_COLORS[i % CHAP_COLORS.length],
-  }));
-  let chaptersHtml = '';
-  chapters.forEach((c, i) => {
-    const w = Math.max(0, c.t1 - c.t0) / duration * 100;
-    chaptersHtml += `<div class="chap" data-t="${c.t0}" data-i="${i}" style="flex:0 0 ${w}%;background:${c.color}" `
-      + `title="${i + 1}. ${c.kind ? esc(kindName(c.kind)) + ': ' : ''}${esc(c.label)}">${w >= (i + 1 >= 10 ? 3.4 : 2.4)
-      ? `<span class="cnum">${i + 1}</span>` : ''}</div>`;
-  });
-
   // Progress chart (top-left of the video). One task: per-step progress toward the goal (climbs to 100%). A session of
   // tasks: the per-step progress is relative to the current task, so plotting it raw would sawtooth, and plotting only
   // the tasks done makes a session with one task jump from 0 to 100%. So it folds both: (tasks done before t + the
@@ -3234,12 +3329,11 @@ function renderEp(d, opts) {
   const eidEnc = encodeURIComponent(meta.episode_id || '');
   // cameras this episode actually has (FastUMI: grippers only, no top camera). The main player shows
   // the top camera when there is one, else the first gripper camera; side cells show the rest.
-  const camViews = (d.camera_views && d.camera_views.length) ? d.camera_views : ['exo', 'left', 'right'];
+  const {views: camViews, main: mainCam} = episodeCams(d);
   const camNameOf = v => {
     const i = camViews.indexOf(v);
     return (d.camera_labels && i >= 0 && d.camera_labels[i]) || v;
   };
-  const mainCam = camViews.includes('exo') ? 'exo' : camViews[0];
   const hasTop = mainCam === 'exo';
   const sideCams = camViews.filter(v => v !== mainCam && v !== 'exo');
   const camLabel = v => v === 'exo' ? 'exo'
@@ -3248,7 +3342,9 @@ function renderEp(d, opts) {
   const videoUrlWL = videoSrc(eidEnc, 'left');
   const videoUrlWR = videoSrc(eidEnc, 'right');
 
-  // LEFT COLUMN: video, timeline, problems, key events, completion, scene and inventory
+  // LEFT COLUMN, in reading order: the footage and its timeline; what happened (key events) and whether the task was
+  // done; how well it was done; what is wrong with the episode (its problems) and every check run on it; the
+  // dataset's own labels; then the scene (state changes, object relationships, inventory)
   let invHtml = '';
   for (const o of inv) {
     invHtml += `<div class="it"><span class="name">${esc(o.name || '?')}</span>`
@@ -3269,10 +3365,9 @@ function renderEp(d, opts) {
   let keyPanelHtml = '';
   keyEvents.forEach((k, i) => {
     const oc = (k.outcome || '').toLowerCase();
-    const col = CHAP_COLORS[i % CHAP_COLORS.length];
     const goalish = k.kind === 'goal_reached' || k.kind === 'subgoal_complete';
     keyPanelHtml += `<div class="key-ev ${oc}${goalish ? ' goal' : ''}" data-t="${k.t_s}">
-      <span class="ke-num" style="background:${col}">${i + 1}</span>
+      <span class="ke-num">${i + 1}</span>
       <span class="ke-time">${fmtT(k.t_s)}</span>
       <div class="ke-body">
         <div class="ke-row1"><span class="ke-label">${esc(k.label || '')}</span>${oc
@@ -3352,7 +3447,7 @@ function renderEp(d, opts) {
     <div class="info-block di-block"><div class="di-row high">
       <span class="di-sev">check</span>
       <div class="di-body">
-        <div class="di-issue">Sped-up recording: the video and robot state play back faster than real time.</div>
+        <div class="di-issue">The video and robot state play back faster than real time.</div>
         <div class="di-tags"><span class="di-cat">${esc(famName('sped-up'))}</span></div>
         <div class="di-ev">The recorder skipped ${((tb.skipped_frac || 0) * 100).toFixed(1)}% and `
           + `repeated ${((tb.repeated_frac || 0) * 100).toFixed(1)}% of samples and the follower arm trails the `
@@ -3361,6 +3456,11 @@ function renderEp(d, opts) {
       </div></div></div>` : '';
   // the entries that count first, then the minor ones, marked; excluded entries (_excluded) are never shown
   const byCount = list => [...list.filter(countsIssue), ...list.filter(x => !countsIssue(x))];
+  // an issue a person checked on the episode's frames, or a deterministic check confirmed, says so; one the model
+  // gave in its free-text notes rather than its list of issues says that
+  const verifiedChip = x => x.verified !== 'confirmed' ? '' : `<span class="di-verified" `
+    + `title="${esc(x.verified_note || '')}">${x.verified_by === 'check' ? 'confirmed by a deterministic check'
+      : 'checked on the frames'}</span>`;
   const issueRows = (list, key) => byCount(list).map(x => {
       const t = (x.t_s != null && !isNaN(parseFloat(x.t_s))) ? x.t_s : null;
       const minor = !countsIssue(x);
@@ -3373,7 +3473,8 @@ function renderEp(d, opts) {
           <div class="di-tags">${minor ? '<span class="di-minor" title="shown, not counted">minor</span>'
             : ''}${x.family || x.category ? `<span class="di-cat" title="${esc(x.category || '')}">${esc(x.family
             ? famName(x.family) : tagName(x.category, key))}</span>` : ''}${t != null
-            ? `<span class="di-t">@ ${esc(fmtT(t))}</span>` : ''}</div>
+            ? `<span class="di-t">@ ${esc(fmtT(t))}</span>` : ''}${verifiedChip(x)}${x.derived_from
+            ? `<span class="di-cat" title="${esc(x.evidence || '')}">from the model's notes</span>` : ''}</div>
           ${x.evidence ? `<div class="di-ev">${esc(x.evidence)}</div>` : ''}
         </div>
       </div>`; }).join('');
@@ -3382,8 +3483,7 @@ function renderEp(d, opts) {
     <div class="info-block di-block"><div class="di-row high">
       <span class="di-sev">check</span>
       <div class="di-body">
-        <div class="di-issue">Camera streams are crossed with the recorded motion: each gripper camera moves with the `
-          + `other side's recorded motion.</div>
+        <div class="di-issue">Each gripper camera moves with the other side's recorded motion.</div>
         <div class="di-tags"><span class="di-cat">${esc(famName('streams-crossed'))}</span></div>
         <div class="di-ev">The left stream's image change follows the right side's recorded speed (r `
           + `= ${sp.left_vs_right}) better than its own (${sp.left_vs_left}), and the right stream follows the left `
@@ -3396,8 +3496,8 @@ function renderEp(d, opts) {
     <div class="info-block di-block">${rjEv.map(e => `<div class="di-row high" data-t="${e.t_s}">
       <span class="di-sev">check</span>
       <div class="di-body">
-        <div class="di-issue">Recorded jump with no camera jump: the ${esc(e.actor)} ${esc(e.unit === 'cm' ? 'gripper'
-          : 'arm')}'s recorded motion leaps ${e.step} ${esc(e.unit)} in one frame.</div>
+        <div class="di-issue">The ${esc(e.actor)} ${esc(e.unit === 'cm' ? 'gripper' : 'arm')}'s recorded motion leaps `
+          + `${e.step} ${esc(e.unit)} in one frame, and its camera does not jump.</div>
         <div class="di-tags"><span class="di-cat">${esc(famName('recorded-jump'))}</span><span `
           + `class="di-t">@ ${esc(fmtT(e.t_s))}</span></div>
         <div class="di-ev">Its typical step is ${e.typical_p95} ${esc(e.unit)} (95th percentile). The ${esc(e.camera
@@ -3529,14 +3629,17 @@ function renderEp(d, opts) {
           <video id="video" controls preload="auto" playsinline${keep ? '' : ` src="${videoUrl}"${posterAttr(eidEnc,
             mainCam)}`}></video>
           ${isEgo ? '<canvas class="hp-canvas" id="hp-canvas" aria-hidden="true"></canvas>' : ''}
-          ${isEgo ? `<div class="ego-status" id="ego-status">
-            <span class="es-pov ${d.viewpoint === 'third_person' ? 'exo' : ''}">${
-              d.viewpoint === 'third_person' ? '&#9673; exo &middot; third-person'
-              : d.viewpoint === 'first_person' ? '&#9673; ego &middot; first-person'
-              : '&#9673; ego view'}</span>
-            <span class="es-hand" id="es-hand"></span>
-          </div>` : ''}
-          ${progOverlayHtml}
+          ${isEgo ? `<div class="top-hud" id="top-hud"><div class="top-hud-in">
+            <div class="th-l">${progOverlayHtml}</div>
+            <div class="ego-status" id="ego-status">
+              <span class="es-pov ${d.viewpoint === 'third_person' ? 'exo' : ''}">${
+                d.viewpoint === 'third_person' ? '&#9673; exo &middot; third-person'
+                : d.viewpoint === 'first_person' ? '&#9673; ego &middot; first-person'
+                : '&#9673; ego view'}</span>
+              <span class="es-hand" id="es-hand"></span>
+            </div>
+            <div class="th-r"></div>
+          </div></div>` : progOverlayHtml}
           ${gripOnly ? '' : notesHtml}
         </div>
         ${isEgo ? '' : sideCams.map(v => `
@@ -3559,13 +3662,6 @@ function renderEp(d, opts) {
     </div>
     ${laneHtml}
     ${failed ? '' : `
-    ${chapters.length ? `<div class="chapters-title">Key-event chapters</div><div class="chapters" `
-      + `id="chapters">${chaptersHtml}</div><div class="chapters-caption" id="chapters-caption"></div>` : ''}
-
-    ${problemsAndNotes}
-
-    ${pubHtml}
-
     <h3 class="section">Key events <span class="count">${keyEvents.length}</span></h3>
     <div class="info-block"><div class="key-events">${keyPanelHtml || '<span style="color:var(--fg-3)">none</span>'}`
       + `</div></div>
@@ -3573,9 +3669,14 @@ function renderEp(d, opts) {
     ${tasksSection}
 
     ${perfHtml ? `<h3 class="section">How well was the task executed?</h3>${perfHtml}` : ''}
+    ${rcHtml ? `<h3 class="section">Recoveries</h3><div class="info-block">${rcHtml}</div>` : ''}
+
+    ${problemsAndNotes}
+
+    ${pubHtml}
+
     ${scHtml ? `<h3 class="section">What physically changed over the episode?</h3><div class="info-block">${scHtml}`
       + `</div>` : ''}
-    ${rcHtml ? `<h3 class="section">Recoveries</h3><div class="info-block">${rcHtml}</div>` : ''}
 
     <h3 class="section">Object relationships</h3>
     <div class="info-block sg-snap" id="sg-snap"></div>
@@ -3765,9 +3866,6 @@ function renderEp(d, opts) {
   document.querySelectorAll('.lane .lane-seg[data-t], .pub-list .pub-row[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
-  document.querySelectorAll('.chapters .chap[data-t]').forEach(c => {
-    c.addEventListener('click', () => seek(c.dataset.t));
-  });
   document.querySelectorAll('.rec [data-t]').forEach(r => {
     r.addEventListener('click', e => { e.stopPropagation(); seek(r.dataset.t); });
   });
@@ -3829,7 +3927,7 @@ function renderEp(d, opts) {
       || 'key event')}</span><span class="vo-key-label">${esc(k.label || '')}</span>${kOc
       ? `<span class="vo-key-outcome ${kOc}">${esc(kOc)}</span>` : ''}</div>` : '';
     overlay.innerHTML = `
-      ${cmpInfo ? `<span class="vo-src">Comparison &middot; ${esc(cmpInfo.name)}</span>` : ''}
+      ${cmpInfo ? `<span class="vo-src">Comparison &middot; ${esc(cmpFullName(cmpInfo.key))}</span>` : ''}
       ${goalHtml}
       ${keyHtml}
       <span class="vo-time">${ev.t_s.toFixed(1)}s</span>
@@ -3905,6 +4003,7 @@ function renderEp(d, opts) {
       `<div class="st-fromto"><span class="st-from">${esc(sc.from || '')}</span>` +
       `<span class="st-arr">&#8594;</span><span class="st-to">${esc(sc.to || '')}</span></div>`;
     stateToast.classList.add('active');
+    placeTop();
   }
 
   // ----- top-middle overlay: recovery, shown for the whole recovery period
@@ -3916,19 +4015,19 @@ function renderEp(d, opts) {
     .sort((a, b) => a.t0 - b.t0);
   const recOverlay = document.getElementById('recovery-overlay');
   const progOverlay = document.getElementById('prog-overlay');
-  // Drop the recovery banner directly beneath whichever top-corner chips are
-  // showing (progress is always up; state only during a change), so the three
-  // stack cleanly and never overlap regardless of text length.
-  function placeRecovery() {
-    if (!recOverlay || !exoCell) return;
+  const topHud = document.getElementById('top-hud');
+  // The notes that come and go at the top of the image stack under what is always there, so none covers another at
+  // any width or text length: on a head camera the state change goes under the top row; the recovery banner goes
+  // under the progress chip, the top row and a state change that is showing.
+  function placeTop() {
+    if (!exoCell) return;
     const cr = exoCell.getBoundingClientRect();
+    const below = c => c.getBoundingClientRect().bottom - cr.top + 8;
     let top = 8;
+    if (topHud) { top = below(topHud); if (stateToast) stateToast.style.top = top + 'px'; }
+    if (!recOverlay) return;
     for (const c of [progOverlay, stateToast]) {
-      if (!c) continue;
-      const vis = (c === progOverlay) || c.classList.contains('active');
-      if (!vis) continue;
-      const b = c.getBoundingClientRect().bottom - cr.top + 8;
-      if (b > top) top = b;
+      if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
     }
     recOverlay.style.top = top + 'px';
   }
@@ -3971,7 +4070,7 @@ function renderEp(d, opts) {
     }
     // reposition every active frame (the top-corner chips it sits below come and
     // go independently); the CSS `top` transition turns each move into a slide.
-    if (w) placeRecovery();
+    if (w) placeTop();
   }
 
   // ----- dense feed: highlight + auto-scroll the active row -----
@@ -3999,24 +4098,15 @@ function renderEp(d, opts) {
     }
   }
 
-  // ----- key-event chapters bar: highlight the current chapter -----
-  const chapEls = [...document.querySelectorAll('.chapters .chap')];
-  const chapCap = document.getElementById('chapters-caption');
-  let lastChap = -2;
-  function syncChapters(t) {
+  // ----- key events: the one the playhead last passed is marked -----
+  const keyEls = [...document.querySelectorAll('.key-events .key-ev')];
+  let lastKey = -2;
+  function syncKeyEvents(t) {
     let ai = -1;
-    for (let i = 0; i < chapters.length; i++) { if (t >= chapters[i].t0 && t < chapters[i].t1) { ai = i; break; } }
-    if (ai < 0 && chapters.length && t >= chapters[chapters.length - 1].t0) ai = chapters.length - 1;
-    if (ai === lastChap) return;
-    lastChap = ai;
-    chapEls.forEach((el, i) => el.classList.toggle('active', i === ai));
-    if (chapCap) {
-      chapCap.innerHTML = (ai >= 0 && chapters[ai])
-        ? `<span class="cc-idx" style="background:${chapters[ai].color}">${ai + 1}</span>${chapters[ai].kind
-          ? `<span class="cc-kind">${esc(kindName(chapters[ai].kind))}</span>`
-          : ''}<span class="cc-text">${esc(chapters[ai].label)}</span>`
-        : '';
-    }
+    for (let i = 0; i < keyEvents.length && keyEvents[i].t_s <= t + 0.05; i++) ai = i;
+    if (ai === lastKey) return;
+    lastKey = ai;
+    keyEls.forEach((el, i) => el.classList.toggle('now', i === ai));
   }
 
   // ----- scene graph: playhead-synced snapshot -----
@@ -4094,7 +4184,7 @@ function renderEp(d, opts) {
     // progress + state first so the recovery banner can place itself below the
     // corner chips that are actually visible this frame.
     renderProgress(t); renderState(t); renderRecovery(t);
-    renderOverlay(t); renderHands(t); renderTaskGoal(t); syncFeed(t); syncChapters(t); renderSceneGraph(t);
+    renderOverlay(t); renderHands(t); renderTaskGoal(t); syncFeed(t); syncKeyEvents(t); renderSceneGraph(t);
       syncLanes(t);
   }
   if (vid) {
@@ -4122,14 +4212,23 @@ const cmpCount = k => CMP ? Object.values(CMP.episodes).filter(e => e[k]).length
 // the model of the board's own labels, the reference every other model is measured against
 const refName = () => (CMP && CMP.reference && CMP.reference.name) || 'the board';
 const withAn = w => (/^[aeiou]/i.test(w) ? 'an ' : 'a ') + w;
-// the model's own name, for "<model>'s read": a run given an example is still that model
+const cap = w => w.charAt(0).toUpperCase() + w.slice(1);
+// a run whose prompt also held one complete annotation of the reference (of another episode of the same rig): the
+// model learns in context from that trace
+const icl = () => `in-context learning with ${withAn(refName())} trace`;
+// the model's own name, for "<model>'s read": a run with in-context learning is still that model
 function cmpWho(k) {
   const m = cmpModel(k);
   if (!m) return 'The model';
   return ((m.example && cmpModel(m.base)) || m).name;
 }
+// the run's full name: the model, and for an in-context run, how it was prompted
+function cmpFullName(k) {
+  const m = cmpModel(k);
+  return !m ? 'The model' : m.example ? `${cmpWho(k)}, ${icl()}` : m.name;
+}
 const ST_WORDS = {unparsed: 'did not parse', cut_off: 'cut off', no_response: 'no response', pending: 'not yet run'};
-// every model in the menu's order: each model, then its run given an example
+// every model in the menu's order: each model, then its in-context run
 function cmpMenuOrder() {
   const ms = (CMP && CMP.models) || [], out = [];
   for (const m of ms.filter(m => !m.example)) { out.push(m); out.push(...ms.filter(x => x.example && x.base === m.key)); }
@@ -4173,8 +4272,7 @@ function lbOpen(open) {
 }
 function lbNameHtml(m) {
   if (!m) return esc(refName());
-  return m.example ? `${esc(cmpWho(m.key))}<small class="lb-sub">given ${esc(withAn(refName()))} example</small>`
-    : esc(m.name);
+  return m.example ? `${esc(cmpWho(m.key))}<small class="lb-sub">${esc(cap(icl()))}</small>` : esc(m.name);
 }
 function renderLabelsBy() {
   lbEl.hidden = !CMP;
@@ -4183,12 +4281,11 @@ function renderLabelsBy() {
   lbEl.classList.toggle('cmp', !!m);
   document.getElementById('lb-name').innerHTML = lbNameHtml(m);
   const n = m ? cmpCount(BY) : ALL_EPS.length;
-  document.getElementById('lb-n').textContent = `${n.toLocaleString()} ${n === 1 ? 'episode' : 'episodes'}`;
-  lbBtn.title = m ? `${m.name}: its labels of the ${n} episodes it was asked to label, shown as a comparison`
+  lbBtn.title = m ? `${cmpFullName(BY)}: its labels of the ${n} episodes it was asked to label, shown as a comparison`
     : `${refName()}, the board’s own labels`;
   // a comparison is marked where it is chosen; the text stays while the note folds away, so it never jumps
-  if (m) document.getElementById('lb-note-in').innerHTML = `<b>A comparison, not ${ref}&rsquo;s labels.</b> Nothing `
-    + `on this board counts them, and its downloads stay ${ref}&rsquo;s.`;
+  if (m) document.getElementById('lb-note-in').innerHTML = `<b>A comparison, not ${ref}&rsquo;s labels.</b> The `
+    + `downloads stay ${ref}&rsquo;s.`;
   document.getElementById('lb-note').classList.toggle('off', !m);
   document.getElementById('rail-dl').classList.toggle('off', !!m);
   updateKpExport();
@@ -4200,10 +4297,10 @@ function buildLabelsMenu() {
       ? `<small>${esc(sub)}</small>` : ''}</span><span class="lb-o-n">${n.toLocaleString()}</span></button>`;
   lbMenu.innerHTML = `<div class="lb-group">This board</div>`
     + row('', refName(), 'the board’s own labels', ALL_EPS.length, !BY)
-    + `<div class="lb-sep"></div><div class="lb-group">Comparisons, not counted</div>`
-    + `<div class="lb-gnote">Other models&rsquo; labels of some of the same episodes, given the same prompt and `
-      + `frames. Nothing on this board counts them.</div>`
-    + cmpMenuOrder().map(m => row(m.key, cmpWho(m.key), [m.example ? `given ${withAn(refName())} example` : '',
+    + `<div class="lb-sep"></div><div class="lb-group">Comparisons</div>`
+    + `<div class="lb-gnote">Other models&rsquo; labels of some of the same episodes, from the same prompt and `
+      + `frames.</div>`
+    + cmpMenuOrder().map(m => row(m.key, cmpWho(m.key), [m.example ? cap(icl()) : '',
       here[m.key] ? 'includes this episode' : ''].filter(Boolean).join(' · '), cmpCount(m.key), BY === m.key)).join('')
     + `<button type="button" class="lb-go" data-go="compare"><span>How the models compare<small>Charts of every `
       + `model on the same episodes</small></span><span class="lb-arrow" aria-hidden="true">&rarr;</span></button>`;
@@ -4290,10 +4387,9 @@ function renderSourceBar() {
   // while the band folds away
   if (m) {
     sbBack.textContent = `Back to ${refName()}`;
-    sbNote.innerHTML = `<span class="sb-long"><b>Comparison: labels by ${esc(m.episode_name || m.name)}.</b> These are `
-      + `not ${ref}&rsquo;s labels, and nothing on this board counts them. The Episode JSON download stays `
-      + `${ref}&rsquo;s.</span><span class="sb-short"><b>Comparison, not ${ref}&rsquo;s labels.</b> Nothing counts `
-      + `them; downloads stay ${ref}&rsquo;s.</span>`;
+    sbNote.innerHTML = `<span class="sb-long"><b>Comparison: labels by ${esc(cmpFullName(m.key))}.</b> These are `
+      + `not ${ref}&rsquo;s labels. The Episode JSON download stays ${ref}&rsquo;s.</span><span class="sb-short">`
+      + `<b>Comparison, not ${ref}&rsquo;s labels.</b> Downloads stay ${ref}&rsquo;s.</span>`;
   }
   sbFit();
 }
@@ -4384,7 +4480,7 @@ const fUsd = v => '$' + (v >= 1 ? v.toFixed(2) : v.toFixed(3));
 const fSec = v => v >= 120 ? (v / 60).toFixed(1) + ' min' : Math.round(v) + ' s';
 const fMin = m => m >= 90 ? (m / 60).toFixed(1) + ' hours'
   : Math.round(m) + (Math.round(m) === 1 ? ' minute' : ' minutes');
-// models in the order every chart uses: the reference, then each model followed by its run given an example
+// models in the order every chart uses: the reference, then each model followed by its in-context run
 function cmpOrder() {
   const ms = CMP_METRICS.models, out = ms.filter(m => m.reference);
   for (const m of ms.filter(m => !m.reference && !m.example)) {
@@ -4395,8 +4491,13 @@ function cmpOrder() {
 }
 function cmpNameHtml(m) {
   if (m.example) { const b = CMP_METRICS.models.find(x => x.key === m.base); return `${esc((b
-    || m).name)}<small>given ${esc(withAn(refName()))} example</small>`; }
+    || m).name)}<small>${esc(cap(icl()))}</small>`; }
   return esc(m.name);
+}
+// the same as text: an in-context run is its model and how it was prompted
+function cmpNameText(m) {
+  const b = m.example && CMP_METRICS.models.find(x => x.key === m.base);
+  return b ? `${b.name}, ${icl()}` : m.name;
 }
 const MAIN_CHARTS = [
   {id: 'parse', title: 'Responses that parse', fmt: fPct, max: () => 1,
@@ -4510,8 +4611,9 @@ function buildCompare() {
       <p>${refH}&rsquo;s labels are this board&rsquo;s. On ${(all.episodes || 0).toLocaleString()} of its episodes,
         about ${fMin(all.minutes || 0)} of footage across ${rigWords}, ${esc(nameList)} labelled the same episodes
         with the same prompt, frames and output budget.${exN ? ` On ${exN.toLocaleString()} of those episodes each of
-        them labelled the episode a second time with one complete ${refH} annotation of a different episode of the
-        same rig in its prompt, as an example of the density and reasoning expected.` : ''}</p>
+        them labelled the episode a second time with in-context learning: its prompt also held one complete ${refH}
+        trace, the annotation of a different episode of the same rig, to show the density and reasoning expected.`
+        : ''}</p>
       <p>${refH}&rsquo;s numbers here are the board&rsquo;s own labels of the same episodes. Everything else on this
         page is a comparison: none of these labels enters the board&rsquo;s counts, filters, downloads or exports.
         There is no ground truth: agreement says how alike two models are, not which one is right. To read one
@@ -4524,15 +4626,15 @@ function buildCompare() {
     <p class="cmpv-sub">Every pair of models, on the episodes both of them parsed. Darker is closer agreement; each cell `
       + `gives its number of episodes.</p>
     <div class="cmpv-grid">${mx('outcome', 'Outcome agreement', 'The share of episodes on which two runs give the task '
-      + 'the same outcome (success, success then undone, partial, failure or unclear). Head-camera sessions grade each '
+      + 'the same outcome (success, success then undone, partial, failure or unclear). Human ego sessions grade each '
       + 'task separately and have no single outcome, so they are left out.')}
       ${mx('issues', 'Issue-type agreement', 'Of the kinds of problem either run reported in an episode (data issues '
         + 'and operator mistakes, every severity, grouped into the board’s issue families), the share both reported, '
         + 'summed over the episodes.')}</div>
-    ${pairs.length ? `<h3 class="section">Given ${esc(withAn(ref))} example</h3>
+    ${pairs.length ? `<h3 class="section">${esc(cap(icl()))}</h3>
     <p class="cmpv-sub" id="pr-sub"></p>
-    <div class="pr-key"><span><i class="k-open"></i>without the example</span><span><i class="k-fill"></i>given the `
-      + `example</span><span><i class="k-ref"></i>${refH} on the same episodes</span></div>
+    <div class="pr-key"><span><i class="k-open"></i>without the trace</span><span><i class="k-fill"></i>with the `
+      + `trace</span><span><i class="k-ref"></i>${refH} on the same episodes</span></div>
     <div class="cmpv-grid">${PAIR_CHARTS.map(pairCard).join('')}</div>` : ''}
     <h3 class="section">Episodes</h3>
     <p class="cmpv-sub">Each model&rsquo;s outcome for every episode of the comparison. Choose one to open the `
@@ -4614,16 +4716,16 @@ function updateCompare(first) {
         : `${g.issues_shared} of ${g.issues_union} kinds of problem in common over ${n} episodes`}`;
     });
     card.querySelector('.cc-foot').textContent = any ? '' : (id === 'outcome' && CMP_RIG === 'head_camera'
-      ? 'Head-camera sessions have no single outcome to compare.' : 'No pair of runs has an episode in common here '
+      ? 'Human ego sessions have no single outcome to compare.' : 'No pair of runs has an episode in common here '
         + 'yet.');
   }
   const pairs = (M.paired || {})[CMP_RIG] || [];
   const sub = document.getElementById('pr-sub');
   if (sub) sub.textContent = pairs.length
-    ? `Each model with and without one complete ${refName()} annotation of another episode of the same rig in its `
-      + `prompt, on the episodes both of its runs parsed: ${pairs.map(p => `${nm(p.base)} ${p.n}`).join(', ')}. Parse `
-      + `share, cost and time use every episode both runs were asked (${pairs.map(p => p.asked).join(', ')}).`
-    : 'No run given an example has episodes on this rig yet.';
+    ? `Each model with and without one complete ${refName()} trace (the annotation of another episode of the same rig) `
+      + `in its prompt, on the episodes both of its runs parsed: ${pairs.map(p => `${nm(p.base)} ${p.n}`).join(', ')}. `
+      + `Parse share, cost and time use every episode both runs were asked (${pairs.map(p => p.asked).join(', ')}).`
+    : 'No in-context run has episodes on this rig yet.';
   for (const c of PAIR_CHARTS) {
     const el = cmpView.querySelector(`[data-pair="${c.id}"]`);
     if (!el) continue;
@@ -4651,8 +4753,8 @@ function updateCompare(first) {
       row.querySelector('small').textContent = !ok ? '' : c.delta ? c.delta(a, b)
         : c.fmt(Math.abs(dd)) === c.fmt(0) ? 'no change' : `${dd > 0 ? '+' : '-'}${c.fmt(Math.abs(dd))}`;
       row.style.display = p ? '' : 'none';
-      row.dataset.tip = ok ? `<b>${esc(c.fmt(a))} → ${esc(c.fmt(b))}</b>${esc(nm(p.base))}, without and given the `
-        + `example${r != null ? `<br>${esc(refName())} on the same ${p.reference_n} episodes: ${esc(c.fmt(r))}` : ''}`
+      row.dataset.tip = ok ? `<b>${esc(c.fmt(a))} → ${esc(c.fmt(b))}</b>${esc(nm(p.base))}, without and with the `
+        + `trace${r != null ? `<br>${esc(refName())} on the same ${p.reference_n} episodes: ${esc(c.fmt(r))}` : ''}`
         : `<b>no data</b>`;
     });
   }
@@ -4677,7 +4779,7 @@ async function renderEpisodeTable(order, first) {
     else { cls = 'fail'; txt = ST_WORDS[r.status] || r.status; }
     const href = `?ep=${encodeURIComponent(e.file)}${by ? '&by=' + encodeURIComponent(by) : ''}`;
     return `<td class="${m.reference ? 'ref-col' : ''}"><a class="et-o ${esc(cls)}" href="${href}" `
-      + `data-file="${esc(e.file)}" data-by="${esc(by)}" title="open with ${esc((by ? (m.episode_name || m.name)
+      + `data-file="${esc(e.file)}" data-by="${esc(by)}" title="open with ${esc((by ? cmpNameText(m)
       : refName()) + '’s labels')}">${esc(txt)}</a></td>`;
   };
   const html = `<table class="et"><thead><tr><th>Episode</th><th>Dataset</th><th>Length</th>`
@@ -4711,22 +4813,45 @@ loadEpisodes();
 """
 
 
+# the title bar, which a site header (--header) replaces
+PAGE_HEAD = ('<header class="page-head"><h1>__PAGE_TITLE__</h1>'
+             '<span class="ph-board">__BOARD_NAME__</span></header>')
+
+
 def _js(v) -> str:
     return json.dumps(v, separators=(",", ":")).replace("<", "\\u003c")
 
 
-def render_index(title: str, board: dict, name: str = "") -> str:
+def read_header(path: Path | None) -> str | None:
+    """A site header for the page (--header): the file's HTML, or None when no file is given."""
+    return Path(path).read_text() if path else None
+
+
+def render_index(title: str, board: dict, name: str = "", header: str | None = None) -> str:
     """The page with its title, the board's name and its data source filled in. `board` is {"mode": "api"} for this
     server, or {"mode": "static", "data": <base>, "media": <base>} for a static build (board/static.py); "compare":
     true, "hands": true and "keypoints": true tell the page the board has other models' labels, hand pose drawings
-    or hand keypoint downloads to ask for."""
+    or hand keypoint downloads to ask for. `header` is a site's own header, for a board served as part of a site: its
+    markup takes the place of the page's title bar and its <style> blocks go into the page's head (a header of another
+    height sets --header-h, which the page's sticky offsets read)."""
     cfg = {**board, "models": model_names()}
-    return (INDEX_HTML.replace("__PAGE_TITLE__", html.escape(title)).replace("__BOARD_NAME__", html.escape(name))
+    page = INDEX_HTML
+    if header is not None:
+        styles = "".join(re.findall(r"<style>.*?</style>", header, re.S))
+        markup = re.sub(r"<style>.*?</style>", "", header, flags=re.S).strip()
+        page = page.replace(PAGE_HEAD, markup, 1).replace("</head>", styles + "\n</head>", 1)
+    return (page.replace("__PAGE_TITLE__", html.escape(title)).replace("__BOARD_NAME__", html.escape(name))
             .replace("__BOARD_CONFIG__", _js(cfg)).replace("__TAG_NAMES__", _js(load_tag_names()))
-            .replace("__FAMILIES__", _js(FAMILIES.catalog())))
+            .replace("__FAMILIES__", _js({**FAMILIES.catalog(), **capture_catalog()})))
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    # keep-alive: a page asks for its labels, posters and three videos at once, and a proxy in front (or a browser
+    # that talks to the board directly) reuses one connection for them instead of opening one per request; an idle
+    # connection is closed after `timeout` seconds
+    protocol_version = "HTTP/1.1"
+    timeout = 30
+
     def log_message(self, *a, **kw):
         pass
 
@@ -4782,6 +4907,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 self.send_response(416)
                 self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
 
@@ -4813,6 +4939,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 try:
                     self.wfile.write(buf)
                 except (BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
                     break
                 remaining -= len(buf)
         finally:
@@ -4858,7 +4985,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # them (no request that can only fail)
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
                    "keypoints": (KEYPOINTS_DIR / "index.json").is_file()}
-            self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME), "text/html; charset=utf-8")
+            self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
             return
         if parsed.path == "/api/episodes":
             self._send(200, list_episodes())
@@ -4983,7 +5110,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main(argv=None) -> int:
-    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, PORT, PAGE_TITLE, BOARD_NAME
+    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, PORT, PAGE_TITLE, BOARD_NAME, HEADER
     ap = argparse.ArgumentParser(prog="python -m board serve", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", type=Path, required=True, help="a board folder (its qa/ holds the episode files)")
@@ -4991,14 +5118,17 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=PORT, help=f"the port to listen on (default {PORT})")
     ap.add_argument("--title", default=PAGE_TITLE, help=f"the page title, in the header and the browser tab "
                                                         f"(default {PAGE_TITLE!r})")
+    ap.add_argument("--header", type=Path, help="an HTML file with a site's own header, shown in place of the page's "
+                                                "title bar (its <style> blocks go into the page's head)")
     a = ap.parse_args(argv)
     HERE = (a.board / "qa").resolve()
     MP4_DIR = a.clips.resolve()
     COMPARE_DIR = (a.board / "compare").resolve()
     HANDS_DIR = (a.board / "hands").resolve()
     KEYPOINTS_DIR = (a.board / "hand_keypoints").resolve()
-    PORT, PAGE_TITLE, BOARD_NAME = a.port, a.title, board_name(a.board)
+    PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
     socketserver.ThreadingTCPServer.allow_reuse_address = True
+    socketserver.ThreadingTCPServer.daemon_threads = True
     with socketserver.ThreadingTCPServer(("", PORT), Handler) as httpd:
         print(f"board at http://localhost:{PORT} ({len(list_episodes())} episodes from {HERE}, clips from {MP4_DIR})",
               flush=True)

@@ -100,6 +100,59 @@ def test_render_index_fills_every_placeholder():
     assert "Pantheon" not in page and "\u2014" not in page and "\u2013" not in page
 
 
+def test_a_site_header_takes_the_place_of_the_title_bar():
+    """A board served as part of a site shows the site's own header (--header): its markup where the title bar was,
+    its styles in the page's head, and nothing else of the page changed."""
+    header = '<style>.site { height: 76px; } :root { --header-h: 76px; }</style>\n<header class="site">Site</header>'
+    plain = serve.render_index("Data Board", {"mode": "api"}, "trial")
+    page = serve.render_index("Data Board", {"mode": "api"}, "trial", header)
+    head, body = page.split("</head>", 1)
+    assert '<header class="site">Site</header>' in body and 'class="page-head"' not in body
+    assert "--header-h: 76px" in head and "<style>.site" not in body
+    assert page.split("<script>", 1)[1] == plain.split("<script>", 1)[1]
+
+
+def test_capture_check_families_are_keyed_by_the_check():
+    """A capture check that fired is a family of its own under the check's id, so renaming a check never moves its
+    episodes to another family; the page's catalog gives it the check's current name."""
+    d = _episode("galaxea", "teleop_arms", dataset_checks={"capture_qc": {
+        "checks": [{"check": "video_frozen_run", "name": "An older name", "status": "fired", "shown_as": "issue"}],
+        "flags": [{"check": "video_frozen_run", "title": "the left camera repeats one frame"}]}})
+    fams = serve._families(d)["families"]
+    assert "cq:video_frozen_run" in fams and not any(f.startswith("d:An older") for f in fams)
+    from checks.capture_qc import NAMES
+    assert serve.capture_catalog()["cq:video_frozen_run"] == {"name": NAMES["video_frozen_run"][0], "list": "data",
+                                                             "check": True}
+
+
+def test_frames_are_kept_on_disk(tmp_path, monkeypatch):
+    """With BOARD_FRAME_DIR a frame cut once is served from disk after a restart (an empty memory cache), with no
+    ffmpeg run."""
+    clip = tmp_path / "episode_000001.mp4"
+    clip.write_bytes(b"not a video")
+    monkeypatch.setattr(serve, "_FRAME_DIR", tmp_path / "frames")
+    monkeypatch.setattr(serve, "FFMPEG", "/no/ffmpeg/here")
+    monkeypatch.setattr(serve, "_FRAME_CACHE", serve.OrderedDict())
+    key = (str(clip), int(clip.stat().st_mtime), 1.5, 640)
+    (tmp_path / "frames").mkdir()
+    (tmp_path / "frames" / (serve.hashlib.sha1(repr(key).encode()).hexdigest() + ".jpg")).write_bytes(b"jpeg")
+    assert serve.extract_frame(clip, 1.5, 640) == b"jpeg"
+    assert serve.extract_frame(clip, 2.5, 640) is None          # not on disk, and ffmpeg cannot run
+
+
+def test_one_connection_serves_several_requests(server):
+    """The server keeps a connection open (HTTP/1.1), so a page's labels, posters and videos share one."""
+    import http.client
+    host, port = server.split("//")[1].split(":")
+    c = http.client.HTTPConnection(host, int(port), timeout=10)
+    for path in ("/api/episodes", "/api/episode?file=episode_000001.json", "/api/video?id=episode_000001&cam=exo"):
+        c.request("GET", path, headers={"Range": "bytes=0-9"} if "video" in path else {})
+        r = c.getresponse()
+        assert r.status in (200, 206) and r.version == 11
+        r.read()
+    c.close()
+
+
 def test_page_script_parses(tmp_path):
     node = shutil.which("node")
     if not node:

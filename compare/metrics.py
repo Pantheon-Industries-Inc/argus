@@ -57,7 +57,7 @@ from label.harness import episode_cost
 FAMILIES = Families()
 MODELS_PATH = Path(__file__).resolve().parent.parent / "configs" / "models.json"
 RIGS ={"teleop_arms": "teleop", "handheld_gripper": "handheld", "ego_head": "head_camera"}
-RIG_NAMES = {"all": "All rigs", "teleop": "Teleop", "handheld": "Handheld gripper", "head_camera": "Head camera"}
+RIG_NAMES = {"all": "All rigs", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
 RESPONDED = ("parsed", "unparsed", "cut_off")
 OUTCOMES = ("success", "success_then_undone", "failure", "partial", "unclear")
 TASK_OUTCOMES = ("success", "partial", "failure")

@@ -39,12 +39,13 @@ Subcommands (all resumable):
   python -m board static measure --board BOARD --clips CLIPS
   python -m board static media --board BOARD --clips CLIPS [--limit-per-dataset 50] [--dataset NAME]
   python -m board static site --board BOARD --clips CLIPS [--public-base https://example.org/board/] [--title T]
+      [--header FILE]
 
 Every subcommand needs ffmpeg and ffprobe. Goal frames are cut by board/serve.py's extract_frame, so
 BOARD_FFMPEG_CONCURRENCY (default 4) also bounds how many are cut at once. OUT (--out) defaults to BOARD/static.
-The page's header shows --title (default "Data Board") and the board's name from BOARD/manifest.json. Test a
-build with any static server that answers byte ranges, e.g. `npx http-server BOARD/static -p 8991`, then open
-http://localhost:8991/<build_id>/.
+The page's header shows --title (default "Data Board") and the board's name from BOARD/manifest.json, or the site
+header in --header. Test a build with any static server that answers byte ranges, e.g.
+`npx http-server BOARD/static -p 8991`, then open http://localhost:8991/<build_id>/.
 board/publish.sh uploads a build with rclone (to an S3-compatible bucket, for example).
 """
 from __future__ import annotations
@@ -609,12 +610,13 @@ def cmd_site(a):
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
            "keypoints": bool(kp_res and kp_res["files"])}
     name = sa.board_name(a.board)
+    header = sa.read_header(getattr(a, "header", None))
     (stage / "index.html").write_text(sa.render_index(
-        a.title, {"mode": "static", "data": "data/", "media": "../media/", **has}, name))
+        a.title, {"mode": "static", "data": "data/", "media": "../media/", **has}, name, header))
     if a.public_base:
         base = a.public_base.rstrip("/") + "/"
         (stage / "index.public.html").write_text(sa.render_index(
-            a.title, {"mode": "static", "data": f"{base}{bid}/data/", "media": f"{base}media/", **has}, name))
+            a.title, {"mode": "static", "data": f"{base}{bid}/data/", "media": f"{base}media/", **has}, name, header))
     st, missing = media_status(eps, a.out / "media")
     build = {"build_id": bid, "built_at": dt.datetime.now().isoformat(timespec="seconds"), "code": _git_commit(),
              "qa": str(a.qa), "clips": str(a.clips), "enc": ENC_TAG, "public_base": a.public_base,
@@ -671,6 +673,8 @@ def main():
     ap.add_argument("--force", action="store_true", help="site: rewrite an existing build id")
     ap.add_argument("--title", default=TITLE, help=f"site: the page title, in the header and the browser tab "
                                                    f"(default {TITLE!r})")
+    ap.add_argument("--header", type=Path, help="site: an HTML file with a site's own header, shown in place of the "
+                                                "page's title bar (python -m board serve --header)")
     a = ap.parse_args()
     a.qa = a.board / "qa"
     a.out = a.out or a.board / "static"
