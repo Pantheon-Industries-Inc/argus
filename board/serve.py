@@ -3187,7 +3187,7 @@ function alignHeads() {
   const lb = document.querySelector('.lb'), eh = document.querySelector('.ep-head');
   if (!lb || !eh) return;
   for (const el of [lb, eh]) { el.style.marginTop = ''; el.style.paddingTop = ''; el.style.paddingBottom = ''; }
-  if (innerWidth < 1230 || lb.hidden || !eh.offsetParent) return;
+  if (!(window.innerWidth >= 1230) || lb.hidden || !eh.offsetParent || !lb.getBoundingClientRect) return;
   // same top and same inner top padding, so "Labels by" sits on the line of the header's "Episode"
   lb.style.paddingTop = getComputedStyle(eh).paddingTop;
   lb.style.marginTop = (eh.getBoundingClientRect().top - lb.getBoundingClientRect().top) + 'px';
