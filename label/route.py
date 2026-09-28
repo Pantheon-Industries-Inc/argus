@@ -64,8 +64,10 @@ def route_width(ep_dir: Path, api_key: str | None, call_model, timeout: int = 12
         return None, {"routed": False}
     low, high = me.ROUTE_WIDTHS[r]
     ctx = ep["context"]
-    has_task = any((ctx.get(k) or "") for k in ("instruction", "task_label", "annotation_subtasks",
-                                                "uploader_annotation"))
+    # a plain video's task label is only its file name, which says nothing about the task
+    real = any((ctx.get(k) or "") for k in ("instruction", "annotation_subtasks", "uploader_annotation"))
+    from_video = (ctx.get("source") or {}).get("format") == "video files"
+    has_task = real or (bool(ctx.get("task_label")) and not from_video)
     if not has_task:
         return high, {"routed": True, "fine_detail": None, "why": "no task text", "cell_w": high}
     if not api_key:
@@ -85,9 +87,10 @@ def route_width(ep_dir: Path, api_key: str | None, call_model, timeout: int = 12
             fine = ans.get("fine_detail")
             hit = {"fine_detail": fine if isinstance(fine, bool) else None, "why": str(ans.get("why") or "")[:200],
                    "cost_usd": float(((resp.get("usage") or {}).get("cost")) or 0.0)}
-        except Exception as e:   # the wide cells are always safe
+        except Exception as e:   # the wide cells are always safe; a failure is not cached, so the next episode retries
             hit = {"fine_detail": None, "why": f"routing failed: {str(e)[:120]}", "cost_usd": 0.0}
-        with _LOCK:
-            _CACHE[text] = hit
+        else:
+            with _LOCK:
+                _CACHE[text] = hit
     w = low if hit["fine_detail"] is False else high
     return w, {"routed": True, "model": ROUTE_MODEL, **hit, "cell_w": w}

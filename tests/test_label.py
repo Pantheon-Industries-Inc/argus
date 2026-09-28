@@ -186,9 +186,9 @@ def test_no_rig_borrows_another_rigs_hardware():
 # The shared instructions each rig is sent, pinned so that no prompt text changes by accident. A deliberate prompt
 # change updates these in the same commit.
 PINNED = {
-    ("teleop_arms", True): "72a4fb82a15ac18c16b91edece03a72c91b253f867fa4de19f8cfbaa4d44a765",
+    ("teleop_arms", True): "fc67f8fae012d7d99f54a49e579cbdc5fcf26b69a126cb526a36abd20dbd0894",
     ("teleop_arms", False): "342c2403e3bfdfe60754e12a09eb784eab4c82aa5482bc9be49803454dda8904",
-    ("handheld_gripper", True): "a1b8844c4da85d681ee504779cca608e99af207f4a115a4bd0219f3d1d92aac4",
+    ("handheld_gripper", True): "091c5b0c2d0be2aaa51665261d21d0bcaf9db5d65654a706aff39c86a83edfa9",
     ("handheld_gripper", False): "522a9e944924ca471e00b11c6a0dcc8ed83e52179b514e8459caa3aa8f861b51",
     ("ego_head", True): "a7affbaf98aa34a92d93e6f271e99b935eedf0ca0b7c2768188693cddd455874",
     ("ego_head", False): "a7affbaf98aa34a92d93e6f271e99b935eedf0ca0b7c2768188693cddd455874",
@@ -278,13 +278,22 @@ def test_routing_reads_the_task_text_and_falls_back_to_wide_cells(tmp_path, monk
         call, _ = _route_call([answer])
         assert route.route_width(ep, "sk-or-x", call)[0] == 448
         monkeypatch.setattr(route, "_CACHE", {})
+    # a failed routing call is not cached: the next episode with the same task text asks again
+    call, calls = _route_call([RuntimeError("HTTP 500"), '{"fine_detail": false, "why": "whole objects"}'])
+    assert route.route_width(ep, "sk-or-x", call)[1]["why"].startswith("routing failed")
+    assert route.route_width(ep, "sk-or-x", call)[0] == 224 and len(calls) == 2
+    monkeypatch.setattr(route, "_CACHE", {})
     assert route.route_width(ep, None, call)[1]["why"] == "no key (dry run)"
     ctx = json.loads((ep / "context.json").read_text())
-    for k in ("instruction", "task_label"):
-        ctx.pop(k)
+    ctx.pop("instruction")
+    # a plain video's task label is its file name, which is no task text
+    (ep / "context.json").write_text(json.dumps({**ctx, "task_label": ["take_03"],
+                                                 "source": {"format": "video files", "file": "take_03.mp4"}}))
+    no_text = (448, {"routed": True, "fine_detail": None, "why": "no task text", "cell_w": 448})
+    assert route.route_width(ep, "sk-or-x", call) == no_text
+    ctx.pop("task_label")
     (ep / "context.json").write_text(json.dumps(ctx))
-    assert route.route_width(ep, "sk-or-x", call) == (448, {"routed": True, "fine_detail": None,
-                                                           "why": "no task text", "cell_w": 448})
+    assert route.route_width(ep, "sk-or-x", call) == no_text
     ctx["profile"] = "handheld_gripper"
     (ep / "context.json").write_text(json.dumps(ctx))
     assert route.route_width(ep, "sk-or-x", call) == (None, {"routed": False})

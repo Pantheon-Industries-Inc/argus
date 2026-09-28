@@ -57,7 +57,8 @@ def prepare_one(root: Path, rel: str, ep: Path, rig: str, dataset: str, given: d
     if not force and (ep / "context.json").exists():
         return "skip"
     name = rel.rsplit(".", 1)[0]
-    extra = {"task_label": [name], "source": {"file": rel}}
+    # the file name is the task label, and "video files" tells label/route.py that it is only a file name
+    extra = {"task_label": [name], "source": {"format": "video files", "file": rel}}
     instruction = (given.get("instruction") or "").strip()
     if instruction:
         extra["instruction"] = instruction

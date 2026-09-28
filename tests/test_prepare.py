@@ -277,7 +277,7 @@ def test_videos_adapter_prepares_each_file_with_its_instruction(tmp_path):
     assert b["instruction"] == "dry the mug"
     assert b["annotation_subtasks"] == [{"t0": 0.0, "t1": 0.5, "label": "pick up the towel"}]
     assert a["profile"] == "ego_head" and a["state_kind"] == "none" and a["dataset"] == "home"
-    assert a["n_state_frames"] == 40 and b["source"] == {"file": "kitchen/run_1.mp4"}
+    assert a["n_state_frames"] == 40 and b["source"] == {"format": "video files", "file": "kitchen/run_1.mp4"}
     req = me.build_request(out / "episode_kitchen_run_1_2")
     assert req["views"] == ["exo"] and 'goal: "dry the mug"' in req["prompt"]
     assert "0.0-0.5s  pick up the towel" in req["prompt"]

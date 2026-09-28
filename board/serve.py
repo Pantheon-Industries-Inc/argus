@@ -847,8 +847,8 @@ aside.left .cam-label {
 .video-overlay .vo-contrib.waste { background: rgba(217, 166, 87, 0.18); color: #e6b878; }
 .video-overlay .vo-contrib.idle  { background: rgba(255,255,255,0.12); color: #cfcfd6; }
 .video-overlay .vo-contrib.none  { background: rgba(255,255,255,0.10); color: #cfcfd6; }
-/* head camera, hands out of view: a pulsing ring on the cell and a pill at the top centre, so a viewer sees at once
-   that the annotation is inferred while the hands are not in shot rather than directly observed. */
+/* head camera, hands out of view: a pulsing ring on the cell and a pill in the status strip below it, so a viewer
+   sees at once that the annotation is inferred while the hands are not in shot rather than directly observed. */
 .cam-cell.hands-hidden::after {
   content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 6;
   border: 2px solid rgba(255,255,255,0.7); border-radius: inherit;
@@ -856,18 +856,19 @@ aside.left .cam-label {
   animation: handsPulse 1.6s ease-in-out infinite;
 }
 @keyframes handsPulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
-/* head-camera status strip (top-center): persistent POV chip + a hand-state chip that
-   adapts with the playhead (out of view / gloved). Prominent so it is not missed. */
+/* head-camera status strip, just below the footage at every width (on top of it, the strip ran into the progress
+   chip wherever the video column is narrow): a persistent POV chip and a hand-state chip that adapts with the
+   playhead (out of view, gloved). */
+aside.left .cam-cell:has(> .ego-status) { flex-wrap: wrap; }
+aside.left .cam-cell:has(> .ego-status) > video { flex: 1 0 100%; }
 .ego-status {
-  position: absolute; top: calc(var(--fx-top, 0px) + 12px); left: 50%; transform: translateX(-50%);
-  z-index: 7; display: flex; flex-direction: row; align-items: center; gap: 8px;
-  max-width: 92%; flex-wrap: wrap; justify-content: center;
+  order: 1; flex: 1 0 100%; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center;
+  justify-content: flex-start; gap: 8px; margin: 8px 0 2px;
 }
 .ego-status .es-pov, .ego-status .es-hand {
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 7px 14px; border-radius: var(--r-pill);
-  font-size: 14px; font-weight: 700; letter-spacing: 0.02em;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+  padding: 4px 10px; border-radius: var(--r-pill);
+  font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
 }
 .ego-status .es-pov {
   background: rgba(20, 22, 18, 0.82); border: 1px solid rgba(255,255,255,0.3); color: #e6e8df;
@@ -883,20 +884,15 @@ aside.left .cam-label {
 .ego-status .es-hand.hidden-hands { background: rgba(20, 22, 18, 0.9); border-color: rgba(255,255,255,0.45);
   color: #f3f2ec; }
 .ego-status .es-hand.gloved { background: rgba(20, 22, 18, 0.9); border-color: rgba(255,255,255,0.3); color: #e6e8df; }
-/* phones: the video is too small to carry a caption card and a status pill on top of it, so both move below the
-   footage (as the handheld grippers' strip already does), their space kept while hidden so nothing jumps */
+/* phones: the video is too small to carry the caption card on top of it, so it moves below the footage (as the
+   handheld grippers' strip already does), after the status strip, its space kept while hidden so nothing jumps */
 @media (max-width: 600px) {
-  aside.left .cam-cell:has(> .video-overlay), aside.left .cam-cell:has(> .ego-status) { flex-wrap: wrap; }
+  aside.left .cam-cell:has(> .video-overlay) { flex-wrap: wrap; }
   aside.left .cam-cell > video { flex: 1 0 100%; }
-  aside.left .cam-cell .ego-status { order: 1; flex: 1 0 100%; }
   aside.left .cam-cell .video-overlay { order: 2; flex: 1 0 100%; }
   aside.left .cam-cell .video-overlay, aside.left .cam-cell .video-overlay.active {
     position: static; transform: none; min-width: 0; max-width: none; margin: 6px 0 0; box-sizing: border-box;
     min-height: 64px; font-size: 13px; }
-  aside.left .cam-cell .ego-status { position: static; transform: none; max-width: none; margin: 8px 0 2px;
-    justify-content: flex-start; }
-  aside.left .cam-cell .ego-status .es-pov, aside.left .cam-cell .ego-status .es-hand { padding: 4px 10px;
-    font-size: 12px; box-shadow: none; }
 }
 section.right { overflow-y: auto; padding: 22px 28px; }
 

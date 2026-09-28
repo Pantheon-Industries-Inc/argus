@@ -157,7 +157,9 @@ def response(model: dict, name: str) -> dict:
     if f.exists():
         r = json.loads(f.read_text())
         u = r.get("usage") or {}
-        return {"status": "cut_off", "cost": u.get("cost"), "latency": None, "out_tokens": u.get("completion_tokens"),
+        # the harness records a cut-off reply's billed cost and its routing call like any other episode's
+        cost = round(episode_cost(r), 6) if u.get("est_cost_usd") is not None else u.get("cost")
+        return {"status": "cut_off", "cost": cost, "latency": None, "out_tokens": u.get("completion_tokens"),
                 "finish_reason": r.get("finish_reason"), "tail": r.get("content_tail") or "", "path": f}
     # only a run that finished (label/run.py writes "done", or "exit N" when some calls failed) has episodes it
     # will never answer; a running or interrupted run (killed from outside, then resumed) has episodes to come
