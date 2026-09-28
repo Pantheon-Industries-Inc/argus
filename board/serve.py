@@ -1083,11 +1083,24 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   border-radius: var(--r-sm); cursor: pointer; }
 .lane-seg { position: absolute; top: 2px; bottom: 2px; border-radius: 1px; }
 .lane-seg.hands { background: #d9a657; }
-/* the stretches of the hands lane as times: click one to jump there */
-.lane-jumps { margin: 5px 0 0; font: 500 10.5px/1.5 var(--mono); color: var(--fg-3); }
-.lane-jump { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: var(--fg-2);
-  text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
-.lane-jump:hover { color: var(--fg); text-decoration-color: var(--fg-3); }
+/* the hands lane: its name and share on the left, a stepper through its stretches on the right, one line over the
+   bar; the stretch under the playhead is lit */
+.lane-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px;
+  margin: 0 0 4px; }
+.lane-head .lane-title { margin: 0; }
+.lane-nav { display: inline-flex; align-items: center; gap: 2px; flex: none; margin-left: auto; }
+.lane-step { width: 20px; height: 20px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--fg-2);
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.lane-step svg { width: 10px; height: 10px; }
+.lane-step:hover { background: var(--bg); color: var(--fg); border-color: var(--border-strong); }
+.lane-pos { min-width: 88px; padding: 0 4px; white-space: nowrap; text-align: center; font: 500 10.5px/1 var(--mono); color: var(--fg-2);
+  font-variant-numeric: tabular-nums; }
+.lane-seg.hands { cursor: pointer; opacity: .55; transition: opacity .2s, background-color .2s; }
+.lane-seg.hands:hover { opacity: .85; }
+.lane-seg.hands.now { opacity: 1; background: #c98a2e; }
+/* the last lane keeps clear of the next section's rule, so the bar's edge is never doubled */
+.lane + section { margin-top: 22px; }
 .lane-seg.pub { background: rgba(69,129,142,0.45); }
 .lane-seg.pub.alt { background: rgba(69,129,142,0.28); }
 .lane-seg.pub.now { background: #45818e; }
@@ -3343,21 +3356,33 @@ function renderEp(d, opts) {
     ? ` <span class="lane-now" id="${id}-now"></span>` : ''}</div>`
     + `<div class="lane-bar">${segs}<div class="lane-ph"></div></div></div>`;
   let laneHtml = '';
-  // the lane's title gives how much of the clip that is (overlapping segments counted once)
-  const handSecs = (() => { let tot = 0, end = -1; for (const [a, b] of handSpans.slice().sort((x, y) => x[0] - y[0])) {
-    if (b <= end) continue; tot += b - Math.max(a, end); end = b; } return tot; })();
-  const handTitle = `Hands out of view <span class="lane-sum">${fmtT(handSecs)} in `
-    + `all, ${(100 * handSecs / Math.max(duration, 1e-6)).toFixed(handSecs / Math.max(duration, 1e-6) < 0.1 ? 1
-    : 0)}% of the clip</span>`;
+  // the stretches with the hands out of view: the model's spans merged where they are under 1.5 s apart, so one
+  // stretch on the bar is one step of the stepper
   const handStretches = handSpans.slice().sort((x, y) => x[0] - y[0]).reduce((acc, [a, b]) => {
     const last = acc[acc.length - 1];
     if (last && a - last[1] < 1.5) last[1] = Math.max(last[1], b); else acc.push([a, b]);
     return acc; }, []);
-  if (handSpans.length) laneHtml += lane('lane-hands', handTitle, false, handSpans.map(([a, b]) =>
-    `<div class="lane-seg hands" data-t="${a}" title="hands out of view ${fmtT(a)} to ${fmtT(b)}" `
-      + `style="left:${lanePct(a)}%;width:max(2px, ${lanePct(b) - lanePct(a)}%)"></div>`).join(''))
-    + `<div class="lane-jumps">Jump to ${handStretches.map(([a, b]) => `<button type="button" class="lane-jump" `
-      + `data-t="${a}" title="hands out of view ${fmtT(a)} to ${fmtT(b)}">${fmtT(a)}</button>`).join(', ')}</div>`;
+  // the share counts the model's own spans (overlaps once), as the dataset's overview does, not the merged gaps
+  const handSecs = (() => { let tot = 0, end = -1; for (const [a, b] of handSpans.slice().sort((x, y) => x[0] - y[0])) {
+    if (b <= end) continue; tot += b - Math.max(a, end); end = b; } return tot; })();
+  const handShare = handSecs / Math.max(duration, 1e-6);
+  const nHand = handStretches.length;
+  const chev = (d) => `<svg viewBox="0 0 10 10" aria-hidden="true"><path d="${d}" fill="none" stroke="currentColor" `
+    + `stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  if (nHand) laneHtml += `<div class="lane lane-hands" id="lane-hands">
+      <div class="lane-head">
+        <span class="lane-title">Hands out of view <span class="lane-sum">${(100 * handShare).toFixed(handShare < 0.1
+          ? 1 : 0)}% of the clip</span></span>
+        <span class="lane-nav" role="group" aria-label="Stretches with the hands out of view">
+          <button type="button" class="lane-step" data-dir="-1" aria-label="Previous stretch">${chev('M6.5 2 3.5 5l3 3')}</button>
+          <span class="lane-pos" id="lane-hands-pos">${nHand} ${nHand === 1 ? 'stretch' : 'stretches'}</span>
+          <button type="button" class="lane-step" data-dir="1" aria-label="Next stretch">${chev('M3.5 2l3 3-3 3')}</button>
+        </span>
+      </div>
+      <div class="lane-bar">${handStretches.map(([a, b], i) => `<div class="lane-seg hands" data-t="${a}" data-i="${i}" `
+        + `title="${fmtT(a)} to ${fmtT(b)}" style="left:${lanePct(a)}%;width:max(3px, ${lanePct(b) - lanePct(a)}%)">`
+        + `</div>`).join('')}<div class="lane-ph"></div></div>
+    </div>`;
   if (pubLabels.length) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
     `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" title="${esc(fmtT(x.t0) + ' to '
       + fmtT(x.t1) + ': ' + x.label)}" style="left:${lanePct(x.t0)}%;width:max(2px, `
@@ -3953,7 +3978,14 @@ function renderEp(d, opts) {
   document.querySelectorAll('.key-events .key-ev[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
-  document.querySelectorAll('.lane .lane-seg[data-t], .lane-jumps .lane-jump[data-t], .pub-list .pub-row[data-t]').forEach(r => {
+  document.querySelectorAll('#lane-hands .lane-step').forEach(bt => bt.addEventListener('click', () => {
+    const t = vid ? vid.currentTime : 0;
+    // previous: the start of the stretch the playhead is in once it is over a second into it, else the one before
+    const i = bt.dataset.dir === '1' ? handStretches.findIndex(([a]) => a > t + 0.05)
+      : handStretches.map(([a]) => a).reduce((k, a, j) => (a < t - 1 ? j : k), -1);
+    if (i >= 0) seek(handStretches[i][0]);
+  }));
+  document.querySelectorAll('.lane .lane-seg[data-t], .pub-list .pub-row[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
   document.querySelectorAll('.rec [data-t]').forEach(r => {
@@ -4258,9 +4290,19 @@ function renderEp(d, opts) {
   }
 
   // the lanes' playheads, the dataset label under the playhead, and its row in the list
-  let _pubIdx = -2;
+  let _pubIdx = -2, _handIdx = -2;
   function syncLanes(t) {
     document.querySelectorAll('.lane .lane-ph').forEach(p => { p.style.left = lanePct(t) + '%'; });
+    if (handStretches.length) {
+      const k = handStretches.findIndex(([a, b]) => a <= t + 0.05 && t < b);
+      if (k !== _handIdx) {
+        _handIdx = k;
+        document.querySelectorAll('#lane-hands .lane-seg').forEach(g => g.classList.toggle('now', +g.dataset.i === k));
+        const pos = document.getElementById('lane-hands-pos');
+        if (pos) pos.textContent = k >= 0 ? `${k + 1} of ${handStretches.length}`
+          : `${handStretches.length} ${handStretches.length === 1 ? 'stretch' : 'stretches'}`;
+      }
+    }
     if (!pubLabels.length) return;
     let idx = -1;
     for (let i = 0; i < pubLabels.length; i++) { if (pubLabels[i].t0 <= t + 0.05 && t < pubLabels[i].t1) { idx = i;
