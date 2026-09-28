@@ -4,7 +4,7 @@ Dense annotations and data-quality checks for robot-learning episodes, from Pant
 
 [Blog post](https://pantheon.inc/research/we-looked-at-everything) · [Data board](https://pantheon.inc/data-board) · [Label your own data](https://pantheon.inc/data-review)
 
-This is the pipeline behind *We Looked at Everything*, where it labelled 3,540 episodes (66 hours) from nine public datasets of teleoperated arms, handheld grippers and head cameras. It takes an episode as it was recorded, from a single video with no instruction to a full dataset with instructions and recorded state, and returns a dense timeline with each action judged advancing, wasteful or idle, progress toward the goal, key events and subgoals, operator mistakes, changes a person made to the scene, and the instruction checked against the footage. Deterministic checks run beside the model for what it should not be trusted with, such as recordings that play faster than real time, camera files swapped between arms, gripper channels that never move and poor capture.
+This is the pipeline behind *We Looked at Everything*, where it labelled 3,546 episodes (66.5 hours) from nine public datasets of teleoperated arms, UMI grippers and human ego video. It takes an episode as it was recorded, from a single video with no instruction to a full dataset with instructions and recorded state, and returns a dense timeline with each action judged advancing, wasteful or idle, progress toward the goal, key events and subgoals, operator mistakes, changes a person made to the scene, and the instruction checked against the footage. Deterministic checks run beside the model for what it should not be trusted with, such as recordings that play faster than real time, camera files swapped between arms, a recorded gripper opening that never changes and poor capture.
 
 The labels come from Astra (`openai/gpt-6-astra`) through a harness that tells it what each kind of rig is, what counts as a mistake on it, and how to check the recording against the pixels. Every prompt is in `label/`. The repository also holds the board that plays each episode with its labels, a comparison of four models on the same harness, and the gate, the regression suite the harness is held to.
 
@@ -31,12 +31,12 @@ uv run python -m prepare molmo prepare --episodes configs/quickstart/teleop.txt 
 uv run python -m checks data/episodes/molmo/quickstart
 uv run python -m label --dataset molmo --episodes data/episodes/molmo/quickstart --kind smoke --cap 2
 
-# handheld gripper: FastUMI, one gripper opens a toilet lid (11.5 s)
+# UMI: FastUMI, one gripper opens a toilet lid (11.5 s)
 uv run python -m prepare fastumi prepare --episodes configs/quickstart/handheld.txt --out data/episodes/fastumi/quickstart
 uv run python -m checks data/episodes/fastumi/quickstart
 uv run python -m label --dataset fastumi --episodes data/episodes/fastumi/quickstart --kind smoke --cap 2
 
-# head camera: OpenAoE, a phone worn at the head (34 s)
+# human ego: OpenAoE, a phone worn at the head (34 s)
 uv run python -m prepare openaoe prepare --episodes configs/quickstart/head_camera.txt --out data/episodes/openaoe/quickstart
 uv run python -m checks data/episodes/openaoe/quickstart
 uv run python -m label --dataset openaoe --episodes data/episodes/openaoe/quickstart --kind smoke --cap 2
@@ -80,7 +80,7 @@ uv run python -m prepare videos prepare --root path/to/videos --rig ego_head --i
 uv run python -m prepare molmo prepare --episodes configs/slices/molmo.txt --out data/episodes/molmo/slice
 ```
 
-`--rig` is `teleop_arms`, `handheld_gripper` or `ego_head`. The LeRobot adapter assigns the video features to cameras by name, reads `observation.state` and `action` when they have 7 values per arm or gripper, and takes each episode's task as its instruction. The videos adapter takes each file as the one camera of its rig; its instructions file maps a file's path to an instruction, or for head cameras to `{"instruction": ..., "subtasks": [{"t0": 0.0, "t1": 4.5, "label": "..."}]}`, and a file with no entry is labelled without one. For any other format, write the sidecar yourself on top of `prepare/sidecar.py`, which documents every field (`prepare/openaoe.py` is the smallest adapter).
+`--rig` is `teleop_arms`, `handheld_gripper` or `ego_head`. The LeRobot adapter assigns the video features to cameras by name, reads `observation.state` and `action` when they have 7 values per arm or gripper, and takes each episode's task as its instruction. The videos adapter takes each file as the one camera of its rig; its instructions file maps a file's path to an instruction, or for human ego video to `{"instruction": ..., "subtasks": [{"t0": 0.0, "t1": 4.5, "label": "..."}]}`, and a file with no entry is labelled without one. For any other format, write the sidecar yourself on top of `prepare/sidecar.py`, which documents every field (`prepare/openaoe.py` is the smallest adapter).
 
 Every public adapter has `prepare --episodes LIST --out FOLDER [--raw RAW] [--jobs N] [--force]` and downloads exactly the listed episodes. `configs/slices/<adapter>.txt` is the list we audited, with the command and seed that drew it in its header.
 
@@ -90,11 +90,11 @@ Every public adapter has `prepare --episodes LIST --out FOLDER [--raw RAW] [--jo
 | XDOF/ABC-130k | teleop | `abc130k` | 183 episodes, 5.9 h, one per task |
 | RogersPyke/Galaxea-Open-World-Dataset_10K_20260123 | teleop | `galaxea` | 222 episodes, 5.7 h, 111 collections |
 | configinc/HABIT | teleop | `habit` | 315 episodes, 5.1 h, 5 per task |
-| IPEC-COMMUNITY/FastUMI_100k_lerobot | handheld | `fastumi` | 964 episodes, 4.8 h, 32 per task |
-| genrobot2025/10Kh-RealOmin-OpenData | handheld | `realomin` | 280 episodes, 5.5 h, round robin over task folders |
-| builddotai/Egocentric-100K | head camera | `egocentric100k` | 112 clips, 5.6 h, one per worker |
-| genrobot2025/Gen-HumanEgo | head camera | `genhumanego` | 79 episodes, 3.5 h, uniform random |
-| inclusionAI/OpenAoE-2000h | head camera | `openaoe` | 107 clips, 5.7 h, one per recording |
+| IPEC-COMMUNITY/FastUMI_100k_lerobot | UMI | `fastumi` | 964 episodes, 4.8 h, 32 per task |
+| genrobot2025/10Kh-RealOmin-OpenData | UMI | `realomin` | 280 episodes, 5.5 h, round robin over task folders |
+| builddotai/Egocentric-100K | human ego | `egocentric100k` | 112 clips, 5.6 h, one per worker |
+| genrobot2025/Gen-HumanEgo | human ego | `genhumanego` | 79 episodes, 3.5 h, uniform random |
+| inclusionAI/OpenAoE-2000h | human ego | `openaoe` | 107 clips, 5.7 h, one per recording |
 
 ## Checks
 
@@ -116,7 +116,7 @@ uv run python -m label --dataset molmo --episodes data/episodes/molmo/slice --ki
 
 `--kind dry` builds every request as it would be sent and costs nothing; `smoke` is a small paid run to read before a full one. A paid run refuses a checkout with uncommitted changes, so every label names the code that made it, and `--cap` is the most it may spend; anything after `--` goes to the harness, for example `-- --model anthropic/claude-opus-5.5`. A run's folder, `data/runs/<dataset>/<YYYYmmdd-HHMM>_<kind>_<commit>`, holds `run.json` (command, settings, cap, cost per footage hour) and one `out/<episode>.json` per episode with the labels, `parse_ok`, what was sent (cameras, cell size, the exact instants, contact views, the routing answer), the checks, what served the request and the billed usage. A reply that does not parse is kept as it came, never retried or repaired. `--resume RUN --why "..."` finishes a run killed from outside, and `python -m label.reparse RUN` re-reads unparsed replies with the current parser.
 
-What the model receives: one instant every 1.5 s on teleop arms, every second on handheld grippers and every half second on head cameras, plus the first and last frame, four instants to a grid image with one row per camera and each column headed with its exact time. Handheld cells are 320 px wide, head-camera cells 256 px. A teleop episode's width comes from its task text: a small model (`openai/gpt-6-sol`) reads only that text and says whether the task needs fine detail (lettering or a display, which face of an object is up, small similar objects). Those episodes get 448 px on every camera; the rest get 224 px plus contact views, the scene camera and the acting arm's camera at detail size just after each sharp change of the recorded gripper value. A request over the provider's image-size cap steps down to narrower cells until it fits. The first and last instant follow at up to 768 px, then the episode's facts (cameras, recorded still spans and motion, the instruction), each as a claim to check. With no instruction, the model names the task as the most specific end state the demonstrator worked toward. The shared instructions are pinned by hash in `tests/test_label.py`. Measured on first sends of the gate's cost samples, expect about $25 per hour of footage on teleop, $30 on handheld grippers and $19 on head cameras.
+What the model receives: one instant every 1.5 s on teleop arms, every second on UMI grippers and every half second on human ego video, plus the first and last frame, four instants to a grid image with one row per camera and each column headed with its exact time. UMI cells are 320 px wide, human ego cells 256 px. A teleop episode's width comes from its task text: a small model (`openai/gpt-6-sol`) reads only that text and says whether the task needs fine detail (lettering or a display, which face of an object is up, small similar objects). Those episodes get 448 px on every camera; the rest get 224 px plus contact views, the scene camera and the acting arm's camera at detail size just after each sharp change of the recorded gripper value. A request over the provider's image-size cap steps down to narrower cells until it fits. The first and last instant follow at up to 768 px, then the episode's facts (cameras, recorded still spans and motion, the instruction and the objects it names), each as a claim to check. With no instruction, the model names the task as the most specific end state the demonstrator worked toward. The shared instructions are pinned by hash in `tests/test_label.py`. Measured on first sends of the gate's cost samples, expect about $26 per hour of footage on teleop, $30 on UMI and $19 on human ego video.
 
 ## Board
 
@@ -131,7 +131,7 @@ uv run python -m board static site --board data/boards/mine --clips data/clips  
 
 A board shows the runs its `manifest.json` names, one entry per dataset, `{"dataset": NAME, "run": RUN, "episodes": FOLDER, "rules": [...]}`, paths absolute or relative to the board folder (`../../runs/<dataset>/latest` is the newest finished run). Its rules apply definitions after labelling (`board/rules.py`; `board/build.py` documents every rule and key). A problem counts when it is a data issue at medium or high severity or an operator mistake that changes the outcome at medium or high, or is high; the rest stay visible as minor, and each flagged issue belongs to one problem family (`board/families.json`), which the filter lists. Each episode downloads as JSON and any filtered list as JSON Lines, and a dataset in `board/dataset_sources.json` is credited with its publisher and license on the page and in the download. `board/publish.sh` uploads a static build.
 
-Head-camera episodes can also show 2D hand keypoints (the "Hand pose" switch, on by default) and offer them as a download. They come from [ACE-Ego-Hand](https://github.com/ggxxii/ACE-Ego-Hand), run on Modal GPUs by `board/hand_pose/modal_app.py`, whose docstring has every command; you register for and download MANO yourself. Name the keypoint folder in the manifest, `"hands": {"src": "../../hand_pose/keypoints", "clips": "../../clips"}`, and `board build` writes the overlay and the downloads, apart from the labels. The keypoints are for non-commercial use only, which every file says (see Licenses).
+Human ego episodes can also show 2D hand keypoints (the "Hand pose" switch, on by default) and offer them as a download. They come from [ACE-Ego-Hand](https://github.com/ggxxii/ACE-Ego-Hand), run on Modal GPUs by `board/hand_pose/modal_app.py`, whose docstring has every command; you register for and download MANO yourself. Name the keypoint folder in the manifest, `"hands": {"src": "../../hand_pose/keypoints", "clips": "../../clips"}`, and `board build` writes the overlay and the downloads, apart from the labels. The keypoints are for non-commercial use only, which every file says (see Licenses).
 
 ## Model comparison
 
@@ -156,7 +156,7 @@ uv run python -m gate label --kind full --cap 40     # one run per rig, about $6
 uv run python -m gate score data/runs/gate_teleop/RUN data/runs/gate_handheld/RUN data/runs/gate_ego/RUN
 ```
 
-The gate holds 122 episodes (`gate/selection.json`) and what each case's label must say (`gate/cases.json`), every fact checked on the frames. Teleop has MolmoAct2 1346 six times (asked to flip three blocks, none ever turns: a failure with a high instruction mismatch), 1213 and 1233 (a goal reached, then undone) and ten more, among them Galaxea Steam_Rice 000050 and 000011. Handheld has all 32 FastUMI Prepare_tableware episodes (a fork is handled, never chopsticks) and four more. Head camera has four clips with a known data issue and three clean ones whose objects must be named. Each rig also has a cost sample of about 20 real episodes across its datasets, priced as first sends. A harness passes when every reply parses, no label contradicts itself, the cases hold and the cost stays at the figures under Label; this one scores 16 of 18 on teleop (1346 is right in four of six samples), 36 of 36 on handheld and 7 of 7 on head cameras.
+The gate holds 126 episodes (`gate/selection.json`) and what each case's label must say (`gate/cases.json`), every fact checked on the frames. Teleop has MolmoAct2 1346 six times (asked to flip three blocks, none ever turns: a failure with a high instruction mismatch), 1213 and 1233 (a goal reached, then undone), MolmoAct2 008276 three times and 010414 (black polo shirts under an instruction to fold black pants: the shirt must be named, and the task asked for was not done) and ten more, among them Galaxea Steam_Rice 000050 and 000011. UMI has all 32 FastUMI Prepare_tableware episodes (a fork is handled, never chopsticks) and four more. Human ego has four clips with a known data issue and three clean ones whose objects must be named. Each rig also has a cost sample of about 20 real episodes across its datasets, priced as first sends. A harness passes when every reply parses, no label contradicts itself, the cases hold and the cost stays at the figures under Label; this one scores 19 of 22 on teleop (1346 is right in three of six samples), 36 of 36 on UMI and 7 of 7 on human ego.
 
 ## Determinism
 
@@ -167,7 +167,7 @@ Everything before the model calls is deterministic and the same on any machine: 
 
 No temperature, top_p or seed is sent and no provider is pinned, since providers honour them unevenly. OpenRouter ids are not dated snapshots, so each output records `provider_name`, `model_served`, `system_fingerprint`, `generation_id` and the routing answer with its reason.
 
-The answers are not bit-reproducible. Routed five times each, 30 of the gate's 34 teleop task texts got the same answer every time, and every task that turns on which face of a block is up was fine detail all five times. The three quickstart episodes and the three bare clips, each labelled three times, got the same outcome every time, with goal and undo times within 5 s of each other (the bare teleop row at 13.5 or 18 s); the OpenAoE clip came back as three or four activities. A repeated request also costs less while the provider still caches it (the bare head-camera clip $0.84, then $0.54). Compare labels across runs by their fields (outcome, goal and undo times, issue types), not byte for byte.
+The answers are not bit-reproducible. Routed five times each, 30 of 34 teleop task texts got the same answer every time, and every task that turns on which face of a block is up was fine detail all five times. The three quickstart episodes and the three bare clips, each labelled three times, got the same outcome every time, with goal and undo times within 5 s of each other (the bare teleop row at 13.5 or 18 s); the OpenAoE clip came back as three or four activities. A repeated request also costs less while the provider still caches it (the bare human ego clip $0.84, then $0.54). Compare labels across runs by their fields (outcome, goal and undo times, issue types), not byte for byte.
 
 ## Credits
 
