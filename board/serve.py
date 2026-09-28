@@ -374,6 +374,7 @@ INDEX_HTML = r"""<!doctype html>
 
   --header-h: 44px;   /* the page header: title and board name */
   --cov-h: 62px;
+  --rail-w: 240px;    /* the episode rail's column; the board totals above it take the same width */
   --top-h: calc(var(--header-h) + var(--cov-h));
   --r-sm: 3px;
   --r-md: 7px;
@@ -541,7 +542,7 @@ body.lb-swap #ep-list, body.lb-swap .issue-filter, body.lb-swap .coverage .cv-nu
 /* ---------- main grid ---------- */
 main {
   display: grid;
-  grid-template-columns: 240px minmax(640px, 56vw) 1fr;
+  grid-template-columns: var(--rail-w) minmax(640px, 56vw) 1fr;
   height: calc(100vh - var(--top-h));
 }
 
@@ -654,10 +655,11 @@ aside.rail {
 /* what is on this board, at a glance: the board's totals, then one tab per dataset with its episodes and hours. The
    open dataset's tab is lit, and when a filter or search narrows the list it says how much of the dataset is listed. */
 .coverage { position: sticky; top: var(--header-h); z-index: 9; height: var(--cov-h); box-sizing: border-box;
-  display: grid; grid-template-columns: max-content 1fr; align-items: stretch;
+  display: grid; grid-template-columns: var(--rail-w) 1fr; align-items: stretch;
   background: var(--bg); border-bottom: 1px solid var(--border); }
-/* board totals: their own segment, set apart from the per-dataset tabs by a heavy rule */
-.cv-all { display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 0 24px 0 18px;
+/* board totals: their own segment over the rail, set apart from the per-dataset tabs by a heavy rule that ends where
+   the rail's border begins */
+.cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 0 24px 0 18px;
   background: var(--surface); border-right: 3px solid var(--border-strong); }
 .cv-all .cv-k { font: 600 11px/1 var(--sans); color: var(--fg-2); letter-spacing: 0.01em; white-space: nowrap; }
 .cv-all .cv-fig { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
