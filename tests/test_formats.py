@@ -221,3 +221,30 @@ def test_a_gen_humanego_recording_goes_to_its_adapter():
     hands = ["/robot0/handtracking/left", "/robot0/handtracking/right"]
     assert f.mcap_layout(cams + hands + [gh.ANNOTATION_TOPIC]) == "genhumanego"
     assert f.mcap_layout(cams + hands) == "generic"
+
+
+def test_every_adapter_says_whether_it_reads_uploads():
+    """An adapter added to prepare/ is found by the reader without editing it, and cannot be forgotten: it declares
+    UPLOAD, a kind of upload it reads (with recognizes and convert_upload) or None."""
+    import importlib
+    import pkgutil
+    import prepare
+    for m in pkgutil.iter_modules(prepare.__path__):
+        if m.name in f.NOT_ADAPTERS:
+            continue
+        mod = importlib.import_module(f"prepare.{m.name}")
+        assert hasattr(mod, "UPLOAD"), f"prepare/{m.name}.py declares no UPLOAD"
+        if mod.UPLOAD is not None:
+            assert callable(getattr(mod, "recognizes", None)) and callable(getattr(mod, "convert_upload", None)), m.name
+    names = [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("mcap")]
+    assert names == ["abc130k", "genhumanego", "realomin"], names
+
+
+def test_each_mcap_adapter_recognizes_its_own_layout_and_no_other():
+    from prepare import abc130k, genhumanego, realomin
+    layouts = {"abc130k": [abc130k.TOP_TOPICS[0], *abc130k.VIEW_TOPIC.values(), *abc130k.ARM],
+               "realomin": [*realomin.CAMERA_TOPICS, *realomin.POSE_TOPICS],
+               "genhumanego": [genhumanego.CAMERA_TOPIC, genhumanego.ANNOTATION_TOPIC]}
+    for name, topics in layouts.items():
+        assert f.mcap_layout(topics) == name, name
+    assert f.mcap_layout(["/camera/color/0/image", "/task", "/task/subtask"]) == "generic"

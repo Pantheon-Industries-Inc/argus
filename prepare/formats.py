@@ -1563,18 +1563,30 @@ def plan_mcap(det: dict, root: Path) -> list[dict]:
     return items
 
 
+# modules of prepare/ that are the reader and its tools, not dataset adapters
+NOT_ADAPTERS = {"__main__", "cli", "folder", "formats", "hub", "lerobot", "videos"}
+
+
+def upload_adapters(kind: str) -> list:
+    """The dataset adapters in prepare/ that read an upload of this kind ("mcap"), found rather than listed: an adapter
+    declares UPLOAD = kind with recognizes() and convert_upload(), or UPLOAD = None when it reads only its published
+    dataset (tests/test_formats.py holds every adapter to one or the other). Adding a dataset is adding its adapter."""
+    import importlib
+    import pkgutil
+    import prepare
+    out = []
+    for m in sorted(pkgutil.iter_modules(prepare.__path__), key=lambda m: m.name):
+        if m.name in NOT_ADAPTERS:
+            continue
+        mod = importlib.import_module(f"prepare.{m.name}")
+        if getattr(mod, "UPLOAD", None) == kind:
+            out.append(mod)
+    return out
+
+
 def mcap_layout(topics: list[str]) -> str:
-    from prepare import abc130k as abc
-    from prepare import realomin as ro
-    if any(t in topics for t in abc.TOP_TOPICS) and all(t in topics for t in abc.VIEW_TOPIC.values()) \
-            and all(t in topics for t in abc.ARM):
-        return "abc130k"
-    if all(t in topics for t in ro.CAMERA_TOPICS) and all(t in topics for t in ro.POSE_TOPICS):
-        return "realomin"
-    from prepare import genhumanego as gh
-    if gh.CAMERA_TOPIC in topics and gh.ANNOTATION_TOPIC in topics:
-        return "genhumanego"
-    return "generic"
+    """The adapter whose layout these topics are (its module name), or "generic"."""
+    return next((m.__name__.rsplit(".", 1)[-1] for m in upload_adapters("mcap") if m.recognizes(topics)), "generic")
 
 
 MCAP_MAGIC = b"\x89MCAP0\r\n"
@@ -1592,29 +1604,10 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if layout != "generic" and item["seconds"] is None:
         layout = "generic"          # a cut-off file: the full adapters need its summary; its cameras are still read
         item.setdefault("notes", []).append("The file ends early, before its index, so it was read from its cameras.")
-    if layout == "abc130k":
-        from prepare import abc130k as abc
-        ctx = abc.convert(item["file"], ep, ep.name, task=item["name"])
-    elif layout == "realomin":
-        from prepare import realomin as ro
-        ctx = ro.convert(item["file"], ep, "upload/" + item["name"])
-        # RealOmin's task text is the dataset's own folder path on Hugging Face; an uploader's folder name is
-        # not a task, so the episode goes to the model with no instruction rather than an invented one
-        for k in ("instruction", "instruction_note"):
-            ctx.pop(k, None)
-        ctx["task_label"] = [item["name"]]
-        (ep / "instruction.txt").write_text("\n")
-    elif layout == "genhumanego":
-        # a DAS-Ego headset recording: its forward camera, and its own goal and timed steps (claims to check)
-        from prepare import genhumanego as gh
-        gh.extract(Path(item["file"]), ep / "source", item["name"])
-        ctx = gh.write_sidecar(ep / "source", ep)
-        ctx["episode_id"] = ep.name
-        if not any(ctx.get("task_label") or []):
-            ctx["task_label"] = [item["name"]]
-        (ep / "instruction.txt").write_text((ctx.get("instruction") or "") + "\n")
-    else:
+    if layout == "generic":
         return convert_mcap_generic(item, rig, ep, dataset)
+    import importlib
+    ctx = importlib.import_module(f"prepare.{layout}").convert_upload(item, ep)
     ctx.update({"dataset": dataset, "source": {"format": f"mcap ({layout} layout)", "file": item["name"]}})
     # the adapters assume a nominal rate (ABC: 30 Hz), but stations record at 30 or 60 Hz; the rate and the
     # length come from the anchor camera's real capture times, so sampling is one instant per second of

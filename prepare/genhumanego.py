@@ -91,6 +91,25 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
     (raw / "meta.json").write_text(json.dumps(meta))
 
 
+# an uploaded MCAP from this headset (its forward camera and its annotation) is read by this adapter
+UPLOAD = "mcap"
+
+
+def recognizes(topics: list[str]) -> bool:
+    return CAMERA_TOPIC in topics and ANNOTATION_TOPIC in topics
+
+
+def convert_upload(item: dict, ep: Path) -> dict:
+    """The forward camera, and the recording's own goal and timed steps (claims for the model to check)."""
+    extract(Path(item["file"]), ep / "source", item["name"])
+    ctx = write_sidecar(ep / "source", ep)
+    ctx["episode_id"] = ep.name
+    if not any(ctx.get("task_label") or []):
+        ctx["task_label"] = [item["name"]]
+    (ep / "instruction.txt").write_text((ctx.get("instruction") or "") + "\n")
+    return ctx
+
+
 def write_sidecar(raw: Path, dst: Path) -> dict:
     import av
     meta = json.loads((raw / "meta.json").read_text())

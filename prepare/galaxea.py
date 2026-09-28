@@ -35,6 +35,10 @@ import numpy as np
 from prepare import cli
 from prepare import hub
 
+# Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
+# upload_adapters); this one reads only the published dataset
+UPLOAD = None
+
 REPO = "RogersPyke/Galaxea-Open-World-Dataset_10K_20260123"
 FPS = 15
 VIDEO_KEYS = {"exo": "observation.images.head_rgb", "left": "observation.images.left_wrist_rgb",

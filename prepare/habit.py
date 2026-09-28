@@ -31,6 +31,10 @@ from prepare import cli
 from prepare import hub
 from prepare import formats
 
+# Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
+# upload_adapters); this one reads only the published dataset
+UPLOAD = None
+
 REPO = "configinc/HABIT"
 META_FILES = ("info.json", "episodes.jsonl", "tasks.jsonl", "subtasks.jsonl", "human_subtasks.jsonl")
 RIG = "teleop_arms"

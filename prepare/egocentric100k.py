@@ -34,6 +34,10 @@ import numpy as np
 from prepare import cli
 from prepare import hub
 
+# Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
+# upload_adapters); this one reads only the published dataset
+UPLOAD = None
+
 REPO = "builddotai/Egocentric-100K"
 API = f"https://huggingface.co/api/datasets/{REPO}/tree/main"
 COLLECTION_NOTE = ("the dataset is continuous head-camera footage of a worker's shift, split into consecutive "

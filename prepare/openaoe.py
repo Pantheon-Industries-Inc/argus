@@ -25,6 +25,10 @@ from prepare import cli
 from prepare import hub
 from prepare import formats
 
+# Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
+# upload_adapters); this one reads only the published dataset
+UPLOAD = None
+
 REPO = "inclusionAI/OpenAoE-2000h"
 COLLECTION_NOTE = ("crowd contributors record their own activities on a phone worn at the head; each clip is one "
                    "numbered segment of a longer recording, so a clip can start or end in the middle of an "
