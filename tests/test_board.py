@@ -486,9 +486,10 @@ def test_keypoint_licence_is_the_attribution_wording():
 
 def test_clip_sizes_follow_where_the_page_shows_each_camera():
     from board import clips
-    # the main camera: upscaled to 1280 wide when narrower, scaled to fit 1920x1080 when larger
-    assert clips.clip_size(456, 256, True)[:2] == (1280, 718)
-    assert clips.clip_size(640, 480, True)[:2] == (1280, 960)
+    # never larger than the source: a small camera keeps its size; the main one is scaled to fit 1920x1080 when larger
+    assert clips.clip_size(456, 256, True)[:2] == (456, 256)
+    assert clips.clip_size(640, 480, True)[:2] == (640, 480)
+    assert clips.clip_size(455, 255, True)[:2] == (454, 254)
     assert clips.clip_size(1920, 1080, True)[:2] == (1920, 1080)
     assert clips.clip_size(1920, 1200, True)[:2] == (1728, 1080)
     assert clips.clip_size(1080, 1920, True)[:2] == (608, 1080)
@@ -499,10 +500,13 @@ def test_clip_sizes_follow_where_the_page_shows_each_camera():
         for main in (True, False):
             cw, ch, _ = clips.clip_size(w, h, main)
             assert cw % 2 == 0 and ch % 2 == 0
+            assert cw <= w and ch <= h
             assert abs(cw / ch - w / h) <= 0.005 * w / h   # the hand overlay accepts 0.5%
     assert clips.main_cam({"left": {}, "right": {}}) == "left"
     assert clips.main_cam({"exo": {}, "left": {}}) == "exo"
     # a seek decodes from a keyframe at most KEY_S back; every frame keeps its source time
+    assert "-vf" not in clips.video_args(456, 256, True, 2)          # a clip at its source size is not resampled
+    assert "scale=1728:1080:flags=lanczos" in clips.video_args(1920, 1200, True, 2)
     args = clips.video_args(1920, 1080, True, 2)
     assert args[args.index("-enc_time_base") + 1] == "demux"
     assert f"expr:gte(t,n_forced*{clips.KEY_S})" in args

@@ -44,19 +44,16 @@ def clip_paths(mp4_dir: Path, eid: str) -> dict:
 
 # The board's viewing copy of each camera: one recipe for every builder (this file and board/static.py, which
 # Data Review also runs), so every copy of a clip is the same.
-# Sizes are for the page as it lays the cameras out: the main camera (the fixed or head camera, else the first
-# gripper camera) is shown 770 to 1040 css px wide on a 1440 to 1920 px screen, 1540 to 2080 device px on a retina
-# one, and fills the screen in full screen; the others are shown 385 to 520 css px wide.
-MAIN_MIN_W = 1280            # a main camera narrower than this is upscaled to it, once, with Lanczos and a light
-UPSCALE = "lanczos"          # unsharp mask (as the article's clips are), which is sharper than the browser's
-SHARPEN = "unsharp=5:5:0.55:5:5:0"   # bilinear stretch
-MAIN_BOX = (1920, 1080)      # and a larger one scaled down to fit a 1080p screen in full screen
-SIDE_BOX = (1280, 1080)      # a side camera: at most this, never upscaled
+# A clip is never larger than its source: it shows the pixels the dataset shipped and no more. A camera larger than
+# where the page shows it is scaled down to fit: the main camera (the fixed or head camera, else the first gripper
+# camera) fills the screen in full screen, the others are shown 385 to 520 css px wide.
+MAIN_BOX = (1920, 1080)      # the main camera: at most this, a 1080p screen in full screen
+SIDE_BOX = (1280, 1080)      # a side camera: at most this
 CRF = 20                     # with veryfast, the quality of CRF 22 at medium (VMAF at the shown size) in
 PRESET = "veryfast"          # 40% of the time, which the whole board and every Data Review upload pay
 KEY_S = 2                    # a keyframe every 2 s, so a seek decodes at most 2 s of video
 # names the recipe; board/static.py folds it into its media names, so a new recipe gets new names
-ENC_TAG = f"h264-crf{CRF}-{PRESET}-main{MAIN_MIN_W}-{MAIN_BOX[0]}x{MAIN_BOX[1]}-side{SIDE_BOX[0]}x{SIDE_BOX[1]}-kf{KEY_S}s-srcts-camclock-v3"
+ENC_TAG = f"h264-crf{CRF}-{PRESET}-main{MAIN_BOX[0]}x{MAIN_BOX[1]}-side{SIDE_BOX[0]}x{SIDE_BOX[1]}-kf{KEY_S}s-srcts-camclock-v4"
 
 
 def main_cam(sources: dict) -> str:
@@ -65,22 +62,23 @@ def main_cam(sources: dict) -> str:
 
 
 def clip_size(w: int, h: int, main: bool) -> tuple:
-    """(width, height, scale) of the board clip of a w x h source, both even, the aspect kept."""
-    if main:
-        s = min(max(1.0, MAIN_MIN_W / w), MAIN_BOX[0] / w, MAIN_BOX[1] / h)
-    else:
-        s = min(1.0, SIDE_BOX[0] / w, SIDE_BOX[1] / h)
-    return 2 * round(w * s / 2), 2 * round(h * s / 2), s
+    """(width, height, scale) of the board clip of a w x h source: never larger than the source, both even, the
+    aspect kept."""
+    box = MAIN_BOX if main else SIDE_BOX
+    s = min(1.0, box[0] / w, box[1] / h)
+    even = lambda x, cap: min(2 * round(x / 2), cap - cap % 2)
+    return even(w * s, w), even(h * s, h), s
 
 
 def video_args(w: int, h: int, main: bool, threads: int) -> list:
     """The recipe's output arguments for a w x h source."""
     cw, ch, s = clip_size(w, h, main)
-    vf = f"scale={cw}:{ch}:flags={UPSCALE},{SHARPEN}" if s > 1 else f"scale={cw}:{ch}:flags=lanczos"
+    # scaled only when it must shrink (or lose an odd row or column), never enlarged
+    vf = [] if (cw, ch) == (w, h) else ["-vf", f"scale={cw}:{ch}:flags=lanczos"]
     # enc_time_base demux: every frame keeps its source timestamp exactly. The encoder's default time base is the
     # frame rate's, which rounds a variable-rate recording's times to a 1/30 s grid (up to half a frame off, and a
     # frame squeezed to 0 s where two round to the same tick)
-    return ["-vf", vf, "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF), "-pix_fmt", "yuv420p",
+    return [*vf, "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF), "-pix_fmt", "yuv420p",
             "-profile:v", "high", "-force_key_frames", f"expr:gte(t,n_forced*{KEY_S})", "-enc_time_base", "demux",
             "-movflags", "+faststart", "-threads", str(threads)]
 
