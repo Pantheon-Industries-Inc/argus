@@ -5,7 +5,7 @@ compare writes the entries for the runs it starts). Paths are absolute or relati
 
     "comparisons": [
       {"key": "opus55", "name": "Claude Opus 5.5", "run": RUN_DIR},
-      {"key": "opus55_ex", "name": "Claude Opus 5.5, given an example", "run": RUN_DIR,
+      {"key": "opus55_ex", "name": "Claude Opus 5.5, in-context learning with an Astra trace", "run": RUN_DIR,
        "example": true, "base": "opus55"},
       ...]
 
@@ -36,7 +36,7 @@ has no board label to set it against, so it is left out):
   - events per minute, key events, subgoals, data issues, operator mistakes: the episodes every model in the
     chart parsed, so no model's number moves because it failed on other episodes than another
   - agreement: each pair on the episodes both parsed
-  - with an example: each model with and without it, on the episodes both of its runs parsed, beside the
+  - in-context learning: each model with and without the trace, on the episodes both of its runs parsed, beside the
     reference's numbers on those of them the board has a label of
 
     python -m compare.metrics BOARD          # print the summary

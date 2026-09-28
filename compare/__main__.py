@@ -1,4 +1,5 @@
-"""Run several models over one set of episodes through the same harness, with or without an example annotation.
+"""Run several models over one set of episodes through the same harness, with and without in-context learning from one
+reference trace.
 
     python -m compare prepare --selection configs/compare/main.json
     python -m compare label --selection configs/compare/main.json --kind full --cap 100
@@ -8,7 +9,7 @@
 
 A selection names the episodes to compare. configs/compare/main.json is a seeded, task-diverse draw of about one
 hour per rig, 193 episodes over the nine datasets; each entry carries the episode's line in its dataset's episode
-list. configs/compare/third.json is a seeded third of it (65 episodes) for the runs given an example annotation,
+list. configs/compare/third.json is a seeded third of it (65 episodes) for the in-context runs,
 named by the episodes' folder names in main.
 
 `prepare` writes each dataset's lines to EPISODES/<dataset>/compare_<selection>.txt, prepares exactly those
@@ -120,7 +121,7 @@ def cmd_label(a) -> int:
         cmd = [sys.executable, "-m", "label", "--dataset", "compare", "--episodes", str(slice_dir), "--kind", a.kind,
                "--cap", str(a.cap), "--runs", str(a.runs), "--concurrency", str(a.concurrency), "--label", key,
                "--note", f"model comparison on {name}: {m['model']}"
-                         + (", given an example annotation" if a.with_example else ""),
+                         + (", in-context learning with a reference trace" if a.with_example else ""),
                "--", "--model", m["model"], "--reasoning", cfg["reasoning"], "--max-tokens", str(cfg["max_tokens"])]
         if a.with_example:
             cmd += ["--example-dir", str(REPO / "configs" / "examples")]
@@ -128,6 +129,8 @@ def cmd_label(a) -> int:
         procs[key] = subprocess.Popen(cmd, cwd=REPO)
     rc = {key: p.wait() for key, p in procs.items()}
     after = sorted(p for p in runs.glob("*") if p.is_dir() and p not in before)
+    ref = cfg["models"][cfg["reference"]]["name"]
+    icl = f", in-context learning with {'an' if ref[:1].lower() in 'aeiou' else 'a'} {ref} trace"
     entries = []
     for key in procs:
         mine = [p for p in after if p.name.endswith("_" + key)]
@@ -135,7 +138,7 @@ def cmd_label(a) -> int:
             print(f"{key}: no run folder (exit {rc[key]})", file=sys.stderr)
             continue
         base = key.removesuffix("_ex")
-        e = {"key": key, "name": cfg["models"][base]["name"] + (", given an example" if a.with_example else ""),
+        e = {"key": key, "name": cfg["models"][base]["name"] + (icl if a.with_example else ""),
              "run": str(mine[-1].resolve()), "episodes": str(slice_dir.resolve())}
         if base == cfg["reference"] and not a.with_example:
             e["reference"] = True

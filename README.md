@@ -61,7 +61,7 @@ The MolmoAct2 episode should come out as a success then undone, the row complete
 | `checks/` | Deterministic checks, written into each episode before labelling, and the label consistency check | `python -m checks` |
 | `label/` | The harness: frame selection, exact decoding, resolution routing, the per-rig prompts, the model call, runs | `python -m label` |
 | `board/` | The board: build, clips, serve or write static files; the hand pose overlay | `python -m board` |
-| `compare/` | Other models over the same episodes and harness, with and without an example annotation | `python -m compare` |
+| `compare/` | Other models over the same episodes and harness, with and without in-context learning from an Astra trace | `python -m compare` |
 | `gate/` | The regression suite: frame-verified cases and a cost sample per rig | `python -m gate` |
 | `configs/` | Episode lists, the quickstart, model settings, example annotations | |
 
@@ -135,7 +135,7 @@ Human ego episodes can also show 2D hand keypoints (the "Hand pose" switch, on b
 
 ## Model comparison
 
-Four models run on the same 193 episodes (about an hour per rig, `configs/compare/main.json`) through the same harness, with the same prompt, images, reasoning effort and output limit (`configs/models.json`): Astra (`openai/gpt-6-astra`, the reference), Claude Opus 5.5 (`anthropic/claude-opus-5.5`), GPT-6 Sol (`openai/gpt-6-sol`) and DeepSeek v4.1 flash (`deepseek/deepseek-v4.1-flash`). With `--with-example`, the other three also see one complete Astra annotation of a different episode of the same rig (`configs/examples/`), on a seeded third of the episodes (`configs/compare/third.json`).
+Four models run on the same 193 episodes (about an hour per rig, `configs/compare/main.json`) through the same harness, with the same prompt, images, reasoning effort and output limit (`configs/models.json`): Astra (`openai/gpt-6-astra`, the reference), Claude Opus 5.5 (`anthropic/claude-opus-5.5`), GPT-6 Sol (`openai/gpt-6-sol`) and DeepSeek v4.1 flash (`deepseek/deepseek-v4.1-flash`). With `--with-example`, the other three learn in context: each prompt also holds one Astra trace, the complete Astra annotation of a different episode of the same rig (`configs/examples/`), on a seeded third of the episodes (`configs/compare/third.json`).
 
 ```bash
 uv run python -m compare prepare --selection configs/compare/main.json          # HF_TOKEN needed
@@ -146,7 +146,7 @@ uv run python -m board build data/boards/compare
 uv run python -m compare.metrics data/boards/compare
 ```
 
-`prepare` prepares and checks exactly the selected episodes, and each `label` starts one run per model at once, each within its own `--cap`; Astra costs about the figures under Label for these three hours, and in our run the other three cost a third, a fifth and a thirtieth as much. `board` writes a manifest whose labels are the reference model's, with every other run as a comparison under `BOARD/compare/`, never counted or exported; the page's "Labels by" control switches the board to one model's labels and opens the comparison view. `compare/metrics.py` measures, from the run folders alone, parse share, schema violations, density, agreement between models, cost, latency and what the example changes.
+`prepare` prepares and checks exactly the selected episodes, and each `label` starts one run per model at once, each within its own `--cap`; Astra costs about the figures under Label for these three hours, and in our run the other three cost a third, a fifth and a thirtieth as much. `board` writes a manifest whose labels are the reference model's, with every other run as a comparison under `BOARD/compare/`, never counted or exported; the page's "Labels by" control switches the board to one model's labels and opens the comparison view. `compare/metrics.py` measures, from the run folders alone, parse share, schema violations, density, agreement between models, cost, latency and what in-context learning changes.
 
 ## Gate
 

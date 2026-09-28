@@ -153,7 +153,7 @@ def test_label_with_example_marks_example_and_base_and_no_reference(tmp_path, mo
     for e in entries:
         base = e["key"].removesuffix("_ex")
         assert e["example"] is True and e["base"] == base and "reference" not in e
-        assert e["name"] == MODELS["models"][base]["name"] + ", given an example"
+        assert e["name"] == MODELS["models"][base]["name"] + ", in-context learning with an Astra trace"
     assert all(cmd[cmd.index("--example-dir") + 1] == str(cm.REPO / "configs" / "examples")
                for cmd in FakeLabel.started)
 
@@ -212,7 +212,7 @@ def _run(root: Path, key: str, sl: Path, outputs: dict, cut_off=(), example=Fals
 
 def _comparison(tmp_path) -> dict:
     """A board manifest over three teleop episodes of 20, 30 and 10 s: the board's own labels (by Astra), a second
-    model, and that model given an example.
+    model, and that model with in-context learning.
 
       board   a parsed (success, 4 segments, 2 key events, 1 subgoal, a high camera swap)  b parsed
               c parsed ($0.30 and a $0.03 routing call)
@@ -237,7 +237,7 @@ def _comparison(tmp_path) -> dict:
                              "episode_b": (_labels("success", 5), 0.06, 6)}, example=True)
     return {"datasets": [{"dataset": "trial", "run": "runs/ref", "episodes": "slice"}],
             "comparisons": [{"key": "m2", "name": "Model two", "run": "runs/m2"},
-                            {"key": "m2_ex", "name": "Model two, given an example", "run": "runs/m2_ex"}]}
+                            {"key": "m2_ex", "name": "Model two, in-context learning with an Astra trace", "run": "runs/m2_ex"}]}
 
 
 def test_load_models_reads_run_json_and_defaults(tmp_path):
