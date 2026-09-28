@@ -188,7 +188,8 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
             d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
     subs = [s for s in ctx.get("annotation_subtasks") or [] if s.get("label") and s.get("t1") is not None]
     if subs:
-        d["dataset_labels"] = [{"t0": float(s["t0"]), "t1": float(s["t1"]), "label": s["label"]} for s in subs]
+        d["dataset_labels"] = [{"t0": float(s["t0"]), "t1": float(s["t1"]), "label": s["label"].replace(
+            "(both hand)", "(both hands)")} for s in subs]   # OpenAoE labels stored before prepare/openaoe.py hand_phrase
         if ctx.get("annotation_note"):
             d["dataset_labels_note"] = ctx["annotation_note"]
     if isinstance(ctx.get("publisher_labels"), dict):

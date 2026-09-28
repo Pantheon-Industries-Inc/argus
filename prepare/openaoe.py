@@ -40,12 +40,17 @@ ANNOTATION_NOTE = ("these action segments were generated automatically on a whol
 CLIP_FILES = ("raw_video.mp4", "video_info.json", "ego_annotation/ego_action_annotation.json")
 
 
+def hand_phrase(hand: str) -> str:
+    """The annotation's hand field (left, right or both) in words."""
+    return "both hands" if hand == "both" else f"{hand} hand"
+
+
 def subtasks(ann: list) -> list[dict]:
     out = []
     for seg in ann:
         acts = seg.get("atomic_action") or []
         label = "; ".join(" ".join(x for x in (a.get("verb"), a.get("object")) if x)
-                          + (f" ({a['hand']} hand)" if a.get("hand") else "") for a in acts)
+                          + (f" ({hand_phrase(a['hand'])})" if a.get("hand") else "") for a in acts)
         label = label or seg.get("scene") or "segment"
         out.append({"t0": float(seg["start_ts"]), "t1": float(seg["end_ts"]), "label": label, "ok": True})
     return out
