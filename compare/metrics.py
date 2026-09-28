@@ -305,6 +305,8 @@ def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
     else:
         c = L.get("completion")
         oc = str(c.get("task_completed") or "").lower() if isinstance(c, dict) else ""
+        # partial is a kind of failure (board/to_board.py), so two runs agree when both say the task was not done
+        oc = "failure" if oc == "partial" else oc
         m["outcome"] = oc if oc in OUTCOMES else (oc or None)
     return m
 

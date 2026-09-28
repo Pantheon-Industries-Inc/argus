@@ -95,15 +95,22 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "undone_by": raw_comp.get("undone_by"),
         "reason": raw_comp.get("reason"),
     }
+    # the outcome is success or failure. "partial" (a real part of the goal left undone) is a kind of failure: the board
+    # records it as a failure and keeps the kind, as success_then_undone is kept as a kind of success
+    if str(completion["task_completed"] or "").lower() == "partial":
+        completion["task_completed"], completion["failure_kind"] = "failure", "partial"
     # head-camera clips have no single completion: they carry a `tasks` list of activities, each with its
     # own outcome and goal frame, which the board shows as a Tasks panel
     tasks = []
     for t in labels.get("tasks") or []:
+        oc = str(t.get("outcome") or "").lower()
         tasks.append({
             "start_s": t.get("start_s"), "end_s": t.get("end_s"),
             "task": t.get("task") or "",
             "objects": t.get("objects") or [],
-            "outcome": str(t.get("outcome") or "").lower(),
+            # a task partly done is a failure of that task, of the kind partial (as the episode's outcome above)
+            "outcome": "failure" if oc == "partial" else oc,
+            **({"failure_kind": "partial"} if oc == "partial" else {}),
             "success_predicate": t.get("success_predicate") or "",
             "completed_at_s": t.get("completed_at_s"),
             "note": t.get("note") or "",

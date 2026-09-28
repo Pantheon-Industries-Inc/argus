@@ -318,6 +318,7 @@ def _rail_record(p: Path, d: dict) -> dict:
         "file": p.name,
         "dataset": d.get("dataset"),
         "task_completed": (d.get("completion") or {}).get("task_completed"),
+        "failure_kind": (d.get("completion") or {}).get("failure_kind"),
         "episode_prompt": d.get("episode_prompt") or "",
         "n_issues": len(issues),
         "max_severity": max_sev if max_sev in SEV_RANK else None,
@@ -2368,6 +2369,9 @@ const OUR_CHECKS = [['stream_pairing', 'crossed', 'streams-crossed'], ['recorded
 // a check's reason as sentences: "no pose: joint-state teleop has none" reads "No pose. Joint-state teleop has none."
 const sentences = (t) => String(t).split(/:\s+/).map(x => x.charAt(0).toUpperCase() + x.slice(1)).join('. ')
   .replace(/\.?$/, '.');
+// an outcome in words; a failure of the kind partial (a real part of the goal left undone) says it was partly done
+const outcomeWords = (oc, kind) => oc === 'failure' && kind === 'partial' ? 'failure, partly done'
+  : String(oc).replace(/_/g, ' ');
 function checksSection(d) {
   const dc = d.dataset_checks || {}, rows = [];
   for (const [k, field, fam] of OUR_CHECKS) if (dc[k] && typeof dc[k] === 'object') rows.push({name: famName(fam),
@@ -2786,7 +2790,8 @@ function renderRail(ds, keepFile, fromSearch) {
       outcomeHtml = `<span class="outcome-tag ${cls}">${ep.n_task_success}/${ep.n_tasks} tasks</span>`;
     } else {
       const oc = (ep.task_completed || '').toLowerCase();
-      outcomeHtml = `<span class="outcome-tag ${oc || 'none'}">${esc(oc || 'unrated')}</span>`;
+      outcomeHtml = `<span class="outcome-tag ${oc || 'none'}">${esc(oc ? outcomeWords(oc, ep.failure_kind)
+        : 'unrated')}</span>`;
     }
     // flag data issues right of the outcome so a "success" with severe metadata
     // faults is not silently trusted, and say WHAT the top issue is (a mispaired
@@ -3486,8 +3491,9 @@ function renderEp(d, opts) {
 
   // a session of tasks: a Tasks panel, each task with its own outcome and goal frame, in place of the single
   // completion
-  const tcount = {success: 0, partial: 0, failure: 0};
+  const tcount = {success: 0, failure: 0};
   tasks.forEach(t => { const o = (t.outcome || '').toLowerCase(); if (o in tcount) tcount[o]++; });
+  const tPartly = tasks.filter(t => t.failure_kind === 'partial').length;
   let tasksHtml = '';
   tasks.forEach((t, i) => {
     const oc = (t.outcome || '').toLowerCase();
@@ -3498,7 +3504,7 @@ function renderEp(d, opts) {
       <span class="task-num ${oc}">${i + 1}</span>
       <div class="task-body">
         <div class="task-head"><span class="task-name">${esc(t.task || '?')}</span>${oc
-          ? `<span class="outcome ${oc}">${esc(oc)}</span>` : ''}</div>
+          ? `<span class="outcome ${oc}">${esc(outcomeWords(oc, t.failure_kind))}</span>` : ''}</div>
         <div class="task-meta">${span}${done}</div>
         ${t.success_predicate ? `<div class="task-pred">${esc(t.success_predicate)}</div>` : ''}
         ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
@@ -3642,8 +3648,7 @@ function renderEp(d, opts) {
     <h3 class="section">What tasks did the operator do?</h3>
     <div class="tasks-summary"><b>${tasks.length}</b> self-directed tasks &nbsp;
       <span class="ts-ok">${tcount.success} success</span> /
-      <span class="ts-part">${tcount.partial} partial</span> /
-      <span class="ts-fail">${tcount.failure} failure</span>
+      <span class="ts-fail">${tcount.failure} failure${tPartly ? `, ${tPartly} of them partly done` : ''}</span>
       <div class="tasks-note">No single goal: each task is graded on its own, and a messy final scene is fine.</div>
     </div>
     ${taskGoalFrameHtml}
@@ -3651,7 +3656,8 @@ function renderEp(d, opts) {
   ` : `
     <h3 class="section">Was the task completed?</h3>
     <div class="completion-banner" style="border-left:4px solid ${vColor}">
-      <span class="comp-verdict" style="color:${vColor}">${esc(comp.task_completed || '-')}</span>
+      <span class="comp-verdict" style="color:${vColor}">${esc(comp.task_completed
+        ? outcomeWords(verdict, comp.failure_kind) : '-')}</span>
       <span class="comp-detail">${undone
         ? `goal reached ${comp.goal_reached_at_s != null ? fmtT(comp.goal_reached_at_s)
           : '?'}, undone ${comp.undone_at_s != null ? fmtT(comp.undone_at_s) : '?'}`
@@ -4687,7 +4693,8 @@ function buildCompare() {
     <p class="cmpv-sub">Every pair of models, on the episodes both of them parsed. Darker is closer agreement; each cell `
       + `gives its number of episodes.</p>
     <div class="cmpv-grid">${mx('outcome', 'Outcome agreement', 'The share of episodes on which two runs give the task '
-      + 'the same outcome (success, success then undone, partial, failure or unclear). Human ego sessions grade each '
+      + 'the same outcome (success, success then undone, failure or unclear; a task partly done is a failure). Human ego '
+      + 'sessions grade each '
       + 'task separately and have no single outcome, so they are left out.')}
       ${mx('issues', 'Issue-type agreement', 'Of the kinds of problem either run reported in an episode (data issues '
         + 'and operator mistakes, every severity, grouped into the board’s issue families), the share both reported, '

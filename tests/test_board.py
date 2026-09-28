@@ -55,6 +55,22 @@ def test_convert_a_harness_output():
     assert d["data_issues"] == [] and d["operator_mistakes"] == [] and d["goal_alignment"] is None
 
 
+def test_a_partial_outcome_is_a_failure_of_the_kind_partial():
+    """The board's outcome is success or failure: a model's "partial" (part of the goal left undone) becomes a
+    failure that keeps its kind, for the episode and for each task of a session, and the comparison agrees with it."""
+    from compare import metrics
+    d = to_board.convert(_output("episode_000010", completion={"task_completed": "partial", "reason": "3 of 4 done"}),
+                         "demo")
+    assert d["completion"]["task_completed"] == "failure" and d["completion"]["failure_kind"] == "partial"
+    assert d["_meta"]["task_completed"] == "failure"
+    s = to_board.convert(_output("episode_000011", tasks=[{"task": "pour", "outcome": "partial"},
+                                                           {"task": "wipe", "outcome": "success"}]), "demo")
+    assert [(t["outcome"], t.get("failure_kind")) for t in s["tasks"]] == [("failure", "partial"), ("success", None)]
+    assert "failure_kind" not in to_board.convert(_output("episode_000012"), "demo")["completion"]
+    L = _output("x")["labels"]
+    assert metrics.measure({**L, "completion": {"task_completed": "partial"}}, "demo")["outcome"] == "failure"
+
+
 def test_convert_a_reply_that_breaks_the_schema():
     """A parsed reply whose lists hold plain strings or whose times are not numbers is shown without them, and the
     board file counts what was left out."""
