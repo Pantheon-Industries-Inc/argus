@@ -1027,7 +1027,7 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 }
 
 /* given-goal mode: the dataset's instruction is the anchor, the model's
-   own account (what it saw) sits beneath it so a divergence is visible at a glance. */
+   independent assessment sits beneath it so a divergence is visible at a glance. */
 .prompt-banner.has-given { border-left-color: var(--fg); }
 .prompt-banner .goal-given {
   display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 12px;
@@ -1049,7 +1049,7 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   color: var(--fg-3); padding-top: 1px;
 }
 .prompt-banner .gr-text { font-size: 14px; line-height: 1.5; color: var(--fg-2); }
-/* alignment chip: whether what the model saw matches the given goal */
+/* alignment chip: whether the model's independent assessment matches the given goal */
 .align-chip {
   display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin-top: 10px;
   font-size: 12px; font-weight: 600; padding: 7px 10px; border-radius: var(--r-md);
@@ -3251,13 +3251,13 @@ function renderEp(d, opts) {
   const taskGoalTimes = tasks.map(t => t.completed_at_s).filter(t => t != null);
 
   // Given or inferred. When the dataset ships an instruction, the episode was graded against it (given mode): that
-  // goal is the anchor, with what the model saw beside it, since a divergence between the two is itself a
-  // data-quality signal. Without one, what the model saw is the one line.
+  // goal is the anchor, with the model's independent assessment beside it, since a divergence between the two is
+  // itself a data-quality signal. Without one, the model's assessment is the one line.
   const givenMode = meta.prompt_mode === 'given' && !!meta.given_prompt;
   const bannerLabel = hasTasks ? 'Session summary'
-    : givenMode ? `Given goal and what ${esc(who)} saw`
-    : `Task, as ${esc(who)} saw it`;
-  // alignment chip: whether what the model saw matches the given goal
+    : givenMode ? `Given goal and ${esc(who)}&rsquo;s independent assessment`
+    : `Task, as ${esc(who)} assessed it`;
+  // alignment chip: whether the model's independent assessment matches the given goal
   const ga = d.goal_alignment || null;
   let alignHtml = '';
   if (givenMode && ga && ga.relation) {
@@ -3276,7 +3276,7 @@ function renderEp(d, opts) {
   const bannerBody = givenMode
     ? `<div class="goal-given"><span class="gg-badge">given goal</span>`
         + `<span class="gg-text">${esc(meta.given_prompt)}</span></div>`
-      + `<div class="goal-read"><span class="gr-badge">what ${esc(who)} saw</span>`
+      + `<div class="goal-read"><span class="gr-badge">${esc(who)}&rsquo;s independent assessment</span>`
         + `<span class="gr-text">${esc(d.episode_prompt || '(empty)')}</span></div>`
       + alignHtml
     : `<div class="text">${esc(d.episode_prompt || '(empty)')}</div>`;
@@ -4302,7 +4302,7 @@ const cap = w => w.charAt(0).toUpperCase() + w.slice(1);
 // a run whose prompt also held one complete annotation of the reference (of another episode of the same rig): the
 // model learns in context from that trace
 const icl = () => `in-context learning with ${withAn(refName())} trace`;
-// the model's own name, for "what <model> saw": a run with in-context learning is still that model
+// the model's own name, for "<model>'s independent assessment": a run with in-context learning is still that model
 function cmpWho(k) {
   const m = cmpModel(k);
   if (!m) return 'The model';
