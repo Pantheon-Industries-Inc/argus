@@ -146,7 +146,7 @@ uv run python -m board build data/boards/compare
 uv run python -m compare.metrics data/boards/compare
 ```
 
-`prepare` prepares and checks exactly the selected episodes, and each `label` starts one run per model at once, each within its own `--cap`; Astra costs about the figures under Label for these three hours, and in our run the other three cost a third, a fifth and a thirtieth as much. `board` writes a manifest whose labels are the reference model's, with every other run as a comparison under `BOARD/compare/`, never counted or exported; the page's "Labels by" control switches the board to one model's labels and opens the comparison view. `compare/metrics.py` measures, from the run folders alone, parse share, schema violations, density, agreement between models, cost, latency and what in-context learning changes.
+`prepare` prepares and checks exactly the selected episodes, and each `label` starts one run per model at once, each within its own `--cap`; Astra costs about the figures under Label for these three hours, and in our run Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash cost 34%, 19% and 4% as much per episode. `board` writes a manifest whose labels are the reference model's, with every other run as a comparison under `BOARD/compare/`, never counted or exported; the page's "Labels by" control switches the board to one model's labels and opens the comparison view. `compare/metrics.py` measures, from the run folders alone, parse share, schema violations, density, agreement between models, cost, latency and what in-context learning changes.
 
 ## Gate
 
