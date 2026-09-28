@@ -1626,7 +1626,7 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
         return convert_mcap_generic(item, rig, ep, dataset)
     import importlib
     ctx = importlib.import_module(f"prepare.{layout}").convert_upload(item, ep)
-    ctx.update({"dataset": dataset, "source": {"format": f"mcap ({layout} layout)", "file": item["name"]}})
+    ctx.update({"dataset": dataset, "source": {"format": f"mcap ({layout} layout)", "adapter": layout, "file": item["name"]}})
     # the adapters assume a nominal rate (ABC: 30 Hz), but stations record at 30 or 60 Hz; the rate and the
     # length come from the anchor camera's real capture times, so sampling is one instant per second of
     # real time and the footage cap counts real minutes
