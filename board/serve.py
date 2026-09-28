@@ -977,6 +977,8 @@ aside.left .cam-label {
     border-top-width: 0; border-bottom-width: 0; box-shadow: none;
     transition: max-height 220ms ease, opacity 200ms ease, padding 220ms ease, margin 220ms ease; }
   aside.left .cam-cell > .state-toast { order: 4; }
+  /* two gripper cameras side by side leave each cell too narrow for the progress chip's sparkline */
+  aside.left .cam-row-grippers:not(.cam-row-single) .prog-overlay .po-svg { display: none; }
   aside.left .cam-cell > .recovery-overlay.active, aside.left .cam-cell > .state-toast.active {
     max-height: 220px; margin-top: 6px; padding-top: 7px; padding-bottom: 7px; border-top-width: 1px;
     border-bottom-width: 1px; }
