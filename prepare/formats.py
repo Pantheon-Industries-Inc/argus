@@ -1751,7 +1751,9 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | No
     """(instruction, uploader notes) from an MCAP's text topics, each a list of its messages in time order as
     (log time ns, text), as add_text keeps them. The instruction is the one message of a topic named for the task
     (/task, /instruction) before any sub-topic (/task/subtask, /task/health); MicroAGI's /task titles the fragment
-    and its /task/subtask names each step, so the first step is never the task. A topic with several messages goes
+    and its /task/subtask names each step, so the first step is never the task. A task topic whose text changes is
+    the instruction whole, as a timeline, with none of its texts chosen over the others. Any other topic with several
+    messages goes
     to the notes as a timeline on the episode's clock (the vendor's steps, claims to check). A topic other than a
     step topic with more than TEXT_MSGS_MAX distinct messages (a heartbeat) keeps only its first, with the count."""
     def named(t):
@@ -1765,8 +1767,8 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | No
     notes = {}
     base = t0 if t0 is not None else min((s[0][0] for s in texts.values() if s), default=0)
     for t, seq in texts.items():
-        if t == it and len(seq) == 1:
-            continue                  # the instruction itself (a task topic whose text changes keeps its timeline)
+        if t == it:
+            continue                  # the instruction itself, all of it (below)
         if len(seq) == 1:
             notes[t] = seq[0][1]
         elif len(seq) > TEXT_MSGS_MAX and not _is_step(t):
@@ -1775,6 +1777,11 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | No
             notes[t] = [f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in seq]
     if it is None:
         return None, notes
+    if len(texts[it]) > 1:
+        # a task topic whose text changes is given whole, each text with the time it was sent, and no one of them is
+        # chosen: MicroAGI sends a placeholder ("The agent is idle") at the start of some fragments, the title after
+        # it, and a new title when the work changes
+        return "; ".join(f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in texts[it]), notes
     instr = texts[it][0][1]
     # a task message in protobuf text form (MicroAGI's /task: title, success, tools, confidence) gives its title as
     # the instruction; the rest of the record stays with the uploader's notes as claims to check
