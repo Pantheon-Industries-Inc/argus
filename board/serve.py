@@ -3775,7 +3775,7 @@ function renderEp(d, opts) {
         <div class="cam-cell cam-exo">
           ${isEgo ? '' : `<span class="cam-label">${esc(camLabel(mainCam))}</span>`}
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
-          <video id="video" controls preload="auto" playsinline${keep ? '' : ` src="${videoUrl}"${posterAttr(eidEnc,
+          <video id="video" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${videoUrl}"${posterAttr(eidEnc,
             mainCam)}`}></video>
           ${isEgo ? '<canvas class="hp-canvas" id="hp-canvas" aria-hidden="true"></canvas>' : ''}
           ${isEgo ? `<div class="top-hud" id="top-hud"><div class="top-hud-in">
@@ -3901,14 +3901,20 @@ function renderEp(d, opts) {
   const tl  = document.getElementById('timeline');
 
   // Fullscreen the exo cell (video + overlays), not the bare video, so overlays
-  // stay on screen. The native fullscreen button is hidden via CSS.
+  // stay on screen. The player's own fullscreen (its button, hidden via CSS, its menu item, off by controlslist, and
+  // a double-click on the video, which Chrome takes as fullscreen) would promote only the video, so a double-click
+  // fullscreens the cell as the button does.
   const fsBtn = document.getElementById('fs-btn');
   const exoCell = document.querySelector('.cam-cell.cam-exo');
-  if (fsBtn && exoCell) fsBtn.addEventListener('click', () => {
+  const fsToggle = () => {
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
     if (fsEl) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); }
     else { (exoCell.requestFullscreen || exoCell.webkitRequestFullscreen).call(exoCell); }
-  });
+  };
+  if (fsBtn && exoCell) {
+    fsBtn.addEventListener('click', fsToggle);
+    exoCell.addEventListener('dblclick', e => { if (e.target.closest('button, a')) return; e.preventDefault(); fsToggle(); });
+  }
 
   // The exo <video> is object-fit:contain, so when the cell's aspect differs
   // from the frame's, the actual image is letterboxed with black bars and does
@@ -4265,10 +4271,14 @@ function renderEp(d, opts) {
       // load/select would drag the column down past the prompt to timestamp 1.
       // When paused (just selected an episode, or scrubbed), leave the scroll be.
       // In the stacked narrow layout the column is part of the page, so following would scroll the page
-      // and pull the video off screen; follow only when the column scrolls on its own.
-      if (vid && !vid.paused
-        && getComputedStyle(rightCol).overflowY !== 'visible') rows[idx].scrollIntoView({block: 'start',
-        behavior: 'smooth'});
+      // and pull the video off screen; follow only when the column scrolls on its own. Only the column
+      // scrolls: scrollIntoView would also scroll every page around the board (Data Review's job page
+      // embeds it), pushing that page down as the rows advance.
+      if (vid && !vid.paused && getComputedStyle(rightCol).overflowY !== 'visible') {
+        const margin = parseFloat(getComputedStyle(rows[idx]).scrollMarginTop) || 0;
+        const top = rows[idx].getBoundingClientRect().top - rightCol.getBoundingClientRect().top + rightCol.scrollTop - margin;
+        rightCol.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
+      }
     }
   }
 
