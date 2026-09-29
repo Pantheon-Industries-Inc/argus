@@ -23,10 +23,11 @@ FIXED_HEADER = ("HOW TO LABEL. These instructions are the same for every episode
 # episodes; they are never a closed list. Each timeline segment is a positional row, so its keys are not
 # repeated hundreds of times.
 SCHEMA = """
-Produce a DENSE timeline of what happens. Segment finely: every
-distinct sub-action is its own segment (an approach, a grasp, a
-transport, a placement, a pour, a release, a retreat). Do not collapse a
-multi-step activity into one segment.
+Produce a timeline of what happens, one segment per distinct action
+phase (an approach, a grasp, a transport, a placement, a pour, a
+release, a retreat). Do not collapse a multi-step activity into one
+segment; TIMELINE GRANULARITY at the end of these instructions says
+exactly how fine to cut.
 
 Return ONLY JSON with this shape. Each timeline segment is one array whose values are in exactly the order of timeline_columns, so the keys are not repeated for every segment; everything else is ordinary JSON objects:
 {
@@ -240,10 +241,11 @@ def schema(r: str) -> str:
 # The head camera's schema: activities as tasks[], and per step whether the hands are in view and what covers
 # them. The two issue lists are the same as the robot rigs', with the tags a person's own work can have.
 EGO_SCHEMA = """
-Produce a DENSE timeline of what happens. Segment finely: every
-distinct sub-action is its own segment (an approach, a grasp, a
-transport, a placement, a pour, a release, a retreat). Do not collapse a
-multi-step activity into one segment.
+Produce a timeline of what happens, one segment per distinct action
+phase (an approach, a grasp, a transport, a placement, a pour, a
+release, a retreat). Do not collapse a multi-step activity into one
+segment; TIMELINE GRANULARITY at the end of these instructions says
+exactly how fine to cut.
 
 Return ONLY JSON with this shape. Each timeline segment is one array whose values are in exactly the order of timeline_columns, so the keys are not repeated for every segment; everything else is ordinary JSON objects:
 {
@@ -750,7 +752,7 @@ success or success_then_undone (the given goal was reached) cannot sit beside a 
 # its own segment.
 LEAN_NOTE = """
 
-COST-LEAN OUTPUT (this OVERRIDES the "Segment finely" instruction above):
+TIMELINE GRANULARITY:
 - Segment the timeline at the level of distinct ACTION PHASES, not per-second or per-frame.
   Merge contiguous frames of ONE continuous action by ONE arm into a SINGLE segment: a whole
   reach is one segment, a whole transport is one segment, a whole placement is one segment. A
@@ -759,8 +761,8 @@ COST-LEAN OUTPUT (this OVERRIDES the "Segment finely" instruction above):
   every placement, every error, and every recovery, and whenever the acting arm or the
   manipulated object changes. Coarser segmentation may NEVER drop a real event; it only merges
   frames that are the same ongoing action.
-- Keep values terse: short action/object strings, set "notes" to null unless it carries real
-  information, and omit the per-segment "confidence" field entirely.
+- Keep values terse: short action/object strings, and set "notes" to null unless it carries real
+  information.
 - Everything else (completion, goal_alignment, key_events, data_issues, recovery,
   state_changes, scene) is unchanged in content; only the timeline's granularity and verbosity
   change. Do not drop detail from those sections.

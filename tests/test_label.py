@@ -164,7 +164,8 @@ def test_prompt_states_only_what_we_know():
     assert "10.00-14.97s" in p                          # the exact still span from the state
     assert "RECORDED MOTION" in p and "This is the recording's claim, not a fact" in p
     assert '"Spell AI2."' in p and "Spell out Ai2" in p
-    assert "success_then_undone" in p and "goal_reached_at_s" in p and "COST-LEAN" in p
+    assert "success_then_undone" in p and "goal_reached_at_s" in p and "TIMELINE GRANULARITY" in p and "Segment finely" not in p
+    assert "confidence" not in p                         # the timeline has no such column
     assert '"data_issues"' in p and '"operator_mistakes"' in p and "TWO KINDS OF PROBLEM" in p
 
 
@@ -210,12 +211,12 @@ def test_no_rig_borrows_another_rigs_hardware():
 # The shared instructions each rig is sent, pinned so that no prompt text changes by accident. A deliberate prompt
 # change updates these in the same commit.
 PINNED = {
-    ("teleop_arms", True): "8c327a4776b227227f3972adc0cff79edfc09d7b63217176afaa4f4803b60cec",
-    ("teleop_arms", False): "1a411688e63810052ddbb685e0df121daca0588ce7cc26d5e598e2eda251f07d",
-    ("handheld_gripper", True): "69273138576f9ed964fccea988df01c46c36ecb7a6860d6b75744c1308ca9198",
-    ("handheld_gripper", False): "18a880a62029f0ea6d4bdc77d78827ccd0655c6675e3ce83018672814c23c1bd",
-    ("ego_head", True): "a7affbaf98aa34a92d93e6f271e99b935eedf0ca0b7c2768188693cddd455874",
-    ("ego_head", False): "a7affbaf98aa34a92d93e6f271e99b935eedf0ca0b7c2768188693cddd455874",
+    ("teleop_arms", True): "2e668a6cd89b7ad101cbe4a684f3eb6464859975031ea86c629707418cad3199",
+    ("teleop_arms", False): "93b9200f2bb18f4ca3f8eda72fb8a502d2c4829277251193bbd6696508ad80ae",
+    ("handheld_gripper", True): "090bc591944a31a251a3abdc2225144afea1516f9b44fbf9d00e37b59a471b97",
+    ("handheld_gripper", False): "8bd7cd5b48980cd55c3b37618ec26e072a906b470831965e2a70b840568cc600",
+    ("ego_head", True): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
+    ("ego_head", False): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
 }
 
 

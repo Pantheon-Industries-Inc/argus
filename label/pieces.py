@@ -377,7 +377,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
             "given_prompt": (ctx.get("instruction") or "").strip() or None,
             "prompt_mode": "given" if (ctx.get("instruction") or "").strip() else "inferred",
-            "task_label": ctx.get("task_label"), "lean": first.get("lean"), "sampling": first.get("sampling"),
+            "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
             "stitched": {"parts": count, "cuts_s": cuts_s}}
