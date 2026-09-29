@@ -566,3 +566,120 @@ def test_the_dashboard_draws_no_issue_in_orange():
         if s > 0.3 and h * 360 <= 55 and l < 0.93:
             found.append(t)
     assert not found, found
+
+
+# ---------------------------------------------------------------- the video download (board/serve.py footage)
+
+def test_footage_layout_keeps_the_main_camera_and_never_enlarges_the_others():
+    from board import serve
+    # Rexair: a portrait scene camera and two landscape wrists share its height in a column beside it
+    W, H, cells = serve.footage_layout([(480, 640), (640, 480), (640, 480)])
+    assert cells == [(0, 0, 480, 640), (488, 0, 420, 316), (488, 324, 420, 316)]
+    assert (W, H) == (908, 640)
+    # a tall main camera: the wrists keep their own size, centred in the column
+    W, H, cells = serve.footage_layout([(1920, 1080), (640, 480), (640, 480)])
+    assert cells[1:] == [(1928, 56, 640, 480), (1928, 544, 640, 480)] and (W, H) == (2568, 1080)
+    # one camera is its own frame
+    assert serve.footage_layout([(640, 360)]) == (640, 360, [(0, 0, 640, 360)])
+    for sizes in ([(456, 256), (640, 480)], [(1280, 720), (1280, 720), (1280, 720)], [(455, 255), (637, 479)]):
+        W, H, cells = serve.footage_layout(sizes)
+        assert W % 2 == 0 and H % 2 == 0
+        for (w, h), (x, y, cw, ch) in zip(sizes, cells):
+            assert cw <= w and ch <= h and x + cw <= W and y + ch <= H
+
+
+def _flash_clip(path: Path, w: int, h: int, n: int, flash: int, start_s: float = 0.0) -> None:
+    """n frames of grey at 30 fps with frame `flash` white, the first frame at start_s."""
+    import av
+    c = av.open(str(path), "w")
+    s = c.add_stream("mpeg4", rate=30)
+    s.width, s.height, s.pix_fmt = w, h, "yuv420p"
+    s.time_base = Fraction(1, 15360)
+    for k in range(n):
+        fr = av.VideoFrame.from_ndarray(np.full((h, w, 3), 255 if k == flash else 60, np.uint8), format="rgb24")
+        fr.pts = round((start_s + k / 30) * 15360)
+        fr.time_base = s.time_base
+        for pkt in s.encode(fr):
+            c.mux(pkt)
+    for pkt in s.encode():
+        c.mux(pkt)
+    c.close()
+
+
+def _footage_board(tmp_path):
+    from board import serve
+    clips = tmp_path / "clips"
+    (clips / "wrist_left").mkdir(parents=True)
+    (clips / "wrist_right").mkdir()
+    _flash_clip(clips / "episode_a.mp4", 60, 80, 90, 45)                         # exo: white at 1.5 s
+    _flash_clip(clips / "wrist_left" / "episode_a.mp4", 80, 60, 90, 45, 0.5)    # started 0.5 s late: white at 2.0 s
+    _flash_clip(clips / "wrist_right" / "episode_a.mp4", 80, 60, 90, 30)        # white at 1.0 s
+    serve.MP4_DIR, serve.FOOTAGE_DIR = clips, tmp_path / "footage"
+    return serve
+
+
+def _cell_means(mp4: Path, cells) -> np.ndarray:
+    """[frame, cell] mean brightness inside each cell (2 px in from its edges)."""
+    import av
+    out = []
+    with av.open(str(mp4)) as c:
+        for fr in c.decode(video=0):
+            a = fr.to_ndarray(format="gray")
+            out.append([a[y + 2:y + h - 2, x + 2:x + w - 2].mean() for x, y, w, h in cells])
+    return np.array(out)
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_footage_shows_each_camera_at_its_own_time(tmp_path):
+    """The downloaded video shows every camera at the time the page shows it: a camera that started late is black
+    until it starts and then on its own clock, and a span starts at its first second."""
+    serve = _footage_board(tmp_path)
+    W, H, cells = serve.footage_layout([(60, 80), (80, 60), (80, 60)])
+    mp4, name = serve.footage("episode_a", 0.5, 2.5)
+    assert name == "episode_a_0.5-2.5s.mp4"
+    m = _cell_means(mp4, cells)
+    assert len(m) == 60                                 # 2 s at 30 fps
+    # the flashes land on the frames of their times: exo 1.5 s, left 2.0 s, right 1.0 s, counted from 0.5 s
+    assert [int(np.argmax(m[:, i])) for i in range(3)] == [30, 45, 15]
+    whole, name = serve.footage("episode_a")
+    assert name == "episode_a.mp4"
+    m = _cell_means(whole, cells)
+    assert len(m) == 90
+    assert m[:14, 1].max() < 20 and m[16:40, 1].min() > 40     # the left wrist is black until it starts at 0.5 s
+    assert [int(np.argmax(m[:, i])) for i in range(3)] == [45, 60, 30]
+    # made once: asking again returns the same file
+    assert serve.footage("episode_a")[0] == whole and len(list(serve.FOOTAGE_DIR.glob("*.mp4"))) == 2
+    assert serve.footage("episode_none") is None
+    assert serve.footage("episode_a", 2.0, 2.0) is None
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_the_server_hands_out_the_video_and_each_camera_as_files(tmp_path):
+    import socketserver
+    import threading
+    import urllib.request
+    serve = _footage_board(tmp_path)
+    serve.HERE = tmp_path / "qa"
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), serve.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        with urllib.request.urlopen(base + "/api/footage?id=episode_a&t0=0.5&t1=2.5&prepare=1") as r:
+            j = json.loads(r.read())
+        assert j["name"] == "episode_a_0.5-2.5s.mp4" and j["bytes"] > 0
+        with urllib.request.urlopen(base + "/api/footage?id=episode_a&t0=0.5&t1=2.5") as r:
+            assert r.headers["Content-Disposition"] == 'attachment; filename="episode_a_0.5-2.5s.mp4"'
+            assert len(r.read()) == j["bytes"]
+        with urllib.request.urlopen(base + "/api/video?id=episode_a&cam=left&download=1") as r:
+            assert r.headers["Content-Disposition"] == 'attachment; filename="episode_a_left.mp4"'
+        with urllib.request.urlopen(base + "/api/video?id=episode_a&cam=left") as r:
+            assert r.headers["Content-Disposition"] is None          # the page's own playback is not a download
+        for bad in ("id=../x", "id=episode_a&t0=x", "id=episode_none"):
+            try:
+                urllib.request.urlopen(base + "/api/footage?" + bad)
+                raise AssertionError(bad)
+            except urllib.error.HTTPError as e:
+                assert e.code in (400, 404), bad
+    finally:
+        srv.shutdown()
+        srv.server_close()

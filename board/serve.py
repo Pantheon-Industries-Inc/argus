@@ -6,7 +6,8 @@ One Python file, no framework: a threaded HTTP server and a single page (INDEX_H
 episode files in BOARD/qa (board/build.py writes them) and plays the per-episode clips in CLIPS
 (board/clips.py writes them: CLIPS/<episode>.mp4 for the fixed or head camera, CLIPS/wrist_left/ and
 CLIPS/wrist_right/ for the mounted cameras). Goal frames are cut from the clips on request with ffmpeg and
-cached. Each episode can be downloaded as JSON, and a filtered set as JSON Lines (/api/export). Other models'
+cached. Each episode can be downloaded as JSON, and a filtered set as JSON Lines (/api/export); its video can be
+downloaded with every camera in one frame, whole or a span of it, or one camera at a time (footage below). Other models'
 labels of some episodes (BOARD/compare, when the manifest names comparisons) are a comparison: the "Labels by"
 control switches the whole board to one model's labels, marked as such, and the comparison view sums them up;
 they never enter the board's counts or its downloads. The hand pose files in BOARD/hands, when the manifest names
@@ -17,7 +18,8 @@ of a site, the site's own header (--header, an HTML file).
 Endpoints (all GET but the export): / (the page), /api/episodes (one rail record per episode),
 /api/episode?file=F[&download=1], /api/compare/index, /api/compare/metrics, /api/compare/list?key=K (one model's
 rail records), /api/compare/episode?key=K&file=F, /api/hands?file=F, /api/keypoints?file=F[&download=1] (F is a
-label file, or index.json for the list), /api/video?id=EPISODE&cam=exo|left|right (byte ranges),
+label file, or index.json for the list), /api/video?id=EPISODE&cam=exo|left|right[&download=1] (byte ranges),
+/api/footage?id=EPISODE[&t0=S&t1=S][&prepare=1] (every camera in one video, see footage below),
 /api/frame?id=EPISODE&cam=C&t=S&w=W (one JPEG), POST /api/export {"files": [...]} (JSON Lines).
 
 Environment:
@@ -25,6 +27,9 @@ Environment:
                                stays cached
     BOARD_FFMPEG_CONCURRENCY   ffmpeg processes cutting frames at once (default 4)
     BOARD_FRAME_DIR            a folder that keeps every frame cut, so a restarted server does not cut them again
+    BOARD_FOOTAGE_DIR          where the videos made to download are kept (default BOARD/footage)
+    BOARD_FOOTAGE_CONCURRENCY  videos made at once (default 1)
+    BOARD_FOOTAGE_THREADS      threads each is made on (default 2)
 
 board/static.py renders the same page with a static data source, so a CDN can serve the board with no server.
 """
@@ -157,6 +162,116 @@ def _under(base: Path, p: Path) -> bool:
         return False
 
 
+# The episode's video as one file to download, play and cut: the main camera at its clip's size and the mounted
+# cameras stacked in a column beside it, on black with a small gap. It is made from the board's clips, so every
+# camera keeps its clip's timestamps (one that started recording late starts late here too) and a time on the page is
+# the same time in the file. It is 30 fps at a constant rate, so an editor cuts it on whole frames. Each span is made
+# once, on request, and kept in FOOTAGE_DIR; one is made at a time, niced, on a few threads, since a board can be
+# served from a machine that also records.
+FOOTAGE_GAP = 8
+FOOTAGE_FPS = 30
+FOOTAGE_TAG = f"footage-v1-h264-crf20-veryfast-{FOOTAGE_FPS}fps-gap{FOOTAGE_GAP}"   # a new recipe makes new files
+_FOOTAGE_SEM = threading.Semaphore(int(os.environ.get("BOARD_FOOTAGE_CONCURRENCY", 1)))
+_FOOTAGE_THREADS = int(os.environ.get("BOARD_FOOTAGE_THREADS", 2))
+_FOOTAGE_LOCKS: dict = {}
+_FOOTAGE_LOCKS_LOCK = threading.Lock()
+
+
+def footage_cams(clips: Path, eid: str) -> list:
+    """[(cam, clip)] of the episode's clips on disk, the main camera first: the fixed or head camera, else the first
+    gripper camera, as the page shows them."""
+    return [(c, clip_path(clips, eid, c)) for c in ("exo", "left", "right") if clip_path(clips, eid, c).is_file()]
+
+
+def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
+    """(width, height, [(x, y, w, h)] per camera) for clips of the given (w, h), the main one first. The main camera
+    keeps its size; the others share its height in a column beside it, each at its own aspect and never enlarged,
+    the column centred when they come out shorter."""
+    even = lambda v: max(2, 2 * int(v / 2))
+    up = lambda v: v + v % 2           # the frame is even in both directions, as H.264 needs
+    w0, h0 = sizes[0]
+    cells = [(0, 0, w0, h0)]
+    side = sizes[1:]
+    if not side:
+        return up(w0), up(h0), cells
+    hs = even(min((h0 - gap * (len(side) - 1)) / len(side), *(h for _, h in side)))
+    col_h = hs * len(side) + gap * (len(side) - 1)
+    x, y, col_w = w0 + gap, 2 * int((h0 - col_h) / 4), 0
+    for w, h in side:
+        ws = even(w * hs / h)
+        cells.append((x, y, ws, hs))
+        y += hs + gap
+        col_w = max(col_w, ws)
+    return up(x + col_w), up(h0), cells
+
+
+def _probe(p: Path) -> tuple:
+    """(width, height, duration s) of a clip."""
+    probe = Path(FFMPEG).with_name("ffprobe") if FFMPEG else None
+    r = subprocess.run([str(probe) if probe and probe.exists() else "ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height:format=duration", "-of", "json", str(p)],
+                       capture_output=True, text=True, timeout=30, check=True)
+    j = json.loads(r.stdout)
+    s = j["streams"][0]
+    return int(s["width"]), int(s["height"]), float(j["format"]["duration"])
+
+
+def footage_command(inputs: list, t0: float, t1: float, out: Path, threads: int = 2) -> list:
+    """The ffmpeg command that composes [(clip, (w, h))] (the main camera first) from t0 to t1 s into out. Timestamps
+    are kept as the clips have them (-copyts), a black canvas runs from t0 to t1 at FOOTAGE_FPS, and each camera is
+    laid on it at its place, so the file shows at each instant what the page shows then."""
+    W, H, cells = footage_layout([wh for _, wh in inputs])
+    cmd = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-copyts"]
+    for clip, _ in inputs:
+        # from a few seconds early, so each camera has the frame showing at t0 (clips have a keyframe every 2 s)
+        cmd += ["-ss", f"{max(0.0, t0 - 3.0):.3f}", "-i", str(clip)]
+    g = [f"color=c=black:s={W}x{H}:r={FOOTAGE_FPS}:d={t1 - t0:.3f},setpts=PTS+{t0:.3f}/TB[b0]"]
+    for i, ((_, wh), (x, y, w, h)) in enumerate(zip(inputs, cells)):
+        g.append(f"[{i}:v]{'' if (w, h) == tuple(wh) else f'scale={w}:{h}:flags=lanczos,'}setsar=1[c{i}]")
+        g.append(f"[b{i}][c{i}]overlay={x}:{y}:eof_action=pass[b{i + 1}]")
+    g.append(f"[b{len(inputs)}]setpts=PTS-STARTPTS,format=yuv420p[v]")
+    return cmd + ["-filter_complex", ";".join(g), "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast",
+                  "-crf", "20", "-pix_fmt", "yuv420p", "-g", str(2 * FOOTAGE_FPS), "-threads", str(threads),
+                  "-filter_complex_threads", "1", "-movflags", "+faststart", str(out)]
+
+
+def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
+    """(file, download name) of the episode's video from t0 to t1 s (the whole episode by default), made now if it
+    was not made before; None when the episode has no clip. Raises RuntimeError when ffmpeg fails."""
+    cams = footage_cams(MP4_DIR, eid)
+    if not cams or not FFMPEG:
+        return None
+    probes = [_probe(p) for _, p in cams]
+    dur = probes[0][2]
+    t0 = round(max(0.0, min(float(t0), dur)), 3)
+    t1 = round(dur if t1 is None else max(0.0, min(float(t1), dur)), 3)
+    if t1 - t0 < 1.0 / FOOTAGE_FPS:
+        return None
+    whole = t0 == 0 and t1 >= round(dur, 3)
+    name = f"{eid}.mp4" if whole else f"{eid}_{t0:.1f}-{t1:.1f}s.mp4"
+    key = hashlib.sha1(json.dumps([eid, t0, t1, FOOTAGE_TAG, [(str(p), p.stat().st_size, int(p.stat().st_mtime))
+                                                             for _, p in cams]]).encode()).hexdigest()[:20]
+    out = FOOTAGE_DIR / f"{key}.mp4"
+    if out.is_file():
+        return out, name
+    with _FOOTAGE_LOCKS_LOCK:
+        lock = _FOOTAGE_LOCKS.setdefault(key, threading.Lock())
+    with lock:                       # a second request for the same span waits for the first one's file
+        if out.is_file():
+            return out, name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
+        cmd = footage_command([(p, pr[:2]) for (_, p), pr in zip(cams, probes)], t0, t1, tmp, _FOOTAGE_THREADS)
+        nice = shutil.which("nice")
+        with _FOOTAGE_SEM:
+            r = subprocess.run(([nice, "-n", "19"] if nice else []) + cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not tmp.is_file():
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"the video could not be made: {(r.stderr or '').strip()[-300:]}")
+        os.replace(tmp, out)
+    return out, name
+
+
 PORT = 8896
 PAGE_TITLE = "Data Dashboard"
 HERE = Path.cwd().resolve()           # the episode files (set by main from --board)
@@ -164,7 +279,8 @@ MP4_DIR = HERE / "clips"              # the clips (set by main from --clips)
 COMPARE_DIR = HERE.parent / "compare" # other models' labels, beside qa/ (board/build.py writes them)
 HANDS_DIR = HERE.parent / "hands"     # the hand pose drawn over head-camera footage (board/build.py)
 KEYPOINTS_DIR = HERE.parent / "hand_keypoints"   # the same keypoints as a download, in the dataset video's pixels
-BOARD_NAME = ""                       # the manifest's "board" (set by main)
+FOOTAGE_DIR = HERE.parent / "footage" # the videos made to download (footage), or $BOARD_FOOTAGE_DIR (set by main)
+BOARD_NAME = ""                     # the manifest's "board" (set by main)
 HEADER = None                         # a site header in place of the title bar (--header)
 
 _LIST_CACHE = {}         # folder -> (signature, rail records)
@@ -436,6 +552,42 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .ep-head-dl:hover { color: var(--fg); border-color: var(--fg-3); }
 /* the open episode's buttons: its download, and on head-camera episodes the hand pose switch beside it */
 .ep-head-acts { flex: none; display: flex; align-items: center; gap: 8px; }
+/* the open episode's video to download: the whole episode or a span of it with every camera in one frame, or one
+   camera on its own. The menu opens under its button, right-aligned to it */
+.vd { position: relative; flex: none; }
+.vd[hidden] { display: none; }
+.vd-btn { display: inline-flex; align-items: center; gap: 7px; background: transparent; cursor: pointer; }
+.vd-caret { flex: none; transition: transform 160ms ease; }
+.vd.open .vd-caret { transform: rotate(180deg); }
+.vd-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: min(320px, calc(100vw - 32px));
+  padding: 6px 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: 0 10px 34px rgba(0,0,0,0.30); opacity: 0; transform: translateY(-4px); pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease; }
+.vd.open .vd-menu { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.vd-opt { display: block; width: 100%; padding: 8px 14px; cursor: pointer; border: 0; background: none; text-align: left;
+  font: 500 13px/1.35 var(--sans); color: var(--fg); text-decoration: none; }
+.vd-opt:hover { background: rgba(28,28,26,0.06); }
+.vd-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.vd-opt small, .vd-span small { display: block; margin-top: 1px; font: 400 11px/1.35 var(--sans); color: var(--fg-3); }
+.vd-opt[aria-disabled="true"] { cursor: default; color: var(--fg-3); background: none; }
+.vd-span { padding: 8px 14px 10px; border-top: 1px solid var(--border-strong); margin-top: 4px;
+  font: 500 13px/1.35 var(--sans); color: var(--fg); }
+.vd-span-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; font: 400 12px/1 var(--sans);
+  color: var(--fg-3); }
+.vd-span-row input { width: 64px; padding: 6px 7px; border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  background: var(--surface); color: var(--fg); font: 500 12px/1 var(--mono); }
+.vd-span-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.vd-span-row .vd-go { margin-left: auto; padding: 6px 10px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-md); background: transparent; cursor: pointer; font: 500 12px/1 var(--sans); color: var(--fg-2); }
+.vd-span-row .vd-go:hover { color: var(--fg); border-color: var(--fg-3); }
+.vd-cams { padding: 8px 14px 2px; border-top: 1px solid var(--border-strong); margin-top: 4px;
+  font: 500 12px/1.3 var(--sans); color: var(--fg-3); }
+.vd-cam-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px 6px; }
+.vd-cam-row a { padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  font: 500 12px/1 var(--sans); color: var(--fg-2); text-decoration: none; }
+.vd-cam-row a:hover { color: var(--fg); border-color: var(--fg-3); }
+.vd-status { padding: 4px 14px 6px; font: 400 11.5px/1.4 var(--sans); color: var(--fg-2); }
+.vd-status:empty { display: none; }
 .hp-btn { display: inline-flex; align-items: center; gap: 8px; background: transparent; cursor: pointer;
   transition: opacity 200ms ease, color 160ms ease, border-color 160ms ease; }
 .hp-btn[hidden] { display: none; }
@@ -1915,6 +2067,8 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   .ep-head { flex-wrap: wrap; row-gap: 10px; }
   .ep-head-side { flex: 1 0 100%; align-items: stretch; }
   .ep-head .ep-head-acts { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+  /* the buttons wrap to the pane's left edge here, so the video menu opens from its button's left */
+  .vd-menu { right: auto; left: 0; }
   .kp-note-in { text-align: left; }
   .video-overlay { min-width: 0; max-width: 94%; padding: 7px 10px; font-size: 12px; }
   aside.left .cam-cell.cam-wrist video { max-height: none; }
@@ -1985,6 +2139,13 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           <a id="kp-dl" class="ep-head-dl" download hidden
             title="the model's 2D hand keypoints for every frame of this episode's video, as JSON, in a file of their own"
             >Hand keypoints</a>
+          <div class="vd" id="vd" hidden>
+            <button id="vd-btn" class="ep-head-dl vd-btn" type="button" aria-haspopup="menu" aria-expanded="false"
+              title="Download this episode's video, with every camera in one frame">Video<svg class="vd-caret"
+              width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" stroke="currentColor"
+              stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <div class="vd-menu" id="vd-menu" role="menu"></div>
+          </div>
           <a id="dl-json" class="ep-head-dl" download
             title="this episode's full annotation and dataset checks as JSON">Episode JSON</a>
         </div>
@@ -2214,6 +2375,81 @@ if (STATIC) for (const id of ['dl-json', 'kp-dl']) document.getElementById(id).a
   try { saveBlob(await (await fetch(a.href)).blob(), a.getAttribute('download') || 'episode.json'); }
   catch (err) { alert(err.message); }
 });
+
+// The open episode's video to download (api/footage): every camera in one frame, the main one with the others beside
+// it, for the whole episode or a span of it in seconds (set to the step under the playhead when the menu opens), made
+// on the server the first time it is asked for; or one camera's own clip. Only a served board makes them.
+const vdEl = document.getElementById('vd'), vdBtn = document.getElementById('vd-btn'),
+  vdMenu = document.getElementById('vd-menu');
+let _vdEp = null;            // the open episode: {eid, d}
+function vdOpen(open) {
+  if (open) buildVideoMenu();
+  vdEl.classList.toggle('open', open);
+  vdBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+// the dense step at time t: {t0, t1, what}, or null before the first one
+function vdStepAt(d, t) {
+  const ev = (d.event_labels || []).filter(e => e && e.t_s != null).slice().sort((a, b) => a.t_s - b.t_s);
+  let k = -1;
+  for (let i = 0; i < ev.length; i++) if (ev[i].t_s <= t + 0.05) k = i;
+  if (k < 0) return null;
+  const e = ev[k];
+  const t1 = (e.end_s != null && e.end_s > e.t_s) ? e.end_s : (ev[k + 1] ? ev[k + 1].t_s : e.t_s + 1);
+  return {t0: Number(e.t_s), t1: Number(t1), what: e.verb_class || ''};
+}
+function buildVideoMenu() {
+  if (!_vdEp) return;
+  const {eid, d} = _vdEp, v = document.getElementById('video');
+  const dur = (v && isFinite(v.duration) && v.duration > 0) ? v.duration : (d.duration_s || null);
+  const st = vdStepAt(d, v ? v.currentTime : 0);
+  const {views, main} = episodeCams(d);
+  const cams = [main, ...views.filter(c => c !== main)];
+  const hasTop = main === 'exo';
+  const name = c => c === 'exo' ? 'exo' : (hasTop ? `${c} wrist` : `${c} camera`);
+  const eidEnc = encodeURIComponent(eid);
+  vdMenu.innerHTML = `<button type="button" class="vd-opt" role="menuitem" data-whole="1">Whole episode<small>`
+      + `${cams.length > 1 ? 'every camera in one frame' : 'the camera'}${dur ? `, 0.0s to ${fmtT(dur)}` : ''}</small>`
+      + `</button>`
+    + `<div class="vd-span">A part of it<small>${st ? `set to the step at the playhead: ${esc(st.what)}`
+      : 'from and to, in seconds'}</small><div class="vd-span-row"><input id="vd-t0" inputmode="decimal" `
+      + `aria-label="From, in seconds" value="${st ? st.t0.toFixed(1) : '0.0'}"> to <input id="vd-t1" `
+      + `inputmode="decimal" aria-label="To, in seconds" value="${st ? st.t1.toFixed(1) : (dur ? dur.toFixed(1) : '')}">`
+      + ` s<button type="button" class="vd-go">Download</button></div></div>`
+    + (cams.length > 1 ? `<div class="vd-cams">Each camera on its own</div><div class="vd-cam-row">`
+      + cams.map(c => `<a role="menuitem" href="api/video?id=${eidEnc}&cam=${c}&download=1" download>${esc(name(c))}`
+        + `</a>`).join('') + `</div>` : '')
+    + `<div class="vd-status" id="vd-status" role="status"></div>`;
+}
+async function vdDownload(t0, t1) {
+  const status = document.getElementById('vd-status');
+  const q = `api/footage?id=${encodeURIComponent(_vdEp.eid)}` + (t0 != null ? `&t0=${t0}` : '')
+    + (t1 != null ? `&t1=${t1}` : '');
+  status.textContent = 'Making the video. A long episode takes a few minutes.';
+  try {
+    const r = await fetch(q + '&prepare=1', {cache: 'no-store'});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    status.textContent = `Downloading ${j.name} (${fmtBytes(j.bytes)}).`;
+    const a = document.createElement('a');
+    a.href = q; a.download = j.name;
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (err) { status.textContent = 'The video could not be made: ' + err.message; }
+}
+vdBtn.addEventListener('click', (e) => { e.stopPropagation(); vdOpen(!vdEl.classList.contains('open')); });
+vdMenu.addEventListener('click', (e) => {
+  if (e.target.closest('[data-whole]')) { vdDownload(null, null); return; }
+  if (e.target.closest('.vd-go')) {
+    const t0 = parseFloat(document.getElementById('vd-t0').value), t1 = parseFloat(document.getElementById('vd-t1').value);
+    if (!(t0 >= 0) || !(t1 > t0)) {
+      document.getElementById('vd-status').textContent = 'The start must be a time before the end, in seconds.';
+      return;
+    }
+    vdDownload(t0, t1);
+  }
+});
+document.addEventListener('click', (e) => { if (!vdEl.contains(e.target)) vdOpen(false); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && vdEl.classList.contains('open')) { vdOpen(false); vdBtn.focus(); } });
 
 // a readable name for an episode id, keeping every part of the id that identifies it (FastUMI's
 // episode_<arm>__<task>__<index> reads "<task> #<index>"); any other id is shown as it is
@@ -3303,6 +3539,10 @@ function renderEp(d, opts) {
   document.getElementById('current-ep-src').innerHTML = datasetSourceHtml(d.dataset_source);
   document.getElementById('dl-json').href = episodeDownloadUrl(_activeFile);
   if (STATIC) document.getElementById('dl-json').setAttribute('download', _activeFile);
+  // the episode's video to download, on a served board (a static build has no server to make it)
+  _vdEp = {eid, d};
+  vdEl.hidden = STATIC || !BOARD.footage || !eid;
+  vdOpen(false);
   // the hand keypoints of a head-camera episode, a download of their own beside the labels'
   const kp = KP_INDEX && KP_INDEX[_activeFile], kpA = document.getElementById('kp-dl');
   kpA.hidden = !kp;
@@ -5065,9 +5305,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, p: Path, ctype: str):
+    def _send_file(self, p: Path, ctype: str, download: str | None = None):
         """Serve a file with proper HTTP Range support so the browser
-        can stream/seek without downloading the whole thing first."""
+        can stream/seek without downloading the whole thing first; download names the saved file."""
         try:
             st = p.stat()
         except FileNotFoundError:
@@ -5118,6 +5358,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(length))
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "public, max-age=3600")
+            if download:
+                self.send_header("Content-Disposition", f'attachment; filename="{download}"')
             self.end_headers()
             f.seek(start)
             remaining = length
@@ -5174,6 +5416,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # the page asks for other models' labels, hand pose files and keypoint downloads only when this board has
             # them (no request that can only fail)
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
+                   "footage": FFMPEG is not None,
                    "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
             return
@@ -5265,11 +5508,43 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/video":
             q = urllib.parse.parse_qs(parsed.query)
-            mp4 = clip_path(MP4_DIR, (q.get("id") or [""])[0], (q.get("cam") or ["exo"])[0])
+            eid, cam = (q.get("id") or [""])[0], (q.get("cam") or ["exo"])[0]
+            mp4 = clip_path(MP4_DIR, eid, cam)
             if not _under(MP4_DIR, mp4) or not mp4.exists():
                 self._send(404, {"error": "video not found"})
                 return
-            self._send_file(mp4, "video/mp4")
+            # download=1: one camera's clip saved as a file of its own
+            name = f"{eid}_{cam if cam in ('left', 'right') else 'main'}.mp4" if (q.get("download") or [""])[0] == "1" \
+                else None
+            self._send_file(mp4, "video/mp4", name)
+            return
+        if parsed.path == "/api/footage":
+            # the episode's cameras in one video (footage), whole or from t0 to t1 s; prepare=1 makes it and answers
+            # with its size, so the page can say it is being made before the download starts
+            q = urllib.parse.parse_qs(parsed.query)
+            eid = (q.get("id") or [""])[0]
+            try:
+                t0 = float((q.get("t0") or ["0"])[0] or 0)
+                t1 = float(q["t1"][0]) if (q.get("t1") or [""])[0] else None
+            except ValueError:
+                self._send(400, {"error": "t0 and t1 are seconds"})
+                return
+            if not eid or "/" in eid or eid.startswith(".") or not _under(MP4_DIR, MP4_DIR / f"{eid}.mp4"):
+                self._send(404, {"error": "no such episode"})
+                return
+            try:
+                got = footage(eid, t0, t1)
+            except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, KeyError) as e:
+                self._send(500, {"error": str(e)[:400]})
+                return
+            if got is None:
+                self._send(404, {"error": "no video for this episode and span"})
+                return
+            out, name = got
+            if (q.get("prepare") or [""])[0] == "1":
+                self._send(200, {"bytes": out.stat().st_size, "name": name})
+                return
+            self._send_file(out, "video/mp4", name)
             return
         if parsed.path == "/api/frame":
             q = urllib.parse.parse_qs(parsed.query)
@@ -5300,7 +5575,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main(argv=None) -> int:
-    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, PORT, PAGE_TITLE, BOARD_NAME, HEADER
+    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, FOOTAGE_DIR, PORT, PAGE_TITLE, BOARD_NAME, HEADER
     ap = argparse.ArgumentParser(prog="python -m board serve", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", type=Path, required=True, help="a board folder (its qa/ holds the episode files)")
@@ -5316,6 +5591,7 @@ def main(argv=None) -> int:
     COMPARE_DIR = (a.board / "compare").resolve()
     HANDS_DIR = (a.board / "hands").resolve()
     KEYPOINTS_DIR = (a.board / "hand_keypoints").resolve()
+    FOOTAGE_DIR = Path(os.environ.get("BOARD_FOOTAGE_DIR") or (a.board / "footage")).resolve()
     PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     socketserver.ThreadingTCPServer.daemon_threads = True
