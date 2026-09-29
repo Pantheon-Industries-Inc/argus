@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import random
 import re
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -37,6 +36,7 @@ import numpy as np
 from prepare import cli
 from prepare import hub
 from prepare import formats
+from prepare.remux import remux  # each frame's capture time as its pts
 
 REPO = "genrobot2025/10Kh-RealOmin-OpenData"
 CAMERA_TOPICS = {"/robot0/sensor/camera0/compressed": "left", "/robot1/sensor/camera0/compressed": "right"}
@@ -80,16 +80,12 @@ def nal_types(b: bytes) -> set[int]:
 
 
 def mux(packets: list[bytes], ts: list[int], out: Path) -> list[int]:
-    """The H.264 packets from the first one carrying SPS, PPS and an IDR frame, stream-copied into out at
-    their median rate; returns the capture times of the packets written."""
+    """The H.264 packets from the first one carrying SPS, PPS and an IDR frame, stream-copied into out with each
+    packet's own capture time as its pts (prepare/remux.py); returns the capture times of the packets written."""
     first = next(i for i, p in enumerate(packets) if {7, 8, 5} <= nal_types(p))
     packets, ts = packets[first:], ts[first:]
-    fps = 1e9 / float(np.median(np.diff(ts)))
-    raw = out.with_suffix(".h264")
-    raw.write_bytes(b"".join(packets))
-    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-fflags", "+genpts", "-r", f"{fps:.9f}", "-f", "h264",
-                    "-i", str(raw), "-map", "0:v:0", "-c:v", "copy", "-tag:v", "avc1", str(out)], check=True)
-    raw.unlink()
+    t = np.asarray(ts, dtype=np.int64)
+    remux(packets, (t - t[0]) / 1e9, "h264", out)
     return ts
 
 
@@ -144,8 +140,8 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
             st = c.streams.video[0]
             npts[v] = np.asarray(sorted(p.pts for p in c.demux(st) if p.pts is not None), dtype=np.int64)
             wh = (st.codec_context.width, st.codec_context.height)
-        n = min(len(npts[v]), len(cts[v]))
-        npts[v], cts[v] = npts[v][:n], cts[v][:n]
+        if len(npts[v]) != len(cts[v]):         # remux wrote one packet per frame message, each at its capture time
+            raise RuntimeError(f"{v}.mp4: {len(npts[v])} frames in the file but {len(cts[v])} capture times")
     t0 = int(cts["left"][0])
     left_t = cts["left"]
     state = []
@@ -164,7 +160,8 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
              right=(cts["right"] - t0) / 1e9, right_pts=npts["right"])
     task = task_of(rel)
     ctx = {"dataset": REPO, "profile": "handheld_gripper", "state_kind": "ee_pose", "episode_id": ep.name,
-           "robot_type": "two handheld GenDAS grippers with wrist fisheye cameras", "fps": 30.0,
+           "robot_type": "two handheld GenDAS grippers with wrist fisheye cameras",
+           "fps": formats.measured_fps((left_t - t0) / 1e9) or 30.0,     # the left camera's real rate, not assumed
            "n_state_frames": int(len(left_t)), "real_times": "times.npz", "instruction": task,
            "instruction_note": ("This instruction is only the task category of the folder the dataset files the clip "
                                 "under; the dataset ships no per-episode instruction, so judge alignment loosely."),

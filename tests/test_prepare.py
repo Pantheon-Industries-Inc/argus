@@ -451,3 +451,84 @@ def test_an_abc130k_remux_keeps_its_last_frame(tmp_path):
     with av.open(str(out)) as c:
         assert sum(1 for _ in c.decode(video=0)) == n
     assert durs == [33_000] * n
+
+
+def _h264_frames(n: int) -> list[bytes]:
+    """n Annex-B H.264 frames, the first carrying SPS, PPS and an IDR, as a recorder writes them one per message."""
+    enc = av.CodecContext.create("libx264", "w")
+    enc.width, enc.height, enc.pix_fmt = 64, 48, "yuv420p"
+    enc.time_base = Fraction(1, 30)
+    enc.options = {"preset": "ultrafast", "bframes": "0", "g": "30"}
+    frames = []
+    for i in range(n):
+        fr = av.VideoFrame.from_ndarray(np.full((48, 64, 3), (i * 4) % 256, np.uint8), format="rgb24")
+        fr.pts = i
+        frames += [bytes(p) for p in enc.encode(fr)]
+    return frames + [bytes(p) for p in enc.encode()]
+
+
+def _file_times(mp4) -> np.ndarray:
+    with av.open(str(mp4)) as c:
+        st = c.streams.video[0]
+        pts = np.sort([p.pts for p in c.demux(st) if p.size])
+        return (pts - pts[0]) * float(st.time_base)
+
+
+# a camera running a little slow (29.9 fps) that drops frame 40: nothing about its times is on a 30 fps grid
+_OFF_GRID = np.delete(np.arange(81) / 29.9, 40)
+
+
+def test_a_recorded_camera_is_written_at_its_recorded_times_not_at_a_constant_rate(tmp_path):
+    from prepare import remux
+    frames = _h264_frames(len(_OFF_GRID))
+    remux.remux(frames, _OFF_GRID, "h264", tmp_path / "cam.mp4")
+    assert np.allclose(_file_times(tmp_path / "cam.mp4"), _OFF_GRID, atol=2e-6)
+    with av.open(str(tmp_path / "cam.mp4")) as c:
+        assert sum(1 for _ in c.decode(video=0)) == len(_OFF_GRID)
+
+
+def test_a_realomni_camera_keeps_its_capture_times(tmp_path):
+    frames = _h264_frames(len(_OFF_GRID))
+    ts = [int(round(1_700_000_000e9 + x * 1e9)) for x in _OFF_GRID]
+    assert realomin.mux(frames, ts, tmp_path / "left.mp4") == ts
+    assert np.allclose(_file_times(tmp_path / "left.mp4"), _OFF_GRID, atol=2e-6)   # was one median rate for all
+
+
+def _genhumanego_raw(raw, times=None):
+    from prepare import remux
+    raw.mkdir(parents=True)
+    t = _OFF_GRID if times is None else times
+    remux.remux(_h264_frames(len(t)), t, "h264", raw / "cam2.mp4")
+    (raw / "meta.json").write_text(json.dumps({"rel": "x.mcap", "dur": float(t[-1]), "ann": None, "fv_invalid": 0,
+                                               "calib2": None}))
+
+
+def test_a_genhumanego_episode_uses_its_recorded_frame_times(tmp_path):
+    from prepare import genhumanego as gh
+    raw, dst = tmp_path / "raw" / "abc", tmp_path / "episode_abc"
+    _genhumanego_raw(raw)
+    np.save(raw / gh.TIMES, _OFF_GRID)
+    ctx = gh.write_sidecar(raw, dst)
+    z = np.load(dst / "times.npz")
+    assert ctx["real_times"] == "times.npz" and ctx["source"]["frame_times"] == gh.FRAME_TIMES_RECORDED
+    assert np.array_equal(z["exo"], _OFF_GRID) and len(z["exo_pts"]) == len(_OFF_GRID)
+    assert abs(ctx["fps"] - 29.9) < 0.01                                  # measured, not assumed to be 30
+    assert ctx["n_state_frames"] == len(_OFF_GRID)
+
+
+def test_a_genhumanego_copy_without_recorded_times_says_its_times_are_nominal(tmp_path):
+    from prepare import genhumanego as gh
+    raw, dst = tmp_path / "raw" / "old", tmp_path / "episode_old"
+    _genhumanego_raw(raw, np.arange(60) / 30)                             # extracted before the times were kept
+    ctx = gh.write_sidecar(raw, dst)
+    assert "real_times" not in ctx and not (dst / "times.npz").exists()
+    assert ctx["source"]["frame_times"] == gh.FRAME_TIMES_NOMINAL and ctx["fps"] == 30.0
+
+
+def test_genhumanego_refuses_recorded_times_that_do_not_match_its_frames(tmp_path):
+    from prepare import genhumanego as gh
+    raw = tmp_path / "raw" / "bad"
+    _genhumanego_raw(raw)
+    np.save(raw / gh.TIMES, _OFF_GRID[:-1])
+    with pytest.raises(RuntimeError, match="recorded frame times"):
+        gh.write_sidecar(raw, tmp_path / "episode_bad")

@@ -986,7 +986,8 @@ DISPOSITION: dict[str, dict] = {
         "Some camera frames are missing, because they do not decode at their recorded times."),
     "state_time_non_monotonic_or_duplicate": _d(
         "flag", "a capture clock that repeats or runs backwards is broken; fired on none of the datasets with capture "
-                "clocks (ABC-130k, RealOmin, Gen-HumanEgo)",
+                "clocks (ABC-130k, RealOmin; the published Gen-HumanEgo copies were extracted with nominal 30 fps "
+                "times, so they were not checked on a capture clock)",
         "The capture clock repeats a time or runs backwards."),
     # ---- video on each camera's native frames
     "video_duplicate_frames": _d(

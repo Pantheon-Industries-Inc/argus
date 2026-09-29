@@ -1720,7 +1720,7 @@ def plan_mcap(det: dict, root: Path) -> list[dict]:
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "folder", "formats", "hub", "lerobot", "videos"}
+NOT_ADAPTERS = {"__main__", "cli", "folder", "formats", "hub", "lerobot", "remux", "videos"}
 
 
 def upload_adapters(kind: str) -> list:
