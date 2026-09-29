@@ -19,8 +19,14 @@ object and an empty closed gripper differ by a few hundredths, so no threshold o
 "holding"; the gripper cameras show the fingers in every frame we send.
 
 The joint tolerances are measured on MolmoAct2: joint encoders step in 0.022 deg ticks and a resting
-arm dithers within ~0.1 deg over 10 s; a resting gripper reading wanders within ~0.006.
-STILL_JOINT_DEG (0.25 deg) and STILL_GRIP (0.01) sit just above that noise.
+arm dithers within ~0.1 deg over 10 s; a resting gripper reading wanders within ~0.006 of its 0 to 1 range.
+STILL_JOINT_DEG (0.25 deg) and STILL_GRIP_FRAC (1% of the gripper's full range, 0.01 there) sit just above that
+noise. Grippers are recorded in different units (Galaxea 0 to 100, RealOmni metres, 0 to about 0.10), so the
+gripper's tolerance is a share of its own range: the range the episode's context declares ("gripper_range", from
+the dataset's adapter), or for an upload the range measured across all its episodes (prepare/formats.py
+measure_gripper_range). An episode with neither is taken as a 0 to 1 opening. Measured on Galaxea, a resting
+gripper wanders by 0.016 at the 90th percentile and 0.22 at the 99th, under its 1.0 tolerance; the old fixed 0.01
+split its still spans.
 """
 from __future__ import annotations
 
@@ -28,7 +34,7 @@ import numpy as np
 
 FPS = 30
 STILL_JOINT_DEG = 0.25
-STILL_GRIP = 0.01
+STILL_GRIP_FRAC = 0.01      # of the gripper's full range
 MIN_STILL_S = 3.0          # shorter pauses are already covered by the 1 fps grid
 MOVING_EVERY_S = 1.0       # sample period while an arm moves
 STILL_EVERY_S = 5.0        # sample period inside a still span (scene can still change)
@@ -41,13 +47,25 @@ STILL_POSE_M = 0.003
 STILL_POSE_DEG = 1.0
 
 
-def still_tolerance(kind: str, dims: int) -> np.ndarray:
+def gripper_full_range(ctx: dict) -> float | None:
+    """The gripper's full range (open minus shut) in its recorded unit, from the context's "gripper_range"
+    [shut, open]; None when the context does not give one."""
+    r = ctx.get("gripper_range")
+    try:
+        return abs(float(r[1]) - float(r[0]))
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+
+
+def still_tolerance(kind: str, dims: int, grip_range: float | None = None) -> np.ndarray:
     """Per-channel range allowed over a still span. kind "joints": 6 joint angles (rad) + gripper per
-    arm. kind "ee_pose": x y z (m), roll pitch yaw (rad) + gripper per gripper."""
+    arm. kind "ee_pose": x y z (m), roll pitch yaw (rad) + gripper per gripper. The gripper's is STILL_GRIP_FRAC of
+    grip_range, its full range in its own unit (None: a 0 to 1 opening)."""
+    grip = STILL_GRIP_FRAC * (1.0 if grip_range is None else float(grip_range))
     if kind == "joints":
-        per = [np.radians(STILL_JOINT_DEG)] * 6 + [STILL_GRIP]
+        per = [np.radians(STILL_JOINT_DEG)] * 6 + [grip]
     elif kind == "ee_pose":
-        per = [STILL_POSE_M] * 3 + [np.radians(STILL_POSE_DEG)] * 3 + [STILL_GRIP]
+        per = [STILL_POSE_M] * 3 + [np.radians(STILL_POSE_DEG)] * 3 + [grip]
     else:
         raise ValueError(f"unknown state kind {kind!r}")
     if dims % 7:
@@ -62,16 +80,17 @@ def _span_ok(seg: np.ndarray, tol: np.ndarray | None = None) -> bool:
 
 
 def still_spans(state: np.ndarray, min_s: float = MIN_STILL_S, fps: float = FPS,
-                kind: str = "joints") -> list[tuple[int, int]]:
+                kind: str = "joints", grip_range: float | None = None) -> list[tuple[int, int]]:
     """Maximal frame intervals [a, b] (inclusive) of at least min_s where every arm (or handheld
-    gripper) is at rest, by the whole-span range test above. Greedy left to right: grow a span while
-    the range test holds; a span that cannot reach min_s advances the start by one frame."""
+    gripper) is at rest, by the whole-span range test above (grip_range: the gripper's full range, see
+    still_tolerance). Greedy left to right: grow a span while the range test holds; a span that cannot reach
+    min_s advances the start by one frame."""
     s = np.asarray(state, dtype=np.float64)
     T = len(s)
     need = int(round(min_s * fps))
     if T < need:
         return []
-    tol = still_tolerance(kind, s.shape[1])
+    tol = still_tolerance(kind, s.shape[1], grip_range)
     # cheap necessary condition: frame-to-frame motion within tolerance on every channel
     d = np.abs(np.diff(s, axis=0))
     calm = np.concatenate([[True], (d <= tol + 1e-12).all(1)])

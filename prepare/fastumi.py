@@ -136,6 +136,7 @@ def prepare_one(item: str, raw_root: Path, out_root: Path, force: bool) -> str:
         "episode_id": name,
         "episode_index": eidx,
         "robot_type": "handheld gripper (UMI-style)",
+        "gripper_range": [0.0, 1.0],
         "fps": fps,
         "task_label": [task],
         "instruction": instruction,

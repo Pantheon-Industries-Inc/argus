@@ -2476,5 +2476,39 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     notes = sorted({e["state_note"] for e in report["episodes"] if e.get("state_note")})
     report["notes"] += notes
     report["seconds"] = round(total, 2)
+    measure_gripper_range(out, [e["episode_id"] for e in report["episodes"]])
     return report
+
+
+def measure_gripper_range(out: Path, ids: list[str]) -> list | None:
+    """The gripper's full range [shut, open] in the upload's own unit, measured across all its episodes (the 0.5th
+    to 99.5th percentile of every gripper reading, so a stray sample does not stretch it), written as
+    "gripper_range" into each episode with recorded state whose reader did not declare one. The still-span test
+    (label/state.py) takes 1% of it as the gripper's tolerance, so a gripper recorded 0 to 100 or in metres is judged
+    as one recorded 0 to 1 is. One episode's own range would not do: a gripper that never moves in it has a range of
+    only its noise. Returns the range, or None when no episode has state."""
+    eps = [out / i for i in ids if (out / i / "state.npz").exists()]
+    ctxs = {d: json.loads((d / "context.json").read_text()) for d in eps}
+    todo = [d for d, c in ctxs.items() if c.get("state_kind") in ("joints", "ee_pose") and "gripper_range" not in c]
+    if not todo:
+        return None
+    vals = []
+    for d in todo:
+        with np.load(d / "state.npz") as z:
+            st = z["state"]
+        if st.ndim == 2 and st.shape[1] % 7 == 0:
+            vals.append(np.asarray(st[:, 6::7], dtype=np.float64).ravel())
+    if not vals:
+        return None
+    v = np.concatenate(vals)
+    v = v[np.isfinite(v)]
+    if not len(v):
+        return None
+    rng = [round(float(np.percentile(v, 0.5)), 6), round(float(np.percentile(v, 99.5)), 6)]
+    for d in todo:
+        c = ctxs[d]
+        c["gripper_range"] = rng
+        c["gripper_range_note"] = f"measured across the {len(todo)} episodes of this upload"
+        (d / "context.json").write_text(json.dumps(c, indent=1, default=str))
+    return rng
 

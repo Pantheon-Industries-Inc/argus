@@ -199,6 +199,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         # checked by eye against the wrist frames (fingers wide at 1.00, pinched at 0.08) and across 40
         # episodes (arms start at a median 0.99 and close to a median minimum of 0.04)
         "gripper_value": "0 = jaws shut, 1 = fully open (checked against the wrist frames)",
+        "gripper_range": [0.0, 1.0],
         "episode_id": ep_name,
         "split": split,
         "robot_type": "bimanual YAM station (2x 6-DoF YAM arms, parallel-jaw grippers)",

@@ -165,6 +165,7 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
         "state_kind": "joints",
         "gripper_value": ("the measured gripper position, about 0 = jaws shut and about 100 = fully open "
                           "(checked against the wrist frames)"),
+        "gripper_range": [0.0, 100.0],
         "episode_id": name,
         "robot_type": "Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)",
         "fps": FPS,

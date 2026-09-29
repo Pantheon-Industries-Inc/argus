@@ -169,6 +169,7 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
            # checked against the gripper camera (fingers pinched on a zipper tab at ~0, wide open at 0.103)
            "gripper_value": ("the measured opening width in metres, about 0 = jaws shut and about 0.10 = fully open "
                              "(checked against the gripper camera frames)"),
+           "gripper_range": [0.0, 0.10],
            "cameras": {v: {"name": v, "width": wh[0], "height": wh[1], "desc": CAMERA_DESC[v]}
                        for v in ("left", "right")},
            "source": {"mcap": rel}}

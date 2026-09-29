@@ -189,7 +189,7 @@ def plan(ep: dict) -> dict:
         checks["timebase"] = timebase.timebase_check(ep["state"], ep["action"],
                                                ep["context"].get("timebase_neighbour_lag_frames"))
     if kind != "none" and checks["camera_windows_match_state"]:
-        spans = ms.still_spans(ep["state"], fps=fps, kind=kind)
+        spans = ms.still_spans(ep["state"], fps=fps, kind=kind, grip_range=ms.gripper_full_range(ep["context"]))
         n = T
     else:
         # video only, or a dataset defect (the cameras do not cover the same frames as the state): label the

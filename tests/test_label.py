@@ -147,6 +147,53 @@ def test_short_pause_is_not_a_span():
     assert ms.still_spans(_state(900, still=[(300, 359)])) == []   # a 2 s pause
 
 
+def test_the_gripper_tolerance_is_a_share_of_its_own_range():
+    """A gripper recorded 0 to 100 (Galaxea) or in metres (RealOmni, 0 to 0.10) is judged as one recorded 0 to 1: its
+    resting wander stays still, and a real change of 5% of its travel is motion."""
+    assert ms.still_tolerance("joints", 7)[6] == pytest.approx(0.01)                  # no range: a 0 to 1 opening
+    assert ms.still_tolerance("joints", 14, 100.0)[[6, 13]] == pytest.approx([1.0, 1.0])
+    assert ms.still_tolerance("ee_pose", 7, 0.10)[6] == pytest.approx(0.001)
+    assert ms.gripper_full_range({"gripper_range": [0, 100]}) == 100.0
+    assert ms.gripper_full_range({"gripper_range": [0.103, 0.0]}) == pytest.approx(0.103)
+    assert ms.gripper_full_range({}) is None and ms.gripper_full_range({"gripper_range": "x"}) is None
+    rng = np.random.default_rng(0)
+    # Galaxea: a still pair of arms whose grippers wander by 0.2 of 100, as measured on the dataset's 99th percentile
+    s = _state(600, still=[(0, 599)])
+    s[:, GRIPS] = 40.0 + rng.uniform(-0.1, 0.1, size=(600, 2))
+    assert ms.still_spans(s) == []                                   # the old fixed 0.01 split it
+    assert ms.still_spans(s, grip_range=100.0) == [(0, 599)]
+    s[300:, 6] += 5.0                                                # a real 5% close
+    assert all(not (a < 300 <= b) for a, b in ms.still_spans(s, grip_range=100.0))
+    # RealOmni: a still gripper that closes by 5 mm of its 0.10 m travel is not still
+    p = np.zeros((600, 7))
+    p[:, 6] = 0.06
+    p[300:, 6] -= 0.005
+    assert ms.still_spans(p, kind="ee_pose") == [(0, 599)]           # the old fixed 0.01 (1 cm) called it still
+    assert all(not (a < 300 <= b) for a, b in ms.still_spans(p, kind="ee_pose", grip_range=0.10))
+
+
+def test_an_upload_gets_its_gripper_range_measured_across_its_episodes(tmp_path):
+    """A reader that does not know the gripper's unit gets the range from every episode of the upload together, so
+    an episode whose gripper never moves is still judged against the gripper's full travel; a declared range stays."""
+    from prepare import formats
+    rng = np.random.default_rng(1)
+    for i, (lo, hi) in enumerate([(0.0, 100.0), (40.0, 40.0), (5.0, 60.0)]):
+        d = tmp_path / f"episode_{i}"
+        d.mkdir()
+        st = np.zeros((300, 14), np.float32)
+        st[:, [6, 13]] = np.linspace(lo, hi, 300)[:, None] + rng.uniform(-0.05, 0.05, size=(300, 2))
+        np.savez(d / "state.npz", state=st)
+        (d / "context.json").write_text(json.dumps({"state_kind": "joints", **({"gripper_range": [0, 1]} if i == 2
+                                                                                else {})}))
+    got = formats.measure_gripper_range(tmp_path, ["episode_0", "episode_1", "episode_2", "episode_none"])
+    assert got[0] == pytest.approx(0.0, abs=2) and got[1] == pytest.approx(100.0, abs=2)
+    ctx = [json.loads((tmp_path / f"episode_{i}" / "context.json").read_text()) for i in range(3)]
+    assert ctx[0]["gripper_range"] == ctx[1]["gripper_range"] == got            # the flat one gets the upload's range
+    assert "2 episodes" in ctx[1]["gripper_range_note"]
+    assert ctx[2]["gripper_range"] == [0, 1] and "gripper_range_note" not in ctx[2]
+    assert formats.measure_gripper_range(tmp_path, []) is None
+
+
 # ---------------------------------------------------------------- prompt
 
 def _ep():
