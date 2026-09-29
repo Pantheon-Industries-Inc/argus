@@ -75,6 +75,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 import sys
 from fractions import Fraction
 from pathlib import Path
@@ -747,6 +748,9 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
 
 
 def episode_name(s: str) -> str:
+    # an accented letter keeps its base letter (Día -> Dia), so a name in Spanish or French stays readable; other
+    # letters and symbols (CJK, emoji) have no ASCII form and are dropped like any other separator
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     s = re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
     return "episode_" + (re.sub(r"^episode_", "", s)[:120] or "0")
 

@@ -446,3 +446,9 @@ def test_joint_state_reads_only_the_layout_the_checks_read():
     assert f.third_arms(three) == ["/camera/joint_state"]
     assert f.third_arms({"/left/joint_state": arm(7), "/arm/joint_state": arm(7)}) == []
     assert f.third_arms({"/left/joint_state": arm(7), "/right/joint_state": arm(7)}) == []
+
+
+def test_an_accented_name_keeps_its_letters_in_the_episode_id():
+    assert f.episode_name("Día 1 – cocina/toma 1 瓶子 🍶") == "episode_Dia_1_cocina_toma_1"
+    assert f.episode_name("Überprüfung_Greifer-3") == "episode_Uberprufung_Greifer_3"
+    assert f.episode_name("run-1") == "episode_run_1" and f.episode_name("瓶子") == "episode_0"
