@@ -58,13 +58,24 @@ uv run python -m board serve --board data/boards/quickstart --clips data/clips
 
 Expect the MolmoAct2 episode to come out as a success then undone, with the row complete near 18 s and pushed apart near 30 s, the FastUMI episode as a success with the lid open near 7 s, and the OpenAoE clip as a few activities, each a success. A bare video works the same way through `prepare videos --rig RIG` with no instructions file, and the model then names the task itself.
 
+## Review your own data
+
+```bash
+uv run python -m review --data path/to/data --rig teleop_arms --out data/review/mine --free    # every request, no model call
+uv run python -m review --data path/to/data --rig teleop_arms --out data/review/mine --cap 20
+uv run python -m board serve --board data/review/mine --clips data/review/mine/clips
+```
+
+`--data` is a folder, a file or an archive in any format Data Review accepts, or an http(s) URL of one. The command runs the same stages as [Data Review](https://pantheon.inc/data-review), in its order and with its settings, so a folder reviewed here and the same folder uploaded there get the same requests and the same board. It reads the data, runs the checks, measures sped-up recordings against their neighbours in the same folder, labels, and builds the board. A recording longer than 450 s, the longest request the published board sends, is labelled in parts cut at moments of little motion (`label/pieces.py`) and stitched back into one timeline, so it stays one episode. Each part is told it is one part of a longer recording, and a cut-off issue the model reports at one of those cuts is set aside, because it describes the cut and not the recording.
+
 ## Layout
 
 | Folder | Contents | Entry point |
 |---|---|---|
 | `prepare/` | One adapter per dataset, and the reader for your own data that Data Review also runs | `python -m prepare <adapter>` |
 | `checks/` | Deterministic checks, and the label consistency check | `python -m checks` |
-| `label/` | The harness, with frame selection, exact decoding, resolution routing, per-setup prompts, the model call, runs | `python -m label` |
+| `label/` | The harness, with frame selection, exact decoding, resolution routing, per-setup prompts, the model call, runs, and long recordings labelled in parts | `python -m label` |
+| `review/` | The whole path for your own data, the one Data Review runs | `python -m review` |
 | `board/` | The dashboard, served live or written as static files, and the hand pose overlay | `python -m board` |
 | `compare/` | Other models on the same episodes and harness, with and without in-context learning from an Astra trace | `python -m compare` |
 | `gate/` | The regression suite, frame-verified cases and a cost sample per setup | `python -m gate` |
