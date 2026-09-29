@@ -12,7 +12,8 @@ which browsers do not all play. This cuts each episode's own frames out of its s
 file, the episode's offset and its exact frame count) into a browser-native H.264 clip, once, sized for where the
 page shows that camera (the recipe below) and timed on the episode's clock: every frame keeps its source time, and a
 camera that started recording after the main one starts that much later. It is a viewing copy only: labelling
-decodes the source files directly and never re-encodes. Idempotent and parallel.
+decodes the source files directly and never re-encodes. Idempotent and parallel. An episode with a camera file
+that does not decode is listed in CLIPS/failed.json and left out by set_aside_failed; the rest go on.
 """
 from __future__ import annotations
 
@@ -171,8 +172,43 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
         o = outs[cam]
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
             s = sources[cam]
-            jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, offsets.get(cam, 0.0)))
+            jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, offsets.get(cam, 0.0),
+                         ep_dir.name, cam))
     return jobs
+
+
+FAILED = "failed.json"      # in the clips folder: {episode folder: {camera: why its clip could not be cut}}
+
+
+def set_aside_failed(eps: Path, clips_dir: Path) -> list[dict]:
+    """Move the episodes whose clips could not be cut (a camera file that does not decode) out of the episode
+    folder, into <eps>_unclipped next to it, so the rest of the upload is labelled and put on the board without them.
+    Returns them as the reader reports an episode it could not open, {"name", "why"}, with a plain reason. An
+    episode moved on an earlier run is not reported again."""
+    fp = clips_dir / FAILED
+    failed = json.loads(fp.read_text()) if fp.exists() else {}
+    out = []
+    for ep, cams in sorted(failed.items()):
+        src = eps / ep
+        if not src.is_dir():
+            continue
+        dest = eps.parent / f"{eps.name}_unclipped"
+        dest.mkdir(exist_ok=True)
+        shutil.rmtree(dest / ep, ignore_errors=True)
+        src.rename(dest / ep)
+        names = " and ".join(("the fixed or head camera" if c == "exo" else f"the {c} camera") for c in sorted(cams))
+        out.append({"name": ep, "why": f"{names} video could not be decoded, so this episode was left out"})
+    return out
+
+
+def drop_from_report(rep: dict, left_out: list[dict]) -> None:
+    """Take the episodes set_aside_failed moved out of the reader's report (prepare.formats.convert): out of its
+    episodes and footage, into its failed list under the name the reader gave them."""
+    gone = {f["name"]: f["why"] for f in left_out}
+    for e in [e for e in rep["episodes"] if e.get("episode_id") in gone]:
+        rep["episodes"].remove(e)
+        rep["failed"].append({"name": e["name"], "why": gone[e["episode_id"]]})
+    rep["seconds"] = round(sum(e["seconds"] for e in rep["episodes"]), 2)
 
 
 def main() -> int:
@@ -200,18 +236,25 @@ def main() -> int:
     print(f"clips: {len(ep_dirs)} episodes, {len(jobs)} cam-clips to extract "
           f"(jobs={args.jobs}, threads={args.clip_threads}) -> {args.out}")
     ok = fail = 0
+    failed: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off): o
-                for (pk, b, du, o, fps, is_main, off) in jobs}
+        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off): (o, ep, cam)
+                for (pk, b, du, o, fps, is_main, off, ep, cam) in jobs}
         for f in as_completed(futs):
+            o, ep, cam = futs[f]
             try:
                 f.result()
                 ok += 1
             except Exception as e:
                 fail += 1
-                sys.stderr.write(f"clip FAIL {futs[f]}: {str(e)[:160]}\n")
-    print(f"clips: ok={ok} fail={fail}")
-    return 1 if fail else 0
+                failed.setdefault(ep, {})[cam] = str(e)[:400]
+                sys.stderr.write(f"clip FAIL {o}: {str(e)[:160]}\n")
+    # a camera file that does not decode costs its own episode, never the rest (set_aside_failed); the step
+    # fails only when no episode came out whole
+    args.out.mkdir(parents=True, exist_ok=True)
+    (args.out / FAILED).write_text(json.dumps(failed, indent=1))
+    print(f"clips: ok={ok} fail={fail}" + (f", {len(failed)} episode(s) left out" if failed else ""))
+    return 1 if failed and len(failed) >= len(ep_dirs) else 0
 
 
 if __name__ == "__main__":

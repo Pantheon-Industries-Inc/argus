@@ -106,6 +106,7 @@ def main() -> int:
     a = ap.parse_args()
 
     from board import build as build_board
+    from board import clips as board_clips
     from board import rules as board_rules
     from checks import timebase
     from label import pieces
@@ -137,6 +138,13 @@ def main() -> int:
     run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env)
     run_step(job, "clips", [PY, "-m", "board", "clips", "--episodes", str(eps), "--out", str(job / "clips"),
                             "--jobs", jobs, "--clip-threads", "1"], env)
+    left_out = board_clips.set_aside_failed(eps, job / "clips")
+    if left_out:
+        board_clips.drop_from_report(rep, left_out)
+        if not rep["episodes"]:
+            raise SystemExit("no episode could be put on the board: " + "; ".join(f["why"] for f in left_out[:3]))
+        (job / "report.json").write_text(json.dumps(rep, indent=1))
+        print(f"left out, a camera file does not decode: {', '.join(f['name'] for f in left_out)}", flush=True)
 
     long_eps = pieces.write_units(job, eps)
     env = repo_env(RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)))

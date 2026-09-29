@@ -4,6 +4,7 @@ outcome and severity values the board knows."""
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -101,3 +102,39 @@ def test_review_runs_every_stage_on_a_recorders_folder_in_free_mode():
         dry = list((job / "dry").glob("episode_*.json"))
         assert len(dry) == 1 and json.loads(dry[0].read_text())["dry_run"] is True
         assert list((job / "clips").rglob("*.mp4"))
+
+
+def _clip_episode(eps: Path, name: str, video: Path) -> None:
+    d = eps / name
+    d.mkdir(parents=True)
+    (d / "sources.json").write_text(json.dumps({"exo": {"packed": str(video), "base_s": 0.0, "n_frames": 30}}))
+    (d / "context.json").write_text(json.dumps({"fps": 30}))
+
+
+def test_a_camera_file_that_does_not_decode_costs_only_its_own_episode(tmp_path):
+    from board import clips
+    good, bad = tmp_path / "good.mp4", tmp_path / "bad.mp4"
+    subprocess.run([clips.find_ffmpeg(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30",
+                    "-t", "1", "-pix_fmt", "yuv420p", str(good)], check=True)
+    bad.write_bytes(good.read_bytes()[:600])                    # a truncated file: no frame decodes
+    eps, out = tmp_path / "episodes", tmp_path / "clips"
+    _clip_episode(eps, "episode_ok", good)
+    _clip_episode(eps, "episode_broken", bad)
+    run = lambda: subprocess.run([sys.executable, "-m", "board", "clips", "--episodes", str(eps), "--out", str(out)],
+                                 cwd=REPO, capture_output=True, text=True)
+    p = run()
+    assert p.returncode == 0, p.stdout + p.stderr               # the upload goes on without the broken episode
+    assert (out / "episode_ok.mp4").exists() and list(json.loads((out / "failed.json").read_text())) == ["episode_broken"]
+    left = clips.set_aside_failed(eps, out)
+    assert [f["name"] for f in left] == ["episode_broken"] and "could not be decoded" in left[0]["why"]
+    assert sorted(d.name for d in eps.iterdir()) == ["episode_ok"]
+    assert (tmp_path / "episodes_unclipped" / "episode_broken").is_dir()
+    assert clips.set_aside_failed(eps, out) == []               # moved once, reported once
+    rep = {"episodes": [{"name": "ok", "episode_id": "episode_ok", "seconds": 1.0},
+                        {"name": "broken", "episode_id": "episode_broken", "seconds": 1.0}], "failed": [], "seconds": 2.0}
+    clips.drop_from_report(rep, left)
+    assert [e["name"] for e in rep["episodes"]] == ["ok"] and rep["seconds"] == 1.0
+    assert rep["failed"] == [{"name": "broken", "why": left[0]["why"]}]
+    (eps / "episode_ok").rename(tmp_path / "episode_ok")       # only the broken one left: nothing to show
+    shutil.move(str(tmp_path / "episodes_unclipped" / "episode_broken"), str(eps / "episode_broken"))
+    assert run().returncode == 1
