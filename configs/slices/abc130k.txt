@@ -1,4 +1,5 @@
-# XDOF/ABC-130k, 183 episodes, 5.94 h, one episode from each of 183 tasks. One repo path per line,
+# XDOF/ABC-130k, 183 episodes, 5.46 h of video as prepared (the draw below measured 5.94 h by its own estimate),
+# one episode from each of 183 tasks. One repo path per line,
 # data/<split>/<task>/<episode>. Drawn in two steps. First python -m prepare abc130k sample --list LIST
 # --per-task 5 --seed 0 took 5 random episodes per task (1,005 episodes). Then one random
 # episode per task was taken from those (seed 31), and random tasks were dropped until the total was under

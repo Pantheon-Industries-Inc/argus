@@ -92,9 +92,9 @@ Each public adapter downloads exactly the episodes in its list. `configs/slices/
 | Dataset | Setup | Adapter | `configs/slices` |
 |---|---|---|---|
 | allenai/MolmoAct2-BimanualYAM-Dataset | teleop | `molmo` | 1,284 episodes, 25.1 h, all 34 tasks |
-| XDOF/ABC-130k | teleop | `abc130k` | 183 episodes, 5.9 h, one per task |
+| XDOF/ABC-130k | teleop | `abc130k` | 183 episodes, 5.5 h, one per task |
 | RogersPyke/Galaxea-Open-World-Dataset_10K_20260123 | teleop | `galaxea` | 222 episodes, 5.7 h, 111 collections |
-| configinc/HABIT | teleop | `habit` | 315 episodes, 5.1 h, 5 per task |
+| configinc/HABIT | teleop | `habit` | 315 episodes, 5.0 h, 5 per task |
 | IPEC-COMMUNITY/FastUMI_100k_lerobot | UMI | `fastumi` | 964 episodes, 4.8 h, 32 per task |
 | genrobot2025/10Kh-RealOmin-OpenData | UMI | `realomin` | 280 episodes, 5.5 h, round robin over task folders |
 | builddotai/Egocentric-100K | human ego | `egocentric100k` | 112 clips, 5.6 h, one per worker |
