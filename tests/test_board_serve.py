@@ -100,6 +100,15 @@ def test_render_index_fills_every_placeholder():
     assert "Pantheon" not in page and "\u2014" not in page and "\u2013" not in page
 
 
+def test_a_site_names_the_model_its_own_way():
+    """A site that shows the board under its own names passes them in "models"; every other model keeps its name."""
+    page = serve.render_index("Data Dashboard", {"mode": "static", "models": {"openai/gpt-6-astra": "the model"}})
+    cfg = json.loads(page.split("const BOARD = ", 1)[1].split(";\n", 1)[0])
+    assert cfg["models"]["openai/gpt-6-astra"] == "the model"
+    assert cfg["models"] == {**json.loads(serve.render_index("x", {"mode": "api"}).split("const BOARD = ", 1)[1]
+                                          .split(";\n", 1)[0])["models"], "openai/gpt-6-astra": "the model"}
+
+
 def test_a_site_header_takes_the_place_of_the_title_bar():
     """A board served as part of a site shows the site's own header (--header): its markup where the title bar was,
     its styles in the page's head, and nothing else of the page changed."""
