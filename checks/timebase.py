@@ -230,10 +230,14 @@ def measure_folder(eps: Path) -> int:
         if "action" not in z.files or z["state"].shape[1] != 14:
             continue
         lag = follower_lag_frames(z["state"], z["action"])
-        if ctx.get("episode_index") is None:
+        # the generic LeRobot reader keeps the episode's index at the top of its context, a dataset's own adapter
+        # (Galaxea, HABIT) in its source; either is the same number from the dataset's metadata
+        src = ctx.get("source") or {}
+        idx = ctx.get("episode_index", src.get("episode_index"))
+        if idx is None:
             continue
-        rows.append((d, int(ctx["episode_index"]), "; ".join(ctx.get("task_label") or []) + "|" +
-                     str((ctx.get("source") or {}).get("dataset_folder") or ""), lag))
+        rows.append((d, int(idx), "; ".join(ctx.get("task_label") or []) + "|" +
+                     str(src.get("dataset_folder") or src.get("folder") or ""), lag))
     if not rows:
         return 0
     med = neighbour_lags([r[1] for r in rows], [r[2] for r in rows], [r[3] for r in rows])

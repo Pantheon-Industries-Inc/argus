@@ -758,9 +758,23 @@ def assess(feats: dict) -> dict:
             kept = [(r, "") for r in frozen]
         if kept:
             r, why = max(kept, key=lambda x: span_s(x[0]))
+            # a recorder that re-encodes a frozen camera changes the picture a little at each keyframe; one such
+            # step (well under real motion) between two frozen runs does not end the freeze, so the run that fired
+            # is reported from where the freeze starts to where it ends. Runs that fire on their own are the only
+            # ones extended, so no new firing can come of it.
+            m_ = extra["duplicate_motion_mad"] or float("inf")
+            starts = {a_: b_ for a_, b_ in runs}
+            ends = {b_: a_ for a_, b_ in runs}
+            a0, b0, steps = r[0], r[1], 0
+            while a0 - 2 in ends and np.isfinite(pair[a0 - 1]) and pair[a0 - 1] < m_:
+                a0, steps = ends[a0 - 2], steps + 1
+            while b0 + 2 in starts and np.isfinite(pair[b0 + 1]) and pair[b0 + 1] < m_:
+                b0, steps = starts[b0 + 2], steps + 1
+            r = (a0, b0)
             t0 = _cam_t(ep, v, r[0], c["fps"])
+            but = (f", apart from {steps} single keyframe step{'s' if steps > 1 else ''} under {m_:g}" if steps else "")
             frz_ev.append(_ev(f"camera {v} shows the same picture for {span_s(r):.1f} s from {t0:.1f} s (every "
-                              f"consecutive frame changes by under {extra['duplicate_pair_mad']:g} grey levels)"
+                              f"consecutive frame changes by under {extra['duplicate_pair_mad']:g} grey levels{but})"
                               + (f" while {why}" if why else "") + f"; the rule is over {extra['frozen_run_s']:g} s",
                               t0, v))
         extreme = (means < extra["black_mean"]) | (means > extra["white_mean"])

@@ -129,6 +129,37 @@ def test_repeat_counts_only_inside_motion():
         assert a["checks"]["video_frozen_run"]["status"] != "fired"   # nothing recorded moves, so no frozen claim
 
 
+def test_a_frozen_picture_is_reported_whole_across_a_lone_keyframe_step():
+    """A frozen camera that a recorder re-encodes changes a little at each keyframe; that one step does not end the
+    frozen run, so the run is reported from where it starts. Two short still runs never add up to a new firing."""
+    T = 300
+    s = np.zeros((T, 14))
+    s[:, 0] = np.linspace(0.0, 0.6, T)                          # the left gripper moves 60 cm throughout
+    s[:, 6] = 0.5
+    s[:, 13] = 0.5
+    ep = _ep(s, views=("left",))
+
+    def run(pair):
+        cams = {"left": {"n": T, "decoded": T, "error": None, "fps": 30.0,
+                         "means": np.full(T, 100.0, np.float32), "stds": np.full(T, 20.0, np.float32),
+                         "pair": pair, "pchange": pair}}
+        return cq.assess({"ep": ep, "T": T, "cams": cams})["checks"]["video_frozen_run"]
+
+    pair = np.full(T - 1, 6.0, dtype=np.float32)
+    pair[60:180] = 0.0                                           # frozen from 2.0 s to 6.0 s
+    pair[120] = 0.4                                              # one keyframe step inside the freeze
+    c = run(pair)
+    assert c["status"] == "fired"
+    ev = c["events"][0]
+    assert abs(ev["t_s"] - 2.0) < 0.05 and "for 4.0 s from 2.0 s" in ev["evidence"]
+    assert "apart from 1 single keyframe step under 3" in ev["evidence"]
+    short = np.full(T - 1, 6.0, dtype=np.float32)
+    short[60:84] = 0.0                                           # 0.8 s still, one keyframe step, 0.8 s still
+    short[84] = 0.4
+    short[85:109] = 0.0
+    assert run(short)["status"] != "fired"
+
+
 def test_disposition_covers_every_check():
     for c in cq.CHECKS:
         d = cq.DISPOSITION[c]

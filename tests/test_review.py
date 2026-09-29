@@ -53,15 +53,19 @@ def test_own_data_entry_adds_fixed_window_only_for_fixed_length_files():
     assert w["rules"][-1]["window_s"] == 180.0
 
 
-def _episode(root: Path, idx: int, lag: int, task: str = "stack") -> None:
+def _episode(root: Path, idx: int, lag: int, task: str = "stack", adapter: bool = False) -> None:
     d = root / f"episode_{idx:06d}"
     d.mkdir(parents=True)
     rng = np.random.default_rng(idx)
     a = np.cumsum(rng.normal(0, 0.01, (400, 14)), axis=0)
     s = np.roll(a, lag, axis=0)                      # the follower trails the leader by `lag` frames
     np.savez(d / "state.npz", state=s, action=a)
-    (d / "context.json").write_text(json.dumps({"profile": "teleop_arms", "state_kind": "joints", "episode_index": idx,
-                                                "task_label": [task]}))
+    ctx = {"profile": "teleop_arms", "state_kind": "joints", "task_label": [task]}
+    if adapter:                                      # a dataset's own adapter keeps the index in its source
+        ctx["source"] = {"folder": "upload", "episode_index": idx, "adapter": "galaxea"}
+    else:
+        ctx["episode_index"] = idx
+    (d / "context.json").write_text(json.dumps(ctx))
 
 
 def test_the_neighbour_lag_is_measured_inside_the_folder(tmp_path):
@@ -72,6 +76,14 @@ def test_the_neighbour_lag_is_measured_inside_the_folder(tmp_path):
     ctx = lambda i: json.loads((tmp_path / f"episode_{i:06d}" / "context.json").read_text())
     assert abs(ctx(2)["timebase_neighbour_lag_frames"] - 3.0) < 0.2 and ctx(2)["timebase_neighbours_in_upload"] == 5
     assert "timebase_neighbour_lag_frames" not in ctx(40) and ctx(40)["timebase_neighbours_in_upload"] == 1
+
+
+def test_the_neighbour_lag_is_measured_when_an_adapter_keeps_the_index_in_its_source(tmp_path):
+    for i in range(4):
+        _episode(tmp_path, i, lag=3, adapter=True)
+    assert timebase.measure_folder(tmp_path) == 4
+    ctx = json.loads((tmp_path / "episode_000001" / "context.json").read_text())
+    assert abs(ctx["timebase_neighbour_lag_frames"] - 3.0) < 0.2 and ctx["timebase_neighbours_in_upload"] == 4
 
 
 def test_review_runs_every_stage_on_a_recorders_folder_in_free_mode():
