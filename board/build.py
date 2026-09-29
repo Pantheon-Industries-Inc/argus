@@ -8,7 +8,9 @@ the run's label (board/to_board.py) with its provenance (`_run`: run id, code co
 rig and length, the deterministic dataset checks and the dataset's own labels from its context.json, where the
 footage comes from and its license (`dataset_source`, from board/dataset_sources.json, for the public datasets
 prepare/ reads), the manifest's rules applied, and the label consistency check (checks/label_consistency.py:
-annotations that contradict themselves are reported in label_consistency, never used to edit a label).
+annotations that contradict themselves are reported in label_consistency, never used to edit a label). A
+recording labelled in parts carries the parts it was stitched from and the issues set aside at our cuts
+(carry_pieces), and an outcome or severity outside its known values is shown as "unclear" (normalize_enums).
 
 manifest.json. Paths are absolute or relative to the board folder; a run given as RUNS/<dataset>/latest is that
 dataset's newest finished run that is not a dry run (run ids start with their start time).
@@ -194,6 +196,39 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
             d["dataset_labels_note"] = ctx["annotation_note"]
     if isinstance(ctx.get("publisher_labels"), dict):
         d["dataset_episode_labels"] = ctx["publisher_labels"]
+
+
+def carry_pieces(d: dict, r: dict, ctx: dict) -> None:
+    """What a label of your own data carries beyond the run's output: for a recording labelled in parts
+    (label/pieces.py), the parts it was stitched from and the issues the stitcher set aside at our own cuts, kept in
+    _excluded with their reason; and how many neighbours the sped-up check had inside the folder
+    (checks.timebase measure_folder)."""
+    if ctx.get("timebase_neighbours_in_upload") is not None and (d.get("dataset_checks") or {}).get("timebase"):
+        d["dataset_checks"]["timebase"]["neighbours_in_upload"] = ctx["timebase_neighbours_in_upload"]
+    if r.get("stitched"):
+        d["_stitched"] = r["stitched"]
+        have = {(x.get("category"), x.get("issue")) for x in d.get("_excluded") or []}
+        ex = [x for x in (r.get("labels") or {}).get("_excluded") or []
+              if (x.get("category"), x.get("issue")) not in have]
+        if ex:
+            d["_excluded"] = (d.get("_excluded") or []) + ex
+
+
+# fields with a fixed set of values: a model's word outside the set is shown as "unclear", so the board never counts
+# or files an outcome or a severity it does not know
+ENUMS = {"task_completed": {"success", "partial", "failure", "unclear", "success_then_undone", None},
+         "severity": {"high", "medium", "low", None}}
+
+
+def normalize_enums(x, key: str | None = None):
+    """x with every string under an ENUMS key that is outside its set replaced by "unclear", at any depth."""
+    if isinstance(x, dict):
+        return {k: normalize_enums(v, k) for k, v in x.items()}
+    if isinstance(x, list):
+        return [normalize_enums(v, key) for v in x]
+    if isinstance(x, str) and key in ENUMS and x not in ENUMS[key]:
+        return "unclear"
+    return x
 
 
 # the episode's context a comparison label carries from the board's own label, so the page lays out the same player
@@ -385,6 +420,8 @@ def build(board: Path) -> dict:
             if dest.exists():
                 raise RuntimeError(f"{dest.name} comes from two manifest entries; a board holds one label per "
                                    "episode (file_prefix separates datasets whose episode names repeat)")
+            carry_pieces(d, r, ctx)
+            d = normalize_enums(d)
             dest.write_text(json.dumps(d))
             board_src[fname] = src
         counts[entry["dataset"]] = {"run_id": info["run_id"], "episodes": len(labels)}

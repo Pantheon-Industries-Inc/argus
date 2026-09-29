@@ -331,40 +331,44 @@ def _clip(path: Path, n: int) -> None:
     c.close()
 
 
-def recorder_folder(root: Path, n: int = 12, t0: float = 1_790_000_000.0) -> Path:
+def recorder_folder(root: Path, n: int = 12, t0: float = 1_790_000_000.0, third_arm: bool = False) -> Path:
     """One episode as a capture stack records it: each camera's colour and depth video with a file of its frames'
     capture times (two frames stamped alike), each arm's joints (follower, joint_pos and gripper_pos) and commands
     (leader, seven values) as JSON MCAP channels beside a health channel, and a metadata file naming the task.
-    Data Review's upload/test_formats.py reads the same folder with the page's reader."""
+    third_arm adds a third arm that carries the scene camera (yam_camera, six joints and no gripper, driven by
+    camera_leader), with the scene camera named arm_cam. Data Review's upload/test_formats.py reads the same folder
+    with the page's reader."""
     import json
     import numpy as np
     from mcap.writer import Writer
     d = root / "episode_000001_ab12"
     d.mkdir(parents=True)
-    for k, cam in enumerate(("exo_cam", "left_wrist_cam", "right_wrist_cam")):
+    for k, cam in enumerate(("arm_cam" if third_arm else "exo_cam", "left_wrist_cam", "right_wrist_cam")):
         for kind in ("rgb", "depth"):
             _clip(d / f"{cam}-images-{kind}.mp4", n)
             ts = t0 + 0.01 * k + np.arange(n) / 30
             ts[3] = ts[2]
             np.save(d / f"{cam}-{kind}-timestamp.npy", ts)
-    for side in ("left", "right"):
-        for leader in (False, True):
-            name = f"yam_{'leader_' if leader else ''}{side}"
-            with open(d / f"{name}.mcap", "wb") as fh:
-                w = Writer(fh)
-                w.start()
-                sid = w.register_schema(name=name, encoding="jsonschema", data=b"{}")
-                ch = w.register_channel(topic=f"/{name}/{'joint_pos' if leader else 'joint_state'}", message_encoding="json",
-                                        schema_id=sid)
-                hc = w.register_channel(topic=f"/{name}/health", message_encoding="json", schema_id=sid)
-                for i in range(n * 4):
-                    t = int((t0 - 0.05 + i / 120) * 1e9)
-                    g = 0.5 + 0.4 * float(np.sin(i / 20))
-                    msg = {"joint_pos": [0.1 * i / n] * 6 + [g]} if leader else \
-                        {"joint_pos": [0.1 * i / n] * 6, "joint_vel": [0.0] * 6, "gripper_pos": [g]}
-                    w.add_message(ch, log_time=t, publish_time=t, data=json.dumps(msg).encode())
-                    w.add_message(hc, log_time=t, publish_time=t, data=b'{"ok": true, "reason": ""}')
-                w.finish()
+    arms = [(f"yam_{'leader_' if leader else ''}{side}", leader, True)
+            for side in ("left", "right") for leader in (False, True)]
+    if third_arm:
+        arms += [("yam_camera", False, False), ("camera_leader", True, False)]
+    for name, leader, gripper in arms:
+        with open(d / f"{name}.mcap", "wb") as fh:
+            w = Writer(fh)
+            w.start()
+            sid = w.register_schema(name=name, encoding="jsonschema", data=b"{}")
+            ch = w.register_channel(topic=f"/{name}/{'joint_pos' if leader else 'joint_state'}", message_encoding="json",
+                                    schema_id=sid)
+            hc = w.register_channel(topic=f"/{name}/health", message_encoding="json", schema_id=sid)
+            for i in range(n * 4):
+                t = int((t0 - 0.05 + i / 120) * 1e9)
+                g = [0.5 + 0.4 * float(np.sin(i / 20))] if gripper else []
+                msg = {"joint_pos": [0.1 * i / n] * 6 + g} if leader else \
+                    {"joint_pos": [0.1 * i / n] * 6, "joint_vel": [0.0] * 6, **({"gripper_pos": g} if g else {})}
+                w.add_message(ch, log_time=t, publish_time=t, data=json.dumps(msg).encode())
+                w.add_message(hc, log_time=t, publish_time=t, data=b'{"ok": true, "reason": ""}')
+            w.finish()
     (d / "session_meta.json").write_text(json.dumps({"prompt": "Pick up the cube", "nodes": [{"name": "exo_cam"}]}))
     return d
 
@@ -392,10 +396,35 @@ def test_a_recorders_folder_is_one_episode_with_its_arm_state():
         ctx = json.loads((ep / "context.json").read_text())
         assert ctx["state_kind"] == "joints" and ctx["instruction"] == "Pick up the cube" and not ctx.get("state_note")
         assert ctx["cameras"]["exo"]["name"] == "exo_cam"
+        assert ctx["source"]["unused_cameras"] == []
         z = np.load(ep / "state.npz")
         assert z["state"].shape == (12, 14) and z["action"].shape == (12, 14)
         tm = np.load(ep / "times.npz")
         assert abs(float(tm["left"][0]) - 0.01) < 1e-6 and abs(float(tm["right"][0]) - 0.02) < 1e-6
+
+
+def test_a_third_arm_that_carries_the_scene_camera_is_neither_working_arm():
+    """A rig with a third arm that carries the scene camera (yam_camera, driven by camera_leader, beside yam_left and
+    yam_right) had its whole arm state dropped, because the third arm's topic names no side. The left and right arms
+    are the state and their leaders the action, the third arm is named in the episode's notes, and the scene camera,
+    whose name says it is on an arm, is described as on that arm rather than as a fixed camera."""
+    import json
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / "upload"
+        recorder_folder(root, third_arm=True)
+        rep = f.convert(root, "teleop_arms", Path(t) / "eps", "test", 900)
+        assert not rep["failed"] and len(rep["episodes"]) == 1
+        ep = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
+        ctx = json.loads((ep / "context.json").read_text())
+        assert ctx["state_kind"] == "joints"
+        assert ctx["state_note"] == ("The recording has a third arm (/yam_camera/joint_state) beside the left and right "
+                                     "arms; it is read as neither working arm.")
+        assert ctx["cameras"]["exo"]["name"] == "arm_cam"
+        assert ctx["cameras"]["exo"]["desc"].startswith("a camera on a third arm, which is not either working arm "
+                                                        "(its joints are recorded as /yam_camera/joint_state)")
+        z = np.load(ep / "state.npz")
+        assert z["state"].shape == (12, 14) and z["action"].shape == (12, 14)
 
 
 def test_joint_state_reads_only_the_layout_the_checks_read():
@@ -409,3 +438,11 @@ def test_joint_state_reads_only_the_layout_the_checks_read():
     assert "does not cover" in f.joint_state({"/arm/joint_state": {"t": np.linspace(5, 6, 30), "pos": np.ones((30, 7))}}, q)[2]
     assert f.joint_state({"/left/joint_state": arm(7), "/arm/joint_state": arm(7)}, q)[2].endswith("which arm is which.")
     assert f.joint_state({}, q) == (None, None, None)
+    # beside a left and a right arm, an arm that names no side is a third arm: the two sided arms are the state
+    three = {"/left/joint_state": arm(7), "/right/joint_state": arm(7), "/camera/joint_state": arm(6),
+             "/camera_leader/joint_pos": arm(6)}
+    state, action, note = f.joint_state(three, q)
+    assert state.shape == (11, 14) and action is None and note is None
+    assert f.third_arms(three) == ["/camera/joint_state"]
+    assert f.third_arms({"/left/joint_state": arm(7), "/arm/joint_state": arm(7)}) == []
+    assert f.third_arms({"/left/joint_state": arm(7), "/right/joint_state": arm(7)}) == []

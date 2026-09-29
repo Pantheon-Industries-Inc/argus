@@ -694,13 +694,15 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 
 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
-                        prs: dict | None = None, real: dict | None = None, state=None, action=None) -> dict:
+                        prs: dict | None = None, real: dict | None = None, state=None, action=None,
+                        descs: dict | None = None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
     (shared_clock) keep their offsets and are measured from the anchor's first frame. real gives every view's
     capture times on one recorder clock (frame_times), which then place the cameras against each other; state and
-    action are rows on the anchor's frames (joint_state)."""
+    action are rows on the anchor's frames (joint_state). descs {view: text} describes a camera the reader knows
+    more about than its slot says (the prompt's camera line)."""
     from label import episode as me
     prs = prs or {v: probe(p) for v, (_, p) in files.items()}
     order = [v for v in me.VIEW_ORDER if v in files]
@@ -730,6 +732,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
                 np.save(ep / f"kmap_{v}.npy", km)
                 sources[v]["kmap"] = f"kmap_{v}.npy"
         cams[v] = camera_entry(v, name, pr, rig)
+        if (descs or {}).get(v):
+            cams[v]["desc"] = descs[v]
     # the rate is measured from the frame times (a header can claim any rate); the length is the span of
     # the frames plus one frame, so it matches what the labeller samples
     step = float(np.median(np.diff(ta))) if len(ta) > 1 else 1 / 30
@@ -1056,6 +1060,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             "annotations.json", "annotation.json", "meta.json", "instruction.txt", "task.txt", "annotations.jsonl",
             "notes.txt")] + (own if len({f.stem for f in fs}) == 1 else []))
     extra = {"task_label": [item["name"]], "source": {"format": "video files", "upload": item["name"]}}
+    if item["dir"] is not None:
+        extra["source"]["unused_cameras"] = unused
     instr = instruction_from(ann)
     if not instr and item["dir"] is not None:
         # a recorder's own metadata file in the episode folder (session_meta.json) that names the task
@@ -1072,6 +1078,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     prs = {v: probe(p) for v, (_, p) in files.items()}
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
     state = action = None
+    descs = {}
     if item.get("state") and rig == "teleop_arms":
         from label import episode as me
         anchor = next(v for v in me.VIEW_ORDER if v in files)
@@ -1079,13 +1086,22 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place the "
                                    "recorded arm state against.")
         else:
-            state, action, note = joint_state(mcap_joint_streams(item["state"]), real[anchor])
+            streams = mcap_joint_streams(item["state"])
+            state, action, note = joint_state(streams, real[anchor])
             if note:
                 extra["state_note"] = note
             elif state is not None:
                 extra["source"]["state"] = [p.name for p in item["state"]]
+                third = third_arms(streams)
+                if third:
+                    extra["state_note"] = (f"The recording has a third arm ({', '.join(third)}) beside the left and "
+                                           "right arms; it is read as neither working arm.")
+                    # a scene camera whose name says it is on an arm, beside a third arm, is carried by that arm
+                    if "exo" in files and is_mount_named(files["exo"][0]):
+                        descs["exo"] = third_arm_camera_desc(third)
     ep = unique_dir(out, episode_name(item["name"]))
-    return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action)
+    return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
+                               descs=descs)
 
 
 # ---------------------------------------------------------------- LeRobot: reading a dataset root
@@ -1900,7 +1916,11 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
         return None, None, None
     order = [s for s in ("left", "right", "only") if s in st]
     if "only" in order and len(order) > 1:
-        return None, None, "Labelled from the cameras, because the recorded arm channels do not say which arm is which."
+        if "left" not in st or "right" not in st:
+            return None, None, "Labelled from the cameras, because the recorded arm channels do not say which arm is which."
+        # an arm that names a side and one that does not could be the same side's arm twice, but a left and a right
+        # arm are the two working arms, and an arm beside them that names no side is a third one (third_arms)
+        order = ["left", "right"]
     dims = [streams[st[s]]["pos"].shape[1] for s in order]
     if any(d != JOINT_DIMS for d in dims):
         return None, None, (f"Labelled from the cameras, because the recorded arms have {' and '.join(map(str, dims))} "
@@ -1920,6 +1940,23 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS for s in order):
         action = np.concatenate([lerp(act[s]) for s in order], axis=1)
     return state, action, None
+
+
+def third_arms(streams: dict) -> list[str]:
+    """The recorded arm channels that are neither working arm: those whose topic names no side, beside a left and a
+    right arm (a third arm that carries the scene camera, as on a rig whose camera an operator moves). joint_state
+    reads the two sided arms and leaves these out."""
+    st = [t for t in streams if not ACTION_TOPIC.search(t)]
+    if not {"left", "right"} <= {side_of(t) for t in st}:
+        return []
+    return sorted(t for t in st if side_of(t) is None)
+
+
+def third_arm_camera_desc(topics: list[str]) -> str:
+    return (f"a camera on a third arm, which is not either working arm (its joints are recorded as {', '.join(topics)}). "
+            "That arm can move, so this view can pan and tilt, and a change of view while it moves is the camera moving, "
+            "not the scene changing. Use it for the scene layout, object locations and where things end up, working "
+            "out from each frame where it looks")
 
 
 def _decoder_for(encoding: str, schema, facs: list):

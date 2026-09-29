@@ -1,0 +1,176 @@
+"""Review your own robot data in one command: read it, check it, label it and build its board.
+
+    python -m review --data PATH_OR_URL --rig teleop_arms|handheld_gripper|ego_head --out JOB \\
+        [--dataset NAME] [--free] [--cap 20] [--concurrency 8] [--max-minutes M] [--grouping JSON]
+
+PATH_OR_URL is a folder, a file or an archive, or an http(s) URL of a file or an archive, which is downloaded into
+JOB/upload first. Everything else is written under JOB, and the data itself is never edited. These are the stages
+Data Review runs on an upload, in its order and with its settings, so a folder reviewed here and the same folder
+uploaded to Data Review get the same requests and the same board:
+
+  1. convert  the data into episode sidecars (prepare/formats.py, the reader python -m prepare folder runs), with
+              a report of what was read, used and left out (JOB/report.json)
+  2. checks   crossed camera streams, recorded jumps and flat gripper channels where the data has arm state
+              (checks.stream_pairing), sped-up recordings measured against their neighbours in the same folder
+              (checks.timebase measure_folder), and the capture checks (checks.capture_qc)
+  3. clips    browser-playable copies of each camera for the board (python -m board clips)
+  4. dry run  every request built exactly as it would be sent, free. A recording longer than label/pieces.py's
+              PIECE_MAX_S is labelled in parts cut at still moments
+  5. label    the model labels every episode or part, stopping at --cap dollars (skipped with --free)
+  6. board    parts stitched back into one timeline per recording, and the board's files (board.build with the
+              rig's rules, plus fixed_window when the reader found fixed-length files)
+
+Serve the result with `python -m board serve --board JOB --clips JOB/clips`. The model key comes from
+OPENROUTER_API_KEYS, as for python -m label.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import shutil
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+PY = sys.executable
+
+
+def now() -> str:
+    return dt.datetime.now().isoformat(timespec="seconds")
+
+
+def repo_env(**extra) -> dict:
+    """The environment every stage runs in: this checkout on PYTHONPATH, and few malloc arenas, as python -m label
+    sets them, so a long threaded run hands freed frame buffers back."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env.setdefault("MALLOC_ARENA_MAX", "2")
+    env.update(extra)
+    return env
+
+
+def run_step(job: Path, step: str, cmd: list[str], env: dict, ok_codes=(0,)) -> int:
+    log = job / "logs" / f"{step}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    print(f"== {step}", flush=True)
+    with open(log, "a") as fh:
+        rc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, env=env, cwd=job).returncode
+    if rc not in ok_codes:
+        tail = log.read_text().strip().splitlines()[-6:]
+        raise SystemExit(f"{step} exited {rc} (log {log}): " + " | ".join(tail))
+    return rc
+
+
+def fetch(data: str, job: Path) -> Path:
+    """The data as a local path: a URL is downloaded into JOB/upload under its own file name."""
+    if not data.startswith(("http://", "https://")):
+        return Path(data).resolve()
+    dest = job / "upload" / (Path(urllib.parse.urlparse(data).path).name or "data")
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        print(f"== download {data}", flush=True)
+        tmp = dest.with_name(dest.name + ".part")
+        with urllib.request.urlopen(data) as r, open(tmp, "wb") as fh:
+            shutil.copyfileobj(r, fh)
+        tmp.replace(dest)
+    return dest
+
+
+def commit() -> str:
+    try:
+        return subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="python -m review", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--data", required=True, help="a folder, file or archive, or an http(s) URL of one")
+    ap.add_argument("--rig", required=True, choices=["teleop_arms", "handheld_gripper", "ego_head"])
+    ap.add_argument("--out", type=Path, required=True, metavar="JOB", help="where everything is written")
+    ap.add_argument("--dataset", default=None, help="name shown on the board and told to the model")
+    ap.add_argument("--free", action="store_true", help="stop after the dry run (no model calls)")
+    ap.add_argument("--cap", type=float, default=20.0, help="most the labelling may spend, in USD (default 20)")
+    ap.add_argument("--concurrency", type=int, default=8, help="requests in flight (default 8)")
+    ap.add_argument("--jobs", type=int, default=2, help="decode processes per step (default 2)")
+    ap.add_argument("--max-minutes", type=float, default=0, help="read at most this much footage (default: all)")
+    ap.add_argument("--grouping", type=json.loads, default={},
+                    help='JSON {folder: "takes" | "cameras"} for folders whose files cannot tell takes from cameras')
+    a = ap.parse_args()
+
+    from board import build as build_board
+    from board import rules as board_rules
+    from checks import timebase
+    from label import pieces
+    from prepare import formats
+
+    job = a.out.resolve()
+    job.mkdir(parents=True, exist_ok=True)
+    data = fetch(a.data, job)
+    dataset = a.dataset or data.stem
+    eps = job / "episodes"
+    jobs = str(max(1, a.jobs))
+    env = repo_env()
+
+    print("== convert", flush=True)
+    if eps.exists():
+        shutil.rmtree(eps)
+    rep = formats.convert(data, a.rig, eps, dataset, a.max_minutes * 60 if a.max_minutes else float("inf"),
+                          grouping=a.grouping)
+    (job / "report.json").write_text(json.dumps(rep, indent=1))
+    if not rep["episodes"]:
+        why = "; ".join(f"{f['name']}: {f['why']}" for f in rep["failed"][:3])
+        raise SystemExit("no episode could be read" + (f" ({why})" if why else ""))
+
+    if any(e["state_kind"] != "none" for e in rep["episodes"]):
+        for flag in ([], ["--jumps"], ["--grippers"]):
+            run_step(job, f"checks{''.join(flag).replace('--', '_')}",
+                     [PY, "-m", "checks.stream_pairing", *flag, "--jobs", jobs, str(eps)], env)
+        timebase.measure_folder(eps)
+    run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env)
+    run_step(job, "clips", [PY, "-m", "board", "clips", "--episodes", str(eps), "--out", str(job / "clips"),
+                            "--jobs", jobs, "--clip-threads", "1"], env)
+
+    long_eps = pieces.write_units(job, eps)
+    env = repo_env(RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)))
+    run_step(job, "dry_run", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
+                              str(job / "dry"), "--concurrency", jobs, "--dry-run"], env)
+    if a.free:
+        print(f"free run: requests built in {job / 'dry'}, model not called", flush=True)
+        return 0
+
+    run_dir = job / "run"
+    run_dir.mkdir(exist_ok=True)
+    info = {"run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
+            "code": f"robot-data-audit@{commit()}", "started_at": now(), "cap_usd": a.cap, "status": "running"}
+    (run_dir / "run.json").write_text(json.dumps(info, indent=1))
+    run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
+                            str(run_dir / "out"), "--concurrency", str(a.concurrency), "--max-spend", str(a.cap)],
+             env, ok_codes=(0, 1))
+    info.update(status="done", finished_at=now())
+    (run_dir / "run.json").write_text(json.dumps(info, indent=1))
+
+    print("== board", flush=True)
+    final = job / "run_final"
+    if final.exists():
+        shutil.rmtree(final)
+    st = pieces.stitch_run(job, eps, long_eps, final / "out")
+    (final / "run.json").write_text(json.dumps(info, indent=1))
+    entry = board_rules.own_data_entry(dataset, str(final), str(eps), a.rig, rep.get("packaging"))
+    (job / "manifest.json").write_text(json.dumps({"board": job.name, "datasets": [entry]}, indent=1))
+    build_board.build(job)
+    if st["incomplete"]:
+        print(f"not on the board, a part was not labelled: {', '.join(st['incomplete'])}", flush=True)
+    print(f"done: python -m board serve --board {job} --clips {job / 'clips'}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

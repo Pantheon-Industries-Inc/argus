@@ -2,6 +2,7 @@
 
     python -m checks.timebase scan --raw RAW --out timebase.csv [--jobs 4]
     python -m checks.timebase apply --timebase timebase.csv [--labels RUN/out] EPISODES [EPISODES ...]
+    python -m checks.timebase folder EPISODES [EPISODES ...]
 
 MolmoAct2's files carry no real clock: timestamps are frame_index/30 and video pts are exactly k/30,
 written by the recorder as if its loop always ran at 30 Hz. When a rig's loop ran slower, every sample
@@ -36,6 +37,10 @@ and the parquets it does not have, as `python -m prepare molmo` does), writes on
 Labelling then measures the episode and reports the flag in dataset_checks["timebase"] (label/episode.py calls
 timebase_check). With --labels it also re-applies the rule to label files already written (RUN/out/<episode>.json),
 without a model call. The flag is a report field, never part of the prompt.
+
+`folder` is for data with no dataset-wide scan (your own data, and Data Review's uploads): it measures the
+neighbours inside each folder of prepared episodes (measure_folder). It is not part of `python -m checks`, so a
+dataset that was scanned keeps its scan's neighbour lags.
 """
 from __future__ import annotations
 
@@ -210,6 +215,52 @@ def cmd_scan(args) -> int:
     return 0
 
 
+def measure_folder(eps: Path) -> int:
+    """The neighbour lag measured inside one folder of prepared episodes, for data with no dataset-wide scan (your
+    own data, Data Review's uploads). The folder holds its own neighbours: the lag is measured on every episode with
+    joint state and leader actions, and an episode gets a neighbour lag only when at least 3 episodes of its run fall
+    in the window (itself and two more), so a lone episode is measured, never flagged. Returns how many episodes
+    got one; every episode also records how many neighbours it had (timebase_neighbours_in_upload)."""
+    rows = []
+    for d in sorted(Path(eps).glob("episode_*")):
+        ctx = json.loads((d / "context.json").read_text())
+        if ctx.get("profile") != "teleop_arms" or ctx.get("state_kind") != "joints" or not (d / "state.npz").exists():
+            continue
+        z = np.load(d / "state.npz")
+        if "action" not in z.files or z["state"].shape[1] != 14:
+            continue
+        lag = follower_lag_frames(z["state"], z["action"])
+        if ctx.get("episode_index") is None:
+            continue
+        rows.append((d, int(ctx["episode_index"]), "; ".join(ctx.get("task_label") or []) + "|" +
+                     str((ctx.get("source") or {}).get("dataset_folder") or ""), lag))
+    if not rows:
+        return 0
+    med = neighbour_lags([r[1] for r in rows], [r[2] for r in rows], [r[3] for r in rows])
+    n = 0
+    for (d, e, task, _), m in zip(rows, med):
+        window = [r for r in rows if r[2] == task and abs(r[1] - e) <= SPEDUP_NEIGHBOURS and r[3] is not None]
+        # only consecutive indices count as neighbours: the run must be unbroken between them
+        run = {r[1] for r in window}
+        near = [x for x in run if all(y in run for y in range(min(x, e), max(x, e) + 1))]
+        p = d / "context.json"
+        ctx = json.loads(p.read_text())
+        if len(near) >= 3 and m == m:
+            ctx["timebase_neighbour_lag_frames"] = round(float(m), 3)
+            n += 1
+        else:
+            ctx.pop("timebase_neighbour_lag_frames", None)
+        ctx["timebase_neighbours_in_upload"] = len(near)
+        p.write_text(json.dumps(ctx, indent=1, default=str))
+    return n
+
+
+def cmd_folder(args) -> int:
+    for root in args.roots:
+        print(f"{root}: neighbour lag measured on {measure_folder(root)} episodes", flush=True)
+    return 0
+
+
 def write_json(p: Path, obj) -> None:
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2))
@@ -262,6 +313,9 @@ def main() -> int:
     a.add_argument("--labels", type=Path, default=None,
                    help="a run's out/ folder: re-apply the rule to the label files already written there")
     a.set_defaults(func=cmd_apply)
+    f = sub.add_parser("folder", help="measure the neighbour lag inside each folder of prepared episodes")
+    f.add_argument("roots", nargs="+", type=Path, metavar="EPISODES", help="folders of prepared episode_* folders")
+    f.set_defaults(func=cmd_folder)
     args = ap.parse_args()
     return args.func(args)
 

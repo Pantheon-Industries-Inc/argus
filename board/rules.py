@@ -41,3 +41,16 @@ BY_RIG = {
 def rules_for(rig: str | None) -> list[dict]:
     """The general rules and the rig's own (teleop_arms, handheld_gripper or ego_head), as fresh copies."""
     return [dict(r) for r in GENERAL + BY_RIG.get(rig or "", [])]
+
+
+def own_data_entry(dataset: str, run: str, episodes: str, rig: str, packaging: dict | None = None) -> dict:
+    """The manifest entry for a folder of your own data (python -m review, and Data Review's uploads): the rig's
+    rules, and the fixed_window rule when the reader found footage cut into files of one length (its report's
+    "packaging")."""
+    from prepare import formats
+    entry = {"dataset": dataset, "run": run, "episodes": episodes, "rules": rules_for(rig)}
+    if packaging:
+        entry["rules"] += [{"kind": "fixed_window", "tags": formats.PACKAGING_TAGS,
+                            "window_s": packaging["fixed_window_s"], "tolerance_s": formats.FIXED_WINDOW_TOLERANCE_S,
+                            "why": "the recorder cuts continuous footage into fixed-length files"}]
+    return entry
