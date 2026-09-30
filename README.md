@@ -141,7 +141,7 @@ The harness samples one instant every 1.5 s on teleop arms, every 1 s on UMI gri
 
 The prompt opens with the shared instructions and the episode's facts (cameras, recorded still spans and motion, every other signal the recording has under its own name with its range and how much it changed over each still span, the instruction and the objects it names), each framed as a claim to check, followed by the grids and then the first and last instants at up to 768 px. Without an instruction, the model names the task as the most specific end state the demonstrator worked toward. The shared instructions are pinned by hash in `tests/test_label.py`. Measured on the gate's cost samples as first sends, labelling costs about $26 per footage hour on teleop, $30 on UMI and $19 on human ego video.
 
-Everything up to the model call is deterministic, down to byte-identical requests at a given cell width, since episode lists are fixed files, packages are pinned in `uv.lock`, frames are decoded at exact timestamps and the grid font ships in `label/fonts/`. On a teleop rig the cell width is itself chosen by a small model call from the task text (`label/route.py`), so another run can send a task at the other width; the width each episode got is recorded in its output (`config.resolution_route`). The calls send no temperature, top_p, seed or provider pin, and each output records `provider_name`, `model_served`, `system_fingerprint` and `generation_id`, because model ids are not dated snapshots. Labels are not bit-reproducible, so compare runs by their fields. Labelled three times each, the quickstart episodes got the same outcome every time, with goal and undo times within 5 s.
+Everything up to the model call is deterministic, down to byte-identical requests at a given cell width, since episode lists are fixed files, packages are pinned in `uv.lock`, frames are decoded at exact timestamps and the grid font ships in `label/fonts/` and is laid out with Pillow's basic engine on every machine. On a teleop rig the cell width is itself chosen by a small model call from the task text (`label/route.py`), so another run can send a task at the other width; the width each episode got is recorded in its output (`config.resolution_route`). The calls send no temperature, top_p, seed or provider pin, and each output records `provider_name`, `model_served`, `system_fingerprint` and `generation_id`, because model ids are not dated snapshots. Labels are not bit-reproducible, so compare runs by their fields. Labelled three times each, the quickstart episodes got the same outcome every time, with goal and undo times within 5 s.
 
 ## Dashboard
 
@@ -160,18 +160,18 @@ Human ego episodes can also show 2D hand keypoints from [ACE-Ego-Hand](https://g
 
 ## Model comparison
 
-Four models label the same 193 episodes (about an hour per setup, `configs/compare/main.json`) with the same harness, prompt, images, reasoning effort and output limit (`configs/models.json`). They are Astra as the reference, Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash. With `--with-example`, the other three also see one complete Astra annotation of a different episode of the same setup (`configs/examples/`), on a seeded third of the episodes (`configs/compare/third.json`).
+The models label the same 193 episodes (about an hour per setup, `configs/compare/main.json`) with the same harness, prompt, images and output limit (`configs/models.json`), each at the reasoning effort its entry names, medium unless it says otherwise. They are Astra as the reference, Claude Opus 5.5, GPT-6 Sol, DeepSeek v4.1 flash, and GPT-6.1 Sol at medium and at high reasoning. With `--with-example`, the others also see one complete Astra annotation of a different episode of the same setup (`configs/examples/`), on a seeded third of the episodes (`configs/compare/third.json`). A teleop episode's cell width comes from a sampled routing call, so `--routes` gives every run the reference run's answers (`configs/compare/routes_main.json`) and every model sees the same frames.
 
 ```bash
 uv run python -m compare prepare --selection configs/compare/main.json
-uv run python -m compare label --selection configs/compare/main.json --kind full --cap 100
-uv run python -m compare label --selection configs/compare/third.json --with-example --kind full --cap 15
+uv run python -m compare label --selection configs/compare/main.json --kind full --cap 100 --routes configs/compare/routes_main.json
+uv run python -m compare label --selection configs/compare/third.json --with-example --kind full --cap 15 --routes configs/compare/routes_main.json
 uv run python -m compare board --entries data/runs/compare/main.json data/runs/compare/third_ex.json --out data/boards/compare
 uv run python -m board build data/boards/compare
 uv run python -m compare.metrics data/boards/compare
 ```
 
-Each `label` starts one run per model, each under its own `--cap`. In our run, Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash cost 34%, 19% and 4% as much per episode as Astra. The dashboard counts only the reference model's labels, and its "Labels by" control switches to any other model's.
+Each `label` starts one run per model, each under its own `--cap`; `--models` names the ones to run, so a new model never reruns the others. In our run, Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash cost 34%, 19% and 4% as much per episode as Astra. The dashboard counts only the reference model's labels, and its "Labels by" control switches to any other model's.
 
 ## Gate
 
