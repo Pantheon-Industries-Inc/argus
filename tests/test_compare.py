@@ -139,9 +139,45 @@ def test_label_writes_one_manifest_entry_per_model(tmp_path, monkeypatch):
     for cmd in FakeLabel.started:
         key = cmd[cmd.index("--label") + 1]
         assert cmd[cmd.index("--model") + 1] == MODELS["models"][key]["model"]
-        assert cmd[cmd.index("--reasoning") + 1] == MODELS["reasoning"] == "medium"
+        assert cmd[cmd.index("--reasoning") + 1] == MODELS["models"][key].get("reasoning", MODELS["reasoning"])
         assert cmd[cmd.index("--max-tokens") + 1] == str(MODELS["max_tokens"]) and "--example-dir" not in cmd
         assert cmd[cmd.index("--cap") + 1] == "25.0" and cmd[cmd.index("--kind") + 1] == "full"
+
+
+# The command each model that has published results ran with (compare/__main__.py at e076229, when every model took
+# the one top-level reasoning effort): a model's own "reasoning" in configs/models.json must never change them.
+PUBLISHED = {"astra": "openai/gpt-6-astra", "opus55": "anthropic/claude-opus-5.5", "sol6": "openai/gpt-6-sol",
+             "dsv41f": "deepseek/deepseek-v4.1-flash"}
+
+
+def _published_command(key, model, slice_dir, runs, example):
+    note = f"model comparison on {slice_dir.name}: {model}" + (", in-context learning with a reference trace"
+                                                                if example else "")
+    return ([sys.executable, "-m", "label", "--dataset", "compare", "--episodes", str(slice_dir), "--kind", "full",
+             "--cap", "25.0", "--runs", str(runs), "--concurrency", "8", "--label", key + ("_ex" if example else ""),
+             "--note", note, "--", "--model", model, "--reasoning", "medium", "--max-tokens", "64000"]
+            + (["--example-dir", str(cm.REPO / "configs" / "examples")] if example else []))
+
+
+@pytest.mark.parametrize("selection,example", [("main", False), ("third", True)])
+def test_every_published_models_command_is_unchanged(tmp_path, monkeypatch, selection, example):
+    episodes, runs = _label(tmp_path, monkeypatch, "--selection", str(SELECTIONS / f"{selection}.json"),
+                            "--cap", "25", *(["--with-example"] if example else []))
+    assert cm.main() == 0
+    started = {cmd[cmd.index("--label") + 1].removesuffix("_ex"): cmd for cmd in FakeLabel.started}
+    want = [k for k in PUBLISHED if k in (MODELS["with_example"] if example else MODELS["models"])]
+    assert want == (["opus55", "sol6", "dsv41f"] if example else list(PUBLISHED))
+    for key in want:
+        assert started[key] == _published_command(key, PUBLISHED[key], episodes / "compare" / selection, runs, example)
+
+
+def test_a_models_own_reasoning_effort_reaches_its_run_only(tmp_path, monkeypatch):
+    _label(tmp_path, monkeypatch, "--selection", str(SELECTIONS / "main.json"), "--models", "sol6,sol61_high",
+           "--cap", "150")
+    assert cm.main() == 0
+    effort = {cmd[cmd.index("--label") + 1]: cmd[cmd.index("--reasoning") + 1] for cmd in FakeLabel.started}
+    assert effort == {"sol6": "medium", "sol61_high": "high"}
+    assert MODELS["models"]["sol61_high"]["reasoning"] == "high" and "reasoning" not in MODELS["models"]["sol6"]
 
 
 def test_label_with_example_marks_example_and_base_and_no_reference(tmp_path, monkeypatch):
@@ -247,6 +283,13 @@ def test_load_models_reads_run_json_and_defaults(tmp_path):
     assert not ms["m2"]["example"] and ms["m2"]["base"] is None
     assert ms["m2"]["episodes"] == tmp_path / "slice"                           # the slice run.json records
     assert ms["m2"]["episode_name"] == "Model two"
+    assert ms["m2"]["reasoning"] is None                  # the command leaves the effort at the harness default
+    manifest = _comparison(tmp_path / "b")
+    run = tmp_path / "b" / "runs" / "m2" / "run.json"
+    info = json.loads(run.read_text())
+    run.write_text(json.dumps({**info, "command": info["command"] + ["--reasoning", "high"]}))
+    assert {m["key"]: m["reasoning"] for m in metrics.load_models(manifest, tmp_path / "b")} \
+        == {"m2": "high", "m2_ex": None}
     for key in ("board", "lists"):          # the reference's key, and the static build's folder of rail records
         bad = _comparison(tmp_path / key)
         bad["comparisons"][0]["key"] = key

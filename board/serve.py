@@ -5018,7 +5018,7 @@ function buildCompare() {
     + '</p></div>'; return; }
   const order = cmpOrder();
   const main = order.filter(m => M.main.includes(m.key));
-  const others = M.models.filter(m => !m.reference && !m.example).map(m => m.name);
+  const others = M.models.filter(m => !m.reference && !m.example);
   const all = M.summary.all || {};
   const exN = new Set(M.episodes.filter(e => Object.keys(e.by).some(k => (M.models.find(m => m.key === k)
     || {}).example)).map(e => e.file)).size;
@@ -5029,8 +5029,10 @@ function buildCompare() {
   // the footage the comparison covers, as its groups are named (teleoperated arms, UMI, human ego)
   const rigList = serialJoin(rigs.filter(r => r !== 'all').map(r => (M.rig_names[r] || r).toLowerCase()
     .replace(/^teleop$/, 'teleoperated arms').replace(/^umi$/, 'UMI')));
-  // each model with the reasoning effort it ran at, where the board knows it
-  const modelList = andJoin(others.map(n => esc(n) + (BOARD.reasoning ? ` (${esc(BOARD.reasoning)} reasoning)` : '')));
+  // each model with the reasoning effort it ran at (its run's own, else the pinned one), unless its name says it
+  const effort = m => m.reasoning || BOARD.reasoning;
+  const modelList = andJoin(others.map(m => esc(m.name) + (effort(m) && !m.name.includes(`${effort(m)} reasoning`)
+    ? ` (${esc(effort(m))} reasoning)` : '')));
   const rigBtns = rigs.map(r => `<button type="button" role="radio" aria-checked="${r === CMP_RIG}" `
     + `data-rig="${r}">${esc(r === 'all' ? 'All footage' : M.rig_names[r] || r)}</button>`).join('');
   const card = (c, rowsHtml, wide) => `<div class="cc${wide ? ' cc-wide' : ''}" data-chart="${c.id}">`

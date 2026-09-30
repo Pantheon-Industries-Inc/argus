@@ -1,5 +1,5 @@
 {
- "about": "The pinned model settings. Every model gets the same harness, prompt, images, reasoning effort and output limit. No temperature, top_p or seed is sent (see the README's Determinism section).",
+ "about": "The pinned model settings. Every model gets the same harness, prompt, images and output limit, and the top-level reasoning effort unless its entry names its own \"reasoning\". No temperature, top_p or seed is sent (see the README's Determinism section).",
  "reasoning": "medium",
  "max_tokens": 64000,
  "reference": "astra",
@@ -19,11 +19,23 @@
   "dsv41f": {
    "model": "deepseek/deepseek-v4.1-flash",
    "name": "DeepSeek v4.1 flash"
+  },
+  "sol61_medium": {
+   "model": "openai/gpt-6.1-sol",
+   "name": "GPT-6.1 Sol, medium reasoning",
+   "reasoning": "medium"
+  },
+  "sol61_high": {
+   "model": "openai/gpt-6.1-sol",
+   "name": "GPT-6.1 Sol, high reasoning",
+   "reasoning": "high"
   }
  },
  "with_example": [
   "opus55",
   "sol6",
-  "dsv41f"
+  "dsv41f",
+  "sol61_medium",
+  "sol61_high"
  ]
 }

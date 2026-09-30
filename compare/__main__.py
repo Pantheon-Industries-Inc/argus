@@ -17,10 +17,10 @@ episodes into EPISODES/<dataset>/compare_<selection> with that dataset's adapter
 deterministic checks on them (python -m checks). Four of the datasets need HF_TOKEN (see the README).
 
 `label` links the selected episodes into one folder, EPISODES/compare/<selection>, and starts one labelling run per
-model (label/run.py) with the model id and settings of configs/models.json, all at once, each in its own run folder
-under RUNS/compare/ named <time>_<kind>_<commit>_<model key>[_ex]. With --with-example the models of the
-"with_example" list are also shown configs/examples/example_<rig>.json, one complete annotation of a different
-episode of the same rig. A paid kind needs --cap, the spend cap of each model's run. It then writes
+model (label/run.py) with the model id and settings of configs/models.json (the top-level reasoning effort unless
+the model's entry names its own), all at once, each in its own run folder under RUNS/compare/ named
+<time>_<kind>_<commit>_<model key>[_ex]. With --with-example the models of the "with_example" list are also shown
+configs/examples/example_<rig>.json, one complete annotation of a different episode of the same rig. A paid kind needs --cap, the spend cap of each model's run. It then writes
 RUNS/compare/<selection>[_ex].json: the runs as entries of a board manifest's "comparisons" list, the run of
 models.json's "reference" model marked as the reference.
 
@@ -122,7 +122,8 @@ def cmd_label(a) -> int:
                "--cap", str(a.cap), "--runs", str(a.runs), "--concurrency", str(a.concurrency), "--label", key,
                "--note", f"model comparison on {name}: {m['model']}"
                          + (", in-context learning with a reference trace" if a.with_example else ""),
-               "--", "--model", m["model"], "--reasoning", cfg["reasoning"], "--max-tokens", str(cfg["max_tokens"])]
+               "--", "--model", m["model"], "--reasoning", m.get("reasoning", cfg["reasoning"]),
+               "--max-tokens", str(cfg["max_tokens"])]
         if a.with_example:
             cmd += ["--example-dir", str(REPO / "configs" / "examples")]
         print(f"starting {key}: {m['model']}", flush=True)

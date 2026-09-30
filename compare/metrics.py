@@ -68,12 +68,18 @@ PER_EPISODE = ("events_per_min", "key_events", "subgoals", "data_issues", "data_
 
 # ---------------------------------------------------------------- the runs
 
+def _run_arg(info: dict, flag: str) -> str | None:
+    """A harness option a run was started with, from its command (None when the command leaves it at the harness
+    default)."""
+    cmd = info.get("command") or []
+    if flag in cmd and cmd.index(flag) + 1 < len(cmd):
+        return cmd[cmd.index(flag) + 1]
+    return None
+
+
 def _run_model(info: dict) -> str | None:
     """The model id a run was started with: its harness command's --model, or None (the harness default)."""
-    cmd = info.get("command") or []
-    if "--model" in cmd and cmd.index("--model") + 1 < len(cmd):
-        return cmd[cmd.index("--model") + 1]
-    return None
+    return _run_arg(info, "--model")
 
 
 def _path(p: str, base: Path | None) -> Path:
@@ -90,7 +96,8 @@ def model_names() -> dict:
 
 
 def reasoning_effort() -> str | None:
-    """The reasoning effort every model is run with, from configs/models.json (None when it is not there)."""
+    """The reasoning effort a model is run with unless its configs/models.json entry names its own (None when the
+    file is not there). Each comparison run's own effort is read from its command (load_models)."""
     try:
         return json.loads(MODELS_PATH.read_text()).get("reasoning")
     except (OSError, ValueError):
@@ -126,6 +133,7 @@ def load_models(manifest: dict, base: Path | None = None) -> list[dict]:
         out.append({"key": key, "name": c["name"], "run": run, "episodes": eps, "reference": False,
                     "example": example, "base": c.get("base") or (re.sub(r"_ex$", "", key) if example else None),
                     "run_id": info.get("run_id"), "code": info.get("code"), "model": _run_model(info),
+                    "reasoning": _run_arg(info, "--reasoning"),
                     "status": info.get("status"), "slice": info.get("slice"), "episode_name": c["name"]})
     keys = [m["key"] for m in out]
     if len(set(keys)) != len(keys):
