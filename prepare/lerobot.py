@@ -67,7 +67,10 @@ def main() -> int:
         it = items[n]
         (formats.convert_lerobot_item if it["kind"] == "lerobot" else formats.convert_recording)(it, a.rig, a.out, name)
         return "ok"
-    return cli.run(picks, one, a.jobs)
+    rc = cli.run(picks, one, a.jobs)
+    # the gripper's range across the dataset, as Data Review measures it across an upload (formats.convert)
+    formats.measure_gripper_range(a.out, [formats.episode_name(n) for n in picks])
+    return rc
 
 if __name__ == "__main__":
     raise SystemExit(main())
