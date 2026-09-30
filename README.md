@@ -4,7 +4,7 @@ Dense annotations and data-quality checks for robot-learning episodes, from Pant
 
 This is Argus, the pipeline behind [*Argus: An Open-Source SoTA Robotics Data Annotator*](https://pantheon.inc/research/argus), in which we audited 3,546 episodes (66.5 hours) across nine public datasets. Every annotation can be browsed on the [data dashboard](https://pantheon.inc/data-board), and [Data Review](https://pantheon.inc/data-review) runs the same pipeline on data you upload.
 
-The pipeline handles teleoperated arms, UMI grippers and head-mounted cameras, and reads LeRobot datasets, MCAP files, plain video and archives of any of these. It draws on instructions and recorded robot state when a dataset provides them, and works from the footage alone when it does not. For each episode it produces a dense timeline with
+The pipeline handles teleoperated arms, UMI grippers and human (ego) data, and reads LeRobot datasets, MCAP files, plain video and archives of any of these. It draws on instructions and recorded robot state when a dataset provides them, and works from the footage alone when it does not. For each episode it produces a dense timeline with
 
 - every action marked as advancing the task, wasteful or idle
 - progress toward the goal, key events and subgoals
