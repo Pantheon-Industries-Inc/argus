@@ -102,6 +102,7 @@ def test_prepare_writes_each_datasets_list_and_runs_prepare_then_checks(tmp_path
 class FakeLabel:
     """compare's label subprocess: makes the run folder label/run.py would, RUNS/compare/<run_id>."""
     started: list = []
+    also: Path | None = None
 
     def __init__(self, cmd, cwd):
         def arg(flag):
@@ -110,7 +111,13 @@ class FakeLabel:
         FakeLabel.started.append(cmd)
         run = Path(arg("--runs")) / arg("--dataset") / f"20260927-1200_{arg('--kind')}_abc1234_{arg('--label')}"
         run.mkdir(parents=True)
-        (run / "run.json").write_text(json.dumps({"run_id": run.name, "command": cmd}))
+        (run / "run.json").write_text(json.dumps({"run_id": run.name, "command": cmd,
+                                                  "slice": str(Path(arg("--episodes")).resolve())}))
+        if FakeLabel.also:
+            # the same model's run of another compare label started at the same moment, over another slice
+            other = Path(arg("--runs")) / arg("--dataset") / f"20260927-1201_{arg('--kind')}_abc1234_{arg('--label')}"
+            other.mkdir(parents=True)
+            (other / "run.json").write_text(json.dumps({"run_id": other.name, "slice": str(FakeLabel.also)}))
 
     def wait(self):
         return 0
@@ -119,7 +126,7 @@ class FakeLabel:
 def _label(tmp_path, monkeypatch, *extra):
     episodes, runs = tmp_path / "episodes", tmp_path / "runs"
     _prepare_all(episodes)
-    FakeLabel.started = []
+    FakeLabel.started, FakeLabel.also = [], None
     monkeypatch.setattr(cm.subprocess, "Popen", FakeLabel)
     monkeypatch.setattr(sys, "argv", ["python -m compare", "label", "--episodes", str(episodes), "--runs", str(runs),
                                       *extra])
@@ -487,3 +494,14 @@ def test_published_routes_answer_every_task_text_true_or_false():
     finally:
         route._CACHE.clear()
         route._CACHE.update(monkeypatch_cache)
+
+
+def test_label_names_its_own_run_when_another_starts_the_same_model(tmp_path, monkeypatch):
+    """Two compare label invocations of one model at once (a tranche while the 193 still run): each entry names the
+    run over its own slice, never the other's newer folder of the same key."""
+    episodes, runs = _label(tmp_path, monkeypatch, "--selection", str(SELECTIONS / "main.json"), "--models", "sol6",
+                            "--cap", "5")
+    FakeLabel.also = tmp_path / "episodes" / "compare" / "tranche_10h"
+    assert cm.main() == 0
+    (entry,) = json.loads((runs / "compare" / "main.json").read_text())
+    assert json.loads((Path(entry["run"]) / "run.json").read_text())["slice"] == entry["episodes"]

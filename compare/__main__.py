@@ -157,7 +157,9 @@ def cmd_label(a) -> int:
     icl = f", in-context learning with {'an' if ref[:1].lower() in 'aeiou' else 'a'} {ref} trace"
     entries = []
     for key in procs:
-        mine = [p for p in after if p.name.endswith("_" + key)]
+        # this invocation's own run of the model: another compare label may start the same key at the same time
+        mine = [p for p in after if p.name.endswith("_" + key) and (p / "run.json").exists()
+                and json.loads((p / "run.json").read_text()).get("slice") == str(slice_dir.resolve())]
         if not mine:
             print(f"{key}: no run folder (exit {rc[key]})", file=sys.stderr)
             continue
