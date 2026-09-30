@@ -12,7 +12,8 @@ it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers c
 It is read exactly as Data Review reads an uploaded LeRobot dataset (prepare/formats.py). Cameras are the
 features of dtype "video" (or images stored in the data files), assigned to the harness views by name: a name
 with a side and wrist, hand or gripper is that side's mounted camera, and the best-named other camera (top, head,
-overhead, front) is the scene camera; the rest are listed in context["source"]["unused_cameras"]. The state is
+overhead, front) is the scene camera; up to three others are sent too (extra1 to extra3), the other eye of a stereo
+camera and any beyond those are listed in context["source"]["unused_cameras"]. The state is
 observation.state and the action is action, used when there are 7 values per arm or gripper (6 joints plus
 gripper for teleop arms, x y z roll pitch yaw plus opening for handheld grippers); any other layout is labelled
 from the video alone and the context says so. The instruction is the episode's task text.

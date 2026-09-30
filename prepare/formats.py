@@ -2138,7 +2138,7 @@ def mcap_step_subtasks(texts: dict, t0: int | None, end_s: float | None) -> tupl
 
 def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     """Every compressed-image / compressed-video channel that carries a colour camera is a candidate camera;
-    up to three are used (one for a head camera). A text or annotation channel becomes the task text or the
+    they are assigned as assign_views does (a head camera gets one). A text or annotation channel becomes the task text or the
     uploader's notes. Channels of arm joints become the recorded state on a teleoperated rig (joint_state)."""
     from mcap.reader import make_reader
     with open(item["file"], "rb") as fh:

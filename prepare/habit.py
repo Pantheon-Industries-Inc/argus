@@ -141,11 +141,15 @@ def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dic
     fps = float(info["fps"])
     ctx = formats.convert_lerobot(it, RIG, out, dataset, hold_back=PUBLISHER_COLUMNS)
     ep = out / ctx["episode_id"]
-    df = pd.read_parquet(root / info["data_path"].format(episode_chunk=eidx // 1000, episode_index=eidx),
+    df = pd.read_parquet(root / info["data_path"].format(episode_chunk=eidx // int(info.get("chunks_size") or 1000),
+                                                         episode_index=eidx),
                          columns=["low_level_task_index", "human_role_subtask_index", "is_error_segment",
                                   "is_intervention_segment", "is_high_jerk_segment"])
     # the dataset's metadata gives robot_type "human", which would tell the model a person is the robot
+    # the gripper opening reads 0 to 1 (0.0 to 0.996 over 20 audited episodes), declared so the still-span tolerance
+    # is a share of that range (label/state.py)
     ctx.update(robot_type="two Franka FR3 arms teleoperated with a Meta Quest 3", state_kind="ee_pose",
+               gripper_range=[0.0, 1.0],
                instruction=r.get("high_level_instruction") or ctx.get("instruction"),
                instruction_note=task_note(root, df, fps),
                collection_note=COLLECTION_NOTE,

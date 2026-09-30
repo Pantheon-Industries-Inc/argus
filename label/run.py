@@ -54,6 +54,17 @@ def commit() -> tuple[str, bool]:
         return "unknown", True
 
 
+def parsed(run: Path, eps: list[str]) -> int:
+    """How many of the episodes with an output have a reply that parsed (episodes_done counts every output)."""
+    n = 0
+    for e in eps:
+        try:
+            n += bool(json.loads((run / "out" / f"{e}.json").read_text()).get("parse_ok"))
+        except (OSError, ValueError):
+            pass
+    return n
+
+
 def billed_cost(run: Path) -> float:
     """The billed cost of every episode in out/, replies cut off at the output limit included (each output records
     its own calls' cost)."""
@@ -97,7 +108,8 @@ def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> None
     cost = round(billed_cost(run), 2)
     info.update({"status": "done" if rc == 0 else f"exit {rc}",
                  "finished_at": dt.datetime.now().isoformat(timespec="seconds"),
-                 "cost_usd": cost, "episodes_done": len(done_eps), "episodes_failed": int(m.get("failed", 0)),
+                 "cost_usd": cost, "episodes_done": len(done_eps), "episodes_parsed": parsed(run, done_eps),
+                 "episodes_failed": int(m.get("failed", 0)),
                  "footage_hours": round(hours, 3), "usd_per_hour": round(cost / hours, 2) if hours and cost else None})
     (run / "run.json").write_text(json.dumps(info, indent=1))
     print(json.dumps({k: info[k] for k in ("run_id", "status", "cost_usd", "episodes_done", "episodes_failed",

@@ -20,7 +20,7 @@ note saying exactly that.
 `sample` takes the same number of clips from each top-level task folder, each from a random sub-folder and a
 random file in it, prepares them as it draws (a clip's length is known only once it is read) until --hours of
 clip time, and writes the list of what it prepared to LIST (default EPISODES.txt). The dataset asks you to accept
-its terms on Hugging Face, so HF_TOKEN must be set. Needs ffmpeg on PATH.
+its terms on Hugging Face, so HF_TOKEN must be set.
 """
 from __future__ import annotations
 

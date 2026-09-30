@@ -447,7 +447,7 @@ def _detail_desc(native: tuple) -> str:
     try:
         w, h = int(native[0]), int(native[1])
     except (TypeError, ValueError):
-        return "up to 960 px wide"
+        return f"up to {DETAIL_MAX_W} px wide"
     dw, dh = detail_size(w, h)
     return f"the full {w}x{h}" if (dw, dh) == (w, h) else f"{dw}x{dh} (the recording is {w}x{h})"
 
