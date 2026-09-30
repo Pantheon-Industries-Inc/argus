@@ -1,0 +1,3888 @@
+{
+ "seed": 20260930,
+ "rule": "About 10 h of published episodes that carry Astra labels, drawn for the Sol 6.1 tranche: a third of the hours per capture modality and an equal share per dataset within it (a dataset short of its share gives the rest to its modality's others); within a dataset, tasks are visited round robin in seeded order and one random episode is taken per task per pass until the budget. The episodes of main.json, of the example annotations and of the gate are excluded. Each episode's line is its line in the dataset's episode list (configs/slices), the input of python -m prepare.",
+ "rigs": {
+  "teleop": {
+   "molmo": {
+    "minutes": 50.3,
+    "budget_minutes": 50.0,
+    "available_minutes": 1473.3,
+    "tasks": 34,
+    "episodes": [
+     {
+      "episode": "episode_005839",
+      "line": "5839",
+      "task": "Pack container",
+      "seconds": 94.13
+     },
+     {
+      "episode": "episode_020961",
+      "line": "20961",
+      "task": "Scoop and weigh 50g on scale",
+      "seconds": 73.67
+     },
+     {
+      "episode": "episode_001255",
+      "line": "1255",
+      "task": "rotate 4 blocks",
+      "seconds": 27.13
+     },
+     {
+      "episode": "episode_000202",
+      "line": "202",
+      "task": "spell out AI2",
+      "seconds": 68.13
+     },
+     {
+      "episode": "episode_021951",
+      "line": "21951",
+      "task": "Sort waste into correct bins and load items into the dishwasher rack.",
+      "seconds": 39.3
+     },
+     {
+      "episode": "episode_024286",
+      "line": "24286",
+      "task": "Sort waste into correct bins and load items into the dishwasher rack",
+      "seconds": 38.0
+     },
+     {
+      "episode": "episode_011328",
+      "line": "11328",
+      "task": "Folding CLothes",
+      "seconds": 41.97
+     },
+     {
+      "episode": "episode_000102",
+      "line": "102",
+      "task": "Spell out Ai2",
+      "seconds": 41.97
+     },
+     {
+      "episode": "episode_004558",
+      "line": "4558",
+      "task": "Plug charger to phone and switch on socket",
+      "seconds": 32.0
+     },
+     {
+      "episode": "episode_000639",
+      "line": "639",
+      "task": "form a tower",
+      "seconds": 151.57
+     },
+     {
+      "episode": "episode_000337",
+      "line": "337",
+      "task": "spell out RSS",
+      "seconds": 69.63
+     },
+     {
+      "episode": "episode_031862",
+      "line": "31862",
+      "task": "Fold the cloth",
+      "seconds": 100.13
+     },
+     {
+      "episode": "episode_001404",
+      "line": "1404",
+      "task": "flip 4 blocks",
+      "seconds": 112.53
+     },
+     {
+      "episode": "episode_000504",
+      "line": "504",
+      "task": "form a circle",
+      "seconds": 83.7
+     },
+     {
+      "episode": "episode_020732",
+      "line": "20732",
+      "task": "Scoop item into bowl and weigh 150g on scale",
+      "seconds": 116.4
+     },
+     {
+      "episode": "episode_000366",
+      "line": "366",
+      "task": "spell out ICRA",
+      "seconds": 62.27
+     },
+     {
+      "episode": "episode_017776",
+      "line": "17776",
+      "task": "scan the item barcode",
+      "seconds": 103.17
+     },
+     {
+      "episode": "episode_000298",
+      "line": "298",
+      "task": "spell out ROBOT",
+      "seconds": 52.63
+     },
+     {
+      "episode": "episode_000681",
+      "line": "681",
+      "task": "spell out NEURIPS",
+      "seconds": 129.5
+     },
+     {
+      "episode": "episode_020775",
+      "line": "20775",
+      "task": "Scoop item into bowl and weigh 50g on scale",
+      "seconds": 80.97
+     },
+     {
+      "episode": "episode_000588",
+      "line": "588",
+      "task": "form a horizontal line",
+      "seconds": 127.2
+     },
+     {
+      "episode": "episode_010167",
+      "line": "10167",
+      "task": "Clothes Folding",
+      "seconds": 25.0
+     },
+     {
+      "episode": "episode_014146",
+      "line": "14146",
+      "task": "Clean dirty plates on tray and stack at the side",
+      "seconds": 48.8
+     },
+     {
+      "episode": "episode_030109",
+      "line": "30109",
+      "task": "Untangle cables",
+      "seconds": 113.97
+     },
+     {
+      "episode": "episode_000244",
+      "line": "244",
+      "task": "spell out CORL",
+      "seconds": 77.23
+     },
+     {
+      "episode": "episode_001204",
+      "line": "1204",
+      "task": "rotate 3 blocks",
+      "seconds": 35.83
+     },
+     {
+      "episode": "episode_001095",
+      "line": "1095",
+      "task": "lift 5 blocks",
+      "seconds": 99.6
+     },
+     {
+      "episode": "episode_001433",
+      "line": "1433",
+      "task": "flip 5 blocks",
+      "seconds": 66.63
+     },
+     {
+      "episode": "episode_001020",
+      "line": "1020",
+      "task": "lift 3 blocks",
+      "seconds": 84.07
+     },
+     {
+      "episode": "episode_024607",
+      "line": "24607",
+      "task": "Sort waste into correct bins and load items into the dishwasher",
+      "seconds": 89.4
+     },
+     {
+      "episode": "episode_001060",
+      "line": "1060",
+      "task": "lift 4 blocks",
+      "seconds": 134.37
+     },
+     {
+      "episode": "episode_001361",
+      "line": "1361",
+      "task": "flip 3 blocks",
+      "seconds": 70.67
+     },
+     {
+      "episode": "episode_001290",
+      "line": "1290",
+      "task": "rotate 5 blocks",
+      "seconds": 118.17
+     },
+     {
+      "episode": "episode_000400",
+      "line": "400",
+      "task": "spell out CVPR",
+      "seconds": 46.87
+     },
+     {
+      "episode": "episode_005824",
+      "line": "5824",
+      "task": "Pack container",
+      "seconds": 43.63
+     },
+     {
+      "episode": "episode_020963",
+      "line": "20963",
+      "task": "Scoop and weigh 50g on scale",
+      "seconds": 80.23
+     },
+     {
+      "episode": "episode_001252",
+      "line": "1252",
+      "task": "rotate 4 blocks",
+      "seconds": 30.1
+     },
+     {
+      "episode": "episode_000163",
+      "line": "163",
+      "task": "spell out AI2",
+      "seconds": 62.6
+     },
+     {
+      "episode": "episode_021945",
+      "line": "21945",
+      "task": "Sort waste into correct bins and load items into the dishwasher rack.",
+      "seconds": 27.1
+     },
+     {
+      "episode": "episode_023006",
+      "line": "23006",
+      "task": "Sort waste into correct bins and load items into the dishwasher rack",
+      "seconds": 118.67
+     }
+    ]
+   },
+   "abc130k": {
+    "minutes": 50.1,
+    "budget_minutes": 50.0,
+    "available_minutes": 302.1,
+    "tasks": 29,
+    "episodes": [
+     {
+      "episode": "episode_281a3aed-0453-4dc2-8714-ff8fa5afd833",
+      "line": "data/train/wrap_the_gift_box_in_paper/episode_281a3aed-0453-4dc2-8714-ff8fa5afd833",
+      "task": "wrap_the_gift_box_in_paper",
+      "seconds": 211.94
+     },
+     {
+      "episode": "episode_d89d51b8-7433-4795-9504-a133d860e053",
+      "line": "data/train/remove_the_brooch_from_the_garment/episode_d89d51b8-7433-4795-9504-a133d860e053",
+      "task": "remove_the_brooch_from_the_garment",
+      "seconds": 75.87
+     },
+     {
+      "episode": "episode_58bd8524-1052-4d91-aa01-72e471070187",
+      "line": "data/train/throw_the_plastic_bottles_in_the_bin/episode_58bd8524-1052-4d91-aa01-72e471070187",
+      "task": "throw_the_plastic_bottles_in_the_bin",
+      "seconds": 76.83
+     },
+     {
+      "episode": "episode_493f172c-c4e0-4203-b04f-9d821192d2c5",
+      "line": "data/train/pack_books_pencil_case_and_school_supplies_into_a_backpack/episode_493f172c-c4e0-4203-b04f-9d821192d2c5",
+      "task": "pack_books_pencil_case_and_school_supplies_into_a_backpack",
+      "seconds": 186.9
+     },
+     {
+      "episode": "episode_b042b66c-452a-41a9-98bf-5256f845020f",
+      "line": "data/train/fold_and_stack_the_long_sleeve_shirts/episode_b042b66c-452a-41a9-98bf-5256f845020f",
+      "task": "fold_and_stack_the_long_sleeve_shirts",
+      "seconds": 102.1
+     },
+     {
+      "episode": "episode_3a4b40e3-eec4-466f-9838-c2100a36503f",
+      "line": "data/train/prepare_toiletry_sets_of_a_toothbrush_and_toothpaste_on_the_tray/episode_3a4b40e3-eec4-466f-9838-c2100a36503f",
+      "task": "prepare_toiletry_sets_of_a_toothbrush_and_toothpaste_on_the_tray",
+      "seconds": 105.02
+     },
+     {
+      "episode": "episode_16ed28bf-08f7-4add-ba66-c7e7ed0c082f",
+      "line": "data/train/put_the_wine_bottle_on_the_wine_rack/episode_16ed28bf-08f7-4add-ba66-c7e7ed0c082f",
+      "task": "put_the_wine_bottle_on_the_wine_rack",
+      "seconds": 100.56
+     },
+     {
+      "episode": "episode_399bb2cb-fc45-4cb4-930c-21c7188e7262",
+      "line": "data/train/place_the_bra_in_the_laundry_bag_and_zip_it_closed/episode_399bb2cb-fc45-4cb4-930c-21c7188e7262",
+      "task": "place_the_bra_in_the_laundry_bag_and_zip_it_closed",
+      "seconds": 217.39
+     },
+     {
+      "episode": "episode_1e69abfe-20da-417b-ab10-8d9ba7dcc04e",
+      "line": "data/train/remove_the_pillowcase_from_the_pillow/episode_1e69abfe-20da-417b-ab10-8d9ba7dcc04e",
+      "task": "remove_the_pillowcase_from_the_pillow",
+      "seconds": 45.26
+     },
+     {
+      "episode": "episode_32c4224f-b030-421c-9cf8-39849bf26a44",
+      "line": "data/train/install_the_water_faucets/episode_32c4224f-b030-421c-9cf8-39849bf26a44",
+      "task": "install_the_water_faucets",
+      "seconds": 91.25
+     },
+     {
+      "episode": "episode_9707baf6-2098-4066-b3d9-31e34d918cf9",
+      "line": "data/train/fold_and_stack_the_trousers/episode_9707baf6-2098-4066-b3d9-31e34d918cf9",
+      "task": "fold_and_stack_the_trousers",
+      "seconds": 68.42
+     },
+     {
+      "episode": "episode_fa87b3a3-a591-4e65-b06e-54d11971a980",
+      "line": "data/train/clip_the_underwear_to_the_hanger/episode_fa87b3a3-a591-4e65-b06e-54d11971a980",
+      "task": "clip_the_underwear_to_the_hanger",
+      "seconds": 73.69
+     },
+     {
+      "episode": "episode_d96184aa-9fab-4807-8f50-8d7bc58338db",
+      "line": "data/train/take_the_fake_bread_out_of_the_paper_bag/episode_d96184aa-9fab-4807-8f50-8d7bc58338db",
+      "task": "take_the_fake_bread_out_of_the_paper_bag",
+      "seconds": 134.64
+     },
+     {
+      "episode": "episode_7dadc2a4-1e34-4e6b-851b-5b5d487eea16",
+      "line": "data/train/place_and_organize_the_plastic_toys_onto_the_shelf/episode_7dadc2a4-1e34-4e6b-851b-5b5d487eea16",
+      "task": "place_and_organize_the_plastic_toys_onto_the_shelf",
+      "seconds": 149.74
+     },
+     {
+      "episode": "episode_489e87ae-17cb-46d2-b052-a61d18e0c939",
+      "line": "data/train/build_the_wood_block_tower/episode_489e87ae-17cb-46d2-b052-a61d18e0c939",
+      "task": "build_the_wood_block_tower",
+      "seconds": 69.88
+     },
+     {
+      "episode": "episode_52370f10-7c3f-4466-92bc-3ea1f2d99213",
+      "line": "data/train/untangle_the_cables/episode_52370f10-7c3f-4466-92bc-3ea1f2d99213",
+      "task": "untangle_the_cables",
+      "seconds": 96.14
+     },
+     {
+      "episode": "episode_db97852f-2127-4c18-9901-0a883fa48dab",
+      "line": "data/train/remove_the_underwear_clipped_to_the_hanger/episode_db97852f-2127-4c18-9901-0a883fa48dab",
+      "task": "remove_the_underwear_clipped_to_the_hanger",
+      "seconds": 63.82
+     },
+     {
+      "episode": "episode_8e0c1305-755f-4c31-bd74-f5e98428270d",
+      "line": "data/train/place_the_shorts_on_the_hanger/episode_8e0c1305-755f-4c31-bd74-f5e98428270d",
+      "task": "place_the_shorts_on_the_hanger",
+      "seconds": 37.31
+     },
+     {
+      "episode": "episode_910603ac-5ab7-49a8-801e-3bb1ef0a20ff",
+      "line": "data/train/sort_the_pills_into_containers/episode_910603ac-5ab7-49a8-801e-3bb1ef0a20ff",
+      "task": "sort_the_pills_into_containers",
+      "seconds": 169.58
+     },
+     {
+      "episode": "episode_8f9f1006-abfa-4138-88fe-1add95d4c896",
+      "line": "data/train/turn_the_mug_right_side_up/episode_8f9f1006-abfa-4138-88fe-1add95d4c896",
+      "task": "turn_the_mug_right_side_up",
+      "seconds": 123.96
+     },
+     {
+      "episode": "episode_fcd5465e-8a9e-44b7-9ad3-c729fb891b10",
+      "line": "data/train/remove_the_trousers_from_the_hanger/episode_fcd5465e-8a9e-44b7-9ad3-c729fb891b10",
+      "task": "remove_the_trousers_from_the_hanger",
+      "seconds": 49.41
+     },
+     {
+      "episode": "episode_b7243f78-11da-4474-8e3c-e7864222d89f",
+      "line": "data/train/paint_the_nails/episode_b7243f78-11da-4474-8e3c-e7864222d89f",
+      "task": "paint_the_nails",
+      "seconds": 72.78
+     },
+     {
+      "episode": "episode_f2b95999-8398-45f4-99ed-a7cf3a5e27f7",
+      "line": "data/train/organize_the_makeup/episode_f2b95999-8398-45f4-99ed-a7cf3a5e27f7",
+      "task": "organize_the_makeup",
+      "seconds": 65.55
+     },
+     {
+      "episode": "episode_e73c0f86-4739-42cd-81b2-3a7229fe71ee",
+      "line": "data/train/fold_and_stack_the_towels/episode_e73c0f86-4739-42cd-81b2-3a7229fe71ee",
+      "task": "fold_and_stack_the_towels",
+      "seconds": 166.14
+     },
+     {
+      "episode": "episode_2617a3aa-faff-40fc-8fee-0dfc45e45a3e",
+      "line": "data/train/open_the_pen_caps/episode_2617a3aa-faff-40fc-8fee-0dfc45e45a3e",
+      "task": "open_the_pen_caps",
+      "seconds": 124.26
+     },
+     {
+      "episode": "episode_19dd9906-b89c-4db8-b077-e77e5e79b9b7",
+      "line": "data/train/organize_the_chemistry_lab_equipment/episode_19dd9906-b89c-4db8-b077-e77e5e79b9b7",
+      "task": "organize_the_chemistry_lab_equipment",
+      "seconds": 77.09
+     },
+     {
+      "episode": "episode_f31bd42b-052e-48b5-a0db-b05b4b56e7b9",
+      "line": "data/train/place_the_phone_on_the_phone_stand/episode_f31bd42b-052e-48b5-a0db-b05b4b56e7b9",
+      "task": "place_the_phone_on_the_phone_stand",
+      "seconds": 76.0
+     },
+     {
+      "episode": "episode_0b16fb97-feb0-45b7-b057-e36f6d4194cb",
+      "line": "data/train/decorate_the_small_christmas_tree/episode_0b16fb97-feb0-45b7-b057-e36f6d4194cb",
+      "task": "decorate_the_small_christmas_tree",
+      "seconds": 144.4
+     },
+     {
+      "episode": "episode_ab76dbc5-8174-4cfc-bd3d-eb0f32eb61b3",
+      "line": "data/train/remove_the_shirt_from_the_hanger/episode_ab76dbc5-8174-4cfc-bd3d-eb0f32eb61b3",
+      "task": "remove_the_shirt_from_the_hanger",
+      "seconds": 31.54
+     }
+    ]
+   },
+   "galaxea": {
+    "minutes": 50.4,
+    "budget_minutes": 50.0,
+    "available_minutes": 313.1,
+    "tasks": 28,
+    "episodes": [
+     {
+      "episode": "episode_Organize_Refrigerated_Beverage_Case_20250704_003_000209",
+      "line": "Organize_Refrigerated_Beverage_Case_20250704_003/209",
+      "task": "organize refrigerated beverage case",
+      "seconds": 22.47
+     },
+     {
+      "episode": "episode_Clean_The_Sofa20250627_002_000041",
+      "line": "Clean_The_Sofa20250627_002/41",
+      "task": "clean the sofa20250627",
+      "seconds": 273.27
+     },
+     {
+      "episode": "episode_Organize_The_Bread_Shelf_20250630_003_000014",
+      "line": "Organize_The_Bread_Shelf_20250630_003/14",
+      "task": "organize the bread shelf",
+      "seconds": 377.53
+     },
+     {
+      "episode": "episode_Organize_trays_20250621_001_000000",
+      "line": "Organize_trays_20250621_001/0",
+      "task": "organize trays",
+      "seconds": 141.13
+     },
+     {
+      "episode": "episode_Use_The_Drawer_To_Store_The_Hair_Dryer20250625_002_000073",
+      "line": "Use_The_Drawer_To_Store_The_Hair_Dryer20250625_002/73",
+      "task": "use the drawer to store the hair dryer20250625",
+      "seconds": 80.4
+     },
+     {
+      "episode": "episode_Store_The_Dolls_20250719_008_000004",
+      "line": "Store_The_Dolls_20250719_008/4",
+      "task": "store the dolls",
+      "seconds": 81.4
+     },
+     {
+      "episode": "episode_Storage_Tools_20250725_010_000047",
+      "line": "Storage_Tools_20250725_010/47",
+      "task": "storage tools",
+      "seconds": 91.47
+     },
+     {
+      "episode": "episode_Open_The_Bedroom_Door_To_Enter20250701_002_000070",
+      "line": "Open_The_Bedroom_Door_To_Enter20250701_002/70",
+      "task": "open the bedroom door to enter20250701",
+      "seconds": 42.0
+     },
+     {
+      "episode": "episode_Put_Slippers_Into_Floor_Standing_Shoe_Cabinet_20250620_001_000004",
+      "line": "Put_Slippers_Into_Floor_Standing_Shoe_Cabinet_20250620_001/4",
+      "task": "put slippers into floor standing shoe cabinet",
+      "seconds": 139.47
+     },
+     {
+      "episode": "episode_Arrange_The_Fruits_20250731_012_000051",
+      "line": "Arrange_The_Fruits_20250731_012/51",
+      "task": "arrange the fruits",
+      "seconds": 66.87
+     },
+     {
+      "episode": "episode_Doll_Storage_20250731_012_000009",
+      "line": "Doll_Storage_20250731_012/9",
+      "task": "doll storage",
+      "seconds": 88.87
+     },
+     {
+      "episode": "episode_Organize_Toys_20250628_002_000028",
+      "line": "Organize_Toys_20250628_002/28",
+      "task": "organize toys",
+      "seconds": 125.4
+     },
+     {
+      "episode": "episode_Twist_The_Bottle_Cap_20250725_010_000051",
+      "line": "Twist_The_Bottle_Cap_20250725_010/51",
+      "task": "twist the bottle cap",
+      "seconds": 27.6
+     },
+     {
+      "episode": "episode_Hang_The_Towel_On_The_Shelf_20250715_006_000037",
+      "line": "Hang_The_Towel_On_The_Shelf_20250715_006/37",
+      "task": "hang the towel on the shelf",
+      "seconds": 95.87
+     },
+     {
+      "episode": "episode_Replace_Toilet_Paper_20250623_002_000101",
+      "line": "Replace_Toilet_Paper_20250623_002/101",
+      "task": "replace toilet paper",
+      "seconds": 55.07
+     },
+     {
+      "episode": "episode_Pick_And_Place_Items_On_The_Potato_Chip_Shelves_20250701_003_000708",
+      "line": "Pick_And_Place_Items_On_The_Potato_Chip_Shelves_20250701_003/708",
+      "task": "pick and place items on the potato chip shelves",
+      "seconds": 30.73
+     },
+     {
+      "episode": "episode_Clean_The_Sink_20250721_008_000024",
+      "line": "Clean_The_Sink_20250721_008/24",
+      "task": "clean the sink",
+      "seconds": 45.67
+     },
+     {
+      "episode": "episode_Pen_Case_For_Storing_Stationery_20250717_006_000036",
+      "line": "Pen_Case_For_Storing_Stationery_20250717_006/36",
+      "task": "pen case for storing stationery",
+      "seconds": 77.47
+     },
+     {
+      "episode": "episode_PourWater_20250614_000025",
+      "line": "PourWater_20250614/25",
+      "task": "pourwater",
+      "seconds": 74.8
+     },
+     {
+      "episode": "episode_Pour_Water_20250801_012_000029",
+      "line": "Pour_Water_20250801_012/29",
+      "task": "pour water",
+      "seconds": 187.73
+     },
+     {
+      "episode": "episode_Pack_Medicines_Into_Medicine_Box_20250707_005_000062",
+      "line": "Pack_Medicines_Into_Medicine_Box_20250707_005/62",
+      "task": "pack medicines into medicine box",
+      "seconds": 118.47
+     },
+     {
+      "episode": "episode_Arrange_Mineral_Water_Bottles_On_The_Desk_20250721_008_000002",
+      "line": "Arrange_Mineral_Water_Bottles_On_The_Desk_20250721_008/2",
+      "task": "arrange mineral water bottles on the desk",
+      "seconds": 93.4
+     },
+     {
+      "episode": "episode_Flowers_Are_Inserted_Into_Vases_20250725_010_000031",
+      "line": "Flowers_Are_Inserted_Into_Vases_20250725_010/31",
+      "task": "flowers are inserted into vases",
+      "seconds": 154.07
+     },
+     {
+      "episode": "episode_Switch_The_Sign_20250616_001_000034",
+      "line": "Switch_The_Sign_20250616_001/34",
+      "task": "switch the sign",
+      "seconds": 110.93
+     },
+     {
+      "episode": "episode_Organize_The_Seasoning_Shelf_20250620_001_000050",
+      "line": "Organize_The_Seasoning_Shelf_20250620_001/50",
+      "task": "organize the seasoning shelf",
+      "seconds": 60.67
+     },
+     {
+      "episode": "episode_Organize_Refrigerator_Items0250703_002_000017",
+      "line": "Organize_Refrigerator_Items0250703_002/17",
+      "task": "organize refrigerator items0250703",
+      "seconds": 190.67
+     },
+     {
+      "episode": "episode_Pull_Out_The_Cap_20250725_010_000028",
+      "line": "Pull_Out_The_Cap_20250725_010/28",
+      "task": "pull out the cap",
+      "seconds": 38.0
+     },
+     {
+      "episode": "episode_Open_And_Close_Microwave_Oven_20250623_002_000063",
+      "line": "Open_And_Close_Microwave_Oven_20250623_002/63",
+      "task": "open and close microwave oven",
+      "seconds": 135.33
+     }
+    ]
+   },
+   "habit": {
+    "minutes": 50.4,
+    "budget_minutes": 50.0,
+    "available_minutes": 282.3,
+    "tasks": 54,
+    "episodes": [
+     {
+      "episode": "episode_003575",
+      "line": "3575",
+      "task": "Clean the shelves.",
+      "seconds": 42.2
+     },
+     {
+      "episode": "episode_005184",
+      "line": "5184",
+      "task": "Sort the digital clocks into the basket.",
+      "seconds": 29.1
+     },
+     {
+      "episode": "episode_006498",
+      "line": "6498",
+      "task": "Prepare the solutions needed for the experiment.",
+      "seconds": 60.7
+     },
+     {
+      "episode": "episode_008121",
+      "line": "8121",
+      "task": "Organize the cables according to human instructions.",
+      "seconds": 64.0
+     },
+     {
+      "episode": "episode_008484",
+      "line": "8484",
+      "task": "Pour the drink into the iced cup.",
+      "seconds": 61.7
+     },
+     {
+      "episode": "episode_006172",
+      "line": "6172",
+      "task": "Clean and organize the cups into the basket.",
+      "seconds": 62.2
+     },
+     {
+      "episode": "episode_000823",
+      "line": "823",
+      "task": "Set up a tray with a mat and arrange the tableware.",
+      "seconds": 54.5
+     },
+     {
+      "episode": "episode_000033",
+      "line": "33",
+      "task": "Pack the gift set into the box.",
+      "seconds": 58.3
+     },
+     {
+      "episode": "episode_004098",
+      "line": "4098",
+      "task": "Clean the floor after clearing the dishes.",
+      "seconds": 55.6
+     },
+     {
+      "episode": "episode_008538",
+      "line": "8538",
+      "task": "Distribute the coffee onto the tray.",
+      "seconds": 33.6
+     },
+     {
+      "episode": "episode_000636",
+      "line": "636",
+      "task": "Sort the waste into the appropriate baskets.",
+      "seconds": 103.9
+     },
+     {
+      "episode": "episode_001076",
+      "line": "1076",
+      "task": "Clean the surface of the table.",
+      "seconds": 47.6
+     },
+     {
+      "episode": "episode_006059",
+      "line": "6059",
+      "task": "Move the third donut from the left to the tray.",
+      "seconds": 35.9
+     },
+     {
+      "episode": "episode_001700",
+      "line": "1700",
+      "task": "Place coasters on the table and set cups on them.",
+      "seconds": 77.1
+     },
+     {
+      "episode": "episode_005951",
+      "line": "5951",
+      "task": "Fold the towel.",
+      "seconds": 51.5
+     },
+     {
+      "episode": "episode_001902",
+      "line": "1902",
+      "task": "Pour a drink into a cup and package it in a carrier.",
+      "seconds": 46.6
+     },
+     {
+      "episode": "episode_007250",
+      "line": "7250",
+      "task": "Place the bread into the airtight container.",
+      "seconds": 40.2
+     },
+     {
+      "episode": "episode_008851",
+      "line": "8851",
+      "task": "Place the drinks into the Shopping basket.",
+      "seconds": 87.0
+     },
+     {
+      "episode": "episode_005385",
+      "line": "5385",
+      "task": "Stack the cups and store them in the basket.",
+      "seconds": 66.5
+     },
+     {
+      "episode": "episode_005431",
+      "line": "5431",
+      "task": "Perform cable management.",
+      "seconds": 44.7
+     },
+     {
+      "episode": "episode_007092",
+      "line": "7092",
+      "task": "Inspect and transfer BCBs to ESD trays.",
+      "seconds": 79.1
+     },
+     {
+      "episode": "episode_006979",
+      "line": "6979",
+      "task": "Sort and store the cups by type.",
+      "seconds": 53.6
+     },
+     {
+      "episode": "episode_002632",
+      "line": "2632",
+      "task": "Clean the table.",
+      "seconds": 33.4
+     },
+     {
+      "episode": "episode_000941",
+      "line": "941",
+      "task": "Pack the item into the box.",
+      "seconds": 39.9
+     },
+     {
+      "episode": "episode_006366",
+      "line": "6366",
+      "task": "Place the shoes on the stand as instructed by the person.",
+      "seconds": 37.8
+     },
+     {
+      "episode": "episode_006090",
+      "line": "6090",
+      "task": "Move the fourth donut from the left to the tray.",
+      "seconds": 24.7
+     },
+     {
+      "episode": "episode_002391",
+      "line": "2391",
+      "task": "Individually package the donuts and arrange them on the tray.",
+      "seconds": 57.7
+     },
+     {
+      "episode": "episode_000182",
+      "line": "182",
+      "task": "Sort the waste into each basket.",
+      "seconds": 41.2
+     },
+     {
+      "episode": "episode_010099",
+      "line": "10099",
+      "task": "Place the pens into the pen holder.",
+      "seconds": 39.5
+     },
+     {
+      "episode": "episode_008833",
+      "line": "8833",
+      "task": "Fold the training pants.",
+      "seconds": 72.1
+     },
+     {
+      "episode": "episode_008676",
+      "line": "8676",
+      "task": "Sort the paper based on its condition.",
+      "seconds": 103.1
+     },
+     {
+      "episode": "episode_002743",
+      "line": "2743",
+      "task": "Place the bread in the container.",
+      "seconds": 19.6
+     },
+     {
+      "episode": "episode_003498",
+      "line": "3498",
+      "task": "Provide the desired donut to the person.",
+      "seconds": 49.9
+     },
+     {
+      "episode": "episode_009652",
+      "line": "9652",
+      "task": "Pack the items into the box.",
+      "seconds": 65.7
+     },
+     {
+      "episode": "episode_009392",
+      "line": "9392",
+      "task": "Sort PCBs into racks and boxes based on the side picked up.",
+      "seconds": 38.2
+     },
+     {
+      "episode": "episode_010367",
+      "line": "10367",
+      "task": "Transfer purchased items from the store into the shopping bag.",
+      "seconds": 61.6
+     },
+     {
+      "episode": "episode_005653",
+      "line": "5653",
+      "task": "Inspect the PCB.",
+      "seconds": 36.6
+     },
+     {
+      "episode": "episode_005088",
+      "line": "5088",
+      "task": "Efficiently arrange items inside the basket to fit them all.",
+      "seconds": 48.4
+     },
+     {
+      "episode": "episode_009632",
+      "line": "9632",
+      "task": "Sort the tops and bottoms.",
+      "seconds": 90.4
+     },
+     {
+      "episode": "episode_002120",
+      "line": "2120",
+      "task": "Place items inside the box.",
+      "seconds": 49.4
+     },
+     {
+      "episode": "episode_008338",
+      "line": "8338",
+      "task": "Pack the shoes into the box.",
+      "seconds": 66.6
+     },
+     {
+      "episode": "episode_009451",
+      "line": "9451",
+      "task": "Separate and place wrapped and unwrapped clocks.",
+      "seconds": 100.2
+     },
+     {
+      "episode": "episode_005743",
+      "line": "5743",
+      "task": "Move the first donut from the left to the tray.",
+      "seconds": 23.8
+     },
+     {
+      "episode": "episode_006732",
+      "line": "6732",
+      "task": "Fill the beverage cans into the dispenser.",
+      "seconds": 95.0
+     },
+     {
+      "episode": "episode_007646",
+      "line": "7646",
+      "task": "Sort the can waste into the basket.",
+      "seconds": 33.7
+     },
+     {
+      "episode": "episode_003092",
+      "line": "3092",
+      "task": "Set up donuts and drinks on trays.",
+      "seconds": 36.2
+     },
+     {
+      "episode": "episode_004406",
+      "line": "4406",
+      "task": "Divide the towels into two baskets.",
+      "seconds": 59.0
+     },
+     {
+      "episode": "episode_009191",
+      "line": "9191",
+      "task": "Prepare the laboratory tools.",
+      "seconds": 45.3
+     },
+     {
+      "episode": "episode_001342",
+      "line": "1342",
+      "task": "Prepare tableware on both trays.",
+      "seconds": 26.4
+     },
+     {
+      "episode": "episode_009809",
+      "line": "9809",
+      "task": "Place the bread in airtight containers.",
+      "seconds": 82.9
+     },
+     {
+      "episode": "episode_004762",
+      "line": "4762",
+      "task": "Pack the glasses set securely to prepare it for shipping.",
+      "seconds": 47.0
+     },
+     {
+      "episode": "episode_010460",
+      "line": "10460",
+      "task": "Organize the shoes by placing them on the stand.",
+      "seconds": 102.9
+     },
+     {
+      "episode": "episode_004657",
+      "line": "4657",
+      "task": "Wrap the clocks to prevent damage.",
+      "seconds": 68.7
+     },
+     {
+      "episode": "episode_009416",
+      "line": "9416",
+      "task": "Retrieve and hand over the desired beverage to the person.",
+      "seconds": 73.7
+     }
+    ]
+   }
+  },
+  "handheld": {
+   "fastumi": {
+    "minutes": 100.0,
+    "budget_minutes": 100.0,
+    "available_minutes": 248.4,
+    "tasks": 30,
+    "episodes": [
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__000269",
+      "line": "dual_arm/Put_Food_into_Microwave/269",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 17.1
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__002761",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/2761",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 22.05
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__000200",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/200",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 18.2
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_microwave__003151",
+      "line": "single_arm/heat_food_in_microwave/3151",
+      "task": "single_arm/heat_food_in_microwave",
+      "seconds": 19.35
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__000054",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/54",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 15.65
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__001991",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/1991",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 14.2
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__000900",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/900",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 25.35
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__002942",
+      "line": "dual_arm/Pour_Water_into_Teacup/2942",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 19.55
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__000552",
+      "line": "dual_arm/Clean_Desktop/552",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 18.95
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__001843",
+      "line": "single_arm/put_shoes_into_storage_box/1843",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 21.1
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__002623",
+      "line": "dual_arm/Fold_the_Suit/2623",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 22.05
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__001409",
+      "line": "single_arm/open_toilet_lid/1409",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 16.05
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__000138",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/138",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 25.45
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__000963",
+      "line": "single_arm/make_sandwich/963",
+      "task": "single_arm/make_sandwich",
+      "seconds": 13.25
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__002310",
+      "line": "dual_arm/Fold_the_Jeans/2310",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 18.25
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000951",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/951",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 16.1
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001698",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1698",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 18.35
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__001039",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/1039",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 16.35
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__004131",
+      "line": "single_arm/pour_water_into_cup/4131",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 18.05
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__000051",
+      "line": "single_arm/heat_food_in_toaster_oven/51",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 18.2
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__000032",
+      "line": "dual_arm/Fold_the_T-shirt/32",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 17.8
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__001344",
+      "line": "single_arm/wash_clothes/1344",
+      "task": "single_arm/wash_clothes",
+      "seconds": 17.05
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001772",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/1772",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 14.85
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__003350",
+      "line": "single_arm/take_items_out_of_drawer/3350",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 23.8
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__000381",
+      "line": "single_arm/iron_clothes/381",
+      "task": "single_arm/iron_clothes",
+      "seconds": 18.1
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__001699",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/1699",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 23.1
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__000936",
+      "line": "dual_arm/Open_Double_Door_Cabinet/936",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 14.65
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__002661",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/2661",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 12.8
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__001592",
+      "line": "dual_arm/Pack_Skincare_Products/1592",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 17.25
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000303",
+      "line": "dual_arm/Put_Books_into_Schoolbag/303",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 32.25
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__001953",
+      "line": "dual_arm/Put_Food_into_Microwave/1953",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 21.7
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__001471",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/1471",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 23.3
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__002037",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/2037",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 14.65
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001222",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/1222",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 15.75
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__000756",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/756",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 15.35
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__000382",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/382",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 18.85
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__000185",
+      "line": "dual_arm/Pour_Water_into_Teacup/185",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 18.4
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__000596",
+      "line": "dual_arm/Clean_Desktop/596",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 14.85
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__004189",
+      "line": "single_arm/put_shoes_into_storage_box/4189",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 19.4
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__000007",
+      "line": "dual_arm/Fold_the_Suit/7",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 20.25
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__002635",
+      "line": "single_arm/open_toilet_lid/2635",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 14.55
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__000960",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/960",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 22.1
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__000908",
+      "line": "single_arm/make_sandwich/908",
+      "task": "single_arm/make_sandwich",
+      "seconds": 15.65
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__000490",
+      "line": "dual_arm/Fold_the_Jeans/490",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 18.4
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000328",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/328",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 17.7
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__000571",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/571",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 21.4
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__003136",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/3136",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 15.9
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__000977",
+      "line": "single_arm/pour_water_into_cup/977",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 18.8
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__000700",
+      "line": "single_arm/heat_food_in_toaster_oven/700",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 17.5
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__001392",
+      "line": "dual_arm/Fold_the_T-shirt/1392",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 13.65
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__000156",
+      "line": "single_arm/wash_clothes/156",
+      "task": "single_arm/wash_clothes",
+      "seconds": 14.75
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001663",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/1663",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 15.85
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__003564",
+      "line": "single_arm/take_items_out_of_drawer/3564",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 18.75
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__000335",
+      "line": "single_arm/iron_clothes/335",
+      "task": "single_arm/iron_clothes",
+      "seconds": 15.4
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__002089",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/2089",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 24.2
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__001232",
+      "line": "dual_arm/Open_Double_Door_Cabinet/1232",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 15.6
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__002669",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/2669",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 14.95
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__001914",
+      "line": "dual_arm/Pack_Skincare_Products/1914",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 16.05
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000788",
+      "line": "dual_arm/Put_Books_into_Schoolbag/788",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 21.7
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__000158",
+      "line": "dual_arm/Put_Food_into_Microwave/158",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 20.8
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__000945",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/945",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 18.6
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__001988",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/1988",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 12.9
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001644",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/1644",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 16.4
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__000810",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/810",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 14.85
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__001194",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/1194",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 25.1
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__002586",
+      "line": "dual_arm/Pour_Water_into_Teacup/2586",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 16.4
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__001264",
+      "line": "dual_arm/Clean_Desktop/1264",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 15.95
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__000200",
+      "line": "single_arm/put_shoes_into_storage_box/200",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 20.2
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__002474",
+      "line": "dual_arm/Fold_the_Suit/2474",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 21.6
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__001022",
+      "line": "single_arm/open_toilet_lid/1022",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 12.7
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__000206",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/206",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 25.8
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__001317",
+      "line": "single_arm/make_sandwich/1317",
+      "task": "single_arm/make_sandwich",
+      "seconds": 14.5
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__002342",
+      "line": "dual_arm/Fold_the_Jeans/2342",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 19.65
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__001142",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/1142",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 17.9
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001296",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1296",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 21.55
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__003236",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/3236",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 18.8
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__003012",
+      "line": "single_arm/pour_water_into_cup/3012",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 21.5
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__001421",
+      "line": "single_arm/heat_food_in_toaster_oven/1421",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 19.45
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__000907",
+      "line": "dual_arm/Fold_the_T-shirt/907",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 18.35
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__000286",
+      "line": "single_arm/wash_clothes/286",
+      "task": "single_arm/wash_clothes",
+      "seconds": 17.4
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__002949",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/2949",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 14.35
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__001917",
+      "line": "single_arm/take_items_out_of_drawer/1917",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 17.2
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__001324",
+      "line": "single_arm/iron_clothes/1324",
+      "task": "single_arm/iron_clothes",
+      "seconds": 15.85
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__001005",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/1005",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 25.25
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__000492",
+      "line": "dual_arm/Open_Double_Door_Cabinet/492",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 17.3
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__000865",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/865",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 16.0
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__002529",
+      "line": "dual_arm/Pack_Skincare_Products/2529",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 21.95
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__001139",
+      "line": "dual_arm/Put_Books_into_Schoolbag/1139",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 22.2
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__001898",
+      "line": "dual_arm/Put_Food_into_Microwave/1898",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 21.65
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__001346",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/1346",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 20.8
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__003047",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/3047",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 14.15
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__000721",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/721",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 15.8
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__000337",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/337",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 17.0
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__000726",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/726",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 19.9
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__003492",
+      "line": "dual_arm/Pour_Water_into_Teacup/3492",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 18.6
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__001150",
+      "line": "dual_arm/Clean_Desktop/1150",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 12.55
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__002960",
+      "line": "single_arm/put_shoes_into_storage_box/2960",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 18.55
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__001753",
+      "line": "dual_arm/Fold_the_Suit/1753",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 17.15
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__000404",
+      "line": "single_arm/open_toilet_lid/404",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 18.4
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__000768",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/768",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 24.35
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__000830",
+      "line": "single_arm/make_sandwich/830",
+      "task": "single_arm/make_sandwich",
+      "seconds": 13.75
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__001490",
+      "line": "dual_arm/Fold_the_Jeans/1490",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 16.5
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000164",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/164",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 19.65
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001136",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1136",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 20.3
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__003793",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/3793",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 17.1
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__002061",
+      "line": "single_arm/pour_water_into_cup/2061",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 20.85
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__001340",
+      "line": "single_arm/heat_food_in_toaster_oven/1340",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 19.1
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__000802",
+      "line": "dual_arm/Fold_the_T-shirt/802",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 20.55
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__001974",
+      "line": "single_arm/wash_clothes/1974",
+      "task": "single_arm/wash_clothes",
+      "seconds": 16.3
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__000506",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/506",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 14.75
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__002837",
+      "line": "single_arm/take_items_out_of_drawer/2837",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 18.25
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__001459",
+      "line": "single_arm/iron_clothes/1459",
+      "task": "single_arm/iron_clothes",
+      "seconds": 17.0
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__003443",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/3443",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 26.85
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__000380",
+      "line": "dual_arm/Open_Double_Door_Cabinet/380",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 16.35
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__000801",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/801",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 13.55
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__001453",
+      "line": "dual_arm/Pack_Skincare_Products/1453",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 21.25
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000358",
+      "line": "dual_arm/Put_Books_into_Schoolbag/358",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 22.25
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__001339",
+      "line": "dual_arm/Put_Food_into_Microwave/1339",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 19.1
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__000095",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/95",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 22.55
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__000647",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/647",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 16.7
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001207",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/1207",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 14.45
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__001179",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/1179",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 18.0
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__001383",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/1383",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 20.35
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__000805",
+      "line": "dual_arm/Pour_Water_into_Teacup/805",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 19.5
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__001101",
+      "line": "dual_arm/Clean_Desktop/1101",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 15.0
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__002909",
+      "line": "single_arm/put_shoes_into_storage_box/2909",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 21.5
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__002493",
+      "line": "dual_arm/Fold_the_Suit/2493",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 21.8
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__002241",
+      "line": "single_arm/open_toilet_lid/2241",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 13.0
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__000649",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/649",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 25.7
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__000040",
+      "line": "single_arm/make_sandwich/40",
+      "task": "single_arm/make_sandwich",
+      "seconds": 16.7
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__000586",
+      "line": "dual_arm/Fold_the_Jeans/586",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 20.05
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000923",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/923",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 17.25
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__000495",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/495",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 17.85
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__000808",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/808",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 19.2
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__001625",
+      "line": "single_arm/pour_water_into_cup/1625",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 20.25
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__003227",
+      "line": "single_arm/heat_food_in_toaster_oven/3227",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 14.7
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__002197",
+      "line": "dual_arm/Fold_the_T-shirt/2197",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 17.3
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__001790",
+      "line": "single_arm/wash_clothes/1790",
+      "task": "single_arm/wash_clothes",
+      "seconds": 16.6
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__002501",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/2501",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 14.85
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__001145",
+      "line": "single_arm/take_items_out_of_drawer/1145",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 17.3
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__000596",
+      "line": "single_arm/iron_clothes/596",
+      "task": "single_arm/iron_clothes",
+      "seconds": 17.25
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__003331",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/3331",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 24.3
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__001456",
+      "line": "dual_arm/Open_Double_Door_Cabinet/1456",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 15.75
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__003150",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/3150",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 15.85
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__002361",
+      "line": "dual_arm/Pack_Skincare_Products/2361",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 19.8
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__001029",
+      "line": "dual_arm/Put_Books_into_Schoolbag/1029",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 23.7
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__000314",
+      "line": "dual_arm/Put_Food_into_Microwave/314",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 21.9
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__002807",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/2807",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 20.35
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__002823",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/2823",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 14.55
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001588",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/1588",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 16.95
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__000941",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/941",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 17.0
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__000261",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/261",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 24.45
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__000373",
+      "line": "dual_arm/Pour_Water_into_Teacup/373",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 17.5
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__001303",
+      "line": "dual_arm/Clean_Desktop/1303",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 16.5
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__000877",
+      "line": "single_arm/put_shoes_into_storage_box/877",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 18.0
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__000386",
+      "line": "dual_arm/Fold_the_Suit/386",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 19.15
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__001811",
+      "line": "single_arm/open_toilet_lid/1811",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 11.85
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__002039",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/2039",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 21.95
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__001972",
+      "line": "single_arm/make_sandwich/1972",
+      "task": "single_arm/make_sandwich",
+      "seconds": 13.7
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__001025",
+      "line": "dual_arm/Fold_the_Jeans/1025",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 22.6
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000087",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/87",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 15.35
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001547",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1547",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 19.8
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__002743",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/2743",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 18.95
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__003096",
+      "line": "single_arm/pour_water_into_cup/3096",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 19.45
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__003050",
+      "line": "single_arm/heat_food_in_toaster_oven/3050",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 16.1
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__002774",
+      "line": "dual_arm/Fold_the_T-shirt/2774",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 13.95
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__001085",
+      "line": "single_arm/wash_clothes/1085",
+      "task": "single_arm/wash_clothes",
+      "seconds": 17.6
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001296",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/1296",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 12.0
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__004106",
+      "line": "single_arm/take_items_out_of_drawer/4106",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 16.2
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__002394",
+      "line": "single_arm/iron_clothes/2394",
+      "task": "single_arm/iron_clothes",
+      "seconds": 16.6
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__002094",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/2094",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 24.75
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__000287",
+      "line": "dual_arm/Open_Double_Door_Cabinet/287",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 14.35
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__000250",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/250",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 13.95
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__001725",
+      "line": "dual_arm/Pack_Skincare_Products/1725",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 20.7
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000737",
+      "line": "dual_arm/Put_Books_into_Schoolbag/737",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 22.4
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__000395",
+      "line": "dual_arm/Put_Food_into_Microwave/395",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 19.75
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__003053",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/3053",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 19.65
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__002346",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/2346",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 16.45
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001726",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/1726",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 15.8
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__000582",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/582",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 14.75
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__000248",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/248",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 20.15
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__002385",
+      "line": "dual_arm/Pour_Water_into_Teacup/2385",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 16.3
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__000651",
+      "line": "dual_arm/Clean_Desktop/651",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 17.4
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__003560",
+      "line": "single_arm/put_shoes_into_storage_box/3560",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 19.6
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__000690",
+      "line": "dual_arm/Fold_the_Suit/690",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 14.55
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__000968",
+      "line": "single_arm/open_toilet_lid/968",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 12.0
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__001533",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/1533",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 21.0
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__002794",
+      "line": "single_arm/make_sandwich/2794",
+      "task": "single_arm/make_sandwich",
+      "seconds": 16.5
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__002824",
+      "line": "dual_arm/Fold_the_Jeans/2824",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 16.6
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000675",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/675",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 14.7
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001657",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1657",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 18.05
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__003301",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/3301",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 18.8
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__000662",
+      "line": "single_arm/pour_water_into_cup/662",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 18.2
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__001930",
+      "line": "single_arm/heat_food_in_toaster_oven/1930",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 18.05
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__002968",
+      "line": "dual_arm/Fold_the_T-shirt/2968",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 21.0
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__000593",
+      "line": "single_arm/wash_clothes/593",
+      "task": "single_arm/wash_clothes",
+      "seconds": 25.3
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__002412",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/2412",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 14.95
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__000153",
+      "line": "single_arm/take_items_out_of_drawer/153",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 17.75
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__001885",
+      "line": "single_arm/iron_clothes/1885",
+      "task": "single_arm/iron_clothes",
+      "seconds": 19.55
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__002829",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/2829",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 24.5
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__001079",
+      "line": "dual_arm/Open_Double_Door_Cabinet/1079",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 14.6
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__002243",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/2243",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 15.0
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__002474",
+      "line": "dual_arm/Pack_Skincare_Products/2474",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 19.85
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000463",
+      "line": "dual_arm/Put_Books_into_Schoolbag/463",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 18.95
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__001250",
+      "line": "dual_arm/Put_Food_into_Microwave/1250",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 19.75
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__003156",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/3156",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 18.6
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__001806",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/1806",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 16.85
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__000584",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/584",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 14.85
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__001071",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/1071",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 16.8
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__001152",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/1152",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 24.65
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__003484",
+      "line": "dual_arm/Pour_Water_into_Teacup/3484",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 16.85
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__000952",
+      "line": "dual_arm/Clean_Desktop/952",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 15.4
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__004059",
+      "line": "single_arm/put_shoes_into_storage_box/4059",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 21.2
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__002052",
+      "line": "dual_arm/Fold_the_Suit/2052",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 16.45
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__001367",
+      "line": "single_arm/open_toilet_lid/1367",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 15.55
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__001593",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/1593",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 21.55
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__001708",
+      "line": "single_arm/make_sandwich/1708",
+      "task": "single_arm/make_sandwich",
+      "seconds": 13.5
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__000495",
+      "line": "dual_arm/Fold_the_Jeans/495",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 17.95
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000168",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/168",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 17.3
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001869",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1869",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 20.3
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__002630",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/2630",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 19.45
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__000145",
+      "line": "single_arm/pour_water_into_cup/145",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 14.4
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__003318",
+      "line": "single_arm/heat_food_in_toaster_oven/3318",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 13.6
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__001883",
+      "line": "dual_arm/Fold_the_T-shirt/1883",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 19.0
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__002356",
+      "line": "single_arm/wash_clothes/2356",
+      "task": "single_arm/wash_clothes",
+      "seconds": 23.8
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__000785",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/785",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 15.55
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__001358",
+      "line": "single_arm/take_items_out_of_drawer/1358",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 15.8
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__001101",
+      "line": "single_arm/iron_clothes/1101",
+      "task": "single_arm/iron_clothes",
+      "seconds": 17.15
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__002096",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/2096",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 24.05
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__000965",
+      "line": "dual_arm/Open_Double_Door_Cabinet/965",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 15.55
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__003283",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/3283",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 14.05
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__000837",
+      "line": "dual_arm/Pack_Skincare_Products/837",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 13.95
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__001039",
+      "line": "dual_arm/Put_Books_into_Schoolbag/1039",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 20.7
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__001613",
+      "line": "dual_arm/Put_Food_into_Microwave/1613",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 20.9
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__001684",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/1684",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 18.6
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__002646",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/2646",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 16.6
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__000277",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/277",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 14.2
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__001775",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/1775",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 16.75
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__001208",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/1208",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 24.95
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__001165",
+      "line": "dual_arm/Pour_Water_into_Teacup/1165",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 17.2
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__001786",
+      "line": "dual_arm/Clean_Desktop/1786",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 15.05
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__001502",
+      "line": "single_arm/put_shoes_into_storage_box/1502",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 21.0
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__001429",
+      "line": "dual_arm/Fold_the_Suit/1429",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 20.55
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__001942",
+      "line": "single_arm/open_toilet_lid/1942",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 14.65
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__002181",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/2181",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 23.55
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__002733",
+      "line": "single_arm/make_sandwich/2733",
+      "task": "single_arm/make_sandwich",
+      "seconds": 13.65
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__001246",
+      "line": "dual_arm/Fold_the_Jeans/1246",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 16.0
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__001062",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/1062",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 17.4
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001970",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1970",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 20.65
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__000043",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/43",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 21.05
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__002400",
+      "line": "single_arm/pour_water_into_cup/2400",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 17.75
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__002173",
+      "line": "single_arm/heat_food_in_toaster_oven/2173",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 17.0
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__001550",
+      "line": "dual_arm/Fold_the_T-shirt/1550",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 17.5
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__000883",
+      "line": "single_arm/wash_clothes/883",
+      "task": "single_arm/wash_clothes",
+      "seconds": 17.85
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__000618",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/618",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 16.15
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__002573",
+      "line": "single_arm/take_items_out_of_drawer/2573",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 17.05
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__001461",
+      "line": "single_arm/iron_clothes/1461",
+      "task": "single_arm/iron_clothes",
+      "seconds": 16.6
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__001339",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/1339",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 23.6
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__001029",
+      "line": "dual_arm/Open_Double_Door_Cabinet/1029",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 14.95
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__000390",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/390",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 14.85
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__000907",
+      "line": "dual_arm/Pack_Skincare_Products/907",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 15.55
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000551",
+      "line": "dual_arm/Put_Books_into_Schoolbag/551",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 21.25
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__001615",
+      "line": "dual_arm/Put_Food_into_Microwave/1615",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 17.15
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__001662",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/1662",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 20.5
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__001184",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/1184",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 16.75
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__000944",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/944",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 15.75
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__000469",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/469",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 14.5
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__001304",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/1304",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 25.3
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__004040",
+      "line": "dual_arm/Pour_Water_into_Teacup/4040",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 16.55
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__000976",
+      "line": "dual_arm/Clean_Desktop/976",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 15.35
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__000746",
+      "line": "single_arm/put_shoes_into_storage_box/746",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 22.3
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__002236",
+      "line": "dual_arm/Fold_the_Suit/2236",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 17.0
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__001060",
+      "line": "single_arm/open_toilet_lid/1060",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 12.8
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__002334",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/2334",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 29.0
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__000822",
+      "line": "single_arm/make_sandwich/822",
+      "task": "single_arm/make_sandwich",
+      "seconds": 14.55
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__001566",
+      "line": "dual_arm/Fold_the_Jeans/1566",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 14.4
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__001365",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/1365",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 18.1
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__000991",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/991",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 17.35
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__002063",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/2063",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 19.6
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__003816",
+      "line": "single_arm/pour_water_into_cup/3816",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 19.5
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__002344",
+      "line": "single_arm/heat_food_in_toaster_oven/2344",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 16.2
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__001065",
+      "line": "dual_arm/Fold_the_T-shirt/1065",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 17.9
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__000617",
+      "line": "single_arm/wash_clothes/617",
+      "task": "single_arm/wash_clothes",
+      "seconds": 19.2
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001682",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/1682",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 13.7
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__000463",
+      "line": "single_arm/take_items_out_of_drawer/463",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 17.1
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__001899",
+      "line": "single_arm/iron_clothes/1899",
+      "task": "single_arm/iron_clothes",
+      "seconds": 15.9
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__000447",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/447",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 23.55
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__001180",
+      "line": "dual_arm/Open_Double_Door_Cabinet/1180",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 14.35
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__001523",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/1523",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 13.8
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__002182",
+      "line": "dual_arm/Pack_Skincare_Products/2182",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 19.8
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000339",
+      "line": "dual_arm/Put_Books_into_Schoolbag/339",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 22.7
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__002132",
+      "line": "dual_arm/Put_Food_into_Microwave/2132",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 24.35
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__000580",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/580",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 19.4
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__001054",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/1054",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 17.25
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__001294",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/1294",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 16.6
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__001913",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/1913",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 19.1
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__000935",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/935",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 25.45
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__002584",
+      "line": "dual_arm/Pour_Water_into_Teacup/2584",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 18.65
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__002070",
+      "line": "dual_arm/Clean_Desktop/2070",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 15.45
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__004168",
+      "line": "single_arm/put_shoes_into_storage_box/4168",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 24.4
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__001449",
+      "line": "dual_arm/Fold_the_Suit/1449",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 26.35
+     },
+     {
+      "episode": "episode_single_arm__open_toilet_lid__002268",
+      "line": "single_arm/open_toilet_lid/2268",
+      "task": "single_arm/open_toilet_lid",
+      "seconds": 14.0
+     },
+     {
+      "episode": "episode_dual_arm__Dispose_of_Desktop_Debris__001051",
+      "line": "dual_arm/Dispose_of_Desktop_Debris/1051",
+      "task": "dual_arm/Dispose_of_Desktop_Debris",
+      "seconds": 17.9
+     },
+     {
+      "episode": "episode_single_arm__make_sandwich__000087",
+      "line": "single_arm/make_sandwich/87",
+      "task": "single_arm/make_sandwich",
+      "seconds": 15.6
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Jeans__001090",
+      "line": "dual_arm/Fold_the_Jeans/1090",
+      "task": "dual_arm/Fold_the_Jeans",
+      "seconds": 18.5
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Electric_Oven__000039",
+      "line": "dual_arm/Put_Food_into_Electric_Oven/39",
+      "task": "dual_arm/Put_Food_into_Electric_Oven",
+      "seconds": 19.5
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Place_on_Coaster__001713",
+      "line": "dual_arm/Take_Bottle_and_Place_on_Coaster/1713",
+      "task": "dual_arm/Take_Bottle_and_Place_on_Coaster",
+      "seconds": 18.25
+     },
+     {
+      "episode": "episode_dual_arm__Arrange_Toothbrush_and_Toothpaste__000879",
+      "line": "dual_arm/Arrange_Toothbrush_and_Toothpaste/879",
+      "task": "dual_arm/Arrange_Toothbrush_and_Toothpaste",
+      "seconds": 16.3
+     },
+     {
+      "episode": "episode_single_arm__pour_water_into_cup__002413",
+      "line": "single_arm/pour_water_into_cup/2413",
+      "task": "single_arm/pour_water_into_cup",
+      "seconds": 18.85
+     },
+     {
+      "episode": "episode_single_arm__heat_food_in_toaster_oven__000011",
+      "line": "single_arm/heat_food_in_toaster_oven/11",
+      "task": "single_arm/heat_food_in_toaster_oven",
+      "seconds": 15.85
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_T-shirt__000874",
+      "line": "dual_arm/Fold_the_T-shirt/874",
+      "task": "dual_arm/Fold_the_T-shirt",
+      "seconds": 15.0
+     },
+     {
+      "episode": "episode_single_arm__wash_clothes__001565",
+      "line": "single_arm/wash_clothes/1565",
+      "task": "single_arm/wash_clothes",
+      "seconds": 17.5
+     },
+     {
+      "episode": "episode_dual_arm__Put_Clothes_into_Laundry_Hamper__001577",
+      "line": "dual_arm/Put_Clothes_into_Laundry_Hamper/1577",
+      "task": "dual_arm/Put_Clothes_into_Laundry_Hamper",
+      "seconds": 16.9
+     },
+     {
+      "episode": "episode_single_arm__take_items_out_of_drawer__001737",
+      "line": "single_arm/take_items_out_of_drawer/1737",
+      "task": "single_arm/take_items_out_of_drawer",
+      "seconds": 16.0
+     },
+     {
+      "episode": "episode_single_arm__iron_clothes__000755",
+      "line": "single_arm/iron_clothes/755",
+      "task": "single_arm/iron_clothes",
+      "seconds": 15.75
+     },
+     {
+      "episode": "episode_dual_arm__Add_Rice_to_Rice_Cooker__002576",
+      "line": "dual_arm/Add_Rice_to_Rice_Cooker/2576",
+      "task": "dual_arm/Add_Rice_to_Rice_Cooker",
+      "seconds": 24.4
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Cabinet__000757",
+      "line": "dual_arm/Open_Double_Door_Cabinet/757",
+      "task": "dual_arm/Open_Double_Door_Cabinet",
+      "seconds": 14.65
+     },
+     {
+      "episode": "episode_single_arm__get_plate_and_spoon_from_dish_rack__002447",
+      "line": "single_arm/get_plate_and_spoon_from_dish_rack/2447",
+      "task": "single_arm/get_plate_and_spoon_from_dish_rack",
+      "seconds": 12.8
+     },
+     {
+      "episode": "episode_dual_arm__Pack_Skincare_Products__001422",
+      "line": "dual_arm/Pack_Skincare_Products/1422",
+      "task": "dual_arm/Pack_Skincare_Products",
+      "seconds": 17.0
+     },
+     {
+      "episode": "episode_dual_arm__Put_Books_into_Schoolbag__000770",
+      "line": "dual_arm/Put_Books_into_Schoolbag/770",
+      "task": "dual_arm/Put_Books_into_Schoolbag",
+      "seconds": 21.25
+     },
+     {
+      "episode": "episode_dual_arm__Put_Food_into_Microwave__000110",
+      "line": "dual_arm/Put_Food_into_Microwave/110",
+      "task": "dual_arm/Put_Food_into_Microwave",
+      "seconds": 20.05
+     },
+     {
+      "episode": "episode_single_arm__Store_Shoes_in_Shoe_Cabinet__002408",
+      "line": "single_arm/Store_Shoes_in_Shoe_Cabinet/2408",
+      "task": "single_arm/Store_Shoes_in_Shoe_Cabinet",
+      "seconds": 24.55
+     },
+     {
+      "episode": "episode_dual_arm__Place_Pot_on_Induction_Cooktop__002619",
+      "line": "dual_arm/Place_Pot_on_Induction_Cooktop/2619",
+      "task": "dual_arm/Place_Pot_on_Induction_Cooktop",
+      "seconds": 14.15
+     },
+     {
+      "episode": "episode_dual_arm__Open_Double_Door_Shoe_Cabinet__000634",
+      "line": "dual_arm/Open_Double_Door_Shoe_Cabinet/634",
+      "task": "dual_arm/Open_Double_Door_Shoe_Cabinet",
+      "seconds": 12.85
+     },
+     {
+      "episode": "episode_dual_arm__Take_Bottle_and_Close_Double_Doors__000124",
+      "line": "dual_arm/Take_Bottle_and_Close_Double_Doors/124",
+      "task": "dual_arm/Take_Bottle_and_Close_Double_Doors",
+      "seconds": 16.15
+     },
+     {
+      "episode": "episode_dual_arm__Place_Shoes_and_Close_Shoe_Cabinet__001887",
+      "line": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet/1887",
+      "task": "dual_arm/Place_Shoes_and_Close_Shoe_Cabinet",
+      "seconds": 20.7
+     },
+     {
+      "episode": "episode_dual_arm__Pour_Water_into_Teacup__003623",
+      "line": "dual_arm/Pour_Water_into_Teacup/3623",
+      "task": "dual_arm/Pour_Water_into_Teacup",
+      "seconds": 16.45
+     },
+     {
+      "episode": "episode_dual_arm__Clean_Desktop__000156",
+      "line": "dual_arm/Clean_Desktop/156",
+      "task": "dual_arm/Clean_Desktop",
+      "seconds": 16.8
+     },
+     {
+      "episode": "episode_single_arm__put_shoes_into_storage_box__002291",
+      "line": "single_arm/put_shoes_into_storage_box/2291",
+      "task": "single_arm/put_shoes_into_storage_box",
+      "seconds": 17.9
+     },
+     {
+      "episode": "episode_dual_arm__Fold_the_Suit__002572",
+      "line": "dual_arm/Fold_the_Suit/2572",
+      "task": "dual_arm/Fold_the_Suit",
+      "seconds": 22.55
+     }
+    ]
+   },
+   "realomin": {
+    "minutes": 100.4,
+    "budget_minutes": 100.0,
+    "available_minutes": 285.8,
+    "tasks": 13,
+    "episodes": [
+     {
+      "episode": "episode_Clutter_Tidy_Up_Stage2_00005_00998",
+      "line": "Clutter Tidy-Up [Stage2]/00005/00998.mcap",
+      "task": "Clutter Tidy-Up [Stage2]",
+      "seconds": 58.17
+     },
+     {
+      "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00426",
+      "line": "Shoes_Handling/organize_scattered_shoes/00001/00426.mcap",
+      "task": "organize scattered shoes",
+      "seconds": 121.04
+     },
+     {
+      "episode": "episode_Organize_Clutter_desktop_object_sorting_00015_00012",
+      "line": "Organize_Clutter/desktop_object_sorting/00015/00012.mcap",
+      "task": "desktop object sorting",
+      "seconds": 45.47
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00008",
+      "line": "Organize_Clutter/fold_and_store_shopping_bag/00001/00008.mcap",
+      "task": "fold and store shopping bag",
+      "seconds": 103.04
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_00010_00666",
+      "line": "Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00010/00666.mcap",
+      "task": "fold and store clothes",
+      "seconds": 77.64
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_take_items_00001_00232",
+      "line": "Organize_Clutter/drawer_to_take_items/00001/00232.mcap",
+      "task": "drawer to take items",
+      "seconds": 32.27
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_towel_00001_00522",
+      "line": "Organize_Clutter/fold_towel/00001/00522.mcap",
+      "task": "fold towel",
+      "seconds": 37.57
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_container_00001_00864",
+      "line": "Cooking_and_Kitchen_Clean/clean_container/00001/00864.mcap",
+      "task": "clean container",
+      "seconds": 78.77
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00240",
+      "line": "Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00240.mcap",
+      "task": "unscrew bottle cap and pour",
+      "seconds": 44.4
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00103",
+      "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00103.mcap",
+      "task": "zip clothes",
+      "seconds": 35.9
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_place_items_00001_00030",
+      "line": "Organize_Clutter/drawer_to_place_items/00001/00030.mcap",
+      "task": "drawer to place items",
+      "seconds": 45.97
+     },
+     {
+      "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00216",
+      "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00216.mcap",
+      "task": "lace up shoes with both hands",
+      "seconds": 190.71
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_bowl_00001_00007",
+      "line": "Cooking_and_Kitchen_Clean/clean_bowl/00001/00007.mcap",
+      "task": "clean bowl",
+      "seconds": 152.84
+     },
+     {
+      "episode": "episode_Clutter_Tidy_Up_Stage2_00001_01755",
+      "line": "Clutter Tidy-Up [Stage2]/00001/01755.mcap",
+      "task": "Clutter Tidy-Up [Stage2]",
+      "seconds": 57.17
+     },
+     {
+      "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00026",
+      "line": "Shoes_Handling/organize_scattered_shoes/00001/00026.mcap",
+      "task": "organize scattered shoes",
+      "seconds": 165.47
+     },
+     {
+      "episode": "episode_Organize_Clutter_desktop_object_sorting_00008_00638",
+      "line": "Organize_Clutter/desktop_object_sorting/00008/00638.mcap",
+      "task": "desktop object sorting",
+      "seconds": 64.64
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00244",
+      "line": "Organize_Clutter/fold_and_store_shopping_bag/00001/00244.mcap",
+      "task": "fold and store shopping bag",
+      "seconds": 140.51
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_00003_00825",
+      "line": "Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00003/00825.mcap",
+      "task": "fold and store clothes",
+      "seconds": 43.63
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_take_items_00001_00059",
+      "line": "Organize_Clutter/drawer_to_take_items/00001/00059.mcap",
+      "task": "drawer to take items",
+      "seconds": 31.9
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_towel_00001_00546",
+      "line": "Organize_Clutter/fold_towel/00001/00546.mcap",
+      "task": "fold towel",
+      "seconds": 56.54
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_container_00001_00327",
+      "line": "Cooking_and_Kitchen_Clean/clean_container/00001/00327.mcap",
+      "task": "clean container",
+      "seconds": 60.64
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00186",
+      "line": "Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00186.mcap",
+      "task": "unscrew bottle cap and pour",
+      "seconds": 49.74
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00055",
+      "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00055.mcap",
+      "task": "zip clothes",
+      "seconds": 68.34
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_place_items_00001_00216",
+      "line": "Organize_Clutter/drawer_to_place_items/00001/00216.mcap",
+      "task": "drawer to place items",
+      "seconds": 231.14
+     },
+     {
+      "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00027",
+      "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00027.mcap",
+      "task": "lace up shoes with both hands",
+      "seconds": 282.94
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_bowl_00001_00441",
+      "line": "Cooking_and_Kitchen_Clean/clean_bowl/00001/00441.mcap",
+      "task": "clean bowl",
+      "seconds": 45.3
+     },
+     {
+      "episode": "episode_Clutter_Tidy_Up_Stage2_00005_00290",
+      "line": "Clutter Tidy-Up [Stage2]/00005/00290.mcap",
+      "task": "Clutter Tidy-Up [Stage2]",
+      "seconds": 58.7
+     },
+     {
+      "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00464",
+      "line": "Shoes_Handling/organize_scattered_shoes/00001/00464.mcap",
+      "task": "organize scattered shoes",
+      "seconds": 124.67
+     },
+     {
+      "episode": "episode_Organize_Clutter_desktop_object_sorting_00007_01980",
+      "line": "Organize_Clutter/desktop_object_sorting/00007/01980.mcap",
+      "task": "desktop object sorting",
+      "seconds": 41.67
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00092",
+      "line": "Organize_Clutter/fold_and_store_shopping_bag/00001/00092.mcap",
+      "task": "fold and store shopping bag",
+      "seconds": 77.0
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_00019_00120",
+      "line": "Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00019/00120.mcap",
+      "task": "fold and store clothes",
+      "seconds": 42.0
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_take_items_00001_00061",
+      "line": "Organize_Clutter/drawer_to_take_items/00001/00061.mcap",
+      "task": "drawer to take items",
+      "seconds": 34.53
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_towel_00001_00315",
+      "line": "Organize_Clutter/fold_towel/00001/00315.mcap",
+      "task": "fold towel",
+      "seconds": 35.5
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_container_00001_00138",
+      "line": "Cooking_and_Kitchen_Clean/clean_container/00001/00138.mcap",
+      "task": "clean container",
+      "seconds": 59.67
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00233",
+      "line": "Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00233.mcap",
+      "task": "unscrew bottle cap and pour",
+      "seconds": 47.04
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00116",
+      "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00116.mcap",
+      "task": "zip clothes",
+      "seconds": 31.2
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_place_items_00001_00033",
+      "line": "Organize_Clutter/drawer_to_place_items/00001/00033.mcap",
+      "task": "drawer to place items",
+      "seconds": 63.44
+     },
+     {
+      "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00236",
+      "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00236.mcap",
+      "task": "lace up shoes with both hands",
+      "seconds": 148.01
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_bowl_00001_00093",
+      "line": "Cooking_and_Kitchen_Clean/clean_bowl/00001/00093.mcap",
+      "task": "clean bowl",
+      "seconds": 90.5
+     },
+     {
+      "episode": "episode_Clutter_Tidy_Up_Stage2_00008_01447",
+      "line": "Clutter Tidy-Up [Stage2]/00008/01447.mcap",
+      "task": "Clutter Tidy-Up [Stage2]",
+      "seconds": 63.5
+     },
+     {
+      "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00430",
+      "line": "Shoes_Handling/organize_scattered_shoes/00001/00430.mcap",
+      "task": "organize scattered shoes",
+      "seconds": 144.64
+     },
+     {
+      "episode": "episode_Organize_Clutter_desktop_object_sorting_00001_00066",
+      "line": "Organize_Clutter/desktop_object_sorting/00001/00066.mcap",
+      "task": "desktop object sorting",
+      "seconds": 46.53
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00194",
+      "line": "Organize_Clutter/fold_and_store_shopping_bag/00001/00194.mcap",
+      "task": "fold and store shopping bag",
+      "seconds": 87.87
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_00013_00471",
+      "line": "Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00013/00471.mcap",
+      "task": "fold and store clothes",
+      "seconds": 92.17
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_take_items_00001_00277",
+      "line": "Organize_Clutter/drawer_to_take_items/00001/00277.mcap",
+      "task": "drawer to take items",
+      "seconds": 30.4
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_towel_00001_00022",
+      "line": "Organize_Clutter/fold_towel/00001/00022.mcap",
+      "task": "fold towel",
+      "seconds": 47.14
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_container_00001_00543",
+      "line": "Cooking_and_Kitchen_Clean/clean_container/00001/00543.mcap",
+      "task": "clean container",
+      "seconds": 55.04
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00173",
+      "line": "Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00173.mcap",
+      "task": "unscrew bottle cap and pour",
+      "seconds": 47.94
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00124",
+      "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00124.mcap",
+      "task": "zip clothes",
+      "seconds": 91.2
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_place_items_00001_00281",
+      "line": "Organize_Clutter/drawer_to_place_items/00001/00281.mcap",
+      "task": "drawer to place items",
+      "seconds": 36.43
+     },
+     {
+      "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00060",
+      "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00060.mcap",
+      "task": "lace up shoes with both hands",
+      "seconds": 60.14
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_bowl_00001_00058",
+      "line": "Cooking_and_Kitchen_Clean/clean_bowl/00001/00058.mcap",
+      "task": "clean bowl",
+      "seconds": 87.37
+     },
+     {
+      "episode": "episode_Clutter_Tidy_Up_Stage2_00019_00993",
+      "line": "Clutter Tidy-Up [Stage2]/00019/00993.mcap",
+      "task": "Clutter Tidy-Up [Stage2]",
+      "seconds": 71.4
+     },
+     {
+      "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00355",
+      "line": "Shoes_Handling/organize_scattered_shoes/00001/00355.mcap",
+      "task": "organize scattered shoes",
+      "seconds": 132.97
+     },
+     {
+      "episode": "episode_Organize_Clutter_desktop_object_sorting_00013_00107",
+      "line": "Organize_Clutter/desktop_object_sorting/00013/00107.mcap",
+      "task": "desktop object sorting",
+      "seconds": 54.2
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00215",
+      "line": "Organize_Clutter/fold_and_store_shopping_bag/00001/00215.mcap",
+      "task": "fold and store shopping bag",
+      "seconds": 82.63
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_00018_00867",
+      "line": "Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00018/00867.mcap",
+      "task": "fold and store clothes",
+      "seconds": 55.4
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_take_items_00001_00233",
+      "line": "Organize_Clutter/drawer_to_take_items/00001/00233.mcap",
+      "task": "drawer to take items",
+      "seconds": 33.4
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_towel_00001_00471",
+      "line": "Organize_Clutter/fold_towel/00001/00471.mcap",
+      "task": "fold towel",
+      "seconds": 59.87
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_container_00001_00126",
+      "line": "Cooking_and_Kitchen_Clean/clean_container/00001/00126.mcap",
+      "task": "clean container",
+      "seconds": 46.8
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00133",
+      "line": "Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00133.mcap",
+      "task": "unscrew bottle cap and pour",
+      "seconds": 53.44
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00111",
+      "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00111.mcap",
+      "task": "zip clothes",
+      "seconds": 43.5
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_place_items_00001_00421",
+      "line": "Organize_Clutter/drawer_to_place_items/00001/00421.mcap",
+      "task": "drawer to place items",
+      "seconds": 43.1
+     },
+     {
+      "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00209",
+      "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00209.mcap",
+      "task": "lace up shoes with both hands",
+      "seconds": 238.51
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_bowl_00001_00507",
+      "line": "Cooking_and_Kitchen_Clean/clean_bowl/00001/00507.mcap",
+      "task": "clean bowl",
+      "seconds": 41.37
+     },
+     {
+      "episode": "episode_Clutter_Tidy_Up_Stage2_00003_00500",
+      "line": "Clutter Tidy-Up [Stage2]/00003/00500.mcap",
+      "task": "Clutter Tidy-Up [Stage2]",
+      "seconds": 48.77
+     },
+     {
+      "episode": "episode_Shoes_Handling_organize_scattered_shoes_00001_00016",
+      "line": "Shoes_Handling/organize_scattered_shoes/00001/00016.mcap",
+      "task": "organize scattered shoes",
+      "seconds": 39.43
+     },
+     {
+      "episode": "episode_Organize_Clutter_desktop_object_sorting_00012_00973",
+      "line": "Organize_Clutter/desktop_object_sorting/00012/00973.mcap",
+      "task": "desktop object sorting",
+      "seconds": 53.64
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_and_store_shopping_bag_00001_00087",
+      "line": "Organize_Clutter/fold_and_store_shopping_bag/00001/00087.mcap",
+      "task": "fold and store shopping bag",
+      "seconds": 150.44
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_00014_00366",
+      "line": "Folding_Clothes_and_Zipper_Operations/fold_and_store_clothes/00014/00366.mcap",
+      "task": "fold and store clothes",
+      "seconds": 40.8
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_take_items_00001_00227",
+      "line": "Organize_Clutter/drawer_to_take_items/00001/00227.mcap",
+      "task": "drawer to take items",
+      "seconds": 36.87
+     },
+     {
+      "episode": "episode_Organize_Clutter_fold_towel_00001_00248",
+      "line": "Organize_Clutter/fold_towel/00001/00248.mcap",
+      "task": "fold towel",
+      "seconds": 42.94
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_container_00001_00767",
+      "line": "Cooking_and_Kitchen_Clean/clean_container/00001/00767.mcap",
+      "task": "clean container",
+      "seconds": 58.87
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_unscrew_bottle_cap_and_pour_00001_00021",
+      "line": "Cooking_and_Kitchen_Clean/unscrew_bottle_cap_and_pour/00001/00021.mcap",
+      "task": "unscrew bottle cap and pour",
+      "seconds": 43.5
+     },
+     {
+      "episode": "episode_Folding_Clothes_and_Zipper_Operations_zip_clothes_00001_00076",
+      "line": "Folding_Clothes_and_Zipper_Operations/zip_clothes/00001/00076.mcap",
+      "task": "zip clothes",
+      "seconds": 117.54
+     },
+     {
+      "episode": "episode_Organize_Clutter_drawer_to_place_items_00001_00157",
+      "line": "Organize_Clutter/drawer_to_place_items/00001/00157.mcap",
+      "task": "drawer to place items",
+      "seconds": 33.33
+     },
+     {
+      "episode": "episode_Shoes_Handling_lace_up_shoes_with_both_hands_00001_00072",
+      "line": "Shoes_Handling/lace_up_shoes_with_both_hands/00001/00072.mcap",
+      "task": "lace up shoes with both hands",
+      "seconds": 289.65
+     },
+     {
+      "episode": "episode_Cooking_and_Kitchen_Clean_clean_bowl_00001_00276",
+      "line": "Cooking_and_Kitchen_Clean/clean_bowl/00001/00276.mcap",
+      "task": "clean bowl",
+      "seconds": 43.94
+     }
+    ]
+   }
+  },
+  "head_camera": {
+   "egocentric100k": {
+    "minutes": 69.0,
+    "budget_minutes": 66.7,
+    "available_minutes": 287.7,
+    "tasks": 23,
+    "episodes": [
+     {
+      "episode": "episode_factory_185_worker_067_0122",
+      "line": "factory185/worker067/part25872.tar factory_185_worker_067_0122.mp4",
+      "task": "factory_185",
+      "seconds": 179.77
+     },
+     {
+      "episode": "episode_factory_224_worker_003_0111",
+      "line": "factory224/worker003/part29248.tar factory_224_worker_003_0111.mp4",
+      "task": "factory_224",
+      "seconds": 179.8
+     },
+     {
+      "episode": "episode_factory_168_worker_035_0042",
+      "line": "factory168/worker035/part23560.tar factory_168_worker_035_0042.mp4",
+      "task": "factory_168",
+      "seconds": 179.83
+     },
+     {
+      "episode": "episode_factory_182_worker_062_0096",
+      "line": "factory182/worker062/part25331.tar factory_182_worker_062_0096.mp4",
+      "task": "factory_182",
+      "seconds": 180.03
+     },
+     {
+      "episode": "episode_factory_096_worker_036_0051",
+      "line": "factory096/worker036/part13073.tar factory_096_worker_036_0051.mp4",
+      "task": "factory_096",
+      "seconds": 179.77
+     },
+     {
+      "episode": "episode_factory_018_worker_037_0021",
+      "line": "factory018/worker037/part1536.tar factory_018_worker_037_0021.mp4",
+      "task": "factory_018",
+      "seconds": 180.03
+     },
+     {
+      "episode": "episode_factory_049_worker_002_0016",
+      "line": "factory049/worker002/part6408.tar factory_049_worker_002_0016.mp4",
+      "task": "factory_049",
+      "seconds": 180.0
+     },
+     {
+      "episode": "episode_factory_009_worker_015_0166",
+      "line": "factory009/worker015/part604.tar factory_009_worker_015_0166.mp4",
+      "task": "factory_009",
+      "seconds": 179.87
+     },
+     {
+      "episode": "episode_factory_064_worker_025_0084",
+      "line": "factory064/worker025/part8069.tar factory_064_worker_025_0084.mp4",
+      "task": "factory_064",
+      "seconds": 180.03
+     },
+     {
+      "episode": "episode_factory_194_worker_024_0052",
+      "line": "factory194/worker024/part26682.tar factory_194_worker_024_0052.mp4",
+      "task": "factory_194",
+      "seconds": 180.0
+     },
+     {
+      "episode": "episode_factory_011_worker_004_0188",
+      "line": "factory011/worker004/part739.tar factory_011_worker_004_0188.mp4",
+      "task": "factory_011",
+      "seconds": 180.0
+     },
+     {
+      "episode": "episode_factory_197_worker_022_0138",
+      "line": "factory197/worker022/part27195.tar factory_197_worker_022_0138.mp4",
+      "task": "factory_197",
+      "seconds": 180.0
+     },
+     {
+      "episode": "episode_factory_219_worker_040_0001",
+      "line": "factory219/worker040/part28827.tar factory_219_worker_040_0001.mp4",
+      "task": "factory_219",
+      "seconds": 180.0
+     },
+     {
+      "episode": "episode_factory_059_worker_009_0117",
+      "line": "factory059/worker009/part7335.tar factory_059_worker_009_0117.mp4",
+      "task": "factory_059",
+      "seconds": 179.77
+     },
+     {
+      "episode": "episode_factory_190_worker_034_0043",
+      "line": "factory190/worker034/part26436.tar factory_190_worker_034_0043.mp4",
+      "task": "factory_190",
+      "seconds": 179.9
+     },
+     {
+      "episode": "episode_factory_090_worker_016_0002",
+      "line": "factory090/worker016/part11969.tar factory_090_worker_016_0002.mp4",
+      "task": "factory_090",
+      "seconds": 179.83
+     },
+     {
+      "episode": "episode_factory_157_worker_013_0114",
+      "line": "factory157/worker013/part21812.tar factory_157_worker_013_0114.mp4",
+      "task": "factory_157",
+      "seconds": 180.0
+     },
+     {
+      "episode": "episode_factory_094_worker_039_0138",
+      "line": "factory094/worker039/part12251.tar factory_094_worker_039_0138.mp4",
+      "task": "factory_094",
+      "seconds": 179.77
+     },
+     {
+      "episode": "episode_factory_107_worker_007_0115",
+      "line": "factory107/worker007/part15220.tar factory_107_worker_007_0115.mp4",
+      "task": "factory_107",
+      "seconds": 179.83
+     },
+     {
+      "episode": "episode_factory_217_worker_013_0025",
+      "line": "factory217/worker013/part28666.tar factory_217_worker_013_0025.mp4",
+      "task": "factory_217",
+      "seconds": 179.77
+     },
+     {
+      "episode": "episode_factory_223_worker_005_0180",
+      "line": "factory223/worker005/part29041.tar factory_223_worker_005_0180.mp4",
+      "task": "factory_223",
+      "seconds": 179.77
+     },
+     {
+      "episode": "episode_factory_069_worker_007_0030",
+      "line": "factory069/worker007/part9069.tar factory_069_worker_007_0030.mp4",
+      "task": "factory_069",
+      "seconds": 180.0
+     },
+     {
+      "episode": "episode_factory_138_worker_013_0017",
+      "line": "factory138/worker013/part19355.tar factory_138_worker_013_0017.mp4",
+      "task": "factory_138",
+      "seconds": 180.0
+     }
+    ]
+   },
+   "openaoe": {
+    "minutes": 69.7,
+    "budget_minutes": 66.7,
+    "available_minutes": 300.5,
+    "tasks": 26,
+    "episodes": [
+     {
+      "episode": "episode_raw_192764_seg_7",
+      "line": "raw_192764_seg_7",
+      "task": "episode_raw_192764",
+      "seconds": 131.6
+     },
+     {
+      "episode": "episode_raw_242809_seg_8",
+      "line": "raw_242809_seg_8",
+      "task": "episode_raw_242809",
+      "seconds": 49.27
+     },
+     {
+      "episode": "episode_raw_333957_seg_2",
+      "line": "raw_333957_seg_2",
+      "task": "episode_raw_333957",
+      "seconds": 61.9
+     },
+     {
+      "episode": "episode_raw_019fea49_b798_4e67_83e6_09badc825661_seg_2",
+      "line": "raw_019fea49-b798-4e67-83e6-09badc825661_seg_2",
+      "task": "episode_raw_019fea49_b798_4e67_83e6_09badc825661",
+      "seconds": 300.21
+     },
+     {
+      "episode": "episode_raw_323151_seg_1",
+      "line": "raw_323151_seg_1",
+      "task": "episode_raw_323151",
+      "seconds": 294.86
+     },
+     {
+      "episode": "episode_raw_318360_seg_1",
+      "line": "raw_318360_seg_1",
+      "task": "episode_raw_318360",
+      "seconds": 237.57
+     },
+     {
+      "episode": "episode_raw_352813_seg_358401",
+      "line": "raw_352813_seg_358401",
+      "task": "episode_raw_352813",
+      "seconds": 300.14
+     },
+     {
+      "episode": "episode_raw_300279_seg_2",
+      "line": "raw_300279_seg_2",
+      "task": "episode_raw_300279",
+      "seconds": 118.4
+     },
+     {
+      "episode": "episode_raw_323099_seg_2",
+      "line": "raw_323099_seg_2",
+      "task": "episode_raw_323099",
+      "seconds": 300.24
+     },
+     {
+      "episode": "episode_raw_192112_seg_3",
+      "line": "raw_192112_seg_3",
+      "task": "episode_raw_192112",
+      "seconds": 169.93
+     },
+     {
+      "episode": "episode_raw_193632_seg_1",
+      "line": "raw_193632_seg_1",
+      "task": "episode_raw_193632",
+      "seconds": 123.87
+     },
+     {
+      "episode": "episode_raw_354199_seg_361050",
+      "line": "raw_354199_seg_361050",
+      "task": "episode_raw_354199",
+      "seconds": 54.97
+     },
+     {
+      "episode": "episode_raw_019fda1b_d429_4bea_81ad_17ab12c4a02a_seg_2",
+      "line": "raw_019fda1b-d429-4bea-81ad-17ab12c4a02a_seg_2",
+      "task": "episode_raw_019fda1b_d429_4bea_81ad_17ab12c4a02a",
+      "seconds": 67.0
+     },
+     {
+      "episode": "episode_raw_353933_seg_358087",
+      "line": "raw_353933_seg_358087",
+      "task": "episode_raw_353933",
+      "seconds": 226.0
+     },
+     {
+      "episode": "episode_raw_241972_seg_11",
+      "line": "raw_241972_seg_11",
+      "task": "episode_raw_241972",
+      "seconds": 44.07
+     },
+     {
+      "episode": "episode_raw_342592_seg_342683",
+      "line": "raw_342592_seg_342683",
+      "task": "episode_raw_342592",
+      "seconds": 301.88
+     },
+     {
+      "episode": "episode_raw_353890_seg_358012",
+      "line": "raw_353890_seg_358012",
+      "task": "episode_raw_353890",
+      "seconds": 247.34
+     },
+     {
+      "episode": "episode_raw_354066_seg_361613",
+      "line": "raw_354066_seg_361613",
+      "task": "episode_raw_354066",
+      "seconds": 81.0
+     },
+     {
+      "episode": "episode_raw_354036_seg_361906",
+      "line": "raw_354036_seg_361906",
+      "task": "episode_raw_354036",
+      "seconds": 101.0
+     },
+     {
+      "episode": "episode_raw_340463_seg_340487",
+      "line": "raw_340463_seg_340487",
+      "task": "episode_raw_340463",
+      "seconds": 93.17
+     },
+     {
+      "episode": "episode_raw_319303_seg_2",
+      "line": "raw_319303_seg_2",
+      "task": "episode_raw_319303",
+      "seconds": 137.83
+     },
+     {
+      "episode": "episode_raw_290000_seg_6",
+      "line": "raw_290000_seg_6",
+      "task": "episode_raw_290000",
+      "seconds": 280.9
+     },
+     {
+      "episode": "episode_raw_352251_seg_361003",
+      "line": "raw_352251_seg_361003",
+      "task": "episode_raw_352251",
+      "seconds": 147.07
+     },
+     {
+      "episode": "episode_raw_205953_seg_154",
+      "line": "raw_205953_seg_154",
+      "task": "episode_raw_205953",
+      "seconds": 56.8
+     },
+     {
+      "episode": "episode_raw_332632_seg_31",
+      "line": "raw_332632_seg_31",
+      "task": "episode_raw_332632",
+      "seconds": 56.71
+     },
+     {
+      "episode": "episode_raw_297363_seg_1",
+      "line": "raw_297363_seg_1",
+      "task": "episode_raw_297363",
+      "seconds": 200.07
+     }
+    ]
+   },
+   "genhumanego": {
+    "minutes": 67.1,
+    "budget_minutes": 66.7,
+    "available_minutes": 168.5,
+    "tasks": 26,
+    "episodes": [
+     {
+      "episode": "episode_875c9492f2ea40a1b31d1fc12664aa2d",
+      "line": "data/domestic_services/living_room/organization/unpack_milk_carton_and_arrange/87/875c9492f2ea40a1b31d1fc12664aa2d.mcap",
+      "task": "domestic_services/living_room/organization/unpack_milk_carton_and_arrange",
+      "seconds": 133.67
+     },
+     {
+      "episode": "episode_30a5d3576de5417bb9b944d0f7a8500f",
+      "line": "data/business/beauty_personal_care/beauty_salon/daily_work/30/30a5d3576de5417bb9b944d0f7a8500f.mcap",
+      "task": "business/beauty_personal_care/beauty_salon/daily_work",
+      "seconds": 179.0
+     },
+     {
+      "episode": "episode_eded36a946e54fd98288060669da8f31",
+      "line": "data/domestic_services/living_room/life_operations/tie_straw_and_place_in_cup/ed/eded36a946e54fd98288060669da8f31.mcap",
+      "task": "domestic_services/living_room/life_operations/tie_straw_and_place_in_cup",
+      "seconds": 80.23
+     },
+     {
+      "episode": "episode_9816b89985204a3594755358806f79da",
+      "line": "data/domestic_services/kitchen/cooking_and_kitchen/wash_vegetables/98/9816b89985204a3594755358806f79da.mcap",
+      "task": "domestic_services/kitchen/cooking_and_kitchen/wash_vegetables",
+      "seconds": 111.87
+     },
+     {
+      "episode": "episode_391e56f45ec24ce088e3c93f5fba9bea",
+      "line": "data/industry/electronics_factory/assembly_line/daily_work/39/391e56f45ec24ce088e3c93f5fba9bea.mcap",
+      "task": "industry/electronics_factory/assembly_line/daily_work",
+      "seconds": 179.23
+     },
+     {
+      "episode": "episode_eac18cbe7ec14a778f4cfea360b6c5e5",
+      "line": "data/domestic_services/study/organization/arrange_laptop_bag/ea/eac18cbe7ec14a778f4cfea360b6c5e5.mcap",
+      "task": "domestic_services/study/organization/arrange_laptop_bag",
+      "seconds": 151.33
+     },
+     {
+      "episode": "episode_66058bc328134257bcf5e9f832bb2a3a",
+      "line": "data/domestic_services/living_room/life_operations/insert_photos_into_album/66/66058bc328134257bcf5e9f832bb2a3a.mcap",
+      "task": "domestic_services/living_room/life_operations/insert_photos_into_album",
+      "seconds": 97.5
+     },
+     {
+      "episode": "episode_a14ba097e13942bab930c8424df3da02",
+      "line": "data/domestic_services/urban_residence/random/random/a1/a14ba097e13942bab930c8424df3da02.mcap",
+      "task": "domestic_services/urban_residence/random/random",
+      "seconds": 179.66
+     },
+     {
+      "episode": "episode_44ee0d83054b467c869f3a87fa567533",
+      "line": "data/industry/precision_parts_factory/other/daily_work/44/44ee0d83054b467c869f3a87fa567533.mcap",
+      "task": "industry/hardware_factory/other/daily_work",
+      "seconds": 179.66
+     },
+     {
+      "episode": "episode_7a91b032e5cf4e4fb5dfecbdc2774661",
+      "line": "data/domestic_services/study/life_operations/fill_fountain_pen_with_ink/7a/7a91b032e5cf4e4fb5dfecbdc2774661.mcap",
+      "task": "domestic_services/study/life_operations/fill_fountain_pen_with_ink",
+      "seconds": 153.67
+     },
+     {
+      "episode": "episode_4a9e9932a5164ddbaee172d1067dece8",
+      "line": "data/domestic_services/living_room/organization/store_power_bank_with_cable_tie/4a/4a9e9932a5164ddbaee172d1067dece8.mcap",
+      "task": "domestic_services/living_room/organization/store_power_bank_with_cable_tie",
+      "seconds": 73.07
+     },
+     {
+      "episode": "episode_fb1deadbe9794c049b4d604debf1f341",
+      "line": "data/domestic_services/living_room/shoes_handling/clean_shoes/fb/fb1deadbe9794c049b4d604debf1f341.mcap",
+      "task": "domestic_services/living_room/shoes_handling/clean_shoes",
+      "seconds": 296.0
+     },
+     {
+      "episode": "episode_3b2f5747612845b89db4a864f555b9cf",
+      "line": "data/industry/electronics_factory/other/daily_work/3b/3b2f5747612845b89db4a864f555b9cf.mcap",
+      "task": "industry/electronics_factory/other/daily_work",
+      "seconds": 179.03
+     },
+     {
+      "episode": "episode_24822d6f87f4414cb93c46aaf4c8b33b",
+      "line": "data/domestic_services/balcony/life_operations/unlace_shoes/24/24822d6f87f4414cb93c46aaf4c8b33b.mcap",
+      "task": "domestic_services/balcony/life_operations/unlace_shoes",
+      "seconds": 182.76
+     },
+     {
+      "episode": "episode_3fc395ba660d434ca272bee6fa33ada1",
+      "line": "data/domestic_services/kitchen/life_operations/wash_fruit/3f/3fc395ba660d434ca272bee6fa33ada1.mcap",
+      "task": "domestic_services/kitchen/life_operations/wash_fruit",
+      "seconds": 126.23
+     },
+     {
+      "episode": "episode_142ad401ae88423baa6afaa8963083e1",
+      "line": "data/business/retail_business/supermarket/daily_work/14/142ad401ae88423baa6afaa8963083e1.mcap",
+      "task": "business/retail_business/supermarket/daily_work",
+      "seconds": 179.03
+     },
+     {
+      "episode": "episode_c6f078defe414a23b628d4d8aba7e38f",
+      "line": "data/domestic_services/bathroom/clean/clean_floor_drain/c6/c6f078defe414a23b628d4d8aba7e38f.mcap",
+      "task": "domestic_services/bathroom/clean/clean_floor_drain",
+      "seconds": 47.97
+     },
+     {
+      "episode": "episode_be2714199343405f9e975a0d91baa382",
+      "line": "data/domestic_services/living_room/organization/organize_tabletop/be/be2714199343405f9e975a0d91baa382.mcap",
+      "task": "domestic_services/living_room/organization/organize_tabletop",
+      "seconds": 84.47
+     },
+     {
+      "episode": "episode_38e134504f1341b1a397fd81ea6b7b5b",
+      "line": "data/domestic_services/kitchen/life_operations/refill_salt_shaker/38/38e134504f1341b1a397fd81ea6b7b5b.mcap",
+      "task": "domestic_services/kitchen/life_operations/refill_salt_shaker",
+      "seconds": 229.7
+     },
+     {
+      "episode": "episode_9f14c16c6710428389545a70a80b3e4b",
+      "line": "data/business/automobiles_and_transportation/ebike_repair/daily_work/9f/9f14c16c6710428389545a70a80b3e4b.mcap",
+      "task": "business/automobiles_and_transportation/ebike_repair/daily_work",
+      "seconds": 179.23
+     },
+     {
+      "episode": "episode_c7102cf8d3f54c6e8fc3c78404490328",
+      "line": "data/business/entertainment_and_activities/chess_card_room/daily_work/c7/c7102cf8d3f54c6e8fc3c78404490328.mcap",
+      "task": "business/entertainment_and_activities/chess_card_room/daily_work",
+      "seconds": 179.26
+     },
+     {
+      "episode": "episode_383cd671516a489ca040f446aef48cbf",
+      "line": "data/domestic_services/living_room/clothing_organization/iron_clothes/38/383cd671516a489ca040f446aef48cbf.mcap",
+      "task": "domestic_services/living_room/clothing_organization/iron_clothes",
+      "seconds": 218.63
+     },
+     {
+      "episode": "episode_85ddeff3175746058a2e41eb4643cbb1",
+      "line": "data/business/beauty_personal_care/barber_shop/daily_work/85/85ddeff3175746058a2e41eb4643cbb1.mcap",
+      "task": "business/beauty_personal_care/barber_shop/daily_work",
+      "seconds": 179.26
+     },
+     {
+      "episode": "episode_1b8928bc599b4929879559e816b1fc04",
+      "line": "data/business/retail_business/flower_shop/daily_work/1b/1b8928bc599b4929879559e816b1fc04.mcap",
+      "task": "business/retail_business/flower_shop/daily_work",
+      "seconds": 179.33
+     },
+     {
+      "episode": "episode_bd3cf5f19c9c42b8962e546e82dd8478",
+      "line": "data/domestic_services/living_room/life_operations/organize_yarn_balls/bd/bd3cf5f19c9c42b8962e546e82dd8478.mcap",
+      "task": "domestic_services/living_room/life_operations/organize_yarn_balls",
+      "seconds": 197.43
+     },
+     {
+      "episode": "episode_8f35e978bc694c07ac43eb9a017dddd2",
+      "line": "data/domestic_services/bedroom/organization/sort_and_organize_cosmetics/8f/8f35e978bc694c07ac43eb9a017dddd2.mcap",
+      "task": "domestic_services/bedroom/organization/sort_and_organize_cosmetics",
+      "seconds": 50.03
+     }
+    ]
+   }
+  }
+ }
+}
