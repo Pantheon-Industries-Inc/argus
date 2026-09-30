@@ -51,6 +51,12 @@ explicitly, so the board's inputs are all in one file.
       clips): on an episode within tolerance of the window, issues with those tags (a clip starting or ending
       mid-task) describe how the dataset is packaged, so they move to "_excluded".
 
+"reruns": [{"run": RUN, "why": "..."}] on a dataset entry names later runs over some of its episodes: for each episode
+a rerun labelled, its label replaces the base run's (later reruns win), and an episode only a rerun labelled joins
+the board from it. A rerun's episode is matched to the entry's by its resolved episode folder, not its name, so a
+rerun over another slice (a model comparison's, whose names are the board's file names) replaces exactly that
+entry's episodes of it. Each label's _run names the run it came from.
+
 "file_prefix" is for a dataset whose episode names repeat another dataset's on the same board (HABIT and
 MolmoAct2 both have episode_000494): its board files become episode_<prefix>000494.json, and `board clips
 --name-prefix` names its clips the same way.
@@ -352,14 +358,33 @@ def _path(p: str, here: Path) -> Path:
     return Path(p) if Path(p).is_absolute() else (here / p).resolve()
 
 
+def _rerun_folder(r: dict, run: Path, name: str) -> Path | None:
+    """The resolved episode folder a rerun's output labelled: its episode_dir, else the run's slice / name."""
+    for p in (r.get("episode_dir"), (json.loads((run / "run.json").read_text()).get("slice") or "") + "/" + name):
+        if p and Path(p).exists():
+            return Path(p).resolve()
+    return None
+
+
 def entry_labels(entry: dict, here: Path) -> tuple[Path, dict]:
-    """A manifest entry's run folder and {board file: (the run's episode name, output file, output)} for every
-    label it holds (board/to_board.py label_outputs). here is the board folder, resolved."""
+    """A manifest entry's run folder and {board file: (the entry's episode name, output file, output, the run it
+    came from)} for every label it holds (board/to_board.py label_outputs), each rerun's label in place of the base
+    run's for the episodes it labelled (the module docstring). here is the board folder, resolved."""
     run = resolve_run(_path(entry["run"], here))
     pre = entry.get("file_prefix") or ""
     outs, _ = label_outputs(run / "out")
-    return run, {(name.replace("episode_", f"episode_{pre}", 1) if pre else name) + ".json": (name, f, r)
-                 for name, (f, r) in outs.items()}
+    by_name = {name: (f, r, run) for name, (f, r) in outs.items()}
+    if entry.get("reruns"):
+        eps = _path(entry["episodes"], here)
+        own = {p.resolve(): p.name for p in eps.iterdir() if p.name.startswith("episode_")}
+        for rr in entry["reruns"]:
+            rrun = resolve_run(_path(rr["run"], here))
+            for rname, (f, r) in label_outputs(rrun / "out")[0].items():
+                folder = _rerun_folder(r, rrun, rname)
+                if folder in own:
+                    by_name[own[folder]] = (f, r, rrun)
+    return run, {(name.replace("episode_", f"episode_{pre}", 1) if pre else name) + ".json": (name, f, r, src)
+                 for name, (f, r, src) in by_name.items()}
 
 
 def label_sources(manifest: dict, board: Path) -> dict:
@@ -367,7 +392,7 @@ def label_sources(manifest: dict, board: Path) -> dict:
     these, and compare/metrics.py measures the reference from them, so the comparison's reference is the board's
     own label of each episode."""
     here = Path(board).resolve()
-    return {f: out for e in manifest.get("datasets", []) for f, (_, out, _) in entry_labels(e, here)[1].items()}
+    return {f: out for e in manifest.get("datasets", []) for f, (_, out, _, _) in entry_labels(e, here)[1].items()}
 
 
 def _swap(board: Path, name: str, keep: bool) -> None:
@@ -392,9 +417,10 @@ def build(board: Path) -> dict:
     episodes = {}       # board file -> its prepared episode folder
     for entry in manifest.get("datasets", []):
         run, labels = entry_labels(entry, here)
-        info = json.loads((run / "run.json").read_text())
+        infos = {}
         eps = _path(entry["episodes"], here)
-        for fname, (name, src, r) in sorted(labels.items()):
+        for fname, (name, src, r, from_run) in sorted(labels.items()):
+            info = infos.get(from_run) or infos.setdefault(from_run, json.loads((from_run / "run.json").read_text()))
             d = convert(r, entry["dataset"])
             d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"],
                          "slice": info.get("slice")}
@@ -424,7 +450,8 @@ def build(board: Path) -> dict:
             d = normalize_enums(d)
             dest.write_text(json.dumps(d))
             board_src[fname] = src
-        counts[entry["dataset"]] = {"run_id": info["run_id"], "episodes": len(labels)}
+        counts[entry["dataset"]] = {"run_id": json.loads((run / "run.json").read_text())["run_id"],
+                                    "episodes": len(labels)}
         # BUILT.json names the run that was used, so the board's inputs stay traceable
         built_entries.append(dict(entry, run=os.path.relpath(run, here)) if run != _path(entry["run"], here)
                              else entry)

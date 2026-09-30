@@ -701,3 +701,48 @@ def test_an_extra_camera_is_cut_served_and_put_in_the_video_download(tmp_path):
     mp4, _ = serve.footage("episode_a")
     m = _cell_means(mp4, cells)
     assert [int(np.argmax(m[:, i])) for i in range(4)] == [45, 60, 30, 75]
+
+
+def _rerun(runs: Path, name: str, slice_dir: Path, outcomes: dict) -> Path:
+    """A run over slice_dir (a folder of links to episode folders) whose outputs name their episode by its slice
+    folder, as a comparison run's do."""
+    run = runs / name
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": name, "code": "def5678", "kind": "full", "status": "done",
+                                              "slice": str(slice_dir)}))
+    for ep, outcome in outcomes.items():
+        (run / "out" / f"{ep}.json").write_text(json.dumps({**_output(ep, completion={"task_completed": outcome}),
+                                                            "episode_dir": str(slice_dir / ep)}))
+    return run
+
+
+def test_reruns_replace_the_labels_of_the_episodes_they_labelled(tmp_path):
+    """A rerun's label replaces the base run's for the episodes it labelled, matched by resolved episode folder
+    (the comparison slice names the episode as the board file does), later reruns win, and the episodes of
+    another dataset in the same slice are left alone. The reference compare.metrics measures against is the same
+    label the board shows."""
+    runs = tmp_path / "runs"
+    _run(runs / "demo", "20260101-0000_full_abc1234", "failure", "aligned")
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    other = _episodes(tmp_path / "episodes" / "other")
+    sl = tmp_path / "episodes" / "cmp"
+    sl.mkdir()
+    (sl / "episode_demo_000001").symlink_to(eps / "episode_000001")
+    (sl / "episode_000000").symlink_to(other / "episode_000000")         # another dataset's episode_000000
+    first = _rerun(runs / "cmp", "20260102-0000_full_def5678_a", sl, {"episode_demo_000001": "partial",
+                                                                        "episode_000000": "success"})
+    later = _rerun(runs / "cmp", "20260103-0000_full_def5678_b", sl, {"episode_demo_000001": "success"})
+    board = tmp_path / "boards" / "demo"
+    board.mkdir(parents=True)
+    manifest = {"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(runs / "demo" / "20260101-0000_full_abc1234"), "episodes": str(eps),
+         "rules": [], "reruns": [{"run": str(first), "why": "a first rerun"}, {"run": str(later), "why": "a later"}]}]}
+    (board / "manifest.json").write_text(json.dumps(manifest))
+    board_build.build(board)
+    d0 = json.loads((board / "qa" / "episode_000000.json").read_text())
+    d1 = json.loads((board / "qa" / "episode_000001.json").read_text())
+    assert d0["completion"]["task_completed"] == "failure" and d0["_run"]["run_id"] == "20260101-0000_full_abc1234"
+    assert d1["completion"]["task_completed"] == "success" and d1["_run"]["run_id"] == later.name
+    src = board_build.label_sources(manifest, board)
+    assert src["episode_000001.json"] == later / "out" / "episode_demo_000001.json"
+    assert src["episode_000000.json"] == runs / "demo" / "20260101-0000_full_abc1234" / "out" / "episode_000000.json"
