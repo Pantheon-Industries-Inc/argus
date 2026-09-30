@@ -461,8 +461,12 @@ def _git_commit() -> str:
 
 
 def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path | None = None,
-                 keypoints: Path | None = None) -> str:
+                 keypoints: Path | None = None, frames: list | None = None) -> str:
     h = hashlib.sha1()
+    # the frames on disk are part of the build (the page lists only those), so a build made before the media finish
+    # gets a new id once they have
+    for rel in frames or []:
+        h.update(f"frame|{rel}\n".encode())
     if keypoints is not None:
         h.update(hashlib.sha1((keypoints / "index.json").read_bytes()).digest())
     for name in ("index.json", "metrics.json"):
@@ -508,7 +512,8 @@ def cmd_site(a):
     files = [e["rec"]["file"] for e in eps]
     hands = hands_dir(a.qa, a.hands)
     keypoints = keypoints_dir(a.qa, a.keypoints)
-    bid = a.build_id or build_id_for(a.qa, files, compare, hands, keypoints)
+    present = sorted(f["rel"] for e in eps for f in e["frames"].values() if (a.out / "media" / f["rel"]).exists())
+    bid = a.build_id or build_id_for(a.qa, files, compare, hands, keypoints, present)
     out = a.out / bid
     if out.exists() and not a.force:
         print(f"{out} exists (a build id names one set of inputs); pass --force to rewrite it")

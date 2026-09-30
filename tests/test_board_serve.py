@@ -421,3 +421,82 @@ def test_the_smoke_fails_on_a_page_that_throws(tmp_path, monkeypatch):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def _page_js() -> str:
+    return serve.render_index("t", {"mode": "static", "data": "data/", "media": "M/"}).split("<script>", 1)[1] \
+        .split("</script>", 1)[0]
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node is not installed")
+def test_static_board_plays_each_extra_camera_its_own_clip(tmp_path):
+    """board/static.py (and Data Review's static board) publish extra1..3 under their own _media keys; the page's
+    videoSrc must play them, not the main camera's clip."""
+    js = _page_js()
+    start = js.index("function mediaKey(cam)")
+    end = js.index("// the camera's first frame as the video's poster attribute")
+    body = js[start:end]
+    prog = ("const STATIC = true, BOARD = {media: 'M/'};\n"
+            "let _activeFile = 'f.json';\n"
+            "const ALL_EPS = [{file: 'f.json', _media: {exo: 'v/exo/e.mp4', left: 'v/left/e.mp4', "
+            "right: 'v/right/e.mp4', extra1: 'v/extra1/e.mp4', extra2: 'v/extra2/e.mp4'}}];\n"
+            + body +
+            "\nconsole.log(JSON.stringify(['exo', 'left', 'right', 'extra1', 'extra2'].map(c => videoSrc('e', c))));")
+    (tmp_path / "t.js").write_text(prog)
+    r = subprocess.run([shutil.which("node"), str(tmp_path / "t.js")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ["M/v/exo/e.mp4", "M/v/left/e.mp4", "M/v/right/e.mp4", "M/v/extra1/e.mp4",
+                                    "M/v/extra2/e.mp4"]
+
+
+def test_an_extra_cameras_download_is_named_after_that_camera(tmp_path, monkeypatch):
+    """/api/video?download=1 names the saved file after the camera; an extra camera must not be saved under the
+    main camera's name (both would be <episode>_main.mp4 and overwrite each other)."""
+    board = _board(tmp_path)
+    clips = tmp_path / "clips"
+    (clips / "extra1").mkdir(parents=True)
+    (clips / "episode_000001.mp4").write_bytes(b"main")
+    (clips / "extra1" / "episode_000001.mp4").write_bytes(b"extra")
+    httpd, url = _serve(monkeypatch, board, clips)
+    try:
+        _, h_main, b_main = _get(url + "/api/video?id=episode_000001&cam=exo&download=1")
+        _, h_x, b_x = _get(url + "/api/video?id=episode_000001&cam=extra1&download=1")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert (b_main, b_x) == (b"main", b"extra")
+    assert h_main["Content-Disposition"] != h_x["Content-Disposition"], h_x["Content-Disposition"]
+
+
+def test_a_static_build_made_before_its_frames_gets_a_new_id_once_they_exist(tmp_path):
+    """The page lists only the frames on disk, so the frames present are part of the build's id: a build made before
+    the media finish is followed by a new build once they have, never refused as the same build."""
+    qa = tmp_path / "qa"
+    qa.mkdir()
+    (qa / "episode_000001.json").write_text("{}")
+    before = static.build_id_for(qa, ["episode_000001.json"], frames=[])
+    after = static.build_id_for(qa, ["episode_000001.json"], frames=["f/exo/episode_000001.jpg"])
+    assert before != after and after == static.build_id_for(qa, ["episode_000001.json"],
+                                                            frames=["f/exo/episode_000001.jpg"])
+
+
+def test_a_part_of_a_long_recording_that_was_undone_counts_like_a_short_episode_that_was(tmp_path):
+    """label/pieces.py stitch puts each part's outcome under tasks and leaves completion empty. A short
+    episode whose outcome is success_then_undone raises the "undone" data-issue family (families.json completion);
+    the same outcome on a part of a long recording raises nothing, and the rail counts that part as not done."""
+    from board import to_board
+    stitched = {"parse_ok": True, "labels": {"completion": {"task_completed": None},
+                                             "tasks": [{"start_s": 0, "end_s": 250, "task": "stack", "outcome": "success"},
+                                                       {"start_s": 250, "end_s": 500, "task": "stack",
+                                                        "outcome": "success_then_undone", "completed_at_s": 300}]}}
+    short = {"parse_ok": True, "labels": {"completion": {"task_completed": "success_then_undone",
+                                                         "goal_reached_at_s": 50, "undone_at_s": 60}}}
+    recs = {}
+    for name, r in (("episode_long", stitched), ("episode_short", short)):
+        d = to_board.convert(r, "own")
+        d["_meta"]["episode_id"] = name
+        p = tmp_path / f"{name}.json"
+        p.write_text(json.dumps(d))
+        recs[name] = serve._rail_record(p, d)
+    assert "undone" in recs["episode_short"]["families"]
+    assert "undone" in recs["episode_long"]["families"]

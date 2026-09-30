@@ -2321,7 +2321,7 @@ function mediaKey(cam) { return (cam === 'left' || cam === 'right' || /^extra\d{
 function videoSrc(eidEnc, cam) {
   if (!STATIC) return 'api/video?id=' + eidEnc + '&cam=' + cam;
   const rec = ALL_EPS.find(e => e.file === _activeFile) || {};
-  return BOARD.media + ((rec._media || {})[cam === 'left' || cam === 'right' ? cam : 'exo'] || '');
+  return BOARD.media + ((rec._media || {})[mediaKey(cam)] || '');
 }
 // the camera's first frame as the video's poster attribute, or nothing where a static build has no such frame
 function posterAttr(eidEnc, cam) {
@@ -2416,7 +2416,10 @@ function buildVideoMenu() {
   const {views, main} = episodeCams(d);
   const cams = [main, ...views.filter(c => c !== main)];
   const hasTop = main === 'exo';
-  const name = c => c === 'exo' ? 'exo' : (hasTop ? `${c} wrist` : `${c} camera`);
+  // an extra camera is named as its cell is (camera_labels), never as a wrist
+  const label = c => { const i = views.indexOf(c); return (d.camera_labels && i >= 0 && d.camera_labels[i]) || c; };
+  const name = c => c === 'exo' ? 'exo' : (c !== 'left' && c !== 'right') ? label(c)
+    : (hasTop ? `${c} wrist` : `${c} camera`);
   const eidEnc = encodeURIComponent(eid);
   vdMenu.innerHTML = `<button type="button" class="vd-opt" role="menuitem" data-whole="1">Whole episode<small>`
       + `${cams.length > 1 ? 'every camera in one frame' : 'the camera'}${dur ? `, 0.0s to ${fmtT(dur)}` : ''}</small>`
@@ -5527,8 +5530,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not _under(MP4_DIR, mp4) or not mp4.exists():
                 self._send(404, {"error": "video not found"})
                 return
-            # download=1: one camera's clip saved as a file of its own
-            name = f"{eid}_{cam if cam in ('left', 'right') else 'main'}.mp4" if (q.get("download") or [""])[0] == "1" \
+            # download=1: one camera's clip saved as a file of its own, named after its camera, so an extra camera never
+            # takes the main camera's name
+            name = f"{eid}_{cam if cam in ('left', 'right') or EXTRA_CAM.fullmatch(cam) else 'main'}.mp4" \
+                if (q.get("download") or [""])[0] == "1" \
                 else None
             self._send_file(mp4, "video/mp4", name)
             return
