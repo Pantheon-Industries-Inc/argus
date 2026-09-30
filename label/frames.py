@@ -126,8 +126,10 @@ def to_jpeg(im, width: int | None = None, quality: int = 90) -> bytes:
 
 
 def _grid_font(size: int):
+    # the basic layout on every machine: Pillow lays text out with libraqm wherever it finds one (Linux wheels, not
+    # macOS ones), which kerns the same font differently, so the same grid would differ in bytes between machines
     from PIL import ImageFont
-    return ImageFont.truetype(str(GRID_FONT), size)
+    return ImageFont.truetype(str(GRID_FONT), size, layout_engine=ImageFont.Layout.BASIC)
 
 
 def compose_grid(cols: list, cam_labels: list[str], quality: int, gutter: int, header: int) -> bytes:
@@ -148,16 +150,20 @@ def compose_grid(cols: list, cam_labels: list[str], quality: int, gutter: int, h
         raise RuntimeError("empty grid block")
     gap = 4
     ncol, nrow = len(cols), len(cam_labels)
-    g = Image.new("RGB", (gutter + ncol * (cw + gap), header + nrow * (ch + gap)), (18, 18, 20))
+    # each row is as tall as its own camera's cells: cameras of another aspect ratio are cut to the same width, so a
+    # taller one laid out at the first camera's height would lose its bottom under the next row
+    rh = [max((im.height for (r, _c), im in decoded.items() if r == ri), default=ch) for ri in range(nrow)]
+    y0 = [header + sum(h + gap for h in rh[:ri]) for ri in range(nrow)]
+    g = Image.new("RGB", (gutter + ncol * (cw + gap), header + sum(h + gap for h in rh)), (18, 18, 20))
     d = ImageDraw.Draw(g)
     for ci, (t_rel, _c) in enumerate(cols):
         d.text((gutter + ci * (cw + gap) + 6, 7), f"t={t_rel:.2f}s", fill=(255, 220, 0), font=_grid_font(22))
     for ri, cl in enumerate(cam_labels):
-        d.text((6, header + ri * (ch + gap) + ch // 2 - 10), cl, fill=(230, 230, 235), font=_grid_font(17))
+        d.text((6, y0[ri] + rh[ri] // 2 - 10), cl, fill=(230, 230, 235), font=_grid_font(17))
         for ci in range(ncol):
             im = decoded.get((ri, ci))
             if im is not None:
-                g.paste(im, (gutter + ci * (cw + gap), header + ri * (ch + gap)))
+                g.paste(im, (gutter + ci * (cw + gap), y0[ri]))
     buf = io.BytesIO()
     g.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
