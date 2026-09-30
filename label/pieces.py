@@ -372,11 +372,16 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     ctx = ep["context"]
     cfg = dict(first.get("config") or {})
     cfg.update(timesteps_s=timesteps, n_timesteps=len(timesteps), pieces=part_info)
+    # each part routed its own cell width; the recording's route records every part's, and its cost is theirs summed
+    routes = [(r.get("config") or {}).get("resolution_route") or {} for _, r in parts]
+    cfg["resolution_route"] = {**(routes[0] or {}), "parts": routes,
+                               "cost_usd": round(sum(float(x.get("cost_usd") or 0) for x in routes), 6)}
     if excluded:
         L["_excluded"] = excluded
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
-            "given_prompt": (ctx.get("instruction") or "").strip() or None,
-            "prompt_mode": "given" if (ctx.get("instruction") or "").strip() else "inferred",
+            # each part inferred its own task, with the recording's task text given only as context (write_pieces), so
+            # no part was graded against that text and the recording is not either
+            "given_prompt": (ctx.get("instruction") or "").strip() or None, "prompt_mode": "inferred",
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,

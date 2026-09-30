@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from label import episode as me
-from label import pieces
+from label import harness, pieces
 from prepare import formats as f
 from test_formats import recorder_folder
 
@@ -84,7 +84,8 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
 
         def result(i, end):
             return {"episode_dir": str(parts[i]), "parse_ok": True, "model": "m",
-                    "config": {"timesteps_s": [0.0, 1.0]}, "usage": {"est_cost_usd": 0.5},
+                    "config": {"timesteps_s": [0.0, 1.0], "resolution_route": {"cost_usd": 0.01 * (i + 1)}},
+                    "usage": {"est_cost_usd": 0.5},
                     "labels": {"task_summary": f"part {i + 1}", "timeline": [{"start_s": 0.2, "end_s": 0.9,
                                                                               "action": "reach"}],
                                "key_events": [{"t_s": 0.5, "label": "grasp"}],
@@ -99,3 +100,6 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
         assert [x["part"] for x in lab["data_issues"]] == [2]                  # the recording's own end stays
         assert [x["excluded_by"] for x in lab["_excluded"]] == ["piece_cut"]   # the cut after part 1 is ours
         assert out["stitched"]["parts"] == 2 and out["usage"]["est_cost_usd"] == 1.0
+        # every part's routing call is billed, and no part was graded against the recording's task text
+        assert out["config"]["resolution_route"]["cost_usd"] == 0.03 and len(out["config"]["resolution_route"]["parts"]) == 2
+        assert harness.episode_cost(out) == 1.03 and out["prompt_mode"] == "inferred"
