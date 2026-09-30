@@ -171,7 +171,7 @@ uv run python -m board build data/boards/compare
 uv run python -m compare.metrics data/boards/compare
 ```
 
-Each `label` starts one run per model, each under its own `--cap`; `--models` names the ones to run, so a new model never reruns the others. In our run, Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash cost 34%, 19% and 4% as much per episode as Astra. The dashboard counts only the reference model's labels, and its "Labels by" control switches to any other model's.
+Each `label` starts one run per model, each under its own `--cap`; `--models` names the ones to run, so a new model never reruns the others. In our run, Claude Opus 5.5, GPT-6 Sol and DeepSeek v4.1 flash cost 34%, 19% and 4% as much per episode as Astra, and GPT-6.1 Sol cost 20% at medium reasoning and 27% at high. The dashboard counts only the reference model's labels, and its "Labels by" control switches to any other model's.
 
 ## Gate
 
