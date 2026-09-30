@@ -6,6 +6,7 @@ The board plays each camera as its own synced <video> and expects one mp4 per ep
   fixed or head camera   CLIPS/<episode>.mp4
   left mounted camera    CLIPS/wrist_left/<episode>.mp4
   right mounted camera   CLIPS/wrist_right/<episode>.mp4
+  any other camera       CLIPS/extra1/<episode>.mp4, CLIPS/extra2/..., as the reader numbers them
 
 Some datasets keep their video packed (MolmoAct2: 12 to 50 episodes per mp4), and some cameras are HEVC or AV1,
 which browsers do not all play. This cuts each episode's own frames out of its source file (sources.json: the
@@ -37,10 +38,23 @@ def find_ffmpeg() -> str:
     return c
 
 
-def clip_paths(mp4_dir: Path, eid: str) -> dict:
-    return {"exo": mp4_dir / f"{eid}.mp4",
-            "left": mp4_dir / "wrist_left" / f"{eid}.mp4",
-            "right": mp4_dir / "wrist_right" / f"{eid}.mp4"}
+def clip_path(mp4_dir: Path, eid: str, cam: str) -> Path:
+    """One camera's clip: the scene camera at the top, the mounted ones and any others in their own folders."""
+    if cam in ("left", "right"):
+        return mp4_dir / f"wrist_{cam}" / f"{eid}.mp4"
+    if cam == "exo":
+        return mp4_dir / f"{eid}.mp4"
+    return mp4_dir / cam / f"{eid}.mp4"
+
+
+def clip_paths(mp4_dir: Path, eid: str, cams=CAMS) -> dict:
+    return {c: clip_path(mp4_dir, eid, c) for c in cams}
+
+
+def cams_of(sources) -> list:
+    """The episode's cameras in row order: the scene camera, the left and right mounted ones, then the others."""
+    from label.episode import order_views
+    return order_views(sources)
 
 
 # The board's viewing copy of each camera: one recipe for every builder (this file and board/static.py, which
@@ -59,7 +73,7 @@ ENC_TAG = f"h264-crf{CRF}-{PRESET}-main{MAIN_BOX[0]}x{MAIN_BOX[1]}-side{SIDE_BOX
 
 def main_cam(sources: dict) -> str:
     """The camera the page shows large: the fixed or head camera, else the first gripper camera."""
-    return next(c for c in CAMS if c in sources)
+    return cams_of(sources)[0]
 
 
 def clip_size(w: int, h: int, main: bool) -> tuple:
@@ -102,7 +116,7 @@ def start_offsets(ep_dir: Path, sources: dict) -> dict:
     on this board that is at most 46 ms, under the page's 0.1 s resync tolerance, and its frames before the main
     camera's first one would otherwise need a negative time."""
     tp = ep_dir / "times.npz"
-    cams = [c for c in CAMS if c in sources]
+    cams = cams_of(sources)
     if not tp.exists() or len(cams) < 2:
         return {}
     import numpy as np
@@ -162,13 +176,12 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     # half a frame before the episode's first frame, at the episode's own rate (packed LeRobot v3 files
     # at 50 fps put the previous episode's last frame closer than half a 30 fps frame)
     fps = float((json.loads(ctx_p.read_text()) if ctx_p.exists() else {}).get("fps") or 30.0)
-    outs = clip_paths(mp4_dir, eid)
-    big = main_cam(sources) if any(c in sources for c in CAMS) else None
+    cams = cams_of(sources)           # FastUMI has no fixed camera; single-gripper tasks have one camera
+    outs = clip_paths(mp4_dir, eid, cams)
+    big = main_cam(sources) if cams else None
     offsets = start_offsets(ep_dir, sources)
     jobs = []
-    for cam in CAMS:
-        if cam not in sources:        # FastUMI has no fixed camera; single-gripper tasks have one camera
-            continue
+    for cam in cams:
         o = outs[cam]
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
             s = sources[cam]

@@ -181,7 +181,7 @@ def actor_views(ep: dict, names: list[str]) -> list[str | None]:
     vs = me.views(ep)
     if len(names) == 2:
         return [v if v in vs else None for v in ("left", "right")]
-    mounted = [v for v in vs if v != "exo"]
+    mounted = [v for v in vs if v in me.MOUNTED]
     return [mounted[-1] if mounted else None]
 
 

@@ -91,7 +91,7 @@ clip_path = sa.clip_path   # the source clip board/serve.py's /api/video serves 
 
 
 def media_key(cam: str) -> str:
-    return cam if cam in ("left", "right") else "exo"
+    return cam if cam in ("left", "right") or sa.EXTRA_CAM.fullmatch(cam or "") else "exo"
 
 
 def shown_cams(d: dict) -> list:
@@ -102,7 +102,7 @@ def shown_cams(d: dict) -> list:
     if d.get("_rig") != "ego_head":      # a head camera is shown alone
         for v in views:
             if v != main and v != "exo":
-                c = "left" if v == "left" else "right"
+                c = v if v in ("left", "right") or sa.EXTRA_CAM.fullmatch(v) else "right"
                 if c not in cams:
                     cams.append(c)
     return cams

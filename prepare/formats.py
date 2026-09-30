@@ -503,8 +503,12 @@ def scene_rank(name: str) -> int:
     return 99
 
 
+MAX_EXTRA_CAMERAS = 3        # cameras beyond the scene and two mounted ones, sent to the model too; more are listed unused
+
+
 def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
-    """{view: camera name} for up to one scene and two mounted cameras, and the names left unused."""
+    """{view: camera name}: one scene and two mounted cameras by role, then every other camera as extra1, extra2, ...
+    (up to MAX_EXTRA_CAMERAS, in the scene cameras' rank order), and the names left unused."""
     out = {}
     # names that also say wrist/hand/gripper take a side before names that only carry a side
     for nm in sorted(names, key=lambda n: (0 if is_mount_named(n) else 1, n)):
@@ -514,11 +518,24 @@ def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
     rest = sorted((nm for nm in names if nm not in out.values()), key=lambda s: (scene_rank(s), s))
     if rest:
         out["exo"] = rest[0]
-    unused = [nm for nm in names if nm not in out.values()]
     if rig == "handheld_gripper" and list(out) == ["exo"]:
         # one camera on a handheld rig is the gripper's own camera (FastUMI single_arm), not a scene camera
         out = {"right": out["exo"]}
+    # the other eye of a stereo camera already shown (/zed/left/image and /zed/right/image) adds a near-copy of its
+    # picture, so it is left out; every other camera is sent
+    for nm in rest[1:]:
+        n_extra = sum(1 for k in out if k.startswith("extra"))
+        if n_extra < MAX_EXTRA_CAMERAS and not any(_stereo_twin(nm, c) for c in out.values()):
+            out[f"extra{n_extra + 1}"] = nm
+    unused = [nm for nm in names if nm not in out.values()]
     return out, unused
+
+
+def _stereo_twin(a: str, b: str) -> bool:
+    """True when two camera names differ only by a left/right word (the two eyes of one stereo camera)."""
+    swap = lambda s: re.sub(r"left|right", lambda m: {"left": "right", "right": "left"}[m.group(0).lower()], s,
+                            flags=re.I)
+    return a != b and swap(a).lower() == b.lower()
 
 
 NOT_RGB = re.compile(r"depth|conf|disparity|mask|seg|thermal|infrared|(^|/)ir(/|$)|vis_", re.I)
@@ -743,7 +760,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     more about than its slot says (the prompt's camera line)."""
     from label import episode as me
     prs = prs or {v: probe(p) for v, (_, p) in files.items()}
-    order = [v for v in me.VIEW_ORDER if v in files]
+    order = me.order_views(files)
     anchor = order[0]
     use_real = bool(real) and all(real.get(v) is not None for v in order)
     zero = float(real[anchor][0]) if use_real else \
@@ -1122,7 +1139,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     descs = {}
     if item.get("state") and rig == "teleop_arms":
         from label import episode as me
-        anchor = next(v for v in me.VIEW_ORDER if v in files)
+        anchor = me.order_views(files)[0]
         if real[anchor] is None:
             extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place the "
                                    "recorded arm state against.")
@@ -1652,7 +1669,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     # timed by frame index, as the dataset defines them
     prs = {v: probe(row["videos"][key]) for v, key in vmap.items()}
     from label import episode as me
-    anchor = next(v for v in me.VIEW_ORDER if v in prs)
+    anchor = me.order_views(prs)[0]
     if not fps:
         fps = measured_fps(prs[anchor]["pts"].astype(np.float64) * float(prs[anchor]["time_base"])) or 30.0
     sources, cameras, grid = {}, {}, {}
@@ -1820,7 +1837,7 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
     # footage cap counts real minutes
     from label import episode as me
     if ctx.get("real_times"):
-        t = np.load(ep / ctx["real_times"])[next(v for v in me.VIEW_ORDER if v in ctx["cameras"])]
+        t = np.load(ep / ctx["real_times"])[me.order_views(ctx["cameras"])[0]]
         step = float(np.median(np.diff(t))) if len(t) > 1 else 1 / 30
         ctx["fps"] = round(1.0 / step, 3)
         ctx["duration_s"] = round(float(t[-1] - t[0]) + step, 3)
@@ -2219,7 +2236,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     prs = {v: probe(p) for v, (_, p) in files.items()}
     if rig == "teleop_arms":
         from label import episode as me
-        pr = prs[next(v for v in me.VIEW_ORDER if v in files)]
+        pr = prs[me.order_views(files)[0]]
         q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])      # its frames were written from t0
         state, action, note = joint_state(mcap_joint_streams([item["file"]]), q)
     # motion the file records but this reader does not use (hand, body or camera poses in a human recording, joints

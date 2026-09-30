@@ -157,8 +157,8 @@ def test_cameras_are_assigned_to_views_by_name():
                                           "observation.images.cam_right_wrist", "observation.images.cam_low"],
                                          "teleop_arms")
     assert views == {"left": "observation.images.cam_left_wrist", "right": "observation.images.cam_right_wrist",
-                     "exo": "observation.images.cam_high"}
-    assert unused == ["observation.images.cam_low"]
+                     "exo": "observation.images.cam_high", "extra1": "observation.images.cam_low"}
+    assert unused == []
     # a fixed camera that carries a side is not a wrist camera
     assert formats.mounted_side("exterior_image_1_left") is None and formats.mounted_side("leftWrist") == "left"
     # the only camera of a single handheld gripper is the gripper's own
@@ -335,6 +335,24 @@ def test_recorded_signals_skip_bookkeeping_and_what_an_adapter_holds_back():
     assert list(got) == ["observation.velocity"] and got["observation.velocity"].shape == (n, 2)
     assert list(formats.recorded_signals(df, set(), n)) == ["observation.velocity", "is_error_segment"]
     assert formats.recorded_signals(df, set(), n + 1) == {}          # a column shorter than the episode is not kept
+
+
+def test_a_fourth_camera_is_sent_to_the_model_under_its_own_name(tmp_path):
+    root = tmp_path / "four_cams"
+    _lerobot_v21(root)
+    info = json.loads((root / "meta" / "info.json").read_text())
+    info["features"]["observation.images.cam_low"] = dict(info["features"]["observation.images.cam_high"])
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    _mp4(root / "videos" / "chunk-000" / "observation.images.cam_low" / "episode_000000.mp4", 45, shade=200)
+    out = tmp_path / "episodes"
+    rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
+    ep = out / "episode_000000"
+    ctx = json.loads((ep / "context.json").read_text())
+    assert rc == 0 and set(ctx["cameras"]) == {"exo", "left", "extra1"} and ctx["source"]["unused_cameras"] == []
+    req = me.build_request(ep)
+    assert req["views"] == ["exo", "left", "extra1"] and req["cam_labels"][-1] == ctx["cameras"]["extra1"]["name"]
+    assert f"- {ctx['cameras']['extra1']['name']}: another camera the recording has" in req["prompt"]
+    assert "There are exactly 3" in req["prompt"]
 
 
 def test_a_lerobot_camera_without_its_video_is_listed_as_unused(tmp_path):

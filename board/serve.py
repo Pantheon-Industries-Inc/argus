@@ -144,12 +144,18 @@ def _remember_frame(key, jpg: bytes) -> None:
             _FRAME_CACHE.popitem(last=False)
 
 
+EXTRA_CAM = re.compile(r"extra\d{1,2}")   # any other camera the recording has (board/clips.py clip_path)
+
+
 def clip_path(clips: Path, eid: str, cam: str) -> Path:
-    """The clip of one camera: cam "left" and "right" are the mounted cameras, anything else the main one."""
+    """The clip of one camera: cam "left" and "right" are the mounted cameras, extra1, extra2, ... the others, anything
+    else the main one."""
     if cam == "left":
         return clips / "wrist_left" / f"{eid}.mp4"
     if cam == "right":
         return clips / "wrist_right" / f"{eid}.mp4"
+    if EXTRA_CAM.fullmatch(cam or ""):
+        return clips / cam / f"{eid}.mp4"
     return clips / f"{eid}.mp4"
 
 
@@ -180,7 +186,9 @@ _FOOTAGE_LOCKS_LOCK = threading.Lock()
 def footage_cams(clips: Path, eid: str) -> list:
     """[(cam, clip)] of the episode's clips on disk, the main camera first: the fixed or head camera, else the first
     gripper camera, as the page shows them."""
-    return [(c, clip_path(clips, eid, c)) for c in ("exo", "left", "right") if clip_path(clips, eid, c).is_file()]
+    extra = sorted((d.name for d in clips.iterdir() if d.is_dir() and EXTRA_CAM.fullmatch(d.name)),
+                   key=lambda n: int(n[5:])) if clips.is_dir() else []
+    return [(c, clip_path(clips, eid, c)) for c in ("exo", "left", "right", *extra) if clip_path(clips, eid, c).is_file()]
 
 
 def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
@@ -2306,6 +2314,9 @@ async function fetchJson(url) {
   } catch (e) { return null; }
 }
 function episodeDownloadUrl(file) { return STATIC ? episodeUrl(file) : episodeUrl(file) + '&download=1'; }
+// the static build's media key of a camera value: left, right and extra1, extra2, ... are their own, anything else the
+// main camera (board/static.py media_key)
+function mediaKey(cam) { return (cam === 'left' || cam === 'right' || /^extra\d{1,2}$/.test(cam)) ? cam : 'exo'; }
 // web copy of one camera's clip; cam is the value the page asks /api/video for (left, right, or the top camera)
 function videoSrc(eidEnc, cam) {
   if (!STATIC) return 'api/video?id=' + eidEnc + '&cam=' + cam;
@@ -2320,7 +2331,7 @@ function posterAttr(eidEnc, cam) {
 function posterSrc(file, eidEnc, cam) {
   if (STATIC) {
     const rec = ALL_EPS.find(e => e.file === file) || {};
-    if (!(rec._frames || {})[(cam === 'left' || cam === 'right' ? cam : 'exo') + '|0']) return '';
+    if (!(rec._frames || {})[mediaKey(cam) + '|0']) return '';
   }
   return frameSrcOf(file, eidEnc, cam, 0);
 }
@@ -2328,7 +2339,7 @@ function frameSrc(eidEnc, cam, t) { return frameSrcOf(_activeFile, eidEnc, cam, 
 function frameSrcOf(file, eidEnc, cam, t) {
   if (!STATIC) return `api/frame?id=${eidEnc}&cam=${cam}&t=${t}&w=640`;
   const rec = ALL_EPS.find(e => e.file === file) || {};
-  return BOARD.media + ((rec._frames || {})[(cam === 'left' || cam === 'right' ? cam : 'exo') + '|'
+  return BOARD.media + ((rec._frames || {})[mediaKey(cam) + '|'
     + Math.round(Number(t) * 1000)] || '');
 }
 // the cameras an episode shows: the main player's (the top camera when there is one, else the first gripper camera)
@@ -3522,8 +3533,8 @@ function renderEp(d, opts) {
   const failed = !!cmpInfo && cmpInfo.status !== 'parsed';
   // switching source keeps the playing footage: the same video elements move into the new layout
   const keep = opts.keepVideo && document.getElementById('video') ? {
-    video: document.getElementById('video'), wl: document.getElementById('video-wl'),
-      wr: document.getElementById('video-wr')} : null;
+    video: document.getElementById('video'),
+    side: [...document.querySelectorAll('.cam-cell.cam-wrist video')].map(el => [el.id, el])} : null;
   // a head camera (the rig board/build.py copies from the episode's context) is a single panel with no mounted
   // cameras beside it
   const isEgo = d._rig === 'ego_head';
@@ -3749,8 +3760,10 @@ function renderEp(d, opts) {
   };
   const hasTop = mainCam === 'exo';
   const sideCams = camViews.filter(v => v !== mainCam && v !== 'exo');
-  const camLabel = v => v === 'exo' ? 'exo'
+  const camLabel = v => v === 'exo' ? 'exo' : (v !== 'left' && v !== 'right') ? camNameOf(v)
     : (hasTop ? `${v} wrist` : `${camNameOf(v)}${camNameOf(v) === 'gripper' ? '' : ' gripper'}`);
+  // the side cells' video ids: the two mounted cameras keep theirs, any other camera is video-<its view>
+  const sideId = v => v === 'left' ? 'video-wl' : v === 'right' ? 'video-wr' : `video-${v}`;
   const videoUrl = videoSrc(eidEnc, mainCam);
   const videoUrlWL = videoSrc(eidEnc, 'left');
   const videoUrlWR = videoSrc(eidEnc, 'right');
@@ -4058,9 +4071,9 @@ function renderEp(d, opts) {
         ${isEgo ? '' : sideCams.map(v => `
         <div class="cam-cell cam-wrist">
           <span class="cam-label">${esc(camLabel(v))}</span>
-          <video id="${v === 'left' ? 'video-wl' : 'video-wr'}" preload="auto" muted playsinline${gripOnly
-            ? ' controls' : ''}${keep ? '' : ` src="${v === 'left' ? videoUrlWL : videoUrlWR}"${posterAttr(eidEnc,
-            v)}`} onloadedmetadata="this.currentTime=0.03"></video>
+          <video id="${sideId(v)}" preload="auto" muted playsinline${gripOnly
+            ? ' controls' : ''}${keep ? '' : ` src="${v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
+            : videoSrc(eidEnc, v)}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>
         </div>`).join('')}
       </div>
       ${gripOnly ? `<div class="grip-strip">${sideCams.length ? '' : `<p class="grip-note">A single-arm task: the dataset records one gripper camera.</p>`}${notesHtml}</div>` : ''}
@@ -4101,7 +4114,7 @@ function renderEp(d, opts) {
   `;
   if (keep) {
     // the kept footage takes the place of the new, empty elements, so it plays on without reloading
-    for (const [id, el] of [['video', keep.video], ['video-wl', keep.wl], ['video-wr', keep.wr]]) {
+    for (const [id, el] of [['video', keep.video], ...keep.side]) {
       const fresh = document.getElementById(id);
       if (fresh && el) fresh.replaceWith(el);
     }
@@ -4159,8 +4172,6 @@ function renderEp(d, opts) {
 
   // wire interactions
   const vid = document.getElementById('video');
-  const vidWL = document.getElementById('video-wl');
-  const vidWR = document.getElementById('video-wr');
   const ph  = document.getElementById('playhead');
   const tl  = document.getElementById('timeline');
 
@@ -4227,7 +4238,8 @@ function renderEp(d, opts) {
   // controls; wrists track currentTime / play / pause / rate, no audio.
   // Hard-resync after each scrub to fight drift introduced by separate
   // video elements decoding at slightly different rates.
-  const slaves = [vidWL, vidWR].filter(Boolean);
+  // every camera beside the main one follows it: the two mounted cameras and any others
+  const slaves = [...document.querySelectorAll('.cam-cell.cam-wrist video')];
   const SYNC_TOL = 0.10;  // seconds; tighter than this won't reseek
   function syncSlavesNow() {
     if (!vid) return;

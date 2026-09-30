@@ -683,3 +683,21 @@ def test_the_server_hands_out_the_video_and_each_camera_as_files(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_an_extra_camera_is_cut_served_and_put_in_the_video_download(tmp_path):
+    from board import clips, static
+    serve = _footage_board(tmp_path)
+    assert clips.clip_path(tmp_path, "e", "extra1") == tmp_path / "extra1" / "e.mp4"
+    assert serve.clip_path(tmp_path, "e", "extra2") == tmp_path / "extra2" / "e.mp4"
+    assert serve.clip_path(tmp_path, "e", "../x") == tmp_path / "e.mp4"          # anything else is the main camera
+    assert static.media_key("extra1") == "extra1" and static.media_key("x") == "exo"
+    assert clips.cams_of({"extra2": 1, "right": 1, "extra1": 1, "exo": 1}) == ["exo", "right", "extra1", "extra2"]
+    (serve.MP4_DIR / "extra1").mkdir()
+    _flash_clip(serve.MP4_DIR / "extra1" / "episode_a.mp4", 80, 60, 90, 75)         # white at 2.5 s
+    assert [c for c, _ in serve.footage_cams(serve.MP4_DIR, "episode_a")] == ["exo", "left", "right", "extra1"]
+    W, H, cells = serve.footage_layout([(60, 80), (80, 60), (80, 60), (80, 60)])
+    mp4, _ = serve.footage("episode_a")
+    m = _cell_means(mp4, cells)
+    assert [int(np.argmax(m[:, i])) for i in range(4)] == [45, 60, 30, 75]

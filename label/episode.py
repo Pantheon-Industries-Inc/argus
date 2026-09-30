@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -48,7 +49,9 @@ from label import prompts
 from label import state as ms
 
 FPS = 30
-VIEW_ORDER = ("exo", "left", "right")          # harness view keys
+VIEW_ORDER = ("exo", "left", "right")          # harness view keys with a role: the scene camera, the two mounted ones
+MOUNTED = ("left", "right")                     # the cameras mounted on the left and right arm or gripper
+EXTRA_VIEW = re.compile(r"extra(\d+)")          # any other camera the recording has (extra1, extra2, ...)
 CAM_NAME = {"exo": "top", "left": "left", "right": "right"}   # dataset camera names
 GRID_CELL_W_BY_RIG = {"teleop_arms": 448, "handheld_gripper": 320, "ego_head": 256}
 CELL_W_STEPS = (448, 384, 320, 288, 256, 224, 192)   # widths tried, largest first, when a request is too big
@@ -95,7 +98,7 @@ def load(ep_dir: Path) -> dict:
     if ctx.get("state_kind") == "none":
         # video-only rigs (a head camera on a person): no recorded state; the state array is empty
         # columns over the anchor camera's frames so frame counts and times work unchanged
-        first = next(v for v in VIEW_ORDER if v in src)
+        first = order_views(src)[0]
         state, action = np.zeros((int(src[first]["n_frames"]), 0)), None
     else:
         z = np.load(ep_dir / "state.npz")
@@ -123,10 +126,17 @@ def ep_fps(ep: dict) -> float:
     return float(ep["context"].get("fps") or FPS)
 
 
+def order_views(keys) -> list[str]:
+    """View keys in row order: the scene camera, the left and right mounted ones, then the extra cameras by number."""
+    keys = list(keys)
+    extra = sorted((k for k in keys if EXTRA_VIEW.fullmatch(str(k))), key=lambda k: int(EXTRA_VIEW.fullmatch(k)[1]))
+    return [v for v in VIEW_ORDER if v in keys] + extra
+
+
 def views(ep: dict) -> list[str]:
-    """The episode's cameras in the fixed row order (top, then left, then right gripper)."""
+    """The episode's cameras in row order (top, then left, then right gripper, then any other cameras)."""
     have = ep.get("sources") or ep["context"].get("cameras") or dict.fromkeys(VIEW_ORDER)
-    return [v for v in VIEW_ORDER if v in have]
+    return order_views(have)
 
 
 def anchor(ep: dict) -> str:
@@ -134,7 +144,7 @@ def anchor(ep: dict) -> str:
 
 
 def cam_name(ep: dict, v: str) -> str:
-    return ((ep["context"].get("cameras") or {}).get(v) or {}).get("name") or CAM_NAME[v]
+    return ((ep["context"].get("cameras") or {}).get(v) or {}).get("name") or CAM_NAME.get(v, v)
 
 
 def frame_time(ep: dict, k: int) -> float:
@@ -249,7 +259,7 @@ def contact_views(ep: dict, pl: dict) -> list[tuple[int, list[str]]]:
     """[(k, views)]: each contact instant with the scene camera (it shows how the object is left) and the mounted
     cameras of the arms whose gripper value changed sharply into it (a wrist camera shows what its own gripper
     holds)."""
-    mounted = [v for v in VIEW_ORDER if v in views(ep) and v != "exo"]
+    mounted = [v for v in views(ep) if v in MOUNTED]
     if not mounted:
         return [(k, list(views(ep))) for k in pl["contact"]]
     st = np.asarray(ep["state"][:pl["n"]], dtype=np.float64)
@@ -276,7 +286,7 @@ def actors(ep: dict) -> list[str]:
         return ["left", "right"]
     if state_kind(ep) == "none":
         # video only: the actors are the mounted cameras' own, or both when no single mounted camera names one
-        mounted = [v for v in views(ep) if v != "exo"]
+        mounted = [v for v in views(ep) if v in MOUNTED]
         return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
     return ["left", "right"] if ep["state"].shape[1] == 14 else [cam_name(ep, views(ep)[-1])]
 
@@ -309,7 +319,7 @@ def frames(ep: dict, pl: dict, gate=None) -> dict:
 
 def timesteps(ep: dict, pl: dict, imgs: dict, cell_w: int, quality: int = 90):
     """[(t_s, [(camera_name, jpeg bytes), ...]), ...] in time order, cameras in a fixed order."""
-    vs = [v for v in VIEW_ORDER if v in imgs]
+    vs = order_views(imgs)
     out = []
     for k in pl["ks"]:
         out.append((frame_time(ep, k), [(cam_name(ep, v), mf.to_jpeg(imgs[v][k], cell_w, quality)) for v in vs]))
@@ -326,7 +336,7 @@ def fullres_stack(ep: dict, imgs: dict, k: int, label: str, t_s: float, only: li
     """All cameras (or `only` these) at instant k, at detail size (native, capped at DETAIL_MAX_W wide), stacked
     top to bottom with a name strip."""
     from PIL import Image, ImageDraw
-    vs = [v for v in VIEW_ORDER if v in imgs and (only is None or v in only)]
+    vs = [v for v in order_views(imgs) if only is None or v in only]
     ims = [imgs[v][k] for v in vs]
     ims = [im if im.width <= DETAIL_MAX_W else im.resize(detail_size(im.width, im.height), Image.LANCZOS)
            for im in ims]
@@ -367,6 +377,9 @@ def _camera_line(ep: dict, v: str) -> str:
     if v == "exo":
         return (f"- {cam_name(ep, v)}: a camera that is not mounted on any {n['actor']}. Use it for the "
                 "scene layout, object locations and where things end up.")
+    if v not in MOUNTED:
+        return (f"- {cam_name(ep, v)}: another camera the recording has; the dataset does not say where it is "
+                "mounted, so read that from its frames.")
     side = "" if len(views(ep)) == 1 or v not in ("left", "right") else f"{v.upper()} "
     return f"- {cam_name(ep, v)}: the camera mounted on the {side}{n['gripper_of']}."
 
@@ -382,8 +395,8 @@ def camera_desc(ep: dict) -> str:
                               "with one of these names")
     s = (f"Cameras in this episode, as named in the dataset{rec}. {count}:\n"
          + "\n".join(_camera_line(ep, v) for v in vs) + "\n")
-    if "exo" not in vs:
-        mounted = [v for v in vs if v != "exo"]
+    if not any(v not in MOUNTED for v in vs):
+        mounted = [v for v in vs if v in MOUNTED]
         s += (f"No camera in this episode is off the {n['actor'] if len(mounted) == 1 else n['actors']}: the "
               f"whole scene is seen only through {'that camera' if len(mounted) == 1 else 'those cameras'}, so "
               "reconstruct the layout and where things end up from what it shows.\n")
@@ -400,7 +413,7 @@ def camera_desc(ep: dict) -> str:
               "pixels. If a stream's content contradicts its name (a mounted camera that shows a fixed view "
               f"or the reverse, two {n['actor']} streams swapped or identical, a black or frozen stream), "
               "describe what the view actually is and record it as a data issue.")
-    if r != "ego_head" and any(v != "exo" for v in vs):
+    if r != "ego_head" and any(v in MOUNTED for v in vs):
         s += (f" A mounted camera turns with its {n['actor']}, so where it looks changes through the episode: "
               "sometimes down onto the work, sometimes along or across it. Work out its direction at each instant "
               "from the frame itself (the perspective of the table or floor, which faces of an object are in view, "
@@ -425,7 +438,7 @@ def camera_desc(ep: dict) -> str:
               "as seen from their head. Which hand is which follows the person's body (the forearm it belongs to, "
               "the thumb side), not which half of the image it is in, because hands cross the midline and reach "
               "across.")
-    elif len([v for v in vs if v != "exo"]) == 1:
+    elif len([v for v in vs if v in MOUNTED]) == 1:
         s += f" In the output, the \"arm\" field always names the one {n['actor']}: \"{actors(ep)[0]}\"."
     return s
 
@@ -672,7 +685,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     if len(views(ep)) == 1:
         # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
         grid_cols = max(grid_cols, 6)
-    cam_labels = [cam_name(ep, v) for v in VIEW_ORDER if v in imgs]
+    cam_labels = [cam_name(ep, v) for v in order_views(imgs)]
     # An explicit cell width is used as given. The rig's default is the largest width whose grids fit the
     # request's image-size cap: a long episode at 448 px can exceed it, and is then sent at the next step
     # down rather than refused. Episodes that fit are unchanged.
@@ -697,7 +710,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     views_sent = [(k, f"{name} of the episode", cam_labels, fullres_stack(ep, imgs, k, name, frame_time(ep, k)))
                   for k, name in ((pl["ks"][0], "first frame"), (pl["ks"][-1], "last frame"))]
     views_sent[1:1] = [(k, "just after a sharp change of the recorded gripper value",
-                        [cam_name(ep, v) for v in VIEW_ORDER if v in vs], jpg) for k, vs, jpg in contact]
+                        [cam_name(ep, v) for v in order_views(vs)], jpg) for k, vs, jpg in contact]
     for k, what, names, jpg in views_sent:
         extra_bytes += len(jpg)
         # the first and last views name every camera; a contact view names only its own cameras
