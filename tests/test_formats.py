@@ -478,7 +478,7 @@ def test_state_that_covers_only_part_of_the_footage_is_not_held_flat_into_a_stil
     assert not ls.still_spans(state, fps=30.0, kind="joints", grip_range=None)
 
 
-def test_frame_times_read_relative_millisecond_stamps_as_milliseconds(tmp_path):
+def _frame_times_read_relative_millisecond_stamps_as_milliseconds(tmp_path):
     """A recorder that stamps each frame in ms from the start of the recording (0, 33.3, 66.7, ...), not since 1970:
     the unit comes from the frame step, so a 3 s clip stays 3 s."""
     import numpy as np
@@ -491,7 +491,7 @@ def test_frame_times_read_relative_millisecond_stamps_as_milliseconds(tmp_path):
     assert abs(float(np.median(np.diff(t))) - 1 / 30) < 1e-6 and t[0] > 1.7e9
 
 
-def test_an_mcap_keeps_every_other_number_it_records_as_a_signal(tmp_path):
+def _an_mcap_keeps_every_other_number_it_records_as_a_signal(tmp_path):
     """The recorder's arm channels also carry joint_vel, and a gripper IMU runs beside them: both reach the episode as
     signals under their own names, while the joints and gripper already read as the state, a 0.5 Hz status report and
     a channel that stops before the footage ends do not."""
@@ -527,3 +527,15 @@ def test_an_mcap_keeps_every_other_number_it_records_as_a_signal(tmp_path):
     z = np.load(ep / "signals.npz")
     imu = z[next(s["key"] for s in ctx["signals"] if s["name"] == "/gripper/imu angular_velocity")]
     assert imu.shape == (ctx["n_state_frames"], 3) and imu[-1, 0] > imu[0, 0]
+
+
+def test_frame_times_read_relative_millisecond_stamps_as_milliseconds():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _frame_times_read_relative_millisecond_stamps_as_milliseconds(Path(t))
+
+
+def test_an_mcap_keeps_every_other_number_it_records_as_a_signal():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _an_mcap_keeps_every_other_number_it_records_as_a_signal(Path(t))
