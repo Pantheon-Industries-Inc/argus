@@ -80,6 +80,7 @@ CONTACT_EVERY_S = 4.0
 CONTACT_MAX = 8
 CONTACT_MIN_CHANGE = 0.25    # of the channel's own range over the episode, between consecutive instants
 CONTACT_MIN_GAP_S = 2.0
+PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
 GRID_GUTTER = 84
 GRID_HEADER = 30
 
@@ -197,9 +198,10 @@ def plan(ep: dict) -> dict:
     paired = {v for v in windows if v != a and v in ep["kmap"] and len(ep["kmap"][v]) >= windows[a]}
     checks = {"state_frames": T, "camera_frames": windows,
               "camera_windows_match_state": all(n == T for v, n in windows.items() if v not in paired)}
-    if ep.get("action") is not None and r == "teleop_arms" and kind == "joints":
+    if ep.get("action") is not None and r == "teleop_arms" and kind == "joints" and ep["state"].shape[1] == 14:
         # sped-up recording (the rig's loop ran below the rate its samples are stamped at): a report
-        # field computed from the leader/follower joint lag, not a claim made to the model
+        # field computed from the leader/follower joint lag, not a claim made to the model. It reads the 12 arm
+        # joints of two arms (timebase.JOINTS), as measure_folder does, so a one-arm recording is not measured
         checks["timebase"] = timebase.timebase_check(ep["state"], ep["action"],
                                                ep["context"].get("timebase_neighbour_lag_frames"))
     if kind != "none" and checks["camera_windows_match_state"]:
@@ -288,7 +290,11 @@ def actors(ep: dict) -> list[str]:
         # video only: the actors are the mounted cameras' own, or both when no single mounted camera names one
         mounted = [v for v in views(ep) if v in MOUNTED]
         return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
-    return ["left", "right"] if ep["state"].shape[1] == 14 else [cam_name(ep, views(ep)[-1])]
+    if ep["state"].shape[1] == 14:
+        return ["left", "right"]
+    # the one arm or gripper is named by its own mounted camera, never by an extra camera that sorts after it
+    mounted = [v for v in views(ep) if v in MOUNTED]
+    return [cam_name(ep, (mounted or views(ep)[:1])[-1])]
 
 
 def _decode_view(ep: dict, v: str, ks: list[int], gate=None):
@@ -317,12 +323,29 @@ def frames(ep: dict, pl: dict, gate=None) -> dict:
         return {v: f.result() for v, f in futs.items()}
 
 
+def recording_at(ep: dict, v: str, k: int) -> bool:
+    """Whether camera v was recording at anchor instant k (within PAIRED_SPAN_SLACK_S of its own first and last frame).
+    A camera paired to the anchor by real time (kmap) that started later or stopped earlier was not: its nearest frame
+    there is its first or last, taken at another time, so it is not shown under this instant's time."""
+    km = (ep.get("kmap") or {}).get(v)
+    t = ep["times"] if ep.get("times") is not None else None
+    if km is None or t is None or v not in t:
+        return True
+    # only the camera's own span counts: inside it, a dropped frame leaves the nearest frame a few hundredths of a
+    # second away, which is still the view at that moment; and a camera whose first frame comes a frame or two after
+    # the anchor's (ABC-130k's wrists, 0.034 s) is shown as usual
+    tk = frame_time(ep, k)
+    return float(t[v][0]) - PAIRED_SPAN_SLACK_S <= tk <= float(t[v][-1]) + PAIRED_SPAN_SLACK_S
+
+
 def timesteps(ep: dict, pl: dict, imgs: dict, cell_w: int, quality: int = 90):
-    """[(t_s, [(camera_name, jpeg bytes), ...]), ...] in time order, cameras in a fixed order."""
+    """[(t_s, [(camera_name, jpeg bytes), ...]), ...] in time order, cameras in a fixed order; a camera with no
+    frame at an instant (recording_at) is left out there, so its grid cell stays empty."""
     vs = order_views(imgs)
     out = []
     for k in pl["ks"]:
-        out.append((frame_time(ep, k), [(cam_name(ep, v), mf.to_jpeg(imgs[v][k], cell_w, quality)) for v in vs]))
+        out.append((frame_time(ep, k), [(cam_name(ep, v), mf.to_jpeg(imgs[v][k], cell_w, quality)) for v in vs
+                                        if recording_at(ep, v, k)]))
     return out
 
 
@@ -462,7 +485,7 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
         "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
         "seconds from the episode's first frame. Read each grid left to right and the grids in order. "
         "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
-        f"downscaled to {cell_w}x{cell_h}. After the grids, the episode's first and last instant are "
+        f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's first and last instant are "
         f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
         "small detail (lettering, a display, fine alignment)."
         + (" So are the instants just after a gripper's recorded value changes sharply, where something is "
@@ -472,7 +495,7 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
            "the frames." if pl.get("contact") else "")
         + "\n"
         f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
-        "frame.")
+        "frame." + _coverage_note(ep, pl))
     sig = _signals_table(ep, pl)
     if kind == "none":
         what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
@@ -498,6 +521,39 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
     else:
         s += f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
     return s + _motion_table(ep, pl) + sig + BETWEEN_INSTANTS
+
+
+def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
+    """The grid cell size: every camera is cut to cell_w wide with its own aspect kept (label/frames.py to_jpeg), so
+    cameras of different aspect get cells of different height, and each is named then."""
+    cams = ep["context"].get("cameras") or {}
+    sizes = {}
+    for v in views(ep):
+        c = cams.get(v) or {}
+        try:
+            w, h = int(c["width"]), int(c["height"])
+        except (KeyError, TypeError, ValueError):
+            return f"{cell_w}x{cell_h}"
+        sizes[cam_name(ep, v)] = int(round(h * cell_w / w / 2)) * 2
+    if len(set(sizes.values())) <= 1:
+        return f"{cell_w}x{cell_h}"
+    return f"{cell_w} px wide (" + ", ".join(f"{n} {cell_w}x{h}" for n, h in sizes.items()) + ")"
+
+
+def _coverage_note(ep: dict, pl: dict) -> str:
+    """A camera that has no frame at some instants (recording_at): when it records, so its empty cells are read as
+    what they are."""
+    gaps = []
+    for v in views(ep):
+        if all(recording_at(ep, v, k) for k in pl["ks"]):
+            continue
+        t = ep["times"][v]
+        gaps.append(f"{cam_name(ep, v)} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
+    if not gaps:
+        return ""
+    s = "; ".join(gaps)
+    return (" " + s[0].upper() + s[1:] + ", so its cells are empty at the instants outside that time, and it is "
+            "left out of a detail view there.")
 
 
 def _num(x: float) -> str:
@@ -693,7 +749,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     if max(widths) >= CONTACT_BELOW_W:
         pl["contact"] = []   # wide cells already show contact in detail
     contact = [(k, vs, fullres_stack(ep, imgs, k, "just after a sharp gripper change", frame_time(ep, k), vs))
-               for k, vs in contact_views(ep, pl)]
+               for k, vs in ((k, [v for v in vs if recording_at(ep, v, k)]) for k, vs in contact_views(ep, pl)) if vs]
     budget = (IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION - DETAIL_VIEW_BYTES_MAX
               - sum(len(j) for _, _, j in contact))
     for cell_w in widths:
@@ -707,8 +763,12 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     prompt = fixed + episode
     extra_bytes = 0
     # the first frame, the contact views in time order, then the last frame
-    views_sent = [(k, f"{name} of the episode", cam_labels, fullres_stack(ep, imgs, k, name, frame_time(ep, k)))
-                  for k, name in ((pl["ks"][0], "first frame"), (pl["ks"][-1], "last frame"))]
+    views_sent = []
+    for k, name in ((pl["ks"][0], "first frame"), (pl["ks"][-1], "last frame")):
+        here = [v for v in order_views(imgs) if recording_at(ep, v, k)]
+        views_sent.append((k, f"{name} of the episode",
+                           cam_labels if len(here) == len(imgs) else [cam_name(ep, v) for v in here],
+                           fullres_stack(ep, imgs, k, name, frame_time(ep, k), None if len(here) == len(imgs) else here)))
     views_sent[1:1] = [(k, "just after a sharp change of the recorded gripper value",
                         [cam_name(ep, v) for v in order_views(vs)], jpg) for k, vs, jpg in contact]
     for k, what, names, jpg in views_sent:

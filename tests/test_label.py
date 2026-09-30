@@ -824,3 +824,67 @@ def test_seeded_routing_answers_are_used_with_no_call(tmp_path, monkeypatch):
                                                                                    "routes_main.json", [])
     with pytest.raises(ValueError, match="not true or false"):
         route.seed({text: {"fine_detail": None}}, "x")
+
+
+def test_a_camera_taller_than_the_first_keeps_its_whole_frame_in_the_grid():
+    """Rows are laid out with the first camera's cell height; a 4:3 wrist camera under a 16:9 scene camera must still
+    show its whole frame (here: a white band in its bottom quarter)."""
+    import io
+    from PIL import Image
+    from label import frames as mf
+    top = Image.new("RGB", (1280, 720), (200, 0, 0))
+    wrist = Image.new("RGB", (640, 480), (0, 200, 0))
+    wrist.paste((255, 255, 255), (0, 360, 640, 480))              # bottom quarter white
+    cols = [(0.0, {"top": mf.to_jpeg(top, 224), "left": mf.to_jpeg(wrist, 224), "right": mf.to_jpeg(wrist, 224)})]
+    g = Image.open(io.BytesIO(mf.compose_grid(cols, ["top", "left", "right"], 95, 84, 30))).convert("RGB")
+    white_rows = 0
+    for y in range(g.height):
+        r, gg, b = g.getpixel((84 + 112, y))
+        white_rows += r > 230 and gg > 230 and b > 230
+    assert white_rows >= 2 * 40
+
+
+def test_the_grid_font_lays_text_out_the_same_on_every_machine():
+    from PIL import ImageFont
+    from label import frames as mf
+    assert mf._grid_font(22).layout_engine == ImageFont.Layout.BASIC
+
+
+def test_one_arm_is_named_by_its_own_camera_not_an_extra_one():
+    from label import state as ms
+    ep = {"context": {"dataset": "mine", "fps": 30, "profile": "teleop_arms", "state_kind": "joints",
+                      "cameras": {"exo": {"name": "top"}, "right": {"name": "wrist"}, "extra1": {"name": "front"}}},
+          "state": np.zeros((300, 7)), "sources": {"exo": {}, "right": {}, "extra1": {}}}
+    assert me.actors(ep) == ["wrist"]
+    pl = {"n": 300, "spans": [], "ks": ms.sample_frames(300, [], moving_every_s=1.5, still_every_s=1.5)}
+    assert 'always names the one arm: "wrist"' in me.build_prompt(ep, pl, cell_w=224, cell_h=126)[1]
+
+
+def test_a_camera_that_starts_late_is_not_shown_before_its_first_frame():
+    """RealOmni's right camera can start 2 s after the left: at 0 s and 1 s its nearest frame is its first, taken at
+    2.03 s, and must not appear under those times."""
+    left = np.arange(0, 6, 1 / 30)
+    right = np.arange(2.03, 6, 1 / 30)
+    from prepare import formats
+    ep = {"context": {"fps": 30, "cameras": {"left": {"name": "left"}, "right": {"name": "right"}}},
+          "sources": {"left": {}, "right": {}}, "times": {"left": left, "right": right},
+          "kmap": {"right": formats.nearest(right, left)}}
+    ks = [0, 30, 60, 90, 120]
+    assert [me.recording_at(ep, "right", k) for k in ks] == [False, False, True, True, True]
+    assert all(me.recording_at(ep, "left", k) for k in ks)
+    assert "Right has frames only from 2.03 s to" in me._coverage_note(ep, {"ks": ks})
+
+
+def test_the_prompt_gives_each_cameras_own_cell_size_when_they_differ():
+    """Rexair: a portrait scene camera (480x640) above two 640x480 wrist cameras. The cells are 448x598 and 448x336."""
+    from label import state as ms
+    cams = {"exo": {"name": "top", "width": 480, "height": 640}, "left": {"name": "left", "width": 640, "height": 480},
+            "right": {"name": "right", "width": 640, "height": 480}}
+    ep = {"context": {"dataset": "rexair", "fps": 30, "profile": "teleop_arms", "state_kind": "joints", "cameras": cams},
+          "state": np.zeros((300, 14)), "sources": {"exo": {}, "left": {}, "right": {}}}
+    pl = {"n": 300, "spans": [], "ks": ms.sample_frames(300, [], moving_every_s=1.5, still_every_s=1.5)}
+    p = me.build_prompt(ep, pl, cell_w=448, cell_h=598)[1]
+    assert "downscaled to 448 px wide (top 448x598, left 448x336, right 448x336)" in p
+    for c in cams.values():
+        c.update(width=640, height=480)
+    assert "downscaled to 448x336." in me.build_prompt(ep, pl, cell_w=448, cell_h=336)[1]
