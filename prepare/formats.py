@@ -678,13 +678,50 @@ def state_layout(dims: int, rig: str) -> tuple[str, str | None]:
                     + ("arm (six joints and a gripper)." if rig == "teleop_arms" else "gripper (a 6D pose and an opening)."))
 
 
-def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None) -> dict:
+# Per-frame columns that are the table's bookkeeping, not a recording: never kept as a signal
+SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
+SIGNAL_MAX_DIMS = 64          # wider columns (a point cloud, a flattened image) are not numbers a person reads
+
+
+def recorded_signals(df, used, n: int) -> dict:
+    """Every other numeric per-frame column of an episode's table, under the dataset's own name, as (n, dims) arrays:
+    the columns that are not bookkeeping (SIGNAL_SKIP), not already read (used: the state, the action, the cameras),
+    finite, at most SIGNAL_MAX_DIMS wide and at least n rows long. The harness shows them to the model as they are
+    (label/episode.py), so nothing a dataset records is dropped because our checks do not know what it means: a
+    mobile robot's base and torso, joint velocities, forces, a state wider than the arm layout."""
+    out = {}
+    if df is None:
+        return out
+    for c in df.columns:
+        if c in used or SIGNAL_SKIP.search(str(c)) or str(c).startswith("observation.images"):
+            continue
+        a = _stack(df[c])
+        if a is not None and 0 < a.shape[1] <= SIGNAL_MAX_DIMS and len(a) >= n:
+            out[str(c)] = a[:n]
+    return out
+
+
+def write_signals(ep: Path, ctx: dict, signals: dict | None) -> None:
+    """signals.npz beside the state (keys s0, s1, ...) and ctx["signals"], [{name, key, dims}], trimmed to the episode's
+    n_state_frames; nothing when there are none."""
+    n = int(ctx.get("n_state_frames") or 0)
+    keep = {k: v for k, v in (signals or {}).items() if n and len(v) >= n}
+    if not keep:
+        ctx.pop("signals", None)
+        return
+    np.savez(ep / "signals.npz", **{f"s{i}": np.asarray(v[:n], dtype=np.float32) for i, v in enumerate(keep.values())})
+    ctx["signals"] = [{"name": k, "key": f"s{i}", "dims": int(v.shape[1])} for i, (k, v) in enumerate(keep.items())]
+
+
+def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None,
+                   signals: dict | None = None) -> dict:
     ep.mkdir(parents=True, exist_ok=True)
     if state is not None and ctx.get("state_kind") != "none":
         arrs = {"state": np.asarray(state, dtype=np.float32)}
         if action is not None and np.shape(action) == np.shape(state):
             arrs["action"] = np.asarray(action, dtype=np.float32)
         np.savez(ep / "state.npz", **arrs)
+    write_signals(ep, ctx, signals)
     if times:
         np.savez(ep / "times.npz", **times)
         ctx["real_times"] = "times.npz"
@@ -1481,11 +1518,12 @@ def _safe_duration(p: Path) -> float | None:
 
 # ---------------------------------------------------------------- LeRobot: converting one episode
 
-def _read_episode_table(path: Path, eidx: int, columns: list[str]):
+def _read_episode_table(path: Path, eidx: int, columns: list[str] | None, exclude=()):
+    """The episode's rows of a LeRobot data file, in frame order: the named columns, or every column but exclude."""
     import pandas as pd
     import pyarrow.parquet as pq
     have = pq.ParquetFile(path).schema_arrow.names
-    cols = [c for c in columns if c in have]
+    cols = [c for c in have if c not in exclude] if columns is None else [c for c in columns if c in have]
     df = pd.read_parquet(path, columns=cols or None)
     if "episode_index" in df.columns:
         df = df[df["episode_index"] == eidx]
@@ -1517,7 +1555,8 @@ def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
     return ctx
 
 
-def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
+def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=()) -> dict:
+    """hold_back: columns an adapter keeps out of the prompt (a publisher's own labels, kept to score against)."""
     r, row = item["root"], item["row"]
     eidx = row["eidx"]
     feats = r["features"]
@@ -1527,8 +1566,10 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if row.get("data") is not None:
         try:
             need_images = [k for k in r["image_cams"]] if not any(k in row["videos"] for k in r["cams"]) else []
-            df = _read_episode_table(row["data"], eidx, ["observation.state", "action", "frame_index", "episode_index",
-                                                         "timestamp", "task_index", *need_images])
+            # every column, so the recording's other signals are kept too (recorded_signals); images only when the
+            # cameras are stored in the data file
+            df = _read_episode_table(row["data"], eidx, None,
+                                     exclude=[k for k in r["image_cams"] if k not in need_images])
             if not len(df):
                 df = None
         except Exception:
@@ -1604,7 +1645,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
         if note or notes:
             ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
-        return finish_episode(ep, ctx, sources, state if kind != "none" else None, action)
+        return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
+                              signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"]))
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
     # frames, so frames on the exact k/fps grid need no times; frames off it are decoded by their own pts and
     # timed by frame index, as the dataset defines them
@@ -1642,7 +1684,14 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str) -> dict:
            **extra}
     if note or notes:
         ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
-    return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times)
+    return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
+                          signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"]))
+
+
+def _used_columns(kind: str) -> set:
+    """The columns already read as the state and action. A state that does not fit the arm layout (kind "none") is not
+    read as one, so it stays a signal the model is shown."""
+    return {"observation.state", "action"} if kind != "none" else set()
 
 
 def _stream_facts(p: Path) -> dict:

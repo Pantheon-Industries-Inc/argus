@@ -216,14 +216,14 @@ def test_video_views_episode_pairs_a_second_camera_by_time(tmp_path):
 
 # ---- your own data: a LeRobot v2.1 folder ----
 
-def _lerobot_v21(root, n: int = 45, task: str = "put the cube in the bowl"):
+def _lerobot_v21(root, n: int = 45, task: str = "put the cube in the bowl", dims: int = 14, extra: dict | None = None):
     feats = {"observation.images.cam_high": {"dtype": "video", "shape": [H, W, 3],
                                              "info": {"video.width": W, "video.height": H, "video.codec": "mpeg4"}},
              "observation.images.cam_left_wrist": {"dtype": "video", "shape": [H, W, 3],
                                                    "info": {"video.width": W, "video.height": H,
                                                             "video.codec": "mpeg4"}},
-             "observation.state": {"dtype": "float32", "shape": [14]},
-             "action": {"dtype": "float32", "shape": [14]}}
+             "observation.state": {"dtype": "float32", "shape": [dims]},
+             "action": {"dtype": "float32", "shape": [dims]}}
     info = {"codebase_version": "v2.1", "fps": FPS, "chunks_size": 1000, "robot_type": "two test arms",
             "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
             "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
@@ -235,10 +235,10 @@ def _lerobot_v21(root, n: int = 45, task: str = "put the cube in the bowl"):
     (root / "meta" / "episodes.jsonl").write_text("".join(
         json.dumps({"episode_index": i, "tasks": [task], "length": n}) + "\n" for i in (0, 1)))
     rng = np.random.default_rng(0)
-    state = np.cumsum(rng.normal(0, 0.01, (n, 14)), axis=0).astype(np.float32)
+    state = np.cumsum(rng.normal(0, 0.01, (n, dims)), axis=0).astype(np.float32)
     df = pd.DataFrame({"observation.state": list(state), "action": list(state + 0.01),
                        "frame_index": np.arange(n), "episode_index": np.zeros(n, dtype=np.int64),
-                       "timestamp": np.arange(n) / FPS})
+                       "timestamp": np.arange(n) / FPS, **(extra or {})})
     (root / "data" / "chunk-000").mkdir(parents=True)
     df.to_parquet(root / "data" / "chunk-000" / "episode_000000.parquet")
     for key, shade in (("observation.images.cam_high", 0), ("observation.images.cam_left_wrist", 100)):
@@ -271,6 +271,70 @@ def test_lerobot_adapter_prepares_an_episode_the_harness_can_label(tmp_path):
     lst.write_text("1\n")
     rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out, "--episodes", lst])
     assert rc != 0
+
+
+def test_every_other_recorded_signal_reaches_the_model_under_its_own_name(tmp_path):
+    """A column the reader has no slot for (a mobile base, joint velocities, a done flag) is kept under the dataset's
+    name and shown at every sampled instant; bookkeeping columns are not; an episode with none gets no table."""
+    n = 45
+    base = np.stack([np.linspace(0, 0.9, n), np.zeros(n), np.linspace(0, 0.3, n)], axis=1)
+    root = tmp_path / "mobile"
+    _lerobot_v21(root, extra={"observation.state.chassis": list(base), "observation.state.torso": [[0.5, 0.25]] * n,
+                              "next.done": [False] * (n - 1) + [True], "task_index": np.zeros(n, dtype=np.int64),
+                              "index": np.arange(n)})
+    out = tmp_path / "episodes"
+    rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
+    ep = out / "episode_000000"
+    ctx = json.loads((ep / "context.json").read_text())
+    assert rc == 0 and ctx["state_kind"] == "joints"
+    assert [s["name"] for s in ctx["signals"]] == ["observation.state.chassis", "observation.state.torso", "next.done"]
+    z = np.load(ep / "signals.npz")
+    assert np.allclose(z[ctx["signals"][0]["key"]], base) and z["s2"].shape == (n, 1)
+    p = me.build_request(ep)["prompt"]
+    table = p.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
+    assert "observation.state.chassis (3 values): 0 to 0.9, 0, 0 to 0.3" in table
+    assert "observation.state.torso (2 values): [0.5, 0.25] throughout" in table and "next.done (1 value): 0 to 1" in table
+    assert "task_index" not in table and "  index" not in table and "timestamp" not in table
+    # an episode that records nothing else gets exactly the prompt it had before
+    plain = tmp_path / "plain"
+    _lerobot_v21(plain)
+    _main(lerobot, ["prepare", "--root", plain, "--rig", "teleop_arms", "--out", tmp_path / "plain_eps"])
+    ctx = json.loads((tmp_path / "plain_eps" / "episode_000000" / "context.json").read_text())
+    assert "signals" not in ctx and not (tmp_path / "plain_eps" / "episode_000000" / "signals.npz").exists()
+    assert "OTHER RECORDED SIGNALS" not in me.build_request(tmp_path / "plain_eps" / "episode_000000")["prompt"]
+
+
+def test_a_state_wider_than_the_arm_layout_is_shown_instead_of_dropped(tmp_path):
+    root = tmp_path / "wide"
+    _lerobot_v21(root, dims=16)
+    out = tmp_path / "episodes"
+    _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
+    ep = out / "episode_000000"
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["state_kind"] == "none" and [s["name"] for s in ctx["signals"]] == ["observation.state", "action"]
+    p = me.build_request(ep)["prompt"]
+    assert "observation.state (16 values)" in p and "the video is all there is" not in p
+
+
+def test_the_other_signals_are_measured_over_each_still_span():
+    """A base that drives while the arms hold still shows up where the still claim is made."""
+    ep = {"signals": {"base": np.concatenate([np.zeros((60, 1)), np.linspace(0, 2, 60)[:, None]]),
+                      "noise": np.full((120, 2), 0.5)}, "times": None, "kmap": {},
+          "context": {"fps": 30}, "state": np.zeros((120, 14)), "sources": {}}
+    t = me._signals_table(ep, {"n": 120, "spans": [(0, 59), (60, 119)], "ks": [0, 119]})
+    assert "base (1 value): 0 to 2" in t and "noise (2 values): [0.5, 0.5] throughout" in t
+    assert "0.00-1.97s: none changed" in t and "2.00-3.97s: base 2" in t
+
+
+def test_recorded_signals_skip_bookkeeping_and_what_an_adapter_holds_back():
+    n = 4
+    df = pd.DataFrame({"observation.velocity": [[1.0, 2.0]] * n, "frame_index": np.arange(n),
+                       "coarse_quality_index": np.zeros(n), "timestamp": np.arange(n) / 30.0,
+                       "is_error_segment": [0, 1, 1, 0], "note": ["a"] * n, "wide": [list(range(100))] * n})
+    got = formats.recorded_signals(df, set(habit.PUBLISHER_COLUMNS), n)
+    assert list(got) == ["observation.velocity"] and got["observation.velocity"].shape == (n, 2)
+    assert list(formats.recorded_signals(df, set(), n)) == ["observation.velocity", "is_error_segment"]
+    assert formats.recorded_signals(df, set(), n + 1) == {}          # a column shorter than the episode is not kept
 
 
 def test_a_lerobot_camera_without_its_video_is_listed_as_unused(tmp_path):

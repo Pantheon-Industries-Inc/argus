@@ -130,12 +130,16 @@ def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
     return write_episode(item, rows.get(int(item["row"]["eidx"]), {}), root, out, dataset)
 
 
+# the publisher's own per-frame labels: kept in context["publisher_labels"], never shown to the model as signals
+PUBLISHER_COLUMNS = ("is_error_segment", "is_intervention_segment", "is_high_jerk_segment")
+
+
 def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dict:
     """One episode read by the LeRobot reader, then HABIT's specifics; returns its context."""
     eidx = int(it["row"]["eidx"])
     info = json.loads((root / "meta" / "info.json").read_text())
     fps = float(info["fps"])
-    ctx = formats.convert_lerobot(it, RIG, out, dataset)
+    ctx = formats.convert_lerobot(it, RIG, out, dataset, hold_back=PUBLISHER_COLUMNS)
     ep = out / ctx["episode_id"]
     df = pd.read_parquet(root / info["data_path"].format(episode_chunk=eidx // 1000, episode_index=eidx),
                          columns=["low_level_task_index", "human_role_subtask_index", "is_error_segment",

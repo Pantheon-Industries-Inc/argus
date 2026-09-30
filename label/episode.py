@@ -103,7 +103,11 @@ def load(ep_dir: Path) -> dict:
             raise RuntimeError(f"{ep_dir}: state.npz has no state array; prepare the episode again")
         state, action = z["state"], (z["action"] if "action" in z.files else None)
     ep = {"dir": ep_dir, "context": ctx, "sources": src, "state": state,
-          "action": action, "times": None, "kmap": {}}
+          "action": action, "times": None, "kmap": {}, "signals": {}}
+    if ctx.get("signals"):
+        # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals)
+        z = np.load(ep_dir / "signals.npz")
+        ep["signals"] = {s["name"]: z[s["key"]] for s in ctx["signals"]}
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
@@ -456,10 +460,12 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
         + "\n"
         f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
         "frame.")
+    sig = _signals_table(ep, pl)
     if kind == "none":
         what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
-        return s + (f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
-                    + BETWEEN_INSTANTS)
+        return s + ((f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
+                     if not sig else f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read.")
+                    + sig + BETWEEN_INSTANTS)
     if not pl.get("state_usable", True):
         return s + ("\nRECORDED STATE: not given. This episode's cameras do not cover the same frames "
                     "as its recorded state, so the state cannot be aligned to the video." + BETWEEN_INSTANTS)
@@ -470,12 +476,57 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
         s += (f"\nRECORDED STILL SPANS, from the dataset's {src}: {sp}. Over each span the recording says "
               f"no {n['actor']} moved and none opened or closed. This is the recording's claim, not a "
               f"fact: check it. {'An' if n['actor'][0] in 'aeiou' else 'A'} {n['actor']} that is really still "
-              "shows a steady view in its own camera. If the views show motion during a span, the recording is "
+              "shows a steady view in its own camera"
+              + (" unless something that carries it moves, which the other recorded signals below may show; the "
+                 f"claim covers only the {n['actors']}" if sig else "")
+              + ". If the views show motion during a span, the recording is "
               f"wrong there. If the views hold steady and the scene still changes, the {n['actors']} did not do it: "
               "say what you see.")
     else:
         s += f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
-    return s + _motion_table(ep, pl) + BETWEEN_INSTANTS
+    return s + _motion_table(ep, pl) + sig + BETWEEN_INSTANTS
+
+
+def _num(x: float) -> str:
+    return f"{float(x):.3g}"
+
+
+def _signals_table(ep: dict, pl: dict) -> str:
+    """The recording's other per-frame numbers (ep["signals"], under the dataset's own names): every one listed once
+    with the range each of its values takes over the episode, and over each recorded still span how much each one
+    changed. The still span is the claim they bear on (a mobile base can drive while the arms are still), so their
+    values are spent there, not repeated at every instant. They are shown, not interpreted: the model reads what each
+    is from its name and the robot's description."""
+    sig = ep.get("signals") or {}
+    if not sig:
+        return ""
+    n = pl["n"]
+    arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
+    lines = []
+    for name, a in arrs.items():
+        d = a.shape[1]
+        head = f"  {name} ({d} value{'s' if d > 1 else ''})"
+        if not len(a):
+            continue
+        lo, hi = a.min(axis=0), a.max(axis=0)
+        if (hi == lo).all():
+            lines.append(f"{head}: " + (_num(lo[0]) if d == 1 else "[" + ", ".join(_num(x) for x in lo) + "]")
+                         + " throughout")
+        else:
+            lines.append(f"{head}: " + ", ".join(_num(l) if l == h else f"{_num(l)} to {_num(h)}" for l, h in zip(lo, hi)))
+    if pl["spans"]:
+        lines.append("  Over each recorded still span, the largest change of any one value of each signal (a signal "
+                     "that did not change is left out):")
+        for a0, b0 in pl["spans"]:
+            ch = [f"{name} {_num(c)}" for name, a in arrs.items()
+                  if (c := float((a[a0:b0 + 1].max(axis=0) - a[a0:b0 + 1].min(axis=0)).max())) > 0]
+            lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
+                         + ("; ".join(ch) if ch else "none changed"))
+    return ("\nOTHER RECORDED SIGNALS: every other number the dataset records per frame, under the dataset's own "
+            "name, with the range each of its values takes over the episode (one that never changes is given as its "
+            "value). They are not interpreted for you: read what each is from its name and the robot's description "
+            "above. Like the rest of the recording they are claims to check against the video; a camera carried by "
+            "something they show moving (a mobile base, a torso) moves with it.\n" + "\n".join(lines))
 
 
 BETWEEN_INSTANTS = (

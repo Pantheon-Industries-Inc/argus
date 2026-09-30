@@ -185,6 +185,12 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     }
     ep_dir.mkdir(parents=True, exist_ok=True)
     np.savez(ep_dir / "state.npz", state=state.astype(np.float32), action=action.astype(np.float32))
+    # everything else the robot records per frame (its base and torso, velocities, end-effector poses), shown to the
+    # model under the dataset's names: the head and wrist cameras move with the base and torso, which the arm
+    # state does not show
+    from prepare import formats
+    formats.write_signals(ep_dir, ctx, formats.recorded_signals(df, set(GALAXEA_COLUMNS) | {
+        "action.left_arm", "action.left_gripper", "action.right_arm", "action.right_gripper"}, n))
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(coarse + "\n")
     (ep_dir / "context.json").write_text(json.dumps(ctx, indent=2))
