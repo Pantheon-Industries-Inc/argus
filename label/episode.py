@@ -689,7 +689,10 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
     what = f" ({robot})" if robot else ""
     k = len(actors(ep))
     who = n["who"] if r in ("teleop_arms", "ego_head") else (
-        "a person holds one handheld gripper and does the task with it" if k == 1
+        # one camera says nothing about how many grippers the rig has: a two-gripper rig's upload can carry one
+        # gripper's footage, and its other gripper then appears in that camera, held in the other hand
+        "a person does the task with one or two handheld grippers, and this recording has one gripper's camera"
+        if k == 1
         else f"a person holds {k} handheld grippers, one per hand, and does the task with them")
     kind_of = ("one clip of first-person human video from the {d} dataset, collected to train robots and world "
                "models" if r == "ego_head" else "one episode of a robot-learning demonstration from the {d} dataset{w}")
