@@ -98,3 +98,28 @@ def test_scorer_counts_failures_missing_episodes_and_cold_cost(tmp_path, monkeyp
     c = p["cost_sample"]
     assert c["billed_usd"] == 14.01 and c["hours"] == 1.0 and c["shared_prefix_tokens"] == 6000
     assert c["cold_usd"] == pytest.approx(14.01 + 34000 * (score.CACHE_WRITE - score.CACHE_READ), abs=0.01)
+
+
+def test_a_cut_off_reply_asked_again_counts_once(tmp_path, monkeypatch):
+    """A cut-off reply stays as failed_<episode>.json and a resumed run asks the episode again; when the second reply
+    parses, the episode is one case, judged on that reply."""
+    monkeypatch.setattr(score, "load_selection", lambda: {"teleop": [{"name": "episode_a", "role": "case"}]})
+    monkeypatch.setattr(score, "load_cases", lambda: {"episode_a": {"outcome": ["failure"]}})
+    run, ep = tmp_path / "run", _episode(tmp_path, "a")
+    _out(run, "episode_a", ep, {"completion": {"task_completed": "failure"}})
+    (run / "out" / "failed_episode_a.json").write_text(json.dumps({"episode_dir": str(ep), "finish_reason": "length",
+                                                                   "usage": {"est_cost_usd": 0.5}}))
+    p = score.score([run])["teleop"]
+    assert (p["cases"], p["met"], p["asked"], p["parsed"], p["failures"]) == (1, 1, 1, 1, [])
+
+
+def test_a_setup_whose_run_wrote_nothing_scores_zero(tmp_path, monkeypatch):
+    """A gate run that failed before any model call is reported as 0 of its cases, every episode "no output", never
+    left out of the report."""
+    monkeypatch.setattr(score, "load_selection", lambda: {"ego": [{"name": "episode_e", "role": "case"}]})
+    monkeypatch.setattr(score, "load_cases", lambda: {"episode_e": {"max_issue_sev": "low"}})
+    run = tmp_path / "gate_ego" / "RUN"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"dataset": "gate_ego", "status": "exit 1"}))
+    p = score.score([run])["ego"]
+    assert (p["cases"], p["met"], p["asked"]) == (1, 0, 1) and "episode_e: no output" in p["failures"][0]

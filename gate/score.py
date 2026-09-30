@@ -152,10 +152,18 @@ def score(runs: list[Path]) -> dict:
                                     "cache_reads": [], "failures": [], "flagged": []})
     seen = set()
     for run in runs:
-        for f in sorted((Path(run) / "out").glob("*.json")):
+        # a setup whose run wrote no output at all still scores, every episode as "no output"
+        rj = Path(run) / "run.json"
+        ds = str(json.loads(rj.read_text()).get("dataset") or "") if rj.exists() else ""
+        if ds.startswith("gate_") and ds[5:] in sel:
+            rig_stats(ds[5:])
+        out = Path(run) / "out"
+        for f in sorted(out.glob("*.json")):
             name = f.stem.removeprefix("failed_")
             if name not in role:
                 continue
+            if name != f.stem and (out / f"{name}.json").exists():
+                continue        # a cut-off reply asked again on a resume: the later reply is the result
             seen.add(name)
             rig, r = role[name]
             p = rig_stats(rig)
