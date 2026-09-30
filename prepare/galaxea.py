@@ -148,6 +148,10 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
                             col("observation.state.right_arm"), col("observation.state.right_gripper")], axis=1)
     action = np.concatenate([col("action.left_arm"), col("action.left_gripper"),
                              col("action.right_arm"), col("action.right_gripper")], axis=1)
+    # a Galaxea arm variant with seven joints records 16 values; the checks and still spans read 7 per arm, so that
+    # state is labelled from the video and kept as signals, as the generic reader does (formats.state_layout)
+    from prepare import formats
+    kind, state_note = formats.state_layout(state.shape[1], "teleop_arms")
     tasks = meta["tasks"]
     # a frame may point at a task index the folder's tasks.jsonl does not define; that is kept and
     # said, since an annotation that references nothing is itself a defect of the dataset
@@ -162,7 +166,7 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     ctx = {
         "dataset": dataset,
         "profile": "teleop_arms",
-        "state_kind": "joints",
+        "state_kind": kind,
         "gripper_value": ("the measured gripper position, about 0 = jaws shut and about 100 = fully open "
                           "(checked against the wrist frames)"),
         "gripper_range": [0.0, 100.0],
@@ -189,8 +193,12 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     # model under the dataset's names: the head and wrist cameras move with the base and torso, which the arm
     # state does not show
     from prepare import formats
-    formats.write_signals(ep_dir, ctx, formats.recorded_signals(df, set(GALAXEA_COLUMNS) | {
-        "action.left_arm", "action.left_gripper", "action.right_arm", "action.right_gripper"}, n))
+    if state_note:
+        ctx["state_note"] = state_note
+    arm_cols = set(GALAXEA_COLUMNS[:4]) | {"action.left_arm", "action.left_gripper", "action.right_arm",
+                                            "action.right_gripper"}
+    formats.write_signals(ep_dir, ctx, formats.recorded_signals(
+        df, set(GALAXEA_COLUMNS[4:]) | (arm_cols if kind != "none" else set()), n))
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(coarse + "\n")
     (ep_dir / "context.json").write_text(json.dumps(ctx, indent=2))

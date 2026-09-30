@@ -85,7 +85,9 @@ def neighbour_lags(episode_index, task, lag):
     equal length; returns a list of floats (NaN where no neighbour has a lag)."""
     import pandas as pd
     d = pd.DataFrame({"e": list(episode_index), "t": list(task), "l": pd.to_numeric(list(lag), errors="coerce")})
-    order = d.sort_values("e").index
+    # runs are consecutive indices of one task, so each task's episodes are ordered by index on their own: two
+    # datasets or collections in one folder repeat the same indices, and sorted by index alone they interleave
+    order = d.sort_values(["t", "e"], kind="stable").index
     s = d.loc[order]
     run = ((s.e.diff() != 1) | (s.t != s.t.shift())).cumsum()
     w = 2 * SPEDUP_NEIGHBOURS + 1

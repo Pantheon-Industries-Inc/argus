@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from checks import capture_qc, label_consistency, stream_pairing, timebase
+from label import episode as me
 
 REPO = Path(__file__).resolve().parent.parent
 T = 120
@@ -336,3 +337,155 @@ def test_timebase_scan_and_apply(tmp_path, capsys):
     assert ctx["timebase_neighbour_lag_frames"] == pytest.approx(x.loc[8, "neighbour_lag_frames"])
     tb = json.loads((labels / "episode_000008.json").read_text())["dataset_checks"]["timebase"]
     assert tb["sped_up_recording"] is True and tb["rule"] == timebase.SPEDUP_RULE
+
+
+def test_single_arm_teleop_with_action_plans(tmp_path):
+    """A one-arm teleop episode (7 values: six joints and a gripper) with leader actions is a layout the reader
+    accepts (formats.state_layout), so planning its request must not fail in the sped-up check."""
+    rng = np.random.default_rng(0)
+    T = 120
+    s = np.cumsum(rng.normal(0, 0.01, (T, 7)), axis=0)
+    d = write_episode(tmp_path / "episode_000000", s, {"exo": np.full(T, 100.0)}, profile="teleop_arms",
+                      kind="joints")
+    np.savez(d / "state.npz", state=s, action=np.roll(s, -3, axis=0))
+    pl = me.plan(me.load(d))
+    assert "timebase" not in pl["checks"]          # the sped-up measure reads two arms, as measure_folder does
+
+
+def test_single_arm_lerobot_upload_builds_its_request(tmp_path):
+    """The same through the reader: a one-arm LeRobot v2.1 dataset (a single 6-joint arm and gripper, 7 values, with
+    actions), converted as an upload is, must build its request."""
+    from prepare import formats
+    from test_prepare import _lerobot_v21
+    root = tmp_path / "one_arm"
+    _lerobot_v21(root, n=60, dims=7)
+    out = tmp_path / "episodes"
+    rep = formats.convert(root, "teleop_arms", out, "one_arm", float("inf"), grouping={})
+    assert [e["state_kind"] for e in rep["episodes"]] == ["joints"]
+    ep = out / rep["episodes"][0]["episode_id"]
+    assert np.load(ep / "state.npz")["action"].shape == (60, 7)
+    me.build_request(ep)
+
+
+def _tb_episode(root: Path, name: str, idx: int, folder: str, lag: int) -> None:
+    d = root / name
+    d.mkdir(parents=True)
+    rng = np.random.default_rng(abs(hash((name, idx))) % 2**32)
+    a = np.cumsum(rng.normal(0, 0.01, (400, 14)), axis=0)
+    np.savez(d / "state.npz", state=np.roll(a, lag, axis=0), action=a)
+    (d / "context.json").write_text(json.dumps({"profile": "teleop_arms", "state_kind": "joints",
+                                                "task_label": ["stack the cups"],
+                                                "source": {"folder": folder, "episode_index": idx}}))
+
+
+def test_neighbour_lag_is_the_neighbours_median_when_two_datasets_share_indices(tmp_path):
+    """An upload of two collections (two LeRobot datasets, or two Galaxea collection folders) has episode indices
+    0..4 in each. The neighbour lag of episode 2 of collection B must be the median of its own run (lags 4, 4, 2, 4,
+    4 -> 4), not its own lag: the neighbour term exists so one low-lag episode among real-time neighbours is not
+    flagged (checks/timebase.py docstring, episode 241)."""
+    for i in range(5):
+        _tb_episode(tmp_path, f"episode_A_{i:06d}", i, "collection_A", lag=4)
+        _tb_episode(tmp_path, f"episode_B_{i:06d}", i, "collection_B", lag=2 if i == 2 else 4)
+    assert timebase.measure_folder(tmp_path) == 10
+    ctx = json.loads((tmp_path / "episode_B_000002" / "context.json").read_text())
+    assert ctx["timebase_neighbours_in_upload"] == 5
+    assert abs(ctx["timebase_neighbour_lag_frames"] - 4.0) < 0.3, ctx["timebase_neighbour_lag_frames"]
+
+
+def test_neighbour_lag_in_one_collection_is_the_neighbours_median(tmp_path):
+    """Control: the same five episodes of collection B alone get the median of their run."""
+    for i in range(5):
+        _tb_episode(tmp_path, f"episode_B_{i:06d}", i, "collection_B", lag=2 if i == 2 else 4)
+    timebase.measure_folder(tmp_path)
+    ctx = json.loads((tmp_path / "episode_B_000002" / "context.json").read_text())
+    assert abs(ctx["timebase_neighbour_lag_frames"] - 4.0) < 0.3
+
+
+def test_a_one_arm_recorders_folder_builds_its_request(tmp_path):
+    """Our own capture stack with one arm (its follower joints and gripper, and its leader's commands): read as one
+    episode with 7 values of joint state and the leader as action, which must build its request."""
+    from prepare import formats
+    from test_formats import recorder_folder
+    d = recorder_folder(tmp_path / "upload", n=90)
+    for p in list(d.iterdir()):
+        if "right" in p.name:
+            p.unlink()
+    out = tmp_path / "episodes"
+    rep = formats.convert(tmp_path / "upload", "teleop_arms", out, "one_arm", float("inf"), grouping={})
+    assert [e["state_kind"] for e in rep["episodes"]] == ["joints"]
+    ep = out / rep["episodes"][0]["episode_id"]
+    z = np.load(ep / "state.npz")
+    assert z["state"].shape[1] == 7 and "action" in z.files
+    me.build_request(ep)
+
+
+def test_a_single_arm_is_named_after_its_mounted_camera_not_an_extra_one(tmp_path):
+    """One arm (7 values) seen by a scene camera, its wrist camera (left) and a third camera (extra1). The arm is the
+    wrist camera's (only left and right count as mounted, a431c8d); capture_qc already takes it so (actor_views), so
+    recorded_jumps must compare the arm with that camera and the prompt must name the arm after it."""
+    rng = np.random.default_rng(1)
+    T = 120
+    s = np.cumsum(rng.normal(0, 0.01, (T, 7)), axis=0)
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"exo": np.full(T, 100.0), "left": np.full(T, 110.0), "extra1": np.full(T, 120.0)},
+                      profile="teleop_arms", kind="joints",
+                      cameras={"exo": {"name": "top"}, "left": {"name": "wrist"}, "extra1": {"name": "front"}})
+    ep = me.load(d)
+    assert me.views(ep) == ["exo", "left", "extra1"]
+    from checks import capture_qc
+    assert capture_qc.actor_views(ep, me.actors(ep)) == ["left"]
+    assert me.actors(ep) == ["wrist"]
+
+
+def test_a_single_arm_upload_with_a_third_camera_names_the_arm_after_its_wrist_camera(tmp_path):
+    """The same through the reader: a one-arm LeRobot dataset (7 values, no action) with a top, a wrist and a front
+    camera. The prompt must not tell the model the arm is called after the front camera."""
+    from prepare import formats
+    from test_prepare import _lerobot_v21, _mp4, W, H
+    root = tmp_path / "one_arm"
+    _lerobot_v21(root, n=45, dims=7)
+    import pandas as pd
+    p = root / "data" / "chunk-000" / "episode_000000.parquet"
+    df = pd.read_parquet(p).drop(columns=["action"])
+    df.to_parquet(p)
+    info = json.loads((root / "meta" / "info.json").read_text())
+    info["features"].pop("action")
+    info["features"]["observation.images.cam_front"] = dict(info["features"]["observation.images.cam_high"])
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    _mp4(root / "videos" / "chunk-000" / "observation.images.cam_front" / "episode_000000.mp4", 45, shade=50)
+    out = tmp_path / "episodes"
+    rep = formats.convert(root, "teleop_arms", out, "one_arm", float("inf"), grouping={})
+    ep = out / rep["episodes"][0]["episode_id"]
+    e = me.load(ep)
+    assert me.views(e) == ["exo", "left", "extra1"] and me.state_kind(e) == "joints"
+    wrist = me.cam_name(e, "left")
+    prompt = me.build_request(ep)["prompt"]
+    assert f'the "arm" field always names the one arm: "{wrist}"' in prompt, [l for l in prompt.splitlines() if '"arm" field' in l]
+
+
+def test_a_galaxea_episode_with_seven_joint_arms_is_labelled_from_the_video(tmp_path):
+    """Two published Galaxea episodes record 7-joint arms, 16 state values, which the checks and still spans cannot
+    read as two 7-value arms: the adapter labels such an episode from the video with a note, as the generic reader
+    does (formats.state_layout), keeps the arm columns as signals, and its request builds."""
+    import pandas as pd
+    from prepare import galaxea
+    from test_prepare import _mp4
+    n = 12
+    root = tmp_path / "collection"
+    for key in galaxea.VIDEO_KEYS.values():
+        _mp4(root / f"{key}.mp4", n, pts=[k * 1024 for k in range(n)])        # the 15 fps grid on 1/15360
+    arm = lambda: list(np.cumsum(np.full((n, 7), 0.01), axis=0))
+    df = pd.DataFrame({"observation.state.left_arm": arm(), "observation.state.right_arm": arm(),
+                       "observation.state.left_gripper": np.linspace(0, 90, n),
+                       "observation.state.right_gripper": np.linspace(0, 90, n),
+                       "action.left_arm": arm(), "action.right_arm": arm(), "action.left_gripper": np.zeros(n),
+                       "action.right_gripper": np.zeros(n), "coarse_task_index": 0, "task_index": 0,
+                       "quality_index": 1})
+    df.to_parquet(root / "episode.parquet")
+    meta = {"folder": "Put_The_Items_Into_The_Storage_Box_20250929_002", "tasks": {0: "put the items away", 1: "good"},
+            "info": {"data_path": "episode.parquet", "video_path": "{video_key}.mp4", "chunks_size": 1000}}
+    ep = tmp_path / "episode_000004"
+    ctx = galaxea.write_episode(meta, {"episode_index": 4}, lambda rel: root / rel, ep, "RogersPyke/Galaxea")
+    assert ctx["state_kind"] == "none" and "values per frame" in ctx["state_note"]
+    assert {"observation.state.left_arm", "observation.state.right_arm"} <= {s["name"] for s in ctx["signals"]}
+    me.build_request(ep)
