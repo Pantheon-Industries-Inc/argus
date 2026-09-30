@@ -106,12 +106,16 @@ class Families:
             for i in d.get(key) or []:
                 if i and i.get("issue"):
                     (counted if self.counts(key, i) else minor)[self.family_of(key, i, ds)].append(i)
-        outcome = str((d.get("completion") or {}).get("task_completed") or "").lower()
+        # the episode's outcome, and each part's of a long recording labelled in parts (label/pieces.py puts those
+        # under tasks), so a part reached and then undone counts as a short episode's does
+        outcomes = {str((d.get("completion") or {}).get("task_completed") or "").lower()}
+        outcomes |= {str(t.get("outcome") or "").lower() for t in d.get("tasks") or [] if isinstance(t, dict)}
+        outcomes.discard("")
         for f in self.defs:
             if f.get("datasets") and ds not in f["datasets"]:
                 continue
             if (any(check_hit(d, k) for k in f.get("checks") or [])
-                    or (outcome and outcome in (f.get("completion") or []))):
+                    or outcomes & set(f.get("completion") or [])):
                 counted.setdefault(f["slug"], [])
         return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted}}
 
