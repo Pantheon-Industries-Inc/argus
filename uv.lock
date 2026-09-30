@@ -21,6 +21,45 @@ wheels = [
 ]
 
 [[package]]
+name = "argus"
+version = "1.0.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "av" },
+    { name = "huggingface-hub" },
+    { name = "mcap" },
+    { name = "mcap-protobuf-support" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "protobuf" },
+    { name = "pyarrow" },
+    { name = "scipy" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "av", specifier = "==18.1.0" },
+    { name = "huggingface-hub", specifier = "==1.32.0" },
+    { name = "mcap", specifier = "==1.4.0" },
+    { name = "mcap-protobuf-support", specifier = "==0.5.4" },
+    { name = "numpy", specifier = "==2.4.6" },
+    { name = "pandas", specifier = "==3.0.6" },
+    { name = "pillow", specifier = "==12.3.0" },
+    { name = "protobuf", specifier = "==7.36.2" },
+    { name = "pyarrow", specifier = "==25.0.1" },
+    { name = "scipy", specifier = "==1.17.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = "==8.4.2" }]
+
+[[package]]
 name = "av"
 version = "18.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -385,45 +424,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/45/91/47a6e1c42d9ee337c4839208f30d9f09caa9f720ec7582917b264defc875/pyyaml-6.0.3-cp311-cp311-win32.whl", hash = "sha256:8098f252adfa6c80ab48096053f512f2321f0b998f98150cea9bd23d83e1467b", size = 142543, upload-time = "2025-09-25T21:32:08.95Z" },
     { url = "https://files.pythonhosted.org/packages/da/e3/ea007450a105ae919a72393cb06f122f288ef60bba2dc64b26e2646fa315/pyyaml-6.0.3-cp311-cp311-win_amd64.whl", hash = "sha256:9f3bfb4965eb874431221a3ff3fdcddc7e74e3b07799e0e84ca4a0f867d449bf", size = 158763, upload-time = "2025-09-25T21:32:09.96Z" },
 ]
-
-[[package]]
-name = "robot-data-audit"
-version = "1.0.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "av" },
-    { name = "huggingface-hub" },
-    { name = "mcap" },
-    { name = "mcap-protobuf-support" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "protobuf" },
-    { name = "pyarrow" },
-    { name = "scipy" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", specifier = "==18.1.0" },
-    { name = "huggingface-hub", specifier = "==1.32.0" },
-    { name = "mcap", specifier = "==1.4.0" },
-    { name = "mcap-protobuf-support", specifier = "==0.5.4" },
-    { name = "numpy", specifier = "==2.4.6" },
-    { name = "pandas", specifier = "==3.0.6" },
-    { name = "pillow", specifier = "==12.3.0" },
-    { name = "protobuf", specifier = "==7.36.2" },
-    { name = "pyarrow", specifier = "==25.0.1" },
-    { name = "scipy", specifier = "==1.17.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = "==8.4.2" }]
 
 [[package]]
 name = "scipy"

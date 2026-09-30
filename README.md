@@ -1,4 +1,4 @@
-# robot-data-audit
+# Argus
 
 Dense annotations and data-quality checks for robot-learning episodes, from Pantheon.
 
@@ -21,7 +21,7 @@ We recommend using Astra (`openai/gpt-6-astra`) with this harness, though it is 
 ## Install
 
 ```bash
-git clone git@github.com:Pantheon-Industries-Inc/robot-data-audit.git && cd robot-data-audit
+git clone git@github.com:Pantheon-Industries-Inc/argus.git && cd argus
 uv sync --frozen
 export OPENROUTER_API_KEYS=sk-or-...    # comma-separated, or set OPENAI_API_KEY to call OpenAI directly
 uv run pytest                           # offline, no model calls

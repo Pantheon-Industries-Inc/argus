@@ -1,5 +1,5 @@
 [project]
-name = "robot-data-audit"
+name = "argus"
 version = "1.0.0"
 description = "Audit robot-learning datasets and annotate every episode densely with a vision-language model and deterministic checks."
 readme = "README.md"

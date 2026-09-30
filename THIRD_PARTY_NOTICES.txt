@@ -1,4 +1,4 @@
-Third-party material in robot-data-audit
+Third-party material in Argus
 
 The repository is licensed under Apache-2.0 (LICENSE). The files listed here contain material that keeps its own
 license. Everything else the pipeline uses (the datasets, the ACE-Ego-Hand code and checkpoints, Wan2.2-Fun-5B-Control,

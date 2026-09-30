@@ -161,7 +161,7 @@ def main() -> int:
     run_dir = job / "run"
     run_dir.mkdir(exist_ok=True)
     info = {"run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
-            "code": f"robot-data-audit@{commit()}", "started_at": now(), "cap_usd": a.cap, "status": "running"}
+            "code": f"argus@{commit()}", "started_at": now(), "cap_usd": a.cap, "status": "running"}
     (run_dir / "run.json").write_text(json.dumps(info, indent=1))
     run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                             str(run_dir / "out"), "--concurrency", str(a.concurrency), "--max-spend", str(a.cap)],
