@@ -332,7 +332,8 @@ def list_episodes(here: Path | None = None) -> list:
     every episode file."""
     here = here or HERE
     try:
-        sig = tuple(sorted((p.name, int(p.stat().st_mtime), p.stat().st_size) for p in here.glob("*.json")))
+        # one stat per file: the list is signed on every page load, and a board has thousands of files
+        sig = tuple(sorted((p.name, int(st.st_mtime), st.st_size) for p in here.glob("*.json") for st in [p.stat()]))
     except OSError:
         sig = None
     with _LIST_LOCK:
@@ -343,6 +344,25 @@ def list_episodes(here: Path | None = None) -> list:
     with _LIST_LOCK:
         _LIST_CACHE[str(here)] = (sig, out)
     return out
+
+
+_LIST_BODY = {}          # folder -> (rail records, their JSON, gzipped): encoded once per list, not per request
+
+
+def list_json(here: Path | None = None) -> tuple:
+    """(JSON, gzipped JSON) of list_episodes(here). Every page load asks for the whole list, and encoding a large
+    board's list (megabytes) on each request held the server's one interpreter for most of its time."""
+    out = list_episodes(here)
+    key = str(here or HERE)
+    with _LIST_LOCK:
+        hit = _LIST_BODY.get(key)
+    if hit and hit[0] is out:
+        return hit[1], hit[2]
+    raw = json.dumps(out).encode()
+    gz = gzip.compress(raw, compresslevel=5)
+    with _LIST_LOCK:
+        _LIST_BODY[key] = (out, raw, gz)
+    return raw, gz
 
 
 def _families(d: dict) -> dict:
@@ -5302,7 +5322,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a, **kw):
         pass
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", gzipped: bytes | None = None):
+        """gzipped: the body already compressed (list_json), sent instead of compressing it again."""
         if isinstance(body, (dict, list)):
             body = json.dumps(body)
         if isinstance(body, str):
@@ -5311,7 +5332,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # gzipped, and the page waits for it before its first paint
         gz = len(body) > 16384 and "gzip" in (self.headers.get("Accept-Encoding") or "")
         if gz:
-            body = gzip.compress(body, compresslevel=5)
+            body = gzipped if gzipped is not None else gzip.compress(body, compresslevel=5)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         if gz:
@@ -5438,7 +5459,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
             return
         if parsed.path == "/api/episodes":
-            self._send(200, list_episodes())
+            raw, gz = list_json()
+            self._send(200, raw, gzipped=gz)
             return
         if parsed.path == "/api/episode":
             q = urllib.parse.parse_qs(parsed.query)
@@ -5476,7 +5498,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not key or "/" in key or key.startswith(".") or not _under(COMPARE_DIR, d) or not d.is_dir():
                     self._send(404, {"error": "no such comparison"})
                     return
-                self._send(200, list_episodes(d))
+                raw, gz = list_json(d)
+                self._send(200, raw, gzipped=gz)
                 return
             if what == "episode":
                 q = urllib.parse.parse_qs(parsed.query)
@@ -5613,6 +5636,9 @@ def main(argv=None) -> int:
     FOOTAGE_DIR = Path(os.environ.get("BOARD_FOOTAGE_DIR") or (a.board / "footage")).resolve()
     PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
     socketserver.ThreadingTCPServer.allow_reuse_address = True
+    # socketserver's default listen backlog is 5: a burst of visitors (or a proxy opening many connections at once)
+    # overflows it and those connections wait on SYN retries for up to a minute
+    socketserver.ThreadingTCPServer.request_queue_size = 128
     socketserver.ThreadingTCPServer.daemon_threads = True
     with socketserver.ThreadingTCPServer(("", PORT), Handler) as httpd:
         print(f"board at http://localhost:{PORT} ({len(list_episodes())} episodes from {HERE}, clips from {MP4_DIR})",

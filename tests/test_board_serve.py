@@ -500,3 +500,22 @@ def test_a_part_of_a_long_recording_that_was_undone_counts_like_a_short_episode_
         recs[name] = serve._rail_record(p, d)
     assert "undone" in recs["episode_short"]["families"]
     assert "undone" in recs["episode_long"]["families"]
+
+
+def test_the_list_is_encoded_once_and_follows_the_files(server):
+    """The page asks for the whole list on every load: the server encodes it once per list, gzipped or not, and a
+    changed episode file still changes the answer."""
+    import gzip as _gzip
+    code, headers, body = _get(server + "/api/episodes", {"Accept-Encoding": "gzip"})
+    plain = json.dumps(serve.list_episodes()).encode()
+    got = _gzip.decompress(body) if headers.get("Content-Encoding") == "gzip" else body
+    assert code == 200 and got == plain
+    raw, gz = serve.list_json()
+    assert serve.list_json()[1] is gz                      # the second request reuses the encoded body
+    assert _gzip.decompress(gz) == raw == plain
+    f = serve.HERE / "episode_000003.json"
+    d = json.loads(f.read_text())
+    d["episode_prompt"] = "a different instruction, long enough to change the file's size"
+    f.write_text(json.dumps(d))
+    code, _, body = _get(server + "/api/episodes")
+    assert code == 200 and any(e.get("episode_prompt") == d["episode_prompt"] for e in json.loads(body))
