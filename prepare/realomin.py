@@ -176,6 +176,11 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
     src = {"left": {"packed": str((ep / "left.mp4").resolve()), "base_s": 0.0, "n_frames": int(len(npts["left"]))},
            "right": {"packed": str((ep / "right.mp4").resolve()), "base_s": 0.0, "n_frames": int(len(npts["right"])),
                      "kmap": "kmap_right.npy"}}
+    # every other number the grippers record (each one's IMU), under the dataset's names (formats.mcap_signals); the
+    # pose and the opening are the state, and /robotN/sim/robot_info repeats the pose
+    used = {**{t: {"pose.position", "pose.orientation"} for t in POSE_TOPICS}, **{t: {""} for t in GRIPPER_TOPICS},
+            **{t.replace("/vio/eef_pose", "/sim/robot_info"): None for t in POSE_TOPICS}}
+    formats.write_signals(ep, ctx, formats.mcap_signals([mcap_path], left_t / 1e9, used))
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
     (ep / "context.json").write_text(json.dumps(ctx, indent=1))
     return ctx

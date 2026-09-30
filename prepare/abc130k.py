@@ -220,6 +220,9 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
                     for v, (name, topic) in cams.items()},
         "stream_checks": checks,
     }
+    # every other number the arms record (joint velocities and torques), under the dataset's names (formats.mcap_signals)
+    formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], t_top / 1e9,
+                                                                {t: {"position"} for t in ARM + ARM_ACT}))
     np.savez(ep_dir / "state.npz", state=state, action=action)
     np.savez(ep_dir / "times.npz", **times)
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))

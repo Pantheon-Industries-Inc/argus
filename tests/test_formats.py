@@ -456,3 +456,74 @@ def test_an_accented_name_keeps_its_letters_in_the_episode_id():
     assert f.episode_name("Día 1 – cocina/toma 1 瓶子 🍶") == "episode_Dia_1_cocina_toma_1"
     assert f.episode_name("Überprüfung_Greifer-3") == "episode_Uberprufung_Greifer_3"
     assert f.episode_name("run-1") == "episode_run_1" and f.episode_name("瓶子") == "episode_0"
+
+
+
+def test_state_that_covers_only_part_of_the_footage_is_not_held_flat_into_a_still_span():
+    """Arms recorded moving over 0 to 6 s of 10 s footage: the state must not claim they stood still over the rest
+    (np.interp holds the last sample flat), so the episode is labelled from the cameras with a note instead."""
+    import numpy as np
+    from label import state as ls
+    q = np.arange(300) / 30.0
+    t = np.arange(180) / 30.0
+    moving = np.stack([np.sin(t + j) for j in range(7)], axis=1)
+    streams = {"/left/joint_state": {"t": t, "pos": moving}, "/right/joint_state": {"t": t, "pos": moving}}
+    state, _, note = f.joint_state(streams, q)
+    assert state is None and "does not cover the footage" in note
+    # a stream that spans the footage is read as before
+    t = np.arange(301) / 30.0 - 0.01
+    full = np.stack([np.sin(t + j) for j in range(7)], axis=1)
+    state, _, note = f.joint_state({k: {"t": t, "pos": full} for k in streams}, q)
+    assert state is not None and note is None
+    assert not ls.still_spans(state, fps=30.0, kind="joints", grip_range=None)
+
+
+def test_frame_times_read_relative_millisecond_stamps_as_milliseconds(tmp_path):
+    """A recorder that stamps each frame in ms from the start of the recording (0, 33.3, 66.7, ...), not since 1970:
+    the unit comes from the frame step, so a 3 s clip stays 3 s."""
+    import numpy as np
+    (tmp_path / "exo_cam-images-rgb.mp4").write_bytes(b"")
+    np.save(tmp_path / "exo_cam-rgb-timestamp.npy", np.arange(90) * (1000 / 30))
+    t = f.frame_times(tmp_path / "exo_cam-images-rgb.mp4", 90)
+    assert abs(float(np.median(np.diff(t))) - 1 / 30) < 1e-6
+    np.save(tmp_path / "exo_cam-rgb-timestamp.npy", 1_790_000_000_000_000_000 + np.arange(90) * (1e9 / 30))
+    t = f.frame_times(tmp_path / "exo_cam-images-rgb.mp4", 90)          # stamps since 1970 in ns, as before
+    assert abs(float(np.median(np.diff(t))) - 1 / 30) < 1e-6 and t[0] > 1.7e9
+
+
+def test_an_mcap_keeps_every_other_number_it_records_as_a_signal(tmp_path):
+    """The recorder's arm channels also carry joint_vel, and a gripper IMU runs beside them: both reach the episode as
+    signals under their own names, while the joints and gripper already read as the state, a 0.5 Hz status report and
+    a channel that stops before the footage ends do not."""
+    import json
+    import numpy as np
+    from mcap.writer import Writer
+    root = tmp_path / "upload"
+    d = recorder_folder(root, n=60)          # 2 s of footage
+    t0 = 1_790_000_000.0
+    with open(d / "imu.mcap", "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        sid = w.register_schema(name="imu", encoding="jsonschema", data=b"{}")
+        imu = w.register_channel(topic="/gripper/imu", message_encoding="json", schema_id=sid)
+        slow = w.register_channel(topic="/system/cpu", message_encoding="json", schema_id=sid)
+        half = w.register_channel(topic="/gripper/force", message_encoding="json", schema_id=sid)
+        for i in range(330):
+            t = int((t0 - 0.02 + i / 150) * 1e9)
+            w.add_message(imu, log_time=t, publish_time=t, data=json.dumps(
+                {"header": {"stamp": t}, "angular_velocity": {"x": 0.1 * i, "y": 0.0, "z": -0.1 * i}}).encode())
+            if i < 150:                               # stops 1 s before the footage ends
+                w.add_message(half, log_time=t, publish_time=t, data=json.dumps({"wrench": [1.0 * i, 0, 0]}).encode())
+        w.add_message(slow, log_time=int(t0 * 1e9), publish_time=int(t0 * 1e9), data=b'{"cpu_percent": 3.0}')
+        w.finish()
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    ctx = json.loads((ep / "context.json").read_text())
+    names = [s["name"] for s in ctx["signals"]]
+    assert "/gripper/imu angular_velocity" in names and "/yam_left/joint_state joint_vel" in names, names
+    assert not any("joint_pos" in n or "gripper_pos" in n for n in names if "leader" not in n), names
+    assert not any(n.startswith(("/system/cpu", "/gripper/force")) for n in names), names
+    z = np.load(ep / "signals.npz")
+    imu = z[next(s["key"] for s in ctx["signals"] if s["name"] == "/gripper/imu angular_velocity")]
+    assert imu.shape == (ctx["n_state_frames"], 3) and imu[-1, 0] > imu[0, 0]

@@ -614,3 +614,49 @@ def test_genhumanego_refuses_recorded_times_that_do_not_match_its_frames(tmp_pat
     np.save(raw / gh.TIMES, _OFF_GRID[:-1])
     with pytest.raises(RuntimeError, match="recorded frame times"):
         gh.write_sidecar(raw, tmp_path / "episode_bad")
+
+
+
+def test_prepare_lerobot_measures_the_gripper_range_as_an_upload_does(tmp_path):
+    """python -m prepare lerobot reads a dataset exactly as Data Review reads an upload, so a gripper recorded 0 to 100
+    gets the range measured across the dataset (its still tolerance is 1% of 100), as an upload's does."""
+    from label import state as ls
+    n = 150
+    root = tmp_path / "gripper100"
+    _lerobot_v21(root, n=n)
+    p = root / "data" / "chunk-000" / "episode_000000.parquet"
+    df = pd.read_parquet(p)
+    rng = np.random.default_rng(1)
+    st = np.zeros((n, 14), dtype=np.float32)
+    st[:, 6] = 0.2 * rng.random(n)                       # shut gripper: its reading wanders by 0.2
+    st[:, 13] = 100 - 0.2 * rng.random(n)                # open gripper, the other end of its 0 to 100 range
+    df["observation.state"] = list(st)
+    df["action"] = list(st)
+    df.to_parquet(p)
+    rep = formats.convert(root, "teleop_arms", tmp_path / "upload_eps", "test", 900)
+    up = json.loads((tmp_path / "upload_eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    argv = sys.argv
+    sys.argv = ["x", "prepare", "--root", str(root), "--rig", "teleop_arms", "--out", str(tmp_path / "cli_eps")]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            lerobot.main()
+    finally:
+        sys.argv = argv
+    cli_ctx = json.loads((tmp_path / "cli_eps" / "episode_000000" / "context.json").read_text())
+    assert ls.still_spans(st, fps=30.0, kind="joints", grip_range=ls.gripper_full_range(up)) == [(0, n - 1)]
+    assert cli_ctx.get("gripper_range") == up.get("gripper_range") is not None
+
+
+def test_an_off_grid_file_without_times_fails_or_shows_the_frame_of_its_time(tmp_path):
+    """FastUMI writes no times.npz: frame k is decoded at pts k * step. In a file missing one frame, the missing
+    instant raises and every other instant decodes the frame whose pts is its own time (never a neighbour's)."""
+    from label import frames as mf
+    pts = [0, 512, 1024, 2048, 2560, 3072]                  # the frame at 3/30 s was never written
+    _mp4(tmp_path / "gap.mp4", len(pts), pts=pts)
+    got = mf.extract_frames(tmp_path / "gap.mp4", 0.0, len(pts), [0, 2, 4])
+    assert sorted(got) == [0, 2, 4]
+    with pytest.raises(mf.FrameError):
+        mf.extract_frames(tmp_path / "gap.mp4", 0.0, len(pts), [3])
+    _mp4(tmp_path / "shift.mp4", 4, pts=[512, 1024, 1536, 2048])  # the whole file one frame late
+    with pytest.raises(mf.FrameError):
+        mf.extract_frames(tmp_path / "shift.mp4", 0.0, 4, [0])

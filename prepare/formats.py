@@ -750,7 +750,7 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
                         prs: dict | None = None, real: dict | None = None, state=None, action=None,
-                        descs: dict | None = None) -> dict:
+                        descs: dict | None = None, signals: dict | None = None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
@@ -798,7 +798,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
            "duration_s": round(float(ta[-1]) + step, 3) if len(ta) else 0.0, "cameras": cams, **extra}
     if state is not None:
         ctx["state_kind"] = state_layout(state.shape[1], rig)[0]
-    return finish_episode(ep, ctx, sources, state=state, action=action, times=times)
+    return finish_episode(ep, ctx, sources, state=state, action=action, times=times, signals=signals)
 
 
 def episode_name(s: str) -> str:
@@ -1013,6 +1013,11 @@ def frame_times(video: Path, n: int) -> np.ndarray | None:
     if not cands:
         return None
     a = min(cands, key=lambda c: c[:3])[3]
+    # the unit from the frame step (a camera runs at 1 to 1000 fps), so stamps counted from the recording's start
+    # (0, 33.3, 66.7 ms) read as well as stamps since 1970; a single frame falls back to the stamp's own size
+    step = float(np.median(np.diff(a))) if n > 1 else 0.0
+    if step > 0:
+        return a * (1e-9 if step > 1.5e6 else 1e-6 if step > 1.5e3 else 1e-3 if step > 1.5 else 1.0)
     return a * (1e-9 if a[0] > 1e17 else 1e-6 if a[0] > 1e14 else 1e-3 if a[0] > 1e11 else 1.0)
 
 
@@ -1136,7 +1141,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     prs = {v: probe(p) for v, (_, p) in files.items()}
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
     state = action = None
-    descs = {}
+    descs, signals = {}, {}
     if item.get("state") and rig == "teleop_arms":
         from label import episode as me
         anchor = me.order_views(files)[0]
@@ -1146,6 +1151,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         else:
             streams = mcap_joint_streams(item["state"])
             state, action, note = joint_state(streams, real[anchor])
+            signals = mcap_signals(item["state"], real[anchor], state_fields(streams, state, action))
             if note:
                 extra["state_note"] = note
             elif state is not None:
@@ -1159,7 +1165,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                         descs["exo"] = third_arm_camera_desc(third)
     ep = unique_dir(out, episode_name(item["name"]))
     return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
-                               descs=descs)
+                               descs=descs, signals=signals)
 
 
 # ---------------------------------------------------------------- LeRobot: reading a dataset root
@@ -1970,6 +1976,106 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
             for t, s in out.items() if len(s["t"]) > 1}
 
 
+# Every other number an MCAP records (a gripper's IMU, an arm's joint velocities and torques, a base's odometry), read
+# as recorded_signals reads a LeRobot table's other columns: per channel, each numeric field under the dataset's own
+# name, placed on the anchor camera's frames. A channel with fewer messages than SIGNAL_MIN_HZ per second (a
+# calibration, a process's CPU report) is not a per-frame record, and one that does not span the footage to within
+# STATE_EDGE_SLACK_S at both ends is left out rather than held flat where nothing was recorded.
+SIGNAL_MIN_HZ = 1.0
+SIGNAL_SKIP_PARTS = {"header", "timestamp", "stamp"}      # a message's own time and sequence bookkeeping
+STATE_EDGE_SLACK_S = 0.5
+
+
+def _msg_items(m) -> list:
+    """(name, value, set) for each field of a decoded message. A Protobuf scalar left at its default is not set: proto3
+    cannot tell a 0 the recorder wrote from a field it never filled in."""
+    if isinstance(m, dict):
+        return [(k, v, True) for k, v in m.items()]
+    desc = getattr(m, "DESCRIPTOR", None)
+    if desc is not None and hasattr(desc, "fields"):          # protobuf: every declared field, zeros included
+        present = {fd.name for fd, _ in m.ListFields()}
+        return [(fd.name, getattr(m, fd.name), fd.name in present) for fd in desc.fields
+                if fd.message_type is None or fd.name in present]
+    slots = getattr(type(m), "__slots__", None)
+    if slots:
+        return [(s, getattr(m, s, None), True) for s in slots]
+    return [(k, v, True) for k, v in vars(m).items()] if hasattr(m, "__dict__") else []
+
+
+def _is_num(x) -> bool:
+    return isinstance(x, (bool, int, float, np.number))
+
+
+def _numbers(m, path: str = "") -> dict:
+    """{name: (values, set)} for the numbers of one decoded message (JSON, Protobuf, ROS): a repeated numeric field is
+    one vector under its path, the scalars of one (sub)message one vector under that message's path, set when any of
+    them was written (_msg_items). Strings, bytes, lists of messages and the message's own stamps are left out."""
+    out = {}
+    for k, v, was_set in _msg_items(m):
+        k = str(k)
+        if k in SIGNAL_SKIP_PARTS or k.startswith("_") or SIGNAL_SKIP.search(k):
+            continue
+        p = f"{path}.{k}" if path else k
+        if _is_num(v):
+            vals, seen = out.get(path, ([], False))
+            out[path] = (vals + [float(v)], seen or was_set)
+        elif v is None or isinstance(v, (str, bytes, bytearray, memoryview)):
+            continue
+        elif hasattr(v, "__len__") and not isinstance(v, dict) and not hasattr(v, "DESCRIPTOR"):
+            vals = list(v)
+            if vals and all(_is_num(x) for x in vals):
+                out[p] = ([float(x) for x in vals], True)
+        else:
+            out.update(_numbers(v, p))
+    return out
+
+
+def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> dict:
+    """{name: (len(q), dims) array} of every numeric field these MCAP files record on channels that are not cameras
+    or text, sampled at the recorded message nearest each anchor frame time q (seconds, the files' log-time clock).
+    used {topic: fields already read, or None for the whole channel} keeps out what the reader already shows as the
+    state. The name is the topic, then the field path ("/robot0/sensor/imu angular_velocity")."""
+    from mcap.reader import make_reader
+    used, facs = used or {}, _decoders()
+    q = np.asarray(q, dtype=np.float64)
+    rows: dict[str, dict] = {}
+    for p in paths:
+        chans = [t for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)
+                 and not (t in used and used[t] is None)]
+        decs = {}
+        with open(p, "rb") as fh:
+            try:
+                for schema, ch, msg in make_reader(fh).iter_messages(topics=chans, log_time_order=True):
+                    if ch.id not in decs:
+                        decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
+                    try:
+                        nums = _numbers(decs[ch.id](msg.data)) if decs[ch.id] else {}
+                    except Exception:
+                        nums = {}
+                    for field, (vals, was_set) in nums.items():
+                        if field in (used.get(ch.topic) or ()):
+                            continue
+                        r = rows.setdefault(f"{ch.topic} {field}".strip(), {"t": [], "v": [], "d": len(vals), "set": False})
+                        if len(vals) == r["d"]:
+                            r["t"].append(msg.log_time / 1e9)
+                            r["v"].append(vals)
+                            r["set"] |= was_set
+            except Exception:
+                pass                                  # a cut-off file: the messages before the cut are kept
+    out = {}
+    span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
+    for name, r in rows.items():
+        t = np.asarray(r["t"])
+        if not r["set"] or len(t) < 2 or not 0 < r["d"] <= SIGNAL_MAX_DIMS or span <= 0 or len(t) / span < SIGNAL_MIN_HZ:
+            continue
+        if t[0] > q[0] + STATE_EDGE_SLACK_S or t[-1] < q[-1] - STATE_EDGE_SLACK_S:
+            continue
+        v = np.asarray(r["v"], dtype=np.float64)
+        if np.isfinite(v).all():
+            out[name] = v[nearest(t, q)]
+    return out
+
+
 def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
     """(state, action, note): the arms' joints and grippers interpolated onto the anchor camera's frame times q (the
     same clock as the streams), 7 values per arm, left arm first; the leader or command channels, when they match, as
@@ -1996,18 +2102,21 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
         return None, None, (f"Labelled from the cameras, because the recorded arms have {' and '.join(map(str, dims))} "
                             "values per frame and our checks read six joints and a gripper per arm.")
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
-    for s in order:
-        t = streams[st[s]]["t"]
-        cover = min(float(t[-1]), float(q[-1])) - max(float(t[0]), float(q[0]))
-        if span <= 0 or cover < 0.5 * span:
-            return None, None, "Labelled from the cameras, because the recorded arm state does not cover the footage's time."
+
+    def covers(topic):
+        # the arm's samples must span the footage: a frame np.interp places past the first or last sample holds that
+        # sample's value, so the state would seem to record an arm standing still where nothing was recorded
+        t = streams[topic]["t"]
+        return span > 0 and t[0] <= q[0] + STATE_EDGE_SLACK_S and t[-1] >= q[-1] - STATE_EDGE_SLACK_S
+    if not all(covers(st[s]) for s in order):
+        return None, None, "Labelled from the cameras, because the recorded arm state does not cover the footage's time."
 
     def lerp(topic):
         x, y = streams[topic]["t"], streams[topic]["pos"]
         return np.stack([np.interp(q, x, y[:, j]) for j in range(y.shape[1])], axis=1)
     state = np.concatenate([lerp(st[s]) for s in order], axis=1)
     action = None
-    if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS for s in order):
+    if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS and covers(act[s]) for s in order):
         action = np.concatenate([lerp(act[s]) for s in order], axis=1)
     return state, action, None
 
@@ -2020,6 +2129,16 @@ def third_arms(streams: dict) -> list[str]:
     if not {"left", "right"} <= {side_of(t) for t in st}:
         return []
     return sorted(t for t in st if side_of(t) is None)
+
+
+def state_fields(streams: dict, state, action) -> dict:
+    """{topic: fields} of the joint channels joint_state read as the state (and the action, when it matched), for
+    mcap_signals to leave out; a third arm's joints, and every joint channel when no state was read, stay signals."""
+    if state is None:
+        return {}
+    third = set(third_arms(streams))
+    return {t: set(JOINT_KEYS) | set(GRIPPER_KEYS) for t in streams
+            if t not in third and (action is not None or not ACTION_TOPIC.search(t))}
 
 
 def third_arm_camera_desc(topics: list[str]) -> str:
@@ -2234,15 +2353,22 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     # the arms' joints, on the cameras' clock, when the file records them (joint_state)
     state = action = note = None
     prs = {v: probe(p) for v, (_, p) in files.items()}
+    from label import episode as me
+    pr = prs[me.order_views(files)[0]]
+    q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])          # its frames were written from t0
+    used = {}
     if rig == "teleop_arms":
-        from label import episode as me
-        pr = prs[me.order_views(files)[0]]
-        q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])      # its frames were written from t0
-        state, action, note = joint_state(mcap_joint_streams([item["file"]]), q)
+        streams = mcap_joint_streams([item["file"]])
+        state, action, note = joint_state(streams, q)
+        used = state_fields(streams, state, action)
+    # every other number the file records, under its own name (mcap_signals)
+    signals = mcap_signals([item["file"]], q, used) if item["seconds"] is not None else {}
     # motion the file records but this reader does not use (hand, body or camera poses in a human recording, joints
     # in a layout the checks do not read): named on the job page, so a missing check is never a silent gap
     motion = [t for t in item["topics"] if re.search(r"hand|pose|slam|body|joint|odom|/tf$", t, re.I)
               and not re.search(r"health|info|meta|static|image|mask", t, re.I)]
+    shown_topics = {n.split(" ", 1)[0] for n in signals}
+    motion = [t for t in motion if t not in shown_topics]            # kept as signals, so shown to the model
     if state is not None:
         extra["source"]["state"] = "joint channels"
     elif note:
@@ -2265,7 +2391,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
-    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, state=state, action=action)
+    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, state=state, action=action,
+                               signals=signals)
 
 
 def nal_units(b: bytes):
