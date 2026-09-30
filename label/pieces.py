@@ -145,6 +145,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     fps = me.ep_fps(ep)
     src = ep["sources"]
     z = np.load(ep_dir / "state.npz") if (ep_dir / "state.npz").exists() else None
+    zs = np.load(ep_dir / "signals.npz") if ctx.get("signals") else None
     tz = dict(np.load(ep_dir / ctx["real_times"])) if ctx.get("real_times") else None
     out = []
     count = len(bounds) - 1
@@ -196,6 +197,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if z is not None:
             arrs = {kk: z[kk][k0:k1] for kk in z.files}
             np.savez(d / "state.npz", **arrs)
+        if zs is not None:          # the context lists the recording's other signals, so the part carries its rows
+            np.savez(d / "signals.npz", **{kk: zs[kk][k0:k1] for kk in zs.files})
         (d / "sources.json").write_text(json.dumps(new_src, indent=1))
         (d / "context.json").write_text(json.dumps(c2, indent=1, default=str))
         (d / "instruction.txt").write_text("\n")

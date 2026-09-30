@@ -103,3 +103,22 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
         # every part's routing call is billed, and no part was graded against the recording's task text
         assert out["config"]["resolution_route"]["cost_usd"] == 0.03 and len(out["config"]["resolution_route"]["parts"]) == 2
         assert harness.episode_cost(out) == 1.03 and out["prompt_mode"] == "inferred"
+
+
+
+def test_a_recording_with_other_signals_can_be_labelled_in_parts(tmp_path, monkeypatch):
+    """A LeRobot upload with one column the reader has no slot for (a base velocity) is longer than a part: each part
+    loads, carrying its own rows of the signals its context lists."""
+    from test_prepare import _lerobot_v21
+    monkeypatch.setitem(pieces.PIECE_MAX_S, "teleop_arms", 0.5)
+    n = 45
+    root = tmp_path / "mobile"
+    _lerobot_v21(root, n=n, extra={"observation.velocity": list(np.linspace(0, 1, n)[:, None] * [1.0, 0.0])})
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    src = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    assert json.loads((src / "context.json").read_text())["signals"]
+    parts = pieces.write_pieces(src, tmp_path / "pieces")
+    assert len(parts) > 1
+    for p in parts:
+        e = me.load(p)
+        assert len(next(iter(e["signals"].values()))) == int(e["context"]["n_state_frames"])
