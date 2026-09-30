@@ -122,3 +122,27 @@ def test_a_recording_with_other_signals_can_be_labelled_in_parts(tmp_path, monke
     for p in parts:
         e = me.load(p)
         assert len(next(iter(e["signals"].values()))) == int(e["context"]["n_state_frames"])
+
+
+def test_a_part_of_a_long_head_camera_recording_gets_its_subtasks_on_its_own_clock(tmp_path, monkeypatch):
+    """The dataset's timed subtasks are on the recording's clock; a part's frames start at 0 at its cut."""
+    from prepare import formats
+    from test_formats import _clip
+    (tmp_path / "v").mkdir()
+    _clip(tmp_path / "v" / "a.mp4", 90)                      # 3 s at 30 fps
+    ep = tmp_path / "eps" / "episode_a"
+    subs = [{"t0": 0.0, "t1": 1.4, "label": "pick up the cup"}, {"t0": 1.6, "t1": 3.0, "label": "wipe the table"}]
+    formats.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "ego_head", "mine",
+                                {"instruction": "clean up", "annotation_subtasks": subs})
+    monkeypatch.setitem(pieces.PIECE_MAX_S, "ego_head", 1.6)
+    parts = pieces.write_pieces(ep, tmp_path / "pieces")
+    assert len(parts) == 2
+    e = me.load(parts[1])
+    t0 = e["context"]["piece"]["t0_s"]
+    req = me.build_request(parts[1])
+    block = req["prompt"].split("THE DATASET'S ANNOTATION FOR THIS EPISODE")[1]
+    # the part's own clock runs 0..(t1 - t0); the second subtask is at 1.6-3.0 s of the recording
+    assert f"{1.6 - t0:.1f}-{3.0 - t0:.1f}s  wipe the table" in block, block
+    first = me.load(parts[0])["context"]["annotation_subtasks"]
+    assert [x["label"] for x in first] == ["pick up the cup"] + (["wipe the table"] if t0 > 1.6 else [])
+    assert all(x["t0"] >= 0 for x in e["context"]["annotation_subtasks"])

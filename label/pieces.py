@@ -199,6 +199,15 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             np.savez(d / "state.npz", **arrs)
         if zs is not None:          # the context lists the recording's other signals, so the part carries its rows
             np.savez(d / "signals.npz", **{kk: zs[kk][k0:k1] for kk in zs.files})
+        if ctx.get("annotation_subtasks"):
+            # the dataset's timed subtasks are on the recording's clock; the part is shown those that overlap it, on
+            # its own clock and clipped to it
+            # (a step with no end time is a moment)
+            subs = [(x, float(x.get("t0") or 0.0), float(x["t1"] if x.get("t1") is not None else x.get("t0") or 0.0))
+                    for x in ctx["annotation_subtasks"] if isinstance(x, dict)]
+            c2["annotation_subtasks"] = [
+                {**x, "t0": round(max(a, t0) - t0, 3), **({"t1": round(min(b, t1) - t0, 3)} if "t1" in x else {})}
+                for x, a, b in subs if b >= t0 and a < t1]
         (d / "sources.json").write_text(json.dumps(new_src, indent=1))
         (d / "context.json").write_text(json.dumps(c2, indent=1, default=str))
         (d / "instruction.txt").write_text("\n")
