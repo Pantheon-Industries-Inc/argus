@@ -808,3 +808,19 @@ def test_reparse_rereads_only_unparsed_replies(tmp_path, monkeypatch, capsys):
     log = json.loads((run / "run.json").read_text())["reparsed"][0]
     assert log["code"] == "abc1234" and [x["episode"] for x in log["parsed_now"]] == ["episode_a"]
     assert [x["episode"] for x in log["still_unparsed"]] == ["episode_b"]
+
+
+def test_seeded_routing_answers_are_used_with_no_call(tmp_path, monkeypatch):
+    """A comparison run seeded with the reference run's answers sends each task text at the width the reference
+    did, with no routing call and nothing billed; an answer that is not true or false is refused."""
+    from label import route
+    monkeypatch.setattr(route, "_CACHE", {})
+    ep, _ = _packed_episode(tmp_path)
+    text = route.route_text(me.load(ep))
+    assert route.seed({text: {"fine_detail": True, "why": "lettering"}}, "routes_main.json") == 1
+    call, calls = _route_call([])
+    w, rec = route.route_width(ep, "sk-or-x", call)
+    assert (w, rec["fine_detail"], rec["cost_usd"], rec["seeded_from"], calls) == (448, True, 0.0,
+                                                                                   "routes_main.json", [])
+    with pytest.raises(ValueError, match="not true or false"):
+        route.seed({text: {"fine_detail": None}}, "x")

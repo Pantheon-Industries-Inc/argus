@@ -530,6 +530,9 @@ def main() -> int:
     ap.add_argument("--example-dir", default=None,
                     help="folder with example_<rig>.json: one complete annotation per rig, shown to the model as an "
                          "example of the density expected (the model comparison's with-example runs); off by default")
+    ap.add_argument("--route-seeds", type=Path, default=None,
+                    help="JSON {task text: routing answer} of another run (a model comparison's reference run), used "
+                         "instead of routing, so this run sends the same widths and frames (label/route.py)")
     ap.add_argument("--max-spend", type=float, default=0.0,
                     help="stop starting new episodes once this many USD are spent (0 = no cap)")
     ap.add_argument("--dry-run", action="store_true", help="build and record every request without calling the model")
@@ -542,6 +545,10 @@ def main() -> int:
     if not args.dry_run and not is_openrouter_key(keys[0]) and not args.model.startswith("openai/"):
         print(f"{args.model} is not an OpenAI model, so it needs OPENROUTER_API_KEYS", file=sys.stderr)
         return 2
+    if args.route_seeds:
+        from label import route
+        n = route.seed(json.loads(args.route_seeds.read_text()), args.route_seeds.name)
+        print(f"routing answers seeded for {n} task texts from {args.route_seeds}", flush=True)
     label_kw = dict(model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
                     cell_w=args.cell_w, example_dir=args.example_dir, dry_run=args.dry_run)
     if args.episode_dir:

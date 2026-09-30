@@ -7,6 +7,10 @@ wide cells, every other task the narrow cells plus contact detail views. The cal
 answer is recorded in the episode's output (config.resolution_route), and a failed call, an unclear answer, a dry
 run or an episode with no task text all get the wide cells. Episodes with the same task text share one answer
 within a run; the cost is recorded on the episode whose call it was (label.harness.episode_cost).
+
+The answer is sampled, so two runs over the same episodes can send some of them at different widths. A model
+comparison seeds the answers instead (seed(), label/harness.py --route-seeds): every model's run starts with the
+reference run's recorded answer for each task text, so every model sees the same frames and makes no routing call.
 """
 from __future__ import annotations
 
@@ -30,6 +34,21 @@ ROUTE_PROMPT = (
 # One answer per task text for the life of the process: the episodes of one task share it.
 _CACHE: dict = {}
 _LOCK = threading.Lock()
+
+
+def seed(answers: dict, source: str) -> int:
+    """Hold another run's routing answers, {task text as route_text gives it: {"fine_detail": true or false, "why":
+    ...}}, as this process's own; returns how many. An answer that is not true or false is refused, since the wide
+    cells it would fall back to need not be what the other run sent."""
+    held = {}
+    for text, a in answers.items():
+        if not isinstance(a.get("fine_detail"), bool):
+            raise ValueError(f"the seeded answer for {text[:80]!r} is not true or false")
+        held[text] = {"fine_detail": a["fine_detail"], "why": str(a.get("why") or "")[:200], "cost_usd": 0.0,
+                      "seeded_from": source}
+    with _LOCK:
+        _CACHE.update(held)
+    return len(held)
 
 
 def route_text(ep: dict) -> str:

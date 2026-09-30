@@ -1,0 +1,158 @@
+{
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: desktop garbage organizing20250721\nTask label: desktop garbage organizing20250721\nTimed sub-steps: [{'t0': 0.0, 't1': 6.87, 'label': 'Approach the table.'}, {'t0': 6.87, 't1': 26.87, 'label': 'Pick up the cigarette box with your left hand and throw it into the trash can.'}, {'t0': 26.87, 't1': 44.0, 'label': 'Pick up the water bottle with your left hand.'}, {'t0': 44.0, 't1': 51.8, 'label': 'Tilt backward to upright, then move backward; lower the torso close to the trash can.'}, {'t0': 51.8, 't1': 58.8, 'label': 'Throw the water bottle into the trash can with your left hand.'}, {'t0': 58.8, 't1': 73.13, 'label': 'Pick up the yellow ticket with the left hand.'}, {'t0': 73.13, 't1': 83.93, 'label': 'Tilt torso upright, then move backward and lower trunk toward the trash can.'}, {'t0': 83.93, 't1': 88.93, 'label': 'Discard the yellow ticket with the left hand.'}, {'t0': 88.93, 't1': 101.33, 'label': 'Return to the initial position.'}]": {
+  "fine_detail": false,
+  "why": "The box, bottle, and yellow ticket can be distinguished by shape and color; no text needs reading."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: dry clothes in a dryer\nTask label: dry clothes in a dryer\nTimed sub-steps: [{'t0': 0.0, 't1': 11.67, 'label': 'Open the middle upper dryer door halfway with the right hand.'}, {'t0': 11.67, 't1': 37.4, 'label': 'Fully open the top-middle dryer door with the left hand.'}, {'t0': 37.4, 't1': 42.67, 'label': 'Fully open the top middle dryer door with the right hand.'}, {'t0': 42.67, 't1': 56.4, 'label': 'Lower the torso to the height of the lower washing machine, then look forward.'}, {'t0': 56.4, 't1': 77.47, 'label': 'Pick up the black clothing from the laundry basket with your right hand.'}, {'t0': 77.47, 't1': 89.4, 'label': 'Move left to the front of the middle washing machine, then raise the torso to the front of the upper dryer.'}, {'t0': 89.4, 't1': 104.0, 'label': 'Place the black clothing into the top-middle dryer with your right hand.'}, {'t0': 104.0, 't1': 111.4, 'label': 'Move backward away from the dryer, then move right to the dryer door.'}, {'t0': 111.4, 't1': 119.27, 'label': 'Close the middle upper dryer door halfway with the right hand.'}, {'t0': 119.27, 't1': 130.6, 'label': 'Fully close the left upper dryer door.'}]": {
+  "fine_detail": false,
+  "why": "Door positions, clothing pickup, and open-or-closed states are visible in small frames."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: heat food in microwave oven\nTask label: heat food in microwave oven\nTimed sub-steps: [{'t0': 0.0, 't1': 10.6, 'label': 'Turn on the microwave switch with the right hand.'}, {'t0': 10.6, 't1': 29.53, 'label': 'Pick up the food with the right hand and place it in the microwave.'}, {'t0': 29.53, 't1': 40.67, 'label': 'Fully close the microwave door with the left hand.'}, {'t0': 40.67, 't1': 49.2, 'label': 'Set microwave time with right hand.'}, {'t0': 49.2, 't1': 55.2, 'label': 'Body remain stationary.'}, {'t0': 55.2, 't1': 61.27, 'label': 'Open the microwave switch with your right hand.'}, {'t0': 61.27, 't1': 82.93, 'label': 'Pick up the food with the right hand and place it into the plate.'}, {'t0': 82.93, 't1': 91.6, 'label': 'Fully close the microwave door with the left hand.'}]": {
+  "fine_detail": true,
+  "why": "Checking the microwave time setting requires reading the display."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: open and close the refrigerator drawer to place items\nTask label: open and close the refrigerator drawer to place items\nTimed sub-steps: [{'t0': 0.0, 't1': 1.73, 'label': 'Torso remains stationary.'}, {'t0': 1.73, 't1': 13.13, 'label': 'Fully pull out the upper drawer of the refrigerator with your right hand.'}, {'t0': 13.13, 't1': 26.87, 'label': 'Pick up the snake fruit with your right hand and place it in the drawer.'}, {'t0': 26.87, 't1': 36.8, 'label': 'Pick up the bell pepper with the right hand.'}, {'t0': 36.8, 't1': 47.47, 'label': 'Pick up the bell pepper with your right hand and place it in the drawer.'}, {'t0': 47.47, 't1': 54.87, 'label': 'Pick up the avocado with the right hand.'}, {'t0': 54.87, 't1': 63.4, 'label': 'Pick up the avocado with the right hand and place it in the drawer.'}, {'t0': 63.4, 't1': 70.2, 'label': 'Fully close the upper drawer of the refrigerator with the right hand.'}]": {
+  "fine_detail": false,
+  "why": "The drawer movement and placement of visually distinct items are visible in small frames."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: organize toys\nTask label: organize toys\nTimed sub-steps: [{'t0': 0.0, 't1': 28.73, 'label': 'Pick up the blue dice with the right hand and place it into the storage box.'}, {'t0': 28.73, 't1': 40.8, 'label': 'Pick up the tennis ball on the ground with your right hand and place it into the storage box.'}, {'t0': 40.8, 't1': 47.13, 'label': 'Tilt backward to upright.'}, {'t0': 47.13, 't1': 64.33, 'label': 'Pick up the tennis ball on the table with your right hand.'}, {'t0': 64.33, 't1': 71.33, 'label': 'Move away from the table, then rotate right to face the storage box.'}, {'t0': 71.33, 't1': 81.4, 'label': 'Place the tennis ball into the storage box with the right hand.'}, {'t0': 81.4, 't1': 105.27, 'label': 'Close the storage box with the lid using your right hand.'}, {'t0': 105.27, 't1': 116.6, 'label': 'Return to initial position.'}]": {
+  "fine_detail": false,
+  "why": "The toys and box actions are identifiable without reading markings or distinguishing small similar objects."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: pick and place ice cream freezer\nTask label: pick and place ice cream freezer\nTimed sub-steps: [{'t0': 0.0, 't1': 3.73, 'label': 'Turn right to face the shelf.'}, {'t0': 3.73, 't1': 23.13, 'label': 'Pick up the yogurt on the second shelf from the top and fifth from the right in the field of view with the left hand.'}, {'t0': 23.13, 't1': 46.87, 'label': 'Place the yogurt back on the shelf with the left hand: second row from the top, fifth position from the right.'}]": {
+  "fine_detail": true,
+  "why": "Identifying the fifth yogurt from the right among similar items may need finer detail."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: pour water\nTask label: pour water\nTimed sub-steps: [{'t0': 0.0, 't1': 17.4, 'label': 'Pick up the hot water bottle with your left hand.'}, {'t0': 17.4, 't1': 55.47, 'label': 'Pour water into the transparent white cup with your left hand.'}, {'t0': 55.47, 't1': 71.67, 'label': 'Pour water into the yellow transparent cup with the left hand.'}, {'t0': 71.67, 't1': 100.93, 'label': 'Place the kettle back in its original position with your left hand.'}, {'t0': 100.93, 't1': 130.0, 'label': 'Pour the water from the yellow transparent cup into the sink with your right hand, then return it to its original position.'}, {'t0': 130.0, 't1': 165.0, 'label': 'Pour the water from the transparent white cup in your right hand into the sink, then return it to its original position.'}, {'t0': 165.0, 't1': 165.07, 'label': 'null'}]": {
+  "fine_detail": false,
+  "why": "Cup colors, pouring, and object placement are visible at low resolution."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: put shoes into the shoe box\nTask label: put shoes into the shoe box\nTimed sub-steps: [{'t0': 0.0, 't1': 31.93, 'label': 'Place the shoe neatly with the right hand.'}, {'t0': 31.93, 't1': 53.53, 'label': 'Place the shoe into the shoebox with the right hand.'}, {'t0': 53.53, 't1': 67.13, 'label': 'Adjust the shoebox position with the right hand.'}, {'t0': 67.13, 't1': 85.0, 'label': 'Close the shoebox lid using both hands.'}, {'t0': 85.0, 't1': 89.87, 'label': 'Restore to initial position.'}]": {
+  "fine_detail": false,
+  "why": "Shoe placement and shoebox closure are visible at low resolution."
+ },
+ "Dataset: RogersPyke/Galaxea-Open-World-Dataset_10K_20260123\nRobot: Galaxea R1 Lite (mobile base and torso, two 6-DoF arms with parallel-jaw grippers)\nInstruction: put the pillow on the bed20250617\nTask label: put the pillow on the bed20250617\nTimed sub-steps: [{'t0': 0.0, 't1': 16.53, 'label': 'Approach the blue pillow with the main body, then pick it up with the right hand.'}, {'t0': 16.53, 't1': 58.33, 'label': 'Approach the bedside, then place the blue pillow on the bedside with the right hand.'}, {'t0': 58.33, 't1': 75.07, 'label': 'Pick up the blue pillow with your right hand.'}, {'t0': 75.07, 't1': 94.67, 'label': 'Approach the foot of the bed with the body, then use the right hand to place the blue pillow at the foot of the bed.'}, {'t0': 94.67, 't1': 94.73, 'label': 'null'}]": {
+  "fine_detail": false,
+  "why": "Pillow placement on the bed is visible at low resolution."
+ },
+ "Dataset: XDOF/ABC-130k\nRobot: bimanual YAM station (2x 6-DoF YAM arms, parallel-jaw grippers)\nInstruction: assemble a carrot with lego\nTask label: assemble_a_carrot_with_lego": {
+  "fine_detail": true,
+  "why": "Assembly requires distinguishing small LEGO pieces of similar shape."
+ },
+ "Dataset: XDOF/ABC-130k\nRobot: bimanual YAM station (2x 6-DoF YAM arms, parallel-jaw grippers)\nInstruction: remove the shorts from the hanger\nTask label: remove_the_shorts_from_the_hanger": {
+  "fine_detail": false,
+  "why": "Removing shorts from a hanger can be judged from their overall positions and movement."
+ },
+ "Dataset: XDOF/ABC-130k\nRobot: bimanual YAM station (2x 6-DoF YAM arms, parallel-jaw grippers)\nInstruction: tie the bouquet of fake flowers\nTask label: tie_the_bouquet_of_fake_flowers": {
+  "fine_detail": false,
+  "why": "Bouquet placement and whether it is tied are visible at low resolution."
+ },
+ "Dataset: XDOF/ABC-130k\nRobot: bimanual YAM station (2x 6-DoF YAM arms, parallel-jaw grippers)\nInstruction: unpack the express box\nTask label: unpack_the_express_box": {
+  "fine_detail": false,
+  "why": "Unpacking a box is visible from object movement and whether the box is open."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Flip the blocks one by one to reveal different letters and symbols on each side.\nTask label: flip 5 blocks": {
+  "fine_detail": true,
+  "why": "Must read letters and symbols to identify the revealed sides."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Grasp the black pants, fold them in half lengthwise, then fold again widthwise. Place the folded pants neatly on the table.\nTask label: Clothes Folding": {
+  "fine_detail": false,
+  "why": "Folding and placing pants can be judged from their overall shape and position."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Move the blocks into a straight horizontal line on the table.\nTask label: form a horizontal line": {
+  "fine_detail": false,
+  "why": "Block positions and alignment are visible at low resolution."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Move the red snack bag, yellow snack bag, and two small boxes to the right side of the table.\nTask label: scan the item barcode": {
+  "fine_detail": true,
+  "why": "Scanning the barcode requires seeing fine printed details."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Pick up blocks with letters A, I, and 2, then arrange them to spell AI2.\nTask label: spell out AI2": {
+  "fine_detail": true,
+  "why": "Must read the letters and number on the blocks to arrange AI2."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Pick up the green block, place it on the table, then stack the red block on top.\nTask label: form a tower": {
+  "fine_detail": false,
+  "why": "Block colors and stacking are visible at low resolution."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Push the blocks into a line, then rotate each block to align their faces correctly.\nTask label: rotate 4 blocks": {
+  "fine_detail": true,
+  "why": "Must distinguish block faces to check their orientation."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Rotate five blocks using the robot arm's gripper.\nTask label: rotate 5 blocks": {
+  "fine_detail": true,
+  "why": "Judging block rotation may require seeing which face is up."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Rotate the blocks with the letters \"A,\" \"B,\" and \"C\" to face upwards using the robotic arm's gripper.\nTask label: rotate 3 blocks": {
+  "fine_detail": true,
+  "why": "Must read the letters and verify each block’s lettered face is up."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Use the blue scoop to transfer red beans into the bowl until the scale reads 150 grams.\nTask label: Scoop item into bowl and weigh 150g on scale": {
+  "fine_detail": true,
+  "why": "Need to read the scale display to confirm 150 grams."
+ },
+ "Dataset: allenai/MolmoAct2-BimanualYAM-Dataset\nRobot: bi_yam_follower\nInstruction: Use the red scoop to transfer beans from the container to the bowl on the scale until it reads 50g.\nTask label: Scoop and weigh 50g on scale": {
+  "fine_detail": true,
+  "why": "The scale display must be read to confirm 50g."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Clean the shelf.\nTask label: Clean the shelf.": {
+  "fine_detail": false,
+  "why": "Shelf cleaning can be judged from visible object positions and movements."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Fill the beverage cans into the dispenser.\nTask label: Fill the beverage cans into the dispenser.": {
+  "fine_detail": false,
+  "why": "Only the cans’ positions and placement in the dispenser matter."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Fold the towels and place them in the basket.\nTask label: Fold the towels and place them in the basket.": {
+  "fine_detail": false,
+  "why": "Folding towels and placing them in a basket is visible at low resolution."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Move the first donut from the left to the tray.\nTask label: Move the first donut from the left to the tray.": {
+  "fine_detail": false,
+  "why": "Identifying the leftmost donut and the tray only requires seeing their positions."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Organize the shoes by placing them on the stand.\nTask label: Organize the shoes by placing them on the stand.": {
+  "fine_detail": false,
+  "why": "The task only requires seeing the shoes and whether they are on the stand."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Pack the glasses set securely to prepare it for shipping.\nTask label: Pack the glasses set securely to prepare it for shipping.": {
+  "fine_detail": false,
+  "why": "Packing glasses can be judged from object placement and box closure."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Pack the items into the box.\nTask label: Pack the items into the box.": {
+  "fine_detail": false,
+  "why": "Packing items into a box can be judged from object locations."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Place the drinks into the Shopping basket.\nTask label: Place the drinks into the Shopping basket.": {
+  "fine_detail": false,
+  "why": "Placing drinks in a basket only requires seeing the objects and their positions."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Pour a drink into a cup and package it in a carrier.\nTask label: Pour a drink into a cup and package it in a carrier.": {
+  "fine_detail": false,
+  "why": "Pouring and placing the cup in a carrier are visible at low resolution."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Prepare the solutions needed for the experiment.\nTask label: Prepare the solutions needed for the experiment.": {
+  "fine_detail": true,
+  "why": "Identifying the required solutions may require reading container labels."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Provide the desired donut to the person.\nTask label: Provide the desired donut to the person.": {
+  "fine_detail": true,
+  "why": "Identifying the desired donut may require distinguishing similar-looking donuts."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Set up a tray with a mat and arrange the tableware.\nTask label: Set up a tray with a mat and arrange the tableware.": {
+  "fine_detail": false,
+  "why": "Arranging a mat and tableware on a tray is visible at low resolution."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Set up donuts and drinks on trays.\nTask label: Set up donuts and drinks on trays.": {
+  "fine_detail": false,
+  "why": "Placing donuts and drinks on trays can be judged from whole objects and their positions."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Sort the digital clocks into the basket.\nTask label: Sort the digital clocks into the basket.": {
+  "fine_detail": true,
+  "why": "Identifying the digital clocks may require seeing their displays."
+ },
+ "Dataset: configinc/HABIT\nRobot: two Franka FR3 arms teleoperated with a Meta Quest 3\nInstruction: Sort the waste into the appropriate baskets.\nTask label: Sort the waste into the appropriate baskets.": {
+  "fine_detail": false,
+  "why": "Waste items and baskets can generally be distinguished by their overall appearance and location."
+ }
+}

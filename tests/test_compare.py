@@ -428,3 +428,62 @@ def test_episodes_the_board_does_not_hold_are_left_out(tmp_path):
     res = metrics.compute(comp, tmp_path)
     assert [e["episode_id"] for e in res["episodes"]] == ["episode_a"]
     assert res["summary"]["all"]["episodes"] == 1 and res["summary"]["all"]["responses"]["m3"]["asked"] == 1
+
+
+# ---------------------------------------------------------------- label: the reference run's routing answers
+
+def _routed_slice(root: Path, instructions: dict) -> Path:
+    """A slice of teleop episodes (a routed rig) and one head-camera episode, each with the files label.episode
+    loads."""
+    import numpy as np
+    sl = root / "slice"
+    for name, instr in {**instructions, "episode_ego": None}.items():
+        d = sl / name
+        d.mkdir(parents=True)
+        (d / "sources.json").write_text(json.dumps({"exo": {"n_frames": 10}}))
+        ctx = {"dataset": "some/dataset", "fps": 30, "n_state_frames": 10}
+        if instr is None:
+            ctx.update(profile="ego_head", state_kind="none")
+        else:
+            ctx.update(profile="teleop_arms", state_kind="joints", instruction=instr)
+            np.savez(d / "state.npz", state=np.zeros((10, 14)))
+        (d / "context.json").write_text(json.dumps(ctx))
+    return sl
+
+
+def test_unrouted_names_the_teleop_episodes_the_answers_do_not_cover(tmp_path):
+    from label import episode as me
+    from label import route
+    sl = _routed_slice(tmp_path, {"episode_a": "Stack the cups.", "episode_b": "Read the label."})
+    answers = {route.route_text(me.load(sl / "episode_a")): {"fine_detail": False, "why": "whole objects"}}
+    assert cm.unrouted(sl, answers) == ["episode_b"]          # a head camera is never routed, so never missing
+
+
+def test_label_with_routes_seeds_every_run_and_refuses_what_it_cannot_seed(tmp_path, monkeypatch):
+    routes = tmp_path / "routes.json"
+    routes.write_text("{}")
+    _label(tmp_path, monkeypatch, "--selection", str(SELECTIONS / "main.json"), "--models", "sol61_high",
+           "--cap", "150", "--routes", str(routes))
+    monkeypatch.setattr(cm, "unrouted", lambda sl, answers: [])
+    assert cm.main() == 0
+    (cmd,) = FakeLabel.started
+    assert cmd[cmd.index("--route-seeds") + 1] == str(routes.resolve())
+    _label(tmp_path / "b", monkeypatch, "--selection", str(SELECTIONS / "main.json"), "--models", "sol61_high",
+           "--cap", "150", "--routes", str(routes))
+    monkeypatch.setattr(cm, "unrouted", lambda sl, answers: ["episode_x"])
+    with pytest.raises(SystemExit, match="no routing answer for 1 routed episodes"):
+        cm.main()
+    assert FakeLabel.started == []
+
+
+def test_published_routes_answer_every_task_text_true_or_false():
+    from label import route
+    answers = json.loads((cm.REPO / "configs" / "compare" / "routes_main.json").read_text())
+    assert len(answers) == 39 and all(isinstance(a["fine_detail"], bool) for a in answers.values())
+    assert all(t.startswith("Dataset: ") for t in answers)
+    monkeypatch_cache = dict(route._CACHE)
+    try:
+        assert route.seed(answers, "routes_main.json") == 39
+    finally:
+        route._CACHE.clear()
+        route._CACHE.update(monkeypatch_cache)

@@ -22,7 +22,10 @@ the model's entry names its own), all at once, each in its own run folder under 
 <time>_<kind>_<commit>_<model key>[_ex]. With --with-example the models of the "with_example" list are also shown
 configs/examples/example_<rig>.json, one complete annotation of a different episode of the same rig. A paid kind needs --cap, the spend cap of each model's run. It then writes
 RUNS/compare/<selection>[_ex].json: the runs as entries of a board manifest's "comparisons" list, the run of
-models.json's "reference" model marked as the reference.
+models.json's "reference" model marked as the reference. A teleop episode's cell width is a sampled routing answer
+(label/route.py), so two runs can send an episode different frames; --routes gives every run the reference run's
+answers instead (configs/compare/routes_main.json holds those of the published comparison), and refuses a routed
+episode it holds no answer for.
 
 `board` writes a board manifest, BOARD/manifest.json, from the entries files: one board dataset, "compare", whose
 labels are the reference run's, and every other run as a comparison. Build it with `python -m board build BOARD`:
@@ -102,6 +105,18 @@ def link_slice(selection: Path, episodes: Path) -> Path:
     return dest
 
 
+def unrouted(slice_dir: Path, answers: dict) -> list[str]:
+    """The episodes of a routed rig (label/episode.py ROUTE_WIDTHS) whose task text has no answer in answers."""
+    from label import episode as me
+    from label import route
+    miss = []
+    for d in sorted(p for p in slice_dir.iterdir() if (p / "context.json").exists()):
+        ep = me.load(d)
+        if me.rig(ep) in me.ROUTE_WIDTHS and route.route_text(ep) not in answers:
+            miss.append(d.name)
+    return miss
+
+
 def cmd_label(a) -> int:
     name = a.selection.stem
     cfg = json.loads((REPO / "configs" / "models.json").read_text())
@@ -112,6 +127,13 @@ def cmd_label(a) -> int:
     if a.kind != "dry" and a.cap <= 0:
         raise SystemExit("a paid run needs --cap (USD per model run)")
     slice_dir = link_slice(a.selection, a.episodes)
+    seeds = []
+    if a.routes:
+        unheld = unrouted(slice_dir, json.loads(a.routes.read_text()))
+        if unheld:
+            raise SystemExit(f"{a.routes} holds no routing answer for {len(unheld)} routed episodes, e.g. "
+                             f"{unheld[:3]}; they would route on their own and may see other frames")
+        seeds = ["--route-seeds", str(a.routes.resolve())]
     runs = a.runs / "compare"
     before = {p for p in runs.glob("*") if p.is_dir()} if runs.exists() else set()
     procs = {}
@@ -126,6 +148,7 @@ def cmd_label(a) -> int:
                "--max-tokens", str(cfg["max_tokens"])]
         if a.with_example:
             cmd += ["--example-dir", str(REPO / "configs" / "examples")]
+        cmd += seeds
         print(f"starting {key}: {m['model']}", flush=True)
         procs[key] = subprocess.Popen(cmd, cwd=REPO)
     rc = {key: p.wait() for key, p in procs.items()}
@@ -188,6 +211,9 @@ def main() -> int:
     p.add_argument("--cap", type=float, default=0.0, help="spend cap per model run, USD (required unless dry)")
     p.add_argument("--runs", type=Path, default=REPO / "data" / "runs", help="where run folders go")
     p.add_argument("--concurrency", type=int, default=8, help="episodes in flight per model")
+    p.add_argument("--routes", type=Path, default=None,
+                   help="configs/compare/routes_<selection>.json: the reference run's routing answer for each task "
+                        "text, so every model is sent the frames the reference was (label/route.py)")
     p = sub.add_parser("board", help="write a board manifest for the comparison runs",
                        description="write a board manifest for the comparison runs")
     p.add_argument("--entries", type=Path, nargs="+", required=True, help="RUNS/compare/<selection>[_ex].json files")
