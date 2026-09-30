@@ -1847,8 +1847,7 @@ h3.section { border-top: 1px solid var(--border-strong); }
   padding-bottom: 6px; }
 .ck-title { font: 700 13px/1.3 var(--sans); color: var(--fg); }
 .ck-sum { font: 500 11px/1.3 var(--mono); color: var(--fg-3); }
-.ck-credit { font-size: 12px; line-height: 1.45; color: var(--fg-3); margin: 0 0 6px; max-width: 70ch; }
-.ck-credit a { color: inherit; text-underline-offset: 3px; }
+.ck-title a { color: inherit; text-underline-offset: 3px; }
 .ck-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: baseline; gap: 2px 8px;
   padding: 5px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
 .ck-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); transform: translateY(-1px); }
@@ -2694,12 +2693,11 @@ function checksSection(d) {
     const n = st => all.filter(c => c.st === st).length;
     const groups = [...new Set(all.map(c => c.group))];
     theirs = `<div class="ck-block ck-theirs${CHECKS_OPEN ? ' open' : ''}">
-      <div class="ck-head"><span class="ck-title">Deterministic checks from public-dataset-adapter</span>
+      <div class="ck-head"><span class="ck-title">Checks from <a href="https://pantheon.inc/research/we-looked-at-the-data"
+        target="_blank" rel="noopener">We Looked at the Data</a></span>
         <span class="ck-sum">${n('issue')} ${n('issue') === 1 ? 'issue'
           : 'issues'} &middot; ${n('note')} ${n('note') === 1 ? 'note' : 'notes'} &middot; ${n('clear')} clear `
           + `&middot; ${n('na')} not applicable</span></div>
-      <div class="ck-credit">As per <a href="https://pantheon.inc/research/we-looked-at-the-data"
-        target="_blank" rel="noopener">We Looked at the Data</a>.</div>
       ${fired.map(row).join('')}
       <div class="ck-all"><div class="ck-all-in">${groups.map(g => `<div class="ck-group">${esc(g)}`
         + `</div>${all.filter(c => c.group === g).map(c => `<div class="ck-row ${c.st}">${dot(c.st)}<span `

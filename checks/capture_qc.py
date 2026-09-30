@@ -461,24 +461,24 @@ def assess(feats: dict) -> dict:
     states, valid = cs["states"], cs["valid"]
     has_state = kind != "none"
     has_pose = kind == "ee_pose"
-    no_pose_why = ("no end-effector pose. Joint-state teleop has no forward kinematics in our pipeline"
-                   if kind == "joints" else "no recorded state (video-only rig)")
+    no_pose_why = ("the recording has joint angles but no gripper pose, which this check needs"
+                   if kind == "joints" else "the recording has no robot state, only video")
 
     # constant exclusions: these upstream reasons test upstream's own processing or a layer we do not build
-    R["invalid_action_shape"] = _na("actions are derived here from the states, so their shape cannot be wrong")
-    R["state_action_count_mismatch"] = _na("actions are derived here from the states, so the counts cannot differ")
-    R["se3_translation_round_trip_failure"] = _na("tests upstream's own action derivation, which we reuse unchanged")
-    R["se3_rotation_round_trip_failure"] = _na("tests upstream's own action derivation, which we reuse unchanged")
-    R["action_time_too_short"] = _na("action times are midpoints of the state times, checked there")
-    R["native_rate_qc_unavailable"] = _na("we never build a native-rate row, so this process flag does not apply")
-    R["native_signal_checks"] = _na("no separate native-rate telemetry layer exists in our sidecars")
-    R["processing_failure"] = _na("a failure to process an episode is reported by the stage itself, per episode")
-    R["action_time_non_monotonic_or_duplicate"] = _na("action times are midpoints of the state times, checked there")
+    R["invalid_action_shape"] = _na("we compute the actions from the recorded state, so their shape is always valid")
+    R["state_action_count_mismatch"] = _na("we compute the actions from the recorded state, so there is one for every state frame")
+    R["se3_translation_round_trip_failure"] = _na("this tests how the actions are computed, not the recording")
+    R["se3_rotation_round_trip_failure"] = _na("this tests how the actions are computed, not the recording")
+    R["action_time_too_short"] = _na("action times are taken from the frame times, which are checked on their own")
+    R["native_rate_qc_unavailable"] = _na("this flags a missing full-rate copy of the signals, which the pipeline does not use")
+    R["native_signal_checks"] = _na("the pipeline keeps no separate full-rate copy of the signals to check")
+    R["processing_failure"] = _na("an episode that fails to process is reported by the step that failed")
+    R["action_time_non_monotonic_or_duplicate"] = _na("action times are taken from the frame times, which are checked on their own")
 
     # ---- structure (filtering.py:1461-1488)
     if not has_state:
         for c in ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal"):
-            R[c] = _na("no recorded state (video-only rig)")
+            R[c] = _na("the recording has no robot state, only video")
     else:
         shape = np.shape(ep["state"])
         width = shape[-1] if len(shape) == 2 else list(shape)
@@ -506,7 +506,7 @@ def assess(feats: dict) -> dict:
     ts_ns = np.round((ts - (ts[0] if len(ts) else 0.0)) * 1e9).astype(np.int64)
     usable_state = has_state and cs["shape_ok"] and not cs["nonfinite"] and T > 2
     unusable_why = ("the state layout is not 7 values per arm or gripper" if has_state and not cs["shape_ok"]
-                    else "the state contains NaN or infinite values" if cs["nonfinite"]
+                    else "the state has missing (NaN) or infinite values" if cs["nonfinite"]
                     else "fewer than 3 state frames")
     if usable_state:
         local, global_, avalid, _ = up.delta_actions(states, valid, ts_ns)
@@ -519,19 +519,19 @@ def assess(feats: dict) -> dict:
              "actions_global": global_, "action_valid_global": avalid, "gripper_unit": unit}
 
     # ---- rotations (filtering.py:1306-1324)
-    why_rot = "rotations are built here from roll/pitch/yaw, always proper and within pi, so this cannot fire"
+    why_rot = "we compute the rotations from roll, pitch and yaw, so they are always valid"
     R["invalid_rotation_matrix"] = _na(why_rot if has_pose else no_pose_why)
     R["nonprincipal_rotation_state"] = _na(why_rot if has_pose else no_pose_why)
 
     # ---- grippers (filtering.py:1327-1333, 936-996, 999-1052, 1131-1158)
-    unit_why = ((f"the gripper reading is in {unit}, not a verified 0-1 open fraction" if unit != "unknown"
-                 else "the gripper unit is not verified for this dataset")
-                + "; this check's thresholds are open fractions")
+    unit_why = ((f"the gripper reading is in {unit}, not a verified opening from 0 to 1" if unit != "unknown"
+                 else "the gripper reading's unit is not known for this dataset")
+                + ", and this check needs an opening from 0 to 1")
     gripper_checks = ("normalized_gripper_out_of_range", "gripper_action_integral_out_of_range", "gripper_never_acts",
                       "gripper_sensor_bug")
     if not usable_state:
         for c in gripper_checks:
-            R[c] = _na("no recorded state (video-only rig)" if not has_state else unusable_why)
+            R[c] = _na("the recording has no robot state, only video" if not has_state else unusable_why)
     elif not normalized:
         for c in gripper_checks:
             R[c] = _na(unit_why)
@@ -626,9 +626,9 @@ def assess(feats: dict) -> dict:
             nev.extend(d2 + g2)
             nm[v] = m2
         R["native_camera_timestamp_gap"] = (_fired(nev, metrics=nm) if nm
-                                            else _na("no camera clock other than the anchor's"))
+                                            else _na("no camera has a clock of its own besides the main one"))
     else:
-        why = "frame times are frame_index / fps by construction (the dataset ships no capture clock)"
+        why = "the dataset has no capture clock, so frame times are the frame number divided by the frame rate"
         R["state_time_non_monotonic_or_duplicate"] = _na(why)
         R["state_timestamp_gap"] = _na(why)
         R["native_camera_timestamp_gap"] = _na(why)
