@@ -30,6 +30,20 @@ def test_every_case_names_gate_episodes_and_every_episode_is_in_its_list():
     assert [x["name"] for x in sel["teleop"]].count("episode_001346_r6") == 1
 
 
+def test_every_fact_a_case_states_is_one_the_scorer_judges():
+    """A key the scorer does not read would let its case pass whatever the label says (not_outcome once did)."""
+    for name, case in score.load_cases().items():
+        assert set(case) <= score.FACTS, (name, set(case) - score.FACTS)
+    assert score.judge({"not_outcome": ["success"]}, {"completion": {"task_completed": "success"}}) == \
+        (False, ["outcome success"])
+    assert score.judge({"not_outcome": ["success"]}, {"completion": {"task_completed": "failure"}})[0]
+    try:
+        score.judge({"outcomes": ["success"]}, {})
+        raise AssertionError("an unknown fact was accepted")
+    except ValueError:
+        pass
+
+
 def test_each_kind_of_fact_is_judged():
     case = {"outcome": ["failure"], "issue": ["instruction_mismatch"], "sev": "high"}
     good = {"completion": {"task_completed": "failure"},

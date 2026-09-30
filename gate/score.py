@@ -89,8 +89,15 @@ def _matches(items, patterns) -> list[dict]:
             and any(fnmatch.fnmatch(str(i.get("category")), p) for p in patterns)]
 
 
+# every kind of fact a case can state; a case with any other key is refused, so no fact is silently left unjudged
+FACTS = {"outcome", "not_outcome", "align", "issue", "sev", "mistake", "named", "max_issue_sev", "held", "why"}
+
+
 def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
     """(the label meets every fact of the case, why not)."""
+    unknown = set(case) - FACTS
+    if unknown:
+        raise ValueError(f"gate case states facts the scorer does not judge: {sorted(unknown)}")
     ok, why = [], []
     comp = labels.get("completion") or {}
     outcome = comp.get("task_completed")
@@ -98,6 +105,9 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         outcome = "tasks:" + ",".join(sorted({str(t.get("outcome")) for t in labels["tasks"]}))
     if "outcome" in case:
         ok.append(outcome in case["outcome"])
+        ok[-1] or why.append(f"outcome {outcome}")
+    if "not_outcome" in case:
+        ok.append(outcome not in case["not_outcome"])
         ok[-1] or why.append(f"outcome {outcome}")
     if "align" in case:
         rel = (labels.get("goal_alignment") or {}).get("relation")
