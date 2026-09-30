@@ -14,7 +14,7 @@ The pipeline handles teleoperated arms, UMI grippers and head-mounted cameras, a
 
 Deterministic checks run alongside the model to catch what a model should not be trusted to judge, such as recordings that play faster than real time, camera streams swapped between arms, gripper signals that never change, and poor capture.
 
-The harness primarily uses Astra (`openai/gpt-6-astra`). For each setup it chooses which frames to send and at what resolution, decodes them at exact timestamps, and prompts the model with what the setup is, what counts as a mistake on it, and how to verify what the recording claims against the pixels. All prompts live in `label/`. The repository also includes the dashboard, a comparison of four models on the same harness, and `gate/`, the regression suite the harness is held to.
+The harness primarily uses Astra (`openai/gpt-6-astra`). For each setup it chooses which frames to send and at what resolution, decodes them at exact timestamps, and prompts the model with what the setup is, what counts as a mistake on it, and how to verify what the recording claims against the pixels. All prompts live in `label/`. The repository also includes the dashboard, a comparison of five models on the same harness, and `gate/`, the regression suite the harness is held to.
 
 ![The dashboard, showing a MolmoAct2 episode with its three cameras, the dense timeline and the outcome against the given goal](media/board.jpg)
 
