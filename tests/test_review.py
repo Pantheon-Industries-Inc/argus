@@ -138,3 +138,29 @@ def test_a_camera_file_that_does_not_decode_costs_only_its_own_episode(tmp_path)
     (eps / "episode_ok").rename(tmp_path / "episode_ok")       # only the broken one left: nothing to show
     shutil.move(str(tmp_path / "episodes_unclipped" / "episode_broken"), str(eps / "episode_broken"))
     assert run().returncode == 1
+
+
+def test_review_says_why_when_no_episode_can_be_put_on_the_board(tmp_path, monkeypatch):
+    """board clips exits 1 when no episode came out whole: review says which camera file did not decode, the
+    upload's own reason, instead of reporting the clips step as a crash."""
+    import pytest
+    import review.__main__ as rv
+    root = tmp_path / "upload"
+    recorder_folder(root, n=30)
+    real = rv.run_step
+
+    def fake(job, step, cmd, env, ok_codes=(0,)):
+        if step == "clips":
+            assert 1 in ok_codes
+            return 1
+        return real(job, step, cmd, env, ok_codes)
+    monkeypatch.setattr(rv, "run_step", fake)
+    from board import clips as board_clips
+    monkeypatch.setattr(board_clips, "set_aside_failed",
+                        lambda eps, out: [{"name": p.name, "why": "the exo camera video could not be decoded"}
+                                          for p in sorted(Path(eps).iterdir()) if p.name.startswith("episode_")])
+    monkeypatch.setattr(board_clips, "drop_from_report", lambda rep, left: rep.update(episodes=[]))
+    monkeypatch.setattr(sys, "argv", ["python -m review", "--data", str(root), "--rig", "teleop_arms", "--out",
+                                      str(tmp_path / "job"), "--dataset", "mine", "--free"])
+    with pytest.raises(SystemExit, match="no episode could be put on the board: the exo camera video could not be"):
+        rv.main()
