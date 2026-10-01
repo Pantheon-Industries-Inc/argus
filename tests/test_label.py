@@ -947,3 +947,8 @@ def test_the_camera_line_names_the_fisheye_only_where_the_check_fired():
     assert desc.count("fisheye") == 1
     del ep["lens"]
     assert "fisheye" not in me.camera_desc(ep)
+
+
+def test_circular_image_with_no_frames_is_not_circular():
+    from label import lens
+    assert lens.circular_image({}) == {"circular": False, "frames": 0}
