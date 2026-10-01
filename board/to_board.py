@@ -152,6 +152,9 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "dataset_checks": result.get("dataset_checks"),
         "task_label": result.get("task_label"),
         "timesteps_s": (result.get("config") or {}).get("timesteps_s"),
+        # the size of each grid cell the model was sent, with timesteps_s the settings its grids were built at, so the
+        # grids shown under "What the model saw" are known to be this label's (board/grids.py)
+        "grid_cell": (result.get("config") or {}).get("cell"),
         # which cameras the episode has and their dataset names (FastUMI has no top camera), so the
         # board lays out only the streams that exist
         "camera_views": (result.get("config") or {}).get("views"),

@@ -16,6 +16,9 @@ page loads is a plain file:
                                          (board/build.py hands/), timed against the web copy of its clip
   <out>/<build_id>/data/keypoints/index.json  the head-camera episodes with a hand keypoints download, each with the
                                          path of its file under media/k/
+  <out>/<build_id>/data/grids/<file>     what the model saw (board/grids.py): the grid images the episode's label was
+                                         sent, listed with their times and sizes and each one's path under media/g/,
+                                         when the board has them (BOARD/grids)
   <out>/<build_id>/BUILD.json            provenance, counts, and which media files are still missing
   <out>/media/v/<cam>/<eid>.<hash>.mp4   web copies of the clips (board/clips.py's own files, stream-copied)
   <out>/media/f/<cam>/<eid>/<ms>.<hash>.jpg  goal frames, the same JPEGs the live /api/frame returns
@@ -23,6 +26,7 @@ page loads is a plain file:
                                          (hand_keypoints/: the dataset video's own pixels and frame times, so no
                                          re-timing), named by their content like the other media, so a new build
                                          does not upload them again
+  <out>/media/g/<eid>/<sha1>.jpg         the grid images, byte for byte as rebuilt and checked, named by their content
 
 Media names carry a hash of the source clip's size and mtime and of the encode settings, so a media file
 never changes under its name (cache it forever), a re-cut clip gets a new name, and builds share media.
@@ -67,6 +71,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from board import clips as bc
+from board import grids as board_grids
 from board import hands as hands_overlay
 from board import serve as sa
 
@@ -174,6 +179,12 @@ def keypoints_dir(qa: Path, given: Path | None = None) -> Path | None:
     """The board's hand keypoint downloads (board/build.py hand_keypoints/), when it has them."""
     k = given if given is not None else qa.parent / "hand_keypoints"
     return k if (k / "index.json").exists() else None
+
+
+def grids_dir(qa: Path, given: Path | None = None) -> Path | None:
+    """The board's grid images (board/grids.py BOARD/grids), when it has any."""
+    g = given if given is not None else qa.parent / "grids"
+    return g if sa.has_grids(g) else None
 
 
 def plan(qa: Path, clips: Path, compare: Path | None = None):
@@ -471,8 +482,13 @@ def _git_commit() -> str:
 
 
 def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path | None = None,
-                 keypoints: Path | None = None, frames: list | None = None) -> str:
+                 keypoints: Path | None = None, frames: list | None = None, grids: Path | None = None) -> str:
     h = hashlib.sha1()
+    if grids is not None:
+        for f in files:
+            gp = board_grids.grid_dir(grids, f) / "grids.json"
+            if gp.exists():
+                h.update(f"grids|{f}|".encode() + hashlib.sha1(gp.read_bytes()).digest())
     # the frames on disk are part of the build (the page lists only those), so a build made before the media finish
     # gets a new id once they have
     for rel in frames or []:
@@ -522,8 +538,9 @@ def cmd_site(a):
     files = [e["rec"]["file"] for e in eps]
     hands = hands_dir(a.qa, a.hands)
     keypoints = keypoints_dir(a.qa, a.keypoints)
+    grids = grids_dir(a.qa, getattr(a, "grids", None))
     present = sorted(f["rel"] for e in eps for f in e["frames"].values() if (a.out / "media" / f["rel"]).exists())
-    bid = a.build_id or build_id_for(a.qa, files, compare, hands, keypoints, present)
+    bid = a.build_id or build_id_for(a.qa, files, compare, hands, keypoints, present, grids)
     out = a.out / bid
     if out.exists() and not a.force:
         print(f"{out} exists (a build id names one set of inputs); pass --force to rewrite it")
@@ -533,6 +550,9 @@ def cmd_site(a):
         stage.rename(a.out / f".{bid}.staging.old.{int(time.time())}")   # never rm; set aside
     (stage / "data/lists").mkdir(parents=True)
     (stage / "data/ep").mkdir(parents=True)
+    if grids is not None:
+        (stage / "data/grids").mkdir()
+    grids_res = {"dir": str(grids), "files": 0, "images": 0, "bytes": 0} if grids is not None else None
     datasets = []
     by_ds = defaultdict(list)
     idx_eps = []
@@ -549,8 +569,30 @@ def cmd_site(a):
             row.append(rec["episode_id"])
         idx_eps.append(row)
         # the page's view of the episode: each issue carries the family it is counted under
-        view = sa.episode_view(json.loads((a.qa / rec["file"]).read_text()))
+        d = json.loads((a.qa / rec["file"]).read_text())
+        view = sa.episode_view(d)
         (stage / "data/ep" / rec["file"]).write_text(json.dumps(view))
+        gidx = board_grids.read(grids, rec["file"], d) if grids is not None else None
+        if gidx is not None:
+            # what the model saw: each image under media/g/ named by its content, so a new build uploads only new
+            # ones; the rail record says how many there are, so the page asks only for episodes that have them
+            gdir = board_grids.grid_dir(grids, rec["file"])
+            (a.out / "media" / "g" / q(rec["episode_id"])).mkdir(parents=True, exist_ok=True)
+            rels = []
+            for g in gidx["grids"]:
+                rel = f"g/{q(rec['episode_id'])}/{g['sha1'][:16]}.jpg"
+                dst = a.out / "media" / rel
+                if not dst.exists():
+                    part = dst.with_name(dst.name + ".part")
+                    shutil.copyfile(gdir / g["file"], part)
+                    part.rename(dst)
+                rels.append(rel)
+                grids_res["bytes"] += g["bytes"]
+            (stage / "data/grids" / rec["file"]).write_text(
+                json.dumps(board_grids.view(gidx, lambda i, _g: rels[i]), separators=(",", ":")))
+            rec["_grids"] = len(rels)
+            grids_res["files"] += 1
+            grids_res["images"] += len(rels)
     for ds, recs in by_ds.items():
         (stage / "data/lists" / f"{ds}.json").write_text(json.dumps(recs, separators=(",", ":")))
     (stage / "data/index.json").write_text(json.dumps({"build": bid, "datasets": datasets, "eps": idx_eps},
@@ -622,7 +664,8 @@ def cmd_site(a):
     # the page asks for other models' labels, hand pose files and keypoint downloads only when the build has them
     # (no request that can only fail)
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
-           "keypoints": bool(kp_res and kp_res["files"]), "labels_license": sa.labels_license(a.board)}
+           "keypoints": bool(kp_res and kp_res["files"]), "grids": bool(grids_res and grids_res["files"]),
+           "labels_license": sa.labels_license(a.board)}
     name = sa.board_name(a.board)
     header = sa.read_header(getattr(a, "header", None))
     (stage / "index.html").write_text(sa.render_index(
@@ -641,7 +684,7 @@ def cmd_site(a):
              "qa": str(a.qa), "clips": str(a.clips), "enc": ENC_TAG, "public_base": a.public_base,
              "episodes": len(eps), "datasets": {ds: len(r) for ds, r in by_ds.items()},
              "compare": {"dir": str(compare), "files": n_cmp} if compare is not None else None,
-             "hands": hands_res, "keypoints": kp_res,
+             "hands": hands_res, "keypoints": kp_res, "grids": grids_res,
              "media": st, "missing_media": missing}
     (stage / "BUILD.json").write_text(json.dumps(build, indent=1))
     if out.exists():
@@ -679,6 +722,8 @@ def main():
     ap.add_argument("--hands", type=Path, default=None, help="hand pose files (default BOARD/hands)")
     ap.add_argument("--keypoints", type=Path, default=None,
                     help="hand keypoint downloads (default BOARD/hand_keypoints)")
+    ap.add_argument("--grids", type=Path, default=None,
+                    help="site: the grid images each label was sent (default BOARD/grids, board/grids.py)")
     ap.add_argument("--out", type=Path, default=None, help="output root (default BOARD/static)")
     ap.add_argument("--jobs", type=int, default=4, help="parallel ffmpeg processes (default 4)")
     ap.add_argument("--threads", type=int, default=4, help="threads per ffmpeg (default 4)")

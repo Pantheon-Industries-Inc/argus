@@ -370,8 +370,12 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
         cfg = r.get("config") or {}
         timesteps += [round(float(x) + t0, 3) for x in cfg.get("timesteps_s") or []]
         still += _shift(r.get("arm_still_spans") or [], t0)
+        # with the settings its grids were built at (its own cell width, its instants on its own clock), so what the
+        # model saw of each part can be rebuilt from the part (label/grids.py)
         part_info.append({"part": i, "t0_s": t0, "t1_s": t1, "episode_dir": r.get("episode_dir"),
-                          "cost_usd": u.get("est_cost_usd"), "parse_ok": r.get("parse_ok")})
+                          "cost_usd": u.get("est_cost_usd"), "parse_ok": r.get("parse_ok"),
+                          "grids": {k: cfg.get(k) for k in ("cell", "grid_cols", "timesteps_s", "views",
+                                                            "cam_labels", "grid_sha1")}})
     uniq = list(dict.fromkeys(summaries))
     L["task_summary"] = uniq[0] if len(uniq) == 1 else " ".join(f"({i}) {s}" for i, s in enumerate(uniq, 1))
     L["performance_review"] = " ".join(reviews)
@@ -384,6 +388,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     ctx = ep["context"]
     cfg = dict(first.get("config") or {})
     cfg.update(timesteps_s=timesteps, n_timesteps=len(timesteps), pieces=part_info)
+    cfg.pop("grid_sha1", None)          # each part's own grid hashes are under pieces, with its other grid settings
     # each part routed its own cell width; the recording's route records every part's, and its cost is theirs summed
     routes = [(r.get("config") or {}).get("resolution_route") or {} for _, r in parts]
     cfg["resolution_route"] = {**(routes[0] or {}), "parts": routes,

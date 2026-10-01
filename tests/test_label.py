@@ -952,3 +952,58 @@ def test_the_camera_line_names_the_fisheye_only_where_the_check_fired():
 def test_circular_image_with_no_frames_is_not_circular():
     from label import lens
     assert lens.circular_image({}) == {"circular": False, "frames": 0}
+
+
+def test_what_the_model_saw_is_rebuilt_byte_for_byte(tmp_path, monkeypatch):
+    """label/grids.py gives back exactly the grid images the request carried, at the rig's default cells and at a
+    narrow cell with contact views, checked against the SHA-1 each label records. A label whose hashes do not match,
+    or that records none (made by older code), is refused. The labelling trace carries each call's grids and leaves
+    out the paths on the labelling server."""
+    import zipfile
+    from label import grids as lg
+    ep, T = _packed_episode(tmp_path)
+    sent = []
+
+    def fake_call(content, model, reasoning, api_key, max_tokens, timeout):
+        sent.append(content)
+        return {"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}], "usage": {"cost": 0.0}}
+
+    monkeypatch.setattr(harness, "call_model", fake_call)
+    calls = tmp_path / "run" / "out"
+    for w in (0, 224):
+        out = calls / f"episode_00000{7 if w else 8}.json"
+        r = harness.label_episode(ep, out, model="openai/gpt-6-astra", reasoning="medium", api_key="sk-or-x",
+                                  max_tokens=1000, timeout=60, cell_w=w)
+        grids = lg.rebuild(r, ep)
+        assert [g["jpeg"] for g in grids] == mf.grid_jpegs(sent[-1]) and grids
+        assert r["config"]["grid_sha1"] == [hashlib.sha1(g["jpeg"]).hexdigest() for g in grids]
+        assert grids[0]["t0_s"] == 0.0 and grids[-1]["t1_s"] == r["config"]["timesteps_s"][-1]
+        assert all(g["width"] > 0 and g["height"] > 0 for g in grids)
+    assert r["config"]["cell"][0] == 224
+    bad = json.loads(out.read_text())
+    bad["config"]["grid_sha1"][-1] = "0" * 40
+    with pytest.raises(lg.GridError, match="not the ones sent"):
+        lg.rebuild(bad, ep)
+    old = json.loads(out.read_text())
+    del old["config"]["grid_sha1"]
+    with pytest.raises(lg.GridError, match="grid_sha1"):
+        lg.rebuild(old, ep)
+    (calls / "episode_000009.json").write_text(json.dumps(old))
+    res = lg.zip_trace(calls, tmp_path / "trace.zip", "trace")
+    assert res["calls"] == 3 and list(res["missing"]) == ["episode_000009.json"]
+    with zipfile.ZipFile(tmp_path / "trace.zip") as z:
+        call = json.loads(z.read("trace/episode_000007.json"))
+        idx = json.loads(z.read("trace/episode_000007/grids.json"))
+        assert "episode_dir" not in call and call["config"]["grid_sha1"] == [g["sha1"] for g in idx["grids"]]
+        assert z.read("trace/episode_000007/grid_01.jpg") == grids[0]["jpeg"] and idx["check"] == "sha1"
+        assert "not rebuilt" in json.loads(z.read("trace/episode_000009/grids.json"))["error"]
+
+
+def test_recording_the_grid_hashes_does_not_change_the_request(tmp_path):
+    """build_request only adds grid_sha1 beside the content parts: the hashes are those of the grid images the
+    content carries, in order."""
+    ep, T = _packed_episode(tmp_path)
+    a, b = me.build_request(ep), me.build_request(ep)
+    assert a["content"] == b["content"]
+    assert a["grid_sha1"] == [hashlib.sha1(j).hexdigest() for j in mf.grid_jpegs(a["content"])]
+    assert len(a["grid_sha1"]) == a["n_grids"] and a["grid_cols"] == 4

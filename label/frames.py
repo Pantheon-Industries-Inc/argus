@@ -220,6 +220,28 @@ def compose_grid(cols: list, cam_labels: list[str], quality: int, gutter: int, h
     return buf.getvalue()
 
 
+def compose_grids(timesteps: list, cam_labels: list[str], grid_cols: int, quality: int, gutter: int,
+                  header: int) -> list[tuple[float, float, bytes]]:
+    """The episode's instants packed into grid images, grid_cols instants each, in time order: [(time of the first
+    column, time of the last column, JPEG bytes), ...]. The one place grids are made, for the request (build_content)
+    and for rebuilding what a label was shown (label/grids.py)."""
+    out = []
+    for i in range(0, len(timesteps), grid_cols):
+        cols = [(t_rel, {lbl: jpg for lbl, jpg in imgs}) for t_rel, imgs in timesteps[i:i + grid_cols]]
+        out.append((cols[0][0], cols[-1][0], compose_grid(cols, cam_labels, quality, gutter, header)))
+    return out
+
+
+GRID_TEXT = "=== grid t="     # how the text part right before each grid image begins (build_content)
+
+
+def grid_jpegs(content: list) -> list[bytes]:
+    """The grid images of a request's content parts, in order: each image part right after a grid's text part."""
+    return [base64.b64decode(b["image_url"]["url"].split(",", 1)[1])
+            for a, b in zip(content, content[1:])
+            if a.get("type") == "text" and a["text"].startswith(GRID_TEXT) and b.get("type") == "image_url"]
+
+
 def build_content(fixed: str, episode: str, timesteps: list, cam_labels: list[str], grid_cols: int,
                   detail: str, quality: int, gutter: int, header: int) -> tuple[list, int, int]:
     """The request's content parts: the shared instructions, the episode's facts, then its instants packed
@@ -228,14 +250,11 @@ def build_content(fixed: str, episode: str, timesteps: list, cam_labels: list[st
     if episode:
         content.append({"type": "text", "text": episode})
     n_grids, total_bytes = 0, 0
-    for i in range(0, len(timesteps), grid_cols):
-        block = timesteps[i:i + grid_cols]
-        cols = [(t_rel, {lbl: jpg for lbl, jpg in imgs}) for t_rel, imgs in block]
-        grid_jpg = compose_grid(cols, cam_labels, quality, gutter, header)
+    for t_first, t_last, grid_jpg in compose_grids(timesteps, cam_labels, grid_cols, quality, gutter, header):
         total_bytes += len(grid_jpg)
         b64 = base64.b64encode(grid_jpg).decode("ascii")
         content.append({"type": "text",
-                        "text": (f"=== grid t={cols[0][0]:.2f}-{cols[-1][0]:.2f}s "
+                        "text": (f"{GRID_TEXT}{t_first:.2f}-{t_last:.2f}s "
                                  f"| rows {', '.join(cam_labels)} | columns are "
                                  f"time left to right ===")})
         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": detail}})

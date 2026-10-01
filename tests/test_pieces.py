@@ -146,3 +146,36 @@ def test_a_part_of_a_long_head_camera_recording_gets_its_subtasks_on_its_own_clo
     first = me.load(parts[0])["context"]["annotation_subtasks"]
     assert [x["label"] for x in first] == ["pick up the cup"] + (["wipe the table"] if t0 > 1.6 else [])
     assert all(x["t0"] >= 0 for x in e["context"]["annotation_subtasks"])
+
+
+def test_what_the_model_saw_of_a_recording_labelled_in_parts(tmp_path, monkeypatch):
+    """Each part was its own request: the stitched label gives back every part's grids, byte for byte as sent and in
+    order, with their times on the recording's clock, and the hashes stay with each part."""
+    from label import frames as mf
+    from label import grids as lg
+    monkeypatch.setitem(pieces.PIECE_MAX_S, "teleop_arms", 1.5)
+    root = tmp_path / "upload"
+    recorder_folder(root, n=90)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    src = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    parts = pieces.write_pieces(src, tmp_path / "pieces")
+    assert len(parts) == 2
+    sent = []
+
+    def fake_call(content, model, reasoning, api_key, max_tokens, timeout):
+        sent.append(mf.grid_jpegs(content))
+        return {"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}], "usage": {"cost": 0.0}}
+
+    monkeypatch.setattr(harness, "call_model", fake_call)
+    results = []
+    for i, p in enumerate(parts):
+        r = harness.label_episode(p, tmp_path / "out" / f"{p.name}.json", model="m", reasoning="medium",
+                                  api_key="sk-or-x", max_tokens=1000, timeout=60, cell_w=224)
+        results.append((json.loads((p / "context.json").read_text()), r))
+    out = pieces.stitch(src, results)
+    assert "grid_sha1" not in out["config"] and all(p["grids"]["grid_sha1"] for p in out["config"]["pieces"])
+    grids = lg.rebuild(out)
+    assert [g["jpeg"] for g in grids] == sent[0] + sent[1]
+    t0 = results[1][0]["piece"]["t0_s"]
+    second = [g for g in grids if g["part"] == 2]
+    assert second and second[0]["t0_s"] == round(results[1][1]["config"]["timesteps_s"][0] + t0, 3)

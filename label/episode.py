@@ -37,6 +37,7 @@ Layout (fixed, not flags):
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import re
@@ -86,6 +87,8 @@ CONTACT_MIN_GAP_S = 2.0
 PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
 GRID_GUTTER = 84
 GRID_HEADER = 30
+GRID_QUALITY = 80          # JPEG quality of a grid image (each cell is cut at quality 90 first, timesteps)
+ONE_CAMERA_GRID_COLS = 6   # instants per grid with one camera: a row of 6 is still under 2048 px wide
 
 
 def is_episode_dir(ep_dir: Path) -> bool:
@@ -357,6 +360,12 @@ def timesteps(ep: dict, pl: dict, imgs: dict, cell_w: int, quality: int = 90):
         out.append((frame_time(ep, k), [(cam_name(ep, v), mf.to_jpeg(imgs[v][k], cell_w, quality)) for v in vs
                                         if recording_at(ep, v, k)]))
     return out
+
+
+def grids_per_row(ep: dict, grid_cols: int) -> int:
+    """Instants per grid image: grid_cols, or with one camera ONE_CAMERA_GRID_COLS (the grid is then one row, so 6
+    instants still fit under 2048 px wide and the per-image overhead halves)."""
+    return max(grid_cols, ONE_CAMERA_GRID_COLS) if len(views(ep)) == 1 else grid_cols
 
 
 def detail_size(w: int, h: int) -> tuple[int, int]:
@@ -765,7 +774,7 @@ EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
 
 
 def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int | None = None,
-                  max_cell_w: int | None = None, grid_cols: int = 4, grid_quality: int = 80,
+                  max_cell_w: int | None = None, grid_cols: int = 4, grid_quality: int = GRID_QUALITY,
                   example_dir=None) -> dict:
     """Everything the harness sends for one episode (content parts), and what it records about it. cell_w fixes
     the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell."""
@@ -782,9 +791,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     any_img = next(iter(imgs.values()))[pl["ks"][0]]
     # a circular image with black corners names a fisheye lens in that camera's line (label/lens.py)
     ep["lens"] = {v: lens.circular_image(imgs[v]) for v in order_views(imgs)}
-    if len(views(ep)) == 1:
-        # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
-        grid_cols = max(grid_cols, 6)
+    grid_cols = grids_per_row(ep, grid_cols)
     cam_labels = [cam_name(ep, v) for v in order_views(imgs)]
     contact = [(k, vs, fullres_stack(ep, imgs, k, "just after a sharp gripper change", frame_time(ep, k), vs))
                for k, vs in ((k, [v for v in vs if recording_at(ep, v, k)]) for k, vs in contact_views(ep, pl)) if vs]
@@ -822,7 +829,10 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
             "n_images": n_grids + len(views_sent), "image_bytes": grid_bytes + extra_bytes,
             "contact_s": [round(frame_time(ep, k), 3) for k in pl["contact"]],
             "given_prompt": (ep["context"].get("instruction") or "").strip() or None,
-            "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels,
+            "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels, "grid_cols": grid_cols,
+            # each grid image's SHA-1, recorded with the label, so a rebuild of what the model saw (label/grids.py)
+            # is checked against what was sent
+            "grid_sha1": [hashlib.sha1(j).hexdigest() for j in mf.grid_jpegs(content)],
             "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]], "lens": ep["lens"],
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
             "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s"}

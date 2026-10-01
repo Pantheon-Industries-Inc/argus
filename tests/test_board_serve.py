@@ -519,3 +519,101 @@ def test_the_list_is_encoded_once_and_follows_the_files(server):
     f.write_text(json.dumps(d))
     code, _, body = _get(server + "/api/episodes")
     assert code == 200 and any(e.get("episode_prompt") == d["episode_prompt"] for e in json.loads(body))
+
+
+# ---------------------------------------------------------------- what the model saw (board/grids.py)
+
+def _with_grids(board: Path) -> list[bytes]:
+    """Give episode_000001 a label that records its instants and cell size, and a grid folder rebuilt from it (two
+    small real JPEGs); returns the images."""
+    import hashlib
+    import io
+    from PIL import Image
+    p = board / "qa" / "episode_000001.json"
+    d = json.loads(p.read_text())
+    d.update(timesteps_s=[0.0, 1.5, 3.0, 4.5, 6.0], grid_cell=[64, 36])
+    p.write_text(json.dumps(d))
+    out = board / "grids" / "episode_000001"
+    out.mkdir(parents=True)
+    jpgs, entries = [], []
+    for i, (t0, t1, w) in enumerate([(0.0, 4.5, 344), (6.0, 6.0, 152)], 1):
+        buf = io.BytesIO()
+        Image.new("RGB", (w, 140), (18, 18, 20 + i)).save(buf, format="JPEG", quality=80)
+        jpgs.append(buf.getvalue())
+        (out / f"grid_{i:02d}.jpg").write_bytes(jpgs[-1])
+        entries.append({"file": f"grid_{i:02d}.jpg", "t0_s": t0, "t1_s": t1, "width": w, "height": 140,
+                        "bytes": len(jpgs[-1]), "sha1": hashlib.sha1(jpgs[-1]).hexdigest()})
+    (out / "grids.json").write_text(json.dumps({"label": {"cell": [64, 36], "timesteps_s": d["timesteps_s"]},
+                                                "check": "sha1", "grids": entries}))
+    return jpgs
+
+
+def test_what_the_model_saw_is_served_only_for_the_label_it_was_rebuilt_from(tmp_path, monkeypatch):
+    board = _board(tmp_path)
+    jpgs = _with_grids(board)
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    monkeypatch.setattr(serve, "GRIDS_DIR", (board / "grids").resolve())
+    httpd, url = _serve(monkeypatch, board, clips)
+    try:
+        assert '"grids":true' in _get(url + "/")[2].decode()
+        code, _, body = _get(url + "/api/grids?file=episode_000001.json")
+        v = json.loads(body)
+        assert code == 200 and v["cell"] == [64, 36] and [g["width"] for g in v["grids"]] == [344, 152]
+        assert [(g["t0_s"], g["t1_s"]) for g in v["grids"]] == [(0.0, 4.5), (6.0, 6.0)]
+        code, headers, body = _get(url + "/" + v["grids"][1]["src"])
+        assert code == 200 and body == jpgs[1] and headers["Content-Type"] == "image/jpeg"
+        # the episode file itself is unchanged: the grids are never part of the labels or their downloads
+        assert "grids" not in json.loads(_get(url + "/api/episode?file=episode_000001.json")[2])
+        assert _get(url + "/api/grids?file=episode_000002.json")[0] == 404
+        assert _get(url + "/api/grid?file=episode_000001.json&i=2")[0] == 404
+        assert _get(url + "/api/grid?file=../manifest.json&i=0")[0] == 404
+        # a later label of the episode (other instants) shows no grids until they are rebuilt from it
+        p = board / "qa" / "episode_000001.json"
+        d = json.loads(p.read_text())
+        d["timesteps_s"] = [0.0, 2.0]
+        p.write_text(json.dumps(d))
+        assert _get(url + "/api/grids?file=episode_000001.json")[0] == 404
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_what_the_model_saw_in_a_static_build(tmp_path):
+    board = _board(tmp_path)
+    jpgs = _with_grids(board)
+    clips = tmp_path / "clips"
+    clips.mkdir()
+
+    def site(bid):
+        a = argparse.Namespace(board=board, qa=board / "qa", clips=clips, compare=None, hands=None, keypoints=None,
+                               grids=None, out=tmp_path / "out", build_id=bid, force=False, public_base=None,
+                               title="Data Dashboard")
+        assert static.cmd_site(a) == 0
+        return tmp_path / "out" / bid
+    out = site("b1")
+    assert '"grids":true' in (out / "index.html").read_text()
+    v = json.loads((out / "data" / "grids" / "episode_000001.json").read_text())
+    assert [(tmp_path / "out" / "media" / g["src"]).read_bytes() for g in v["grids"]] == jpgs
+    assert all(g["src"].startswith("g/episode_000001/") for g in v["grids"])
+    recs = {r["file"]: r for r in json.loads((out / "data" / "lists" / "galaxea.json").read_text())}
+    assert recs["episode_000001.json"]["_grids"] == 2
+    assert not (out / "data" / "grids" / "episode_000002.json").exists()
+    assert json.loads((out / "BUILD.json").read_text())["grids"]["images"] == 2
+    # new grids are a new build
+    qa_files = sorted(p.name for p in (board / "qa").glob("episode_*.json"))
+    before = static.build_id_for(board / "qa", qa_files, grids=board / "grids")
+    (board / "grids" / "episode_000001" / "grids.json").write_text(
+        (board / "grids" / "episode_000001" / "grids.json").read_text().replace('"t1_s": 4.5', '"t1_s": 4.4'))
+    assert static.build_id_for(board / "qa", qa_files, grids=board / "grids") != before
+
+
+def test_what_the_model_saw_panel_shows_each_image_at_its_own_size():
+    """The page shows the grids in a panel at one image pixel per CSS pixel (never enlarged or shrunk: the image keeps
+    its own width and height and no max-width), an image wider than the panel scrolls sideways in its own row, and
+    the button stays hidden until the episode's list has come back."""
+    js, css = _page_js(), serve.INDEX_HTML
+    assert 'width="${g.width}" height="${g.height}"' in js
+    assert ".ms-scroll img { display: block; max-width: none;" in css and ".ms-scroll { overflow-x: auto;" in css
+    assert 'id="ms-btn" class="ep-head-dl ms-btn" type="button" hidden' in css
+    assert "msShow(cmpInfo ? null : _activeFile)" in js        # never for another model's labels of the episode

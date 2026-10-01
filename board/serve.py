@@ -12,7 +12,8 @@ labels of some episodes (BOARD/compare, when the manifest names comparisons) are
 control switches the whole board to one model's labels, marked as such, and the comparison view sums them up;
 they never enter the board's counts or its downloads. The hand pose files in BOARD/hands, when the manifest names
 them, are drawn over the head-camera footage, and BOARD/hand_keypoints holds the same keypoints as a download of
-their own. The header shows the page title and the board's name from BOARD/manifest.json, or, for a board that is part
+their own. BOARD/grids holds, per episode, the grid images its label was sent (board/grids.py), shown under "What
+the model saw". The header shows the page title and the board's name from BOARD/manifest.json, or, for a board that is part
 of a site, the site's own header (--header, an HTML file).
 
 Endpoints (all GET but the export): / (the page), /api/episodes (one rail record per episode),
@@ -20,7 +21,8 @@ Endpoints (all GET but the export): / (the page), /api/episodes (one rail record
 rail records), /api/compare/episode?key=K&file=F, /api/hands?file=F, /api/keypoints?file=F[&download=1] (F is a
 label file, or index.json for the list), /api/video?id=EPISODE&cam=exo|left|right[&download=1] (byte ranges),
 /api/footage?id=EPISODE[&t0=S&t1=S][&prepare=1] (every camera in one video, see footage below),
-/api/frame?id=EPISODE&cam=C&t=S&w=W (one JPEG), POST /api/export {"files": [...]} (JSON Lines).
+/api/frame?id=EPISODE&cam=C&t=S&w=W (one JPEG), /api/grids?file=F (the grid images F's label was sent, listed) and
+/api/grid?file=F&i=N (one of them), POST /api/export {"files": [...]} (JSON Lines).
 
 Environment:
     BOARD_FRAME_CACHE          frames kept in memory (default 800); raise it so every goal frame of a large board
@@ -353,6 +355,7 @@ COMPARE_DIR = HERE.parent / "compare" # other models' labels, beside qa/ (board/
 HANDS_DIR = HERE.parent / "hands"     # the hand pose drawn over head-camera footage (board/build.py)
 KEYPOINTS_DIR = HERE.parent / "hand_keypoints"   # the same keypoints as a download, in the dataset video's pixels
 FOOTAGE_DIR = HERE.parent / "footage" # the videos made to download (footage), or $BOARD_FOOTAGE_DIR (set by main)
+GRIDS_DIR = HERE.parent / "grids"     # the grid images each label was sent, rebuilt (board/grids.py)
 BOARD_NAME = ""                     # the manifest's "board" (set by main)
 HEADER = None                         # a site header in place of the title bar (--header)
 
@@ -479,6 +482,14 @@ def episode_view(d: dict) -> dict:
                 i["family"] = FAMILIES.family_of(key, i, ds)
                 i["counted"] = FAMILIES.counts(key, i)
     return d
+
+
+def has_grids(grids: Path) -> bool:
+    """Whether a board has any grid folder (board/grids.py), so the page asks for an episode's grids at all."""
+    try:
+        return any(p.is_dir() for p in Path(grids).iterdir())
+    except OSError:
+        return False
 
 
 def _duration_s(ts):
@@ -681,6 +692,39 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .vd-cam-row a:hover { color: var(--fg); border-color: var(--fg-3); }
 .vd-status { padding: 4px 14px 6px; font: 400 11.5px/1.4 var(--sans); color: var(--fg-2); }
 .vd-status:empty { display: none; }
+/* what the model saw (board/grids.py): the grid images the episode's label was sent, in a panel over the page, each
+   at its own size (one image pixel per CSS pixel, never enlarged or shrunk); an image wider than the panel scrolls
+   sideways inside its own row. The panel fades and rises in and out, and reverses from any point */
+.ms-btn { background: transparent; cursor: pointer; }
+.ms-btn[hidden] { display: none; }
+.ms { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  padding: 24px; opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
+.ms[hidden] { display: none; }
+.ms.open { opacity: 1; pointer-events: auto; }
+.ms-back { position: absolute; inset: 0; background: rgba(18, 18, 20, 0.55); }
+.ms-panel { position: relative; display: flex; flex-direction: column; width: min(100%, var(--ms-w, 960px));
+  max-height: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: 0 10px 34px rgba(0,0,0,0.30); transform: translateY(8px); transition: transform 180ms ease; }
+.ms.open .ms-panel { transform: translateY(0); }
+.ms-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
+  padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
+.ms-head-text { min-width: 0; }
+.ms-head h2 { margin: 0; font: 600 15px/1.25 var(--sans); color: var(--fg); }
+.ms-sub { margin: 4px 0 0; max-width: 72ch; font: 400 12px/1.45 var(--sans); color: var(--fg-2); }
+.ms-close { background: transparent; cursor: pointer; }
+.ms-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 16px;
+  display: flex; flex-direction: column; gap: 14px; }
+.ms-fig { margin: 0; min-width: 0; }
+.ms-cap { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; margin: 0 0 6px;
+  font: 500 12px/1.35 var(--sans); color: var(--fg); }
+.ms-cap span { font-weight: 400; color: var(--fg-3); }
+.ms-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+.ms-scroll img { display: block; max-width: none; background: #121214; }
+.ms-none { font: 400 12px/1.45 var(--sans); color: var(--fg-2); }
+@media (max-width: 760px) {
+  .ms { padding: 0; }
+  .ms-panel { width: 100%; height: 100%; border: 0; border-radius: 0; }
+}
 .hp-btn { display: inline-flex; align-items: center; gap: 8px; background: transparent; cursor: pointer;
   transition: opacity 200ms ease, color 160ms ease, border-color 160ms ease; }
 .hp-btn[hidden] { display: none; }
@@ -2251,6 +2295,9 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           </div>
           <a id="dl-json" class="ep-head-dl" download
             title="this episode's full annotation and dataset checks as JSON">Episode JSON</a>
+          <button id="ms-btn" class="ep-head-dl ms-btn" type="button" hidden aria-haspopup="dialog"
+            title="The frame grids the labelling model was sent for this episode, at their real size"
+            >What the model saw</button>
         </div>
         <div class="kp-note off" id="kp-note"><div class="kp-note-in">Hand keypoints for non-commercial use only. Predicted
           by <a href="https://huggingface.co/acerobotics2025/ACE-Ego-Hand" target="_blank"
@@ -2264,6 +2311,16 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   <section class="right" id="right-col"></section>
 </main>
 <section id="cmp-view" aria-label="Model comparison"></section>
+<div class="ms" id="ms" hidden>
+  <div class="ms-back" data-ms-close></div>
+  <section class="ms-panel" role="dialog" aria-modal="true" aria-labelledby="ms-title">
+    <header class="ms-head">
+      <div class="ms-head-text"><h2 id="ms-title">What the model saw</h2><p class="ms-sub" id="ms-sub"></p></div>
+      <button class="ep-head-dl ms-close" id="ms-close" type="button" data-ms-close>Close</button>
+    </header>
+    <div class="ms-body" id="ms-body"></div>
+  </section>
+</div>
 <div class="cmp-tip" id="cmp-tip" role="tooltip"></div>
 <script>
 const currentEp = document.getElementById('current-ep');
@@ -2568,6 +2625,88 @@ vdMenu.addEventListener('click', (e) => {
 document.addEventListener('click', (e) => { if (!vdEl.contains(e.target)) vdOpen(false); });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && vdEl.classList.contains('open')) { vdOpen(false); vdBtn.focus(); } });
+
+// ---- what the model saw (board/grids.py) ----
+// The grid images the episode's label was sent, rebuilt from its footage and checked against what was sent. A served
+// board lists them at api/grids?file=F; a static build at data/grids/<file>, and only for episodes whose rail record
+// counts them (_grids), so the page never asks for a list that is not there. Each image is shown at its own size.
+const msBtn = document.getElementById('ms-btn'), msEl = document.getElementById('ms');
+const msBody = document.getElementById('ms-body'), msSub = document.getElementById('ms-sub');
+let _msFile = null, _msView = null, _msHide = null, _msReturn = null;
+function gridsUrl(file) {
+  return STATIC ? BOARD.data + 'grids/' + encodeURIComponent(file) : 'api/grids?file=' + encodeURIComponent(file);
+}
+function gridSrc(src) { return STATIC ? BOARD.media + src : src; }
+async function msShow(file) {
+  _msFile = file; _msView = null;
+  msBtn.hidden = true;
+  msOpen(false);
+  if (!file || !BOARD.grids) return;
+  if (STATIC) {
+    const rec = ALL_EPS.find(e => e.file === file);
+    if (!rec || !rec._grids) return;
+  }
+  const v = await fetchJson(gridsUrl(file));
+  if (_msFile !== file || !v || !Array.isArray(v.grids) || !v.grids.length) return;
+  _msView = v;
+  msBtn.hidden = false;
+}
+function msRender(v) {
+  const n = v.grids.length;
+  const parts = new Set(v.grids.map(g => g.part).filter(x => x != null)).size;
+  msSub.textContent = `The labelling model was sent these ${n} image${n === 1 ? '' : 's'} for this episode`
+    + (parts > 1 ? `, in ${parts} requests, one per part of the recording` : '')
+    + `. Each is shown at its real size, never enlarged or shrunk. Each column is one moment of the episode and each`
+    + ` row one camera. The model was also sent a few single frames at higher resolution, which are not shown here.`;
+  const wMax = Math.max(...v.grids.map(g => g.width));
+  // the panel hugs the widest image (its padding and border included) and is never wider than the window
+  msEl.style.setProperty('--ms-w', (wMax + 34) + 'px');
+  msBody.innerHTML = v.grids.map((g, i) => {
+    const span = `${fmtT(g.t0_s)} to ${fmtT(g.t1_s)}`;
+    return `<figure class="ms-fig"><figcaption class="ms-cap">${g.part != null && parts > 1 ? `Part ${g.part}, ` : ''}`
+      + `Image ${i + 1} of ${n}<span>${esc(span)}, ${g.width} x ${g.height} px</span></figcaption>`
+      + `<div class="ms-scroll"><img src="${esc(gridSrc(g.src))}" width="${g.width}" height="${g.height}" `
+      + `alt="The frames the model was sent from ${esc(span)}" loading="lazy" decoding="async"></div></figure>`;
+  }).join('');
+  msBody.scrollTop = 0;
+}
+function msOpen(open) {
+  if (open) {
+    if (!_msView) return;
+    clearTimeout(_msHide);
+    if (msEl.hidden) msRender(_msView);
+    _msReturn = document.activeElement;
+    msEl.hidden = false;
+    void msEl.offsetWidth;            // start the fade from the hidden state
+    msEl.classList.add('open');
+    document.documentElement.style.overflow = 'hidden';
+    document.getElementById('ms-close').focus({preventScroll: true});
+  } else {
+    if (msEl.hidden) return;
+    msEl.classList.remove('open');
+    document.documentElement.style.overflow = '';
+    clearTimeout(_msHide);
+    // hidden once the fade has run, unless it was opened again meanwhile
+    _msHide = setTimeout(() => { if (!msEl.classList.contains('open')) msEl.hidden = true; }, 200);
+    if (_msReturn && _msReturn.focus && document.contains(_msReturn)) _msReturn.focus({preventScroll: true});
+  }
+}
+msBtn.addEventListener('click', () => msOpen(true));
+msEl.addEventListener('click', (e) => { if (e.target.closest('[data-ms-close]')) msOpen(false); });
+document.addEventListener('keydown', (e) => {
+  if (msEl.hidden || !msEl.classList.contains('open')) return;
+  if (e.key === 'Escape') { e.stopPropagation(); msOpen(false); return; }
+  if (e.key === 'Tab') {
+    // focus stays inside the panel while it is open
+    const f = [...msEl.querySelectorAll('button, [href], [tabindex]:not([tabindex="-1"])')].filter(x => !x.hidden);
+    const body = msBody;
+    const order = [f[0], body].filter(Boolean);
+    if (!body.hasAttribute('tabindex')) body.setAttribute('tabindex', '0');
+    const i = order.indexOf(document.activeElement);
+    e.preventDefault();
+    order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length].focus();
+  }
+}, true);
 
 // a readable name for an episode id, keeping every part of the id that identifies it (FastUMI's
 // episode_<arm>__<task>__<index> reads "<task> #<index>"); any other id is shown as it is
@@ -3721,6 +3860,8 @@ function renderEp(d, opts) {
   _vdEp = {eid, d};
   vdEl.hidden = STATIC || !BOARD.footage || !eid;
   vdOpen(false);
+  // what the model saw: the grid images the board's own label of this episode was sent, when the board has them
+  msShow(cmpInfo ? null : _activeFile);
   // the hand keypoints of a head-camera episode, a download of their own beside the labels'
   const kp = KP_INDEX && KP_INDEX[_activeFile], kpA = document.getElementById('kp-dl');
   kpA.hidden = !kp;
@@ -5631,7 +5772,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # them (no request that can only fail)
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
                    "footage": FFMPEG is not None,
-                   "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
+                   "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "grids": has_grids(GRIDS_DIR),
+                   "labels_license": labels_license(HERE.parent)}
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
             return
         if parsed.path == "/api/episodes":
@@ -5656,6 +5798,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             self._send(200, json.dumps(episode_view(json.loads(p.read_text()))), "application/json")
+            return
+        if parsed.path in ("/api/grids", "/api/grid"):
+            # what the model saw (board/grids.py): the list of grid images the episode's label was sent, or one of
+            # them (i), rebuilt from the footage and checked against what was sent; only while they match the label
+            # the board shows
+            q = urllib.parse.parse_qs(parsed.query)
+            fname, i = (q.get("file") or [""])[0], (q.get("i") or [""])[0]
+            p = HERE / fname
+            if not _under(HERE, p) or not p.is_file() or p.suffix != ".json":
+                self._send(404, {"error": "no such file"})
+                return
+            from board import grids as bg
+            idx = bg.read(GRIDS_DIR, p.name, json.loads(p.read_text()))
+            if idx is None:
+                self._send(404, {"error": "no grids for this episode"})
+                return
+            if parsed.path == "/api/grids":
+                quoted = urllib.parse.quote(p.name)
+                self._send(200, bg.view(idx, lambda n, _g: f"api/grid?file={quoted}&i={n}"))
+                return
+            if not i.isdigit() or int(i) >= len(idx["grids"]):
+                self._send(404, {"error": "no such grid"})
+                return
+            self._send_file(bg.grid_dir(GRIDS_DIR, p.name) / idx["grids"][int(i)]["file"], "image/jpeg")
             return
         if parsed.path.startswith("/api/compare/"):
             # other models' labels (board/build.py compare/): kept beside the board's own and never in its lists
@@ -5793,7 +5959,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main(argv=None) -> int:
-    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, FOOTAGE_DIR, PORT, PAGE_TITLE, BOARD_NAME, HEADER
+    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, FOOTAGE_DIR, GRIDS_DIR, PORT, PAGE_TITLE, BOARD_NAME
+    global HEADER
     ap = argparse.ArgumentParser(prog="python -m board serve", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", type=Path, required=True, help="a board folder (its qa/ holds the episode files)")
@@ -5809,6 +5976,7 @@ def main(argv=None) -> int:
     COMPARE_DIR = (a.board / "compare").resolve()
     HANDS_DIR = (a.board / "hands").resolve()
     KEYPOINTS_DIR = (a.board / "hand_keypoints").resolve()
+    GRIDS_DIR = (a.board / "grids").resolve()
     FOOTAGE_DIR = Path(os.environ.get("BOARD_FOOTAGE_DIR") or (a.board / "footage")).resolve()
     PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
     socketserver.ThreadingTCPServer.allow_reuse_address = True

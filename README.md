@@ -164,12 +164,13 @@ Everything up to the model call is deterministic, down to byte-identical request
 mkdir -p data/boards/mine && cp configs/quickstart/board.json data/boards/mine/manifest.json   # then edit it
 uv run python -m board build data/boards/mine
 uv run python -m board clips --episodes data/episodes/mine/all --out data/clips
+uv run python -m board grids data/boards/mine                                     # what the model saw, optional
 uv run python -m board serve --board data/boards/mine --clips data/clips
 uv run python -m board static media --board data/boards/mine --clips data/clips   # static build, video and frames
 uv run python -m board static site --board data/boards/mine --clips data/clips    # static build, page and data
 ```
 
-A dashboard shows the runs named in its `manifest.json`, one `{"dataset", "run", "episodes", "rules"}` entry per dataset, and `board/build.py` documents every key and rule. An issue counts as a problem when it is a data issue or an outcome-changing operator mistake of medium or high severity, or any issue of high severity. The rest stay visible as minor, and each problem belongs to one family in `board/families.json`. A partial outcome is shown as a failure, partly done, and success then undone keeps its own outcome, since the goal it reached no longer holds at the end. Episodes download as JSON and filtered lists as JSON Lines, and `board/publish.sh` uploads a static build.
+A dashboard shows the runs named in its `manifest.json`, one `{"dataset", "run", "episodes", "rules"}` entry per dataset, and `board/build.py` documents every key and rule. An issue counts as a problem when it is a data issue or an outcome-changing operator mistake of medium or high severity, or any issue of high severity. The rest stay visible as minor, and each problem belongs to one family in `board/families.json`. A partial outcome is shown as a failure, partly done, and success then undone keeps its own outcome, since the goal it reached no longer holds at the end. Episodes download as JSON and filtered lists as JSON Lines, and `board/publish.sh` uploads a static build. `board grids` rebuilds, for each episode, the frame grids its label was sent, with no model call: each label records the SHA-1 of every grid image in its request, and a grid is kept only when the rebuilt image matches it byte for byte. Each episode then has a "What the model saw" button that shows them at their real size, and `python -m label.grids --trace RUN/out` writes a run's labelling trace with every call's grids beside it.
 
 Human ego episodes can also show 2D hand keypoints from [ACE-Ego-Hand](https://github.com/ggxxii/ACE-Ego-Hand), computed on Modal GPUs by `board/hand_pose/modal_app.py` (you register for and download MANO yourself) and added through the manifest's `hands` key. The keypoints are for non-commercial use only.
 

@@ -19,7 +19,7 @@ cost are recorded in config.resolution_route, and episode_cost() counts both cal
 
 Output per episode (out.json, or OUT/<episode>.json): the model's labels (`labels`, parsed; `_raw` and
 `_parse_error` when the reply did not parse), `parse_ok`, what was sent (`config`: cameras, cell size, the
-exact instants), the deterministic checks that ran on the episode (`dataset_checks`), the still spans the model
+exact instants and each grid image's SHA-1, so label/grids.py can show exactly what the model saw), the deterministic checks that ran on the episode (`dataset_checks`), the still spans the model
 was told about, the instruction it was graded against, and the billed usage and cost. A reply cut off at the
 output limit is kept as failed_<episode>.json for diagnosis and counts as a failure.
 
@@ -194,7 +194,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         "dataset_checks": pl["checks"],
         "example_dir": str(example_dir) if example_dir else None,
         "config": {"views": req["views"], "cam_labels": req["cam_labels"], "layout": "grid",
-                   "grid_cols": GRID_COLS, "cell": req["cell"],
+                   "grid_cols": req["grid_cols"], "cell": req["cell"], "grid_sha1": req["grid_sha1"],
                    "n_timesteps": len(pl["ks"]), "n_frames_sent": len(pl["ks"]) * len(req["cam_labels"]),
                    "n_image_parts": req["n_images"], "fullres_frames": ["first", "last"],
                    "contact_detail_s": req["contact_s"], "resolution_route": route,
