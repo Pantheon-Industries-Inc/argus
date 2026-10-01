@@ -74,7 +74,7 @@
   "camera": "exo",
   "place": "static web copy of another clip (board/static.py transcode)",
   "in": "640x360 rot 90, 60 frames",
-  "out": "copy: 640x360 rot 90, 60 frames, 0.000-2.000 s"
+  "out": "encode: 360x640, 60 frames, 0.000-2.000 s"
  },
  {
   "case": "phone_portrait_rot90",
@@ -172,7 +172,7 @@
   "camera": "exo",
   "place": "static web copy of another clip (board/static.py transcode)",
   "in": "640x360 rot 270, 60 frames",
-  "out": "copy: 640x360 rot 270, 60 frames, 0.000-2.000 s"
+  "out": "encode: 360x640, 60 frames, 0.000-2.000 s"
  },
  {
   "case": "phone_portrait_rot270",
@@ -270,7 +270,7 @@
   "camera": "exo",
   "place": "static web copy of another clip (board/static.py transcode)",
   "in": "640x360 rot 180, 60 frames",
-  "out": "copy: 640x360 rot 180, 60 frames, 0.000-2.000 s"
+  "out": "encode: 640x360, 60 frames, 0.000-2.000 s"
  },
  {
   "case": "upside_down_rot180",
@@ -858,7 +858,7 @@
   "camera": "exo",
   "place": "static web copy of another clip (board/static.py transcode)",
   "in": "3840x2160 rot 90, 4 frames",
-  "out": "encode: 1920x1080, 4 frames, 0.000-0.133 s"
+  "out": "encode: 608x1080, 4 frames, 0.000-0.133 s"
  },
  {
   "case": "uhd_portrait_hevc_rot90_4_frames",

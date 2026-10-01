@@ -224,8 +224,15 @@ def probe(p: Path) -> dict:
     j = json.loads(r.stdout or "{}")
     v = next((s for s in j.get("streams", []) if s.get("codec_type") == "video"), {})
     fmt = j.get("format", {})
-    return {"codec": v.get("codec_name"), "w": int(v.get("width") or 0), "h": int(v.get("height") or 0),
-            "pix_fmt": v.get("pix_fmt"), "frames": int(v.get("nb_frames") or 0),
+    # the picture as it is shown (prepare/display.py): a clip stored turned, mirrored or with pixels that are not
+    # square is shown at another size than it is stored, and copying it would leave a player to turn it again
+    from prepare import display
+    g = display.geometry(str(p), FFPROBE)
+    w, h = (int(v.get("width") or 0), int(v.get("height") or 0))
+    sw, sh = display.shown_size(g) if g["stored"][0] else (w, h)
+    return {"codec": v.get("codec_name"), "w": sw, "h": sh, "stored_w": w, "stored_h": h,
+            "as_shown": not (g["rotation"] or g["mirror"] or display.needs_resample(g)),
+            "resample": display.needs_resample(g), "pix_fmt": v.get("pix_fmt"), "frames": int(v.get("nb_frames") or 0),
             "fps": v.get("avg_frame_rate"), "dur": float(fmt.get("duration") or 0),
             "v_bps": int(v.get("bit_rate") or 0),
             "bytes": int(fmt.get("size") or p.stat().st_size),
@@ -239,8 +246,9 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
     The board's clips (board/clips.py) already are that, so they are stream-copied into a faststart mp4 and never
     re-encoded: the static board plays the same pictures at the same times as the live one (-copyts keeps a clip
     that starts after 0, a camera that started recording late, where it is), and a second lossy pass would only
-    cost quality. A clip made some other way (not H.264 4:2:0, or larger than the recipe allows) is encoded with
-    board/clips.py's recipe, as the page's main camera or a side one (main)."""
+    cost quality. A clip made some other way (not H.264 4:2:0, larger than the recipe allows, or stored turned or with
+    pixels that are not square) is encoded with board/clips.py's recipe at the size it is shown, as the page's main
+    camera or a side one (main)."""
     t0 = time.time()
     sp = probe(src)
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -255,7 +263,7 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
         acodec = ["-c:a", "aac", "-b:a", "96k"] if sp["audio"] else []
         cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-copyts", "-i", str(src),
                "-map", "0:v:0", *amap, "-fps_mode", "passthrough",
-               *bc.video_args(sp["w"], sp["h"], main, threads), *acodec, str(part)]
+               *bc.video_args(sp["w"], sp["h"], main, threads, sp["resample"]), *acodec, str(part)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg {mode} {src}: {r.stderr.strip()[-300:]}")
@@ -274,8 +282,9 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
 # ---------------------------------------------------------------- measure
 
 def _compliant(pr: dict) -> bool:
-    """H.264 4:2:0 within the recipe's largest size: what the clip builder writes, so it is copied, not re-encoded."""
-    return (pr["codec"] == "h264" and pr["pix_fmt"] == "yuv420p"
+    """H.264 4:2:0 within the recipe's largest size, stored as it is shown: what the clip builder writes, so it is
+    copied, not re-encoded."""
+    return (pr["codec"] == "h264" and pr["pix_fmt"] == "yuv420p" and pr.get("as_shown", True)
             and pr["w"] <= bc.MAIN_BOX[0] and pr["h"] <= bc.MAIN_BOX[1])
 
 
