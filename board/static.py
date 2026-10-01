@@ -253,7 +253,7 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
         mode = "encode"
         amap = ["-map", "0:a:0"] if sp["audio"] else []
         acodec = ["-c:a", "aac", "-b:a", "96k"] if sp["audio"] else []
-        cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src),
+        cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-copyts", "-i", str(src),
                "-map", "0:v:0", *amap, "-fps_mode", "passthrough",
                *bc.video_args(sp["w"], sp["h"], main, threads), *acodec, str(part)]
     r = subprocess.run(cmd, capture_output=True, text=True)
