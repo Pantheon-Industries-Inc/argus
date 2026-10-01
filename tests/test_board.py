@@ -543,9 +543,10 @@ def test_a_camera_that_started_late_is_shifted_onto_the_episode_clock(tmp_path):
 
 
 def test_the_progress_readout_reaches_the_goal_when_it_is_reached():
-    """tests/progress_points.js on the page's progressPoints and progressAt: 100% only when the finishing step ends,
-    no drop at the end from a parked arm's whole-episode step, an undone goal keeps its drop, and a session of tasks
-    never counts a finished task twice."""
+    """tests/progress_points.js on the page's progressPoints, progressAt and progressPct: the chart reads 100% exactly
+    from the goal frame the board shows and never before it or without one, on real episodes where the labels counted
+    work past the goal (the rice cooker's lid, a second coffee filter) or finished it while the robot waited; an undone
+    goal keeps its drop; a session of tasks reads 100% only when every task is done; a parked arm never drags it down."""
     import subprocess
     here = Path(__file__).resolve().parent
     r = subprocess.run([shutil.which("node"), str(here / "progress_points.js"), str(here.parent / "board" / "serve.py")],

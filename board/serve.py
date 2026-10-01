@@ -3491,42 +3491,95 @@ function alignHeads() {
   if (d > 0.01) short.style.paddingBottom = (parseFloat(getComputedStyle(short).paddingBottom) + d) + 'px';
 }
 
-// The progress chart's points, [{t, p}] in time order from {t: 0, p: 0}. A step's progress is the level the task has
-// reached when the step ends (the step that completes the goal carries 1.0), so each value is plotted at its step's end
-// and the readout moves linearly between points (progressAt): it reaches 100% when the finishing step ends, never while
-// it is still under way. One task: per-step progress toward the goal. A session of tasks (taskGoalTimes, each task's
-// goal frame): the per-step progress is relative to the current task, so plotting it raw would sawtooth, and plotting
-// only the tasks done makes a session with one task jump from 0 to 100%. So it folds both: (tasks done before t + the
-// current task's own progress) / tasks. An idle step (an arm parked while the other works, often the whole episode
-// long) changes nothing about the task, so it places no point: read at its end, a parked arm's step spanning the
-// episode drew a drop to its progress at the very end. The last level holds to the end of the episode.
-// tests/progress_points.js runs this on those cases, and Data Review's QA viewer carries the same function.
-function progressPoints(eventLabels, duration, taskGoalTimes) {
+// The progress chart's points, [{t, p}] in time order from {t: 0, p: 0}. The chart is tied to the goal frame the board
+// shows: it reaches 100% exactly there and nowhere else, so the chart, the goal frame and the outcome never disagree.
+// A step's progress is the level the task has reached when the step ends, so each value is plotted at its step's end
+// and the readout moves linearly between points (progressAt).
+// - One goal (goal.completedAt, or goal.reachedAt for a goal reached and later undone): before the goal frame the
+//   labels' progress is divided by its own level there, so it rises to 100% at the goal frame however the labels
+//   counted the work, and it is held under 100% until then. A demonstration that keeps working past the goal (more
+//   items, or a step the instruction does not ask for) holds 100% from the goal frame on. An undone goal holds 100%
+//   until goal.undoneAt and then follows the labels down. With no goal frame the chart never reaches 100%; it holds
+//   the highest level the labels reach below it.
+// - A session of tasks (goal.tasks, each with its own goal frame, a head camera's activities): every task is an equal
+//   share. A task's share is full from its own goal frame on; before that, or if it never reaches one, it carries the
+//   task's own progress, held under full. So the session reaches 100% only when every task is done.
+// An idle step (an arm parked while the other works, or waiting while someone else finishes the task) places a point
+// only when it raises the level. Read at its end, a parked arm's step spanning the episode would draw a drop to its own
+// progress, while a goal completed during a wait (a collaborator closing a lid) would otherwise never reach the chart.
+// The last level holds to the end of the episode. tests/progress_points.js runs this on real cases, and Data Review's
+// QA viewer (teleop-labeler/scripts/serve_qa.py) carries the same two functions, checked identical by its tests.
+function progressPoints(eventLabels, duration, goal) {
+  goal = goal || {};
+  const UNDER = 0.99;   // the highest level shown before a goal frame, so it never reads 100%
   const stepEnd = e => (e.end_s != null && Number(e.end_s) >= e.t_s ? Number(e.end_s) : e.t_s);
-  const changesTask = e => e.contribution !== 'idle';
-  let pts;
-  if (taskGoalTimes && taskGoalTimes.length) {
-    const M = taskGoalTimes.length;
-    const goals = taskGoalTimes.slice().sort((a, b) => a - b);
-    const doneBefore = (t) => goals.filter(g => g <= t + 1e-6).length;
-    pts = eventLabels
-      .filter(e => e.t_s != null && changesTask(e))
-      .map(e => {
-        // a step whose end completes a task has its progress counted in the tasks done; its own 1.0 is that task's,
-        // so it adds nothing toward the next one (counted again, it read the next task as done too)
-        const t = stepEnd(e), done = doneBefore(t), completes = done > doneBefore(e.t_s);
-        const within = (done < M && !completes && e.progress != null) ? Math.max(0, Math.min(1, Number(e.progress))) : 0;
-        return {t, p: Math.min(1, (done + within) / M)};
-      });
-  } else {
-    pts = eventLabels
-      .filter(e => e.t_s != null && e.progress != null && changesTask(e))
-      .map(e => ({t: stepEnd(e), p: Math.max(0, Math.min(1, Number(e.progress)))}));
+  const clamp = v => Math.max(0, Math.min(1, Number(v)));
+  // the labels' own levels in time order; an idle step counts only when it raises the level
+  const levels = steps => {
+    const out = [];
+    let cur = 0;
+    const ordered = steps.filter(x => x.t_s != null && x.progress != null)
+      .map((x, i) => ({x, i})).sort((a, b) => stepEnd(a.x) - stepEnd(b.x) || a.i - b.i).map(o => o.x);
+    for (const e of ordered) {
+      const p = clamp(e.progress);
+      if (e.contribution === 'idle' && p <= cur) continue;
+      out.push({t: stepEnd(e), p});
+      cur = p;
+    }
+    return out;
+  };
+  const lastAt = (pts, t) => { let p = 0; for (const q of pts) { if (q.t <= t + 1e-6) p = q.p; else break; } return p; };
+  const finish = pts => {
+    pts.sort((a, b) => a.t - b.t);
+    pts.unshift({t: 0, p: 0});
+    if (pts.length >= 2 && pts[pts.length - 1].t < duration) pts.push({t: duration, p: pts[pts.length - 1].p});
+    return pts;
+  };
+  const tasks = (goal.tasks || []).filter(t => t);
+  if (tasks.length) {
+    const N = tasks.length;
+    // each step belongs to the task whose span holds its start (the last task also takes anything after its end)
+    const spans = tasks.map((t, i) => ({s: i === 0 || t.start_s == null ? -Infinity : Number(t.start_s),
+      e: i + 1 < N && tasks[i + 1].start_s != null ? Number(tasks[i + 1].start_s) : Infinity,
+      g: t.completed_at_s != null ? Number(t.completed_at_s) : null}));
+    const own = spans.map(sp => levels(eventLabels.filter(e => e.t_s != null && e.t_s >= sp.s && e.t_s < sp.e)));
+    const share = (i, t) => (spans[i].g != null && t >= spans[i].g - 1e-6) ? 1 : Math.min(UNDER, lastAt(own[i], t));
+    const times = new Set();
+    own.forEach(o => o.forEach(q => times.add(q.t)));
+    spans.forEach(sp => { if (sp.g != null) times.add(sp.g); });
+    const pts = [...times].filter(t => t > 0).sort((a, b) => a - b)
+      .map(t => ({t, p: spans.reduce((a, _, i) => a + share(i, t), 0) / N}));
+    return finish(pts);
   }
-  pts.sort((a, b) => a.t - b.t);
-  pts.unshift({t: 0, p: 0});
-  if (pts.length >= 2 && pts[pts.length - 1].t < duration) pts.push({t: duration, p: pts[pts.length - 1].p});
-  return pts;
+  const raw = levels(eventLabels);
+  // the goal frame the board shows: completion's goal frame, or for a goal later undone the frame it was reached
+  const g = goal.completedAt != null ? Number(goal.completedAt) : (goal.reachedAt != null ? Number(goal.reachedAt) : null);
+  if (g == null) {
+    // no goal frame: never 100%, the highest level the labels reach below it
+    const below = raw.filter(q => q.p < 1).reduce((a, q) => Math.max(a, q.p), 0);
+    const cap = below > 0 ? below : UNDER;
+    return finish(raw.map(q => ({t: q.t, p: Math.min(q.p, cap)})));
+  }
+  const atGoal = progressAt(finish(raw.map(q => ({t: q.t, p: q.p}))), g);
+  const scale = atGoal > 0 ? atGoal : Math.max(0, ...raw.map(q => q.p));
+  const lift = v => (scale > 0 ? Math.min(UNDER, v / scale) : 0);
+  const pts = raw.filter(q => q.t < g - 1e-6).map(q => ({t: q.t, p: lift(q.p)}));
+  pts.push({t: g, p: 1});
+  const u = goal.undoneAt != null ? Number(goal.undoneAt) : null;
+  if (u != null && u > g) {
+    // a goal undone: 100% until it is undone, then the labels' own level, held under 100%
+    pts.push({t: u, p: 1});
+    const after = raw.filter(q => q.t > u + 1e-6).map(q => ({t: q.t, p: lift(q.p)}));
+    if (after.length) pts.push(...after);
+    else pts.push({t: Math.min(duration, u + 0.5), p: lift(raw.length ? raw[raw.length - 1].p : 0)});
+  }
+  return finish(pts);
+}
+
+// The readout's whole percent: 100 only when the level is 100% (the goal frame), so a level of 99.6% never rounds up
+// to a goal the board has not reached.
+function progressPct(p) {
+  return p >= 1 - 1e-9 ? 100 : Math.min(99, Math.round(p * 100));
 }
 
 // The level the progress readout shows at time t: read off the straight line joining the points either side of t.
@@ -3671,7 +3724,8 @@ function renderEp(d, opts) {
   const keyEvents = (d.key_events || []).filter(k => k.t_s != null)
       .slice().sort((a, b) => a.t_s - b.t_s);
 
-  const progPts = progressPoints(eventLabels, duration, hasTasks ? taskGoalTimes : []);
+  const progPts = progressPoints(eventLabels, duration, hasTasks ? {tasks}
+    : {completedAt: comp.completed_at_s, reachedAt: comp.goal_reached_at_s, undoneAt: comp.undone_at_s});
   const progSubLabel = hasTasks ? 'tasks done' : 'to goal';
   let progOverlayHtml = '';
   if (progPts.length >= 2) {
@@ -4639,7 +4693,7 @@ function renderEp(d, opts) {
     const cx = Math.max(0, Math.min(1, duration ? t / duration : 0)) * PO_W;
     if (poPast) poPast.setAttribute('points', past.join(' '));
     if (poDot) { poDot.setAttribute('cx', cx.toFixed(2)); poDot.setAttribute('cy', ((1 - p) * PO_H).toFixed(2)); }
-    poPct.textContent = Math.round(p * 100) + '%';
+    poPct.textContent = progressPct(p) + '%';
   }
 
   // the lanes' playheads, the dataset label under the playhead, and its row in the list
