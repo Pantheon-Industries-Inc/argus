@@ -14,7 +14,9 @@ What the model is told about the episode, and where each fact comes from:
 - still spans: from the recorded state, true by construction (state.still_spans), as the recording's claim.
 - recorded motion between consecutive instants: from the recorded state, as a claim to check.
 - sampling: exactly what state.sample_frames did.
-Nothing is said about field of view, lens, lighting, object identities, or what a gripper reading implies.
+- a fisheye lens: only where the camera's own frames show a circular image with black corners (label/lens.py).
+Nothing else is said about field of view or the lens, nor about lighting, object identities, or what a gripper
+reading implies.
 
 Layout (fixed, not flags):
 - Grid cells. A teleop episode's width is chosen from its task text alone (label/route.py): a task that needs
@@ -45,6 +47,7 @@ import numpy as np
 
 from checks import timebase
 from label import frames as mf
+from label import lens
 from label import prompts
 from label import state as ms
 
@@ -396,8 +399,16 @@ def _rig_nouns(r: str) -> dict:
 
 
 def _camera_line(ep: dict, v: str) -> str:
-    """One camera's facts. A description written at prep time (verified for that dataset) wins; the
-    fallback says only what the camera's slot implies: on the left/right gripper, or not on one."""
+    """One camera's facts, and its lens when its frames show a circular image (label/lens.py)."""
+    line = _camera_facts(ep, v)
+    if ((ep.get("lens") or {}).get(v) or {}).get("circular"):
+        line += f" It has {lens.DESC}."
+    return line
+
+
+def _camera_facts(ep: dict, v: str) -> str:
+    """A description written at prep time (verified for that dataset) wins; the fallback says only what the
+    camera's slot implies: on the left/right gripper, or not on one."""
     cam = (ep["context"].get("cameras") or {}).get(v) or {}
     if cam.get("desc"):
         return f"- {cam_name(ep, v)}: {cam['desc'].rstrip('.')}."
@@ -769,6 +780,8 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     # full size is kept only where a detail view shows it: the first and last instant and the contact instants
     imgs = frames(ep, pl, gate, widths=widths, detail_ks={pl["ks"][0], pl["ks"][-1], *(pl.get("contact") or [])})
     any_img = next(iter(imgs.values()))[pl["ks"][0]]
+    # a circular image with black corners names a fisheye lens in that camera's line (label/lens.py)
+    ep["lens"] = {v: lens.circular_image(imgs[v]) for v in order_views(imgs)}
     if len(views(ep)) == 1:
         # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
         grid_cols = max(grid_cols, 6)
@@ -810,6 +823,6 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
             "contact_s": [round(frame_time(ep, k), 3) for k in pl["contact"]],
             "given_prompt": (ep["context"].get("instruction") or "").strip() or None,
             "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels,
-            "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]],
+            "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]], "lens": ep["lens"],
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
             "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s"}

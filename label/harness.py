@@ -198,7 +198,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                    "n_timesteps": len(pl["ks"]), "n_frames_sent": len(pl["ks"]) * len(req["cam_labels"]),
                    "n_image_parts": req["n_images"], "fullres_frames": ["first", "last"],
                    "contact_detail_s": req["contact_s"], "resolution_route": route,
-                   "timesteps_s": req["timesteps"], "detail": DETAIL},
+                   "timesteps_s": req["timesteps"], "detail": DETAIL, "circular_image": req["lens"]},
     }
     return _call_and_record(ep_dir, out_path, req["content"], req["image_bytes"], fields, model=model,
                             reasoning=reasoning, api_key=api_key, max_tokens=max_tokens, timeout=timeout,
