@@ -77,6 +77,7 @@ image = (
 WINDOW, STRIDE = 22, 11                  # latents per window, and the step between windows (half overlap)
 CALIB_WINDOWS = 12                       # windows the K-free checkpoint reads to estimate an unknown camera
 SMOOTH = {"min_cut": 1.5, "beta": 1.0}   # one-euro filter at the knot rate (core.py says why)
+READOUT_RADIUS = 3                       # the second 2D readout, near each slot's attention peak (core.combine_readouts)
 WAN = "alibaba-pai/Wan2.2-Fun-5B-Control"
 
 
@@ -199,6 +200,7 @@ class Ace:
         torch.cuda.empty_cache()
         extra = {"key": key, "pinhole": pin, "gpu": torch.cuda.get_device_name(), "n_src": n_src,
                  "window": WINDOW, "stride": STRIDE, "ckpt": "ace_ego_hand_k.pt", "ace_commit": ACE_COMMIT,
+                 "readout_radius": READOUT_RADIUS,
                  "load_sec": self.load_sec}
         if src_cam is not None:
             K_used = {k: pin[k] for k in ("fx", "fy", "cx", "cy", "image_width", "image_height")}
@@ -220,6 +222,18 @@ class Ace:
             K_source = "estimated by the K-free checkpoint's ray field over the whole clip"
         blended, st, _ = C.run_windows(self.k_model, ctrl, K_used, WINDOW, STRIDE)
         extra["windows"] = st
+        # the same windows again with the 2D read near each hand's attention peak; where the model's own reading is a
+        # blend of two hands, that reading is drawn instead (core.combine_readouts)
+        C.set_readout(self.k_model, READOUT_RADIUS)
+        try:
+            peak, _, _ = C.run_windows(self.k_model, ctrl, K_used, WINDOW, STRIDE)
+        finally:
+            C.set_readout(self.k_model, None)
+        j2d, extra["readout"] = C.combine_readouts(blended["direct_joints2d"], peak["direct_joints2d"],
+                                                   blended["exists_2d"] >= 0.5, pin)
+        blended["direct_joints2d_model"] = blended["direct_joints2d"]
+        blended["direct_joints2d_peak"] = peak["direct_joints2d"]
+        blended["direct_joints2d"] = j2d
         C.write_outputs(out_dir, {"ds": spec["ds"], "ep": spec["ep"], "board_path": spec["board_path"]},
                         meta, pin, src_cam, K_used, K_source, blended, n_src, SMOOTH, extra)
         extra["total_gpu_fn_sec"] = time.time() - t_all
