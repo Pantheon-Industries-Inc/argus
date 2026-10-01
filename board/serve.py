@@ -2118,7 +2118,8 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
 @media (max-width: 599px) {
   .cmpv-grid { grid-template-columns: minmax(0, 1fr); }
   .br { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) 84px; column-gap: 10px; }
-  .pr { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) 84px; column-gap: 10px; }
+  /* a pair's value ("100% → 100%") is wider than a bar's: its column fits it, and the track gives the room */
+  .pr { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) max-content; column-gap: 10px; }
   .sb-row { flex-wrap: wrap; gap: 8px 12px; padding: 10px 16px; }
   .sb-note { flex-basis: 100%; order: 3; }
   .sb-long { display: none; } .sb-short { display: inline; }
