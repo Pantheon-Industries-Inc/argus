@@ -1007,3 +1007,26 @@ def test_recording_the_grid_hashes_does_not_change_the_request(tmp_path):
     assert a["content"] == b["content"]
     assert a["grid_sha1"] == [hashlib.sha1(j).hexdigest() for j in mf.grid_jpegs(a["content"])]
     assert len(a["grid_sha1"]) == a["n_grids"] and a["grid_cols"] == 4
+
+
+def test_board_grids_rebuilds_each_label_of_a_board_once(tmp_path, monkeypatch):
+    """python -m board grids: the board's label of each episode gets its grid folder, checked against the label's
+    hashes and matching the board file made from it; a second pass keeps it."""
+    from board import grids as bg
+    ep, T = _packed_episode(tmp_path)
+    monkeypatch.setattr(harness, "call_model", lambda *a, **k: {
+        "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}], "usage": {"cost": 0.0}})
+    run = tmp_path / "runs" / "r1"
+    out = run / "out" / "episode_000007.json"
+    r = harness.label_episode(ep, out, model="m", reasoning="medium", api_key="sk-or-x", max_tokens=1000, timeout=60,
+                              cell_w=224)
+    (run / "run.json").write_text(json.dumps({"status": "done", "kind": "full", "slice": str(tmp_path)}))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "b", "datasets": [
+        {"dataset": "molmo", "run": str(run), "episodes": str(tmp_path)}]}))
+    res = bg.build(board, jobs=1, quiet=True)
+    assert res["rebuilt"] == 1 and not res["failed"] and res["bytes"] > 0
+    idx = bg.read(board / "grids", "episode_000007.json", to_board.convert(json.loads(out.read_text()), "molmo"))
+    assert idx["check"] == "sha1" and [g["sha1"] for g in idx["grids"]] == r["config"]["grid_sha1"]
+    assert bg.build(board, jobs=1, quiet=True)["kept"] == 1
