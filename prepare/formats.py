@@ -425,19 +425,28 @@ def display_rotation(path: Path) -> int:
 
 
 def probe(path: Path) -> dict:
-    """Container facts for one video file: frame pts in decode order sorted, time base, size as shown (a
-    display rotation of 90 or 270 degrees swaps the stored width and height; label/frames.py upright turns the
-    decoded frames the same way), codec."""
+    """Container facts for one video file: frame pts in decode order sorted, time base, size as shown (pixels
+    that are not square made square, prepare/display.py; a display rotation of 90 or 270 degrees swaps the stored
+    width and height; label/frames.py upright turns the decoded frames the same way), codec. A file stored with
+    pixels that are not square, or mirrored, also says so ("sar", "mirror")."""
+    from prepare import display
     with open_checked(path) as c:
         st = video_stream(c, path)
         pts = sorted(p.pts for p in c.demux(st) if p.size and p.pts is not None)
         rate = st.average_rate or st.guessed_rate
         w, h, tb, codec = st.codec_context.width, st.codec_context.height, st.time_base, st.codec_context.name
+    geom = display.geometry(str(path))
+    extra = {}
+    if tuple(geom["stored"]) == (w, h) and display.needs_resample(geom):
+        w, h = display.square_size(geom)
+        extra["sar"] = f"{geom['sar'].numerator}:{geom['sar'].denominator}"
+    if geom["mirror"]:
+        extra["mirror"] = True
     rot = display_rotation(path)
     if rot in (90, 270):
         w, h = h, w
     return {"pts": np.asarray(pts, dtype=np.int64), "time_base": tb, "width": w, "height": h,
-            "codec": codec, "fps": float(rate) if rate else None, "rotation": rot}
+            "codec": codec, "fps": float(rate) if rate else None, "rotation": rot, **extra}
 
 
 def seconds(pr: dict) -> np.ndarray:
@@ -1792,7 +1801,7 @@ def plan_mcap(det: dict, root: Path) -> list[dict]:
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "folder", "formats", "hub", "lerobot", "remux", "videos"}
+NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "videos"}
 
 
 def upload_adapters(kind: str) -> list:

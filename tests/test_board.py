@@ -657,8 +657,8 @@ def test_a_phone_portrait_video_gets_a_portrait_clip(tmp_path):
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
     subprocess.run(["ffmpeg", "-v", "error", "-display_rotation", "-90", "-i", str(src), "-c", "copy", str(rotated)],
                    check=True)
-    assert clips.source_size("ffmpeg", str(rotated)) == (1350, 2400)
-    assert clips.source_size("ffmpeg", str(src)) == (2400, 1350)
+    assert clips.source_size("ffmpeg", str(rotated)) == (1350, 2400, False)
+    assert clips.source_size("ffmpeg", str(src)) == (2400, 1350, False)
     clips.extract_one(str(rotated), 0.0, 6, out, "ffmpeg", 1)
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
                         "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True)

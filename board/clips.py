@@ -85,11 +85,13 @@ def clip_size(w: int, h: int, main: bool) -> tuple:
     return even(w * s, w), even(h * s, h), s
 
 
-def video_args(w: int, h: int, main: bool, threads: int) -> list:
-    """The recipe's output arguments for a w x h source."""
+def video_args(w: int, h: int, main: bool, threads: int, resample: bool = False) -> list:
+    """The recipe's output arguments for a source shown w x h. resample: its pixels are not square
+    (prepare/display.py), so it is scaled to its shown size and given square pixels like every other copy."""
     cw, ch, s = clip_size(w, h, main)
-    # scaled only when it must shrink (or lose an odd row or column), never enlarged
-    vf = [] if (cw, ch) == (w, h) else ["-vf", f"scale={cw}:{ch}:flags=lanczos"]
+    # scaled only when it must shrink (or lose an odd row or column) or its pixels are not square, never enlarged
+    vf = [] if (cw, ch) == (w, h) and not resample else \
+        ["-vf", f"scale={cw}:{ch}:flags=lanczos" + (",setsar=1" if resample else "")]
     # enc_time_base demux: every frame keeps its source timestamp exactly. The encoder's default time base is the
     # frame rate's, which rounds a variable-rate recording's times to a 1/30 s grid (up to half a frame off, and a
     # frame squeezed to 0 s where two round to the same tick)
@@ -99,19 +101,17 @@ def video_args(w: int, h: int, main: bool, threads: int) -> list:
 
 
 def source_size(ffmpeg: str, path: str) -> tuple:
-    """(width, height) of a video's first stream as it is shown: a phone stores portrait video as landscape frames
-    with a display rotation, and ffmpeg turns the frames upright before scaling, so a rotation of 90 or 270 degrees
-    swaps the stored size (prepare/formats.py probe, the same rule). Scaling a portrait video to its stored landscape
-    size squashed it."""
+    """(width, height, resample) of a video's first stream as it is shown (prepare/display.py, the reader's rule):
+    pixels that are not square made square (resample says they must be), and a rotation of 90 or 270 degrees
+    swapping the stored size, since ffmpeg turns the frames upright before scaling. Scaling a portrait phone video to
+    its stored landscape size squashed it."""
+    from prepare import display
     probe = Path(ffmpeg).with_name("ffprobe")
-    r = subprocess.run([str(probe) if probe.exists() else "ffprobe", "-v", "error", "-select_streams", "v:0",
-                        "-show_entries", "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
-                        "-of", "json", path], capture_output=True, text=True, check=True)
-    st = (json.loads(r.stdout).get("streams") or [{}])[0]
-    w, h = int(st["width"]), int(st["height"])
-    rot = next((sd["rotation"] for sd in st.get("side_data_list") or [] if "rotation" in sd),
-               (st.get("tags") or {}).get("rotate", 0))
-    return (h, w) if int(round(float(rot))) % 180 == 90 else (w, h)
+    g = display.geometry(str(path), str(probe) if probe.exists() else None)
+    if not g["stored"][0]:
+        raise RuntimeError(f"ffprobe could not read the size of {path}")
+    w, h = display.shown_size(g)
+    return w, h, display.needs_resample(g)
 
 
 def start_offsets(ep_dir: Path, sources: dict) -> dict:
@@ -143,10 +143,10 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
     # a per-process temp name, so two builders on the same clip can never write one file at once
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
-    w, h = source_size(ffmpeg, packed)
+    w, h, resample = source_size(ffmpeg, packed)
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), "-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}",
            "-i", packed, "-frames:v", str(int(n_frames)), "-an", "-fps_mode", "passthrough",
-           *video_args(w, h, main, threads),
+           *video_args(w, h, main, threads, resample),
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     subprocess.run(cmd, check=True, capture_output=True)
     got = clip_frames(tmp)

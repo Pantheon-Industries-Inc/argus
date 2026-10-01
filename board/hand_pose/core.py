@@ -97,19 +97,36 @@ def remap_tables(src_cam: dict, pin: dict):
 
 # ----------------------------------------------------------------------------- video IO
 
+def _display():
+    # prepare/display.py, the one rule for how a file is shown; the Modal image carries it beside this file
+    try:
+        from prepare import display
+    except ImportError:
+        import display
+    return display
+
+
 def probe(path: str) -> dict:
+    """The video as it is shown (prepare/display.py): ffmpeg turns the frames upright, so a phone's portrait video
+    is its stored size turned, and pixels that are not square are made square (resample), so the keypoints are in
+    the same picture the board's clip shows."""
     o = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
                         "stream=width,height,r_frame_rate,avg_frame_rate,nb_read_packets", "-of", "json", path],
                        capture_output=True, text=True, check=True).stdout
     s = json.loads(o)["streams"][0]
     num, den = s["avg_frame_rate"].split("/")
-    return {"width": int(s["width"]), "height": int(s["height"]), "fps": float(num) / float(den),
-            "n_packets": int(s["nb_read_packets"])}
+    d = _display()
+    g = d.geometry(path)
+    w, h = d.shown_size(g) if g["stored"][0] else (int(s["width"]), int(s["height"]))
+    return {"width": w, "height": h, "fps": float(num) / float(den), "n_packets": int(s["nb_read_packets"]),
+            "resample": d.needs_resample(g)}
 
 
-def read_frames(path: str, W: int, H: int):
-    """Yield RGB uint8 frames at native size, decoded by ffmpeg (every frame, no dup/drop)."""
-    p = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-vsync", "passthrough",
+def read_frames(path: str, W: int, H: int, resample: bool = False):
+    """Yield RGB uint8 frames W x H as shown, decoded by ffmpeg (every frame, no dup/drop): turned upright as the
+    file says, and scaled to square pixels when they are not (resample)."""
+    vf = ["-vf", f"scale={W}:{H}:flags=lanczos,setsar=1"] if resample else []
+    p = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-vsync", "passthrough", *vf,
                           "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE, bufsize=W * H * 3 * 4)
     n = W * H * 3
     try:
@@ -129,7 +146,7 @@ def load_pinhole_frames(path: str, meta: dict, src_cam: dict | None, pin: dict):
     W, H = pin["image_width"], pin["image_height"]
     maps = remap_tables(src_cam, pin) if src_cam is not None else None
     out = []
-    for f in read_frames(path, meta["width"], meta["height"]):
+    for f in read_frames(path, meta["width"], meta["height"], meta.get("resample", False)):
         if maps is not None:
             g = cv2.remap(f, maps[0], maps[1], interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
         else:

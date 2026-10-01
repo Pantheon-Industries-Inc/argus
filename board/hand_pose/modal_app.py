@@ -71,6 +71,7 @@ image = (
                   f"cd /opt/ace/third_party && git checkout {VIDEOX_COMMIT}")
     .env({"ACE_EGO_HAND_MANO_DIR": "/w/mano", "HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1"})
     .add_local_file(HERE / "core.py", "/opt/ace/ace_core.py", copy=True)
+    .add_local_file(HERE.parent.parent / "prepare" / "display.py", "/opt/ace/display.py", copy=True)
 )
 
 WINDOW, STRIDE = 22, 11                  # latents per window, and the step between windows (half overlap)
