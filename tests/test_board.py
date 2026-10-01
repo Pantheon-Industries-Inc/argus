@@ -554,6 +554,22 @@ def test_the_progress_readout_reaches_the_goal_when_it_is_reached():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_a_new_episode_stops_the_old_episodes_videos():
+    """Opening another episode empties the old episode's video elements before the new layout is built, so their
+    downloads end at once instead of competing with the new footage until the browser collects them (a visitor
+    clicking quickly through datasets left 7 videos loading at once and one superseded download running); switching
+    source keeps the playing footage, so it is left alone there."""
+    from board import serve
+    page = serve.INDEX_HTML
+    body = page[page.index("function renderEp(d, opts) {"):]
+    keep, release = body.index("const keep = "), body.index("if (!keep) {")
+    build = body.index("current-ep-src")
+    assert keep < release < build
+    block = body[release:build]
+    for call in ("v.pause()", "v.removeAttribute('src')", "v.load()"):
+        assert call in block
+
+
 def test_the_dashboard_draws_no_issue_in_orange():
     """A problem is crimson and the operator's performance indigo, as on the blog; no literal colour in the page is an
     orange or orange-red hue (0 to 55 degrees, saturated, not near white)."""
