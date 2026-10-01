@@ -1985,7 +1985,7 @@
   "camera": "exo+left",
   "place": "footage download (board/serve.py footage_command)",
   "in": "640x360 + 276x480, 2.000 s",
-  "out": "854x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0 + 206x360 at 648,0"
+  "out": "856x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0 + 208x360 at 648,0"
  },
  {
   "case": "lerobot_v3_portrait_wrist",

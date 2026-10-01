@@ -235,9 +235,10 @@ def footage_cams(clips: Path, eid: str) -> list:
 
 def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
     """(width, height, [(x, y, w, h)] per camera) for clips of the given (w, h), the main one first. The main camera
-    keeps its size; the others share its height in a column beside it, each at its own aspect and never enlarged,
-    the column centred when they come out shorter."""
+    keeps its size; the others share its height in a column beside it, each at its own aspect (its width the even
+    number nearest it, so within a pixel) and never enlarged, the column centred when they come out shorter."""
     even = lambda v: max(2, 2 * int(v / 2))
+    nearest = lambda v, cap: max(2, min(2 * round(v / 2), cap - cap % 2))
     up = lambda v: v + v % 2           # the frame is even in both directions, as H.264 needs
     w0, h0 = sizes[0]
     cells = [(0, 0, w0, h0)]
@@ -248,7 +249,7 @@ def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
     col_h = hs * len(side) + gap * (len(side) - 1)
     x, y, col_w = w0 + gap, 2 * int((h0 - col_h) / 4), 0
     for w, h in side:
-        ws = even(w * hs / h)
+        ws = nearest(w * hs / h, w)
         cells.append((x, y, ws, hs))
         y += hs + gap
         col_w = max(col_w, ws)
