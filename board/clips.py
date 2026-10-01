@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -280,9 +281,50 @@ def set_aside_failed(eps: Path, clips_dir: Path) -> list[dict]:
         dest.mkdir(exist_ok=True)
         shutil.rmtree(dest / ep, ignore_errors=True)
         src.rename(dest / ep)
-        names = " and ".join(("the fixed or head camera" if c == "exo" else f"the {c} camera") for c in sorted(cams))
-        out.append({"name": ep, "why": f"{names} video could not be decoded, so this episode was left out"})
+        out.append({"name": ep, "why": failed_reason(cams, dest / ep)})
     return out
+
+
+SHORT_CLIP = re.compile(r"clip has (\d+) frames, episode has (\d+)")
+
+
+def camera_label(view: str, ctx: dict) -> str:
+    """A camera as the board names it: the main (or head) camera, the left or right wrist (or gripper), and any other
+    camera by the dataset's own name for it."""
+    rig = ctx.get("profile")
+    if view == "exo":
+        return "head camera" if rig == "ego_head" else "main camera"
+    if view in ("left", "right"):
+        return f"{view} gripper camera" if rig == "handheld_gripper" else f"{view} wrist camera"
+    cam = (ctx.get("cameras") or {}).get(view) or {}
+    return str(cam.get("name") or cam.get("key") or "other") + " camera"
+
+
+def failed_reason(cams: dict, ep_dir: Path) -> str:
+    """Why an episode's clips could not be cut, in one plain sentence: {camera view: the error extract_one raised}. A
+    video that ends before the episode's last frame says so with its counts; anything else is a video that does not
+    decode. When every camera failed the same way, it is said once for all of them."""
+    ctx_p = ep_dir / "context.json"
+    try:
+        ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
+    except ValueError:
+        ctx = {}
+    all_views = set(json.loads((ep_dir / "sources.json").read_text())) if (ep_dir / "sources.json").exists() else set()
+    by_why: dict[str, list] = {}
+    for view in sorted(cams, key=lambda v: (CAMS + (v,)).index(v)):
+        m = SHORT_CLIP.search(cams[view])
+        why = f"has {m.group(1)} frames where the episode has {m.group(2)}" if m else "could not be decoded"
+        by_why.setdefault(why, []).append(view)
+    parts = []
+    for why, views in by_why.items():
+        if len(by_why) == 1 and len(views) > 1 and set(views) >= all_views:
+            parts.append(f"every camera's video {why}")
+            continue
+        names = [camera_label(v, ctx) for v in views]
+        joined = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        verb = why if len(names) == 1 else why.replace("has ", "have ", 1)
+        parts.append(f"the {joined} video{'s' if len(names) > 1 else ''} {verb}")
+    return "; ".join(parts) + ", so this episode was left out"
 
 
 def drop_from_report(rep: dict, left_out: list[dict]) -> None:

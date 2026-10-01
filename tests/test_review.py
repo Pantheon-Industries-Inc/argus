@@ -140,6 +140,28 @@ def test_a_camera_file_that_does_not_decode_costs_only_its_own_episode(tmp_path)
     assert run().returncode == 1
 
 
+def test_an_episode_left_off_the_board_is_explained_with_the_boards_camera_names(tmp_path):
+    """A clip that comes out a frame short is not called undecodable, cameras are named as the board names them (never
+    extra1 or exo), and a reason every camera shares is said once."""
+    from board import clips
+    ep = tmp_path / "episode_x"
+    ep.mkdir()
+    views = ["exo", "left", "right", "extra1", "extra2"]
+    (ep / "sources.json").write_text(json.dumps({v: {} for v in views}))
+    ctx = {"profile": "teleop_arms", "cameras": {"extra1": {"name": "cam_low"}, "extra2": {"name": "cam_side"}}}
+    (ep / "context.json").write_text(json.dumps(ctx))
+    short = "episode_x.mp4: clip has 195 frames, episode has 196"
+    assert clips.failed_reason({v: short for v in views}, ep) == \
+        "every camera's video has 195 frames where the episode has 196, so this episode was left out"
+    assert clips.failed_reason({"left": short, "extra1": short}, ep) == \
+        "the left wrist camera and cam_low camera videos have 195 frames where the episode has 196, so this episode was left out"
+    assert clips.failed_reason({"exo": "Command '...' returned non-zero exit status 183.", "right": short}, ep) == \
+        "the main camera video could not be decoded; the right wrist camera video has 195 frames where the episode " \
+        "has 196, so this episode was left out"
+    (ep / "context.json").write_text(json.dumps({"profile": "handheld_gripper"}))
+    assert clips.failed_reason({"left": "boom"}, ep) == "the left gripper camera video could not be decoded, so this episode was left out"
+
+
 def test_review_says_why_when_no_episode_can_be_put_on_the_board(tmp_path, monkeypatch):
     """board clips exits 1 when no episode came out whole: review says which camera file did not decode, the
     upload's own reason, instead of reporting the clips step as a crash."""
