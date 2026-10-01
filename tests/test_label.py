@@ -888,3 +888,62 @@ def test_the_prompt_gives_each_cameras_own_cell_size_when_they_differ():
     for c in cams.values():
         c.update(width=640, height=480)
     assert "downscaled to 448x336." in me.build_prompt(ep, pl, cell_w=448, cell_h=336)[1]
+
+
+def _scene(rng, i: int, w: int = 640, h: int = 480, level: float = 120.0) -> np.ndarray:
+    """A lit scene that moves from frame to frame: noise over a pattern that shifts with i."""
+    xx = np.arange(w)[None, :, None]
+    return (rng.random((h, w, 3)) * 60 + level + 40 * np.sin(xx / 37 + i)).clip(0, 255)
+
+
+def _frames(make, n: int = 12) -> dict:
+    from PIL import Image
+    rng = np.random.default_rng(0)
+    return {k * 30: Image.fromarray(make(rng, k).astype(np.uint8)) for k in range(n)}
+
+
+def _circular(rng, i):
+    """A fisheye's image circle inside the sensor: outside it the sensor stays black (with a little noise)."""
+    a = _scene(rng, i)
+    yy, xx = np.mgrid[0:480, 0:640]
+    out = np.hypot(xx - 319.5, yy - 239.5) > 300
+    a[out] = rng.integers(0, 8, size=(int(out.sum()), 3))
+    return a
+
+
+def _dark_room(rng, i):
+    """A dark scene with one lit patch: most of the image is near black in every frame, the corners included."""
+    a = rng.random((480, 640, 3)) * 14
+    a[200:280, 280 + i:360 + i] += 150
+    return a
+
+
+def _fingers(rng, i):
+    """A gripper camera: its dark fingers fill the bottom edge in every frame, the corners there included."""
+    a = _scene(rng, i)
+    a[380:] = rng.integers(0, 10, size=(100, 640, 3))
+    return a
+
+
+def test_a_circular_image_names_a_fisheye_lens_and_other_images_do_not():
+    from label import lens
+    assert lens.circular_image(_frames(_circular))["circular"]
+    for make in (_scene, _dark_room, _fingers):
+        assert not lens.circular_image(_frames(make))["circular"], make.__name__
+    # a frame kept only at cell widths gives the thumbnail its full-size frame gives
+    im = _frames(_circular, 1)[0]
+    assert np.array_equal(lens.thumb(im), lens.thumb(mf.Shrunk(im, [448, 320, 192])))
+
+
+def test_the_camera_line_names_the_fisheye_only_where_the_check_fired():
+    ep = {"context": {"dataset": "x", "fps": 30, "profile": "handheld_gripper", "state_kind": "none",
+                      "cameras": {"left": {"name": "left", "desc": "the camera carried on the LEFT-hand gripper"},
+                                  "right": {"name": "right", "desc": "the camera carried on the RIGHT-hand gripper"}}},
+          "sources": {"left": {}, "right": {}}, "lens": {"left": {"circular": True}, "right": {"circular": False}}}
+    desc = me.camera_desc(ep)
+    assert "- left: the camera carried on the LEFT-hand gripper. It has a fisheye lens; straight lines curve near " \
+           "the edge.\n" in desc
+    assert "- right: the camera carried on the RIGHT-hand gripper.\n" in desc
+    assert desc.count("fisheye") == 1
+    del ep["lens"]
+    assert "fisheye" not in me.camera_desc(ep)
