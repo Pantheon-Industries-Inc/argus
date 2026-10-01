@@ -21,14 +21,22 @@ the output schema, not from any one episode:
   happened ("broader"). A goal cannot be reached when part of it never happened.
 - alignment_vs_match: goal_alignment says "aligned" (exactly the given goal) and also that the footage does not
   depict the given goal (matches_given false).
-- progress_vs_outcome: the outcome is failure or partial, yet the timeline's progress reaches 1.0, which the
-  schema reserves for the moment the full success predicate holds. The progress line would read as the goal
-  reached on an episode the label says never reached it.
+- progress_vs_outcome: the outcome is failure, partial or unclear, yet the timeline's progress reaches 1.0, which
+  the schema reserves for the moment the full success predicate holds.
+- goal_times_differ: the outcome is success, but goal_reached_at_s and completed_at_s differ; for a success the
+  schema makes them the same frame.
+- progress_before_goal: the outcome is success, yet the timeline's progress reaches 1.0 more than 3 s before the
+  goal frame, which is the first frame the success predicate holds. (Within a few seconds the two differ only by
+  where a step ends.)
+- progress_past_goal: the outcome is success, yet the timeline's progress reaches 1.0 only more than 3 s after the
+  goal frame, while the goal alignment calls the footage exactly the given goal ("aligned") and no instruction
+  mismatch is recorded. The demonstration kept working past the goal, typically handling more of a
+  repeated item than the instruction names ("place the coffee filter" with two filters), and nothing says so.
 """
 from __future__ import annotations
 
 REACHED = ("success", "success_then_undone")
-NOT_REACHED = ("failure", "partial")
+NOT_REACHED = ("failure", "partial", "unclear")
 OTHER_TASK = ("different", "unrelated")
 
 
@@ -37,6 +45,24 @@ def _num(x):
         return float(x)
     except (TypeError, ValueError):
         return None
+
+
+def _levels(steps: list[dict]) -> list[tuple[float, float]]:
+    """The timeline's progress in time order, each value at its step's end; an idle step counts only when it raises
+    the level (a parked arm's step would otherwise read as a drop), as the board's chart reads it."""
+    def end(s):
+        a, b = _num(s.get("start_s", s.get("t_s"))), _num(s.get("end_s"))
+        return b if b is not None and a is not None and b >= a else a
+    rows = sorted(((end(s), i, s) for i, s in enumerate(steps) if end(s) is not None and _num(s.get("progress")) is not None),
+                  key=lambda r: (r[0], r[1]))
+    out, cur = [], 0.0
+    for t, _, s in rows:
+        p = max(0.0, min(1.0, _num(s.get("progress"))))
+        if str(s.get("contribution") or "").lower() == "idle" and p <= cur:
+            continue
+        out.append((t, p))
+        cur = p
+    return out
 
 
 def check(label: dict, duration_s: float | None = None) -> list[dict]:
@@ -74,6 +100,28 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
         out.append({"rule": "progress_vs_outcome",
                     "note": f"The outcome is {outcome}, but the timeline's progress reaches {peak:.0%}, the level kept "
                             f"for the moment the goal is reached."})
+    done = _num(c.get("completed_at_s"))
+    if outcome == "success" and done is not None and goal is not None and abs(goal - done) > 0.5:
+        out.append({"rule": "goal_times_differ",
+                    "note": f"The outcome is success, but the goal is reached at {goal:.1f} s and the goal frame is "
+                            f"{done:.1f} s; for a success they are the same frame."})
+    if outcome == "success" and done is not None and steps:
+        lv = _levels(steps)
+        first_full = next((t for t, p in lv if p >= 0.99), None)
+        at_goal = ([p for t, p in lv if t <= done + 0.05] or [0.0])[-1]
+        GAP = 3.0   # seconds; within this the timeline and the goal frame differ only by where a step ends
+        mism = any(str((i or {}).get("category") or (i or {}).get("family") or "").replace("-", "_") == "instruction_mismatch"
+                   for i in label.get("data_issues") or [] if isinstance(i, dict))
+        if first_full is not None and first_full < done - GAP:
+            out.append({"rule": "progress_before_goal",
+                        "note": f"The timeline's progress reaches 100% at {first_full:.1f} s, before the goal frame at "
+                                f"{done:.1f} s, which is the first frame the goal holds."})
+        elif first_full is not None and first_full > done + GAP and rel == "aligned" and not mism:
+            out.append({"rule": "progress_past_goal",
+                        "note": f"The demonstration keeps working past the goal frame: progress is {at_goal:.0%} at "
+                                f"the goal frame ({done:.1f} s) and reaches 100% only at {first_full:.1f} s, yet nothing "
+                                "says it does more than the instruction. The instruction may name fewer items than "
+                                "were handled."})
     if duration_s:
         for key in ("goal_reached_at_s", "undone_at_s", "completed_at_s"):
             t = _num(c.get(key))

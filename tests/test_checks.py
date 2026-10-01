@@ -248,6 +248,44 @@ def test_progress_vs_outcome():
     assert rules({"completion": {"task_completed": "failure"}, "timeline": [{"progress": None}]}) == []
 
 
+def test_progress_vs_outcome_for_an_unclear_outcome():
+    full = [{"start_s": 0, "progress": 0.4}, {"start_s": 5, "progress": 1.0}]
+    assert rules({"completion": {"task_completed": "unclear"}, "timeline": full}) == ["progress_vs_outcome"]
+
+
+def test_goal_times_differ():
+    c = {"task_completed": "success", "completed_at_s": 9.0}
+    assert rules({"completion": {**c, "goal_reached_at_s": 0.0}}) == ["goal_times_differ"]
+    assert rules({"completion": {**c, "goal_reached_at_s": 9.0}}) == []
+
+
+def _steps(*rows):
+    return [{"start_s": a, "end_s": b, "progress": p, "contribution": c} for a, b, p, c in rows]
+
+
+def test_progress_past_goal():
+    # "place the coffee filter in the dripper": the first filter is seated at the goal frame, the second much later
+    two = _steps((0, 4, 0.25, "advancing"), (4, 5, 0.5, "advancing"), (5, 8, 0.75, "advancing"), (8, 9, 1.0, "advancing"))
+    c = {"task_completed": "success", "completed_at_s": 5.0, "goal_reached_at_s": 5.0}
+    assert rules({"completion": c, "goal_alignment": {"relation": "aligned"}, "timeline": two}) == ["progress_past_goal"]
+    # the label already says it does more than asked: nothing to flag
+    assert rules({"completion": c, "goal_alignment": {"relation": "narrower"}, "timeline": two}) == []
+    assert rules({"completion": c, "goal_alignment": {"relation": "aligned"}, "timeline": two,
+                  "data_issues": [{"category": "instruction_mismatch"}]}) == []
+    # a step that ends a second after the goal frame is where the step ends, not more work
+    near = _steps((0, 4, 0.5, "advancing"), (4, 6, 1.0, "advancing"))
+    assert rules({"completion": c, "goal_alignment": {"relation": "aligned"}, "timeline": near}) == []
+
+
+def test_progress_before_goal():
+    early = _steps((0, 2, 1.0, "advancing"), (2, 10, 1.0, "idle"))
+    c = {"task_completed": "success", "completed_at_s": 9.0, "goal_reached_at_s": 9.0}
+    assert rules({"completion": c, "timeline": early}) == ["progress_before_goal"]
+    # a parked arm's idle step at 0 never reads as the level dropping
+    parked = _steps((0, 9, 0.0, "idle"), (0, 8, 0.6, "advancing"), (8, 9, 1.0, "advancing"))
+    assert rules({"completion": c, "timeline": parked}) == []
+
+
 def test_consistent_label_has_no_findings():
     label = {"completion": {"task_completed": "success_then_undone", "goal_reached_at_s": 4.0, "undone_at_s": 8.0},
              "goal_alignment": {"relation": "aligned"}, "state_changes": [{"t_s": 4.0}, {"t_s": 8.0}],
