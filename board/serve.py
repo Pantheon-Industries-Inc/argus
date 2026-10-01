@@ -41,6 +41,7 @@ import hashlib
 import html
 import http.server
 import json
+import math
 import os
 import re
 import shutil
@@ -218,7 +219,7 @@ def _under(base: Path, p: Path) -> bool:
 # served from a machine that also records.
 FOOTAGE_GAP = 8
 FOOTAGE_FPS = 30
-FOOTAGE_TAG = f"footage-v1-h264-crf20-veryfast-{FOOTAGE_FPS}fps-gap{FOOTAGE_GAP}"   # a new recipe makes new files
+FOOTAGE_TAG = f"footage-v2-h264-crf20-veryfast-{FOOTAGE_FPS}fps-gap{FOOTAGE_GAP}"   # a new recipe makes new files
 _FOOTAGE_SEM = threading.Semaphore(int(os.environ.get("BOARD_FOOTAGE_CONCURRENCY", 1)))
 _FOOTAGE_THREADS = int(os.environ.get("BOARD_FOOTAGE_THREADS", 2))
 _FOOTAGE_LOCKS: dict = {}
@@ -291,13 +292,18 @@ def footage_command(inputs: list, t0: float, t1: float, out: Path, threads: int 
         # from a few seconds early, so each camera has the frame showing at t0 (clips have a keyframe every 2 s)
         cmd += ["-ss", f"{max(0.0, t0 - 3.0):.3f}", "-i", str(clip)]
     g = [f"color=c=black:s={W}x{H}:r={fps}:d={t1 - t0:.3f},setpts=PTS+{t0:.3f}/TB[b0]"]
+    # a camera keeps its last frame on to t1, as the page's video does once it has played to its end: the overlay
+    # dropped a camera to black from its last frame's start (a 15 fps camera's last 1/30 s), so each is held there
+    # (tpad), and the file keeps the canvas's own frames (those before t1), which the held frames would otherwise run past
+    hold = f"tpad=stop_mode=clone:stop_duration={t1 - t0 + 1:.3f}"
     for i, ((_, wh), (x, y, w, h)) in enumerate(zip(inputs, cells)):
-        g.append(f"[{i}:v]{'' if (w, h) == tuple(wh) else f'scale={w}:{h}:flags=lanczos,'}setsar=1[c{i}]")
+        g.append(f"[{i}:v]{'' if (w, h) == tuple(wh) else f'scale={w}:{h}:flags=lanczos,'}setsar=1,{hold}[c{i}]")
         g.append(f"[b{i}][c{i}]overlay={x}:{y}:eof_action=pass[b{i + 1}]")
     g.append(f"[b{len(inputs)}]setpts=PTS-STARTPTS,format=yuv420p[v]")
-    return cmd + ["-filter_complex", ";".join(g), "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast",
-                  "-crf", "20", "-pix_fmt", "yuv420p", "-g", str(2 * FOOTAGE_FPS), "-threads", str(threads),
-                  "-filter_complex_threads", "1", "-movflags", "+faststart", str(out)]
+    n = math.ceil(round((t1 - t0) * fps, 6))
+    return cmd + ["-filter_complex", ";".join(g), "-map", "[v]", "-frames:v", str(n), "-an", "-c:v", "libx264",
+                  "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-g", str(2 * FOOTAGE_FPS), "-threads",
+                  str(threads), "-filter_complex_threads", "1", "-movflags", "+faststart", str(out)]
 
 
 def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
