@@ -67,6 +67,8 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
     if pts is not None and len(pts) != n_frames:
         raise FrameError(f"{len(pts)} pts given for {n_frames} frames ({packed})")
     b0 = base_frame(base_s, fps)
+    from prepare import display
+    geom = display.geometry(str(packed))
     out = {}
     with av.open(str(packed)) as c:
         s = c.streams.video[0]
@@ -92,7 +94,7 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
                     continue
                 if fr.pts != target:
                     raise FrameError(f"frame {k}: expected pts {target}, decoder gave {fr.pts} ({packed})")
-                out[k] = upright(fr)
+                out[k] = upright(fr, geom)
                 break
             if not forward:
                 seek_cost.append(n)
@@ -103,12 +105,33 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
     return out
 
 
-def upright(fr):
-    """A decoded frame as a PIL image the way players show it. A phone stores portrait video as landscape
-    frames with a display rotation; the decoder returns the stored frame, so the rotation is applied here,
-    as ffmpeg (and so the board's clips) applies it."""
+# the picture a player shows for each mirroring display matrix [a, b, c, d] (signs of its 2x2 part), measured
+# against ffmpeg, which the board's clips are made with: pixel for pixel equal for every rotation and mirror
+def _mirror_ops():
+    from PIL import Image
+    T = Image.Transpose
+    return {(-1, 0, 0, 1): T.FLIP_LEFT_RIGHT, (1, 0, 0, -1): T.FLIP_TOP_BOTTOM,
+            (0, -1, -1, 0): T.TRANSVERSE, (0, 1, 1, 0): T.TRANSPOSE}
+
+
+def upright(fr, geom: dict | None = None):
+    """A decoded frame as a PIL image the way players show it (prepare/display.py says how the file is meant to be
+    shown). Pixels that are not square are made square first, on the stored frame, as ffmpeg does. A phone stores
+    portrait video as landscape frames with a display rotation; the decoder returns the stored frame, so the
+    rotation is applied here, as ffmpeg (and so the board's clips) applies it. A display matrix that also mirrors
+    (a front camera) is applied as the matrix says, since its rotation angle alone would turn the picture wrong."""
     from PIL import Image
     im = fr.to_image()
+    if geom is not None:
+        from prepare import display
+        sq = display.square_size(geom)
+        if sq != im.size and display.needs_resample(geom):
+            im = im.resize(sq, Image.LANCZOS)
+        if geom.get("mirror"):
+            sign = tuple((v > 0) - (v < 0) for v in geom["matrix"])
+            op = _mirror_ops().get(sign)
+            if op is not None:
+                return im.transpose(op)
     turn = {90: Image.Transpose.ROTATE_90, 180: Image.Transpose.ROTATE_180, 270: Image.Transpose.ROTATE_270}
     rot = int(round(getattr(fr, "rotation", 0) or 0)) % 360        # degrees counterclockwise
     return im.transpose(turn[rot]) if rot in turn else im
