@@ -24,6 +24,13 @@ the overlay (board/hands.py).
 
 This file imports only modal and the standard library on your machine; everything else runs in the image.
 
+A rerun beside an earlier one names its own output volume and, when the specs change, its own specs volume, so
+nothing of the earlier run is overwritten:
+
+    HAND_POSE_VOLUMES=ace HAND_POSE_SPECS=ace-specs-v2 $MODAL run board/hand_pose/modal_app.py::upload_specs --specs v2.json
+    HAND_POSE_VOLUMES=ace HAND_POSE_SPECS=ace-specs-v2 HAND_POSE_OUT=ace-out-v2 $MODAL run --detach \
+        board/hand_pose/modal_app.py::full --specs v2.json
+
 Volumes (created on first use, names from HAND_POSE_VOLUMES, default "hand-pose"):
   <prefix>-weights  ckpt/Wan2.2-Fun-5B-Control/..., checkpoints/ace_ego_hand_{k,kfree}.pt, cache/caption_embed.pt,
                     mano/mano/MANO_{LEFT,RIGHT}.pkl
@@ -51,7 +58,12 @@ VIDEOX_COMMIT = "968f0e2192ba4c7a12868bf36d73260d135424ca"       # github.com/ai
 app = modal.App("hand-pose")
 wvol = modal.Volume.from_name(f"{PREFIX}-weights", create_if_missing=True)
 cvol = modal.Volume.from_name(f"{PREFIX}-clips", create_if_missing=True)
-ovol = modal.Volume.from_name(f"{PREFIX}-out", create_if_missing=True)
+# a rerun writes to its own output volume and may read its specs from their own volume, so an earlier run's outputs
+# and specs are never overwritten (HAND_POSE_OUT=ace-out-v2 HAND_POSE_SPECS=ace-specs-v2)
+OUT = os.environ.get("HAND_POSE_OUT") or f"{PREFIX}-out"
+SPECS = os.environ.get("HAND_POSE_SPECS") or None
+ovol = modal.Volume.from_name(OUT, create_if_missing=True)
+svol = modal.Volume.from_name(SPECS, create_if_missing=True) if SPECS else None
 
 image = (
     modal.Image.debian_slim(python_version="3.10")
@@ -69,7 +81,9 @@ image = (
                   f"cd /opt/ace && git checkout {ACE_COMMIT}",
                   "git clone https://github.com/aigc-apps/VideoX-Fun /opt/ace/third_party",
                   f"cd /opt/ace/third_party && git checkout {VIDEOX_COMMIT}")
-    .env({"ACE_EGO_HAND_MANO_DIR": "/w/mano", "HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1"})
+    .env({"ACE_EGO_HAND_MANO_DIR": "/w/mano", "HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONUNBUFFERED": "1",
+          # the container must name the same volumes as the machine that launched it
+          "HAND_POSE_VOLUMES": PREFIX, "HAND_POSE_OUT": OUT, "HAND_POSE_SPECS": SPECS or ""})
     .add_local_file(HERE / "core.py", "/opt/ace/ace_core.py", copy=True)
     .add_local_file(HERE.parent.parent / "prepare" / "display.py", "/opt/ace/display.py", copy=True)
 )
@@ -79,6 +93,31 @@ CALIB_WINDOWS = 12                       # windows the K-free checkpoint reads t
 SMOOTH = {"min_cut": 1.5, "beta": 1.0}   # one-euro filter at the knot rate (core.py says why)
 READOUT_RADIUS = 3                       # the second 2D readout, near each slot's attention peak (core.combine_readouts)
 WAN = "alibaba-pai/Wan2.2-Fun-5B-Control"
+
+
+def _numpy2_pickles():
+    """Pickles written under numpy 2 (the converted MANO files) name numpy._core.*; this image has numpy 1.24, where
+    the same modules are numpy.core.*. Map one to the other so pickle finds them; nothing else changes."""
+    import importlib
+    import importlib.abc
+    import importlib.util
+    import sys
+    import numpy
+
+    class _Alias(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        def find_spec(self, name, path=None, target=None):
+            if name == "numpy._core" or name.startswith("numpy._core."):
+                return importlib.util.spec_from_loader(name, self)
+            return None
+
+        def create_module(self, spec):
+            return importlib.import_module("numpy.core" + spec.name[len("numpy._core"):])
+
+        def exec_module(self, module):
+            pass
+
+    if not hasattr(numpy, "_core") and not any(type(f).__name__ == "_Alias" for f in sys.meta_path):
+        sys.meta_path.insert(0, _Alias())
 
 
 def _link_weights():
@@ -130,6 +169,20 @@ def upload(specs: str):
     print(f"uploaded {len(todo)} clips")
 
 
+@app.local_entrypoint()
+def upload_specs(specs: str):
+    """Only each spec to the specs volume (HAND_POSE_SPECS), leaving the clips volume and its specs untouched."""
+    if svol is None:
+        raise SystemExit("set HAND_POSE_SPECS to the specs volume")
+    items = json.loads(Path(specs).read_text())
+    with tempfile.TemporaryDirectory() as tmp, svol.batch_upload(force=True) as b:
+        for s in items:
+            spec = Path(tmp) / f"{s['ds']}__{s['ep']}.spec.json"
+            spec.write_text(json.dumps(s))
+            b.put_file(str(spec), f"/{s['ds']}/{s['ep']}/spec.json")
+    print(f"uploaded {len(items)} specs to {SPECS}")
+
+
 def _opt(name: str) -> dict:
     import yaml
     opt = yaml.safe_load(open(f"/opt/ace/options/{name}.yml"))
@@ -139,7 +192,8 @@ def _opt(name: str) -> dict:
     return opt
 
 
-@app.cls(image=image, gpu="H100", volumes={"/w": wvol, "/c": cvol, "/o": ovol}, timeout=3 * 3600,
+@app.cls(image=image, gpu="H100", volumes={"/w": wvol, "/c": cvol, "/o": ovol, **({"/s": svol} if svol else {})},
+         timeout=3 * 3600,
          memory=65536, cpu=8, max_containers=40)
 class Ace:
     @modal.enter()
@@ -148,6 +202,7 @@ class Ace:
         import torch
         sys.path.insert(0, "/opt/ace")
         os.chdir("/opt/ace")
+        _numpy2_pickles()
         import ace_ego_hand.video_vae as vv
         vv.MODEL_ROOT = Path("/w/ckpt/Wan2.2-Fun-5B-Control")
         vv.VIDEOX_CFG = Path("/opt/ace/third_party/config/wan2.2/wan_civitai_5b.yaml")
@@ -178,7 +233,9 @@ class Ace:
         t_all = time.time()
         ovol.reload()
         cvol.reload()
-        spec = json.loads(Path(f"/c/{key}/spec.json").read_text())
+        if svol:
+            svol.reload()
+        spec = json.loads(Path(f"/{'s' if svol else 'c'}/{key}/spec.json").read_text())
         out_dir = Path(f"/o/{key}")
         video = f"/c/{key}/source.mp4"
         meta = C.probe(video)
