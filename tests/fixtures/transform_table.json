@@ -2307,14 +2307,14 @@
   "camera": "exo",
   "place": "board clip (board/clips.py)",
   "in": "320x240, 30 frames",
-  "out": "320x240, 30 frames, 0.000-1.967 s"
+  "out": "320x240, 30 frames, 0.000-2.000 s"
  },
  {
   "case": "mcap_portrait_wrist",
   "camera": "exo",
   "place": "static web copy (board/static.py transcode)",
   "in": "320x240, 30 frames",
-  "out": "320x240, 30 frames, 0.000-1.967 s"
+  "out": "320x240, 30 frames, 0.000-2.000 s"
  },
  {
   "case": "mcap_portrait_wrist",
@@ -2328,14 +2328,14 @@
   "camera": "left",
   "place": "board clip (board/clips.py)",
   "in": "240x320, 18 frames",
-  "out": "240x320, 18 frames, 0.200-1.933 s"
+  "out": "240x320, 18 frames, 0.200-2.000 s"
  },
  {
   "case": "mcap_portrait_wrist",
   "camera": "left",
   "place": "static web copy (board/static.py transcode)",
   "in": "240x320, 18 frames",
-  "out": "240x320, 18 frames, 0.200-1.933 s"
+  "out": "240x320, 18 frames, 0.200-2.000 s"
  },
  {
   "case": "mcap_portrait_wrist",
@@ -2348,7 +2348,7 @@
   "case": "mcap_portrait_wrist",
   "camera": "exo+left",
   "place": "footage download (board/serve.py footage_command)",
-  "in": "320x240 + 240x320, 1.967 s",
+  "in": "320x240 + 240x320, 2.000 s",
   "out": "508x240, 60 frames, 0.000-2.000 s with 320x240 at 0,0 + 180x240 at 328,0"
  }
 ]

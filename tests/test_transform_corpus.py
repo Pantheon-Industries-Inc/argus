@@ -712,10 +712,7 @@ def corpus(tmp_path_factory):
 
 
 # cases that still break a rule, each with where; a fix removes its case (strict, so a case that passes must go)
-KNOWN = {
-    "mcap_portrait_wrist": "prepare/formats.py FrameWriter gives an encoded image frame 1/30 s, not the step to the "
-                           "next",
-}
+KNOWN = {}
 
 
 @pytest.mark.parametrize("name", list(CASES))

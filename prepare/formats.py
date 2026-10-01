@@ -2450,6 +2450,7 @@ class FrameWriter:
     def __init__(self, out: Path, fmt: str):
         self.out, self.fmt, self.pts, self.kind = out, fmt, [], None
         self.raw = self.enc = self.dst = None
+        self.held = []                    # encoded packets waiting for the next frame's time (_mux)
 
     def add(self, t_s: float, frame: bytes) -> None:
         if self.kind is None:
@@ -2496,16 +2497,32 @@ class FrameWriter:
             im = im.resize((self.enc.width, self.enc.height))
         fr = av.VideoFrame.from_image(im)
         fr.pts, fr.time_base = p, Fraction(1, TIME_BASE_DEN)
-        for pkt in self.enc.encode(fr):
-            self.dst.mux(pkt)
         self.pts.append(p)
+        self._mux(self.enc.encode(fr))
+
+    def _mux(self, packets, last: bool = False) -> None:
+        """Encoded packets into the mp4 in the order the encoder gives them, each lasting the step to the next frame's
+        time and the last frame the step before it, as copied frames do (close): the encoder gives every frame 1/30 s
+        at any rate, which ended a 15 fps camera's file half a frame early. A packet waits until the frame after it
+        has come in."""
+        import bisect
+        self.held += list(packets)
+        while self.held:
+            pkt = self.held[0]
+            i = min(bisect.bisect_left(self.pts, int(pkt.pts)), len(self.pts) - 1)
+            if i + 1 < len(self.pts):
+                pkt.duration = self.pts[i + 1] - self.pts[i]
+            elif last:
+                pkt.duration = self.pts[i] - self.pts[i - 1] if i else TIME_BASE_DEN // 30
+            else:
+                return
+            self.dst.mux(self.held.pop(0))
 
     def close(self) -> int:
         """Finish the file; returns the number of frames written."""
         import av
         if self.kind == "image" and self.enc is not None:
-            for pkt in self.enc.encode():
-                self.dst.mux(pkt)
+            self._mux(self.enc.encode(), last=True)
             self.dst.close()
         elif self.raw is not None:
             self.raw.close()
