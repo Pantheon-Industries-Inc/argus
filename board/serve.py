@@ -1806,6 +1806,8 @@ h3.section .count {
   display: block; width: 100%; max-width: 480px; border-radius: var(--r-md);
   border: 1.5px solid rgba(78,194,127,0.5);
 }
+/* a portrait frame (a phone held upright) would be 480 x 853 at full width: it is as tall as a square one instead */
+.goal-frame img.tall { width: auto; max-width: 100%; max-height: 480px; }
 
 /* goal marker on the scrubber */
 .timeline .marker.goal {
@@ -2414,6 +2416,15 @@ function posterSrc(file, eidEnc, cam) {
     if (!(rec._frames || {})[mediaKey(cam) + '|0']) return '';
   }
   return frameSrcOf(file, eidEnc, cam, 0);
+}
+// a goal frame that loads taller than it is wide gets .tall, which caps its height (landscape ones are untouched)
+function markTallGoalFrames() {
+  document.querySelectorAll('.goal-frame img').forEach(im => {
+    // kept for every load: the task goal frame shows another picture as the video plays
+    const mark = () => im.classList.toggle('tall', im.naturalHeight > im.naturalWidth);
+    im.addEventListener('load', mark);
+    if (im.complete && im.naturalWidth) mark();
+  });
 }
 function frameSrc(eidEnc, cam, t) { return frameSrcOf(_activeFile, eidEnc, cam, t); }
 function frameSrcOf(file, eidEnc, cam, t) {
@@ -4467,6 +4478,7 @@ function renderEp(d, opts) {
   document.querySelectorAll('.goal-frame[data-t]').forEach(g => {
     g.addEventListener('click', () => seek(g.dataset.t));
   });
+  markTallGoalFrames();
   document.querySelectorAll('.task-row[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
