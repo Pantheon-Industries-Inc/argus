@@ -1,0 +1,2354 @@
+[
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360 rot 90, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "360x640",
+  "out": "360x640, 5 instants"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "360x640, cell 256 px",
+  "out": "256x456"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x490"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 360x640",
+  "out": "360x666: exo 360x640"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 360x640",
+  "out": "360x666: exo 360x640"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "360x640",
+  "out": "360x640 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360 rot 90, 60 frames",
+  "out": "copy: 640x360 rot 90, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "360x640, 2.000 s",
+  "out": "360x640, 60 frames, 0.000-2.000 s with 360x640 at 0,0"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames"
+ },
+ {
+  "case": "phone_portrait_rot90",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "360x640 source pixels, joint at 104.4,185.6",
+  "out": "360x640 clip pixels, joint at 104,186"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360 rot 270, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "360x640",
+  "out": "360x640, 5 instants"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "360x640, cell 256 px",
+  "out": "256x456"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x490"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 360x640",
+  "out": "360x666: exo 360x640"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 360x640",
+  "out": "360x666: exo 360x640"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "360x640",
+  "out": "360x640 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360 rot 270, 60 frames",
+  "out": "copy: 640x360 rot 270, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "360x640, 2.000 s",
+  "out": "360x640, 60 frames, 0.000-2.000 s with 360x640 at 0,0"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "360x640, 60 frames",
+  "out": "360x640, 60 frames"
+ },
+ {
+  "case": "phone_portrait_rot270",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "360x640 source pixels, joint at 104.4,185.6",
+  "out": "360x640 clip pixels, joint at 104,186"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360 rot 180, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 5 instants"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360 rot 180, 60 frames",
+  "out": "copy: 640x360 rot 180, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 2.000 s",
+  "out": "640x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames"
+ },
+ {
+  "case": "upside_down_rot180",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "480x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "480x480, 60 frames",
+  "out": "480x480, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "480x480",
+  "out": "480x480, 5 instants"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "480x480, cell 256 px",
+  "out": "256x256"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x290"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 480x480",
+  "out": "480x506: exo 480x480"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 480x480",
+  "out": "480x506: exo 480x480"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "480x480, 60 frames",
+  "out": "480x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "480x480, 60 frames",
+  "out": "480x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "480x480",
+  "out": "480x480 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "480x480, 60 frames",
+  "out": "copy: 480x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "480x480, 2.000 s",
+  "out": "480x480, 60 frames, 0.000-2.000 s with 480x480 at 0,0"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "480x480, 60 frames",
+  "out": "480x480, 60 frames"
+ },
+ {
+  "case": "square_480x480",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "480x480 source pixels, joint at 139.2,139.2",
+  "out": "480x480 clip pixels, joint at 139,139"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "1280x320, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "1280x320, 60 frames",
+  "out": "1280x320, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "1280x320",
+  "out": "1280x320, 5 instants"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "1280x320, cell 256 px",
+  "out": "256x64"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x98"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 1280x320",
+  "out": "768x218: exo 768x192"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 1280x320",
+  "out": "768x218: exo 768x192"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "1280x320, 60 frames",
+  "out": "1280x320, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "1280x320, 60 frames",
+  "out": "1280x320, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "1280x320",
+  "out": "640x160 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "1280x320, 60 frames",
+  "out": "copy: 1280x320, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "1280x320, 2.000 s",
+  "out": "1280x320, 60 frames, 0.000-2.000 s with 1280x320 at 0,0"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "1280x320, 60 frames",
+  "out": "1280x320, 60 frames"
+ },
+ {
+  "case": "ultrawide_1280x320",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "1280x320 source pixels, joint at 371.2,92.8",
+  "out": "1280x320 clip pixels, joint at 371,93"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "455x255, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "455x255, 60 frames",
+  "out": "455x255, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "455x255",
+  "out": "455x255, 5 instants"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "455x255, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 455x255",
+  "out": "455x281: exo 455x255"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 455x255",
+  "out": "455x281: exo 455x255"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "455x255, 60 frames",
+  "out": "454x254, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "454x254, 60 frames",
+  "out": "454x254, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "454x254",
+  "out": "454x254 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "455x255, 60 frames",
+  "out": "encode: 454x254, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "454x254, 2.000 s",
+  "out": "454x254, 60 frames, 0.000-2.000 s with 454x254 at 0,0"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "455x255, 60 frames",
+  "out": "455x255, 60 frames"
+ },
+ {
+  "case": "odd_455x255",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "455x255 source pixels, joint at 131.9,73.9",
+  "out": "454x254 clip pixels, joint at 132,74"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "160x120, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "160x120, 60 frames",
+  "out": "160x120, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "160x120",
+  "out": "160x120, 5 instants"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "160x120, cell 256 px",
+  "out": "160x120"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "904x154"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 160x120",
+  "out": "160x146: exo 160x120"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 160x120",
+  "out": "160x146: exo 160x120"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "160x120, 60 frames",
+  "out": "160x120, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "160x120, 60 frames",
+  "out": "160x120, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "160x120",
+  "out": "160x120 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "160x120, 60 frames",
+  "out": "copy: 160x120, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "160x120, 2.000 s",
+  "out": "160x120, 60 frames, 0.000-2.000 s with 160x120 at 0,0"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "160x120, 60 frames",
+  "out": "160x120, 60 frames"
+ },
+ {
+  "case": "tiny_160x120",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "160x120 source pixels, joint at 46.4,34.8",
+  "out": "160x120 clip pixels, joint at 46,35"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "3840x2160, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "3840x2160, 4 frames",
+  "out": "3840x2160, 4 frames, episode 0.133 s"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "3840x2160",
+  "out": "3840x2160, 2 instants"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "3840x2160, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "2 instants, 2 per grid",
+  "out": "604x178"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 3840x2160",
+  "out": "768x458: exo 768x432"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 3840x2160",
+  "out": "768x458: exo 768x432"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "3840x2160, 4 frames",
+  "out": "1920x1080, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "1920x1080, 4 frames",
+  "out": "1920x1080, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "1920x1080",
+  "out": "640x360 at 0, 0.071, 0.1, 0.6 s"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "3840x2160, 4 frames",
+  "out": "encode: 1920x1080, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "1920x1080, 0.133 s",
+  "out": "1920x1080, 4 frames, 0.000-0.133 s with 1920x1080 at 0,0"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "3840x2160, 4 frames",
+  "out": "3840x2160, 4 frames"
+ },
+ {
+  "case": "uhd_3840x2160_4_frames",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "3840x2160 source pixels, joint at 1113.6,626.4",
+  "out": "1920x1080 clip pixels, joint at 557,313"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "3840x2160 rot 90, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "2160x3840, 4 frames",
+  "out": "2160x3840, 4 frames, episode 0.133 s"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "2160x3840",
+  "out": "2160x3840, 2 instants"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "2160x3840, cell 256 px",
+  "out": "256x456"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "2 instants, 2 per grid",
+  "out": "604x490"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 2160x3840",
+  "out": "768x1392: exo 768x1366"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 2160x3840",
+  "out": "768x1392: exo 768x1366"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "2160x3840, 4 frames",
+  "out": "608x1080, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "608x1080, 4 frames",
+  "out": "608x1080, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "608x1080",
+  "out": "608x1080 at 0, 0.071, 0.1, 0.6 s"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "3840x2160 rot 90, 4 frames",
+  "out": "encode: 1920x1080, 4 frames, 0.000-0.133 s"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "608x1080, 0.133 s",
+  "out": "608x1080, 4 frames, 0.000-0.133 s with 608x1080 at 0,0"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "2160x3840, 4 frames",
+  "out": "2160x3840, 4 frames"
+ },
+ {
+  "case": "uhd_portrait_hevc_rot90_4_frames",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "2160x3840 source pixels, joint at 626.4,1113.6",
+  "out": "608x1080 clip pixels, joint at 176,313"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x480, 60 frames",
+  "out": "640x480, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x480",
+  "out": "640x480, 5 instants"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x480, cell 256 px",
+  "out": "256x192"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x226"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x480",
+  "out": "640x506: exo 640x480"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x480",
+  "out": "640x506: exo 640x480"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x480, 60 frames",
+  "out": "640x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x480, 60 frames",
+  "out": "640x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x480",
+  "out": "640x480 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x480, 60 frames",
+  "out": "copy: 640x480, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x480, 2.000 s",
+  "out": "640x480, 60 frames, 0.000-2.000 s with 640x480 at 0,0"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x480, 60 frames",
+  "out": "640x480, 60 frames"
+ },
+ {
+  "case": "fisheye_circle",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x480 source pixels, joint at 185.6,139.2",
+  "out": "640x480 clip pixels, joint at 186,139"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 40 frames, 0.000-1.933 s"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 40 frames",
+  "out": "640x360, 40 frames, episode 1.933 s"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 4 instants"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "4 instants, 4 per grid",
+  "out": "1124x178"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 40 frames",
+  "out": "640x360, 40 frames, 0.000-1.933 s"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 40 frames",
+  "out": "640x360, 40 frames, 0.000-1.933 s"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 0.671, 1.9, 2.4 s"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 40 frames",
+  "out": "copy: 640x360, 40 frames, 0.000-1.933 s"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 1.933 s",
+  "out": "640x360, 58 frames, 0.000-1.933 s with 640x360 at 0,0"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 40 frames",
+  "out": "640x360, 40 frames"
+ },
+ {
+  "case": "variable_rate_30_then_10",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 56 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 56 frames",
+  "out": "640x360, 56 frames, episode 2.000 s"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 5 instants"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 56 frames",
+  "out": "640x360, 56 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 56 frames",
+  "out": "640x360, 56 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.037, 1.967, 2.467 s"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 56 frames",
+  "out": "copy: 640x360, 56 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 2.000 s",
+  "out": "640x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 56 frames",
+  "out": "640x360, 56 frames"
+ },
+ {
+  "case": "dropped_frames",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 45 frames",
+  "out": "640x360, 45 frames, episode 1.500 s"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 4 instants"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "4 instants, 4 per grid",
+  "out": "1124x178"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 45 frames",
+  "out": "640x360, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 45 frames",
+  "out": "640x360, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 0.737, 1.467, 1.967 s"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 45 frames",
+  "out": "copy: 640x360, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 1.500 s",
+  "out": "640x360, 45 frames, 0.000-1.500 s with 640x360 at 0,0"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 45 frames",
+  "out": "640x360, 45 frames"
+ },
+ {
+  "case": "copy_trimmed",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 5 instants"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "encode: 640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 2.000 s",
+  "out": "640x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames"
+ },
+ {
+  "case": "hevc_10bit",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "v.mp4",
+  "place": "source",
+  "in": "",
+  "out": "320x240, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "320x240, 60 frames",
+  "out": "320x240, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "320x240",
+  "out": "320x240, 5 instants"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "320x240, cell 256 px",
+  "out": "256x192"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x226"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240",
+  "out": "320x266: exo 320x240"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240",
+  "out": "320x266: exo 320x240"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "320x240, 60 frames",
+  "out": "320x240, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "320x240, 60 frames",
+  "out": "320x240, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "320x240",
+  "out": "320x240 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "320x240, 60 frames",
+  "out": "encode: 320x240, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "320x240, 2.000 s",
+  "out": "320x240, 60 frames, 0.000-2.000 s with 320x240 at 0,0"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "320x240, 60 frames",
+  "out": "320x240, 60 frames"
+ },
+ {
+  "case": "grayscale_hevc",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "320x240 source pixels, joint at 92.8,69.6",
+  "out": "320x240 clip pixels, joint at 93,70"
+ },
+ {
+  "case": "mkv",
+  "camera": "v.mkv",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 5 instants"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "copy: 640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 2.000 s",
+  "out": "640x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames"
+ },
+ {
+  "case": "mkv",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "v.avi",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 5 instants"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "encode: 640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 2.000 s",
+  "out": "640x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames"
+ },
+ {
+  "case": "avi_mpeg4",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "v.webm",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 5 instants"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "encode: 640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 2.000 s",
+  "out": "640x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames"
+ },
+ {
+  "case": "webm_vp9",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "mov",
+  "camera": "v.mov",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 5 instants"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 256 px",
+  "out": "256x144"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "5 instants, 5 per grid",
+  "out": "1384x178"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360",
+  "out": "640x386: exo 640x360"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "static web copy of another clip (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "copy: 640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360, 2.000 s",
+  "out": "640x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "hand tracker frames (board/hand_pose/core.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames"
+ },
+ {
+  "case": "mov",
+  "camera": "exo",
+  "place": "hand drawing (board/hands.py)",
+  "in": "640x360 source pixels, joint at 185.6,104.4",
+  "out": "640x360 clip pixels, joint at 186,104"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "top.mp4",
+  "place": "source",
+  "in": "",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "left_wrist.mp4",
+  "place": "source",
+  "in": "",
+  "out": "277x480, 30 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, episode 2.000 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "left",
+  "place": "reader (prepare/formats.py)",
+  "in": "277x480, 30 frames",
+  "out": "277x480, 30 frames"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "640x360",
+  "out": "640x360, 3 instants"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "left",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "277x480",
+  "out": "277x480, 3 instants"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "640x360, cell 448 px",
+  "out": "448x252"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "left",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "277x480, cell 448 px",
+  "out": "277x480"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo+left",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "3 instants, 3 per grid",
+  "out": "1440x770"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo+left",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360, left 277x480",
+  "out": "640x892: exo 640x360, left 277x480"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo+left",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 640x360, left 277x480",
+  "out": "640x892: exo 640x360, left 277x480"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "640x360, 60 frames",
+  "out": "640x360, 60 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "640x360",
+  "out": "640x360 at 0, 1.004, 1.967, 2.467 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "left",
+  "place": "board clip (board/clips.py)",
+  "in": "277x480, 30 frames",
+  "out": "276x480, 30 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "left",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "276x480, 30 frames",
+  "out": "276x480, 30 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "left",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "276x480",
+  "out": "276x480 at 0 s"
+ },
+ {
+  "case": "two_cameras_of_different_shapes",
+  "camera": "exo+left",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "640x360 + 276x480, 2.000 s",
+  "out": "854x360, 60 frames, 0.000-2.000 s with 640x360 at 0,0 + 206x360 at 648,0"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "observation.images.cam_high",
+  "place": "source",
+  "in": "",
+  "out": "320x240, 90 frames, 0.000-3.000 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "observation.images.cam_left_wrist",
+  "place": "source",
+  "in": "",
+  "out": "320x240 rot 270, 90 frames, 0.000-3.000 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "320x240, 45 frames",
+  "out": "320x240, 45 frames, episode 1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/left",
+  "place": "reader (prepare/formats.py)",
+  "in": "240x320, 45 frames",
+  "out": "320x240, 45 frames"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "320x240",
+  "out": "320x240, 2 instants"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/left",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "240x320",
+  "out": "240x320, 2 instants"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "320x240, cell 448 px",
+  "out": "320x240"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/left",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "240x320, cell 448 px",
+  "out": "240x320"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo+left",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "2 instants, 2 per grid",
+  "out": "732x598"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo+left",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240, left 240x320",
+  "out": "320x612: exo 320x240, left 240x320"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo+left",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240, left 240x320",
+  "out": "320x612: exo 320x240, left 240x320"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo",
+  "place": "board clip (board/clips.py)",
+  "in": "320x240, 45 frames",
+  "out": "320x240, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "320x240, 45 frames",
+  "out": "320x240, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "320x240",
+  "out": "320x240 at 0, 0.737, 1.467, 1.967 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/left",
+  "place": "board clip (board/clips.py)",
+  "in": "240x320, 45 frames",
+  "out": "240x320, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/left",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "240x320, 45 frames",
+  "out": "240x320, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/left",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "240x320",
+  "out": "240x320 at 0 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000000/exo+left",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "320x240 + 240x320, 1.500 s",
+  "out": "508x240, 45 frames, 0.000-1.500 s with 320x240 at 0,0 + 180x240 at 328,0"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "320x240, 45 frames",
+  "out": "320x240, 45 frames, episode 1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/left",
+  "place": "reader (prepare/formats.py)",
+  "in": "240x320, 45 frames",
+  "out": "320x240, 45 frames"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "320x240",
+  "out": "320x240, 2 instants"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/left",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "240x320",
+  "out": "240x320, 2 instants"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "320x240, cell 448 px",
+  "out": "320x240"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/left",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "240x320, cell 448 px",
+  "out": "240x320"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo+left",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "2 instants, 2 per grid",
+  "out": "732x598"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo+left",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240, left 240x320",
+  "out": "320x612: exo 320x240, left 240x320"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo+left",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240, left 240x320",
+  "out": "320x612: exo 320x240, left 240x320"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo",
+  "place": "board clip (board/clips.py)",
+  "in": "320x240, 45 frames",
+  "out": "320x240, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "320x240, 45 frames",
+  "out": "320x240, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "320x240",
+  "out": "320x240 at 0, 0.737, 1.467, 1.967 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/left",
+  "place": "board clip (board/clips.py)",
+  "in": "240x320, 45 frames",
+  "out": "240x320, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/left",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "240x320, 45 frames",
+  "out": "240x320, 45 frames, 0.000-1.500 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/left",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "240x320",
+  "out": "240x320 at 0 s"
+ },
+ {
+  "case": "lerobot_v3_portrait_wrist",
+  "camera": "episode_000001/exo+left",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "320x240 + 240x320, 1.500 s",
+  "out": "508x240, 45 frames, 0.000-1.500 s with 320x240 at 0,0 + 180x240 at 328,0"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "/cam_high/image/compressed",
+  "place": "source",
+  "in": "",
+  "out": "320x240, 30 frames, 0.000-2.000 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "/cam_left_wrist/image/compressed",
+  "place": "source",
+  "in": "",
+  "out": "240x320, 18 frames, 0.200-2.000 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo",
+  "place": "reader (prepare/formats.py)",
+  "in": "320x240, 30 frames",
+  "out": "320x240, 30 frames, episode 2.000 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "left",
+  "place": "reader (prepare/formats.py)",
+  "in": "240x320, 18 frames",
+  "out": "240x320, 18 frames"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "320x240",
+  "out": "320x240, 3 instants"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "left",
+  "place": "model frame (label/frames.py extract_frames, upright)",
+  "in": "240x320",
+  "out": "240x320, 3 instants"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "320x240, cell 448 px",
+  "out": "320x240"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "left",
+  "place": "grid cell (label/frames.py to_jpeg)",
+  "in": "240x320, cell 448 px",
+  "out": "240x320"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo+left",
+  "place": "grid image (label/frames.py compose_grid)",
+  "in": "3 instants, 3 per grid",
+  "out": "1056x598"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo",
+  "place": "detail view, first frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240",
+  "out": "320x266: exo 320x240"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo+left",
+  "place": "detail view, last frame (label/episode.py fullres_stack)",
+  "in": "exo 320x240, left 240x320",
+  "out": "320x612: exo 320x240, left 240x320"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo",
+  "place": "board clip (board/clips.py)",
+  "in": "320x240, 30 frames",
+  "out": "320x240, 30 frames, 0.000-1.967 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "320x240, 30 frames",
+  "out": "320x240, 30 frames, 0.000-1.967 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "320x240",
+  "out": "320x240 at 0, 1.004, 1.933, 2.433 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "left",
+  "place": "board clip (board/clips.py)",
+  "in": "240x320, 18 frames",
+  "out": "240x320, 18 frames, 0.200-1.933 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "left",
+  "place": "static web copy (board/static.py transcode)",
+  "in": "240x320, 18 frames",
+  "out": "240x320, 18 frames, 0.200-1.933 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "left",
+  "place": "goal frame (board/serve.py extract_frame, 640)",
+  "in": "240x320",
+  "out": "240x320 at 0 s"
+ },
+ {
+  "case": "mcap_portrait_wrist",
+  "camera": "exo+left",
+  "place": "footage download (board/serve.py footage_command)",
+  "in": "320x240 + 240x320, 1.967 s",
+  "out": "508x240, 60 frames, 0.000-2.000 s with 320x240 at 0,0 + 180x240 at 328,0"
+ }
+]
