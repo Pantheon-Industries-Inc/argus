@@ -1656,11 +1656,14 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             mp4, base, to = row["videos"][key]
             n = int(round((to - base) * fps))
             sources[v] = {"packed": str(mp4), "base_s": base, "n_frames": n, "camera_key": key}
+            # the size as the file is shown (prepare/display.py, as probe gives it): info.json's video.width and
+            # video.height are the stored frame's, which a display rotation turns (a wrist camera mounted on its side)
             vi = (feats.get(key) or {}).get("info") or {}
-            w, h, codec = vi.get("video.width"), vi.get("video.height"), vi.get("video.codec")
-            if not w:
+            w, h = _shown_size(mp4)
+            codec = vi.get("video.codec")
+            if not w or not codec:
                 pr = _stream_facts(mp4)
-                w, h, codec = pr["width"], pr["height"], pr["codec"]
+                w, h, codec = w or pr["width"], h or pr["height"], codec or pr["codec"]
             cameras[v] = describe({"key": key, "name": _short(key, v), "width": w, "height": h, "codec": codec}, v, key, rig)
         n_frames = min(s["n_frames"] for s in sources.values())
         if state is not None and kind != "none" and len(state) != n_frames:
@@ -1730,6 +1733,14 @@ def _stream_facts(p: Path) -> dict:
     with open_video(p) as c:
         st = c.streams.video[0]
         return {"width": st.codec_context.width, "height": st.codec_context.height, "codec": st.codec_context.name}
+
+
+def _shown_size(p: Path) -> tuple[int, int]:
+    """(width, height) of a video as it is shown (prepare/display.py; read once per file, so a packed file shared by
+    many episodes is probed once); (0, 0) when ffprobe cannot read it."""
+    from prepare import display
+    g = display.geometry(str(p))
+    return display.shown_size(g) if g["stored"][0] else (0, 0)
 
 
 def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra, notes) -> dict:

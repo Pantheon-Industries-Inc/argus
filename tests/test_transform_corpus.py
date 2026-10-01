@@ -715,8 +715,6 @@ def corpus(tmp_path_factory):
 KNOWN = {
     "two_cameras_of_different_shapes": "board/serve.py footage_layout rounds a side camera's width down; "
                                        "footage_command drops a camera that ended",
-    "lerobot_v3_portrait_wrist": "prepare/formats.py convert_lerobot takes a packed camera's size from info.json, "
-                                 "not as the file is shown",
     "mcap_portrait_wrist": "prepare/formats.py FrameWriter gives an encoded image frame 1/30 s, not the step to the "
                            "next; board/serve.py footage_command drops a camera that ended",
 }

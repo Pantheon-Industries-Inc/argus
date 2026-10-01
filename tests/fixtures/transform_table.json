@@ -2013,7 +2013,7 @@
   "camera": "episode_000000/left",
   "place": "reader (prepare/formats.py)",
   "in": "240x320, 45 frames",
-  "out": "320x240, 45 frames"
+  "out": "240x320, 45 frames"
  },
  {
   "case": "lerobot_v3_portrait_wrist",
@@ -2125,7 +2125,7 @@
   "camera": "episode_000001/left",
   "place": "reader (prepare/formats.py)",
   "in": "240x320, 45 frames",
-  "out": "320x240, 45 frames"
+  "out": "240x320, 45 frames"
  },
  {
   "case": "lerobot_v3_portrait_wrist",
