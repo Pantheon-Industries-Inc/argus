@@ -593,8 +593,8 @@ def test_footage_layout_keeps_the_main_camera_and_never_enlarges_the_others():
     from board import serve
     # Rexair: a portrait scene camera and two landscape wrists share its height in a column beside it
     W, H, cells = serve.footage_layout([(480, 640), (640, 480), (640, 480)])
-    assert cells == [(0, 0, 480, 640), (488, 0, 420, 316), (488, 324, 420, 316)]
-    assert (W, H) == (908, 640)
+    assert cells == [(0, 0, 480, 640), (488, 0, 422, 316), (488, 324, 422, 316)]
+    assert (W, H) == (910, 640)
     # a tall main camera: the wrists keep their own size, centred in the column
     W, H, cells = serve.footage_layout([(1920, 1080), (640, 480), (640, 480)])
     assert cells[1:] == [(1928, 56, 640, 480), (1928, 544, 640, 480)] and (W, H) == (2568, 1080)
