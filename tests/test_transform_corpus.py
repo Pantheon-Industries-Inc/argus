@@ -713,9 +713,8 @@ def corpus(tmp_path_factory):
 
 # cases that still break a rule, each with where; a fix removes its case (strict, so a case that passes must go)
 KNOWN = {
-    "two_cameras_of_different_shapes": "board/serve.py footage_command drops a camera that ended",
     "mcap_portrait_wrist": "prepare/formats.py FrameWriter gives an encoded image frame 1/30 s, not the step to the "
-                           "next; board/serve.py footage_command drops a camera that ended",
+                           "next",
 }
 
 
