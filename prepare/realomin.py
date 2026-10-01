@@ -138,7 +138,8 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
     for v in ("left", "right"):
         with av.open(str(ep / f"{v}.mp4")) as c:
             st = c.streams.video[0]
-            npts[v] = np.asarray(sorted(p.pts for p in c.demux(st) if p.pts is not None), dtype=np.int64)
+            npts[v] = np.asarray(sorted(p.pts for p in c.demux(st) if p.pts is not None and not p.is_discard),
+                                 dtype=np.int64)
             wh = (st.codec_context.width, st.codec_context.height)
         if len(npts[v]) != len(cts[v]):         # remux wrote one packet per frame message, each at its capture time
             raise RuntimeError(f"{v}.mp4: {len(npts[v])} frames in the file but {len(cts[v])} capture times")

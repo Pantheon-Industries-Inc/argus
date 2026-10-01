@@ -199,13 +199,15 @@ def probe_pts(clip: Path) -> tuple:
     """(width, height, time base, every frame's presentation timestamp): packets sorted by pts, which is display
     order, so the i-th is the i-th decoded frame the keypoints are numbered by."""
     r = subprocess.run([_ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries",
-                        "stream=width,height,time_base:packet=pts", "-of", "json", str(clip)],
+                        "stream=width,height,time_base:packet=pts,flags", "-of", "json", str(clip)],
                        capture_output=True, text=True, timeout=300)
     if r.returncode != 0:
         raise RuntimeError(f"ffprobe {clip}: {r.stderr.strip()[:200]}")
     j = json.loads(r.stdout)
     st = j["streams"][0]
-    pts = sorted(int(p["pts"]) for p in j.get("packets", []) if p.get("pts") not in (None, "N/A"))
+    # a packet flagged D (discarded by an edit list) is not a frame
+    pts = sorted(int(p["pts"]) for p in j.get("packets", [])
+                 if p.get("pts") not in (None, "N/A") and "D" not in str(p.get("flags", "")))
     if not pts:
         raise RuntimeError(f"{clip}: no video frames")
     return int(st["width"]), int(st["height"]), Fraction(st["time_base"]), pts

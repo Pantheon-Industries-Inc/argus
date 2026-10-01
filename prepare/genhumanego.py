@@ -129,7 +129,7 @@ def write_sidecar(raw: Path, dst: Path) -> dict:
     ann = meta.get("ann") or {}
     with av.open(str(raw / "cam2.mp4")) as c:
         st = c.streams.video[0]
-        pts = sorted(p.pts for p in c.demux(st) if p.pts is not None)
+        pts = sorted(p.pts for p in c.demux(st) if p.pts is not None and not p.is_discard)
         w, h = st.codec_context.width, st.codec_context.height
     n = len(pts)
     recorded = np.load(raw / TIMES) if (raw / TIMES).exists() else None

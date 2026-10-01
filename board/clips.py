@@ -161,7 +161,7 @@ def clip_frames(mp4: Path) -> int:
     try:
         import av
         with av.open(str(mp4)) as c:
-            return sum(1 for p in c.demux(c.streams.video[0]) if p.size)
+            return sum(1 for p in c.demux(c.streams.video[0]) if p.size and not p.is_discard)
     except Exception:
         return 0
 

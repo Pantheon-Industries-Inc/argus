@@ -131,7 +131,7 @@ def prepare_clip(shard: str, member: str, raw: Path, out_root: Path) -> dict:
     ep.mkdir(parents=True, exist_ok=True)
     with av.open(str(mp4)) as c:
         st = c.streams.video[0]
-        pts = sorted(p.pts for p in c.demux(st) if p.pts is not None)
+        pts = sorted(p.pts for p in c.demux(st) if p.pts is not None and not p.is_discard)
         tb, w, h = st.time_base, st.codec_context.width, st.codec_context.height
     n = len(pts)
     fps = float(clip_meta.get("fps") or 30.0)
