@@ -2674,7 +2674,7 @@ function msOpen(open) {
   if (open) {
     if (!_msView) return;
     clearTimeout(_msHide);
-    if (msEl.hidden) msRender(_msView);
+    if (msBody._view !== _msView) { msRender(_msView); msBody._view = _msView; }
     _msReturn = document.activeElement;
     msEl.hidden = false;
     void msEl.offsetWidth;            // start the fade from the hidden state
