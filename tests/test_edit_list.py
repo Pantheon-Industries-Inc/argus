@@ -33,6 +33,7 @@ def test_a_copy_trimmed_video_is_read_as_the_frames_it_shows(tmp_path):
     ep = next(out.glob("episode_*"))
     req = episode.build_request(ep)            # raised "expected pts ..., decoder gave 0" on frame 0 before
     assert req["n_images"] > 0
+    assert req["grid_cols"] == 6               # one camera: the grid row actually sent holds 6 instants, not 4
     clip = tmp_path / "clip.mp4"
     clips.extract_one(str(trim), 0.0, shown, clip, "ffmpeg", 1)
     assert clips.clip_frames(clip) == shown

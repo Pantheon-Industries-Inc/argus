@@ -194,7 +194,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         "dataset_checks": pl["checks"],
         "example_dir": str(example_dir) if example_dir else None,
         "config": {"views": req["views"], "cam_labels": req["cam_labels"], "layout": "grid",
-                   "grid_cols": GRID_COLS, "cell": req["cell"],
+                   "grid_cols": req["grid_cols"], "cell": req["cell"],
                    "n_timesteps": len(pl["ks"]), "n_frames_sent": len(pl["ks"]) * len(req["cam_labels"]),
                    "n_image_parts": req["n_images"], "fullres_frames": ["first", "last"],
                    "contact_detail_s": req["contact_s"], "resolution_route": route,

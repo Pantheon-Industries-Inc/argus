@@ -824,5 +824,6 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
             "given_prompt": (ep["context"].get("instruction") or "").strip() or None,
             "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels,
             "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]], "lens": ep["lens"],
+            "grid_cols": grid_cols,
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
             "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s"}
