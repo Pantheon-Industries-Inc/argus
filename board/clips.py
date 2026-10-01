@@ -165,10 +165,15 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
     w, h, resample = source_size(ffmpeg, packed)
     want = int(n_frames) - int(skip)
-    timing = ((f"select=gte(n\\,{int(skip)})",) if skip else ()) + ("setpts=PTS-STARTPTS",)
+    timing = (f"select=gte(n\\,{int(skip)})",) if skip else ()
+    # the first frame is put at 0 after encoding (the setts bitstream filter), which keeps every frame's duration.
+    # ffmpeg 7's setpts filter, which did this before, drops them: the last frame then had no duration, the clip's edit
+    # list ended where that frame starts, and players and clip_frames drop it (a 453-frame FastUMI camera came out
+    # with 452 and its episode was left off the board)
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), "-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}",
            "-i", packed, "-map", "0:v:0", "-frames:v", str(want), "-an", "-fps_mode", "passthrough",
            *video_args(w, h, main, threads, resample, pre=timing),
+           "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS",
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     subprocess.run(cmd, check=True, capture_output=True)
     got = clip_frames(tmp)

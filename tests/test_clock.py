@@ -35,6 +35,41 @@ def test_a_clip_starts_at_its_first_video_frame_when_audio_comes_first(tmp_path)
     assert len(p) == n and abs(p[0]) < 1e-6 and abs(p[1] - 1 / 30) < 2e-3
 
 
+def _shown(p):
+    """(frames a player shows, the video's shown length in s, the last frame's duration in s): an edit list that ends
+    where the last frame starts discards it."""
+    import av
+    with av.open(str(p)) as c:
+        s = c.streams.video[0]
+        ps = [x for x in c.demux(s) if x.size]
+        tb = s.time_base
+        return sum(1 for x in ps if not x.is_discard), float(s.duration * tb), float(ps[-1].duration * tb)
+
+
+@pytest.mark.parametrize("codec,rate,timescale,skip,offset", [
+    ("mpeg4", 20, 10240, 0, 0.0),        # a FastUMI camera: MPEG-4 Part 2 at 20 fps, in a 1/10240 time base
+    ("libx264", 30, 15360, 0, 0.0),
+    ("libx264", 30, 15360, 6, 0.0),      # a camera that started first, its first frames dropped
+    ("libx264", 15, 15360, 0, 0.5),      # a camera that started late, its clip shifted
+])
+def test_the_last_frame_of_a_clip_is_shown(tmp_path, codec, rate, timescale, skip, offset):
+    # ffmpeg 7's setpts dropped every frame's duration, so the clip's last frame had none, its edit list ended where
+    # that frame starts, and a player (and clip_frames) dropped it: FastUMI uploads failed with "clip has 452 frames,
+    # episode has 453" on Data Review (ffmpeg 7.1) and on pluto (7.0)
+    src = tmp_path / "src.mp4"
+    n = 3 * rate + 3
+    _ff("-f", "lavfi", "-i", f"testsrc2=size=320x180:rate={rate}", "-frames:v", str(n), "-c:v", codec, "-pix_fmt",
+        "yuv420p", "-video_track_timescale", str(timescale), str(src))
+    out = tmp_path / "clip.mp4"
+    clips.extract_one(str(src), 0.0, n, out, "ffmpeg", 1, fps=float(rate), offset_s=offset, skip=skip)
+    shown, length, last = _shown(out)
+    assert clips.clip_frames(out) == shown == n - skip
+    assert abs(last - 1 / rate) < 2e-3
+    assert abs(length - (n - skip) / rate) < 2e-3
+    p = _pts(out)
+    assert abs(p[0] - offset) < 2e-3 and abs(p[1] - p[0] - 1 / rate) < 2e-3
+
+
 def test_a_packed_episode_starts_at_0_not_half_a_frame_late(tmp_path):
     src = tmp_path / "packed.mp4"
     _ff("-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-t", "6", "-c:v", "libx264", "-pix_fmt", "yuv420p",
