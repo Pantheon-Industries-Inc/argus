@@ -297,16 +297,22 @@ def actors(ep: dict) -> list[str]:
     return [cam_name(ep, (mounted or views(ep)[:1])[-1])]
 
 
-def _decode_view(ep: dict, v: str, ks: list[int], gate=None):
+def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=()):
     """Frames for anchor indices ks. A camera paired to the anchor by real time (kmap) is decoded at
-    its own frame nearest each anchor frame; results are keyed by the anchor index."""
+    its own frame nearest each anchor frame; results are keyed by the anchor index. With widths, a frame wider
+    than the widest of them is kept full size only at detail_ks, and otherwise only at those widths."""
     s = ep["sources"][v]
     km = ep["kmap"].get(v)
     own = [int(km[k]) for k in ks] if km is not None else list(ks)
     pts = ep["times"].get(f"{v}_pts") if ep.get("times") is not None else None
+    keep = None
+    if widths:
+        full = {int(km[k]) if km is not None else int(k) for k in detail_ks}
+        top = max(widths)
+        keep = lambda j, im: im if (j in full or im.width <= top) else mf.Shrunk(im, widths)
 
     def run():
-        return mf.extract_frames(s["packed"], s["base_s"], int(s["n_frames"]), own, pts=pts, fps=ep_fps(ep))
+        return mf.extract_frames(s["packed"], s["base_s"], int(s["n_frames"]), own, pts=pts, fps=ep_fps(ep), keep=keep)
     if gate is not None:
         with gate:
             got = run()
@@ -315,11 +321,12 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None):
     return {k: got[j] for k, j in zip(ks, own)}
 
 
-def frames(ep: dict, pl: dict, gate=None) -> dict:
-    """{view: {k: PIL image}} for every planned k, decoded exactly (raises otherwise)."""
+def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
+    """{view: {k: PIL image}} for every planned k, decoded exactly (raises otherwise). With widths (the cell widths
+    a request can be built at), frames outside detail_ks are kept only at those widths (label/frames.py Shrunk)."""
     vs = views(ep)
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
-        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate) for v in vs}
+        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks) for v in vs}
         return {v: f.result() for v, f in futs.items()}
 
 
@@ -753,18 +760,19 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell."""
     ep = load(ep_dir)
     pl = plan(ep)
-    imgs = frames(ep, pl, gate)
-    any_img = next(iter(imgs.values()))[pl["ks"][0]]
-    if len(views(ep)) == 1:
-        # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
-        grid_cols = max(grid_cols, 6)
-    cam_labels = [cam_name(ep, v) for v in order_views(imgs)]
     # An explicit cell width is used as given. The rig's default is the largest width whose grids fit the
     # request's image-size cap: a long episode at 448 px can exceed it, and is then sent at the next step
     # down rather than refused. Episodes that fit are unchanged.
     widths = [cell_w] if cell_w else [w for w in CELL_W_STEPS if w <= (max_cell_w or GRID_CELL_W_BY_RIG[rig(ep)])]
     if max(widths) >= CONTACT_BELOW_W:
         pl["contact"] = []   # wide cells already show contact in detail
+    # full size is kept only where a detail view shows it: the first and last instant and the contact instants
+    imgs = frames(ep, pl, gate, widths=widths, detail_ks={pl["ks"][0], pl["ks"][-1], *(pl.get("contact") or [])})
+    any_img = next(iter(imgs.values()))[pl["ks"][0]]
+    if len(views(ep)) == 1:
+        # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
+        grid_cols = max(grid_cols, 6)
+    cam_labels = [cam_name(ep, v) for v in order_views(imgs)]
     contact = [(k, vs, fullres_stack(ep, imgs, k, "just after a sharp gripper change", frame_time(ep, k), vs))
                for k, vs in ((k, [v for v in vs if recording_at(ep, v, k)]) for k, vs in contact_views(ep, pl)) if vs]
     budget = (IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION - DETAIL_VIEW_BYTES_MAX

@@ -52,12 +52,13 @@ def base_frame(base_s: float, fps: float = FPS) -> int:
 
 
 def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[int], pts=None,
-                   fps: float = FPS):
+                   fps: float = FPS, keep=None):
     """Decode episode frames ks (indices into the episode, 0..n_frames-1) from a packed mp4.
     Returns {k: PIL.Image (RGB, native size)}. Raises FrameError unless every k is found at its
     exact pts. `pts` (one integer per episode frame) gives each frame's exact pts for files whose
     frames are not on a fixed grid (ABC-130k keeps real capture times); otherwise frame k sits at
-    (base_s * fps + k) * step on the fixed frame grid."""
+    (base_s * fps + k) * step on the fixed frame grid. keep(k, image), when given, is what is kept of each frame
+    as soon as it is decoded (episode.py keeps most frames only at their cell widths)."""
     import av
     ks = sorted(set(int(k) for k in ks))
     if not ks:
@@ -94,7 +95,8 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
                     continue
                 if fr.pts != target:
                     raise FrameError(f"frame {k}: expected pts {target}, decoder gave {fr.pts} ({packed})")
-                out[k] = upright(fr, geom)
+                im = upright(fr, geom)
+                out[k] = keep(k, im) if keep is not None else im
                 break
             if not forward:
                 seek_cost.append(n)
@@ -137,13 +139,36 @@ def upright(fr, geom: dict | None = None):
     return im.transpose(turn[rot]) if rot in turn else im
 
 
+def downscaled(im, width: int):
+    """im at most `width` wide, aspect kept, height even (box filter); a narrower frame as it is."""
+    from PIL import Image
+    if im.width <= width:
+        return im
+    return im.resize((width, int(round(im.height * width / im.width / 2)) * 2), Image.BOX)
+
+
+class Shrunk:
+    """A decoded frame kept only at the widths it can be sent at (downscaled from the full-size frame, which is then
+    let go): a long 4K recording no longer holds every sampled frame at full size (about 25 MB each) in memory.
+    width and height are the full-size frame's."""
+
+    def __init__(self, im, widths):
+        self.width, self.height = im.size
+        self.by_width = {int(w): downscaled(im, int(w)) for w in widths}
+
+    def at(self, width: int):
+        if width not in self.by_width:
+            raise FrameError(f"frame kept at widths {sorted(self.by_width)}, asked for {width}")
+        return self.by_width[width]
+
+
 def to_jpeg(im, width: int | None = None, quality: int = 90) -> bytes:
     """JPEG bytes, downscaled to at most `width` (aspect kept; box filter). A frame narrower than that is kept at its
     own size: enlarging adds no detail, only a blur the model could read as the camera's."""
-    from PIL import Image
+    if isinstance(im, Shrunk):
+        im = im.at(width)
     if width and im.width > width:
-        h = int(round(im.height * width / im.width / 2)) * 2
-        im = im.resize((width, h), Image.BOX)
+        im = downscaled(im, width)
     buf = io.BytesIO()
     im.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
