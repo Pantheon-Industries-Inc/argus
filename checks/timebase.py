@@ -57,9 +57,21 @@ JOINTS = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]    # the 12 arm joints of the 1
 
 SPEDUP_JITTER_FRAC = 0.020
 SPEDUP_LAG_FRAMES = 3.4
+# the follower's delay is a time: 3.4 frames at the 30 Hz the rule was calibrated at, compared at each recording's rate
+SPEDUP_LAG_S = SPEDUP_LAG_FRAMES / 30
 SPEDUP_NEIGHBOURS = 3
 SPEDUP_RULE = (f"skipped+repeated >= {SPEDUP_JITTER_FRAC:.3f} and follower lag <= {SPEDUP_LAG_FRAMES} frames "
                f"and median lag of the {SPEDUP_NEIGHBOURS} episodes either side <= {SPEDUP_LAG_FRAMES} frames")
+
+
+def rule_text(fps: float = 30.0) -> str:
+    """The rule as it applies at fps: SPEDUP_RULE at 30, the same delay in this recording's frames otherwise."""
+    if fps == 30:
+        return SPEDUP_RULE
+    n = round(SPEDUP_LAG_S * fps, 2)
+    return (f"skipped+repeated >= {SPEDUP_JITTER_FRAC:.3f} and follower lag <= {n:g} frames at {fps:g} fps "
+            f"({SPEDUP_LAG_S * 1000:.0f} ms, {SPEDUP_LAG_FRAMES} frames at 30 fps) and median lag of the "
+            f"{SPEDUP_NEIGHBOURS} episodes either side <= {n:g} frames")
 
 
 def _num(v) -> float | None:
@@ -70,13 +82,15 @@ def _num(v) -> float | None:
     return None if v != v else v
 
 
-def is_sped_up(lag, skipped_frac, repeated_frac, neighbour_lag) -> bool:
-    """The sped-up rule. False when any input is missing: no neighbour lag means the episode was not scanned
-    with its neighbours (`scan`, then `apply`), and an unscanned episode is never flagged."""
+def is_sped_up(lag, skipped_frac, repeated_frac, neighbour_lag, fps: float = 30.0) -> bool:
+    """The sped-up rule, the lags in frames at fps. False when any input is missing: no neighbour lag means the
+    episode was not scanned with its neighbours (`scan`, then `apply`), and an unscanned episode is never flagged."""
     lag, sk, rp, nb = (_num(v) for v in (lag, skipped_frac, repeated_frac, neighbour_lag))
     if None in (lag, sk, rp, nb):
         return False
-    return (sk + rp) >= SPEDUP_JITTER_FRAC and lag <= SPEDUP_LAG_FRAMES and nb <= SPEDUP_LAG_FRAMES
+    if fps == 30:
+        return (sk + rp) >= SPEDUP_JITTER_FRAC and lag <= SPEDUP_LAG_FRAMES and nb <= SPEDUP_LAG_FRAMES
+    return (sk + rp) >= SPEDUP_JITTER_FRAC and lag / fps <= SPEDUP_LAG_S and nb / fps <= SPEDUP_LAG_S
 
 
 def neighbour_lags(episode_index, task, lag):
@@ -139,14 +153,15 @@ def sample_jitter(state: np.ndarray) -> dict:
             "repeated_frac": round(float((r < 0.15).mean()), 4)}
 
 
-def timebase_check(state: np.ndarray, action: np.ndarray, neighbour_lag: float | None = None) -> dict:
-    """One episode's measurements and flag. neighbour_lag comes from the dataset scan (via context.json,
-    written by `apply`); without it the episode is measured but not flagged."""
+def timebase_check(state: np.ndarray, action: np.ndarray, neighbour_lag: float | None = None,
+                   fps: float = 30.0) -> dict:
+    """One episode's measurements and flag, at the recording's frame rate. neighbour_lag comes from the dataset scan
+    (via context.json, written by `apply`); without it the episode is measured but not flagged."""
     lag = follower_lag_frames(state, action)
     j = sample_jitter(state)
     return {"follower_lag_frames": lag, **j, "neighbour_lag_frames": _num(neighbour_lag),
-            "sped_up_recording": is_sped_up(lag, j["skipped_frac"], j["repeated_frac"], neighbour_lag),
-            "rule": SPEDUP_RULE}
+            "sped_up_recording": is_sped_up(lag, j["skipped_frac"], j["repeated_frac"], neighbour_lag, fps),
+            "rule": rule_text(fps)}
 
 
 def scan_file(raw: Path, chunk: int, file: int) -> list[dict]:

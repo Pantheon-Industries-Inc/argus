@@ -203,7 +203,7 @@ def plan(ep: dict) -> dict:
         # field computed from the leader/follower joint lag, not a claim made to the model. It reads the 12 arm
         # joints of two arms (timebase.JOINTS), as measure_folder does, so a one-arm recording is not measured
         checks["timebase"] = timebase.timebase_check(ep["state"], ep["action"],
-                                               ep["context"].get("timebase_neighbour_lag_frames"))
+                                               ep["context"].get("timebase_neighbour_lag_frames"), ep_fps(ep))
     if kind != "none" and checks["camera_windows_match_state"]:
         spans = ms.still_spans(ep["state"], fps=fps, kind=kind, grip_range=ms.gripper_full_range(ep["context"]))
         n = T
