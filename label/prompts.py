@@ -717,6 +717,11 @@ what a policy learns the instruction means, so it follows the instruction:
   A step whose result already holds at the first frame (a cap already off, a plug already in) is
   part of the end state that holds, not part of the goal that never happened: keep the relation
   aligned, and record the step the demonstration never shows as an instruction_mismatch.
+- An instruction can name one of several like items ("place the coffee filter in the dripper" with two
+  filters and two drippers, "roll the sock" beside a pile of socks). When the demonstration handles all of
+  them, the given goal holds as soon as the first one is done: that frame is the goal frame, and progress
+  reaches 1.0 there. The others are more than the instruction asks, so choose the relation narrower and
+  record a low-severity instruction_mismatch saying the instruction does not say how many.
 - The objects the instruction names are part of its claim. One instruction is often written once
   for many recordings, so the object handled in this one can be a different kind of object from the
   one it names. Identify every object from what the frames show of it (its shape and parts, how it

@@ -258,9 +258,9 @@ def test_no_rig_borrows_another_rigs_hardware():
 # The shared instructions each rig is sent, pinned so that no prompt text changes by accident. A deliberate prompt
 # change updates these in the same commit.
 PINNED = {
-    ("teleop_arms", True): "2e668a6cd89b7ad101cbe4a684f3eb6464859975031ea86c629707418cad3199",
+    ("teleop_arms", True): "79456a4ab69aea8202fe215d606484dfc38fcbc242da768b9a911c115c887f4e",
     ("teleop_arms", False): "93b9200f2bb18f4ca3f8eda72fb8a502d2c4829277251193bbd6696508ad80ae",
-    ("handheld_gripper", True): "b05feb1c81a3039e4102dbb10d97ef985c6f0c9c82e14cbf427c70ecad9433c3",
+    ("handheld_gripper", True): "fa5f49ffe3c6042e757f78ad775a87f1af7308b858a59b30420e9ab416434989",
     ("handheld_gripper", False): "0e421e7c6ddc2d8d9954629b6f152d2ac61d65406547647c9519040e9c1a4da5",
     ("ego_head", True): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
     ("ego_head", False): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",

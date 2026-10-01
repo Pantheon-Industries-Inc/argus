@@ -404,8 +404,9 @@ def _camera_line(ep: dict, v: str) -> str:
         return (f"- {cam_name(ep, v)}: another camera the recording has; the dataset does not say where it is "
                 "mounted, so read that from its frames.")
     side = "" if len(views(ep)) == 1 or v not in ("left", "right") else f"{v.upper()} "
-    return (f"- {cam_name(ep, v)}: the camera mounted on the {side}{n['gripper_of']}. Its own gripper's fingers sit in "
-            "the same place in every frame, usually along the bottom edge, and change only by opening and closing; "
+    return (f"- {cam_name(ep, v)}: the camera mounted on the {side}{n['gripper_of']}. When its own gripper's fingers "
+            "are in view, they sit in the same place in every frame, usually along the bottom edge, and change only by "
+            "opening and closing; "
             "the rest of the image moves whenever the gripper moves.")
 
 
