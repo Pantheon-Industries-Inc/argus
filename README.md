@@ -6,15 +6,17 @@ This is the pipeline behind [*Argus: An Open-Source Annotator for Robotics Data*
 
 The pipeline handles teleoperated arms, UMI grippers and human (ego) data, and reads LeRobot datasets, MCAP files, plain video and archives of any of these. It draws on instructions and recorded robot state when a dataset provides them, and works from the footage alone when it does not. For each episode it produces a dense timeline with
 
-- every action marked as advancing the task, wasteful or idle
-- progress toward the goal, key events and subgoals
-- the outcome, and whether the instruction matches what was actually done
-- operator mistakes, and whether and how the operator recovered
+- every action phase of each arm, gripper or hand, marked as advancing the task, wasteful or idle
+- progress toward the goal, and key events, the moments a reviewer would mark to judge progress (every fold of a T-shirt, every cup stacked), each with its outcome
+- the outcome and the goal frame, and whether the instruction matches what was actually done
+- on human ego video, each separate activity with its own outcome and goal frame
+- operator mistakes that would teach a model a bad habit, with their severity
+- every failed attempt, and whether and how the operator recovered
 - changes a person made to the scene
 
 Deterministic checks run alongside the model to catch what a model should not be trusted to judge, such as recordings that play faster than real time, camera streams swapped between arms, gripper signals that never change, and poor capture.
 
-We recommend using Astra (`openai/gpt-6-astra`) with this harness, though it is obviously VLM agnostic. For each setup it chooses which frames to send and at what resolution, decodes them at exact timestamps, and prompts the model with what the setup is, what counts as a mistake on it, and how to verify what the recording claims against the pixels. All prompts live in `label/`. The repository also includes the dashboard, a comparison of five models on the same harness, and `gate/`, the regression suite the harness is held to.
+We recommend using Astra (`openai/gpt-6-astra`) with this harness, though it also runs unchanged on other VLMs. For each setup it chooses which frames to send and at what resolution, decodes them at exact timestamps, and prompts the model with what the setup is, what counts as a mistake on it, and how to verify what the recording claims against the pixels. All prompts live in `label/`. The repository also includes the dashboard, a comparison of five models on the same harness, and `gate/`, the regression suite the harness is held to.
 
 ![The dashboard playing a MolmoAct2 episode, with its three cameras, the dense timeline and the outcome against the given goal](media/board.gif)
 
