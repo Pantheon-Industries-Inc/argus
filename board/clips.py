@@ -172,12 +172,52 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
            *video_args(w, h, main, threads, resample, pre=timing),
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     subprocess.run(cmd, check=True, capture_output=True)
+    frame_lengths(tmp)
     got = clip_frames(tmp)
     if got != want:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"{out_mp4.name}: clip has {got} frames, episode has {want}"
                            + (f" after the {skip} before the main camera's first" if skip else ""))
     os.replace(tmp, out_mp4)
+
+
+def frame_lengths(mp4: Path) -> bool:
+    """Give every video frame of an encoded mp4 its length, so the file plays to the end of its last frame; True when
+    it had to. Some ffmpeg builds (7.0.2 and 7.1.5 seen, on an MPEG-4 Part 2 source among others) hand the muxer
+    encoded packets with no duration, so the last packet in decode order lasts 0 s, the file's edit list ends where
+    the latest frame starts, and a player (and clip_frames) drops that frame: a 480-frame episode came out as 479.
+    Each frame then lasts the step to the next frame's time and the last one the step before it, as FrameWriter
+    (prepare/formats.py) gives copied frames; the packets, their times and every other stream are copied unchanged,
+    so a camera that starts late still starts where it did. A file whose frames all have a length is left as it is."""
+    import av
+    with av.open(str(mp4)) as src:
+        ist = src.streams.video[0]
+        meta = [(p.pts, p.duration) for p in src.demux(ist) if p.size and p.pts is not None]
+    if not meta or all(d for _, d in meta[:-1]) and meta[-1][1]:
+        return False
+    pts = sorted(p for p, _ in meta)
+    step = {p: (pts[i + 1] - p if i + 1 < len(pts) else (p - pts[i - 1] if i else 0)) for i, p in enumerate(pts)}
+    tmp = mp4.with_name(mp4.stem + ".len.mp4")
+    try:
+        with av.open(str(mp4)) as src, av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
+            outs = {}
+            for s in src.streams:
+                if s.type in ("video", "audio"):
+                    o = dst.add_stream_from_template(s)
+                    o.time_base = s.time_base
+                    outs[s.index] = o
+            vi = src.streams.video[0].index
+            for pkt in src.demux(*[src.streams[i] for i in outs]):
+                if not pkt.size:
+                    continue
+                if pkt.stream.index == vi and pkt.pts is not None and step.get(pkt.pts):
+                    pkt.duration = step[pkt.pts]
+                pkt.stream = outs[pkt.stream.index]
+                dst.mux(pkt)
+        os.replace(tmp, mp4)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
 
 
 def clip_frames(mp4: Path) -> int:

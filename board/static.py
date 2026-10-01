@@ -267,6 +267,7 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg {mode} {src}: {r.stderr.strip()[-300:]}")
+    bc.frame_lengths(part)          # some ffmpeg builds leave the last frame 0 s long, so it is never shown
     op = probe(part)
     warn = []
     if sp["frames"] and op["frames"] and sp["frames"] != op["frames"]:
