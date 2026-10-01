@@ -99,13 +99,19 @@ def video_args(w: int, h: int, main: bool, threads: int) -> list:
 
 
 def source_size(ffmpeg: str, path: str) -> tuple:
-    """(width, height) of a video's first stream."""
+    """(width, height) of a video's first stream as it is shown: a phone stores portrait video as landscape frames
+    with a display rotation, and ffmpeg turns the frames upright before scaling, so a rotation of 90 or 270 degrees
+    swaps the stored size (prepare/formats.py probe, the same rule). Scaling a portrait video to its stored landscape
+    size squashed it."""
     probe = Path(ffmpeg).with_name("ffprobe")
     r = subprocess.run([str(probe) if probe.exists() else "ffprobe", "-v", "error", "-select_streams", "v:0",
-                        "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
-                       capture_output=True, text=True, check=True)
-    w, h = r.stdout.strip().split(",")[:2]
-    return int(w), int(h)
+                        "-show_entries", "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
+                        "-of", "json", path], capture_output=True, text=True, check=True)
+    st = (json.loads(r.stdout).get("streams") or [{}])[0]
+    w, h = int(st["width"]), int(st["height"])
+    rot = next((sd["rotation"] for sd in st.get("side_data_list") or [] if "rotation" in sd),
+               (st.get("tags") or {}).get("rotate", 0))
+    return (h, w) if int(round(float(rot))) % 180 == 90 else (w, h)
 
 
 def start_offsets(ep_dir: Path, sources: dict) -> dict:

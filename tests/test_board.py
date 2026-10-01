@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import shutil
+import subprocess
 from fractions import Fraction
 from pathlib import Path
 
@@ -627,6 +628,24 @@ def _cell_means(mp4: Path, cells) -> np.ndarray:
             a = fr.to_ndarray(format="gray")
             out.append([a[y + 2:y + h - 2, x + 2:x + w - 2].mean() for x, y, w, h in cells])
     return np.array(out)
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_phone_portrait_video_gets_a_portrait_clip(tmp_path):
+    """A phone stores portrait video as landscape frames with a display rotation (an iPhone's 3840x2160 with -90):
+    the clip is the upright portrait size, never the frames squashed into the stored landscape size."""
+    from board import clips
+    src, rotated, out = tmp_path / "land.mp4", tmp_path / "IMG_0001.MOV", tmp_path / "clip.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=2400x1350:rate=30", "-frames:v", "6",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src)], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-display_rotation", "-90", "-i", str(src), "-c", "copy", str(rotated)],
+                   check=True)
+    assert clips.source_size("ffmpeg", str(rotated)) == (1350, 2400)
+    assert clips.source_size("ffmpeg", str(src)) == (2400, 1350)
+    clips.extract_one(str(rotated), 0.0, 6, out, "ffmpeg", 1)
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                        "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True)
+    assert tuple(int(x) for x in r.stdout.strip().split(",")[:2]) == (608, 1080)   # 1350x2400 fitted to 1080 tall
 
 
 @pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
