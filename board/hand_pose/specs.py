@@ -6,8 +6,11 @@
                    <factory>/<worker>/intrinsics.json on the Hub (a gated dataset: HF_TOKEN), resampled to a
                    832x480 pinhole with a 120 degree horizontal field of view
   Gen-HumanEgo     the headset camera's Double Sphere calibration from the episode's MCAP (meta.json calib2,
-                   written by prepare/genhumanego.py), resampled to an 832x672 pinhole with a 110 degree field of
-                   view pitched down 25 degrees, since the wearer's hands sit at the bottom of that fisheye
+                   written by prepare/genhumanego.py), resampled to an 832x672 pinhole with a 90 degree field of
+                   view pitched down 30 degrees, since the wearer's hands sit at the bottom of that fisheye (the
+                   earlier 110 degree view drew the hands smaller; on 9 episodes the 90 degree view put 3 points more
+                   of the drawn keypoints inside an independent detector's hand boxes, 14 points more on frames with
+                   another person's hand in view, and drew a hand on 96% of the detector's hands against 94%)
   OpenAoE          phone video; its metadata's intrinsics are not self-consistent, so no camera is passed and the
                    K-free checkpoint reads one camera for the whole clip (it affects only the 3D decode, not the
                    2D keypoints the board draws)
@@ -50,7 +53,7 @@ def spec(ep: Path) -> dict | None:
         fx, fy, cx, cy, xi, al = c["D"]
         cam = {"model": "ds", "convention": "opencv", "fx": fx, "fy": fy, "cx": cx, "cy": cy, "xi": xi, "alpha": al,
                "source": "meta.json calib2 (camera2, double sphere)"}
-        return {**base, "camera": cam, "pinhole": {"w": 832, "h": 672, "hfov_deg": 110, "pitch_deg": 25}}
+        return {**base, "camera": cam, "pinhole": {"w": 832, "h": 672, "hfov_deg": 90, "pitch_deg": 30}}
     return {**base, "camera": {"model": "unknown_pinhole"}}
 
 
