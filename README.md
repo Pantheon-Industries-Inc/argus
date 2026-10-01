@@ -16,7 +16,7 @@ Deterministic checks run alongside the model to catch what a model should not be
 
 We recommend using Astra (`openai/gpt-6-astra`) with this harness, though it is obviously VLM agnostic. For each setup it chooses which frames to send and at what resolution, decodes them at exact timestamps, and prompts the model with what the setup is, what counts as a mistake on it, and how to verify what the recording claims against the pixels. All prompts live in `label/`. The repository also includes the dashboard, a comparison of five models on the same harness, and `gate/`, the regression suite the harness is held to.
 
-![The dashboard, showing a MolmoAct2 episode with its three cameras, the dense timeline and the outcome against the given goal](media/board.jpg)
+![The dashboard playing a MolmoAct2 episode, with its three cameras, the dense timeline and the outcome against the given goal](media/board.gif)
 
 ## Install
 
