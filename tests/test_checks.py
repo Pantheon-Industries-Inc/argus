@@ -527,3 +527,13 @@ def test_a_galaxea_episode_with_seven_joint_arms_is_labelled_from_the_video(tmp_
     assert ctx["state_kind"] == "none" and "values per frame" in ctx["state_note"]
     assert {"observation.state.left_arm", "observation.state.right_arm"} <= {s["name"] for s in ctx["signals"]}
     me.build_request(ep)
+
+
+def test_the_sped_up_lag_is_a_time_at_the_recordings_own_rate():
+    """3.4 frames at 30 fps is 113 ms: at 15 fps that delay is 1.7 frames, so a 15 fps recording lagging 3.4 frames
+    (227 ms, a normal follower) is not sped up, and one lagging 1.7 is held to the same rule as 3.4 at 30 fps."""
+    from checks import timebase as tb
+    assert tb.is_sped_up(3.4, 0.03, 0.0, 3.4) is True and tb.rule_text(30) == tb.SPEDUP_RULE
+    assert tb.is_sped_up(3.4, 0.03, 0.0, 3.4, fps=15) is False
+    assert tb.is_sped_up(1.7, 0.03, 0.0, 1.7, fps=15) is True
+    assert "1.7 frames at 15 fps" in tb.rule_text(15)
