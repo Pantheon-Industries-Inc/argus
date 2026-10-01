@@ -713,11 +713,6 @@ def corpus(tmp_path_factory):
 
 # cases that still break a rule, each with where; a fix removes its case (strict, so a case that passes must go)
 KNOWN = {
-    "phone_portrait_rot90": "board/static.py _compliant copies a clip that still carries a display rotation",
-    "phone_portrait_rot270": "board/static.py _compliant copies a clip that still carries a display rotation",
-    "upside_down_rot180": "board/static.py _compliant copies a clip that still carries a display rotation",
-    "uhd_portrait_hevc_rot90_4_frames": "board/static.py transcode scales to the stored size, squashing a turned "
-                                        "picture",
     "two_cameras_of_different_shapes": "board/serve.py footage_layout rounds a side camera's width down; "
                                        "footage_command drops a camera that ended",
     "lerobot_v3_portrait_wrist": "prepare/formats.py convert_lerobot takes a packed camera's size from info.json, "
