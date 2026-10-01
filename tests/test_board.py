@@ -523,7 +523,7 @@ def test_clip_sizes_follow_where_the_page_shows_each_camera():
     assert clips.main_cam({"exo": {}, "left": {}}) == "exo"
     # a seek decodes from a keyframe at most KEY_S back; every frame keeps its source time
     assert "-vf" not in clips.video_args(456, 256, True, 2)          # a clip at its source size is not resampled
-    assert "scale=1728:1080:flags=lanczos" in clips.video_args(1920, 1200, True, 2)
+    assert "scale=1728:1080:flags=lanczos,setsar=1" in clips.video_args(1920, 1200, True, 2)
     args = clips.video_args(1920, 1080, True, 2)
     assert args[args.index("-enc_time_base") + 1] == "demux"
     assert f"expr:gte(t,n_forced*{clips.KEY_S})" in args

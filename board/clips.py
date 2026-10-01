@@ -90,9 +90,10 @@ def video_args(w: int, h: int, main: bool, threads: int, resample: bool = False,
     (prepare/display.py), so it is scaled to its shown size and given square pixels like every other copy. pre: filters
     run before the scale (the clip's timing, extract_one)."""
     cw, ch, s = clip_size(w, h, main)
-    # scaled only when it must shrink (or lose an odd row or column) or its pixels are not square, never enlarged
-    scale = [] if (cw, ch) == (w, h) and not resample else \
-        [f"scale={cw}:{ch}:flags=lanczos" + (",setsar=1" if resample else "")]
+    # scaled only when it must shrink (or lose an odd row or column) or its pixels are not square, never enlarged.
+    # cw x ch is the picture's own shape, so its pixels are square: without setsar, ffmpeg's scale records the rounding
+    # of each side as a pixel shape (11557:11577 for 455x255 cut to 454x254)
+    scale = [] if (cw, ch) == (w, h) and not resample else [f"scale={cw}:{ch}:flags=lanczos,setsar=1"]
     vf = ["-vf", ",".join([*pre, *scale])] if (pre or scale) else []
     # enc_time_base demux: every frame keeps its source timestamp exactly. The encoder's default time base is the
     # frame rate's, which rounds a variable-rate recording's times to a 1/30 s grid (up to half a frame off, and a

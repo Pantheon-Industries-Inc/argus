@@ -716,11 +716,10 @@ KNOWN = {
     "phone_portrait_rot90": "board/static.py _compliant copies a clip that still carries a display rotation",
     "phone_portrait_rot270": "board/static.py _compliant copies a clip that still carries a display rotation",
     "upside_down_rot180": "board/static.py _compliant copies a clip that still carries a display rotation",
-    "odd_455x255": "board/clips.py video_args scales without setsar=1, so the clip's pixels are not square",
-    "uhd_portrait_hevc_rot90_4_frames": "board/clips.py video_args (pixel shape); board/static.py transcode scales "
-                                        "to the stored size, squashing a turned picture",
-    "two_cameras_of_different_shapes": "board/clips.py video_args (pixel shape); board/serve.py footage_layout "
-                                       "rounds a side camera's width down; footage_command drops a camera that ended",
+    "uhd_portrait_hevc_rot90_4_frames": "board/static.py transcode scales to the stored size, squashing a turned "
+                                        "picture",
+    "two_cameras_of_different_shapes": "board/serve.py footage_layout rounds a side camera's width down; "
+                                       "footage_command drops a camera that ended",
     "lerobot_v3_portrait_wrist": "prepare/formats.py convert_lerobot takes a packed camera's size from info.json, "
                                  "not as the file is shown",
     "mcap_portrait_wrist": "prepare/formats.py FrameWriter gives an encoded image frame 1/30 s, not the step to the "
