@@ -856,7 +856,7 @@ aside.rail {
   background: var(--border-strong); pointer-events: none; }
 /* board totals: their own segment over the rail, set apart from the per-dataset tabs by a heavy rule centred on the
    rail's border (the segment is 1px wider than the rail) */
-.cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 0 24px 0 18px;
+.cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 0 24px 0 10px;
   background: var(--surface); border-right: 3px solid var(--border-strong); }
 .cv-all .cv-k { font: 600 11px/1 var(--sans); color: var(--fg-2); letter-spacing: 0.01em; white-space: nowrap; }
 .cv-all .cv-fig { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
@@ -886,9 +886,9 @@ aside.rail {
 .cv-cell.none:hover { background: none; }
 /* all nine tabs fit from 1600 px down to 1280 px (at 1440 px the last one ran past the edge) */
 @media (max-width: 1600px) { .cv-cell { padding: 0 10px; } .cv-num { font-size: 10.5px; } .cv-all {
-  padding: 0 16px 0 14px; } }
+  padding: 0 16px 0 10px; } }
 @media (max-width: 1280px) { .cv-num .u { display: none; } .cv-cell { padding: 0 11px; } .cv-all {
-  padding: 0 16px 0 14px; } }
+  padding: 0 16px 0 10px; } }
 @media (max-width: 1200px) { .cv-num { font-size: 10.5px; } .cv-name { font-size: 12px; } .cv-cell { padding: 0 8px; }
   .cv-all .cv-fig b { font-size: 16px; } }
 .rail-empty {
@@ -1884,6 +1884,11 @@ section.right { grid-column: 3; grid-row: 2; min-height: 0; }
   transition: height 240ms ease, background-color 240ms ease, color 240ms ease, border-color 240ms ease;
   background: var(--raised); color: var(--fg); border-bottom: 1px solid transparent; position: relative; z-index: 12; }
 .src-bar.on { border-bottom-color: var(--border-strong); }
+/* side by side (1230 px up) the band runs over the rail's column too, above the rail, whose own block starts under
+   it (alignHeads), so the rail keeps no empty strip beside the band; its text starts on the rail's left edge */
+@media (min-width: 1230px) { .src-bar { grid-column: 1 / span 3; z-index: 21; } .src-bar .sb-row { padding-left: 10px; }
+  /* the line under the dataset tabs sits 1px above their row's edge; the open band meets it */
+  .src-bar.on { margin-top: -1px; } }
 .sb-row { display: flex; align-items: center; gap: 14px; padding: 10px 16px; min-height: 52px; box-sizing: border-box; }
 .sb-note { min-width: 0; flex: 1; font: 400 12.5px/1.45 var(--sans); color: var(--fg-2); transition: color 240ms ease; }
 .sb-note b { font-weight: 600; color: inherit; }
@@ -3701,8 +3706,8 @@ function renderEp(d, opts) {
   // itself a data-quality signal. Without one, the model's assessment is the one line.
   const givenMode = meta.prompt_mode === 'given' && !!meta.given_prompt;
   const bannerLabel = hasTasks ? 'Session summary'
-    : givenMode ? `Given goal and ${esc(who)}&rsquo;s independent assessment`
-    : `Task, as ${esc(who)} assessed it`;
+    : givenMode ? `Given goal and ${whoOwn(who, 'independent assessment')}`
+    : `Task, as ${esc(nameParts(who)[0])}${nameParts(who)[1] ? ` (${esc(nameParts(who)[1])})` : ''} assessed it`;
   // alignment chip: whether the model's independent assessment matches the given goal
   const ga = d.goal_alignment || null;
   let alignHtml = '';
@@ -3722,7 +3727,7 @@ function renderEp(d, opts) {
   const bannerBody = givenMode
     ? `<div class="goal-given"><span class="gg-badge">given goal</span>`
         + `<span class="gg-text">${esc(meta.given_prompt)}</span></div>`
-      + `<div class="goal-read"><span class="gr-badge">${esc(who)}&rsquo;s independent assessment</span>`
+      + `<div class="goal-read"><span class="gr-badge">${whoOwn(who, 'independent assessment')}</span>`
         + `<span class="gr-text">${esc(d.episode_prompt || '(empty)')}</span></div>`
       + alignHtml
     : `<div class="text">${esc(d.episode_prompt || '(empty)')}</div>`;
@@ -4461,7 +4466,6 @@ function renderEp(d, opts) {
       || 'key event')}</span><span class="vo-key-label">${esc(k.label || '')}</span>${kOc
       ? `<span class="vo-key-outcome ${kOc}">${esc(kOc)}</span>` : ''}</div>` : '';
     overlay.innerHTML = `
-      ${cmpInfo ? `<span class="vo-src">Comparison &middot; ${esc(cmpFullName(cmpInfo.key))}</span>` : ''}
       ${goalHtml}
       ${keyHtml}
       <span class="vo-time">${ev.t_s.toFixed(1)}s</span>
@@ -4820,9 +4824,21 @@ function lbOpen(open) {
   lbEl.classList.toggle('open', open);
   lbBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
+// a model's own name and the qualifier after its first comma ("GPT-6.1 Sol", "high reasoning")
+function nameParts(n) {
+  const i = String(n).indexOf(', ');
+  return i < 0 ? [String(n), ''] : [n.slice(0, i), n.slice(i + 2)];
+}
+// "<model>'s <noun>", with a qualifier after the noun in brackets, never "<model>, <qualifier>'s <noun>"
+function whoOwn(who, noun) {
+  const [h, t] = nameParts(who);
+  return `${esc(h)}&rsquo;s ${noun}${t ? ` (${esc(t)})` : ''}`;
+}
 function lbNameHtml(m) {
   if (!m) return esc(refName());
-  return m.example ? `${esc(cmpWho(m.key))}<small class="lb-sub">${esc(cap(icl()))}</small>` : esc(m.name);
+  const [head, tail] = nameParts(m.example ? cmpWho(m.key) : m.name);
+  const sub = [tail, m.example ? icl() : ''].filter(Boolean).join(', ');
+  return `${esc(head)}${sub ? `<small class="lb-sub">${esc(cap(sub))}</small>` : ''}`;
 }
 function renderLabelsBy() {
   lbEl.hidden = !CMP;
@@ -4836,7 +4852,7 @@ function renderLabelsBy() {
   // a comparison is marked where it is chosen; the text stays while the note folds away, so it never jumps
   if (m) document.getElementById('lb-note-in').innerHTML = `<b>A comparison, not ${ref}&rsquo;s labels.</b> The `
     + `downloads stay ${ref}&rsquo;s.`;
-  document.getElementById('lb-note').classList.toggle('off', !m);
+  document.getElementById('lb-note').classList.add('off');
   document.getElementById('rail-dl').classList.toggle('off', !!m);
   updateKpExport();
 }
@@ -4928,6 +4944,8 @@ const sbNote = document.getElementById('sb-note'), sbBack = document.getElementB
 const sbRow = srcBar.querySelector('.sb-row');
 function sbFit() { srcBar.style.height = (srcBar.classList.contains('on') ? sbRow.offsetHeight : 0) + 'px'; }
 if (window.ResizeObserver) new ResizeObserver(sbFit).observe(sbRow);
+// the header's top moves while the band opens or closes, so the rail's block is aligned again once it has
+srcBar.addEventListener('transitionend', e => { if (e.target === srcBar && e.propertyName === 'height') alignHeads(); });
 function renderSourceBar() {
   const m = SHOWN ? cmpModel(SHOWN) : null, ref = esc(refName());
   srcBar.classList.toggle('on', !!m);
@@ -5111,9 +5129,18 @@ function buildCompare() {
   // the footage the comparison covers, as its groups are named (teleoperated arms, UMI, human ego)
   const rigList = serialJoin(rigs.filter(r => r !== 'all').map(r => (M.rig_names[r] || r).toLowerCase()
     .replace(/^teleop$/, 'teleoperated arms').replace(/^umi$/, 'UMI')));
-  // each model with the reasoning effort it ran at (its run's own, else the pinned one), unless its name says it
+  // the episodes each model labelled with an Astra trace: the count most models share, then any model that differs
+  const exBy = {};
+  for (const m of M.models.filter(x => x.example)) {
+    const n = M.episodes.filter(e => e.by && e.by[m.key]).length;
+    (exBy[n] = exBy[n] || new Set()).add(m.name.split(',')[0]);
+  }
+  const exNs = Object.keys(exBy).map(Number).sort((a, b) => exBy[b].size - exBy[a].size || b - a);
+  const exAlt = exNs.slice(1).map(n => `${n.toLocaleString()} for ${andJoin([...exBy[n]].map(esc))}`).join('; ');
+  const exText = exNs.length ? `${exNs[0].toLocaleString()} of them${exAlt ? ` (${exAlt})` : ''}` : '';
+  // each model with the reasoning effort it ran at (its run's own, else the pinned one), unless its name names one
   const effort = m => m.reasoning || BOARD.reasoning;
-  const modelList = andJoin(others.map(m => esc(m.name) + (effort(m) && !m.name.includes(`${effort(m)} reasoning`)
+  const modelList = andJoin(others.map(m => esc(m.name) + (effort(m) && !/ reasoning$/.test(m.name)
     ? ` (${esc(effort(m))} reasoning)` : '')));
   const rigBtns = rigs.map(r => `<button type="button" role="radio" aria-checked="${r === CMP_RIG}" `
     + `data-rig="${r}">${esc(r === 'all' ? 'All footage' : M.rig_names[r] || r)}</button>`).join('');
@@ -5149,20 +5176,20 @@ function buildCompare() {
     <div class="cmpv-head"><h2>How the models compare</h2>
       <p>The comparison uses a ${(all.episodes || 0).toLocaleString()}-episode subset of the dashboard, meaning
         ${fMin(all.minutes || 0)} of footage spread across ${esc(rigList)}. ${modelList} each labelled these episodes and
-        reported their data issues with the same harness as ${refH}.${exN ? ` On ${exN.toLocaleString()} of them, each
+        reported their data issues with the same harness as ${refH}.${exN ? ` On ${exText}, each
         labelled the episode a second time with in-context learning, its prompt including one complete ${refH} trace to
         show the density and reasoning expected.` : ''}</p></div>
     <div class="cmpv-bar"><span class="if-sev-seg" role="radiogroup" aria-label="Footage">${rigBtns}</span><span `
       + `class="cmpv-scope" id="cmpv-scope"></span></div>
-    <h3 class="section">Each model on the same episodes</h3>
+    <h3 class="section">Each model on the same episodes <span class="count">(all medium reasoning unless otherwise specified)</span></h3>
     <div class="cmpv-grid cmpv-main">${MAIN_CHARTS.map(c => card(c, barRows(c))).join('')}</div>
-    <h3 class="section">Agreement between models</h3>
+    <h3 class="section">Agreement between models <span class="count">(all medium reasoning unless otherwise specified)</span></h3>
     <div class="cmpv-grid">${mx('outcome', 'Outcome agreement', 'The share of episodes on which two runs give the task '
       + 'the same outcome (success, success then undone, failure or unclear; a task partly done is a failure). Human ego '
       + 'sessions grade each '
       + 'task separately and have no single outcome, so they are left out.')}
       ${mx('issues', 'Issue-type agreement', '')}</div>
-    ${pairs.length ? `<h3 class="section">${esc(cap(icl()))}</h3>
+    ${pairs.length ? `<h3 class="section">${esc(cap(icl()))} <span class="count">(all medium reasoning unless otherwise specified)</span></h3>
     <p class="cmpv-sub" id="pr-sub"></p>
     <div class="pr-key"><span><i class="k-open"></i>without the trace</span><span><i class="k-fill"></i>with the `
       + `trace</span><span><i class="k-ref"></i>${refH} on the same episodes</span></div>
