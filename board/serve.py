@@ -339,6 +339,8 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
         if r.returncode != 0 or not tmp.is_file():
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"the video could not be made: {(r.stderr or '').strip()[-300:]}")
+        from board.clips import frame_lengths
+        frame_lengths(tmp)           # some ffmpeg builds leave the last frame 0 s long, so it is never shown
         os.replace(tmp, out)
     return out, name
 
