@@ -198,7 +198,7 @@ uv run python -m gate label --kind full --cap 40     # one run per setup, about 
 uv run python -m gate score data/runs/gate_teleop/RUN data/runs/gate_handheld/RUN data/runs/gate_ego/RUN
 ```
 
-The gate holds 126 episodes (`gate/selection.json`) and, for each case, what its label must say, every fact checked on the frames (`gate/cases.json`). The cases include MolmoAct2 1346 (asked to flip three blocks, none ever turns), 008276 (black polo shirts under an instruction to fold black pants) and all 32 FastUMI Prepare_tableware episodes (a fork is handled, never chopsticks). Each setup also has a cost sample of about 20 episodes. A harness passes when every reply parses, no label contradicts itself, the cases hold and cost stays within the figures under Label. The current harness scores 19 of 22 on teleop, 36 of 36 on UMI and 7 of 7 on human ego.
+The gate holds 126 episodes (`gate/selection.json`) and, for each case, what its label must say, every fact checked on the frames (`gate/cases.json`). The cases include MolmoAct2 1346 (asked to flip three blocks, none ever turns), 008276 (black polo shirts under an instruction to fold black pants) and all 32 FastUMI Prepare_tableware episodes (a fork is handled, never chopsticks). Each setup also has a cost sample of about 20 episodes. A harness passes when every reply parses, no label contradicts itself, the cases hold and cost stays within the figures under Label. The current harness scores 19 of 22 on teleop, 36 of 36 on UMI and 6 of 7 on human ego.
 
 ## Credits
 
