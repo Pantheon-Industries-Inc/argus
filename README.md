@@ -2,7 +2,7 @@
 
 Dense annotations and data-quality checks for robot-learning episodes, from Pantheon.
 
-This is the pipeline behind [*Argus: An Open-Source Annotator for Robotics Data*](https://pantheon.inc/research/argus), in which we audited 3,546 episodes (66.5 hours) across nine public datasets. Every annotation can be browsed on the [data dashboard](https://pantheon.inc/data-board), and [Data Review](https://pantheon.inc/data-review) runs the same pipeline on data you upload.
+This is the pipeline behind [*Argus: An Open-Source Annotator for Robotics Data*](https://pantheon.inc/research/argus), in which we audited 3,546 episodes (66.5 hours) across nine public datasets. Every annotation can be browsed on the [data dashboard](https://pantheon.inc/data-board), and [Data Review](https://data.pantheon.inc/review) runs the same pipeline on data you upload.
 
 The pipeline handles teleoperated arms, UMI grippers and human (ego) data, and reads LeRobot datasets, MCAP files, plain video and archives of any of these. It draws on instructions and recorded robot state when a dataset provides them, and works from the footage alone when it does not. For each episode it produces a dense timeline with
 
@@ -60,6 +60,19 @@ uv run python -m board serve --board data/boards/quickstart --clips data/clips
 
 Expect the MolmoAct2 episode to come out as a success then undone, with the row complete near 18 s and pushed apart near 30 s, the FastUMI episode as a success with the lid open near 7 s, and the OpenAoE clip as a few activities, each a success. A bare video works the same way through `prepare videos --rig RIG` with no instructions file, and the model then names the task itself.
 
+## What a run writes
+
+Each labelling run writes `data/runs/<dataset>/<time>_<kind>_<commit>/`, with `run.json` for the command, settings and cost, and one `out/<episode>.json` per episode. The labels in that file share one schema on every setup:
+
+- `timeline`, the dense list of action phases, each with its start and end, the arm, gripper or hand that acts, the object, and whether it advances the task, is wasteful or is idle
+- `key_events` and `goal_alignment`, the moments that mark progress and how the demonstration relates to its instruction
+- `completion` with the outcome and goal frame, or on human ego video `tasks`, one entry per separate activity with its own outcome and goal frame
+- `operator_mistakes` and `recovery`, what the operator got wrong and how they recovered
+- `data_issues`, problems in the recording or its metadata, such as an instruction that does not match the footage
+- `state_changes` and `scene_graph`, what changed in the scene and where objects sit over time
+
+`configs/examples/` holds one complete annotation per setup. The dashboard plays each episode with these labels beside its video, and `board build` turns them into the episode files it serves.
+
 ## Review your own data
 
 ```bash
@@ -68,7 +81,7 @@ uv run python -m review --data path/to/data --rig teleop_arms --out data/review/
 uv run python -m board serve --board data/review/mine --clips data/review/mine/clips
 ```
 
-`--data` is a folder, a file or an archive in any format Data Review accepts, or an http(s) URL of one. The command runs the same stages as [Data Review](https://pantheon.inc/data-review), in its order and with its settings, so a folder reviewed here and the same folder uploaded there get the same requests and the same board. It reads the data, runs the checks, measures sped-up recordings against their neighbours in the same folder, labels, and builds the board. A recording longer than 450 s, the longest request the published board sends, is labelled in parts cut at moments of little motion (`label/pieces.py`) and stitched back into one timeline, so it stays one episode. Each part is told it is one part of a longer recording, and a cut-off issue the model reports at one of those cuts is set aside, because it describes the cut and not the recording.
+`--data` is a folder, a file or an archive in any format Data Review accepts, or an http(s) URL of one. The command runs the same stages as [Data Review](https://data.pantheon.inc/review), in its order and with its settings, so a folder reviewed here and the same folder uploaded there get the same requests and the same board. It reads the data, runs the checks, measures sped-up recordings against their neighbours in the same folder, labels, and builds the board. A recording longer than 450 s, the longest request the published board sends, is labelled in parts cut at moments of little motion (`label/pieces.py`) and stitched back into one timeline, so it stays one episode. Each part is told it is one part of a longer recording, and a cut-off issue the model reports at one of those cuts is set aside, because it describes the cut and not the recording.
 
 ## Layout
 
