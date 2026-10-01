@@ -8,9 +8,14 @@ predictions are mapped back through it. The model predicts at the VAE latent rat
 22-latent windows; windows overlap by half and are blended with a triangular weight, so every frame is the
 mean of two independent predictions and there are no seams (two windows disagree by about 1 px on an 832 px
 frame). The 2D keypoints come from the model's direct 2D head, which does not use MANO and does not read the
-camera: MANO and the camera enter only the 3D translation decode. Smoothing is a zero-phase one-euro filter at
-the knot rate (min cutoff 1.5 Hz, beta 1 hand size per second): slow hands lose their knot-to-knot wiggle, fast
-hands keep their motion; a Savitzky-Golay filter moved fast real motion by a median 5 px and was not used.
+camera: MANO and the camera enter only the 3D translation decode. That head reads each joint as the mean of the
+image grid weighted by the joint's attention (a soft-argmax), and when a hand slot attends to two hands at once
+(the wearer's and another person's, or both of the wearer's) the mean is a point between them, on no hand; so the
+2D head is read twice, and where the model's own reading is such a blend the reading near the peak of the slot's
+attention is drawn instead (mode_soft_argmax, combine_readouts). Smoothing is a
+zero-phase one-euro filter at the knot rate (min cutoff 1.5 Hz, beta 1 hand size per second): slow hands lose
+their knot-to-knot wiggle, fast hands keep their motion; a Savitzky-Golay filter moved fast real motion by a
+median 5 px and was not used.
 
 Coordinates. Everything 2D here uses continuous pixel coordinates: x in [0, W], the centre of pixel
 column j is x = j + 0.5. OpenCV-style calibrations (Egocentric-100K KB, Gen-HumanEgo DS) put pixel
@@ -234,6 +239,71 @@ def run_windows(model, ctrl, intr: dict, w: int, stride: int, tap: int = 15, wan
     return res, stats, rays
 
 
+def mode_soft_argmax(attn_w, H: int, W: int, num_slots: int = 2, radius: int = 3):
+    """The 2D readout's soft-argmax, restricted to one hand. The model reads each joint as the attention-weighted mean
+    of the latent grid (attn_w (BF, slots*joints, H*W), slot-major); when a slot's attention is split between the
+    wearer's hand and another hand, that mean is a point between them, on neither. Here each slot keeps only the
+    cells within `radius` cells (Chebyshev) of the peak of its summed joint attention, then takes the same mean, on
+    the same [0, 1] coordinates as the model's own _soft_argmax. It finds the right hand but draws it about half its
+    size (the model's attention is calibrated for the mean over the whole grid), so it is used only through
+    combine_readouts."""
+    import torch
+    BF, nq, _ = attn_w.shape
+    J = nq // num_slots
+    hm = attn_w.reshape(BF, num_slots, J, H, W)
+    peak = hm.sum(2).reshape(BF, num_slots, H * W).argmax(-1)                      # (BF, S)
+    py, px = peak // W, peak % W
+    ii = torch.arange(H, device=attn_w.device).view(1, 1, H, 1)
+    jj = torch.arange(W, device=attn_w.device).view(1, 1, 1, W)
+    keep = ((ii - py[..., None, None]).abs() <= radius) & ((jj - px[..., None, None]).abs() <= radius)
+    hm = (hm * keep[:, :, None].to(hm.dtype)).reshape(BF, nq, H, W)
+    us = torch.linspace(0.0, 1.0, W, device=attn_w.device, dtype=attn_w.dtype)
+    vs = torch.linspace(0.0, 1.0, H, device=attn_w.device, dtype=attn_w.dtype)
+    wsum = hm.sum(dim=(-1, -2)).clamp(min=1e-6)
+    u = (hm.sum(dim=-2) * us).sum(dim=-1) / wsum
+    v = (hm.sum(dim=-1) * vs).sum(dim=-1) / wsum
+    return torch.stack([u, v], dim=-1)
+
+
+def set_readout(model, radius: int | None) -> list:
+    """Make the model's 2D readout use mode_soft_argmax with `radius` (None restores the model's own soft-argmax).
+    Returns the encoders it changed."""
+    encs = [p.alternating_encoder for p in model.net.projectors.values() if hasattr(p, "alternating_encoder")]
+    for enc in encs:
+        if radius is None:
+            enc.__dict__.pop("_soft_argmax", None)
+        else:
+            enc._soft_argmax = (lambda a, H, W, _e=enc, _r=radius: mode_soft_argmax(a, H, W, _e.num_slots, _r))
+    return encs
+
+
+def combine_readouts(j_model: np.ndarray, j_peak: np.ndarray, present: np.ndarray, pin: dict,
+                     gate: float = 0.5, stretch: float = 1.5, default_k: float = 2.0):
+    """The 2D keypoints to draw, from the two readouts of the same frames: j_model, the model's own soft-argmax, and
+    j_peak, mode_soft_argmax (both (n, slots, 21, 2) normalised; present (n, slots) bool).
+
+    Where the two agree, the model's own skeleton is kept unchanged. Where they disagree, the model's own skeleton is
+    a blend of two hands (its centroid more than `gate` hand sizes from the peak readout's, or the skeleton more than
+    `stretch` times the size of the peak readout's), and the peak readout is drawn instead, scaled about its centroid
+    by k, the median ratio of the two readouts' sizes over the frames where they agree (per slot; default_k when
+    fewer than 50 such frames). Returns (j, info) with info = {"k": [...], "replaced": share of present frames}."""
+    sc = np.array([pin["image_width"], pin["image_height"]], np.float64)
+    ca, cb = j_model.mean(2, keepdims=True), j_peak.mean(2, keepdims=True)
+    size_a = np.linalg.norm(np.ptp(j_model * sc, axis=2), axis=-1)
+    size_b = np.linalg.norm(np.ptp(j_peak * sc, axis=2), axis=-1)
+    dist = np.linalg.norm((ca - cb)[:, :, 0] * sc, axis=-1) / np.maximum(size_a, 1.0)
+    k = np.full(j_model.shape[1], default_k)
+    for s in range(j_model.shape[1]):
+        ok = present[:, s] & (dist[:, s] < 0.5 * gate) & (size_b[:, s] > 1.0)
+        if ok.sum() >= 50:
+            k[s] = float(np.median(size_a[ok, s] / size_b[ok, s]))
+    j_scaled = cb + (j_peak - cb) * k[None, :, None, None]
+    agree = (dist <= gate) & (size_a <= stretch * k[None, :] * size_b)
+    j = np.where(agree[..., None, None], j_model, j_scaled)
+    replaced = float((~agree & present).sum() / max(present.sum(), 1))
+    return j, {"k": [round(float(x), 3) for x in k], "replaced": round(replaced, 4), "gate": gate, "stretch": stretch}
+
+
 def fit_K_from_rays(rays: list, intr: dict) -> dict:
     """One pinhole for the whole clip from the K-free ray fields of several windows (ACE-Ego-Hand's own
     least-squares fit)."""
@@ -304,7 +374,11 @@ def write_outputs(out_dir: Path, ep: dict, meta: dict, pin: dict, src_cam, K_use
         "kp": "per frame, 21 joints flattened as x0,y0,...,x20,y20",
         "hands": hands,
         "model": {"name": "ACE-Ego-Hand", "paper": "arXiv:2608.20308", "code_commit": extra["ace_commit"],
-                  "checkpoint": extra.get("ckpt"), "head": "direct 2D head (MANO-free)"},
+                  "checkpoint": extra.get("ckpt"), "head": "direct 2D head (MANO-free)",
+                  "readout": ("the model's soft-argmax" if extra.get("readout") is None else
+                              "the model's soft-argmax, except where it blends two hands: there the soft-argmax within "
+                              f"{extra['readout_radius']} latent cells of the hand's attention peak, scaled to size "
+                              f"(combine_readouts {extra['readout']})")},
         "camera": {"source_model": (src_cam or {}).get("model", "pinhole"), "virtual_pinhole": pin,
                    "K_used_encode_px": K_used, "K_source": K_source},
         "temporal": {"window_latents": extra["window"], "stride_latents": extra["stride"],
