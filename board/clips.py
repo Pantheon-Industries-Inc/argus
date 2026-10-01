@@ -85,13 +85,15 @@ def clip_size(w: int, h: int, main: bool) -> tuple:
     return even(w * s, w), even(h * s, h), s
 
 
-def video_args(w: int, h: int, main: bool, threads: int, resample: bool = False) -> list:
+def video_args(w: int, h: int, main: bool, threads: int, resample: bool = False, pre: tuple = ()) -> list:
     """The recipe's output arguments for a source shown w x h. resample: its pixels are not square
-    (prepare/display.py), so it is scaled to its shown size and given square pixels like every other copy."""
+    (prepare/display.py), so it is scaled to its shown size and given square pixels like every other copy. pre: filters
+    run before the scale (the clip's timing, extract_one)."""
     cw, ch, s = clip_size(w, h, main)
     # scaled only when it must shrink (or lose an odd row or column) or its pixels are not square, never enlarged
-    vf = [] if (cw, ch) == (w, h) and not resample else \
-        ["-vf", f"scale={cw}:{ch}:flags=lanczos" + (",setsar=1" if resample else "")]
+    scale = [] if (cw, ch) == (w, h) and not resample else \
+        [f"scale={cw}:{ch}:flags=lanczos" + (",setsar=1" if resample else "")]
+    vf = ["-vf", ",".join([*pre, *scale])] if (pre or scale) else []
     # enc_time_base demux: every frame keeps its source timestamp exactly. The encoder's default time base is the
     # frame rate's, which rounds a variable-rate recording's times to a 1/30 s grid (up to half a frame off, and a
     # frame squeezed to 0 s where two round to the same tick)
@@ -114,45 +116,66 @@ def source_size(ffmpeg: str, path: str) -> tuple:
     return w, h, display.needs_resample(g)
 
 
-def start_offsets(ep_dir: Path, sources: dict) -> dict:
-    """Each camera's first frame on the episode's clock, in seconds after the main camera's: from times.npz, the
-    real capture times some datasets keep per camera (ABC-130k, RealOmni). A camera whose recording started later
-    gets its clip's timestamps shifted by that much, so every camera plays on the one clock the page syncs them by
-    (RealOmni's right gripper camera starts up to 2 s after the left one). One that started earlier is left at 0:
-    on this board that is at most 46 ms, under the page's 0.1 s resync tolerance, and its frames before the main
-    camera's first one would otherwise need a negative time."""
+def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
+    """{camera: (offset s, skip)} on the episode's clock, from times.npz, the real capture times some recordings keep
+    per camera (ABC-130k, RealOmni, MCAP uploads). The main camera's first frame is 0. A camera whose recording
+    started later plays its first frame offset s after it (RealOmni's right gripper camera starts up to 2 s after the
+    left one); one that started earlier drops its skip frames from before the main camera's first frame (more than
+    half a frame before it), so it never plays early, and its next frame is at most half a frame from 0."""
     tp = ep_dir / "times.npz"
     cams = cams_of(sources)
     if not tp.exists() or len(cams) < 2:
         return {}
     import numpy as np
     with np.load(tp) as z:
-        t0 = {c: float(z[c][0]) for c in cams if c in z.files and len(z[c])}
-    ref = t0.get(main_cam(sources))
-    return {c: t - ref for c, t in t0.items() if ref is not None and t - ref > 0}
+        t = {c: np.asarray(z[c], dtype=np.float64) for c in cams if c in z.files and len(z[c])}
+    main = main_cam(sources)
+    if main not in t:
+        return {}
+    ref, half = float(t[main][0]), 0.5 / fps
+    out = {}
+    for c, tc in t.items():
+        if c == main:
+            continue
+        skip = int(np.searchsorted(tc, ref - half, side="left"))
+        if skip >= len(tc):
+            continue
+        off = float(tc[skip]) - ref
+        if skip or off >= half:
+            out[c] = (off if off >= half else 0.0, skip)
+    return out
 
 
 def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
-                ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0) -> None:
+                ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0,
+                skip: int = 0) -> None:
     """Exactly the episode's n_frames, starting at its first frame. Packed files are on an exact frame grid,
     so seeking half a frame before the episode's offset lands on its first frame whichever way the decimal
     rounds, and -frames:v stops after the last one (never a frame of the next episode). Per-episode files
     (ABC-130k, FastUMI) start at 0. Frame timestamps pass through unchanged, so real capture times stay the
     playback times. main is the camera the page shows large (main_cam); offset_s shifts every timestamp, for a
-    camera that started recording after the main one (start_offsets)."""
+    camera that started recording after the main one, and skip drops a camera's first frames from before the main
+    camera's first one (start_offsets).
+
+    The clip is cut from the file's first video stream alone, and its first frame is put at 0 (then offset_s), so
+    neither another stream that starts first (an audio track) nor the seek's half-frame lead shifts it off the
+    episode's clock; the frames after it keep their own spacing, so a variable-rate recording plays as recorded."""
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
     # a per-process temp name, so two builders on the same clip can never write one file at once
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
     w, h, resample = source_size(ffmpeg, packed)
+    want = int(n_frames) - int(skip)
+    timing = ((f"select=gte(n\\,{int(skip)})",) if skip else ()) + ("setpts=PTS-STARTPTS",)
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), "-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}",
-           "-i", packed, "-frames:v", str(int(n_frames)), "-an", "-fps_mode", "passthrough",
-           *video_args(w, h, main, threads, resample),
+           "-i", packed, "-map", "0:v:0", "-frames:v", str(want), "-an", "-fps_mode", "passthrough",
+           *video_args(w, h, main, threads, resample, pre=timing),
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     subprocess.run(cmd, check=True, capture_output=True)
     got = clip_frames(tmp)
-    if got != int(n_frames):
+    if got != want:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"{out_mp4.name}: clip has {got} frames, episode has {n_frames}")
+        raise RuntimeError(f"{out_mp4.name}: clip has {got} frames, episode has {want}"
+                           + (f" after the {skip} before the main camera's first" if skip else ""))
     os.replace(tmp, out_mp4)
 
 
@@ -185,13 +208,14 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     cams = cams_of(sources)           # FastUMI has no fixed camera; single-gripper tasks have one camera
     outs = clip_paths(mp4_dir, eid, cams)
     big = main_cam(sources) if cams else None
-    offsets = start_offsets(ep_dir, sources)
+    offsets = start_offsets(ep_dir, sources, fps)
     jobs = []
     for cam in cams:
         o = outs[cam]
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
             s = sources[cam]
-            jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, offsets.get(cam, 0.0),
+            off, skip = offsets.get(cam, (0.0, 0))
+            jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, off, skip,
                          ep_dir.name, cam))
     return jobs
 
@@ -257,8 +281,8 @@ def main() -> int:
     ok = fail = 0
     failed: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off): (o, ep, cam)
-                for (pk, b, du, o, fps, is_main, off, ep, cam) in jobs}
+        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip): (o, ep, cam)
+                for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
             try:

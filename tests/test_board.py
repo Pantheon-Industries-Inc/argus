@@ -534,10 +534,11 @@ def test_a_camera_that_started_late_is_shifted_onto_the_episode_clock(tmp_path):
     np.savez(tmp_path / "times.npz", left=np.array([0.0, 0.033, 0.067]), right=np.array([2.031, 2.064]),
              left_pts=np.array([0, 1, 2]), right_pts=np.array([0, 1]))
     sources = {"left": {}, "right": {}}
-    assert clips.start_offsets(tmp_path, sources) == {"right": 2.031}
-    # a camera that started first is left at 0, and one camera or no real times means nothing to shift
+    assert clips.start_offsets(tmp_path, sources) == {"right": (2.031, 0)}
+    # a camera that started first drops its frame from more than half a frame before the main camera's first (its
+    # next is 10 ms from it, under half a frame), and one camera or no real times means nothing to shift
     np.savez(tmp_path / "times.npz", left=np.array([0.04, 0.07]), right=np.array([0.0, 0.03]))
-    assert clips.start_offsets(tmp_path, sources) == {}
+    assert clips.start_offsets(tmp_path, sources) == {"right": (0.0, 1)}
     assert clips.start_offsets(tmp_path, {"left": {}}) == {}
     assert clips.start_offsets(tmp_path / "none", sources) == {}
 

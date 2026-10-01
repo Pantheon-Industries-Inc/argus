@@ -85,6 +85,35 @@ _FFMPEG_SEM = threading.Semaphore(int(os.environ.get("BOARD_FFMPEG_CONCURRENCY",
 _FRAME_DIR = Path(os.environ["BOARD_FRAME_DIR"]) if os.environ.get("BOARD_FRAME_DIR") else None
 
 
+_CLIP_TIMES: dict = {}
+
+
+def _clip_times(mp4: Path) -> list:
+    """The clip's frame times in seconds after its first frame (sorted presentation times), read once per clip
+    version; [] when they cannot be read."""
+    try:
+        key = (str(mp4), mp4.stat().st_size, mp4.stat().st_mtime_ns)
+    except OSError:
+        return []
+    hit = _CLIP_TIMES.get(key)
+    if hit is not None:
+        return hit
+    probe = Path(FFMPEG).with_name("ffprobe") if FFMPEG else None
+    try:
+        r = subprocess.run([str(probe) if probe and probe.exists() else "ffprobe", "-v", "error", "-select_streams",
+                            "v:0", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", str(mp4)],
+                           capture_output=True, text=True, timeout=60)
+        ts = sorted(float(a) for a, *f in (ln.split(",") for ln in r.stdout.split() if ln)
+                    if a not in ("", "N/A") and "D" not in "".join(f))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        ts = []
+    rel = [x - ts[0] for x in ts] if ts else []
+    if len(_CLIP_TIMES) > 2048:
+        _CLIP_TIMES.clear()
+    _CLIP_TIMES[key] = rel
+    return rel
+
+
 def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
     """One JPEG from mp4 at time t (seconds), at most max_w wide, or None when it cannot be cut."""
     if not FFMPEG or not mp4.exists():
@@ -103,16 +132,29 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
         out = disk.read_bytes()
         _remember_frame(key, out)
         return out
-    # Clips hold exactly the episode's own frames. Snap t to a 30 fps grid and seek half a frame early, so a
-    # 4-decimal seek can never round past the intended frame; a time at or past the clip's end (a goal frame on
-    # the last instant) falls back to the clip's last frame.
-    k = max(0, int(round(max(0.0, t) * 30)))
+    # Clips hold exactly the episode's own frames, their first at the clip's start. The frame shown is the clip's
+    # own frame nearest t, from its frame times (any rate, variable or not), and the seek lands half a gap before
+    # it (an input seek counts from the clip's start), so a 4-decimal seek can never round past it; a time at or
+    # past the clip's end (a goal frame on the last instant) is its last frame, and a frame that cannot be cut
+    # falls back to the one before.
+    rel = _clip_times(mp4)
+    if rel:
+        import bisect
+        i = bisect.bisect_left(rel, max(0.0, t))
+        i = min(range(max(0, i - 1), min(len(rel), i + 1)), key=lambda j: (abs(rel[j] - t), j))
+
+        def half_gap(j):
+            gaps = [g for g in ([rel[j] - rel[j - 1]] if j > 0 else []) + ([rel[j + 1] - rel[j]] if j + 1 < len(rel)
+                                                                           else []) if g > 0]
+            return 0.5 * (min(gaps) if gaps else 1 / 30.0)
+        tries = [rel[j] - half_gap(j) for j in (i, i - 1, i - 2) if j >= 0]
+    else:
+        k = max(0, int(round(max(0.0, t) * 30)))
+        tries = [(kk - 0.5) / 30 for kk in (k, k - 1, k - 2) if kk >= 0]
     out = None
-    for kk in (k, k - 1, k - 2):
-        if kk < 0:
-            break
+    for seek in tries:
         cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-               "-ss", f"{max(0.0, (kk - 0.5) / 30):.4f}", "-i", str(mp4), "-frames:v", "1",
+               "-ss", f"{max(0.0, seek):.4f}", "-i", str(mp4), "-frames:v", "1",
                "-vf", f"scale='min({max_w},iw)':-2", "-q:v", "3",
                "-f", "image2pipe", "-vcodec", "mjpeg", "-"]
         try:
@@ -214,26 +256,40 @@ def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
 
 
 def _probe(p: Path) -> tuple:
-    """(width, height, duration s) of a clip."""
+    """(width, height, duration s, frame rate) of a clip. The duration runs to the end of its last frame (its
+    time plus its own length), which a variable-rate recording's container duration can stop short of."""
     probe = Path(FFMPEG).with_name("ffprobe") if FFMPEG else None
     r = subprocess.run([str(probe) if probe and probe.exists() else "ffprobe", "-v", "error", "-select_streams", "v:0",
-                        "-show_entries", "stream=width,height:format=duration", "-of", "json", str(p)],
-                       capture_output=True, text=True, timeout=30, check=True)
+                        "-show_entries", "stream=width,height,avg_frame_rate:format=duration:packet=pts_time,duration_time",
+                        "-of", "json", str(p)], capture_output=True, text=True, timeout=30, check=True)
     j = json.loads(r.stdout)
     s = j["streams"][0]
-    return int(s["width"]), int(s["height"]), float(j["format"]["duration"])
+    dur = float(j["format"]["duration"])
+    pk = [(float(x["pts_time"]), float(x.get("duration_time") or 0)) for x in j.get("packets", [])
+          if x.get("pts_time") not in (None, "N/A")]
+    if pk:
+        last, d = max(pk)
+        dur = max(dur, last + d)
+    num, _, den = str(s.get("avg_frame_rate") or "0/1").partition("/")
+    rate = float(num) / float(den) if den and float(den) else 0.0
+    return int(s["width"]), int(s["height"]), dur, rate
 
 
 def footage_command(inputs: list, t0: float, t1: float, out: Path, threads: int = 2) -> list:
     """The ffmpeg command that composes [(clip, (w, h))] (the main camera first) from t0 to t1 s into out. Timestamps
     are kept as the clips have them (-copyts), a black canvas runs from t0 to t1 at FOOTAGE_FPS, and each camera is
     laid on it at its place, so the file shows at each instant what the page shows then."""
+    # inputs may carry each camera's frame rate; the canvas runs at FOOTAGE_FPS, or at the fastest camera's own rate
+    # when that is faster, so no frame is dropped
+    rates = [x[2] for x in inputs if len(x) > 2 and isinstance(x[2], (int, float)) and x[2] > 0]
+    fps = max([FOOTAGE_FPS] + [int(-(-float(r) // 1)) for r in rates])
+    inputs = [(x[0], x[1]) for x in inputs]
     W, H, cells = footage_layout([wh for _, wh in inputs])
     cmd = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-copyts"]
     for clip, _ in inputs:
         # from a few seconds early, so each camera has the frame showing at t0 (clips have a keyframe every 2 s)
         cmd += ["-ss", f"{max(0.0, t0 - 3.0):.3f}", "-i", str(clip)]
-    g = [f"color=c=black:s={W}x{H}:r={FOOTAGE_FPS}:d={t1 - t0:.3f},setpts=PTS+{t0:.3f}/TB[b0]"]
+    g = [f"color=c=black:s={W}x{H}:r={fps}:d={t1 - t0:.3f},setpts=PTS+{t0:.3f}/TB[b0]"]
     for i, ((_, wh), (x, y, w, h)) in enumerate(zip(inputs, cells)):
         g.append(f"[{i}:v]{'' if (w, h) == tuple(wh) else f'scale={w}:{h}:flags=lanczos,'}setsar=1[c{i}]")
         g.append(f"[b{i}][c{i}]overlay={x}:{y}:eof_action=pass[b{i + 1}]")
@@ -269,7 +325,7 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
             return out, name
         out.parent.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
-        cmd = footage_command([(p, pr[:2]) for (_, p), pr in zip(cams, probes)], t0, t1, tmp, _FOOTAGE_THREADS)
+        cmd = footage_command([(p, pr[:2], pr[3]) for (_, p), pr in zip(cams, probes)], t0, t1, tmp, _FOOTAGE_THREADS)
         nice = shutil.which("nice")
         with _FOOTAGE_SEM:
             r = subprocess.run(([nice, "-n", "19"] if nice else []) + cmd, capture_output=True, text=True)
