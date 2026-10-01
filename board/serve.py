@@ -5209,8 +5209,9 @@ function buildCompare() {
   const exText = exNs.length ? `${exNs[0].toLocaleString()} of them${exAlt ? ` (${exAlt})` : ''}` : '';
   // each model with the reasoning effort it ran at (its run's own, else the pinned one), unless its name names one
   const effort = m => m.reasoning || BOARD.reasoning;
-  const modelList = andJoin(others.map(m => esc(m.name) + (effort(m) && !/ reasoning$/.test(m.name)
-    ? ` (${esc(effort(m))} reasoning)` : '')));
+  // a qualified name ("GPT-6.1 Sol, high reasoning") reads as the model with its qualifier in brackets, like the rest
+  const modelList = andJoin(others.map(m => { const [h, t] = nameParts(m.name);
+    return esc(h) + (t ? ` (${esc(t)})` : effort(m) ? ` (${esc(effort(m))} reasoning)` : ''); }));
   const rigBtns = rigs.map(r => `<button type="button" role="radio" aria-checked="${r === CMP_RIG}" `
     + `data-rig="${r}">${esc(r === 'all' ? 'All footage' : M.rig_names[r] || r)}</button>`).join('');
   const card = (c, rowsHtml, wide) => `<div class="cc${wide ? ' cc-wide' : ''}" data-chart="${c.id}">`
