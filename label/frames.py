@@ -138,9 +138,10 @@ def upright(fr, geom: dict | None = None):
 
 
 def to_jpeg(im, width: int | None = None, quality: int = 90) -> bytes:
-    """JPEG bytes, optionally downscaled to `width` (aspect kept; box filter)."""
+    """JPEG bytes, downscaled to at most `width` (aspect kept; box filter). A frame narrower than that is kept at its
+    own size: enlarging adds no detail, only a blur the model could read as the camera's."""
     from PIL import Image
-    if width and im.width != width:
+    if width and im.width > width:
         h = int(round(im.height * width / im.width / 2)) * 2
         im = im.resize((width, h), Image.BOX)
     buf = io.BytesIO()
@@ -171,6 +172,8 @@ def compose_grid(cols: list, cam_labels: list[str], quality: int, gutter: int, h
             decoded[(ri, ci)] = im
     if cw is None:
         raise RuntimeError("empty grid block")
+    # columns as wide as the widest image: a camera narrower than the cell (never enlarged, to_jpeg) sits centred
+    cw = max(im.width for im in decoded.values())
     gap = 4
     ncol, nrow = len(cols), len(cam_labels)
     # each row is as tall as its own camera's cells: cameras of another aspect ratio are cut to the same width, so a
@@ -186,7 +189,7 @@ def compose_grid(cols: list, cam_labels: list[str], quality: int, gutter: int, h
         for ci in range(ncol):
             im = decoded.get((ri, ci))
             if im is not None:
-                g.paste(im, (gutter + ci * (cw + gap), y0[ri]))
+                g.paste(im, (gutter + ci * (cw + gap) + (cw - im.width) // 2, y0[ri]))
     buf = io.BytesIO()
     g.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()

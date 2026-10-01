@@ -528,19 +528,30 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
 
 def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
     """The grid cell size: every camera is cut to cell_w wide with its own aspect kept (label/frames.py to_jpeg), so
-    cameras of different aspect get cells of different height, and each is named then."""
+    cameras of different aspect get cells of different height, and each is named then. A camera narrower than
+    cell_w is sent at its own size, never enlarged, and said to be."""
     cams = ep["context"].get("cameras") or {}
-    sizes = {}
+    sizes, small = {}, set()
     for v in views(ep):
         c = cams.get(v) or {}
         try:
             w, h = int(c["width"]), int(c["height"])
         except (KeyError, TypeError, ValueError):
             return f"{cell_w}x{cell_h}"
-        sizes[cam_name(ep, v)] = int(round(h * cell_w / w / 2)) * 2
-    if len(set(sizes.values())) <= 1:
-        return f"{cell_w}x{cell_h}"
-    return f"{cell_w} px wide (" + ", ".join(f"{n} {cell_w}x{h}" for n, h in sizes.items()) + ")"
+        if w < cell_w:
+            sizes[cam_name(ep, v)] = (w, h)
+            small.add(cam_name(ep, v))
+        else:
+            sizes[cam_name(ep, v)] = (cell_w, int(round(h * cell_w / w / 2)) * 2)
+    native = lambda n: " at its own size, not enlarged" if n in small else ""
+    if not small:
+        if len({h for _w, h in sizes.values()}) <= 1:
+            return f"{cell_w}x{cell_h}"
+        return f"{cell_w} px wide (" + ", ".join(f"{n} {w}x{h}" for n, (w, h) in sizes.items()) + ")"
+    if len(sizes) == 1:
+        (n, (w, h)), = sizes.items()
+        return f"{w}x{h}{native(n)}"
+    return f"at most {cell_w} px wide (" + ", ".join(f"{n} {w}x{h}{native(n)}" for n, (w, h) in sizes.items()) + ")"
 
 
 def _coverage_note(ep: dict, pl: dict) -> str:
