@@ -98,4 +98,6 @@ def circular_image(frames_by_k: dict) -> dict:
     """measure() over one camera's decoded frames ({anchor index: frame}), on up to MAX_FRAMES of them spread
     evenly in time."""
     ks = sorted(frames_by_k)
+    if not ks:      # a camera recording at none of the sampled instants has no frames to read
+        return {"circular": False, "frames": 0}
     return {**measure(brightest([frames_by_k[ks[i]] for i in spread(len(ks))])), "frames": len(spread(len(ks)))}
