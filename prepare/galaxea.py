@@ -134,7 +134,7 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
         p = get(info["video_path"].format(episode_chunk=chunk, video_key=key, episode_index=i))
         with av.open(str(p)) as c:
             s = c.streams.video[0]
-            pts = sorted(pk.pts for pk in c.demux(s) if pk.pts is not None)
+            pts = sorted(pk.pts for pk in c.demux(s) if pk.pts is not None and not pk.is_discard)
             w, h, tb = s.codec_context.width, s.codec_context.height, s.time_base
         step = int(round(1 / (FPS * float(tb))))
         on_grid = bool(pts) and pts[0] == 0 and all(pp == k * step for k, pp in enumerate(pts))

@@ -432,7 +432,7 @@ def probe(path: Path) -> dict:
     from prepare import display
     with open_checked(path) as c:
         st = video_stream(c, path)
-        pts = sorted(p.pts for p in c.demux(st) if p.size and p.pts is not None)
+        pts = sorted(p.pts for p in c.demux(st) if p.size and p.pts is not None and not p.is_discard)
         rate = st.average_rate or st.guessed_rate
         w, h, tb, codec = st.codec_context.width, st.codec_context.height, st.time_base, st.codec_context.name
     geom = display.geometry(str(path))
@@ -853,7 +853,7 @@ def _duration(p: Path) -> float:
 def _frame_count(p: Path) -> int:
     with open_video(p) as c:
         st = c.streams.video[0]
-        return sum(1 for pk in c.demux(st) if pk.size and pk.pts is not None)
+        return sum(1 for pk in c.demux(st) if pk.size and pk.pts is not None and not pk.is_discard)
 
 
 # ---------------------------------------------------------------- plain video
