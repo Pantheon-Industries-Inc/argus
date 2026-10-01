@@ -3609,6 +3609,13 @@ function renderEp(d, opts) {
   const keep = opts.keepVideo && document.getElementById('video') ? {
     video: document.getElementById('video'),
     side: [...document.querySelectorAll('.cam-cell.cam-wrist video')].map(el => [el.id, el])} : null;
+  // a new episode: stop the old episode's videos now, so their downloads end instead of running on until the detached
+  // elements are collected and competing with the new episode's footage (a fast visitor left several loading at once)
+  if (!keep) {
+    for (const v of leftCol.querySelectorAll('video')) {
+      try { v.pause(); v.removeAttribute('src'); v.querySelectorAll('source').forEach(s => s.remove()); v.load(); } catch (_) {}
+    }
+  }
   // a head camera (the rig board/build.py copies from the episode's context) is a single panel with no mounted
   // cameras beside it
   const isEgo = d._rig === 'ego_head';
