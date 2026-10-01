@@ -2150,6 +2150,9 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
     border-bottom: 1px solid var(--border-strong); }
   .ep-head { position: static; }
   section.right { overflow: visible; padding: 20px 16px; }
+  /* in one column a long list scrolls inside its own panel, so the page never runs on for screens */
+  #feed, .key-events, .di-block, #left-col > .info-block, .inv-list { max-height: 60vh; overflow-y: auto;
+    overscroll-behavior: contain; }
 }
 @media (max-width: 599px) {
   /* on a phone the band naming the comparison is pinned right above the footage, and the small player has no room for
@@ -3091,8 +3094,9 @@ function renderCoverage(ds, shown) {
   const onTab = coverageEl.querySelector('.cv-cell.on'), strip = coverageEl.querySelector('.cv-cells');
   if (onTab && strip && strip.scrollWidth > strip.clientWidth) {
     const l = onTab.offsetLeft - strip.offsetLeft, r = l + onTab.offsetWidth;
+    // a tab wider than the strip shows its start, so its name never begins mid-word
     if (l < strip.scrollLeft || r > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = Math.max(0,
-      r - strip.clientWidth);
+      onTab.offsetWidth > strip.clientWidth ? l : r - strip.clientWidth);
   }
 }
 
@@ -3902,7 +3906,9 @@ function renderEp(d, opts) {
   for (let t = 0; t <= duration; t += labelStep / 2) {
     const pct = (t / duration) * 100;
     ticksHtml += `<div class="tick" style="left:${pct}%"></div>`;
-    if (t % labelStep === 0) ticksHtml += `<div class="tick-label" style="left:${pct}%">${tickLabel(t)}</div>`;
+    // the first label starts at the timeline's edge instead of centring on it, so it never sits outside the timeline
+    if (t % labelStep === 0) ticksHtml += `<div class="tick-label" style="left:${pct}%${t === 0 ? ';transform:none' : ''}">`
+      + `${tickLabel(t)}</div>`;
   }
 
   const eidEnc = encodeURIComponent(meta.episode_id || '');
@@ -4848,7 +4854,7 @@ function cmpWho(k) {
 // the run's full name: the model, and for an in-context run, how it was prompted
 function cmpFullName(k) {
   const m = cmpModel(k);
-  return !m ? 'The model' : m.example ? `${cmpWho(k)}, ${icl()}` : m.name;
+  return !m ? 'The model' : m.example ? `${shownName(cmpWho(k))}, ${icl()}` : shownName(m.name);
 }
 const ST_WORDS = {unparsed: 'did not parse', cut_off: 'cut off', no_response: 'no response', pending: 'not yet run'};
 // every model in the menu's order: each model, then its in-context run
@@ -4897,6 +4903,11 @@ function lbOpen(open) {
 function nameParts(n) {
   const i = String(n).indexOf(', ');
   return i < 0 ? [String(n), ''] : [n.slice(0, i), n.slice(i + 2)];
+}
+// the name a reader sees: the qualifier in brackets ("GPT-6.1 Sol (high reasoning)"), the same in every chart and line
+function shownName(n) {
+  const [h, t] = nameParts(n);
+  return t ? `${h} (${t})` : h;
 }
 // "<model>'s <noun>", with a qualifier after the noun in brackets, never "<model>, <qualifier>'s <noun>"
 function whoOwn(who, noun) {
@@ -5127,14 +5138,14 @@ function cmpOrder() {
   return out.concat(ms.filter(m => !out.includes(m)));
 }
 function cmpNameHtml(m) {
-  if (m.example) { const b = CMP_METRICS.models.find(x => x.key === m.base); return `${esc((b
-    || m).name)}<small>${esc(cap(icl()))}</small>`; }
-  return esc(m.name);
+  if (m.example) { const b = CMP_METRICS.models.find(x => x.key === m.base); return `${esc(shownName((b
+    || m).name))}<small>${esc(cap(icl()))}</small>`; }
+  return esc(shownName(m.name));
 }
 // the same as text: an in-context run is its model and how it was prompted
 function cmpNameText(m) {
   const b = m.example && CMP_METRICS.models.find(x => x.key === m.base);
-  return b ? `${b.name}, ${icl()}` : m.name;
+  return b ? `${shownName(b.name)}, ${icl()}` : shownName(m.name);
 }
 const MAIN_CHARTS = [
   {id: 'parse', title: 'Responses that parse', fmt: fPct, max: () => 1,
@@ -5236,7 +5247,7 @@ function buildCompare() {
   const pairCard = (c) => `<div class="cc" data-pair="${c.id}"><h4>${esc(c.title.replace('{ref}', ref))}</h4>`
     + pairs.map(p => { const m = M.models.find(x => x.key === p.base) || {};
       return `<div class="pr" data-k="${esc(p.base)}" tabindex="0"><span class="br-name">${esc(m.name
-      || p.base)}</span>`
+      ? shownName(m.name) : p.base)}</span>`
       + `<span class="pr-track"><span class="pr-ref" style="opacity:0"></span><span class="pr-line"></span><span `
         + `class="pr-dot without"></span><span class="pr-dot with"></span></span>`
       + `<span class="pr-val"><span class="pv"></span><small></small></span></div>`; }).join('') + '</div>';
@@ -5287,7 +5298,7 @@ function buildCompare() {
 function updateCompare(first) {
   const M = CMP_METRICS, s = M.summary[CMP_RIG] || {};
   const order = cmpOrder();
-  const nm = k => (M.models.find(m => m.key === k) || {}).name || k;
+  const nm = k => { const m = M.models.find(x => x.key === k); return m && m.name ? shownName(m.name) : k; };
   document.getElementById('cmpv-scope').textContent = `${(s.episodes || 0).toLocaleString()} episodes, ${fMin(s.minutes
     || 0)} of footage`;
   for (const c of MAIN_CHARTS) {
