@@ -293,7 +293,8 @@ def test_every_other_recorded_signal_reaches_the_model_under_its_own_name(tmp_pa
     p = me.build_request(ep)["prompt"]
     table = p.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
     assert "observation.state.chassis (3 values): 0 to 0.9, 0, 0 to 0.3" in table
-    assert "observation.state.torso (2 values): [0.5, 0.25] throughout" in table and "next.done (1 value): 0 to 1" in table
+    # a value the same at every frame is named once, on one line with the others like it
+    assert "The same at every frame: observation.state.torso [0.5, 0.25]" in table and "next.done (1 value): 0 to 1" in table
     assert "task_index" not in table and "  index" not in table and "timestamp" not in table
     # an episode that records nothing else gets exactly the prompt it had before
     plain = tmp_path / "plain"
@@ -322,7 +323,7 @@ def test_the_other_signals_are_measured_over_each_still_span():
                       "noise": np.full((120, 2), 0.5)}, "times": None, "kmap": {},
           "context": {"fps": 30}, "state": np.zeros((120, 14)), "sources": {}}
     t = me._signals_table(ep, {"n": 120, "spans": [(0, 59), (60, 119)], "ks": [0, 119]})
-    assert "base (1 value): 0 to 2" in t and "noise (2 values): [0.5, 0.5] throughout" in t
+    assert "base (1 value): 0 to 2" in t and "The same at every frame: noise [0.5, 0.5]" in t
     assert "0.00-1.97s: none changed" in t and "2.00-3.97s: base 2" in t
 
 
@@ -330,11 +331,29 @@ def test_recorded_signals_skip_bookkeeping_and_what_an_adapter_holds_back():
     n = 4
     df = pd.DataFrame({"observation.velocity": [[1.0, 2.0]] * n, "frame_index": np.arange(n),
                        "coarse_quality_index": np.zeros(n), "timestamp": np.arange(n) / 30.0,
-                       "is_error_segment": [0, 1, 1, 0], "note": ["a"] * n, "wide": [list(range(100))] * n})
+                       "is_error_segment": [0, 1, 1, 0], "note": ["a"] * n,
+                       "picture": [list(range(formats.SIGNAL_MAX_VALUES + 1))] * n})
     got = formats.recorded_signals(df, set(habit.PUBLISHER_COLUMNS), n)
     assert list(got) == ["observation.velocity"] and got["observation.velocity"].shape == (n, 2)
-    assert list(formats.recorded_signals(df, set(), n)) == ["observation.velocity", "is_error_segment"]
+    every = formats.recorded_signals(df, set(), n)
+    assert list(every) == ["observation.velocity", "is_error_segment"]
+    # a column too wide to be a signal is named with the reason, never dropped without a word
+    assert [k for k, _ in every.left_out] == ["picture"]
     assert formats.recorded_signals(df, set(), n + 1) == {}          # a column shorter than the episode is not kept
+
+
+def test_a_tactile_map_keeps_its_shape_and_its_value_names():
+    """A glove's 16 x 16 pressure map (parquet's list of lists) is one signal of 256 values shaped 16 x 16, not dropped
+    for being wide; a force sensor's values keep the names the dataset gives them."""
+    n = 5
+    grid = [[[float(r * 16 + c + k) for c in range(16)] for r in range(16)] for k in range(n)]
+    df = pd.DataFrame({"observation.tactile.right": grid, "observation.force": [[0.1, 0.2, 9.8]] * n})
+    feats = {"observation.force": {"dtype": "float32", "shape": [3], "names": {"axes": ["fx", "fy", "fz"]}}}
+    got = formats.recorded_signals(df, set(), n, feats)
+    assert got["observation.tactile.right"].shape == (n, 256)
+    assert got.meta["observation.tactile.right"]["shape"] == [16, 16]
+    assert got["observation.tactile.right"][2, 17] == 2 + 17            # row 1, column 1 of frame 2, in the map's order
+    assert got.meta["observation.force"]["names"] == ["fx", "fy", "fz"] and "shape" not in got.meta["observation.force"]
 
 
 def test_a_fourth_camera_is_sent_to_the_model_under_its_own_name(tmp_path):

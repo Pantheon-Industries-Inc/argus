@@ -21,15 +21,21 @@ Accepted uploads, in the order they are recognised:
 2. MCAP, one file per episode. A layout a dataset adapter recognizes goes through that adapter (the
    prepare/*.py that declare UPLOAD = "mcap", found by upload_adapters: ABC-130k and RealOmin with their
    robot state, Gen-HumanEgo with its forward camera, goal and timed steps). Any other layout is read for
-   its cameras (every compressed-image or compressed-video channel), its arm joints on a teleoperated rig
-   (joint_state: any channel whose messages carry a joint vector and a gripper reading, its side from the topic,
-   a leader or command channel as the action) and its text channels (the task topic, and on a head camera a
-   step topic as the timed steps).
-3. Plain video (mp4, mov, mkv, webm, avi). Either one file per episode, or one folder per episode
-   holding the cameras of one episode (group_videos says how names and folders group them). MCAP files with no
-   camera beside the videos are the episode's recorded state, read as in 2 and placed on the frames' capture
-   times from the timestamp file a recorder writes beside each video (frame_times). A depth or infrared video
-   beside a colour one is left out. A file is never split: an unsplit recording is one episode, and the
+   its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
+   whose topic it shares), its arm joints on a teleoperated rig (joint_state: any channel whose messages carry a joint
+   vector and a gripper reading, its side from the topic, a leader or command channel as the action), every other
+   number it records as a signal (mcap_signals), and its text channels (the task topic, and on a head camera a step
+   topic as the timed steps).
+3. HDF5 (h5, hdf5), read by what each array is (plan_hdf5, h5_kind): sibling groups that share one layout are one
+   episode each, image frames or encoded images are cameras, a large 16-bit or float picture is depth, a rising array
+   named for time is a clock, every other numeric array is a signal, and strings, records and attributes are the
+   uploader's notes.
+4. Plain video (mp4, mov, mkv, webm, avi). Either one file per episode, or one folder per episode
+   holding the cameras of one episode (group_videos says how names and folders group them). MCAP and HDF5 files with
+   no camera beside the videos are the episode's recorded state and sensor data, read as in 2 and 3 and placed on the
+   frames' capture times from the timestamp file a recorder writes beside each video (frame_times), and so is a CSV
+   table of numbers beside them (table_signals). A depth video beside a colour one goes with that camera
+   (depth_videos); an infrared or mask video is left out. A file is never split: an unsplit recording is one episode, and the
    pipeline labels a long one in pieces and stitches the labels back into one timeline. When
    many files share one length, the recorder cut continuous footage into fixed-length files; the episodes
    say so, so a file that starts or ends mid-activity is read as packaging, not a truncated episode. A folder
@@ -45,8 +51,12 @@ the uploader's own annotation, a claim to check against the video, never as trut
 file in an episode folder that names the task (its prompt, instruction or task) gives the instruction.
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
-arms; x y z roll pitch yaw plus opening for handheld grippers). Other layouts are labelled from the
-video alone and the report says so. Nothing in the footage is re-encoded except image frames (MCAP
+arms; x y z roll pitch yaw plus opening for handheld grippers). Every other number the recording keeps is a signal
+(Signals), under its own name, with its shape (a 16 x 16 pressure map stays 16 x 16) and its values' names: counters
+and clocks are bookkeeping, a topic that names its sensor per message is split, a sensor faster than the camera is
+summarised per frame (place_on_frames), and a frame with no reading near it is NaN. Anything read but not kept is
+listed with the reason, never dropped without a word. After every episode is read, the upload's depth ranges, each
+signal's resting level and swing, and each episode's contacts (label/contacts.py) are measured across the upload. Nothing in the footage is re-encoded except image frames (MCAP
 image channels, LeRobot image features), which are written to H.264 at their real capture times.
 
 Every episode's duration is known before conversion (metadata or container headers), so the
@@ -55,7 +65,10 @@ and the rest are listed as skipped. The report lists, in plain words, what was r
 could not be read and what was done instead.
 
 What every adapter writes, one folder per episode (label/episode.py reads it):
-  context.json     the facts the harness may state: dataset, rig (profile), state kind, fps, cameras, instruction
+  context.json     the facts the harness may state: dataset, rig (profile), state kind, fps, cameras, instruction,
+                   signals and contacts
+  signals.npz      the other signals, one row per anchor-camera frame (absent when there are none)
+  depth.json       each camera's depth stream, with depth_kmap_<view>.npy and depth_times.npz
   sources.json     per camera: the video file (packed), the episode's offset in it (base_s) and its frame count
   state.npz        state and action, one row per anchor-camera frame (absent when there is no usable state)
   times.npz        each camera's real frame times and exact pts, when frames are not on the k / fps grid
@@ -334,16 +347,24 @@ def detect(root: Path) -> dict:
     if roots:
         return {"format": "lerobot", "roots": roots}
     mcaps = [p for p in files if p.suffix.lower() == ".mcap"]
+    h5s = [p for p in files if p.suffix.lower() in H5_EXT]
     vids = [p for p in files if p.suffix.lower() in VIDEO_EXT]
-    if mcaps and vids and not any(mcap_has_camera(p) for p in mcaps):
-        # MCAP files with no camera (arm joints, grippers) beside videos are the videos' recorded state, not episodes
-        return {"format": "video", "files": [str(p) for p in vids], "state": [str(p) for p in mcaps]}
+    h5_cams = [p for p in h5s if h5_has_camera(p)]
+    if vids and not h5_cams and (mcaps or h5s) and not any(mcap_has_camera(p) for p in mcaps):
+        # MCAP and HDF5 files with no camera (arm joints, grippers, a glove's pressure and hand pose) beside videos are
+        # the videos' recorded state and sensor data, not episodes
+        return {"format": "video", "files": [str(p) for p in vids], "state": [str(p) for p in mcaps + h5s]}
     if mcaps:
         return {"format": "mcap", "files": [str(p) for p in mcaps]}
+    if h5_cams:
+        return {"format": "hdf5", "files": [str(p) for p in h5_cams]}
     if vids:
         return {"format": "video", "files": [str(p) for p in vids]}
     seen = sorted({p.suffix.lower() or p.name for p in files})[:12]
-    raise ValueError("the upload holds no LeRobot dataset, MCAP file or video"
+    if h5s:
+        raise ValueError("the HDF5 files hold no camera (no image frames or encoded images), and there are no videos "
+                         "beside them to place their data against")
+    raise ValueError("the upload holds no LeRobot dataset, MCAP file, HDF5 file or video"
                      + (f" (only {', '.join(seen)} files)" if seen else " (it is empty)"))
 
 
@@ -512,19 +533,28 @@ def scene_rank(name: str) -> int:
     return 99
 
 
-MAX_EXTRA_CAMERAS = 3        # cameras beyond the scene and two mounted ones, sent to the model too; more are listed unused
+MAX_EXTRA_CAMERAS = 4        # cameras beyond the scene and two mounted ones, sent to the model too; more are listed unused
+# a view whose name says it senses touch (a GelSight or DIGIT image, a tactile heatmap) is never the scene camera or the
+# camera on a gripper: it is another view, named as the dataset names it, and the pair of them (left and right) are two
+# sensors, not the two eyes of one stereo camera
+SENSING_WORDS = ("tactile", "touch", "gelsight", "digit", "xense", "visuotactile", "haptic", "heatmap", "taxel", "skin")
+
+
+def is_sensing(name: str) -> bool:
+    return any(w in t for t in tokens(name) for w in SENSING_WORDS)
 
 
 def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
     """{view: camera name}: one scene and two mounted cameras by role, then every other camera as extra1, extra2, ...
     (up to MAX_EXTRA_CAMERAS, in the scene cameras' rank order), and the names left unused."""
     out = {}
+    sensing = [nm for nm in names if is_sensing(nm)]
     # names that also say wrist/hand/gripper take a side before names that only carry a side
-    for nm in sorted(names, key=lambda n: (0 if is_mount_named(n) else 1, n)):
+    for nm in sorted((n for n in names if n not in sensing), key=lambda n: (0 if is_mount_named(n) else 1, n)):
         v = mounted_side(nm)
         if v and v not in out:
             out[v] = nm
-    rest = sorted((nm for nm in names if nm not in out.values()), key=lambda s: (scene_rank(s), s))
+    rest = sorted((nm for nm in names if nm not in out.values() and nm not in sensing), key=lambda s: (scene_rank(s), s))
     if rest:
         out["exo"] = rest[0]
     if rig == "handheld_gripper" and list(out) == ["exo"]:
@@ -532,9 +562,9 @@ def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
         out = {"right": out["exo"]}
     # the other eye of a stereo camera already shown (/zed/left/image and /zed/right/image) adds a near-copy of its
     # picture, so it is left out; every other camera is sent
-    for nm in rest[1:]:
+    for nm in rest[1:] + sorted(sensing):
         n_extra = sum(1 for k in out if k.startswith("extra"))
-        if n_extra < MAX_EXTRA_CAMERAS and not any(_stereo_twin(nm, c) for c in out.values()):
+        if n_extra < MAX_EXTRA_CAMERAS and (nm in sensing or not any(_stereo_twin(nm, c) for c in out.values())):
             out[f"extra{n_extra + 1}"] = nm
     unused = [nm for nm in names if nm not in out.values()]
     return out, unused
@@ -605,6 +635,58 @@ def raw_image(msg):
         a = np.frombuffer(data, np.uint8, count=step * h).reshape(h, step)[:, :w * 2]
         return av.VideoFrame.from_ndarray(np.ascontiguousarray(a).reshape(h, w, 2), format=fmt).to_image()
     return None
+
+
+DEPTH_TOPIC = re.compile(r"depth", re.I)
+
+
+def depth_image(msg) -> tuple[np.ndarray, float | None] | None:
+    """(depth array, metres per unit) of a depth image message: a raw image in 16UC1 / mono16 (millimetres, as ROS
+    defines it) or 32FC1 (metres), or a compressed one (a 16-bit PNG, with the 12-byte header ROS's compressedDepth adds);
+    None for anything else."""
+    import io
+    enc = str(_field(msg, "encoding") or _field(msg, "format") or "").lower()
+    data = _field(msg, "data", binary=True)
+    data = bytes(data) if data is not None else b""
+    w, h = int(_field(msg, "width") or 0), int(_field(msg, "height") or 0)
+    if w and h and data:
+        step = int(_field(msg, "step") or 0)
+        if enc in ("16uc1", "mono16") and len(data) >= h * (step or w * 2):
+            step = step or w * 2
+            a = np.frombuffer(data, np.uint16, count=h * step // 2).reshape(h, step // 2)[:, :w]
+            return a.copy(), 0.001
+        if enc == "32fc1" and len(data) >= h * (step or w * 4):
+            step = step or w * 4
+            a = np.frombuffer(data, np.float32, count=h * step // 4).reshape(h, step // 4)[:, :w]
+            return a.copy(), 1.0
+        return None
+    i = data.find(b"\x89PNG")
+    if i < 0:
+        return None
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(data[i:]))
+        a = np.asarray(im)
+    except Exception:
+        return None
+    if a.ndim != 2:
+        return None
+    return a.astype(np.uint16), (0.001 if a.dtype == np.uint16 else None)
+
+
+def depth_partner(depth_topic: str, cams: dict) -> str | None:
+    """The view whose camera topic shares the longest leading path with a depth topic (/realsense/aligned_depth_to_color
+    goes with /realsense/color), or None when none shares any."""
+    parts = [x for x in depth_topic.split("/") if x]
+    best, n = None, 0
+    for v, t in cams.items():
+        q = [x for x in t.split("/") if x]
+        k = 0
+        while k < min(len(parts), len(q)) and parts[k] == q[k]:
+            k += 1
+        if k > n:
+            best, n = v, k
+    return best
 
 
 def pick_cameras(topics: list[str], rig: str, all_topics: list[str] | None = None) -> tuple[dict, list]:
@@ -706,37 +788,288 @@ def state_layout(dims: int, rig: str) -> tuple[str, str | None]:
 
 # Per-frame columns that are the table's bookkeeping, not a recording: never kept as a signal
 SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
-SIGNAL_MAX_DIMS = 64          # wider columns (a point cloud, a flattened image) are not numbers a person reads
+# A per-frame array of more values than this (a point cloud, a flattened image) is a picture, not numbers a person or a
+# model reads one by one; it is listed among the signals left out, never dropped without a word. A tactile pressure map
+# of 64 x 64 cells is still a signal.
+SIGNAL_MAX_VALUES = 4096
 
 
-def recorded_signals(df, used, n: int) -> dict:
-    """Every other numeric per-frame column of an episode's table, under the dataset's own name, as (n, dims) arrays:
+class Signals(dict):
+    """{name: (n, values) array} of the numbers a recording keeps beside its cameras and arm state, under the dataset's
+    own names, with what is known about each (meta[name]: "shape", the array's own shape per frame when it is not a flat
+    vector, such as a 16 x 16 pressure map; "names", one per value, when the dataset names them; "source", where it was
+    read) and the numbers that were not kept (left_out: [(name, why)]). A plain dict of arrays is read the same way."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.meta: dict[str, dict] = {}
+        self.left_out: list[tuple[str, str]] = []
+        self.clocks: dict[str, np.ndarray] = {}      # per-frame clocks the recording keeps (write_signals)
+
+    def add(self, name: str, a: np.ndarray, shape=None, names=None, source: str | None = None) -> None:
+        self[name] = a
+        m = {}
+        if shape is not None and tuple(int(x) for x in shape) != (a.shape[1],):
+            m["shape"] = [int(x) for x in shape]
+        if names is not None and len(names) == a.shape[1]:
+            m["names"] = [str(x) for x in names]
+        if source:
+            m["source"] = source
+        self.meta[name] = m
+
+
+def is_clock(x: np.ndarray) -> bool:
+    """Whether a column is a clock or a counter: it never falls, rises at 90% of its rows or more, and rises by a steady
+    step (the spread of its steps under half their median), as a receive time or a sequence number does. A cumulative
+    reading (a distance travelled) rises unevenly and is not one."""
+    x = np.asarray(x, dtype=np.float64)
+    x = x[np.isfinite(x)]
+    if len(x) < COUNTER_MIN_MESSAGES:
+        return False
+    d = np.diff(x)
+    if (d < 0).any() or (d > 0).mean() < 0.9:
+        return False
+    up = d[d > 0]
+    return float(np.std(up)) < 0.5 * float(np.median(up))
+
+
+def value_names(names, dims: int) -> list[str] | None:
+    """One name per value from a dataset's own naming of a feature: a list (["x", "y", "z"]), a dict holding one list
+    ({"motors": [...]}), or nested lists in the feature's shape; None when they do not give exactly dims names."""
+    if isinstance(names, dict):
+        vals = [v for v in names.values() if isinstance(v, (list, tuple))]
+        names = vals[0] if len(vals) == 1 else None
+    if not isinstance(names, (list, tuple)):
+        return None
+    flat = []
+
+    def walk(x):
+        if isinstance(x, (list, tuple)):
+            for y in x:
+                walk(y)
+        else:
+            flat.append(str(x))
+    walk(names)
+    return flat if len(flat) == dims else None
+
+
+def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
+    """Every other numeric per-frame column of an episode's table, under the dataset's own name, as (n, values) arrays:
     the columns that are not bookkeeping (SIGNAL_SKIP), not already read (used: the state, the action, the cameras),
-    finite, at most SIGNAL_MAX_DIMS wide and at least n rows long. The harness shows them to the model as they are
-    (label/episode.py), so nothing a dataset records is dropped because our checks do not know what it means: a
-    mobile robot's base and torso, joint velocities, forces, a state wider than the arm layout."""
-    out = {}
+    finite and at least n rows long. An array per frame keeps its shape (a pressure map is 16 x 16, not 256 numbers in
+    a row) and the names the dataset gives its values (features: meta/info.json's, with "shape" and "names"). The
+    harness shows them to the model as they are (label/episode.py), so nothing a dataset records is dropped because our
+    checks do not know what it means: a mobile robot's base and torso, joint velocities, forces, a tactile glove's
+    pressure map. A column wider than SIGNAL_MAX_VALUES is listed in left_out with the reason."""
+    out = Signals()
     if df is None:
         return out
+    features = features or {}
     for c in df.columns:
         if c in used or SIGNAL_SKIP.search(str(c)) or str(c).startswith("observation.images"):
             continue
+        if (features.get(c) or {}).get("dtype") == "video":
+            continue
+        if (features.get(c) or {}).get("dtype") == "image":
+            a = _image_cells(df[c])               # only the small per-pad images reach here (read_root image_signals)
+            if a is None:
+                continue
+            out.add(str(c), a[0][:n] if len(a[0]) >= n else a[0], shape=a[1], source="image column " + str(c))
+            continue
         a = _stack(df[c])
-        if a is not None and 0 < a.shape[1] <= SIGNAL_MAX_DIMS and len(a) >= n:
-            out[str(c)] = a[:n]
+        if a is None or not a.shape[1] or len(a) < n:
+            continue
+        if a.shape[1] > SIGNAL_MAX_VALUES:
+            out.left_out.append((str(c), f"{a.shape[1]} values per frame, more than the {SIGNAL_MAX_VALUES} a signal holds"))
+            continue
+        if a.shape[1] == 1 and is_clock(a[:, 0]):
+            # a clock (the time a sensor's reading was received, a sequence number): kept for the sync check, not shown
+            out.clocks[str(c)] = a[:n, 0]
+            continue
+        f = features.get(c) or {}
+        shape = f.get("shape") if isinstance(f.get("shape"), (list, tuple)) and int(np.prod(f["shape"])) == a.shape[1] \
+            else _cell_shape(df[c], a.shape[1])
+        out.add(str(c), a[:n], shape=shape, names=value_names(f.get("names"), a.shape[1]), source="column " + str(c))
     return out
 
 
+def _image_cells(col):
+    """(rows, (h, w)) of a column of small encoded images (PNG bytes, as LeRobot stores an image feature), each read as
+    grey values; None when they do not decode to one size."""
+    import io
+    from PIL import Image
+    rows, shape = [], None
+    for cell in col.to_numpy():
+        b = cell.get("bytes") if isinstance(cell, dict) else cell
+        try:
+            a = np.asarray(Image.open(io.BytesIO(bytes(b))).convert("L"), dtype=np.float64)
+        except Exception:
+            return None
+        if shape is None:
+            shape = a.shape
+        if a.shape != shape:
+            return None
+        rows.append(a.ravel())
+    return (np.stack(rows), list(shape)) if rows else None
+
+
+def _cell_shape(col, dims: int):
+    """The shape of one cell of a table column (a 16 x 16 list of lists), when it holds exactly dims numbers."""
+    try:
+        s = np.asarray(_nested(col.iloc[0]), dtype=np.float64).shape
+    except Exception:
+        return None
+    return s if s and int(np.prod(s)) == dims else None
+
+
+def _nested(x):
+    """A cell as nested lists: parquet gives a list of lists as an object array of arrays."""
+    if isinstance(x, np.ndarray) and x.dtype == object:
+        return [_nested(y) for y in x]
+    return x
+
+
 def write_signals(ep: Path, ctx: dict, signals: dict | None) -> None:
-    """signals.npz beside the state (keys s0, s1, ...) and ctx["signals"], [{name, key, dims}], trimmed to the episode's
-    n_state_frames; nothing when there are none."""
+    """signals.npz beside the state (keys s0, s1, ...) and ctx["signals"], [{name, key, dims, shape, names, source}],
+    trimmed to the episode's n_state_frames; nothing when there are none. What a reader read but did not keep
+    (Signals.left_out) is written to ctx["source"]["unused_signals"], so the report names it."""
     n = int(ctx.get("n_state_frames") or 0)
-    keep = {k: v for k, v in (signals or {}).items() if n and len(v) >= n}
+    meta = getattr(signals, "meta", {}) or {}
+    left = list(getattr(signals, "left_out", []) or [])
+    keep = {}
+    for k, v in (signals or {}).items():
+        if n and len(v) >= n:
+            keep[k] = v
+        else:
+            left.append((k, f"{len(v)} samples, fewer than the episode's {n} frames"))
+    if left:
+        ctx.setdefault("source", {})["unused_signals"] = [f"{k} ({why})" for k, why in left]
+    clocks = getattr(signals, "clocks", None) or {}
+    if len(clocks) >= 2 and n:
+        # each clock's offset from the first, its median and spread in milliseconds (checks/sensors.py reads them)
+        names_ = list(clocks)
+        base = np.asarray(clocks[names_[0]][:n], dtype=np.float64)
+        unit = _seconds(base[:1000]) / np.where(base[:1000] != 0, base[:1000], 1)
+        to_s = float(np.median(unit[np.isfinite(unit)])) if np.isfinite(unit).any() else 1.0
+        ctx["clocks"] = [{"name": k, "offset_ms": round(float(np.nanmedian((np.asarray(v[:n], dtype=np.float64) - base)
+                                                                          * to_s)) * 1000, 2),
+                          "spread_ms": round(float(np.nanstd((np.asarray(v[:n], dtype=np.float64) - base) * to_s)) * 1000, 2)}
+                         for k, v in clocks.items()]
     if not keep:
         ctx.pop("signals", None)
         return
     np.savez(ep / "signals.npz", **{f"s{i}": np.asarray(v[:n], dtype=np.float32) for i, v in enumerate(keep.values())})
-    ctx["signals"] = [{"name": k, "key": f"s{i}", "dims": int(v.shape[1])} for i, (k, v) in enumerate(keep.items())]
+    ctx["signals"] = [{"name": k, "key": f"s{i}", "dims": int(v.shape[1]), **(meta.get(k) or {})}
+                      for i, (k, v) in enumerate(keep.items())]
+
+
+# ---------------------------------------------------------------- depth
+
+# A depth stream is a per-pixel distance picture on its own clock, kept beside the colour camera it belongs to: never a
+# camera of its own, never re-encoded when it is already a file (a RealSense FFV1 16-bit video), and in metres only when
+# the recording says what one unit is (ROS 16UC1 is millimetres and 32FC1 metres by the message's own definition, or a
+# depth_scale the recorder wrote). Otherwise its values are relative distances, and everything downstream says so.
+DEPTH_SCALE_KEY = re.compile(r"depth[_ ]?(scale|units?)$", re.I)
+
+
+def depth_scale_from(folder: Path) -> float | None:
+    """Metres per depth unit from a recorder's metadata in the episode's folder: a JSON file (at most 1 MB) holding a
+    number under a key named depth_scale or depth_units (a RealSense's 0.001). None when nothing says."""
+    found = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if DEPTH_SCALE_KEY.search(str(k)) and isinstance(v, (int, float)) and 0 < v < 10:
+                    found.append(float(v))
+                walk(v)
+        elif isinstance(x, list):
+            for v in x[:200]:
+                walk(v)
+    for p in sorted(Path(folder).glob("*.json")):
+        if p.stat().st_size <= 1_000_000:
+            walk(_read_json(p) or {})
+    return found[0] if found and len(set(found)) == 1 else None
+
+
+def depth_entry(ep: Path, view: str, path: Path, t_depth: np.ndarray, t_anchor: np.ndarray, pts: np.ndarray,
+                scale_m: float | None, source: str) -> tuple[dict, dict]:
+    """(depth.json entry, times) for one camera's depth stream: its file, its frame for each anchor frame (nearest in
+    time, depth_kmap_<view>.npy), its frame times and exact pts, and metres per unit when known."""
+    km = nearest(np.asarray(t_depth, dtype=np.float64), np.asarray(t_anchor, dtype=np.float64))
+    np.save(ep / f"depth_kmap_{view}.npy", km)
+    entry = {"packed": str(Path(path).resolve()), "base_s": 0.0, "n_frames": int(len(t_depth)),
+             "kmap": f"depth_kmap_{view}.npy", "scale_m": scale_m, "source": source,
+             # a disparity (or inverse depth) stream reads larger where nearer; label/depth.py draws it reversed
+             "kind": "disparity" if re.search(r"disparit|inverse", source or "", re.I) else "depth"}
+    return entry, {f"depth_{view}": np.asarray(t_depth, dtype=np.float64), f"depth_{view}_pts": np.asarray(pts)}
+
+
+def write_depth(ep: Path, ctx: dict, depth: dict | None, times: dict | None = None) -> None:
+    """depth.json ({view: entry}), depth_times.npz (each stream's frame times and pts, depth_entry) and ctx["depth"]
+    ({view: {units, source}}); nothing when there is no depth."""
+    if not depth:
+        ctx.pop("depth", None)
+        return
+    (ep / "depth.json").write_text(json.dumps(depth, indent=1))
+    if times:
+        np.savez(ep / "depth_times.npz", **times)
+    ctx["depth"] = {v: {"units": ("metres" if d.get("scale_m") else "relative"), "scale_m": d.get("scale_m"),
+                        "kind": d.get("kind", "depth"), "source": d.get("source")} for v, d in depth.items()}
+
+
+def probe_depth(path: Path) -> dict:
+    """A depth video's frame pts, time base and pixel format (gray16le for a 16-bit depth stream)."""
+    with open_checked(path) as c:
+        st = video_stream(c, path)
+        pts = sorted(p.pts for p in c.demux(st) if p.size and p.pts is not None and not p.is_discard)
+        return {"pts": np.asarray(pts, dtype=np.int64), "time_base": st.time_base, "width": st.codec_context.width,
+                "height": st.codec_context.height, "pix_fmt": st.codec_context.pix_fmt}
+
+
+class DepthWriter:
+    """One camera's depth frames streamed to a lossless 16-bit FFV1 mkv at their real times (an MCAP's or an HDF5
+    file's depth images). Values are kept as recorded: 16-bit integers as they are, metres (float) as millimetres, so
+    scale_m says what one stored unit is."""
+
+    def __init__(self, out: Path):
+        self.out, self.pts, self.dst, self.st, self.scale_m = out, [], None, None, None
+
+    def add(self, t_s: float, a: np.ndarray, scale_m: float | None) -> None:
+        import av
+        a = np.asarray(a)
+        if a.ndim == 3:
+            a = a[..., 0]
+        if a.dtype.kind == "f":
+            a = np.nan_to_num(a * 1000.0, nan=0.0, posinf=0.0, neginf=0.0)
+            a = np.clip(a, 0, 65535).astype(np.uint16)
+            scale_m = 0.001 if scale_m is None or scale_m == 1.0 else scale_m * 0.001
+        a = a.astype(np.uint16)
+        if self.dst is None:
+            self.scale_m = scale_m
+            self.dst = av.open(str(self.out), "w", format="matroska")
+            self.st = self.dst.add_stream("ffv1", rate=30)
+            self.st.width, self.st.height = a.shape[1], a.shape[0]
+            self.st.pix_fmt = "gray16le"
+            self.st.time_base = Fraction(1, TIME_BASE_DEN)
+            self.st.codec_context.time_base = Fraction(1, TIME_BASE_DEN)
+        if a.shape != (self.st.height, self.st.width):
+            return                        # a frame of another size cannot join this stream
+        p = int(round(t_s * TIME_BASE_DEN))
+        if self.pts and p <= self.pts[-1]:
+            p = self.pts[-1] + 1
+        fr = av.VideoFrame.from_ndarray(np.ascontiguousarray(a), format="gray16le")
+        fr.pts, fr.time_base = p, Fraction(1, TIME_BASE_DEN)
+        self.pts.append(p)
+        for pkt in self.st.encode(fr):
+            self.dst.mux(pkt)
+
+    def close(self) -> int:
+        if self.dst is not None:
+            for pkt in self.st.encode():
+                self.dst.mux(pkt)
+            self.dst.close()
+        return len(self.pts)
 
 
 def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None,
@@ -759,14 +1092,16 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
                         prs: dict | None = None, real: dict | None = None, state=None, action=None,
-                        descs: dict | None = None, signals: dict | None = None) -> dict:
+                        descs: dict | None = None, signals: dict | None = None, depth: dict | None = None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
     (shared_clock) keep their offsets and are measured from the anchor's first frame. real gives every view's
     capture times on one recorder clock (frame_times), which then place the cameras against each other; state and
     action are rows on the anchor's frames (joint_state). descs {view: text} describes a camera the reader knows
-    more about than its slot says (the prompt's camera line)."""
+    more about than its slot says (the prompt's camera line). depth {view: {"path", "real" (its own capture times on
+    the same recorder clock, or None), "scale_m", "source"}} is each camera's depth stream (depth_entry), timed as its
+    colour camera is."""
     from label import episode as me
     prs = prs or {v: probe(p) for v, (_, p) in files.items()}
     order = me.order_views(files)
@@ -798,6 +1133,27 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         cams[v] = camera_entry(v, name, pr, rig)
         if (descs or {}).get(v):
             cams[v]["desc"] = descs[v]
+    dep, dtimes = {}, {}
+    for v, d in (depth or {}).items():
+        if v not in files:
+            continue
+        try:
+            pd_ = probe_depth(Path(d["path"]))
+        except Exception:
+            extra.setdefault("source", {}).setdefault("unused_depth", []).append(f"{Path(d['path']).name} (could not be read)")
+            continue
+        if not len(pd_["pts"]):
+            continue
+        if use_real and d.get("real") is not None and len(d["real"]) == len(pd_["pts"]):
+            td = np.asarray(d["real"], dtype=np.float64) - zero
+        else:
+            # no capture times of its own: the depth stream is timed by its file, from the colour camera's first frame
+            td = pd_["pts"].astype(np.float64) * float(pd_["time_base"])
+            td = td - (zero if shared_clock and zero is not None else td[0]) + (times[v][0] if not shared_clock else 0.0)
+        entry, tz = depth_entry(ep, v, Path(d["path"]), td, ta, pd_["pts"], d.get("scale_m"), d.get("source") or "")
+        entry.update(width=pd_["width"], height=pd_["height"], pix_fmt=pd_["pix_fmt"])
+        dep[v] = entry
+        dtimes.update(tz)
     # the rate is measured from the frame times (a header can claim any rate); the length is the span of
     # the frames plus one frame, so it matches what the labeller samples
     step = float(np.median(np.diff(ta))) if len(ta) > 1 else 1 / 30
@@ -807,6 +1163,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
            "duration_s": round(float(ta[-1]) + step, 3) if len(ta) else 0.0, "cameras": cams, **extra}
     if state is not None:
         ctx["state_kind"] = state_layout(state.shape[1], rig)[0]
+    write_depth(ep, ctx, dep, dtimes)
     return finish_episode(ep, ctx, sources, state=state, action=action, times=times, signals=signals)
 
 
@@ -987,10 +1344,13 @@ NON_COLOUR = {"depth", "disparity", "confidence", "conf", "mask", "infrared", "i
 GENERIC_VIDEO_WORDS = {"images", "image", "video", "videos", "rgb", "color", "colour", "raw"}
 
 
+DEPTH_WORDS = {"depth", "disparity"}
+
+
 def colour_videos(rels: list[str]) -> tuple[list[str], list[str]]:
-    """(kept, left out): a folder's depth, infrared and mask videos are left out when a colour video is beside them,
-    since the labeller reads colour footage (exo_cam-images-depth.mkv beside exo_cam-images-rgb.mp4). read.js
-    colourVideos, the same rule."""
+    """(kept, left out): a folder's depth, infrared and mask videos are not cameras of their own when a colour video
+    is beside them (exo_cam-images-depth.mkv beside exo_cam-images-rgb.mp4): a depth video goes with its colour camera
+    (depth_videos), and the rest are left out. read.js colourVideos, the same rule."""
     dirs = lambda r: r.rsplit("/", 1)[0] if "/" in r else ""
     non = lambda r: bool(set(tokens(r.rsplit("/", 1)[-1].rsplit(".", 1)[0])) & NON_COLOUR)
     colour_dirs = {dirs(r) for r in rels if not non(r)}
@@ -998,12 +1358,33 @@ def colour_videos(rels: list[str]) -> tuple[list[str], list[str]]:
     return [r for r in rels if r not in out], out
 
 
-def frame_times(video: Path, n: int) -> np.ndarray | None:
+def camera_words(rel: str) -> frozenset:
+    """The words of a video's name that name its camera, not what the file holds (exo_cam-images-depth gives exo, cam)."""
+    return frozenset(set(tokens(rel.rsplit("/", 1)[-1].rsplit(".", 1)[0])) - NON_COLOUR - GENERIC_VIDEO_WORDS)
+
+
+def depth_videos(rels: list[str]) -> dict[str, str]:
+    """{colour video: its depth video} for each depth video in a folder whose camera words (camera_words) match exactly
+    one colour video beside it (exo_cam-images-depth.mkv goes with exo_cam-images-rgb.mp4). read.js depthVideos, the
+    same rule."""
+    dirs = lambda r: r.rsplit("/", 1)[0] if "/" in r else ""
+    kind = lambda r: set(tokens(r.rsplit("/", 1)[-1].rsplit(".", 1)[0]))
+    colour = [r for r in rels if not kind(r) & NON_COLOUR]
+    out = {}
+    for d in (r for r in rels if kind(r) & DEPTH_WORDS):
+        match = [c for c in colour if dirs(c) == dirs(d) and camera_words(c) == camera_words(d)]
+        if len(match) == 1 and match[0] not in out:
+            out[match[0]] = d
+    return out
+
+
+def frame_times(video: Path, n: int, depth: bool = False) -> np.ndarray | None:
     """A video's frames' capture times in seconds on its recorder's clock, from the per-frame timestamp array a
     recorder writes beside it (exo_cam-rgb-timestamp.npy beside exo_cam-images-rgb.mp4): a .npy in its folder whose
     name says time and has the video's camera words, holding n rising numbers (seconds, or ms, us or ns, read
-    from their size). Colour over depth when both fit. None when there is none."""
-    cam = set(tokens(video.stem)) - GENERIC_VIDEO_WORDS
+    from their size). Colour over depth when both fit, and depth over colour for a depth video (depth=True, whose
+    stamps exo_cam-depth-timestamp.npy are its own). None when there is none."""
+    cam = set(tokens(video.stem)) - GENERIC_VIDEO_WORDS - (NON_COLOUR if depth else set())
     cands = []
     for p in sorted(video.parent.glob("*.npy")):
         tk = set(tokens(p.stem))
@@ -1018,7 +1399,7 @@ def frame_times(video: Path, n: int) -> np.ndarray | None:
         a = a.astype(np.float64)
         if n > 1 and not (np.all(np.diff(a) >= 0) and a[-1] > a[0]):
             continue                      # never backwards (a recorder can stamp two frames alike)
-        cands.append((bool(tk & NON_COLOUR), -len(os.path.commonprefix([p.stem, video.stem])), p.name, a))
+        cands.append((bool(tk & NON_COLOUR) != depth, -len(os.path.commonprefix([p.stem, video.stem])), p.name, a))
     if not cands:
         return None
     a = min(cands, key=lambda c: c[:3])[3]
@@ -1030,17 +1411,72 @@ def frame_times(video: Path, n: int) -> np.ndarray | None:
     return a * (1e-9 if a[0] > 1e17 else 1e-6 if a[0] > 1e14 else 1e-3 if a[0] > 1e11 else 1.0)
 
 
+def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) -> Signals:
+    """The numbers of CSV tables beside an episode's videos as signals, one per table under its own name (the file's
+    name without its take: "traj"), its numeric columns as the named values. A table is placed on the anchor camera's
+    frames by its time column (a rising column named for time) on the recorder's clock when the videos carry capture
+    times, row by row when it has exactly one row per frame, and otherwise by its time column from the videos' start,
+    which the source notes say; a table that cannot be placed is left out with the reason."""
+    import pandas as pd
+    out = Signals()
+    n = int(len(pr_anchor["pts"]))
+    t_vid = pr_anchor["pts"].astype(np.float64) * float(pr_anchor["time_base"])
+    t_vid = t_vid - t_vid[0]
+    for p in paths:
+        try:
+            df = pd.read_csv(p, sep="\t" if p.suffix.lower() == ".tsv" else ",")
+        except Exception:
+            out.left_out.append((p.name, "could not be read as a table"))
+            continue
+        num = df.select_dtypes("number")
+        if num.shape[1] == 0 or len(num) < 2:
+            continue                      # text only: the uploader's notes, read by annotation_tables
+        tcol = next((c for c in num.columns if H5_TIME_NAME.search(str(c)) and is_clock(num[c].to_numpy())), None)
+        vals = num.drop(columns=[c for c in num.columns if c == tcol or SIGNAL_SKIP.search(str(c))
+                                 or is_clock(num[c].to_numpy())])
+        if vals.shape[1] == 0:
+            continue
+        v = vals.to_numpy(dtype=np.float64)
+        parts = name_parts(p.stem)
+        name = parts["cam"] or p.stem
+        if tcol is not None:
+            t = _seconds(num[tcol].to_numpy(dtype=np.float64))
+        if tcol is not None and real_anchor is not None and t[0] < real_anchor[-1] and t[-1] > real_anchor[0]:
+            a, var, gaps = place_on_frames(t, v, np.asarray(real_anchor, dtype=np.float64))
+        elif len(v) == n:
+            a, gaps = v, 0
+        elif tcol is not None:
+            a, var, gaps = place_on_frames(t - t[0], v, t_vid)
+            extra.setdefault("source", {})["series_note"] = (f"{p.name} was placed on the video from both starts, since the "
+                                                             "videos carry no capture times on its clock")
+        else:
+            out.left_out.append((p.name, f"{len(v)} rows and no time column, while the video has {n} frames"))
+            continue
+        out.add(name, a, names=[str(c) for c in vals.columns], source=f"table {p.name}")
+        if gaps:
+            out.meta[name]["gaps"] = gaps
+    return out
+
+
 def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict]:
     """One item per episode, grouped as group_videos says. Files are never split. Fixed-length packaging (a
     recorder that cuts continuous footage into files of one length) is found here and recorded on every item it
     applies to. MCAP files of recorded state (det["state"]) go with the episode of their folder, when the folder
     holds one episode."""
     root = Path(root)
-    rels, left_out = colour_videos([Path(f).relative_to(root).as_posix() for f in det["files"]])
+    all_rels = [Path(f).relative_to(root).as_posix() for f in det["files"]]
+    rels, left_out = colour_videos(all_rels)
+    pairs = depth_videos(all_rels)
+    with_colour = set(pairs.values())
+    if with_colour:
+        det.setdefault("used", []).append(
+            f"{len(with_colour)} depth video{'s were' if len(with_colour) != 1 else ' was'} read with the colour camera "
+            f"{'they belong' if len(with_colour) != 1 else 'it belongs'} to.")
+    left_out = [r for r in left_out if r not in with_colour]
     if left_out:
         det.setdefault("used", []).append(
-            f"{len(left_out)} depth or infrared video{'s were' if len(left_out) != 1 else ' was'} left out, since the "
-            "labeller reads the colour video of each camera.")
+            f"{len(left_out)} infrared, mask or unmatched depth video{'s were' if len(left_out) != 1 else ' was'} left "
+            "out, since the labeller reads the colour video of each camera.")
     durations = {}
 
     def length_of(r):
@@ -1064,12 +1500,27 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
         files = [root / r for _, r in e["cams"]]
         items.append({"kind": "video", "name": e["name"], "files": files,
                       "dir": (root / e["dir"]) if e["dir"] is not None else None,
-                      "cams": {c: root / r for c, r in e["cams"]}})
+                      "cams": {c: root / r for c, r in e["cams"]},
+                      "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}})
     for it in items:
         try:
             it["seconds"] = max((durations.get(Path(f).relative_to(root).as_posix()) or _duration(f)) for f in it["files"])
         except Exception:
             it["seconds"] = None          # unreadable header: measured on conversion, or reported as unreadable
+    # a table of numbers beside an episode's videos (FreeTacMan's Hold_10_traj.csv beside Hold_10_camera1.mp4): the CSVs
+    # in a folder of one episode, or the CSVs whose name gives the same take as the episode's videos (name_parts)
+    csvs = {}
+    for it in items:
+        d = Path(it["files"][0]).parent
+        csvs.setdefault(d, sorted(p for p in d.glob("*") if p.suffix.lower() in (".csv", ".tsv")
+                                  and p.stat().st_size <= TABLE_MAX_BYTES))
+    eps_in = {}
+    for it in items:
+        eps_in[Path(it["files"][0]).parent] = eps_in.get(Path(it["files"][0]).parent, 0) + 1
+    for it in items:
+        d = Path(it["files"][0]).parent
+        take = name_parts(Path(it["files"][0]).stem)["take"]
+        it["series"] = [p for p in csvs.get(d, []) if eps_in[d] == 1 or (take and name_parts(p.stem)["take"] == take)]
     folder = lambda it: Path(it["files"][0]).parent
     per_folder: dict[Path, int] = {}
     for it in items:
@@ -1078,10 +1529,10 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
         it["state"] = [Path(p) for p in det.get("state") or [] if Path(p).parent == folder(it) and per_folder[folder(it)] == 1]
     if det.get("state"):
         n = sum(1 for p in det["state"] if any(Path(p) in it["state"] for it in items))
-        det["used"].append(f"{n} MCAP file{'s' if n != 1 else ''} of recorded arm state, read with the videos beside "
-                           f"{'them' if n != 1 else 'it'}." if n else
+        det["used"].append(f"{n} MCAP file{'s' if n != 1 else ''} of recorded state and sensor data, read with the videos "
+                           f"beside {'them' if n != 1 else 'it'}." if n else
                            "The MCAP files hold no camera, and no folder holds them with the videos of one episode, so "
-                           "their recorded state was not read.")
+                           "their recorded data was not read.")
     return items
 
 
@@ -1151,20 +1602,27 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
     state = action = None
     descs, signals = {}, {}
-    if item.get("state") and rig == "teleop_arms":
+    if item.get("state"):
         from label import episode as me
         anchor = me.order_views(files)[0]
+        mcap_files = [p for p in item["state"] if Path(p).suffix.lower() == ".mcap"]
+        h5_files = [Path(p) for p in item["state"] if Path(p).suffix.lower() in H5_EXT]
         if real[anchor] is None:
             extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place the "
-                                   "recorded arm state against.")
+                                   "recorded " + ("arm state" if rig == "teleop_arms" else "sensor data") + " against.")
+        elif rig != "teleop_arms" or not mcap_files:
+            # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP and
+            # HDF5 files record, on the videos' clock (mcap_signals, h5_file_signals); there is no arm state to read
+            signals = mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals()
+            extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
         else:
-            streams = mcap_joint_streams(item["state"])
+            streams = mcap_joint_streams(mcap_files)
             state, action, note = joint_state(streams, real[anchor])
-            signals = mcap_signals(item["state"], real[anchor], state_fields(streams, state, action))
+            signals = mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action))
             if note:
                 extra["state_note"] = note
             elif state is not None:
-                extra["source"]["state"] = [p.name for p in item["state"]]
+                extra["source"]["state"] = [Path(p).name for p in mcap_files]
                 third = third_arms(streams)
                 if third:
                     extra["state_note"] = (f"The recording has a third arm ({', '.join(third)}) beside the left and "
@@ -1172,9 +1630,50 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                     # a scene camera whose name says it is on an arm, beside a third arm, is carried by that arm
                     if "exo" in files and is_mount_named(files["exo"][0]):
                         descs["exo"] = third_arm_camera_desc(third)
+        if real[anchor] is not None and h5_files:
+            more = h5_file_signals(h5_files, real[anchor], len(real[anchor]))
+            if not hasattr(signals, "meta"):
+                signals = Signals(signals)
+            for k, v in more.items():
+                signals[k] = v
+                signals.meta[k] = more.meta[k]
+            signals.left_out += more.left_out
+    if item.get("series"):
+        from label import episode as me
+        anchor = me.order_views(files)[0]
+        more = table_signals(item["series"], real.get(anchor), prs[anchor], extra)
+        if not hasattr(signals, "meta"):
+            signals = Signals(signals)
+        for k, v in more.items():
+            signals[k] = v
+            signals.meta[k] = more.meta[k]
+        signals.left_out += more.left_out
+    # each camera's depth video, when the folder has one beside its colour video (depth_videos), on the same clock. A
+    # depth video stored as an ordinary 8-bit picture (yuv, rgb) holds the recorder's shading, not distances: it is
+    # shown as a camera of its own and never decoded as depth
+    depth = {}
+    for v, (_, p) in list(files.items()):
+        dp = (item.get("depth") or {}).get(str(p))
+        if dp is None:
+            continue
+        try:
+            pr_d = probe_depth(dp)
+            n_d = len(pr_d["pts"])
+        except Exception:
+            pr_d, n_d = None, 0
+        if pr_d is not None and not str(pr_d["pix_fmt"] or "").startswith("gray"):
+            k = 1 + sum(1 for x in files if x.startswith("extra"))
+            files[f"extra{k}"] = (Path(dp).stem, Path(dp))
+            descs[f"extra{k}"] = (f"the depth of {files[v][0]}, stored by the recorder as an ordinary picture, with its "
+                                  "own shading of near and far")
+            prs[f"extra{k}"] = probe(Path(dp))
+            real[f"extra{k}"] = frame_times(Path(dp), len(prs[f"extra{k}"]["pts"]), depth=True)
+            continue
+        depth[v] = {"path": dp, "real": frame_times(Path(dp), n_d, depth=True) if n_d else None,
+                    "scale_m": depth_scale_from(Path(dp).parent), "source": Path(dp).name}
     ep = unique_dir(out, episode_name(item["name"]))
     return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
-                               descs=descs, signals=signals)
+                               descs=descs, signals=signals, depth=depth)
 
 
 # ---------------------------------------------------------------- LeRobot: reading a dataset root
@@ -1265,8 +1764,28 @@ def read_root(rdir: Path, rel: str) -> dict:
                        "frame rate from its timestamps.")
     else:
         used.append(f"LeRobot {version} metadata{where} (meta/info.json).")
-    cams = [k for k, f in feats.items() if f.get("dtype") == "video"]
-    image_cams = [k for k, f in feats.items() if f.get("dtype") == "image"]
+    feats = {k: dict(f) for k, f in feats.items()}
+    # an array's shape stated elsewhere in info.json (OpenTouch's export: "tactile": {"key": ..., "shape": [16, 16]})
+    def shapes(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("key"), str) and isinstance(x.get("shape"), list):
+                feats.setdefault(x["key"], {}).setdefault("shape", x["shape"])
+            for y in x.values():
+                shapes(y)
+    shapes({k: v for k, v in (info or {}).items() if k != "features"})
+    def side(f):
+        """The shorter side of an image feature, its channel axis (1, 3 or 4, first or last) left out; 0 when unknown."""
+        sh = [int(x) for x in (f.get("shape") or [])]
+        if len(sh) == 3:
+            sh = sh[1:] if sh[0] in (1, 3, 4) else sh[:2] if sh[2] in (1, 3, 4) else sh[:2]
+        return min(sh) if len(sh) == 2 else 0
+    # an image feature smaller than CAMERA_MIN_PX on a side is a reading, not a camera (the Inspire hand's per-pad pressure
+    # images of 3 x 3 to 14 x 8 cells): it is kept as a signal (recorded_signals)
+    image_signals = [k for k, f in feats.items() if f.get("dtype") == "image" and 0 < side(f) < CAMERA_MIN_PX]
+    is_depth = lambda k, f: bool((f.get("info") or {}).get("video.is_depth_map")) or bool(DEPTH_TOPIC.search(k))
+    depth_cams = [k for k, f in feats.items() if f.get("dtype") == "video" and is_depth(k, f)]
+    cams = [k for k, f in feats.items() if f.get("dtype") == "video" and k not in depth_cams]
+    image_cams = [k for k, f in feats.items() if f.get("dtype") == "image" and k not in image_signals]
     if not cams:
         on_disk = sorted({p.parent.name for p in vids_v2} if not v3 else {p.parent.parent.name for p in vids_v3})
         if on_disk:
@@ -1289,6 +1808,7 @@ def read_root(rdir: Path, rel: str) -> dict:
     annotated, annot_src = annotated_instructions(rdir / "meta")
     root = {"dir": str(rdir), "rel": rel, "info": info, "version": version, "v3": v3, "fps": fps,
             "robot_type": (info or {}).get("robot_type"), "features": feats, "cams": cams, "image_cams": image_cams,
+            "image_signals": image_signals, "depth_cams": depth_cams,
             "tasks_by_index": tasks_by_index, "annotated": annotated, "annot_src": annot_src,
             "used": used, "missing": missing, "episodes": [], "recordings": []}
     if v3:
@@ -1316,7 +1836,7 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
     for e in idx:
         row = rows.get(e, {})
         vids_e = {}
-        for key in root["cams"]:
+        for key in root["cams"] + root["depth_cams"]:
             p = vid_by.get(e, {}).get(key)
             if p is None and info.get("video_path"):
                 try:
@@ -1364,7 +1884,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         for e in sorted(eps, key=lambda r: int(scalar(r["episode_index"]))):
             eidx = int(scalar(e["episode_index"]))
             vids_e = {}
-            for key in root["cams"]:
+            for key in root["cams"] + root["depth_cams"]:
                 try:
                     mp4 = inside(rdir, rdir / rel_tpl.format(video_key=key, chunk_index=int(scalar(e[f"videos/{key}/chunk_index"])),
                                                              file_index=int(scalar(e[f"videos/{key}/file_index"]))))
@@ -1565,8 +2085,10 @@ def _read_episode_table(path: Path, eidx: int, columns: list[str] | None, exclud
 
 
 def _stack(col) -> np.ndarray | None:
+    """A column as (rows, values), each cell flattened; a cell that is a list of lists (a 16 x 16 pressure map, which
+    parquet gives as an array of arrays) is flattened in its own order."""
     try:
-        a = np.stack([np.asarray(x, dtype=np.float64).reshape(-1) for x in col.to_numpy()])
+        a = np.stack([np.asarray(_nested(x), dtype=np.float64).reshape(-1) for x in col.to_numpy()])
         return a if a.ndim == 2 and np.isfinite(a).all() else None
     except Exception:
         return None
@@ -1680,8 +2202,10 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
         if note or notes:
             ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
+        write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"]))
         return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
-                              signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"]))
+                              signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"],
+                                                       feats))
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
     # frames, so frames on the exact k/fps grid need no times; frames off it are decoded by their own pts and
     # timed by frame index, as the dataset defines them
@@ -1719,8 +2243,50 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
            **extra}
     if note or notes:
         ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
+    write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"]))
     return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
-                          signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"]))
+                          signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"],
+                                                   feats))
+
+
+def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int) -> tuple[dict, dict]:
+    """(depth.json entries, depth times) of a LeRobot episode's depth videos (features marked video.is_depth_map or named
+    depth), each with the camera whose name it shares once the depth words are left out, else the scene camera. Frames
+    are timed as LeRobot defines them, frame index over fps, from the episode's own window of a packed file."""
+    dep, tz = {}, {}
+    if not r.get("depth_cams") or not vmap:
+        return dep, tz
+    from label import episode as me
+    anchor = me.order_views(vmap)[0]
+    ta = np.arange(n) / float(fps or 30.0)
+    for key in r["depth_cams"]:
+        src = row["videos"].get(key)
+        if src is None:
+            continue
+        path, base, to = (src if isinstance(src, tuple) else (src, None, None))
+        words = camera_words(key)
+        v = next((v for v, k in vmap.items() if camera_words(k) == words), None) or anchor
+        if v in dep:
+            continue
+        try:
+            pr = probe_depth(Path(path))
+        except Exception:
+            continue
+        if not str(pr["pix_fmt"] or "").startswith("gray"):
+            continue                          # a depth feature stored in colour is a rendered picture, not distances
+        t_all = pr["pts"].astype(np.float64) * float(pr["time_base"])
+        sel = (t_all >= base - 1e-6) & (t_all < to - 1e-6) if base is not None else np.ones(len(t_all), dtype=bool)
+        if not sel.any():
+            continue
+        td = t_all[sel] - (base if base is not None else t_all[sel][0])
+        info = (r["features"].get(key) or {}).get("info") or {}
+        scale = next((float(x) for k, x in info.items() if DEPTH_SCALE_KEY.search(str(k).split(".")[-1])
+                      and isinstance(x, (int, float)) and 0 < x < 10), None)
+        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, key)
+        e.update(width=pr["width"], height=pr["height"], pix_fmt=pr["pix_fmt"])
+        dep[v] = e
+        tz.update(t)
+    return dep, tz
 
 
 def _used_columns(kind: str) -> set:
@@ -1764,12 +2330,14 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     extra = {**extra}
     extra["source"]["unused_cameras"] = unused
     extra["source"]["images_in_parquet"] = True
-    ctx = video_views_episode(ep, files, rig, dataset, extra)
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig)
+    # the table's other numbers go with the frames as they do beside videos (recorded_signals)
+    signals = recorded_signals(df, _used_columns(kind) | set(r["image_cams"]), 0, r["features"])
+    ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals)
     if state is not None and kind != "none" and len(state) == ctx["n_state_frames"]:
         ctx["state_kind"] = kind
         return finish_episode(ep, ctx, json.loads((ep / "sources.json").read_text()), state, action,
-                              times={k: v for k, v in np.load(ep / "times.npz").items()})
+                              times={k: v for k, v in np.load(ep / "times.npz").items()}, signals=signals)
     if rig != "ego_head":
         ctx["state_note"] = note or "Labelled from the video: the recorded state and the image frames cannot be lined up."
         (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
@@ -1809,6 +2377,461 @@ def plan_mcap(det: dict, root: Path) -> list[dict]:
         items.append({"kind": "mcap", "name": Path(f).relative_to(root).with_suffix("").as_posix(), "file": Path(f),
                       "seconds": secs, "topics": topics})
     return items
+
+
+# ---------------------------------------------------------------- HDF5
+
+# HDF5 has no schema for robot data, so it is read by what each array is, never by a list of dataset names:
+#   - a camera: uint8 frames (N, H, W, 3) or (N, H, W) at least CAMERA_MIN_PX on a side, or N encoded images (JPEG, PNG
+#     bytes); its name decides its slot as any camera's does (assign_views)
+#   - depth: (N, H, W) of 16-bit integers or floats, too large to be a signal (more than SIGNAL_MAX_VALUES pixels), or
+#     any such array named depth; it goes with the camera whose name it shares, else the scene camera
+#   - a clock: a rising 1-D (or N x 1) array named for time (time_s, timestamps, stamp, ts), read in seconds, ms, us or
+#     ns by its step; it times every array of its length in its group, then in the groups above it
+#   - a signal: every other numeric array with one row per sample (a 16 x 16 pressure map, 21 x 3 hand landmarks, a
+#     force vector), resampled onto the anchor camera's frames as an MCAP channel is (mcap_signals' rules)
+#   - text: strings, one-row records and attributes become the uploader's notes, and one named for the task
+#     (instruction, task, prompt, language) the instruction
+# Episodes: sibling groups that share one layout (OpenTouch's data/demo_287, robomimic's data/demo_0) are one episode
+# each; otherwise the file is one episode (ALOHA's episode_0.hdf5). A file with no camera beside videos holds the
+# videos' sensor data (a glove's pressure recorded beside a head camera), as an MCAP with no camera does.
+H5_EXT = {".h5", ".hdf5", ".hdf"}
+CAMERA_MIN_PX = 64
+H5_CONSTANT_MAX = 64              # a numeric array this small with no clock of its length is a setting, kept as a note
+H5_TIME_NAME = re.compile(r"(^|[_./])(time|times|timestamp|timestamps|stamp|stamps|ts|t)([_.]?(s|ns|us|ms|sec|secs))?$",
+                          re.I)
+H5_FPS_KEY = re.compile(r"^(fps|frame_?rate|frequency|freq|hz|rate|control_?freq)$", re.I)
+TASK_KEY = re.compile(r"(^|_)(instruction|task|task_description|language_instruction|language|prompt|goal)$", re.I)
+
+
+def _is_image_bytes(b) -> bool:
+    b = bytes(b[:8]) if b is not None else b""
+    return b.startswith(b"\xff\xd8") or b.startswith(b"\x89PNG")
+
+
+def _h5_bytes(x) -> bytes | None:
+    if isinstance(x, (bytes, bytearray, memoryview)):
+        return bytes(x)
+    if isinstance(x, np.ndarray) and x.dtype == np.uint8 and x.ndim == 1:
+        return x.tobytes()
+    if isinstance(x, np.void):
+        return bytes(x)
+    return None
+
+
+def _seconds(a: np.ndarray) -> np.ndarray:
+    """A clock in seconds from its step (one sample every 1 ms to 10 s), as frame_times reads a recorder's stamps."""
+    a = np.asarray(a, dtype=np.float64).ravel()
+    step = float(np.median(np.diff(a))) if len(a) > 1 else 0.0
+    if step > 0:
+        return a * (1e-9 if step > 1.5e6 else 1e-6 if step > 1.5e3 else 1e-3 if step > 1.5 else 1.0)
+    return a * (1e-9 if a[0] > 1e17 else 1e-6 if a[0] > 1e14 else 1e-3 if a[0] > 1e11 else 1.0)
+
+
+def h5_kind(name: str, ds) -> str | None:
+    """camera, depth, time, signal, text or None (empty, or nothing we read) for one HDF5 dataset."""
+    shape, dt = ds.shape, ds.dtype
+    if not shape or shape[0] < 1:
+        return "text" if dt.kind in "SUO" or dt.names else None
+    n = shape[0]
+    leaf = name.rsplit("/", 1)[-1]
+    if dt.kind == "O" or dt.kind == "V" and not dt.names or (dt.kind == "u" and dt.itemsize == 1 and len(shape) == 1
+                                                              and not H5_TIME_NAME.search(leaf)):
+        try:
+            first = _h5_bytes(ds[0])
+        except Exception:
+            first = None
+        if first is not None and _is_image_bytes(first):
+            return "camera"
+        if dt.kind == "O":
+            try:
+                return "text" if isinstance(ds[0], (str, bytes)) else None
+            except Exception:
+                return None
+    if dt.kind in "SU" or dt.names:
+        return "text"
+    if dt.kind not in "biuf":
+        return None
+    per = shape[1:]
+    if len(per) <= 1 and (not per or per[0] == 1) and n > 1 and H5_TIME_NAME.search(leaf):
+        a = np.asarray(ds[: min(n, 4096)], dtype=np.float64).ravel()
+        if np.all(np.diff(a) >= 0) and a[-1] > a[0]:
+            return "time"
+    if len(per) == 3 and per[2] in (3, 4) and dt == np.uint8 and min(per[:2]) >= CAMERA_MIN_PX:
+        return "camera"
+    if len(per) == 2 and min(per) >= CAMERA_MIN_PX:
+        if "depth" in leaf.lower() or "depth" in name.lower() or (int(np.prod(per)) > SIGNAL_MAX_VALUES and dt.kind in "uf"
+                                                                   and dt.itemsize >= 2):
+            return "depth"
+        if dt == np.uint8:
+            return "camera"
+    if int(np.prod(per)) <= SIGNAL_MAX_VALUES:
+        return "signal"
+    return None
+
+
+def _h5_datasets(g, base: str = "") -> list[tuple[str, object]]:
+    import h5py
+    out = []
+    for k in g:
+        try:
+            o = g[k]
+        except Exception:
+            continue
+        p = f"{base}/{k}" if base else k
+        if isinstance(o, h5py.Dataset):
+            out.append((p, o))
+        elif isinstance(o, h5py.Group):
+            out += _h5_datasets(o, p)
+    return out
+
+
+def h5_episodes(f) -> list[str]:
+    """The group paths of the file's episodes: the first level, from the root down, holding two or more sibling groups
+    with one layout (the same dataset paths under each); else [""], the whole file."""
+    import h5py
+
+    def layout(g):
+        return frozenset(p for p, _ in _h5_datasets(g))
+    queue = [("", f)]
+    while queue:
+        path, g = queue.pop(0)
+        kids = [(k, g[k]) for k in g if isinstance(g[k], h5py.Group)]
+        lays = {k: layout(kg) for k, kg in kids}
+        lays = {k: lay for k, lay in lays.items() if lay}
+        # siblings that share most of one layout are episodes: a demo that also records one more array (or one fewer)
+        # is still a demo, never dropped for it
+        similar = lambda a, b: len(a & b) * 2 >= max(len(a), len(b))
+        best = max(([k2 for k2, l2 in lays.items() if similar(l1, l2)] for l1 in lays.values()), key=len, default=[])
+        if len(best) >= 2:
+            return [f"{path}/{k}" if path else k for k in sorted(best, key=_natural)]
+        queue += [(f"{path}/{k}" if path else k, kg) for k, kg in kids]
+    return [""]
+
+
+def _natural(s: str):
+    return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", s)]
+
+
+def h5_fps(f, group: str) -> float | None:
+    """A frame rate the file states in the attributes of the episode's group or any group above it."""
+    parts = [p for p in group.split("/") if p]
+    for i in range(len(parts), -1, -1):
+        g = f["/".join(parts[:i])] if i else f
+        for k, v in g.attrs.items():
+            if H5_FPS_KEY.match(str(k)):
+                try:
+                    x = float(np.asarray(v).ravel()[0])
+                except Exception:
+                    continue
+                if 1 <= x <= 1000:
+                    return x
+    return None
+
+
+def h5_streams(f, group: str) -> dict:
+    """What one episode's group holds: {"camera": [...], "depth": [...], "signal": [...], "text": [...], "clock": {path:
+    seconds}}, each stream {"path", "name" (its path inside the episode), "n", "clock" (the path of the clock that times
+    it, or None)}."""
+    g = f[group] if group else f
+    items = _h5_datasets(g)
+    kinds = {p: h5_kind(p, ds) for p, ds in items}
+    clocks = {p: _seconds(ds[()]) for p, ds in items if kinds[p] == "time"}
+    out = {"camera": [], "depth": [], "signal": [], "text": [], "clock": clocks, "unused": []}
+    for p, ds in items:
+        k = kinds[p]
+        if k == "time":
+            continue
+        if k is None:
+            if ds.shape and ds.shape[0] > 1 and ds.dtype.kind in "biuf":
+                out["unused"].append(f"{p} ({' x '.join(map(str, ds.shape[1:]))} values per sample, more than the "
+                                     f"{SIGNAL_MAX_VALUES} a signal holds)")
+            continue
+        n = int(ds.shape[0]) if ds.shape else 0
+        if k == "signal" and not any(len(t) == n for t in clocks.values()) and ds.size <= H5_CONSTANT_MAX:
+            k = "text"                    # a calibration or a setting (a 4 x 4 transform), not a sample per frame
+        # the clock beside it with its length, in its own group first, then in each group above it
+        clock = None
+        parts = p.split("/")[:-1]
+        parent = lambda c: c.rsplit("/", 1)[0] if "/" in c else ""
+        for i in range(len(parts), -1, -1):
+            pre = "/".join(parts[:i])
+            cands = [c for c, t in clocks.items() if len(t) == n and parent(c) == pre]
+            if cands:
+                clock = sorted(cands)[0]
+                break
+        out[k].append({"path": f"{group}/{p}" if group else p, "name": p, "n": n, "clock": clock})
+    # names inside the episode: a group every camera and signal sits under (OpenTouch's data/demo_023/ in a file of one
+    # demo) says nothing about any one of them, so it is left off their names
+    timed = out["camera"] + out["depth"] + out["signal"]
+    if timed:
+        common = os.path.commonprefix([x["name"].split("/")[:-1] for x in timed])
+        if common:
+            cut = len("/".join(common)) + 1
+            for x in timed:
+                x["name"] = x["name"][cut:]
+    return out
+
+
+def h5_text(f, group: str, texts: list[dict]) -> tuple[str | None, dict]:
+    """(instruction, notes) from an episode's strings and records and the attributes of its group and the file."""
+    notes, instr = {}, None
+
+    def val(x):
+        if isinstance(x, bytes):
+            return x.decode("utf-8", "replace")
+        if isinstance(x, np.ndarray):
+            if x.dtype.names:
+                return [{n: val(r[n]) for n in x.dtype.names} for r in x.ravel()[:50]]
+            return [val(y) for y in x.ravel()[:50]] if x.size > 1 else val(x.ravel()[0]) if x.size else None
+        if isinstance(x, np.void) and x.dtype.names:
+            return {n: val(x[n]) for n in x.dtype.names}
+        if isinstance(x, np.generic):
+            return x.item()
+        return x
+    for s in texts:
+        try:
+            v = val(f[s["path"]][()])
+        except Exception:
+            continue
+        notes[s["name"]] = v
+        if instr is None and TASK_KEY.search(s["name"].rsplit("/", 1)[-1]) and isinstance(v, str) and 0 < len(v) < 400:
+            instr = v.strip()
+    if group:
+        # what the file keeps beside its episodes (a camera's calibration, a setting): small arrays and strings outside
+        # every episode group, as notes of each episode
+        eps = set(h5_episodes(f))
+        for p, ds in _h5_datasets(f):
+            if any(p == e or p.startswith(e + "/") for e in eps) or ds.size > H5_CONSTANT_MAX:
+                continue
+            try:
+                notes[f"file {p}"] = val(ds[()])
+            except Exception:
+                continue
+    for where, g in (("episode", f[group] if group else None), ("file", f)):
+        if g is None:
+            continue
+        for k, v in g.attrs.items():
+            v = val(v)
+            notes[f"{where} attribute {k}"] = v
+            if instr is None and TASK_KEY.search(str(k)) and isinstance(v, str) and 0 < len(v) < 400:
+                instr = v.strip()
+    return instr, notes
+
+
+def plan_hdf5(det: dict, root: Path) -> list[dict]:
+    """One item per episode of every HDF5 file (h5_episodes), with its length from its clocks or its stated rate."""
+    import h5py
+    items = []
+    for fpath in det["files"]:
+        try:
+            with h5py.File(fpath, "r") as f:
+                groups = h5_episodes(f)
+                for g in groups:
+                    st = h5_streams(f, g)
+                    cams = st["camera"]
+                    secs = None
+                    if cams:
+                        c0 = cams[0]
+                        if c0["clock"]:
+                            t = st["clock"][c0["clock"]]
+                            secs = float(t[-1] - t[0]) + (float(np.median(np.diff(t))) if len(t) > 1 else 0.0)
+                        else:
+                            secs = c0["n"] / (h5_fps(f, g) or 30.0)
+                    rel = Path(fpath).relative_to(root).with_suffix("").as_posix()
+                    items.append({"kind": "hdf5", "name": f"{rel}/{g.rsplit('/', 1)[-1]}" if g else rel,
+                                  "file": Path(fpath), "group": g, "seconds": secs, "has_camera": bool(cams)})
+        except Exception as e:
+            items.append({"kind": "hdf5", "name": Path(fpath).relative_to(root).with_suffix("").as_posix(),
+                          "file": Path(fpath), "group": "", "seconds": None, "has_camera": False,
+                          "error": f"the HDF5 file could not be opened ({type(e).__name__})"})
+    return items
+
+
+def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor: int) -> Signals:
+    """Every signal of an episode on the anchor camera's frames: by its own clock, as mcap_signals places a channel
+    (nearest sample, NaN where none is near, left out when it does not cover the footage), or, with no clock, one row
+    per anchor frame when it has as many rows as the anchor has frames."""
+    out = Signals()
+    q = np.asarray(q_abs, dtype=np.float64)
+    span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
+    for s in streams["signal"]:
+        ds = f[s["path"]]
+        if ds.dtype.kind not in "biuf":
+            continue
+        a = np.asarray(ds[()], dtype=np.float64)
+        shape = list(a.shape[1:])
+        a = a.reshape(len(a), -1) if a.ndim > 1 else a[:, None]
+        if not a.shape[1]:
+            continue
+        names = None
+        for key in ("names", "columns", "labels", "fields"):
+            if key in ds.attrs:
+                names = value_names([x.decode() if isinstance(x, bytes) else str(x) for x in np.asarray(ds.attrs[key]).ravel()],
+                                    a.shape[1])
+                break
+        if s["clock"]:
+            t = streams["clock"][s["clock"]]
+            if span <= 0 or len(t) < 2:
+                continue
+            if t[0] > q[0] + STATE_EDGE_SLACK_S or t[-1] < q[-1] - STATE_EDGE_SLACK_S:
+                out.left_out.append((s["name"], f"recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, not over "
+                                                "the whole footage"))
+                continue
+            v, var, n_gaps = place_on_frames(t, a, q)
+            far = np.zeros(len(q), dtype=bool)
+            far[:n_gaps] = True               # only its count is kept (meta "gaps")
+            rate = len(t) / max(float(t[-1] - t[0]), 1e-9)
+            if var is not None and a.shape[1] <= VARIATION_MAX_VALUES and _variation_matters(v, var):
+                out.add(f"{s['name']} variation within each frame", var, shape=shape if len(shape) > 1 else None,
+                        names=names, source=f"HDF5 dataset {s['path']}")
+                out.meta[f"{s['name']} variation within each frame"]["variation_of"] = s["name"]
+        elif len(a) == n_anchor:
+            v, rate, far, var = a, fps, None, None
+        else:
+            out.left_out.append((s["name"], f"{len(a)} rows and no clock, while the camera has {n_anchor} frames"))
+            continue
+        if not np.isfinite(v[~np.isnan(v).all(axis=1)] if np.isnan(v).any() else v).all():
+            out.left_out.append((s["name"], "values that are not finite numbers"))
+            continue
+        out.add(s["name"], v, shape=shape if len(shape) > 1 else None, names=names, source=f"HDF5 dataset {s['path']}")
+        if rate:
+            out.meta[s["name"]]["rate_hz"] = round(float(rate), 2)
+        if far is not None and far.any():
+            out.meta[s["name"]]["gaps"] = int(far.sum())
+    return out
+
+
+def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
+    """One HDF5 episode: its cameras written to H.264 at their frame times (encoded images as they are decoded, raw
+    frames as they are), its depth to 16-bit FFV1, every signal on the anchor camera's frames, and its text as the
+    instruction and the uploader's notes (h5_streams says what each array is)."""
+    import h5py
+    from PIL import Image
+    if item.get("error"):
+        raise ValueError(item["error"])
+    ep = unique_dir(out, episode_name(item["name"]))
+    ep.mkdir(parents=True, exist_ok=True)
+    with h5py.File(item["file"], "r") as f:
+        g = item["group"]
+        st = h5_streams(f, g)
+        if not st["camera"]:
+            raise ValueError("the HDF5 episode has no camera (no image frames or encoded images)")
+        fps = h5_fps(f, g)
+        names = [c["name"] for c in st["camera"]]
+        vmap, unused = pick_cameras(names, rig, names + [d["name"] for d in st["depth"]])
+        by_name = {c["name"]: c for c in st["camera"]}
+
+        def times_of(s):
+            if s["clock"]:
+                return st["clock"][s["clock"]]
+            return np.arange(s["n"]) / (fps or 30.0)
+        chosen = {v: by_name[nm] for v, nm in vmap.items()}
+        t0 = min(float(times_of(s)[0]) for s in chosen.values())
+        files, real = {}, {}
+        for v, s in chosen.items():
+            ds = f[s["path"]]
+            t = times_of(s)
+            w = FrameWriter(ep / f"{v}.mp4", "")
+            for i in range(s["n"]):
+                x = ds[i]
+                b = _h5_bytes(x) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
+                if b is not None:
+                    w.add(float(t[i] - t0), b)
+                else:
+                    a = np.asarray(x)
+                    w.add_image(float(t[i] - t0), Image.fromarray(a if a.ndim == 3 else a.astype(np.uint8)).convert("RGB"))
+            if not w.close():
+                unused.append(f"{s['name']} (no frame could be decoded)")
+                continue
+            files[v] = (s["name"], ep / f"{v}.mp4")
+        if not files:
+            raise ValueError("no frame of the HDF5 episode's cameras could be decoded")
+        from label import episode as me
+        anchor = me.order_views(files)[0]
+        q_abs = times_of(chosen[anchor])
+        # depth: with the camera whose name it shares, else the anchor camera
+        depth = {}
+        for d in st["depth"]:
+            words = set(tokens(d["name"])) - NON_COLOUR - GENERIC_VIDEO_WORDS
+            v = next((v for v, (nm, _) in files.items() if words and words <= set(tokens(nm))), None) or \
+                (anchor if anchor not in depth else None)
+            if v is None or v in depth:
+                unused.append(f"{d['name']} (depth with no camera of its own)")
+                continue
+            ds = f[d["path"]]
+            t = times_of(d)
+            scale = 1.0 if ds.dtype.kind == "f" else depth_scale_attr(ds)
+            dw = DepthWriter(ep / f"depth_{v}.mkv")
+            for i in range(d["n"]):
+                dw.add(float(t[i] - t0), ds[i], scale)
+            if dw.close():
+                depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": d["name"]}
+        signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
+        instr, notes = h5_text(f, g, st["text"])
+    extra = {"task_label": [item["name"]],
+             "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
+    if st["unused"]:
+        extra["source"]["unused_arrays"] = st["unused"]
+    if not chosen[anchor]["clock"]:
+        extra["source"]["clock_note"] = (f"the file gives no frame times, so frames are {fps:g} per second as it states"
+                                         if fps else "the file gives no frame times or rate, so 30 frames per second "
+                                                     "was assumed")
+    if instr:
+        extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the HDF5 file.")
+    if notes:
+        extra["uploader_annotation"] = annotation_text(notes)
+    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth)
+
+
+def depth_scale_attr(ds) -> float | None:
+    """Metres per unit from a depth dataset's own attributes (depth_scale, units "mm" or "m"), else None."""
+    for k, v in ds.attrs.items():
+        if DEPTH_SCALE_KEY.search(str(k)):
+            try:
+                x = float(np.asarray(v).ravel()[0])
+                if 0 < x < 10:
+                    return x
+            except Exception:
+                pass
+        if str(k).lower() in ("unit", "units"):
+            u = (v.decode() if isinstance(v, bytes) else str(v)).strip().lower()
+            if u in ("mm", "millimeter", "millimeters", "millimetre", "millimetres"):
+                return 0.001
+            if u in ("m", "meter", "meters", "metre", "metres"):
+                return 1.0
+    return None
+
+
+def h5_has_camera(path: Path) -> bool:
+    import h5py
+    try:
+        with h5py.File(path, "r") as f:
+            return any(h5_kind(p, ds) == "camera" for p, ds in _h5_datasets(f))
+    except Exception:
+        return False
+
+
+def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Signals:
+    """Every signal of HDF5 files that hold no camera, placed on videos' frame times (q_abs, the recorder's clock):
+    a glove's pressure and hand pose recorded beside a head camera. Only arrays with their own clock can be placed."""
+    import h5py
+    out = Signals()
+    for p in paths:
+        try:
+            with h5py.File(p, "r") as f:
+                st = h5_streams(f, "")
+                got = h5_signals(f, {**st, "signal": [s for s in st["signal"] if s["clock"]]}, q_abs, None, n_anchor)
+                for k, v in got.items():
+                    name = f"{p.stem} {k}" if len(paths) > 1 else k
+                    out[name] = v
+                    out.meta[name] = got.meta[k]
+                out.left_out += got.left_out
+                out.left_out += [(s["name"], "no clock to place it against the videos") for s in st["signal"]
+                                 if not s["clock"]]
+        except Exception as e:
+            out.left_out.append((p.name, f"could not be read ({type(e).__name__})"))
+    return out
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
@@ -2027,9 +3050,12 @@ def _is_num(x) -> bool:
 
 
 def _numbers(m, path: str = "") -> dict:
-    """{name: (values, set)} for the numbers of one decoded message (JSON, Protobuf, ROS): a repeated numeric field is
-    one vector under its path, the scalars of one (sub)message one vector under that message's path, set when any of
-    them was written (_msg_items). Strings, bytes, lists of messages and the message's own stamps are left out."""
+    """{name: (values, set, value names, shape)} for the numbers of one decoded message (JSON, Protobuf, ROS): a repeated
+    numeric field is one vector under its path, the scalars of one (sub)message one vector under that message's path
+    (each value named by its field, so a position reads x, y, z), set when any of them was written (_msg_items). A
+    repeated field of messages (the 21 joints of a tracked hand as a list of poses, the taxels of a glove as a list of
+    readings) is one array under its path, shaped (count, numbers per element), when every element carries the same
+    numbers. Strings, bytes and the message's own stamps are left out."""
     out = {}
     for k, v, was_set in _msg_items(m):
         k = str(k)
@@ -2037,24 +3063,128 @@ def _numbers(m, path: str = "") -> dict:
             continue
         p = f"{path}.{k}" if path else k
         if _is_num(v):
-            vals, seen = out.get(path, ([], False))
-            out[path] = (vals + [float(v)], seen or was_set)
+            vals, seen, names, _ = out.get(path, ([], False, [], None))
+            out[path] = (vals + [float(v)], seen or was_set, names + [k], None)
         elif v is None or isinstance(v, (str, bytes, bytearray, memoryview)):
             continue
         elif hasattr(v, "__len__") and not isinstance(v, dict) and not hasattr(v, "DESCRIPTOR"):
             vals = list(v)
             if vals and all(_is_num(x) for x in vals):
-                out[p] = ([float(x) for x in vals], True)
+                out[p] = ([float(x) for x in vals], True, None, None)
+            elif vals and all(_is_num(y) for x in vals if isinstance(x, (list, tuple)) for y in x) \
+                    and all(isinstance(x, (list, tuple)) and len(x) == len(vals[0]) and len(x) for x in vals):
+                out[p] = ([float(y) for x in vals for y in x], True, None, (len(vals), len(vals[0])))
+            elif vals:
+                rows = [_flat_numbers(x) for x in vals]
+                if rows[0] and all(r is not None and [n for n, _ in r] == [n for n, _ in rows[0]] for r in rows):
+                    per = [n for n, _ in rows[0]]
+                    out[p] = ([x for r in rows for _, x in r], True, [f"{i}.{n}" for i in range(len(rows)) for n in per],
+                              (len(rows), len(per)))
         else:
             out.update(_numbers(v, p))
     return out
 
 
-def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> dict:
-    """{name: (len(q), dims) array} of every numeric field these MCAP files record on channels that are not cameras
+def _flat_numbers(m) -> list[tuple[str, float]] | None:
+    """[(name, value)] of every number in one element of a repeated field of messages, in field order (position.x,
+    position.y, ...), or None when it holds none."""
+    if _is_num(m):
+        return [("value", float(m))]
+    flat = []
+    for path, (vals, _seen, names, _shape) in _numbers(m).items():
+        flat += [(f"{path}.{n}" if path else str(n), x) for n, x in zip(names or range(len(vals)), vals)]
+    return flat or None
+
+
+SAMPLE_RATE_KEY = re.compile(r"^(sample_?rate|sampling_?rate|sample_?freq(uency)?|fs)$", re.I)
+SAMPLES_MIN = 32           # a vector this long beside a sample rate is samples in time (audio), not channels
+MUX_MAX_VALUES = 8         # a field with at most this many integer values that keeps switching names the sensor
+VARIATION_MAX_VALUES = 64  # a fast signal this wide or narrower also gets its variation within each frame
+VARIATION_MIN_SHARE = 0.05  # kept only when it reaches this share of the signal's own range somewhere in the episode
+COUNTER_MIN_MESSAGES = 20  # a value must rise at this many messages in a row to be taken for a counter or a clock
+
+
+def place_on_frames(t: np.ndarray, v: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, np.ndarray | None, int]:
+    """(values, variation within each frame or None, frames with no reading) of samples (t seconds, v rows) on frame
+    times q. A sensor no faster than twice the frame rate gives each frame its nearest sample, and a frame with no
+    sample near it is NaN rather than the last value held. A faster sensor gives each frame the mean of the samples in
+    its interval and their standard deviation, so a vibration or a slip between two frames is not lost by picking one
+    sample; a frame whose interval holds no sample is NaN."""
+    t, q = np.asarray(t, dtype=np.float64), np.asarray(q, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    dq = float(np.median(np.diff(q))) if len(q) > 1 else 1 / 30
+    rate = len(t) / max(float(t[-1] - t[0]), 1e-9) if len(t) > 1 else 0.0
+    if rate <= 2.0 / dq:
+        idx = nearest(t, q)
+        a = v[idx].copy()
+        far = np.abs(t[idx] - q) > max(2.5 * float(np.median(np.diff(t))) if len(t) > 1 else 0.0, 2.5 * dq)
+        a[far] = np.nan
+        return a, None, int(far.sum())
+    edges = np.concatenate([[q[0] - dq / 2], (q[1:] + q[:-1]) / 2, [q[-1] + dq / 2]])
+    bin_ = np.searchsorted(edges, t, side="right") - 1
+    ok = (bin_ >= 0) & (bin_ < len(q))
+    n = np.bincount(bin_[ok], minlength=len(q)).astype(np.float64)
+    tot = np.zeros((len(q), v.shape[1]))
+    sq = np.zeros((len(q), v.shape[1]))
+    np.add.at(tot, bin_[ok], v[ok])
+    np.add.at(sq, bin_[ok], v[ok] ** 2)
+    with np.errstate(all="ignore"):
+        mean = tot / n[:, None]
+        std = np.sqrt(np.maximum(sq / n[:, None] - mean ** 2, 0.0))
+    mean[n == 0] = np.nan
+    std[n == 0] = np.nan
+    return mean, std, int((n == 0).sum())
+
+
+def _variation_matters(a: np.ndarray, var: np.ndarray, samples: bool = False) -> bool:
+    """Whether a fast signal's variation within frames is worth a signal of its own: it is where a vibration or a slip
+    shows, so it is kept for a signal that behaves like touch (label/signals.py touch_like) or the loudness of samples
+    in time (a contact microphone), and there only when it reaches VARIATION_MIN_SHARE of the signal's own range
+    somewhere in the episode. An IMU's or a pose's jitter between frames is left out."""
+    from label import signals as sg
+    if not samples and not sg.touch_like(a):
+        return False
+    with np.errstate(all="ignore"):
+        rng = np.nanmax(a, axis=0) - np.nanmin(a, axis=0)
+        top = np.nanmax(var, axis=0)
+    ok = np.isfinite(rng) & np.isfinite(top) & (rng > 0)
+    return bool(ok.any() and (top[ok] >= VARIATION_MIN_SHARE * rng[ok]).any())
+
+
+def _counters(r: dict) -> list[int]:
+    """The values of a row that count up message by message (a device's clock or sequence number): bookkeeping."""
+    v = np.asarray(r["v"], dtype=np.float64)
+    if len(v) < COUNTER_MIN_MESSAGES:
+        return []
+    d = np.diff(v, axis=0)
+    # whole numbers that never fall and rise at nearly every message (a device clock can stamp two messages alike)
+    return [int(i) for i in range(v.shape[1]) if np.all(v[:, i] == np.round(v[:, i])) and (d[:, i] >= 0).all()
+            and (d[:, i] > 0).mean() >= 0.9]
+
+
+def _multiplexed(r: dict) -> int | None:
+    """The value of a row that says which sensor each message is from (an IMU topic whose `type` is 1 for the
+    accelerometer, 2 for the gyroscope): integers, at most MUX_MAX_VALUES of them, switching between at least a tenth of
+    consecutive messages. None when no value does."""
+    v = np.asarray(r["v"], dtype=np.float64)
+    if len(v) < 10 or v.shape[1] < 2:
+        return None
+    for i in range(v.shape[1]):
+        c = v[:, i]
+        vals = np.unique(c)
+        if 2 <= len(vals) <= MUX_MAX_VALUES and np.all(vals == np.round(vals)) and (np.diff(c) != 0).mean() >= 0.1:
+            return i
+    return None
+
+
+def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> Signals:
+    """{name: (len(q), values) array} of every numeric field these MCAP files record on channels that are not cameras
     or text, sampled at the recorded message nearest each anchor frame time q (seconds, the files' log-time clock).
     used {topic: fields already read, or None for the whole channel} keeps out what the reader already shows as the
-    state. The name is the topic, then the field path ("/robot0/sensor/imu angular_velocity")."""
+    state. The name is the topic, then the field path ("/robot0/sensor/imu angular_velocity"); each signal keeps its
+    values' names and its shape (Signals.meta), and a field that is read but not kept is named with the reason
+    (Signals.left_out): too few messages to be a per-frame record, not covering the footage, values that are not
+    finite, or wider than SIGNAL_MAX_VALUES."""
     from mcap.reader import make_reader
     used, facs = used or {}, _decoders()
     q = np.asarray(q, dtype=np.float64)
@@ -2065,34 +3195,121 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
         decs = {}
         with open(p, "rb") as fh:
             try:
-                for schema, ch, msg in make_reader(fh).iter_messages(topics=chans, log_time_order=True):
+                try:
+                    has_summary = make_reader(fh).get_summary() is not None
+                except Exception:
+                    has_summary = False
+                fh.seek(0)
+                # a recording cut off before its index is read message by message (_mcap_stream)
+                msgs = make_reader(fh).iter_messages(topics=chans, log_time_order=True) if has_summary \
+                    else _mcap_stream(p, set(chans))
+                for schema, ch, msg in msgs:
                     if ch.id not in decs:
                         decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
                     try:
                         nums = _numbers(decs[ch.id](msg.data)) if decs[ch.id] else {}
                     except Exception:
                         nums = {}
-                    for field, (vals, was_set) in nums.items():
+                    for field, (vals, was_set, names, shape) in list(nums.items()):
                         if field in (used.get(ch.topic) or ()):
                             continue
-                        r = rows.setdefault(f"{ch.topic} {field}".strip(), {"t": [], "v": [], "d": len(vals), "set": False})
+                        # samples in time beside a sample rate (a contact microphone's 512 samples at 48 kHz): kept as
+                        # their loudness, root mean square and peak, not as 512 channels
+                        parent = field.rsplit(".", 1)[0] if "." in field else ""
+                        sib = nums.get(parent) if parent != field else None
+                        rate = next((x for n_, x in zip((sib or [None, None, []])[2] or [], (sib or [[]])[0])
+                                     if SAMPLE_RATE_KEY.match(str(n_))), None) if sib else None
+                        kind = None
+                        if rate and len(vals) >= SAMPLES_MIN and shape is None:
+                            x = np.asarray(vals, dtype=np.float64)
+                            vals, names, kind = [float(np.sqrt(np.mean(x ** 2))), float(np.max(np.abs(x)))], \
+                                ["root mean square", "peak"], {"kind": "samples", "sample_rate": float(rate)}
+                        r = rows.setdefault(f"{ch.topic} {field}".strip(), {"t": [], "v": [], "d": len(vals), "set": False,
+                                                                            "names": names, "shape": shape,
+                                                                            "topic": ch.topic, "kind": kind})
                         if len(vals) == r["d"]:
                             r["t"].append(msg.log_time / 1e9)
                             r["v"].append(vals)
                             r["set"] |= was_set
             except Exception:
                 pass                                  # a cut-off file: the messages before the cut are kept
-    out = {}
+    # bookkeeping values (a counter, a device clock) leave the row; a row that names its sensor per message is split
+    out = Signals()
+
+    def no_counters(name, r):
+        cnt = _counters(r)
+        if not cnt:
+            return r
+        nm = r["names"] or [f"[{i}]" for i in range(r["d"])]
+        keep = [i for i in range(r["d"]) if i not in cnt]
+        out.left_out.append((f"{name} " + ", ".join(str(nm[i]) for i in cnt),
+                             "rises at every message, so a counter or a clock rather than a reading"))
+        if not keep:
+            return None
+        return {**r, "v": [[row[i] for i in keep] for row in r["v"]], "d": len(keep),
+                "names": [nm[i] for i in keep] if r["names"] else None, "shape": None}
+    split = {}
+    for name, r in rows.items():
+        if not r["v"]:
+            split[name] = r
+            continue
+        r = no_counters(name, r)
+        if r is None:
+            continue
+        mux = _multiplexed(r)
+        if mux is None:
+            split[name] = r
+            continue
+        nm = r["names"] or [f"[{i}]" for i in range(r["d"])]
+        v = np.asarray(r["v"])
+        t = np.asarray(r["t"])
+        for val in np.unique(v[:, mux]):
+            sel = v[:, mux] == val
+            keep = [i for i in range(r["d"]) if i != mux]
+            sub = f"{name} ({nm[mux]} {int(val)})"
+            part = no_counters(sub, {**r, "t": list(t[sel]), "v": v[sel][:, keep].tolist(), "d": len(keep),
+                                     "names": [nm[i] for i in keep] if r["names"] else None, "shape": None})
+            if part is not None:
+                split[sub] = part
+    rows = split
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
+    sparse = []
     for name, r in rows.items():
         t = np.asarray(r["t"])
-        if not r["set"] or len(t) < 2 or not 0 < r["d"] <= SIGNAL_MAX_DIMS or span <= 0 or len(t) / span < SIGNAL_MIN_HZ:
+        if not r["set"] or not r["d"] or span <= 0:
+            continue
+        if len(t) < 2 or len(t) / span < SIGNAL_MIN_HZ:
+            sparse.append(name)               # a setting, a calibration or a status report, not a per-frame record
+            continue
+        if r["d"] > SIGNAL_MAX_VALUES:
+            out.left_out.append((name, f"{r['d']} values per message, more than the {SIGNAL_MAX_VALUES} a signal holds"))
             continue
         if t[0] > q[0] + STATE_EDGE_SLACK_S or t[-1] < q[-1] - STATE_EDGE_SLACK_S:
+            out.left_out.append((name, f"recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, not over the whole "
+                                       "footage"))
             continue
         v = np.asarray(r["v"], dtype=np.float64)
-        if np.isfinite(v).all():
-            out[name] = v[nearest(t, q)]
+        if not np.isfinite(v).all():
+            out.left_out.append((name, "values that are not finite numbers"))
+            continue
+        rate = len(t) / max(float(t[-1] - t[0]), 1e-9)
+        # a frame with no message near it (a hand the tracker lost, a sensor that paused) is NaN, not the last value
+        # held; a sensor faster than the camera gives each frame the mean of its interval (place_on_frames)
+        a, var, gaps = place_on_frames(t, v, q)
+        out.add(name, a, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
+        out.meta[name]["rate_hz"] = round(rate, 2)
+        if r.get("kind"):
+            out.meta[name].update(r["kind"])
+        if gaps:
+            out.meta[name]["gaps"] = gaps
+        if var is not None and a.shape[1] <= VARIATION_MAX_VALUES and _variation_matters(a, var, bool(r.get("kind"))):
+            vn = f"{name} variation within each frame"
+            out.add(vn, var, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
+            out.meta[vn].update(rate_hz=round(rate, 2), variation_of=name)
+    if sparse:
+        out.left_out.append((", ".join(sparse[:6]) + (f" and {len(sparse) - 6} more" if len(sparse) > 6 else ""),
+                             f"fewer than {SIGNAL_MIN_HZ:g} message per second, so settings or reports rather than a "
+                             "per-frame record"))
     return out
 
 
@@ -2299,8 +3516,18 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     all_topics = [t for t, _ in chan_topics]
     vmap, unused = pick_cameras(video_topics, rig, all_topics)
     text_topics = sorted({t for t in all_topics if TEXT_TOPIC.search(t) and t not in video_topics})
-    want = set(vmap.values()) | set(text_topics)
+    # depth image channels, each with the camera whose topic it shares the most of (depth_partner), one per camera
+    depth_of = {}
+    for t, sname in sorted(chan_topics):
+        if CAMERA_SCHEMA.search(sname) and DEPTH_TOPIC.search(t) and t not in vmap.values():
+            v = depth_partner(t, vmap)
+            if v is not None and v not in depth_of.values():
+                depth_of[t] = v
+            else:
+                unused.append(f"{t} (depth with no camera of its own)")
+    want = set(vmap.values()) | set(text_topics) | set(depth_of)
     view_of_topic = {t: v for v, t in vmap.items()}
+    dwriters: dict[str, DepthWriter] = {}
     writers: dict[str, FrameWriter] = {}
     texts: dict[str, list] = {}               # topic: its messages in time order, (log time ns, text) (add_text)
     n_text: dict[str, int] = {}
@@ -2320,6 +3547,16 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     undecodable.add(f"{ch.topic} ({ch.message_encoding})")
                     continue
                 dec = decs[ch.id](msg.data)
+                if ch.topic in depth_of:
+                    if t0 is None:
+                        continue                  # depth before the first colour frame has no frame to go with
+                    got = depth_image(dec)
+                    if got is not None:
+                        dw = dwriters.get(ch.topic)
+                        if dw is None:
+                            dw = dwriters[ch.topic] = DepthWriter(ep / f"depth_{depth_of[ch.topic]}.mkv")
+                        dw.add((int(msg.log_time) - t0) / 1e9, got[0], got[1])
+                    continue
                 if ch.topic in view_of_topic:
                     t0 = int(msg.log_time) if t0 is None else t0          # every camera on the recording's one clock
                     w = writers.get(ch.topic)
@@ -2342,6 +3579,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             # a damaged tail (recording cut off): keep every frame read before it
             item.setdefault("notes", []).append("The file ends early; every frame before the cut was used.")
     counts = {t: w.close() for t, w in writers.items()}
+    depth = {}
+    for t, dw in dwriters.items():
+        if dw.close() and depth_of[t] in vmap:
+            depth[depth_of[t]] = {"path": ep / f"depth_{depth_of[t]}.mkv", "real": None, "scale_m": dw.scale_m,
+                                  "source": t}
     missing = [t for t in vmap.values() if not counts.get(t)]
     if missing and len(missing) == len(vmap):
         encodings = sorted({u.rsplit(" (", 1)[-1].rstrip(")") for u in undecodable})
@@ -2382,7 +3624,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         state, action, note = joint_state(streams, q)
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)
-    signals = mcap_signals([item["file"]], q, used) if item["seconds"] is not None else {}
+    signals = mcap_signals([item["file"]], q, used)
     # motion the file records but this reader does not use (hand, body or camera poses in a human recording, joints
     # in a layout the checks do not read): named on the job page, so a missing check is never a silent gap
     motion = [t for t in item["topics"] if re.search(r"hand|pose|slam|body|joint|odom|/tf$", t, re.I)
@@ -2412,7 +3654,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, state=state, action=action,
-                               signals=signals)
+                               signals=signals, depth={v: d for v, d in depth.items() if v in files})
 
 
 def nal_units(b: bytes):
@@ -2610,11 +3852,87 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
             det["missing"].append("Some MCAP files end early, before their index; they were scanned message by message.")
         _mark_packaging(det, items)
         return det, items
+    if det["format"] == "hdf5":
+        items = plan_hdf5(det, root)
+        nf = len(det["files"])
+        det["used"].append(f"{nf} HDF5 file{'s' if nf != 1 else ''}, {len(items)} episode{'s' if len(items) != 1 else ''}.")
+        _mark_packaging(det, items)
+        return det, items
     items = plan_video(det, root, grouping)
     det["used"].append(f"{len(items)} video episodes." if len(items) != 1
                        else "1 video episode.")
     _mark_packaging(det, items)
     return det, items
+
+
+TABLE_EXT = {".csv", ".tsv", ".jsonl"}
+TABLE_MAX_BYTES = 20_000_000
+TABLE_MAX_ROWS_PER_EPISODE = 20
+
+
+def annotation_tables(root: Path) -> list[tuple[str, list[dict]]]:
+    """[(file name, rows)] of every table in the upload (CSV, TSV, JSON Lines, at most TABLE_MAX_BYTES each): a dataset's
+    per-episode metadata kept beside its data (OpenTouch's final_annotations/eat_ygf_p1_merged.csv, one row per clip
+    with its object, action, grip and description)."""
+    import csv
+    out = []
+    for p in files_under(root):
+        if p.suffix.lower() not in TABLE_EXT or p.stat().st_size > TABLE_MAX_BYTES:
+            continue
+        try:
+            if p.suffix.lower() == ".jsonl":
+                rows = [r for r in read_jsonl(p) if isinstance(r, dict)]
+            else:
+                with open(p, newline="", errors="replace") as fh:
+                    rows = list(csv.DictReader(fh, delimiter="\t" if p.suffix.lower() == ".tsv" else ","))
+        except Exception:
+            continue
+        if rows:
+            out.append((p.relative_to(root).as_posix(), rows))
+    return out
+
+
+def table_rows_for(tables: list, item: dict) -> list[dict]:
+    """The rows of the upload's tables that name this episode: a cell holding its file's name and, for an episode that
+    is one group of a file, that group's name too (eat_ygf_p1::demo_00 names demo_00 of eat_ygf_p1.hdf5), as a whole
+    word. Rows that name every episode alike (a file shared by all) are not one episode's."""
+    parts = [x for x in str(item["name"]).split("/") if x]
+    if not parts:
+        return []
+    need = [parts[-1]] if len(parts) == 1 else [parts[-2], parts[-1]]
+    if item.get("kind") == "hdf5" and item.get("group"):
+        need = [Path(item["file"]).stem, item["group"].rsplit("/", 1)[-1]]
+    pats = [re.compile(r"(^|[^A-Za-z0-9])" + re.escape(w) + r"($|[^A-Za-z0-9])") for w in need]
+    got = []
+    for name, rows in tables:
+        for r in rows:
+            cells = [str(v) for v in r.values() if isinstance(v, (str, int, float)) and str(v)]
+            if all(any(pt.search(c) for c in cells) for pt in pats):
+                got.append({"table": name, **{k: v for k, v in r.items() if v not in (None, "")}})
+    return got[:TABLE_MAX_ROWS_PER_EPISODE] if 0 < len(got) <= TABLE_MAX_ROWS_PER_EPISODE * 5 else []
+
+
+def add_table_notes(ep: Path, ctx: dict, rows: list[dict]) -> dict:
+    """The table rows that name an episode, added to its uploader notes (claims the model checks against the video),
+    and a task text among them (a column named for the task) as its instruction when it has none."""
+    if not rows:
+        return ctx
+    prev = ctx.get("uploader_annotation")
+    try:
+        prev = json.loads(prev) if prev else prev          # notes already written as JSON stay one object, not a string
+    except (TypeError, ValueError):
+        pass
+    ctx["uploader_annotation"] = annotation_text({"notes": prev, "table rows": rows} if prev else {"table rows": rows})
+    if not ctx.get("instruction"):
+        task = next((str(v).strip() for r in rows for k, v in r.items() if TASK_KEY.search(str(k))
+                     and isinstance(v, str) and 0 < len(v.strip()) < 400), None)
+        if task:
+            ctx["instruction"] = task
+            ctx["instruction_note"] = "This instruction is the task text in a table the uploader sent with the episode."
+            (ep / "instruction.txt").write_text(task + "\n")
+    ctx.setdefault("source", {})["tables"] = sorted({r["table"] for r in rows})
+    (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    return ctx
 
 
 def _mark_packaging(det: dict, items: list[dict]) -> None:
@@ -2662,6 +3980,7 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
               "used": opened + list(det.get("used") or []), "missing": list(det.get("missing") or [])}
     if det.get("packaging"):
         report["packaging"] = det["packaging"]
+    tables = annotation_tables(root)
     for i, it in enumerate(items):
         known = it["seconds"] if it["seconds"] is not None else 0.0      # unknown until converted; measured below
         first = not report["episodes"]
@@ -2677,12 +3996,16 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
                 ctx = convert_recording(it, rig, out, dataset)
             elif it["kind"] == "mcap":
                 ctx = convert_mcap(it, rig, out, dataset)
+            elif it["kind"] == "hdf5":
+                ctx = convert_hdf5(it, rig, out, dataset)
             else:
                 ctx = convert_video(it, rig, out, dataset)
         except Exception as e:
             report["failed"].append({"name": it["name"], "why": plain_error(e)})
             print(f"convert: {it['name']}: {type(e).__name__}: {e}", file=sys.stderr)
             continue
+        if tables:
+            ctx = add_table_notes(out / ctx["episode_id"], ctx, table_rows_for(tables, it))
         secs = float(ctx.get("duration_s") or ctx["n_state_frames"] / float(ctx["fps"]))
         if first and secs > max_seconds + 1:
             # one recording longer than the whole limit: its first max_seconds are labelled, never nothing
@@ -2706,8 +4029,121 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     notes = sorted({e["state_note"] for e in report["episodes"] if e.get("state_note")})
     report["notes"] += notes
     report["seconds"] = round(total, 2)
-    measure_gripper_range(out, [e["episode_id"] for e in report["episodes"]])
+    ids = [e["episode_id"] for e in report["episodes"]]
+    measure_gripper_range(out, ids)
+    measure_depth_ranges(out, ids)
+    measure_signal_scales(out, ids)
+    measure_contacts(out, ids)
     return report
+
+
+def measure_contacts(out: Path, ids: list[str]) -> int:
+    """Each episode's contacts (label/contacts.py), found with the upload's signal scales and written as
+    context["contacts"], so the labeller, the checks and the board read one list. Returns how many were found."""
+    from label import contacts as lc
+    from label import episode as me
+    total = 0
+    for i in ids:
+        d = Path(out) / i
+        if not (d / "signals.npz").exists():
+            continue
+        try:
+            ep = me.load(d)
+            sig = ep.get("signals") or {}
+            n = len(next(iter(sig.values()))) if sig else 0
+            found = lc.find(sig, ep.get("signal_meta") or {}, np.array([me.frame_time(ep, k) for k in range(n)]))
+        except Exception as e:
+            print(f"contacts: {i}: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        ctx = json.loads((d / "context.json").read_text())
+        ctx["contacts"] = found
+        (d / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+        total += len(found)
+    return total
+
+
+DEPTH_RANGE_FRAMES = 6        # depth frames per episode read to measure a camera's range across the upload
+
+
+def measure_depth_ranges(out: Path, ids: list[str]) -> dict:
+    """For each camera whose depth has no stated unit, the range of its readings across every episode of the upload (the
+    2nd to 98th percentile, label/depth.scale_range), written as "range" into each episode's depth.json, so a shade of
+    grey is the same reading in every episode (label/depth.py). Metric depth needs none: it has one fixed scale."""
+    from label import depth as dp
+    from label import episode as me
+    frames, where = {}, {}
+    for i in ids:
+        d = Path(out) / i
+        if not (d / "depth.json").exists():
+            continue
+        try:
+            ep = me.load(d)
+        except Exception:
+            continue
+        for v, e in (ep.get("depth") or {}).items():
+            if e.get("scale_m") and e.get("kind") != "disparity":
+                continue
+            key = (ep["sources"][v].get("camera_key") or v)
+            n = int(ep["sources"][me.anchor(ep)]["n_frames"])
+            ks = sorted({int(x) for x in np.linspace(0, max(n - 1, 0), DEPTH_RANGE_FRAMES)})
+            frames.setdefault(key, []).extend(dp.at_anchor(ep, ep["depth"], v, ks).values())
+            where.setdefault(key, []).append((d, v))
+    ranges = {}
+    for key, fs in frames.items():
+        r = dp.scale_range(fs)
+        if r is None:
+            continue
+        ranges[key] = [round(r[0], 6), round(r[1], 6)]
+        for d, v in where[key]:
+            dj = json.loads((d / "depth.json").read_text())
+            dj[v]["range"] = ranges[key]
+            dj[v]["range_note"] = f"measured across the {len(where[key])} episodes of this upload"
+            (d / "depth.json").write_text(json.dumps(dj, indent=1))
+    return ranges
+
+
+SIGNAL_SCALE_ROWS = 200_000   # rows per signal read across the upload to measure its rest and swing
+
+
+def measure_signal_scales(out: Path, ids: list[str]) -> dict:
+    """For each signal (by name), its resting level per value and its typical swing measured across every episode of the
+    upload (label/signals.py), written into each episode's context.json signal entry as "rest" and "swing", so the
+    activity of a glove's pressure, and the colour of its map on the board, mean the same raw distance from rest in
+    every episode: a light touch in one episode never looks like a hard grip in another."""
+    from label import signals as sg
+    rows, where = {}, {}
+    for i in ids:
+        d = Path(out) / i
+        p = d / "context.json"
+        if not (d / "signals.npz").exists() or not p.exists():
+            continue
+        ctx = json.loads(p.read_text())
+        with np.load(d / "signals.npz") as z:
+            for s in ctx.get("signals") or []:
+                if s["key"] in z.files:
+                    rows.setdefault(s["name"], []).append(np.asarray(z[s["key"]], dtype=np.float64))
+                    where.setdefault(s["name"], []).append(d)
+    scales = {}
+    for name, arrs in rows.items():
+        if len({a.shape[1] for a in arrs}) != 1:
+            continue                       # one name with different widths in different episodes: no shared scale
+        a = np.concatenate(arrs)
+        if len(a) > SIGNAL_SCALE_ROWS:
+            a = a[:: int(np.ceil(len(a) / SIGNAL_SCALE_ROWS))]
+        rest = sg.resting_level(a)
+        _, swing = sg._distance(a, rest)
+        scales[name] = {"rest": [round(float(x), 6) for x in rest], "swing": round(float(swing), 6),
+                        "episodes": len(arrs)}
+    for name, sc in scales.items():
+        for d in set(where[name]):
+            p = d / "context.json"
+            ctx = json.loads(p.read_text())
+            for s in ctx.get("signals") or []:
+                if s["name"] == name:
+                    s.update(rest=sc["rest"], swing=sc["swing"], scale_note=f"measured across the {sc['episodes']} "
+                                                                             "episodes of this upload")
+            p.write_text(json.dumps(ctx, indent=1, default=str))
+    return scales
 
 
 def measure_gripper_range(out: Path, ids: list[str]) -> list | None:

@@ -23,13 +23,16 @@ CASES = [
     (["bright_cam", "upright_view"], "teleop_arms", {"exo": "bright_cam", "extra1": "upright_view"}),
     # a fourth and fifth camera are sent too, the other eye of a stereo camera is not, and at most three extras
     (["front", "back", "side_a", "side_b", "side_c", "/zed/front/left", "/zed/front/right"], "teleop_arms",
-     {"exo": "/zed/front/left", "extra1": "front", "extra2": "back", "extra3": "side_a"}),
+     {"exo": "/zed/front/left", "extra1": "front", "extra2": "back", "extra3": "side_a", "extra4": "side_b"}),
     (["observation.images.left_camera_rgb_image", "observation.images.right_camera_rgb_image"], "handheld_gripper",
      {"left": "observation.images.left_camera_rgb_image", "right": "observation.images.right_camera_rgb_image"}),
     (["observation.images.camera_rgb_image"], "handheld_gripper", {"right": "observation.images.camera_rgb_image"}),
     (["/robot0/wrist_l", "/robot0/wrist_r", "/scene"], "teleop_arms", {"exo": "/scene", "left": "/robot0/wrist_l", "right": "/robot0/wrist_r"}),
     (["observation.images.top", "observation.images.top_depth", "observation.images.wrist_left"], "teleop_arms",
      {"exo": "observation.images.top", "left": "observation.images.wrist_left"}),
+    # a view named for touch is its own view, never the scene or a gripper camera, and a pair of them are two sensors
+    (["external_cam", "wrist_cam", "tactile_left", "tactile_right"], "teleop_arms",
+     {"exo": "external_cam", "extra1": "wrist_cam", "extra2": "tactile_left", "extra3": "tactile_right"}),
 ]
 
 
@@ -393,7 +396,9 @@ def test_a_recorders_folder_is_one_episode_with_its_arm_state():
         assert sorted(Path(p).name for p in items[0]["files"]) == [
             "exo_cam-images-rgb.mp4", "left_wrist_cam-images-rgb.mp4", "right_wrist_cam-images-rgb.mp4"]
         assert len(items[0]["state"]) == 4
-        assert any("3 depth or infrared videos were left out" in u for u in det["used"])
+        # each camera's depth video goes with it (depth_videos), never a camera of its own and never dropped
+        assert any("3 depth videos were read with the colour camera they belong to" in u for u in det["used"])
+        assert len(items[0]["depth"]) == 3
         rep = f.convert(root, "teleop_arms", Path(t) / "eps", "test", 900)
         assert not rep["failed"] and len(rep["episodes"]) == 1
         ep = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
