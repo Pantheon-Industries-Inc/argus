@@ -2300,7 +2300,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
         if note or notes:
             ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
-        write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"]))
+        write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused))
         return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
                               signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"],
                                                        feats))
@@ -2341,15 +2341,16 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
            **extra}
     if note or notes:
         ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
-    write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"]))
+    write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused))
     return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
                           signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"],
                                                    feats))
 
 
-def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int) -> tuple[dict, dict]:
+def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, unused: list) -> tuple[dict, dict]:
     """(depth.json entries, depth times) of a LeRobot episode's depth videos (features marked video.is_depth_map or named
-    depth), each with its camera as the HDF5 reader pairs them (depth_camera). Frames are timed as LeRobot defines
+    depth), each with its camera as the HDF5 reader pairs them (depth_camera). A second depth stream for a camera is
+    added to unused (the episode's unused cameras), as convert_hdf5 lists it. Frames are timed as LeRobot defines
     them, frame index over fps, from the episode's own window of a packed file."""
     dep, tz = {}, {}
     if not r.get("depth_cams") or not vmap:
@@ -2364,6 +2365,7 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int) 
         path, base, to = (src if isinstance(src, tuple) else (src, None, None))
         v, source = depth_camera(key, vmap, anchor)
         if v in dep:
+            unused.append(f"{key} (depth with no camera of its own)")
             continue
         try:
             pr = probe_depth(Path(path))
