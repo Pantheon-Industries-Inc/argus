@@ -806,7 +806,7 @@ SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
 # model reads one by one; it is listed among the signals left out, never dropped without a word. A tactile pressure map
 # of 64 x 64 cells is still a signal.
 SIGNAL_MAX_VALUES = 4096
-SIGNAL_MIN_READINGS = 0.5         # the share of its rows a column must have a reading at (finite values) to be kept
+SIGNAL_MIN_READINGS = 0.5         # the share of its rows a column must have a reading at (any finite value) to be kept
 
 
 class Signals(dict):
@@ -930,7 +930,9 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
         a = _cells(df[c])
         if a is None or not a.shape[1] or len(a) < n:
             continue
-        has_reading = np.isfinite(a).all(axis=1)
+        # a row has a reading when any of its values does, as checks/sensors.py counts it: a pressure map with one dead
+        # cell still reads at every frame
+        has_reading = np.isfinite(a).any(axis=1)
         if has_reading.mean() < SIGNAL_MIN_READINGS:
             out.left_out.append((str(c), "no reading at most frames"))
             continue

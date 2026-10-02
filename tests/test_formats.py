@@ -761,6 +761,16 @@ def test_a_reading_missing_at_some_frames_is_kept_with_nan_there():
     assert "ft" in out and np.isnan(out["ft"][20, 1])
 
 
+def test_a_pressure_map_with_one_dead_cell_is_a_reading_at_every_frame():
+    """A row has a reading when any of its values is finite, as checks/sensors.py counts it, so a 16 x 16 map whose
+    last cell never reads is kept, NaN in that cell."""
+    import numpy as np, pandas as pd
+    n = 60
+    cells = [np.r_[np.full(255, 3000.0), np.nan] for _ in range(n)]
+    out = f.recorded_signals(pd.DataFrame({"pad": cells}), set(), n)
+    assert "pad" in out and np.isnan(out["pad"][:, 255]).all() and (out["pad"][:, :255] == 3000).all()
+
+
 def test_a_reading_missing_at_most_frames_is_left_out_with_the_reason():
     import numpy as np, pandas as pd
     n = 60
