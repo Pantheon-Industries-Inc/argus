@@ -185,3 +185,28 @@ def test_a_signal_that_swings_both_ways_or_a_switching_setting_is_not_touch():
     press = _press(n, (60, 120)).reshape(n, -1).astype(np.float64)
     (c,) = lc.find({"left_glove": press}, {"left_glove": {"shape": [16, 16]}}, t)
     assert c["hand"] == "left" and abs(c["start_s"] - 2.0) < 0.05
+
+
+def test_a_position_that_leaves_its_level_one_way_or_a_pad_that_only_rounds_is_not_touch():
+    """A hand's position that holds one level and then rises still moves past that level, so it is not bounded at
+    rest; an idle pad read in whole numbers flickers by one step, which is rounding; a contact flag moves by one step
+    when it closes, and still is touch."""
+    n, rng = 200, np.random.default_rng(1)
+    pos = np.full((n, 3), 1.1) + rng.normal(0, 0.002, (n, 3))
+    pos[:60, 1] -= 0.05                      # the hand starts a little lower, then holds
+    pos[120:, 1] += np.linspace(0, 0.1, 80)  # and rises
+    rest = list(pos[60:120].mean(axis=0))
+    assert not sg.touch_like(pos, rest, 0.7)
+    pad = np.zeros((n, 96))
+    pad[:, 5] = rng.random(n) < 0.3          # one cell flips between 0 and 1
+    pad[:, 40] = 3 + (rng.random(n) < 0.5)   # one sits at 3 and flips to 4
+    pad[0, 41] = 7
+    assert sg.rounding_only(pad) and not sg.touch_like(pad)
+    pressed = pad.copy()
+    pressed[80:120, 10:30] = 40
+    assert not sg.rounding_only(pressed) and sg.touch_like(pressed)
+    flag = np.zeros((n, 1))
+    flag[70:110] = 1
+    assert sg.touch_like(flag)
+    (c,) = lc.find({"right_contact": flag}, {}, np.arange(n) / 30.0)
+    assert c["hand"] == "right"

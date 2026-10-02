@@ -16,6 +16,10 @@ Nothing here knows what a signal is called or what sensor made it. A signal is r
 - It has a rest only when it really holds one level: at least HOLD_SHARE of its readings lie within HOLD_BAND of its
   typical swing from their resting level (an untouched cell reads 3072 frame after frame). A position or an IMU,
   whose values drift through their range, has no rest, whatever its percentiles say.
+- Touch is bounded at rest: a pressure moves away from its unloaded reading one way and never reads past it except
+  by noise. A hand's position can hold one level for a while and then leave it one way, but it also moves past that
+  level, so it is not touch (direction). A pad read in whole numbers that only flickers by one step has measured
+  nothing but the rounding of its readout (rounding_only).
 - It rests and rises when it has a rest, and its activity is under REST_FRACTION of its peak for at least MIN_REST of
   the episode and above it for at least MIN_ACTIVE: a tactile glove's pressure, a fingertip's force, a contact flag, a gripper's
   effort. For such a signal the spans it is away from rest are reported with their exact start and end, from every
@@ -79,13 +83,34 @@ def resting_level(a: np.ndarray, rest=None) -> np.ndarray:
 
 def direction(a: np.ndarray, rest=None, swing=None) -> str | None:
     """How a signal moves away from rest: "up" when its active values rise above their resting levels, "down" when
-    they fall below them, else None (both, or never active)."""
+    they fall below them, else None (both, never active, or not bounded at rest). A signal moving one way is bounded
+    at rest when on the other side its readings go no further than REST_FRACTION of how far it moves: a pressure
+    never reads past its unloaded value except by noise, while a position that holds one level for a while moves past
+    it whenever the hand does."""
     dev = a - resting_level(a, rest)
     act = _active(a, rest, swing)
     if not act.any():
         return None
     up = float((dev[act] > 0).mean())
-    return "up" if up >= 0.8 else "down" if up <= 0.2 else None
+    way = "up" if up >= 0.8 else "down" if up <= 0.2 else None
+    if way is None:
+        return None
+    toward = (dev if way == "up" else -dev)[np.isfinite(dev)]
+    beyond = float(np.percentile(np.maximum(-toward, 0.0), 99))
+    return way if beyond <= REST_FRACTION * float(toward.max()) else None
+
+
+def rounding_only(a: np.ndarray, rest=None, swing=None) -> bool:
+    """Whether a map of many levels has recorded nothing but the rounding of its readout: its typical swing is no
+    more than the smallest step between its readings, so its cells only flip between neighbouring readings (an
+    untouched pad read in whole numbers flickers between 0 and 1). A map of a few readings (taxels that are on or
+    off) moves by one step when pressed, so it is never rounding only."""
+    v = a[np.isfinite(a)]
+    u = np.unique(v)
+    if a.shape[1] <= SMALL or len(u) <= SETTING_STATES:
+        return False
+    _, sw = _distance(a, rest, swing)
+    return sw <= float(np.diff(u).min()) * (1 + 1e-6)
 
 
 def _distance(a: np.ndarray, rest=None, swing=None) -> tuple[np.ndarray, float]:
@@ -141,15 +166,20 @@ def rests_and_rises(a: np.ndarray, rest=None, swing=None) -> bool:
 
 
 def touch_like(a: np.ndarray, rest=None, swing=None) -> bool:
-    """Whether a signal behaves the way touch does: it has a rest, moves away from it in one direction only (pressure
-    rises, a raw glove reading falls), and either rests and rises or is a local array. A joint velocity rests at zero
-    too, but swings both ways, so it is not touch; a camera's calibration that switches between two settings rests and
-    moves one way too, but a sensor of several values never takes only SETTING_STATES readings, so it is not either."""
+    """Whether a signal behaves the way touch does: it has a rest, moves away from it in one direction only and is
+    bounded there (pressure rises, a raw glove reading falls, and neither reads past untouched), and either rests and
+    rises or is a local array. A joint velocity rests at zero too, but swings both ways, so it is not touch; a hand's
+    position can hold one level and leave it one way in an episode, but it also moves past that level, so it is not
+    either; a camera's calibration that switches between two settings rests and moves one way too, but a sensor of
+    several values never takes only SETTING_STATES readings; and a pad that only flickers by one step of its readout
+    (rounding_only) has measured nothing."""
     a = np.asarray(a, dtype=np.float64)
     if not len(a) or not has_rest(a, rest, swing) or direction(a, rest, swing) is None:
         return False
     if a.shape[1] > 1 and len(np.unique(a[np.isfinite(a).all(axis=1)], axis=0)) <= SETTING_STATES:
         return False      # several values that only ever take a few readings together: a setting switching, not a sensor
+    if rounding_only(a, rest, swing):
+        return False
     return rests_and_rises(a, rest, swing) or (a.shape[1] > SMALL and localized(a, rest, swing))
 
 
