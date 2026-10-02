@@ -1518,10 +1518,11 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .pub-list .pub-group + .pub-group, .pub-list .pub-row + .pub-group, .pub-list .pub-ep + .pub-group,
 .pub-list .pub-fold:not(:first-child) { margin-top: 12px; }
 .pub-list .pub-gt { font-family: var(--mono); font-size: 11px; color: var(--fg-3); margin: 0 0 4px; overflow-wrap: anywhere; }
-.pub-list .pub-kv { display: grid; grid-template-columns: 112px 1fr; gap: 10px; padding: 4px 6px; font-size: 13px;
-  line-height: 1.4; }
-.pub-list .pub-kv .pub-k { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
-.pub-list .pub-v { overflow-wrap: anywhere; }
+.pub-list .pub-group { display: grid; grid-template-columns: fit-content(42%) 1fr; column-gap: 10px; }
+.pub-list .pub-gt { grid-column: 1 / -1; }
+.pub-list .pub-kv { display: contents; font-size: 13px; line-height: 1.4; }
+.pub-list .pub-kv .pub-k { min-width: 100px; margin: 0; padding: 4px 0 4px 6px; line-height: 1.6; overflow-wrap: anywhere; }
+.pub-list .pub-v { padding: 4px 6px 4px 0; font-size: 13px; overflow-wrap: anywhere; }
 .pub-list .pub-at { margin-left: 6px; padding: 0; background: none; border: 0; cursor: pointer; font-family: var(--mono);
   font-size: 11.5px; color: var(--accent); }
 .pub-list .pub-at:hover { text-decoration: underline; }
