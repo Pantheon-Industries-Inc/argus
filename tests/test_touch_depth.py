@@ -77,6 +77,50 @@ def test_an_hdf5_file_of_demos_is_one_episode_per_demo_with_its_pressure_map_and
     assert c["regions"]["right_pressure"]["rows"] == [3, 7] and c["regions"]["right_pressure"]["columns"] == [5, 9]
 
 
+def test_an_hdf5_rate_inside_a_json_attribute_times_the_frames(tmp_path):
+    """robomimic keeps its control rate in the data group's env_args, a JSON string ({"env_kwargs": {"control_freq":
+    20}}); the demo is timed at that rate, not the 30 fps default. A value under a rate's name counts only between 1
+    and 1000, and an attribute that is not JSON, is bytes, or is malformed JSON is passed over without an error."""
+    p = tmp_path / "robomimic.hdf5"
+    with h5py.File(p, "w") as f:
+        g = f.create_group("data")
+        g.attrs["env_args"] = json.dumps({"env_name": "Lift", "env_kwargs": {"control_freq": 20, "horizon": 400}})
+        g.create_group("demo_0")
+        assert formats.h5_fps(f, "data/demo_0") == 20.0
+    q = tmp_path / "odd.hdf5"
+    with h5py.File(q, "w") as f:
+        g = f.create_group("data")
+        g.attrs["note"] = "pick up the cup"                       # a string that is not JSON
+        g.attrs["blob"] = np.bytes_(b"{not json")                 # bytes that start like JSON but are malformed
+        g.attrs["empty"] = ""
+        g.attrs["list"] = json.dumps([{"fps": 25}])               # JSON at any depth, lists included
+        g.create_group("demo_0")
+        assert formats.h5_fps(f, "data/demo_0") == 25.0
+        g.attrs["list"] = json.dumps({"env_kwargs": {"control_freq": 0.5, "other": {"hz": 5000}}})
+        assert formats.h5_fps(f, "data/demo_0") is None           # outside 1..1000 is not a rate
+        g.attrs["list"] = np.bytes_(json.dumps({"fps": 12}).encode())
+        assert formats.h5_fps(f, "data/demo_0") == 12.0
+
+
+def test_a_robomimic_style_demo_without_timestamps_is_timed_at_its_json_rate(tmp_path):
+    """The rate reaches the episode: 40 frames at the 20 Hz the data group's env_args states last 2.0 s, not 1.33 s
+    (robomimic's 84 x 84 agentview images, two or more demos, actions beside them, no timestamps)."""
+    root = tmp_path / "up"
+    root.mkdir()
+    with h5py.File(root / "rm.hdf5", "w") as f:
+        g = f.create_group("data")
+        g.attrs["env_args"] = json.dumps({"env_kwargs": {"control_freq": 20}})
+        for i in range(2):
+            d = g.create_group(f"demo_{i}")
+            d.create_dataset("obs/agentview_image",
+                             data=np.random.default_rng(i).integers(0, 255, (40, 84, 84, 3), dtype=np.uint8))
+            d.create_dataset("actions", data=np.zeros((40, 7), np.float32))
+    rep = formats.convert(root, "teleop_arms", tmp_path / "eps", "rm", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 2
+    ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert abs(ctx["fps"] - 20.0) < 0.1 and abs(ctx["duration_s"] - 2.0) < 0.1
+
+
 def test_the_notes_an_upload_sends_reach_the_board_as_sent_with_their_times_on_the_episode(tmp_path):
     """A table row that names a demo goes to the board under its own column names, beside the notes read from the file,
     and a value on the recorder's clock (ns here) carries its moment in the episode; a count stays a count."""

@@ -2554,18 +2554,35 @@ def _natural(s: str):
 
 
 def h5_fps(f, group: str) -> float | None:
-    """A frame rate the file states in the attributes of the episode's group or any group above it."""
+    """A frame rate the file states in the attributes of the episode's group or any group above it, under a rate's name
+    (fps, control_freq) either as the attribute itself or inside an attribute that holds JSON (robomimic's env_args
+    keeps env_kwargs.control_freq)."""
+    def found(k, v):
+        if isinstance(v, (dict, list)):
+            kids = v.items() if isinstance(v, dict) else ((k, x) for x in v)
+            return next((x for kk, vv in kids for x in [found(kk, vv)] if x), None)
+        if not H5_FPS_KEY.match(str(k)):
+            return None
+        try:
+            x = float(np.asarray(v).ravel()[0])
+        except Exception:
+            return None
+        return x if 1 <= x <= 1000 else None
+
     parts = [p for p in group.split("/") if p]
     for i in range(len(parts), -1, -1):
         g = f["/".join(parts[:i])] if i else f
         for k, v in g.attrs.items():
-            if H5_FPS_KEY.match(str(k)):
+            if isinstance(v, bytes):
+                v = v.decode("utf-8", "replace")
+            if isinstance(v, str) and v.lstrip()[:1] in ("{", "["):
                 try:
-                    x = float(np.asarray(v).ravel()[0])
-                except Exception:
-                    continue
-                if 1 <= x <= 1000:
-                    return x
+                    v = json.loads(v)
+                except ValueError:
+                    pass
+            x = found(k, v)
+            if x:
+                return x
     return None
 
 
