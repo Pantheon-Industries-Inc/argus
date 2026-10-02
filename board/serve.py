@@ -4645,7 +4645,9 @@ function renderEp(d, opts) {
   const touch = tcData(d);
   for (const c of touch.contacts) duration = Math.max(duration, c.end_s);
   for (const x of touch.missing) duration = Math.max(duration, x.t_s);
-  duration = Math.max(duration + 1, 10);
+  // the recording's own length when the episode has one, so the timeline, its lanes and the video end together;
+  // without it, the last labelled time with a second's margin
+  duration = d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
 
   // a head-camera session is a sequence of self-directed tasks (d.tasks), each with its own goal frame; every other
   // episode has one completion and one goal
@@ -4782,7 +4784,7 @@ function renderEp(d, opts) {
   }
   let ticksHtml = '';
   // at most about eight labels whatever the length, so a long recording's labels never run into each other
-  const labelStep = [10, 20, 30, 60, 120, 300, 600, 1200, 1800].find(st => duration / st <= 8) || 3600;
+  const labelStep = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800].find(st => duration / st <= 8) || 3600;
   const tickLabel = t => t >= 60 && labelStep >= 60 ? `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`
     : `${t}s`;
   for (let t = 0; t <= duration; t += labelStep / 2) {
