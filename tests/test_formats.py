@@ -799,6 +799,26 @@ def test_a_depth_stream_goes_with_the_camera_whose_name_has_all_its_camera_words
     assert f.depth_camera("observation.depth.cam_high", lerobot, "exo") == ("exo", "observation.depth.cam_high")
 
 
+LEROBOT_CAMERAS = {"exo": "observation.images.cam_high", "left": "observation.images.cam_left_wrist",
+                   "right": "observation.images.cam_right_wrist"}
+
+
+def test_a_depth_stream_named_only_by_the_datasets_prefix_goes_with_the_scene_camera_and_says_why():
+    """observation.depth has only the word every camera key shares (observation), which names no camera."""
+    view, source = f.depth_camera("observation.depth", LEROBOT_CAMERAS, "exo")
+    assert view == "exo" and "scene camera" in source
+
+
+def test_a_depth_stream_whose_words_fit_two_cameras_goes_with_the_scene_camera_and_says_why():
+    """observation.depth.wrist fits cam_left_wrist and cam_right_wrist alike, so it is not paired with either."""
+    view, source = f.depth_camera("observation.depth.wrist", LEROBOT_CAMERAS, "exo")
+    assert view == "exo" and "scene camera" in source
+
+
+def test_the_one_camera_of_an_episode_is_paired_by_its_own_words():
+    assert f.depth_camera("cam_high_depth", {"exo": "cam_high"}, "exo") == ("exo", "cam_high_depth")
+
+
 def test_a_depth_stream_with_no_camera_of_its_own_goes_with_the_scene_camera_and_says_why():
     view, source = f.depth_camera("observations/depth/zed", {"exo": "top", "left": "wrist_left"}, "exo")
     assert view == "exo" and source.startswith("observations/depth/zed (") and "scene camera" in source

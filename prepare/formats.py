@@ -1053,15 +1053,20 @@ def depth_scale_from(folder: Path) -> float | None:
 
 
 def depth_camera(depth_name: str, cameras: dict[str, str], scene: str) -> tuple[str, str]:
-    """(view, source note) for a depth stream of an HDF5 file or a LeRobot dataset: the first camera ({view: name})
-    whose name has every word of the depth's name but the words for what a file holds (observations/depth/cam_high
-    goes with observations/images/cam_high, observation.depth.left_wrist with observation.images.cam_left_wrist), else
-    the scene camera, with the reason added to the note."""
-    words = set(tokens(depth_name)) - NON_COLOUR - GENERIC_VIDEO_WORDS
-    view = next((v for v, name in cameras.items() if words and words <= set(tokens(name))), None)
-    if view is not None:
-        return view, depth_name
-    return scene, f"{depth_name} (no camera's name has its words, so it goes with the scene camera)"
+    """(view, source note) for a depth stream of an HDF5 file or a LeRobot dataset: the one camera ({view: name}) whose
+    name has every word of the depth's name, leaving out the words for what a file holds (depth, images) and, when
+    there are several cameras, the words every camera's name shares (the dataset's own prefix, observation). So
+    observations/depth/cam_high goes with observations/images/cam_high, and observation.depth.left_wrist with
+    observation.images.cam_left_wrist. A depth stream whose words fit no camera or several (observation.depth.wrist
+    beside a left and a right wrist camera) goes with the scene camera, with the reason added to the note, as
+    depth_videos asks for exactly one match."""
+    names = {v: set(tokens(name)) for v, name in cameras.items()}
+    shared = set.intersection(*names.values()) if len(names) > 1 else set()
+    words = set(tokens(depth_name)) - NON_COLOUR - GENERIC_VIDEO_WORDS - shared
+    fits = [v for v, name in names.items() if words and words <= name]
+    if len(fits) == 1:
+        return fits[0], depth_name
+    return scene, f"{depth_name} (its words name no one camera, so it goes with the scene camera)"
 
 
 def depth_entry(ep: Path, view: str, path: Path, t_depth: np.ndarray, t_anchor: np.ndarray, pts: np.ndarray,
