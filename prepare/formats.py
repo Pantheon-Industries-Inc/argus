@@ -806,6 +806,7 @@ SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
 # model reads one by one; it is listed among the signals left out, never dropped without a word. A tactile pressure map
 # of 64 x 64 cells is still a signal.
 SIGNAL_MAX_VALUES = 4096
+SIGNAL_MIN_READINGS = 0.5         # the share of its rows a column must have a reading at (finite values) to be kept
 
 
 class Signals(dict):
@@ -903,12 +904,14 @@ def value_names(names, dims: int) -> list[str] | None:
 
 def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
     """Every other numeric per-frame column of an episode's table, under the dataset's own name, as (n, values) arrays:
-    the columns that are not bookkeeping (SIGNAL_SKIP), not already read (used: the state, the action, the cameras),
-    finite and at least n rows long. An array per frame keeps its shape (a pressure map is 16 x 16, not 256 numbers in
-    a row) and the names the dataset gives its values (features: meta/info.json's, with "shape" and "names"). The
-    harness shows them to the model as they are (label/episode.py), so nothing a dataset records is dropped because our
-    checks do not know what it means: a mobile robot's base and torso, joint velocities, forces, a tactile glove's
-    pressure map. A column wider than SIGNAL_MAX_VALUES is listed in left_out with the reason."""
+    the columns that are not bookkeeping (SIGNAL_SKIP), not already read (used: the state, the action, the cameras)
+    and at least n rows long. A reading missing at some frames is still a reading, NaN at those frames, while a column
+    with a reading at fewer than SIGNAL_MIN_READINGS of its rows is left out. An array per frame keeps its shape (a
+    pressure map is 16 x 16, not 256 numbers in a row) and the names the dataset gives its values (features:
+    meta/info.json's, with "shape" and "names"). The harness shows them to the model as they are (label/episode.py), so
+    nothing a dataset records is dropped because our checks do not know what it means: a mobile robot's base and torso,
+    joint velocities, forces, a tactile glove's pressure map. A column left out (wider than SIGNAL_MAX_VALUES, with too
+    few readings, a counter) is listed in left_out with the reason."""
     out = Signals()
     if df is None:
         return out
@@ -924,9 +927,14 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
                 continue
             out.add(str(c), a[0][:n] if len(a[0]) >= n else a[0], shape=a[1], source="image column " + str(c))
             continue
-        a = _stack(df[c])
+        a = _cells(df[c])
         if a is None or not a.shape[1] or len(a) < n:
             continue
+        has_reading = np.isfinite(a).all(axis=1)
+        if has_reading.mean() < SIGNAL_MIN_READINGS:
+            out.left_out.append((str(c), "no reading at most frames"))
+            continue
+        a = np.where(np.isfinite(a), a, np.nan)
         if a.shape[1] > SIGNAL_MAX_VALUES:
             out.left_out.append((str(c), f"{a.shape[1]} values per frame, more than the {SIGNAL_MAX_VALUES} a signal holds"))
             continue
@@ -2149,14 +2157,21 @@ def _read_episode_table(path: Path, eidx: int, columns: list[str] | None, exclud
     return df
 
 
-def _stack(col) -> np.ndarray | None:
+def _cells(col) -> np.ndarray | None:
     """A column as (rows, values), each cell flattened; a cell that is a list of lists (a 16 x 16 pressure map, which
-    parquet gives as an array of arrays) is flattened in its own order."""
+    parquet gives as an array of arrays) is flattened in its own order. None when the cells are not numbers of one
+    size."""
     try:
         a = np.stack([np.asarray(_nested(x), dtype=np.float64).reshape(-1) for x in col.to_numpy()])
-        return a if a.ndim == 2 and np.isfinite(a).all() else None
+        return a if a.ndim == 2 else None
     except Exception:
         return None
+
+
+def _stack(col) -> np.ndarray | None:
+    """A column as (rows, values) (_cells) when every value is a finite number, else None."""
+    a = _cells(col)
+    return a if a is not None and np.isfinite(a).all() else None
 
 
 def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:

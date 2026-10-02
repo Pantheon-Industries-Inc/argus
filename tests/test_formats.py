@@ -726,6 +726,39 @@ def test_a_tables_sequence_number_is_left_out_as_bookkeeping():
         _a_tables_sequence_number_is_left_out_as_bookkeeping(Path(t))
 
 
+def test_a_reading_missing_at_some_frames_is_kept_with_nan_there():
+    """A column with a few empty or infinite cells is still a reading; the cells become NaN instead of the whole
+    column being dropped."""
+    import numpy as np, pandas as pd
+    n = 60
+    force = np.linspace(0, 1, n)
+    force[[5, 6]] = np.nan
+    force[9] = np.inf
+    ft = [np.array([1.0, 2.0, 3.0]) for _ in range(n)]
+    ft[20] = np.array([1.0, np.nan, 3.0])
+    out = f.recorded_signals(pd.DataFrame({"force": list(force), "ft": ft}), set(), n)
+    assert "force" in out and np.isnan(out["force"][[5, 6, 9], 0]).all() and np.isfinite(out["force"][10, 0])
+    assert "ft" in out and np.isnan(out["ft"][20, 1])
+
+
+def test_a_reading_missing_at_most_frames_is_left_out_with_the_reason():
+    import numpy as np, pandas as pd
+    n = 60
+    force = np.linspace(0, 1, n)
+    force[:40] = np.nan
+    out = f.recorded_signals(pd.DataFrame({"force": list(force)}), set(), n)
+    assert "force" not in out and ("force", "no reading at most frames") in out.left_out
+
+
+def test_a_clock_with_a_missing_stamp_is_still_a_clock():
+    import numpy as np, pandas as pd
+    n = 60
+    t = 1.79e18 + np.arange(n) * 3.3e7
+    t[[5, 40]] = np.nan
+    out = f.recorded_signals(pd.DataFrame({"recv_time": list(t)}), set(), n)
+    assert "recv_time" in out.clocks and "recv_time" not in out
+
+
 def _an_mcap_layout_adapters_source_notes_are_kept(tmp_path):
     """convert_mcap adds its format and file to the adapter's source instead of replacing it."""
     import sys
