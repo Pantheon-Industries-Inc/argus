@@ -817,11 +817,11 @@ def lean(r: str) -> str:
 
 
 def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True) -> str:
-    """Everything before the episode's own facts. A head-camera dataset has one variant whether or not it is
-    annotated, so every episode of it shares the cached prefix. A robot rig has up to four variants (instruction
-    present or not, recorded or video only), and every episode of the same variant shares the prefix. recorded
-    False (no recorded state and no other signal, label/episode.py is_recorded) takes out every word about a
-    recorded motion."""
+    """Everything before the episode's own facts. A head-camera dataset has one variant per recorded or video only
+    episode, whether or not it is annotated. A robot rig has up to four variants (instruction present or not,
+    recorded or video only). Every episode of the same variant shares the cached prefix. recorded False (no
+    recorded state and no other signal, label/episode.py is_recorded) takes out every word about a recorded
+    motion."""
     head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
     if r == "ego_head":
         return head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + EGO_ANNOTATION_RULES + lean(r)

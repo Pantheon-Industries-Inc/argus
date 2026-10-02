@@ -1085,8 +1085,8 @@ def _state_unaligned_text(ep: dict, pl: dict) -> str:
 
 # What in context["source"] says the reader found sensor data it did not read (prepare/formats.py write_signals,
 # convert_hdf5, plan_video): the arrays and signals it left out, and "sensors", the sensor files whose signals it read
-# (formats.py:1738), so an episode with no signal from them has none read. With any of it, the episode is never told
-# its dataset records no state.
+# (prepare/formats.py convert_video), so an episode with no signal from them has none read. With any of it, the
+# episode is never told its dataset records no state.
 UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 
