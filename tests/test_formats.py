@@ -597,9 +597,13 @@ def test_a_leading_zero_sentinel_does_not_hide_an_epoch_clock():
     assert f._seconds_scale(t) == 1e-6
 
 
-def test_a_single_stamp_is_read_by_its_size_and_an_empty_clock_is_empty():
+def test_a_single_stamp_is_read_by_its_size():
     import numpy as np
     assert abs(f._seconds(np.array([EPOCH * 1e9]))[0] - EPOCH) < 1
+
+
+def test_an_empty_clock_is_empty():
+    import numpy as np
     assert len(f._seconds(np.array([]))) == 0
 
 

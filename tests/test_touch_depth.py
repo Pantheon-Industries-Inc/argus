@@ -140,9 +140,12 @@ def test_a_direct_frame_rate_on_the_root_beats_a_frame_rate_inside_a_groups_json
 
 def test_a_generic_rate_name_inside_json_never_counts(tmp_path):
     """A configuration holds its sensors' rates under generic names, so {"sensors": {"imu": {"rate": 200}}} does not
-    time the frames, while a frame rate's name beside it does."""
+    time the frames."""
     assert _h5_rate(tmp_path, {"sensor_config": json.dumps({"sensors": {"imu": {"rate": 200}}})}) is None
     assert _h5_rate(tmp_path, {"sensor_config": json.dumps({"audio": {"hz": 48}})}) is None
+
+
+def test_a_frame_rate_name_inside_json_counts_beside_a_sensors_generic_one(tmp_path):
     both = json.dumps({"imu": {"rate": 200}, "env_kwargs": {"control_freq": 20}})
     assert _h5_rate(tmp_path, {"env_args": both}) == 20.0
 
@@ -163,9 +166,13 @@ def test_per_camera_frame_rates_count_when_they_agree(tmp_path):
     assert _h5_rate(tmp_path, {"meta": json.dumps({"fps": {"cam_high": 30, "cam_wrist": 15}})}) is None
 
 
-def test_json_nested_deeper_than_the_parser_allows_is_passed_over_and_deep_json_is_searched(tmp_path):
-    """json.loads stops at about 1000 levels; the search through what it parsed has no depth limit of its own."""
+def test_json_nested_deeper_than_the_parser_allows_is_passed_over(tmp_path):
+    """json.loads stops at about 1000 levels and raises RecursionError, which h5_fps passes over."""
     assert _h5_rate(tmp_path, {"env_args": "[" * 100000}) is None
+
+
+def test_json_the_parser_accepts_is_searched_at_any_depth(tmp_path):
+    """The search through parsed JSON is a loop, with no depth limit of its own."""
     assert _h5_rate(tmp_path, {"env_args": '{"a":' * 900 + '{"fps": 9}' + "}" * 900}) == 9.0
 
 
