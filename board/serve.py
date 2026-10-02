@@ -1361,8 +1361,8 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 /* ---------- sensors: the recording's other signals and depth (board/sensors.py) ----------
    Under the timeline and on its time scale. Each signal that changes is a lane as wide as the timeline, so its playhead
    stands under the timeline's: its name and the value at the playhead over a strip of its samples, the stretches it
-   spends away from rest shaded. A 2-D array that behaves like touch (a pressure map) is drawn as a heatmap at the
-   playhead beside the lanes' start. Lanes past the first few open with "Show all". */
+   spends away from rest shaded. A 2-D array that is touch (label/signals.py is_touch, a pressure map) is drawn as a
+   heatmap at the playhead beside the lanes' start. Lanes past the first few open with "Show all". */
 /* clear the timeline's tick labels, which hang 16px below it, as the first lane does */
 .timeline + #sn-slot > h3.sn-h, .lane + #sn-slot > h3.sn-h { margin-top: 22px; }
 .sn { margin: 0 0 22px; }

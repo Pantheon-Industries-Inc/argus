@@ -197,10 +197,7 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
     rest = np.asarray(meta["rest"], dtype=np.float64) if meta.get("rest") is not None else None
     swing = float(meta["swing"]) if meta.get("swing") else None
     rr = bool(_call(S.rests_and_rises, a, rest, swing))
-    if hasattr(S, "is_touch"):
-        touch = bool(S.is_touch(meta["name"], a, rest, swing))
-    else:
-        touch = bool(_call(S.touch_like, a, rest, swing)) if hasattr(S, "touch_like") else rr
+    touch = bool(S.is_touch(meta["name"], a, rest, swing))
     doc.update({"constant": False, "rests_and_rises": rr, "touch": touch,
                 "direction": _call(S.direction, a, rest, swing)})
     doc["spans"] = [[round(s, 3), round(e, 3)] for s, e in _spans(S, a, t, rest, swing)] if rr or touch else []
