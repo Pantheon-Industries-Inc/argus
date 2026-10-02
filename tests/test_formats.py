@@ -616,6 +616,16 @@ def test_a_table_keeps_a_steadily_rising_column_unless_its_name_says_time():
         _a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(Path(t))
 
 
+def test_a_clock_name_takes_any_common_time_unit_suffix_and_nothing_else():
+    """A clock's name ends in a time word, alone or with a unit (stamp_nsec, header.t_usec, time_msec, ts_nanos); a name
+    that only contains a t word (left_arm, t_joint_3, base.odom_x, tact) is a reading."""
+    for name in ("stamp_nsec", "header.t_usec", "time_msec", "ts_nanos", "t_micros", "time_millis", "timestamp",
+                 "t_ns", "time.sec", "/obs/ts"):
+        assert f.H5_TIME_NAME.search(name), name
+    for name in ("left_arm", "t_joint_3", "base.odom_x", "tact", "stamp_count", "time_to_go"):
+        assert not f.H5_TIME_NAME.search(name), name
+
+
 def _an_mcap_layout_adapters_source_notes_are_kept(tmp_path):
     """convert_mcap adds its format and file to the adapter's source instead of replacing it."""
     import sys

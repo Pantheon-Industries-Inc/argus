@@ -834,8 +834,9 @@ class Signals(dict):
 
 def is_clock(x: np.ndarray) -> bool:
     """Whether a column is a clock or a counter: it never falls, rises at 90% of its rows or more, and rises by a steady
-    step (the spread of its steps under half their median), as a receive time or a sequence number does. A cumulative
-    reading (a distance travelled) rises unevenly and is not one."""
+    step (the spread of its steps under half their median), as a receive time does. A base driving at a steady speed
+    rises as steadily, so callers also require a time's name (H5_TIME_NAME) before they treat a column as a clock. A
+    cumulative reading (a distance travelled) rises unevenly and is not one."""
     x = np.asarray(x, dtype=np.float64)
     x = x[np.isfinite(x)]
     if len(x) < COUNTER_MIN_MESSAGES:
@@ -2425,7 +2426,7 @@ def plan_mcap(det: dict, root: Path) -> list[dict]:
 H5_EXT = {".h5", ".hdf5", ".hdf"}
 CAMERA_MIN_PX = 64
 H5_CONSTANT_MAX = 64              # a numeric array this small with no clock of its length is a setting, kept as a note
-H5_TIME_NAME = re.compile(r"(^|[_./])(time|times|timestamp|timestamps|stamp|stamps|ts|t)([_.]?(s|ns|us|ms|sec|secs))?$",
+H5_TIME_NAME = re.compile(r"(^|[_./])(time|times|timestamp|timestamps|stamp|stamps|ts|t)([_.]?(s|ns|us|ms|sec|secs|nsec|usec|msec|nanos|micros|millis))?$",
                           re.I)
 H5_FPS_KEY = re.compile(r"^(fps|frame_?rate|frequency|freq|hz|rate|control_?freq)$", re.I)
 TASK_KEY = re.compile(r"(^|_)(instruction|task|task_description|language_instruction|language|prompt|goal)$", re.I)
