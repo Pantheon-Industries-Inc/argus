@@ -506,7 +506,8 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     assert json.loads(out.read_text())["model_served"] == "openai/gpt-6-astra-20260901"
     assert r["config"]["timesteps_s"][0] == 0.0 and r["config"]["timesteps_s"][-1] == round(119 / 30, 3)
     assert r["config"]["cell"][0] == me.GRID_CELL_W_BY_RIG["teleop_arms"]
-    imgs = [c for c in sent["content"] if c["type"] == "image_url"]
+    assert isinstance(r["config"]["prompt_blocks"], list) and "contacts" not in r["config"]["schema_fields"]
+    imgs =[c for c in sent["content"] if c["type"] == "image_url"]
     assert len(imgs) == r["config"]["n_image_parts"] == -(-len(r["config"]["timesteps_s"]) // 4) + 2
     # the detail view of the LAST instant is episode frame 119 (global 169), never the next episode's 170
     from PIL import Image

@@ -14,6 +14,8 @@ What the model is told about the episode, and where each fact comes from:
 - still spans: from the recorded state, true by construction (state.still_spans), as the recording's claim.
 - recorded motion between consecutive instants: from the recorded state, as a claim to check.
 - sampling: exactly what state.sample_frames did.
+- which of these are said at all: each part that depends on data the episode may not hold is a block (BLOCKS) with a
+  test of the episode folder, so an episode without that data gets no word of it and is asked for no field of it.
 - a fisheye lens: only where the camera's own frames show a circular image with black corners (label/lens.py).
 Nothing else is said about field of view or the lens, nor about lighting, object identities, or what a gripper
 reading implies.
@@ -41,7 +43,9 @@ import io
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -676,54 +680,6 @@ def _detail_desc(native: tuple) -> str:
     return f"the full {w}x{h}" if (dw, dh) == (w, h) else f"{dw}x{dh} (the recording is {w}x{h})"
 
 
-def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -> str:
-    r, kind = rig(ep), state_kind(ep)
-    n = _rig_nouns(r)
-    names = ", ".join(cam_name(ep, v) for v in views(ep))
-    every = SAMPLE_EVERY_S[r]
-    s = (
-        f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
-        "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
-        "seconds from the episode's first frame. Read each grid left to right and the grids in order. "
-        "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
-        f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's first and last instant are "
-        f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
-        "small detail (lettering, a display, fine alignment)."
-        + (" So are the instants just after a gripper's recorded value changes sharply, where something is "
-           "usually picked up or put down, from the scene camera and that gripper's own camera ("
-           + ", ".join(f"{frame_time(ep, k):.2f}" for k in pl.get("contact") or []) + " s): use them to read what "
-           "is held and how it is left. The value only chose where to look closer; what is held is read from "
-           "the frames." if pl.get("contact") else "")
-        + "\n"
-        f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
-        "frame." + _coverage_note(ep, pl) + _depth_note(ep))
-    sig = _signals_table(ep, pl)
-    if kind == "none":
-        what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
-        return s + ((f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
-                     if not sig else f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read.")
-                    + sig + BETWEEN_INSTANTS)
-    if not pl.get("state_usable", True):
-        return s + ("\nRECORDED STATE: not given. This episode's cameras do not cover the same frames "
-                    "as its recorded state, so the state cannot be aligned to the video." + BETWEEN_INSTANTS)
-    src = ("joint encoders" if kind == "joints" else
-           "recorded end-effector poses" if r == "teleop_arms" else "tracked gripper poses")
-    if pl["spans"]:
-        sp = ", ".join(f"{d['start_s']:.2f}-{d['end_s']:.2f}s" for d in describe_spans(ep, pl["spans"]))
-        s += (f"\nRECORDED STILL SPANS, from the dataset's {src}: {sp}. Over each span the recording says "
-              f"no {n['actor']} moved and none opened or closed. This is the recording's claim, not a "
-              f"fact: check it. {'An' if n['actor'][0] in 'aeiou' else 'A'} {n['actor']} that is really still "
-              "shows a steady view in its own camera"
-              + (" unless something that carries it moves, which the other recorded signals below may show; the "
-                 f"claim covers only the {n['actors']}" if sig else "")
-              + ". If the views show motion during a span, the recording is "
-              f"wrong there. If the views hold steady and the scene still changes, the {n['actors']} did not do it: "
-              "say what you see.")
-    else:
-        s += f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
-    return s + _motion_table(ep, pl) + sig + BETWEEN_INSTANTS
-
-
 def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
     """The grid cell size: every camera is cut to cell_w wide with its own aspect kept (label/frames.py to_jpeg), so
     cameras of different aspect get cells of different height, and each is named then. A camera narrower than
@@ -823,13 +779,32 @@ def _contact_line(c: dict) -> str:
                if c.get("dips_s") else ""))
 
 
+def _touch_signal(ep: dict, name: str) -> bool:
+    """Whether one of the episode's signals measures touch (label/signals.py is_touch: its name says so and its numbers
+    behave like touch, on the upload's scale), once per signal per episode."""
+    memo = ep.setdefault("_touch", {})
+    if name not in memo:
+        from label import signals as sg
+        a = (ep.get("signals") or {}).get(name)
+        m = (ep.get("signal_meta") or {}).get(name) or {}
+        memo[name] = a is not None and bool(sg.is_touch(name, np.asarray(a, dtype=np.float64), m.get("rest"),
+                                                        m.get("swing")))
+    return memo[name]
+
+
+def touch_contacts(ep: dict, contacts) -> list[dict]:
+    """The contacts timed by at least one touch signal of the episode. A context.json prepared before is_touch can hold
+    a contact found from a signal that only behaved like touch (an intervention flag, odometry); it is not shown."""
+    return [c for c in contacts or [] if any(_touch_signal(ep, nm) for nm in c.get("signals") or [])]
+
+
 def contacts_block(ep: dict) -> str:
     """The episode's contacts as the recording gives them (label/contacts.py), what each contact picture shows, and
-    what to return for them. Empty when the recording has no touch signal."""
-    shown = ep.get("contacts_shown") or []
+    what to return for them. Empty when no contact is timed by a touch signal (touch_contacts)."""
+    shown = touch_contacts(ep, ep.get("contacts_shown"))
     if not shown:
         return ""
-    rest = [c for c in ep.get("contacts") or [] if c["id"] not in {x["id"] for x in shown}]
+    rest = [c for c in touch_contacts(ep, ep.get("contacts")) if c["id"] not in {x["id"] for x in shown}]
     depth = any(_contact_views(ep, c)[2] for c in shown)
     return ("\nCONTACTS: the recording's touch signals say a hand is touching something in these spans. They are the "
             "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
@@ -1003,10 +978,137 @@ def ego_annotation_block(ctx: dict) -> str:
             + (f"  about these annotations: {ctx['annotation_note'].strip()}\n" if ctx.get("annotation_note") else ""))
 
 
-def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None) -> tuple[str, str]:
-    """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
-    identical for every episode of the dataset, then the facts about THIS episode (rig, cameras, frames,
-    recorded state, instruction)."""
+# ---------------------------------------------------------------- the episode prompt: a base and its blocks
+
+# Where a block's text goes in the episode prompt. The base fills the rest: the intro (who and what), the camera
+# paragraph, the frames paragraph, the sampling line, BETWEEN_INSTANTS and the task.
+PROMPT_SLOTS = ("intro", "frames_detail", "frames", "state", "signals", "after_frames", "after_task")
+
+
+@dataclass(frozen=True)
+class Block:
+    """One part of the episode prompt that exists only when the episode holds its data. present(ep, pl) tests the
+    loaded episode folder and the plan made from it, never the rig or the dataset's name; text(ep, pl) is what the
+    model is told; schema_fields are the output fields the text asks for beyond the rig's shared schema
+    (label/prompts.py); checks are the deterministic checks the same data feeds (reported, never told to the model).
+    An episode without the data gets neither the text nor the fields."""
+    name: str
+    slot: str
+    present: Callable[[dict, dict], bool]
+    text: Callable[[dict, dict], str]
+    schema_fields: tuple = ()
+    checks: tuple = ()
+
+
+def _has_signals(ep: dict, pl: dict) -> bool:
+    return bool(ep.get("signals"))
+
+
+def _has_state(ep: dict, pl: dict) -> bool:
+    return state_kind(ep) != "none" and bool(pl.get("state_usable", True))
+
+
+def _state_unaligned(ep: dict, pl: dict) -> bool:
+    return state_kind(ep) != "none" and not pl.get("state_usable", True)
+
+
+def _has_contacts(ep: dict, pl: dict) -> bool:
+    return bool(touch_contacts(ep, ep.get("contacts_shown")))
+
+
+def _no_state(ep: dict, pl: dict) -> bool:
+    return state_kind(ep) == "none"
+
+
+def _collection_text(ep: dict, pl: dict) -> str:
+    return f"How the dataset cuts its recordings into episodes: {ep['context']['collection_note'].strip()}\n"
+
+
+def _contact_views_text(ep: dict, pl: dict) -> str:
+    return (" So are the instants just after a gripper's recorded value changes sharply, where something is "
+            "usually picked up or put down, from the scene camera and that gripper's own camera ("
+            + ", ".join(f"{frame_time(ep, k):.2f}" for k in pl["contact"]) + " s): use them to read what "
+            "is held and how it is left. The value only chose where to look closer; what is held is read from "
+            "the frames.")
+
+
+def _state_text(ep: dict, pl: dict) -> str:
+    """The recorded state, as the recording's claims: its still spans and the motion between consecutive instants."""
+    r, kind = rig(ep), state_kind(ep)
+    n = _rig_nouns(r)
+    src = ("joint encoders" if kind == "joints" else
+           "recorded end-effector poses" if r == "teleop_arms" else "tracked gripper poses")
+    if pl["spans"]:
+        sp = ", ".join(f"{d['start_s']:.2f}-{d['end_s']:.2f}s" for d in describe_spans(ep, pl["spans"]))
+        s = (f"\nRECORDED STILL SPANS, from the dataset's {src}: {sp}. Over each span the recording says "
+             f"no {n['actor']} moved and none opened or closed. This is the recording's claim, not a "
+             f"fact: check it. {'An' if n['actor'][0] in 'aeiou' else 'A'} {n['actor']} that is really still "
+             "shows a steady view in its own camera"
+             + (" unless something that carries it moves, which the other recorded signals below may show; the "
+                f"claim covers only the {n['actors']}" if _has_signals(ep, pl) else "")
+             + ". If the views show motion during a span, the recording is "
+             f"wrong there. If the views hold steady and the scene still changes, the {n['actors']} did not do it: "
+             "say what you see.")
+    else:
+        s = f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
+    return s + _motion_table(ep, pl)
+
+
+def _state_unaligned_text(ep: dict, pl: dict) -> str:
+    return ("\nRECORDED STATE: not given. This episode's cameras do not cover the same frames "
+            "as its recorded state, so the state cannot be aligned to the video.")
+
+
+def _no_state_text(ep: dict, pl: dict) -> str:
+    n = _rig_nouns(rig(ep))
+    if _has_signals(ep, pl):
+        return f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
+    what = "no hand, head or device tracking" if rig(ep) == "ego_head" else "no robot or gripper state"
+    return f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
+
+
+def _uploader_text(ep: dict, pl: dict) -> str:
+    # notes the person who uploaded the episode sent with it (a note file beside a video, an annotation channel in an
+    # MCAP), in whatever form they came
+    return ("\nTHE UPLOADER'S OWN NOTES FOR THIS EPISODE, as sent. They are claims to check against the "
+            "video, not ground truth; where the video contradicts them, record it as a data issue:\n"
+            + ep["context"]["uploader_annotation"].strip() + "\n")
+
+
+BLOCKS = (
+    Block("collection_note", "intro", lambda ep, pl: bool(ep["context"].get("collection_note")), _collection_text),
+    Block("contact_views", "frames_detail", lambda ep, pl: bool(pl.get("contact")), _contact_views_text),
+    Block("coverage", "frames", lambda ep, pl: bool(_coverage_note(ep, pl)), _coverage_note),
+    Block("depth", "frames", lambda ep, pl: bool(ep.get("depth")), lambda ep, pl: _depth_note(ep)),
+    Block("state", "state", _has_state, _state_text,
+          checks=("still_spans", "timebase", "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")),
+    Block("state_unaligned", "state", _state_unaligned, _state_unaligned_text, checks=("camera_windows_match_state",)),
+    Block("no_state", "state", _no_state, _no_state_text),
+    Block("signals", "signals", _has_signals, _signals_table, checks=("sensors",)),
+    Block("contacts", "after_frames", _has_contacts, lambda ep, pl: contacts_block(ep),
+          schema_fields=("contacts", "contacts_missing"),
+          checks=("contact_checks",)),
+    Block("uploader_notes", "after_task", lambda ep, pl: bool(ep["context"].get("uploader_annotation")),
+          _uploader_text),
+)
+
+
+def present_blocks(ep: dict, pl: dict) -> list[Block]:
+    """The blocks whose data this episode holds, in prompt order."""
+    return [b for b in BLOCKS if b.present(ep, pl)]
+
+
+def requested_schema(ep: dict, pl: dict) -> tuple:
+    """The output fields this episode's blocks ask for beyond the rig's shared schema."""
+    return tuple(f for b in present_blocks(ep, pl) for f in b.schema_fields)
+
+
+def implied_checks(ep: dict, pl: dict) -> tuple:
+    """The deterministic checks the data of this episode's blocks feeds."""
+    return tuple(c for b in present_blocks(ep, pl) for c in b.checks)
+
+
+def _intro_head(ep: dict) -> str:
     ctx = ep["context"]
     r = rig(ep)
     n = _rig_nouns(r)
@@ -1021,40 +1123,72 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
         else f"a person holds {k} handheld grippers, one per hand, and does the task with them")
     kind_of = ("one clip of first-person human video from the {d} dataset, collected to train robots and world "
                "models" if r == "ego_head" else "one episode of a robot-learning demonstration from the {d} dataset{w}")
-    intro = (
-        f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the episode exactly as "
-        "the dataset ships it, from its first recorded frame to its last; nothing was trimmed, cleaned or edited.\n"
-        + (f"How the dataset cuts its recordings into episodes: {ctx['collection_note'].strip()}\n"
-           if ctx.get("collection_note") else "")
-        + "\n" + camera_desc(ep) + "\n")
-    cams = ctx.get("cameras") or {}
-    c0 = cams.get(anchor(ep), {})
+    return (f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the episode exactly as "
+            "the dataset ships it, from its first recorded frame to its last; nothing was trimmed, cleaned or "
+            "edited.\n")
+
+
+def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
+    names = ", ".join(cam_name(ep, v) for v in views(ep))
+    return (
+        f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
+        "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
+        "seconds from the episode's first frame. Read each grid left to right and the grids in order. "
+        "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
+        f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's first and last instant are "
+        f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
+        "small detail (lettering, a display, fine alignment).")
+
+
+def _instants_line(ep: dict) -> str:
+    return (f"Which instants you get: one every {SAMPLE_EVERY_S[rig(ep)]:g} s for the whole episode, plus its first "
+            "and last frame.")
+
+
+def task_block(ep: dict) -> str:
+    """The task, part of the base: the dataset's instruction (robot rigs) or annotation (head camera). A head camera
+    with no annotation is told there is none, because its shared instructions always ask for goal_alignment."""
+    ctx = ep["context"]
+    if rig(ep) == "ego_head":
+        return ego_annotation_block(ctx)
+    given = (ctx.get("instruction") or "").strip()
+    if not given:
+        return ""
+    label = "; ".join(ctx.get("task_label") or [])
+    # the rules for using the instruction are the same for every episode and live in the cached
+    # instructions (instruction_rules); only the instruction itself belongs to the episode
+    s = ("\nTHE TASK FOR THIS EPISODE WAS GIVEN TO YOU as the dataset's per-episode instruction:\n"
+         f"  \"{given}\"\nHow to use it is set out under ABOUT THE EPISODE'S INSTRUCTION above.\n")
+    if ctx.get("instruction_note"):
+        s += ctx["instruction_note"].strip() + "\n"
+    elif label:
+        s += (f"The dataset's coarse task label for this episode is \"{label}\"; the "
+              "instruction above is the dataset's per-episode annotation of it, and "
+              "the outcome is graded against it.\n")
+    return s
+
+
+def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -> str:
+    """The episode's part of the prompt: the base, with each present block's text in its slot."""
+    got = dict.fromkeys(PROMPT_SLOTS, "")
+    for b in present_blocks(ep, pl):
+        got[b.slot] += b.text(ep, pl)
+    return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep) + "\n"
+            + _frames_head(ep, cell_w, cell_h, native) + got["frames_detail"] + "\n" + _instants_line(ep)
+            + got["frames"] + got["state"] + got["signals"] + BETWEEN_INSTANTS + got["after_frames"] + "\n"
+            + task_block(ep) + got["after_task"])
+
+
+def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None) -> tuple[str, str]:
+    """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
+    identical for every episode of the dataset, then the facts about THIS episode (episode_text)."""
+    ctx = ep["context"]
+    r = rig(ep)
+    c0 = (ctx.get("cameras") or {}).get(anchor(ep), {})
     native = (c0.get("width") or "native", c0.get("height") or "resolution")
     given = (ctx.get("instruction") or "").strip()
-    label = "; ".join(ctx.get("task_label") or [])
-    given_block = ""
-    if r == "ego_head":
-        given_block = ego_annotation_block(ctx)
-    elif given:
-        # the rules for using the instruction are the same for every episode and live in the cached
-        # instructions (instruction_rules); only the instruction itself belongs to the episode
-        given_block = ("\nTHE TASK FOR THIS EPISODE WAS GIVEN TO YOU as the dataset's per-episode instruction:\n"
-                       f"  \"{given}\"\nHow to use it is set out under ABOUT THE EPISODE'S INSTRUCTION above.\n")
-        if ctx.get("instruction_note"):
-            given_block += ctx["instruction_note"].strip() + "\n"
-        elif label:
-            given_block += (f"The dataset's coarse task label for this episode is \"{label}\"; the "
-                            "instruction above is the dataset's per-episode annotation of it, and "
-                            "the outcome is graded against it.\n")
-    if ctx.get("uploader_annotation"):
-        # notes the person who uploaded the episode sent with it (a note file beside a video, an annotation
-        # channel in an MCAP), in whatever form they came
-        given_block += ("\nTHE UPLOADER'S OWN NOTES FOR THIS EPISODE, as sent. They are claims to check against the "
-                        "video, not ground truth; where the video contradicts them, record it as a data issue:\n"
-                        + ctx["uploader_annotation"].strip() + "\n")
     return (prompts.fixed_instructions(r, has_instruction=bool(given)) + prompts.example_block(r, example_dir),
-            EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + contacts_block(ep) + "\n"
-            + given_block)
+            episode_text(ep, pl, cell_w, cell_h, native))
 
 
 EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
@@ -1068,7 +1202,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     ep = load(ep_dir)
     pl = plan(ep)
     from label import contacts as lc
-    ep["contacts"] = lc.of_episode(ep)
+    ep["contacts"] = touch_contacts(ep, lc.of_episode(ep))
     ep["contacts_shown"] = chosen_contacts(ep, ep["contacts"])
     if ep["contacts_shown"]:
         pl["contact"] = []   # the touch signals' own contacts replace the views chosen from the gripper's value
@@ -1154,6 +1288,9 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
             "grid_cols": grid_cols,
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
             "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s",
+            "blocks": [b.name for b in present_blocks(ep, pl)],
+            "schema_fields": list(requested_schema(ep, pl)),
+            "checks_implied": list(implied_checks(ep, pl)),
             **({"depth_s": depth_sent, "depth_views": order_views(depth_at)} if depth_sent else {}),
             **({"contact_views": {"shown": contacts_sent, "strips": strips}, "contacts": ep.get("contacts")}
                if contacts_sent else {})}

@@ -152,3 +152,132 @@ def test_episode_prompts_match_their_pinned_text(name):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     assert path.read_text() == text, f"{name}: the episode prompt changed"
+
+
+def _add(**ctx):
+    def f(ep, pl):
+        ep["context"].update(ctx)
+    return f
+
+
+def _add_contact_views(ep, pl):
+    pl["contact"] = [pl["ks"][3]]
+
+
+def _add_late_camera(ep, pl):
+    """The left camera starts 3 s after the scene camera (paired by real time), so it has no frame at the first
+    instants."""
+    n = len(ep["state"])
+    ep["times"] = {"exo": np.arange(n) / 30.0, "left": np.arange(90, n) / 30.0, "right": np.arange(n) / 30.0}
+    ep["kmap"] = {"left": np.clip(np.arange(n) - 90, 0, None), "right": np.arange(n)}
+
+
+def _add_depth(ep, pl):
+    ep["depth"] = {"exo": {}}
+
+
+def _add_arm_state(ep, pl):
+    ep["context"]["state_kind"] = "joints"
+    ep["state"] = _joints(len(ep["state"]), arms=1)
+
+
+def _misalign(ep, pl):
+    pl["state_usable"] = False
+
+
+def _drop_state(ep, pl):
+    ep["context"]["state_kind"] = "none"
+    ep["state"] = np.zeros((len(ep["state"]), 0))
+
+
+def _add_signals(ep, pl):
+    t = np.arange(len(ep["state"])) / 30.0
+    ep["signals"] = {"base.odom": np.stack([0.01 * t, 0 * t, 0.002 * t], axis=1)}
+    ep["signal_meta"] = {"base.odom": {"names": ["x", "y", "yaw"]}}
+
+
+def _add_contact(ep, pl):
+    """The left glove's pressure (touch by name and numbers) and the contact it times."""
+    n = len(ep["state"])
+    ep.setdefault("signals", {})["left_glove_pressure"] = _glove(n)
+    ep.setdefault("signal_meta", {})["left_glove_pressure"] = dict(GLOVE_META)
+    ep["contacts"] = ep["contacts_shown"] = [dict(CONTACT)]
+
+
+# (block, the case without its data, what adds the data, text only that block says)
+BLOCK_CASES = [
+    ("collection_note", "teleop_joints", _add(collection_note="consecutive 3-minute clips of a shift."),
+     ("How the dataset cuts its recordings",)),
+    ("contact_views", "teleop_joints", _add_contact_views, ("So are the instants just after",)),
+    ("coverage", "teleop_joints", _add_late_camera, ("has frames only from",)),
+    ("depth", "teleop_joints", _add_depth, ("DEPTH:",)),
+    ("state", "teleop_video_only", _add_arm_state, ("RECORDED STILL SPANS", "RECORDED MOTION")),
+    ("state_unaligned", "teleop_joints", _misalign, ("RECORDED STATE: not given",)),
+    ("no_state", "teleop_joints", _drop_state, ("RECORDED STATE: none",)),
+    ("signals", "teleop_joints", _add_signals, ("OTHER RECORDED SIGNALS", "base.odom")),
+    ("contacts", "teleop_joints", _add_contact, ("CONTACTS:",)),
+    ("uploader_notes", "teleop_joints", _add(uploader_annotation='{"operator": "A"}\n'),
+     ("THE UPLOADER'S OWN NOTES",)),
+]
+# blocks whose presence switches the shared instructions to another variant (none yet; Task 3 adds them)
+CHANGES_FIXED = ()
+
+
+@pytest.mark.parametrize("block,base,add,markers", BLOCK_CASES, ids=[c[0] for c in BLOCK_CASES])
+def test_a_block_is_in_the_prompt_and_the_schema_only_when_its_data_is(block, base, add, markers):
+    ep, pl = CASES[base]()
+    fields = next(b.schema_fields for b in me.BLOCKS if b.name == block)
+    fixed0, ep0 = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert block not in [b.name for b in me.present_blocks(ep, pl)]
+    assert not any(m in fixed0 + ep0 for m in markers)
+    assert not set(fields) & set(me.requested_schema(ep, pl))
+    assert not any(f'"{f}"' in fixed0 + ep0 for f in fields)
+    add(ep, pl)
+    fixed1, ep1 = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert block in [b.name for b in me.present_blocks(ep, pl)]
+    assert all(m in ep1 for m in markers)
+    assert set(fields) <= set(me.requested_schema(ep, pl))
+    assert all(f'"{f}"' in ep1 for f in fields)
+    if block not in CHANGES_FIXED:
+        assert fixed1 == fixed0                      # the cached shared instructions stay byte for byte the same
+
+
+def test_every_block_is_tested_and_presence_never_reads_the_rig_or_dataset_name():
+    import inspect
+    assert {c[0] for c in BLOCK_CASES} == {b.name for b in me.BLOCKS}
+    for b in me.BLOCKS:
+        src = inspect.getsource(b.present) if b.present.__name__ != "<lambda>" else ""
+        assert "rig(" not in src and "dataset" not in src, b.name
+    assert {b.slot for b in me.BLOCKS} <= set(me.PROMPT_SLOTS)
+
+
+def test_contacts_ask_for_their_fields_and_imply_the_contact_check():
+    ep, pl = CASES["teleop_joints"]()
+    assert me.requested_schema(ep, pl) == () and "contact_checks" not in me.implied_checks(ep, pl)
+    _add_contact(ep, pl)
+    assert me.requested_schema(ep, pl) == ("contacts", "contacts_missing")
+    assert "contact_checks" in me.implied_checks(ep, pl)
+
+
+def test_a_contact_timed_only_by_a_signal_that_does_not_measure_touch_is_not_shown():
+    """A context.json prepared before is_touch can hold a contact found from an intervention flag, which rests and
+    rises like a pad but whose name says nothing of touch: it is neither told to the model nor asked about."""
+    ep, pl = CASES["teleop_joints"]()
+    t = np.arange(900) / 30.0
+    ep["signals"] = {"teleop.intervention": ((t > 6) & (t < 8)).astype(float)[:, None]}
+    ep["signal_meta"] = {"teleop.intervention": {}}
+    ep["contacts"] = ep["contacts_shown"] = [dict(CONTACT, signals=["teleop.intervention"])]
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert "contacts" not in [b.name for b in me.present_blocks(ep, pl)] and me.requested_schema(ep, pl) == ()
+    assert "CONTACTS:" not in episode and '"contacts"' not in episode
+    assert me.touch_contacts(ep, ep["contacts"]) == []
+    _add_contact(ep, pl)                             # a contact the glove's pressure times is shown
+    assert [c["id"] for c in me.touch_contacts(ep, ep["contacts"])] == ["c1"]
+    assert "contacts" in [b.name for b in me.present_blocks(ep, pl)]
+
+
+def test_an_unaligned_state_no_longer_hides_the_signals():
+    ep, pl = CASES["teleop_unaligned"]()
+    _add_signals(ep, pl)
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert "RECORDED STATE: not given" in episode and "OTHER RECORDED SIGNALS" in episode
