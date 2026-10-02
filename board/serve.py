@@ -648,6 +648,9 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #current-ep-src a:hover { color: var(--fg); border-bottom-color: var(--fg-3); }
 #current-ep-reader { font: 500 11px/1.35 var(--sans); color: var(--fg-3); }
 #current-ep-reader:empty { display: none; }
+/* with the reader's line (which opens to a tall list) under the name, the buttons stay at the top, beside the name,
+   instead of sliding down the header's centre as the list opens */
+.ep-head:has(#current-ep-reader:not(:empty)) { align-items: flex-start; }
 /* what the model was not shown: the board's own fold (.pub-fold); opened, the list scrolls inside the header so it
    never pushes the player off screen */
 #current-ep-reader .rn-note { overflow-wrap: anywhere; }
