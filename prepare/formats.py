@@ -896,8 +896,9 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
         if a.shape[1] > SIGNAL_MAX_VALUES:
             out.left_out.append((str(c), f"{a.shape[1]} values per frame, more than the {SIGNAL_MAX_VALUES} a signal holds"))
             continue
-        if a.shape[1] == 1 and is_clock(a[:, 0]):
-            # a clock (the time a sensor's reading was received, a sequence number): kept for the sync check, not shown
+        if a.shape[1] == 1 and H5_TIME_NAME.search(str(c).lower()) and is_clock(a[:, 0]):
+            # a clock (the time a sensor's reading was received): kept for the sync check, not shown. Only a time's name
+            # makes a column one; a base driving at a steady speed rises by a steady step too
             out.clocks[str(c)] = a[:n, 0]
             continue
         f = features.get(c) or {}
@@ -1459,7 +1460,7 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             continue                      # text only: the uploader's notes, read by annotation_tables
         tcol = next((c for c in num.columns if H5_TIME_NAME.search(str(c)) and is_clock(num[c].to_numpy())), None)
         vals = num.drop(columns=[c for c in num.columns if c == tcol or SIGNAL_SKIP.search(str(c))
-                                 or is_clock(num[c].to_numpy())])
+                                 or (H5_TIME_NAME.search(str(c).lower()) and is_clock(num[c].to_numpy()))])
         if vals.shape[1] == 0:
             continue
         v = vals.to_numpy(dtype=np.float64)
