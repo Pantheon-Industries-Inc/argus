@@ -607,6 +607,24 @@ def test_an_empty_clock_is_empty():
     assert len(f._seconds(np.array([]))) == 0
 
 
+def test_clocks_from_zero_keep_their_own_units():
+    """Two clocks that both start at 0 (a camera in seconds from the recording's start beside an IMU in nanoseconds
+    from it) do not say they share a unit, so each is read by its own step."""
+    import numpy as np
+    out = f._clocks_in_seconds({"cam": np.arange(40) / 30.0, "imu": np.arange(400) * 5e6})
+    assert abs(np.median(np.diff(out["cam"])) - 1 / 30) < 1e-9
+    assert abs(np.median(np.diff(out["imu"])) - 5e-3) < 1e-9
+
+
+def test_clocks_from_the_same_moment_far_from_zero_share_the_slowest_ones_unit():
+    """A 1 kHz pad and a 30 fps camera, both in nanoseconds from 43 minutes of uptime: the pad's step of 1e6 alone
+    reads as microseconds, so it takes the camera's unit."""
+    import numpy as np
+    cam = 2_600e9 + np.arange(40) * 33_333_333.0
+    out = f._clocks_in_seconds({"cam": cam, "pad": cam[0] - 1e7 + np.arange(1400) * 1e6})
+    assert abs(np.median(np.diff(out["pad"])) - 1e-3) < 1e-9
+
+
 def test_a_steadily_rising_reading_stays_a_signal_unless_its_name_says_time():
     """A base driving forward at a steady speed rises by a steady step, as a clock does; only a time's name (timestamp,
     t_ns) makes a column a clock."""

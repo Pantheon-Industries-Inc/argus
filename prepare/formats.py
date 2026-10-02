@@ -2543,21 +2543,29 @@ def _seconds(a: np.ndarray) -> np.ndarray:
 
 
 SAME_ORIGIN = 0.01             # clocks whose first values agree to within this share count from the same moment
+FAR_FROM_ZERO_STEPS = 1000     # a clock counts from a moment far from zero when it starts this many steps past it
 
 
 def _clocks_in_seconds(raw: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """{path: seconds} for the clocks of one file. They come from one recorder, so clocks that count from the same
-    moment (first values within SAME_ORIGIN of each other) are in one unit, the one _seconds_scale reads from the
-    slowest of them, whose large step is the least ambiguous. A 1 kHz pad stamped in nanoseconds from boot steps by
-    1e6, which alone reads as microseconds; beside a 30 fps camera on the same clock it is read in nanoseconds."""
+    moment are in one unit, the one _seconds_scale reads from the slowest of them, whose large step is the least
+    ambiguous. A 1 kHz pad stamped in nanoseconds from boot steps by 1e6, which alone reads as microseconds; beside a
+    30 fps camera on the same clock it is read in nanoseconds. Two clocks share a moment only when both start far from
+    zero (more than FAR_FROM_ZERO_STEPS of the larger of their steps, as a clock from boot or the epoch does) and
+    their first values agree to within SAME_ORIGIN. Clocks that start at 0 say nothing about their units (a camera in
+    seconds and an IMU in nanoseconds, both from the recording's start), so each keeps its own."""
     finite = {p: a[np.isfinite(a)] for p, a in raw.items()}
     first = {p: float(a[0]) if len(a) else None for p, a in finite.items()}
     step = {p: float(np.median(np.diff(a))) if len(a) > 1 else 0.0 for p, a in finite.items()}
 
     def same_origin(p, q):
+        if p == q:
+            return True
         if first[p] is None or first[q] is None:
-            return p == q
-        return abs(first[p] - first[q]) <= SAME_ORIGIN * max(abs(first[p]), abs(first[q]))
+            return False
+        far = FAR_FROM_ZERO_STEPS * max(step[p], step[q])
+        both_far_from_zero = abs(first[p]) > far and abs(first[q]) > far
+        return both_far_from_zero and abs(first[p] - first[q]) <= SAME_ORIGIN * max(abs(first[p]), abs(first[q]))
     out = {}
     for p, a in raw.items():
         slowest = max((q for q in raw if same_origin(p, q)), key=lambda q: step[q])
