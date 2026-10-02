@@ -2585,8 +2585,9 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
       epoch), beside a reference that does too, takes the unit among CLOCK_SCALES under which its time range overlaps
       the reference's. The units are 1000 apart, so at most one does, whether the clock's log runs longer than the
       camera's clip or covers only part of it.
-    - A clock or a reference that starts near zero says nothing about its unit by its start, so the clock takes the
-      unit that puts its span within SPAN_MATCH of the reference's.
+    - A clock or a reference that starts near zero says nothing about its unit by its start, so a sampled stream (at
+      least COUNTER_MIN_MESSAGES finite values) takes the unit that puts its span within SPAN_MATCH of the
+      reference's. A few event stamps are not a stream and need not span the episode, so they keep their own reading.
     - Otherwise, and when it has fewer than two finite values, a clock keeps its own _seconds_scale.
     The reference is the camera's clock (reference). Without one, the clock with the largest step is a guess, so it is
     used only when its size settles its unit (_epoch_scale), and otherwise every clock keeps its own reading. A
@@ -2617,7 +2618,7 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
                 overlapping = [s for s in CLOCK_SCALES if lo * s <= ref_hi and hi * s >= ref_lo]
                 if overlapping:
                     scale = overlapping[0]
-            elif hi > lo and ref_hi > ref_lo:
+            elif len(facts[p][0]) >= COUNTER_MIN_MESSAGES and hi > lo and ref_hi > ref_lo:
                 off = {s: abs(np.log((hi - lo) * s / (ref_hi - ref_lo))) for s in CLOCK_SCALES}
                 closest = min(off, key=off.get)
                 if off[closest] <= np.log(SPAN_MATCH):

@@ -685,6 +685,14 @@ def test_a_reference_clock_that_never_steps_leaves_the_other_clocks_alone():
     assert np.array_equal(out["pad"], f._seconds(pad))
 
 
+def test_sparse_event_stamps_from_zero_keep_their_own_reading():
+    """Three event stamps from the recording's start over 30 ms, in nanoseconds, beside a 30 s camera from that start in
+    seconds: a few stamps are not a sampled stream, so their span is not matched to the camera's."""
+    import numpy as np
+    out = f._clocks_in_seconds({"cam": np.arange(900) / 30.0, "events": np.array([0, 1.5e7, 3e7])}, reference="cam")
+    assert abs(_step_s(out["events"]) - 0.015) < 1e-9
+
+
 def test_a_single_clock_is_read_as_it_would_be_alone():
     import numpy as np
     cam = BOOT_NS + np.arange(40) * 33_333_333.0
