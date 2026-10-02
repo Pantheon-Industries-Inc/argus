@@ -193,6 +193,8 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         "arm_still_spans": req["still_spans"],
         "dataset_checks": pl["checks"],
         "example_dir": str(example_dir) if example_dir else None,
+        # the recording's contacts (label/contacts.py) and the strips each one shown was drawn with (checks/contacts.py)
+        **({"contacts": req["contacts"], "contact_views": req["contact_views"]} if req.get("contact_views") else {}),
         "config": {"views": req["views"], "cam_labels": req["cam_labels"], "layout": "grid",
                    "grid_cols": req["grid_cols"], "cell": req["cell"],
                    "n_timesteps": len(pl["ks"]), "n_frames_sent": len(pl["ks"]) * len(req["cam_labels"]),

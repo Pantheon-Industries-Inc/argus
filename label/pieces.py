@@ -194,6 +194,23 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if new_times:
             np.savez(d / "times.npz", **new_times)
             c2["real_times"] = "times.npz"
+        if "contacts" in ctx:
+            # the recording's contacts that overlap the part, on its clock and clipped to it, keeping their ids so the
+            # parts' answers join back into one list
+            c2["contacts"] = [{**c, "start_s": round(max(c["start_s"], t0) - t0, 3), "end_s": round(min(c["end_s"], t1) - t0, 3),
+                               "peak_s": round(min(max(c["peak_s"], t0), t1) - t0, 3),
+                               "from_start": c["from_start"] or c["start_s"] < t0, "to_end": c["to_end"] or c["end_s"] > t1,
+                               "dips_s": [round(x - t0, 3) for x in c.get("dips_s") or [] if t0 <= x <= t1]}
+                              for c in ctx["contacts"] if c["end_s"] >= t0 and c["start_s"] < t1]
+        if (ep_dir / "depth.json").exists():
+            # each camera's depth frames for the part's anchor frames; the depth files and their times are the
+            # recording's own
+            dj = json.loads((ep_dir / "depth.json").read_text())
+            for v, e in dj.items():
+                np.save(d / e["kmap"], np.asarray(np.load(ep_dir / e["kmap"])[k0:k1]))
+            (d / "depth.json").write_text(json.dumps(dj, indent=1))
+            if (ep_dir / "depth_times.npz").exists():
+                shutil.copy(ep_dir / "depth_times.npz", d / "depth_times.npz")
         if z is not None:
             arrs = {kk: z[kk][k0:k1] for kk in z.files}
             np.savez(d / "state.npz", **arrs)
@@ -318,6 +335,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     L = {"scene": {"objects": [], "setting": ""}, "timeline": [], "key_events": [], "state_changes": [],
          "scene_graph": [], "recovery": [], "instruction_variants": [], "data_issues": [], "operator_mistakes": [],
          "tasks": []}
+    contacts_model, contacts_missing, views = [], [], {"shown": [], "strips": {}}
     excluded, summaries, reviews, seen_obj = [], [], [], set()
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "est_cost_usd": 0.0,
              "cached_tokens": 0, "cache_write_tokens": 0, "latency_s": 0.0}
@@ -351,6 +369,17 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
                                                "off at this point describes our cut, not the recording"})
                 else:
                     L[k].append(iss)
+        # a contact cut by one of our cuts is answered by each part it reaches; the first answer that saw it is kept
+        for c in lab.get("contacts") or []:
+            if isinstance(c, dict) and not any(x.get("id") == c.get("id") for x in contacts_model):
+                contacts_model.append(c)
+        contacts_missing += [c for c in lab.get("contacts_missing") or [] if isinstance(c, dict)]
+        cv = r.get("contact_views") or {}
+        for cid in cv.get("shown") or []:
+            if cid not in views["shown"]:
+                views["shown"].append(cid)
+                views["strips"][cid] = {k: [round(float(x) + t0, 3) for x in ts]
+                                        for k, ts in ((cv.get("strips") or {}).get(cid) or {}).items()}
         summ = (lab.get("task_summary") or "").strip()
         if summ:
             summaries.append(summ)
@@ -390,6 +419,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
                                "cost_usd": round(sum(float(x.get("cost_usd") or 0) for x in routes), 6)}
     if excluded:
         L["_excluded"] = excluded
+    if views["shown"]:
+        L["contacts"], L["contacts_missing"] = contacts_model, contacts_missing
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
             # each part inferred its own task, with the recording's task text given only as context (write_pieces), so
             # no part was graded against that text and the recording is not either
@@ -397,7 +428,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
-            "stitched": {"parts": count, "cuts_s": cuts_s}}
+            "stitched": {"parts": count, "cuts_s": cuts_s},
+            **({"contacts": ctx.get("contacts"), "contact_views": views} if views["shown"] else {})}
 
 
 if __name__ == "__main__":

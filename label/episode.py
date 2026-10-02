@@ -112,9 +112,12 @@ def load(ep_dir: Path) -> dict:
     ep = {"dir": ep_dir, "context": ctx, "sources": src, "state": state,
           "action": action, "times": None, "kmap": {}, "signals": {}}
     if ctx.get("signals"):
-        # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals)
+        # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals), with
+        # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz)
         z = np.load(ep_dir / "signals.npz")
         ep["signals"] = {s["name"]: z[s["key"]] for s in ctx["signals"]}
+        ep["signal_meta"] = {s["name"]: {k: s[k] for k in ("shape", "names", "rate_hz", "rest", "swing") if k in s}
+                             for s in ctx["signals"]}
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
@@ -123,6 +126,9 @@ def load(ep_dir: Path) -> dict:
     for v, d in src.items():
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
+    # each camera's depth stream, when the recording has one (label/depth.py)
+    from label import depth as dp
+    ep["depth"] = {v: e for v, e in dp.load(ep_dir).items() if v in src}
     return ep
 
 
@@ -387,6 +393,176 @@ def fullres_stack(ep: dict, imgs: dict, k: int, label: str, t_s: float, only: li
     return buf.getvalue()
 
 
+DEPTH_SCALE_INSTANTS = 12   # sampled instants whose depth readings set a camera's colour scale
+
+
+def _depth_frames(ep: dict, pl: dict) -> dict:
+    """{view: {k: depth array}} at the detail instants (first, contact, last), and ep["depth_range"] {view: (near, far)}
+    from those and up to DEPTH_SCALE_INSTANTS sampled instants spread over the episode."""
+    from label import depth as dp
+    d = ep.get("depth") or {}
+    if not d:
+        return {}
+    ks = pl["ks"]
+    detail = sorted({ks[0], ks[-1], *(pl.get("contact") or [])})
+    spread = [ks[int(i)] for i in np.linspace(0, len(ks) - 1, min(DEPTH_SCALE_INSTANTS, len(ks)))]
+    out, rng = {}, {}
+    for v in order_views(d):
+        got = dp.at_anchor(ep, d, v, sorted(set(detail) | set(spread)))
+        # the upload's range for depth with no stated unit (prepare/formats.py measure_depth_ranges), else this episode's
+        r = tuple(d[v]["range"]) if d[v].get("range") else dp.scale_range(got.values())
+        if r is None:
+            continue
+        rng[v] = r
+        out[v] = {k: got[k] for k in detail if k in got}
+    ep["depth_range"] = rng
+    return out
+
+
+def depth_stack(ep: dict, depth_at: dict, vs: list[str], k: int, label: str) -> bytes:
+    """The depth pictures of cameras vs at instant k, coloured on each camera's episode scale (label/depth.py), at detail
+    size, stacked top to bottom with a name strip that gives the scale."""
+    from PIL import Image, ImageDraw
+    from label import depth as dp
+    ims = []
+    for v in vs:
+        im = dp.picture(depth_at[v][k], ep["depth"][v], ep["depth_range"].get(v))
+        if im.width > DETAIL_MAX_W:
+            im = im.resize(detail_size(im.width, im.height), Image.NEAREST)
+        ims.append((v, im))
+    w = max(im.width for _, im in ims)
+    strip = 26
+    g = Image.new("RGB", (w, sum(im.height + strip for _, im in ims)), (18, 18, 20))
+    dr = ImageDraw.Draw(g)
+    y = 0
+    for v, im in ims:
+        dr.text((6, y + 5), f"{cam_name(ep, v)} depth   {label}   t={frame_time(ep, k):.2f}s", fill=(255, 220, 0))
+        g.paste(im, (0, y + strip))
+        y += im.height + strip
+    return dp.to_jpeg(g)
+
+
+def _contact_views(ep: dict, c: dict) -> tuple[list[str], list[str], list[str]]:
+    """(the camera the strips show, the cameras the strongest moment shows, those of them with depth). The strips show
+    the camera closest to the touch: the head camera on a person, the camera on the contact's own arm or gripper when
+    there is one, else the scene camera. The strongest moment adds the scene camera, so where the object is stays
+    clear."""
+    vs = views(ep)
+    if rig(ep) == "ego_head":
+        near = vs[:1]
+    else:
+        own = [v for v in vs if v in MOUNTED and c.get("hand") == v]
+        mounted = [v for v in vs if v in MOUNTED]
+        near = own or (mounted[:1] if len(mounted) == 1 and c.get("hand") is None else []) or vs[:1]
+    peak = near + [v for v in vs[:1] if v not in near]
+    return near, peak, [v for v in peak if v in (ep.get("depth") or {})]
+
+
+def _frame_at(ep: dict, t_s: float) -> int:
+    n = int(len(ep["state"]))
+    ts = np.array([frame_time(ep, k) for k in range(n)])
+    return int(np.clip(np.argmin(np.abs(ts - t_s)), 0, n - 1))
+
+
+def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
+    """(picture, strips) of one contact: for each camera shown (_contact_views) five frames around the signal's begin
+    and five around its end (STRIP_OFFSETS_S, numbered 1 to 5), then the strongest moment with the cameras' depth and
+    the touch sensor's maps (the contact's 2-D signals, bright away from rest on the upload's scale). strips gives each
+    strip's frame times ({"begin": [...], "end": [...]}), which checks/contacts.py reads the model's frame numbers
+    against. None when its frames cannot be decoded."""
+    from PIL import Image, ImageDraw
+    from label import depth as dp
+    vs, pvs, dvs = _contact_views(ep, c)
+    t_end = frame_time(ep, len(ep["state"]) - 1)
+    strips = []
+    if not c.get("from_start"):
+        strips.append(("touch begins by the recording", [min(max(c["start_s"] + o, 0.0), t_end) for o in STRIP_OFFSETS_S]))
+    if not c.get("to_end"):
+        strips.append(("touch ends by the recording", [min(max(c["end_s"] + o, 0.0), t_end) for o in END_OFFSETS_S]))
+    kp = _frame_at(ep, c["peak_s"])
+    ks = sorted({_frame_at(ep, t) for _, ts in strips for t in ts} | {kp})
+    try:
+        got = {v: _decode_view(ep, v, ks if v in vs else [kp], gate) for v in dict.fromkeys(vs + pvs)}
+    except Exception:
+        return None
+    font = mf._grid_font(16)
+    pad, strip_h = 8, 24
+    blocks = []                                   # (title, [(label, PIL)] rows)
+    for title, ts in strips:
+        rows = []
+        for v in vs:
+            cells = []
+            for i, t in enumerate(ts):
+                k = _frame_at(ep, t)
+                if not recording_at(ep, v, k):
+                    continue
+                im = got[v][k]
+                im = im.resize((STRIP_CELL_W, int(round(im.height * STRIP_CELL_W / im.width))))
+                cells.append((f"{i + 1}   {frame_time(ep, k):.2f}s", im))
+            rows.append((cam_name(ep, v), cells))
+        blocks.append((title, rows))
+    peak = []
+    for v in pvs:
+        im = got[v][kp]
+        peak.append((f"{cam_name(ep, v)}   {frame_time(ep, kp):.2f}s",
+                     im.resize((PEAK_CELL_W, int(round(im.height * PEAK_CELL_W / im.width))))))
+    if dvs:
+        d = ep.get("depth") or {}
+        rng = ep.get("depth_range") or {}
+        for v in dvs:
+            fr = dp.at_anchor(ep, d, v, [kp]).get(kp)
+            if fr is not None:
+                im = dp.picture(fr, d[v], rng.get(v))
+                peak.append((f"{cam_name(ep, v)} depth", im.resize((PEAK_CELL_W, int(round(im.height * PEAK_CELL_W / im.width))),
+                                                                  Image.NEAREST)))
+    for nm in c["signals"]:
+        tile = _map_tile(ep, nm, kp)
+        if tile is not None:
+            peak.append((nm, tile))
+    blocks.append(("strongest", [("", peak)]))
+    widths = [sum(im.width for _, im in cells) + pad * max(len(cells) - 1, 0)
+              for _, rows in blocks for _, cells in rows]
+    w = max(widths + [640]) + 2 * pad
+    h = sum(strip_h + sum(strip_h + max((im.height for _, im in cells), default=0) for _, cells in rows)
+            for _, rows in blocks) + strip_h
+    g = Image.new("RGB", (w, h), (18, 18, 20))
+    dr = ImageDraw.Draw(g)
+    dr.text((pad, 4), f"contact {c['id']}   {c.get('hand') or 'hand not named'}   {', '.join(c['signals'])}   "
+                      f"{c['start_s']:.2f}-{c['end_s']:.2f}s", font=font, fill=(255, 220, 0))
+    y = strip_h
+    for title, rows in blocks:
+        dr.text((pad, y + 4), title, font=font, fill=(255, 220, 0))
+        y += strip_h
+        for cam, cells in rows:
+            x = pad
+            for lab, im in cells:
+                dr.text((x + 2, y + 4), (cam + "   " if cam and x == pad else "") + lab, font=font, fill=(230, 230, 230))
+                g.paste(im, (x, y + strip_h))
+                x += im.width + pad
+            y += strip_h + max((im.height for _, im in cells), default=0)
+    times = {("begin" if "begins" in title else "end"): [round(frame_time(ep, _frame_at(ep, t)), 3) for t in ts]
+             for title, ts in strips}
+    return mf.to_jpeg(g, None, 88), times
+
+
+def _map_tile(ep: dict, name: str, k: int):
+    """A 2-D touch signal at frame k as grey cells, bright away from rest on the upload's scale; None for a signal that
+    is not a map."""
+    from PIL import Image
+    from label import signals as sg
+    m = (ep.get("signal_meta") or {}).get(name) or {}
+    shape = m.get("shape") or []
+    if len(shape) != 2 or name not in (ep.get("signals") or {}):
+        return None
+    a = np.asarray(ep["signals"][name], dtype=np.float64)
+    d, swing = sg._distance(a, m.get("rest"), m.get("swing"))
+    row = d[min(k, len(d) - 1)].reshape(int(shape[0]), int(shape[1]))
+    g = np.where(np.isfinite(row), np.clip(row / swing, 0, 1) if swing > 0 else 0.0, 0.0)
+    cell = max(1, MAP_TILE_PX // max(int(shape[0]), int(shape[1])))
+    return Image.fromarray((g * 255).astype(np.uint8), "L").resize((int(shape[1]) * cell, int(shape[0]) * cell),
+                                                                    Image.NEAREST).convert("RGB")
+
+
 def _rig_nouns(r: str) -> dict:
     if r == "ego_head":
         return {"actor": "hand", "an_actor": "a hand", "actors": "hands", "gripper_of": "hand",
@@ -516,7 +692,7 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
            "the frames." if pl.get("contact") else "")
         + "\n"
         f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
-        "frame." + _coverage_note(ep, pl))
+        "frame." + _coverage_note(ep, pl) + _depth_note(ep))
     sig = _signals_table(ep, pl)
     if kind == "none":
         what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
@@ -592,37 +768,150 @@ def _num(x: float) -> str:
     return f"{float(x):.3g}"
 
 
+def _depth_note(ep: dict) -> str:
+    """Which cameras also record depth, and that each detail view is followed by their depth: what the input is, never
+    how to read it."""
+    d = ep.get("depth") or {}
+    if not d:
+        return ""
+    names = ", ".join(cam_name(ep, v) for v in order_views(d))
+    return (f"\nDEPTH: {names} {'records' if len(d) == 1 else 'record'} depth as well as colour. Each detail view is "
+            "followed by the depth from the same "
+            + ("camera's depth sensor" if len(d) == 1 else "cameras' depth sensors") + " at that instant.")
+
+
+CONTACT_VIEWS_MAX = 8             # contacts shown per episode, the strongest first, at most one per CONTACT_EVERY_S
+STRIP_OFFSETS_S = (-0.3, -0.15, 0.0, 0.15, 0.3)   # the frames of the begin strip, around the signal's begin
+END_OFFSETS_S = (-0.15, 0.0, 0.15)                # the frames of the end strip: the begin strip pins the clock
+STRIP_CELL_W = 192
+PEAK_CELL_W = 288
+MAP_TILE_PX = 160
+
+
+def chosen_contacts(ep: dict, contacts: list[dict]) -> list[dict]:
+    """The contacts shown to the model: the strongest, at most CONTACT_VIEWS_MAX and one per CONTACT_EVERY_S of
+    footage, in time order."""
+    if not contacts:
+        return []
+    dur = frame_time(ep, len(ep["state"]) - 1) if len(ep["state"]) else 0.0
+    cap = min(CONTACT_VIEWS_MAX, max(1, int(round(dur / CONTACT_EVERY_S))))
+    best = sorted(contacts, key=lambda c: -float(c.get("peak_strength") or 0))[:cap]
+    return sorted(best, key=lambda c: c["start_s"])
+
+
+def _contact_line(c: dict) -> str:
+    hand = f"{c['hand']} hand" if c.get("hand") else "hand not named by the recording"
+    when = (f"{c['start_s']:.2f} s" + (" (already touching at the first frame)" if c.get("from_start") else "")
+            + f" to {c['end_s']:.2f} s" + (" (still touching at the last frame)" if c.get("to_end") else "")
+            + f", strongest at {c['peak_s']:.2f} s")
+    where = []
+    for nm, r in (c.get("regions") or {}).items():
+        if nm == "active_signals":
+            continue
+        where.append(f"{nm}: {r['cells']} cells, rows {r['rows'][0]}-{r['rows'][1]} and columns "
+                     f"{r['columns'][0]}-{r['columns'][1]} of {r['of'][0]} x {r['of'][1]}")
+    act = (c.get("regions") or {}).get("active_signals")
+    if act:
+        where.append("active: " + ", ".join(act))
+    return (f"  {c['id']}: {hand}, from {', '.join(c['signals'])}, {when}"
+            + (f"; at its strongest {'; '.join(where)}" if where else "")
+            + (f"; it weakens and comes back at {', '.join(f'{x:.2f}' for x in c['dips_s'])} s" if c.get("dips_s") else ""))
+
+
+def contacts_block(ep: dict) -> str:
+    """The episode's contacts as the recording gives them (label/contacts.py), what each contact picture shows, and
+    what to return for them. Empty when the recording has no touch signal."""
+    shown = ep.get("contacts_shown") or []
+    if not shown:
+        return ""
+    rest = [c for c in ep.get("contacts") or [] if c["id"] not in {x["id"] for x in shown}]
+    depth = any(_contact_views(ep, c)[2] for c in shown)
+    return ("\nCONTACTS: the recording's touch signals say a hand is touching something in these spans. They are the "
+            "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
+            + (("  The signals record more contacts that are not shown: "
+                + "; ".join(f"{c['id']} {c['start_s']:.2f}-{c['end_s']:.2f} s" for c in rest) + ".\n") if rest else "")
+            + "After the detail views, each contact above has one picture: five frames around the time the signal says "
+            "the touch begins, numbered 1 to 5, three around the time it says the touch ends, numbered 1 to 3, and the "
+            "moment it is strongest" + (" with that camera's depth" if depth else "") + " and the touch sensor's "
+            "reading, each frame with its time. Return, beside the other fields:\n"
+            '  "contacts": [{"id": "<c1, ...>", "touch_seen": "yes" | "no" | "unclear", '
+            '"first_touch_frame": <1-5, the first frame of the begin strip in which the hand is touching, or null>, '
+            '"last_touch_frame": <1-3, the last frame of the end strip in which it is still touching, or null>, '
+            '"hand": "left" | "right" | "both" | "unclear", "object": "<what it touches>", '
+            '"grip": "<how the hand holds or presses it>", "action": "<what the contact does in the task>", '
+            '"slip": "yes" | "no" | "unclear", "notes": "<or null>"}], one per contact shown,\n'
+            '  "contacts_missing": [{"t_s": <float>, "hand": "left" | "right" | "unclear", "object": "<name>"}], each '
+            "moment a hand clearly takes hold of or presses something that no contact of the recording covers.\n")
+
+
+SIGNAL_TABLE_MAX_CHARS = 12000     # the per-instant readout of the signals stays under this
+
+
 def _signals_table(ep: dict, pl: dict) -> str:
     """The recording's other per-frame numbers (ep["signals"], under the dataset's own names): every one listed once
-    with the range each of its values takes over the episode, and over each recorded still span how much each one
-    changed. The still span is the claim they bear on (a mobile base can drive while the arms are still), so their
-    values are spent there, not repeated at every instant. They are shown, not interpreted: the model reads what each
-    is from its name and the robot's description."""
+    with its shape and the range its values take; over each recorded still span how much each one changed (the claim
+    they bear on: a mobile base can drive while the arms are still); the exact times at which a signal that holds one
+    level leaves it and comes back (label/signals.py), which the sampled instants alone cannot give; and the values at
+    every sampled instant, as long as that readout stays under SIGNAL_TABLE_MAX_CHARS, except a touch signal's, whose
+    timing is given once as the episode's contacts (contacts_block). They are shown, not interpreted: the model reads
+    what each is from its name and the robot's description."""
+    from label import signals as sg
     sig = ep.get("signals") or {}
     if not sig:
         return ""
+    meta = ep.get("signal_meta") or {}
     n = pl["n"]
+    sc = {k: ((meta.get(k) or {}).get("rest"), (meta.get(k) or {}).get("swing")) for k in sig}   # the upload's scale
     arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
-    lines = []
+    lines, still = [], []
     for name, a in arrs.items():
-        d = a.shape[1]
-        head = f"  {name} ({d} value{'s' if d > 1 else ''})"
         if not len(a):
             continue
-        lo, hi = a.min(axis=0), a.max(axis=0)
-        if (hi == lo).all():
-            lines.append(f"{head}: " + (_num(lo[0]) if d == 1 else "[" + ", ".join(_num(x) for x in lo) + "]")
-                         + " throughout")
-        else:
-            lines.append(f"{head}: " + ", ".join(_num(l) if l == h else f"{_num(l)} to {_num(h)}" for l, h in zip(lo, hi)))
+        with np.errstate(all="ignore"):
+            flat = np.isfinite(a).any() and bool((np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all())
+        if flat:
+            # a value repeated at every frame (a setting, a calibration, or a sensor that sent nothing new): named once
+            v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
+            still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
+                                 " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.SMALL else ""))
+            continue
+        lines.append(sg.describe(name, a, (meta.get(name) or {}).get("shape"), (meta.get(name) or {}).get("names")))
+    if still:
+        lines.append("  The same at every frame: " + "; ".join(still))
     if pl["spans"]:
         lines.append("  Over each recorded still span, the largest change of any one value of each signal (a signal "
                      "that did not change is left out):")
         for a0, b0 in pl["spans"]:
-            ch = [f"{name} {_num(c)}" for name, a in arrs.items()
-                  if (c := float((a[a0:b0 + 1].max(axis=0) - a[a0:b0 + 1].min(axis=0)).max())) > 0]
+            ch = []
+            for name, a in arrs.items():
+                seg = a[a0:b0 + 1]
+                with np.errstate(all="ignore"):
+                    c = float(np.nanmax(np.nanmax(seg, axis=0) - np.nanmin(seg, axis=0))) if np.isfinite(seg).any() else 0.0
+                if c > 0:
+                    ch.append(f"{name} {_num(c)}")
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
                          + ("; ".join(ch) if ch else "none changed"))
+    # a touch signal's timing is given once, as the episode's contacts (contacts_block), so the frames are read on their
+    # own first and the contacts are checked against them
+    touch = {nm for nm, a in arrs.items() if sg.touch_like(a, *sc[nm])}
+    ks = pl["ks"]
+    rows = []
+    for name, a in arrs.items():
+        if name in touch or not len(a) or not np.isfinite(a).any():
+            continue
+        with np.errstate(all="ignore"):
+            if (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all():
+                continue
+        rows += sg.summary_rows(name, a, ks, (meta.get(name) or {}).get("shape"), (meta.get(name) or {}).get("names"))
+    if rows:
+        head = "    at: " + " ".join(f"{frame_time(ep, k):.2f}" for k in ks)
+        body = [f"    {lb}: " + " ".join(v) for lb, v in rows]
+        if len(head) + sum(len(b) for b in body) <= SIGNAL_TABLE_MAX_CHARS:
+            lines.append("  Each signal that changes, at every instant you receive (seconds in the first row; \"-\" is "
+                         "no reading):")
+            lines += [head] + body
+        else:
+            lines.append("  (The signals' values at each instant are left out: they would not fit.)")
     return ("\nOTHER RECORDED SIGNALS: every other number the dataset records per frame, under the dataset's own "
             "name, with the range each of its values takes over the episode (one that never changes is given as its "
             "value). They are not interpreted for you: read what each is from its name and the robot's description "
@@ -758,7 +1047,8 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
                         "video, not ground truth; where the video contradicts them, record it as a data issue:\n"
                         + ctx["uploader_annotation"].strip() + "\n")
     return (prompts.fixed_instructions(r, has_instruction=bool(given)) + prompts.example_block(r, example_dir),
-            EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + "\n" + given_block)
+            EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + contacts_block(ep) + "\n"
+            + given_block)
 
 
 EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
@@ -771,6 +1061,11 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell."""
     ep = load(ep_dir)
     pl = plan(ep)
+    from label import contacts as lc
+    ep["contacts"] = lc.of_episode(ep)
+    ep["contacts_shown"] = chosen_contacts(ep, ep["contacts"])
+    if ep["contacts_shown"]:
+        pl["contact"] = []   # the touch signals' own contacts replace the views chosen from the gripper's value
     # An explicit cell width is used as given. The rig's default is the largest width whose grids fit the
     # request's image-size cap: a long episode at 448 px can exceed it, and is then sent at the next step
     # down rather than refused. Episodes that fit are unchanged.
@@ -782,6 +1077,8 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     any_img = next(iter(imgs.values()))[pl["ks"][0]]
     # a circular image with black corners names a fisheye lens in that camera's line (label/lens.py)
     ep["lens"] = {v: lens.circular_image(imgs[v]) for v in order_views(imgs)}
+    # depth at the detail instants, and one colour scale per camera from its readings at the sampled instants
+    depth_at = _depth_frames(ep, pl)
     if len(views(ep)) == 1:
         # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
         grid_cols = max(grid_cols, 6)
@@ -809,6 +1106,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                            fullres_stack(ep, imgs, k, name, frame_time(ep, k), None if len(here) == len(imgs) else here)))
     views_sent[1:1] = [(k, "just after a sharp change of the recorded gripper value",
                         [cam_name(ep, v) for v in order_views(vs)], jpg) for k, vs, jpg in contact]
+    depth_sent = []
     for k, what, names, jpg in views_sent:
         extra_bytes += len(jpg)
         # the first and last views name every camera; a contact view names only its own cameras
@@ -818,12 +1116,38 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
         content.append({"type": "image_url", "image_url": {
             "url": "data:image/jpeg;base64," + base64.b64encode(jpg).decode("ascii"),
             "detail": detail}})
+        dv = [v for v in order_views(depth_at) if cam_name(ep, v) in names and k in depth_at[v]]
+        if dv:
+            djpg = depth_stack(ep, depth_at, dv, k, what)
+            extra_bytes += len(djpg)
+            depth_sent.append(round(frame_time(ep, k), 3))
+            dn = ", ".join(cam_name(ep, v) for v in dv)
+            content.append({"type": "text", "text": f"=== depth, {what}, t={frame_time(ep, k):.2f}s | "
+                                                    f"{'cameras' if len(dv) > 1 else 'camera'} {dn} ==="})
+            content.append({"type": "image_url", "image_url": {
+                "url": "data:image/jpeg;base64," + base64.b64encode(djpg).decode("ascii"), "detail": detail}})
+    contacts_sent, strips = [], {}
+    for c in ep.get("contacts_shown") or []:
+        got = contact_image(ep, c, gate)
+        if got is None:
+            continue
+        cjpg, strips[c["id"]] = got
+        extra_bytes += len(cjpg)
+        contacts_sent.append(c["id"])
+        content.append({"type": "text", "text": f"=== contact {c['id']}, {c.get('hand') or 'hand not named'}, "
+                                                f"{c['start_s']:.2f}-{c['end_s']:.2f}s ==="})
+        content.append({"type": "image_url", "image_url": {
+            "url": "data:image/jpeg;base64," + base64.b64encode(cjpg).decode("ascii"), "detail": detail}})
     return {"content": content, "prompt": prompt, "plan": pl, "n_grids": n_grids,
-            "n_images": n_grids + len(views_sent), "image_bytes": grid_bytes + extra_bytes,
+            "n_images": n_grids + len(views_sent) + len(depth_sent) + len(contacts_sent),
+            "image_bytes": grid_bytes + extra_bytes,
             "contact_s": [round(frame_time(ep, k), 3) for k in pl["contact"]],
             "given_prompt": (ep["context"].get("instruction") or "").strip() or None,
             "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels,
             "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]], "lens": ep["lens"],
             "grid_cols": grid_cols,
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
-            "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s"}
+            "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s",
+            **({"depth_s": depth_sent, "depth_views": order_views(depth_at)} if depth_sent else {}),
+            **({"contact_views": {"shown": contacts_sent, "strips": strips}, "contacts": ep.get("contacts")}
+               if contacts_sent else {})}
