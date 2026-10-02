@@ -2658,8 +2658,8 @@ def h5_kind(name: str, ds) -> str | None:
     if len(per) == 3 and per[2] in (3, 4) and dt == np.uint8 and min(per[:2]) >= CAMERA_MIN_PX:
         return "camera"
     if len(per) == 2 and min(per) >= CAMERA_MIN_PX:
-        large_16bit_or_float = int(np.prod(per)) > SIGNAL_MAX_VALUES and dt.kind in "uf" and dt.itemsize >= 2
-        if "depth" in leaf.lower() or "depth" in name.lower() or large_16bit_or_float:
+        wide_numeric_picture = int(np.prod(per)) > SIGNAL_MAX_VALUES and dt.kind in "uf" and dt.itemsize >= 2
+        if "depth" in leaf.lower() or "depth" in name.lower() or wide_numeric_picture:
             return "depth"
         if dt == np.uint8:
             return "camera"
