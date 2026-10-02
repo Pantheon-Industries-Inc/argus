@@ -774,31 +774,31 @@ def test_a_depth_stream_with_no_camera_of_its_own_goes_with_the_scene_camera_and
     assert view == "exo" and source.startswith("observations/depth/zed (") and "scene camera" in source
 
 
-def _an_mcap_layout_adapters_source_notes_are_kept(tmp_path):
-    """convert_mcap adds its format and file to the adapter's source instead of replacing it."""
-    import sys
-    from prepare import formats
-    fake = type("M", (), {})()
-
-    def convert_upload(item, ep):
-        ep.mkdir(parents=True, exist_ok=True)
-        (ep / "context.json").write_text("{}")
-        return {"profile": "ego_head", "cameras": {}, "fps": 30, "n_state_frames": 1, "state_kind": "none",
-                "source": {"unused_signals": ["/imu (not read yet)"], "invalid_ranges": [[0, 1]]}}
-    fake.convert_upload = convert_upload
-    # import_module returns a module already in sys.modules, so only the made-up layout is faked
-    sys.modules["prepare.fakelayout"] = fake
+def _mcap_layout_context_with(convert_upload):
+    """mcap_layout_context through a made-up layout whose reader is convert_upload: import_module returns a module
+    already in sys.modules, so only that layout is faked."""
+    import sys, types
+    sys.modules["prepare.fakelayout"] = types.SimpleNamespace(convert_upload=convert_upload)
     try:
-        ctx = formats.convert_mcap_layout_ctx({"name": "a.mcap"}, "fakelayout", tmp_path / "ep", "ds")
+        return f.mcap_layout_context({"name": "a.mcap"}, "fakelayout", Path("episode_a"), "ds")
     finally:
         del sys.modules["prepare.fakelayout"]
+
+
+def test_an_mcap_layout_readers_source_notes_are_kept():
+    """The format and file are added to the layout reader's source instead of replacing it."""
+    ctx = _mcap_layout_context_with(lambda item, ep: {"source": {"unused_signals": ["/imu (not read yet)"],
+                                                                 "invalid_ranges": [[0, 1]]}})
     assert ctx["source"]["unused_signals"] == ["/imu (not read yet)"]
     assert ctx["source"]["invalid_ranges"] == [[0, 1]]
     assert ctx["source"]["format"] == "mcap (fakelayout layout)" and ctx["source"]["file"] == "a.mcap"
     assert ctx["dataset"] == "ds"
 
 
-def test_an_mcap_layout_adapters_source_notes_are_kept():
-    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
-    with tempfile.TemporaryDirectory() as t:
-        _an_mcap_layout_adapters_source_notes_are_kept(Path(t))
+def test_an_mcap_layout_reader_that_returns_no_context_is_an_error():
+    try:
+        _mcap_layout_context_with(lambda item, ep: None)
+    except ValueError as e:
+        assert str(e) == "prepare.fakelayout returned no context"
+    else:
+        raise AssertionError("no error for a reader that returned no context")
