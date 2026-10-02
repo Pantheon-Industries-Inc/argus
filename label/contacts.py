@@ -70,7 +70,8 @@ def find(signals: dict, meta: dict, t: np.ndarray) -> list[dict]:
     by_hand: dict = {}
     for key, names in groups.items():
         timed = {nm: sg.active_spans(touch[nm][0], t, touch[nm][1].get("rest"), touch[nm][1].get("swing"))
-                 for nm in names if sg.rests_and_rises(touch[nm][0], touch[nm][1].get("rest"), touch[nm][1].get("swing"))}
+                 for nm in names
+                 if sg.rests_and_rises(touch[nm][0], touch[nm][1].get("rest"), touch[nm][1].get("swing"))}
         timed = {nm: sp for nm, sp in timed.items() if sp}
         for nm in names:
             if timed:

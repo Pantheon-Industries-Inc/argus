@@ -327,9 +327,9 @@ def _built_board(tmp: Path) -> Path:
         out = _output(ep, "openai/gpt-6-astra", rig == "ego_head")
         if ds == "molmo":
             # the model's answer for the episode's one contact, and a grasp it saw that no contact covers
-            out["labels"]["contacts"] = [{"id": "c1", "touch_seen": "yes", "first_touch_frame": 3, "last_touch_frame": 2,
-                                          "hand": "right", "object": "cup", "grip": "pinch", "action": "lifts it",
-                                          "slip": "no", "notes": None}]
+            out["labels"]["contacts"] = [{"id": "c1", "touch_seen": "yes", "first_touch_frame": 3,
+                                          "last_touch_frame": 2, "hand": "right", "object": "cup", "grip": "pinch",
+                                          "action": "lifts it", "slip": "no", "notes": None}]
             out["labels"]["contacts_missing"] = [{"t_s": 7.0, "hand": "left", "object": "lid"}]
             out["contact_views"] = {"shown": ["c1"], "strips": {"c1": {"begin": [1.7, 1.85, 2.0, 2.15, 2.3],
                                                                        "end": [3.817, 3.967, 4.117]}}}

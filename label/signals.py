@@ -21,9 +21,10 @@ Nothing here knows what a signal is called or what sensor made it. A signal is r
   level, so it is not touch (direction). A pad read in whole numbers that only flickers by one step has measured
   nothing but the rounding of its readout (rounding_only).
 - It rests and rises when it has a rest, and its activity is under REST_FRACTION of its peak for at least MIN_REST of
-  the episode and above it for at least MIN_ACTIVE: a tactile glove's pressure, a fingertip's force, a contact flag, a gripper's
-  effort. For such a signal the spans it is away from rest are reported with their exact start and end, from every
-  recorded frame rather than only the sampled instants, because that is when a hand or a gripper touches something.
+  the episode and above it for at least MIN_ACTIVE: a tactile glove's pressure, a fingertip's force, a contact flag, a
+  gripper's effort. For such a signal the spans it is away from rest are reported with their exact start and end, from
+  every recorded frame rather than only the sampled instants, because that is when a hand or a gripper touches
+  something.
 - An array of more than SMALL values per frame is shown as numbers that summarise it. One that has a rest and whose
   activity is local
   (at a typical frame fewer than half its values are active: a pressure map under a grasp, whether or not it ever
@@ -177,7 +178,7 @@ def touch_like(a: np.ndarray, rest=None, swing=None) -> bool:
     if not len(a) or not has_rest(a, rest, swing) or direction(a, rest, swing) is None:
         return False
     if a.shape[1] > 1 and len(np.unique(a[np.isfinite(a).all(axis=1)], axis=0)) <= SETTING_STATES:
-        return False      # several values that only ever take a few readings together: a setting switching, not a sensor
+        return False  # several values that only ever take a few readings together: a setting switching, not a sensor
     if rounding_only(a, rest, swing):
         return False
     return rests_and_rises(a, rest, swing) or (a.shape[1] > SMALL and localized(a, rest, swing))
@@ -263,5 +264,6 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
             return f"{head}: every value constant throughout{tail}"
         return f"{head}: values from {_num(np.nanmin(lo))} to {_num(np.nanmax(hi))}{tail}"
     if (hi == lo).all():
-        return f"{head}: " + (_num(lo[0]) if d == 1 else "[" + ", ".join(_num(x) for x in lo) + "]") + f" throughout{tail}"
+        value = _num(lo[0]) if d == 1 else "[" + ", ".join(_num(x) for x in lo) + "]"
+        return f"{head}: {value} throughout{tail}"
     return f"{head}: " + ", ".join(_num(l) if l == h else f"{_num(l)} to {_num(h)}" for l, h in zip(lo, hi)) + tail

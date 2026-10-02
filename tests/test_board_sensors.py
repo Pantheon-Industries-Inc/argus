@@ -308,7 +308,8 @@ def test_the_static_build_publishes_sensors_and_each_depth_clip(tmp_path):
     (clips_dir / "episode_000000.mp4").write_bytes(b"colour")
     (clips_dir / "depth_exo" / "episode_000000.mp4").write_bytes(b"depth")
     (e,) = static.plan(board / "qa", clips_dir)
-    assert {k for k in e["media"] if k.startswith("depth_")} == {"depth_exo"} and e["media"]["depth_exo"]["rel"].startswith("v/depth_exo/")
+    assert {k for k in e["media"] if k.startswith("depth_")} == {"depth_exo"}
+    assert e["media"]["depth_exo"]["rel"].startswith("v/depth_exo/")
     a = argparse.Namespace(board=board, qa=board / "qa", clips=clips_dir, compare=None, hands=None, keypoints=None,
                            out=tmp_path / "out", build_id="b1", force=False, public_base=None, title="Data Dashboard")
     assert static.cmd_site(a) == 0

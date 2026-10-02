@@ -410,7 +410,8 @@ def _depth_frames(ep: dict, pl: dict) -> dict:
     out, rng = {}, {}
     for v in order_views(d):
         got = dp.at_anchor(ep, d, v, sorted(set(detail) | set(spread)))
-        # the upload's range for depth with no stated unit (prepare/formats.py measure_depth_ranges), else this episode's
+        # the upload's range for depth with no stated unit (prepare/formats.py measure_depth_ranges), else the
+        # range of this episode's readings
         r = tuple(d[v]["range"]) if d[v].get("range") else dp.scale_range(got.values())
         if r is None:
             continue
@@ -421,8 +422,8 @@ def _depth_frames(ep: dict, pl: dict) -> dict:
 
 
 def depth_stack(ep: dict, depth_at: dict, vs: list[str], k: int, label: str) -> bytes:
-    """The depth pictures of cameras vs at instant k, coloured on each camera's episode scale (label/depth.py), at detail
-    size, stacked top to bottom with a name strip that gives the scale."""
+    """The depth pictures of cameras vs at instant k, coloured on each camera's episode scale (label/depth.py), at
+    detail size, stacked top to bottom with a name strip that gives the scale."""
     from PIL import Image, ImageDraw
     from label import depth as dp
     ims = []
@@ -477,7 +478,8 @@ def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
     t_end = frame_time(ep, len(ep["state"]) - 1)
     strips = []
     if not c.get("from_start"):
-        strips.append(("touch begins by the recording", [min(max(c["start_s"] + o, 0.0), t_end) for o in STRIP_OFFSETS_S]))
+        strips.append(("touch begins by the recording",
+                       [min(max(c["start_s"] + o, 0.0), t_end) for o in STRIP_OFFSETS_S]))
     if not c.get("to_end"):
         strips.append(("touch ends by the recording", [min(max(c["end_s"] + o, 0.0), t_end) for o in END_OFFSETS_S]))
     kp = _frame_at(ep, c["peak_s"])
@@ -514,8 +516,8 @@ def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
             fr = dp.at_anchor(ep, d, v, [kp]).get(kp)
             if fr is not None:
                 im = dp.picture(fr, d[v], rng.get(v))
-                peak.append((f"{cam_name(ep, v)} depth", im.resize((PEAK_CELL_W, int(round(im.height * PEAK_CELL_W / im.width))),
-                                                                  Image.NEAREST)))
+                size = (PEAK_CELL_W, int(round(im.height * PEAK_CELL_W / im.width)))
+                peak.append((f"{cam_name(ep, v)} depth", im.resize(size, Image.NEAREST)))
     for nm in c["signals"]:
         tile = _map_tile(ep, nm, kp)
         if tile is not None:
@@ -537,7 +539,8 @@ def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
         for cam, cells in rows:
             x = pad
             for lab, im in cells:
-                dr.text((x + 2, y + 4), (cam + "   " if cam and x == pad else "") + lab, font=font, fill=(230, 230, 230))
+                dr.text((x + 2, y + 4), (cam + "   " if cam and x == pad else "") + lab, font=font,
+                        fill=(230, 230, 230))
                 g.paste(im, (x, y + strip_h))
                 x += im.width + pad
             y += strip_h + max((im.height for _, im in cells), default=0)
@@ -816,7 +819,8 @@ def _contact_line(c: dict) -> str:
         where.append("active: " + ", ".join(act))
     return (f"  {c['id']}: {hand}, from {', '.join(c['signals'])}, {when}"
             + (f"; at its strongest {'; '.join(where)}" if where else "")
-            + (f"; it weakens and comes back at {', '.join(f'{x:.2f}' for x in c['dips_s'])} s" if c.get("dips_s") else ""))
+            + (f"; it weakens and comes back at {', '.join(f'{x:.2f}' for x in c['dips_s'])} s"
+               if c.get("dips_s") else ""))
 
 
 def contacts_block(ep: dict) -> str:
@@ -887,7 +891,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
             for name, a in arrs.items():
                 seg = a[a0:b0 + 1]
                 with np.errstate(all="ignore"):
-                    c = float(np.nanmax(np.nanmax(seg, axis=0) - np.nanmin(seg, axis=0))) if np.isfinite(seg).any() else 0.0
+                    c = (float(np.nanmax(np.nanmax(seg, axis=0) - np.nanmin(seg, axis=0)))
+                         if np.isfinite(seg).any() else 0.0)
                 if c > 0:
                     ch.append(f"{name} {_num(c)}")
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "

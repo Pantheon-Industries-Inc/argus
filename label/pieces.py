@@ -197,9 +197,11 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if "contacts" in ctx:
             # the recording's contacts that overlap the part, on its clock and clipped to it, keeping their ids so the
             # parts' answers join back into one list
-            c2["contacts"] = [{**c, "start_s": round(max(c["start_s"], t0) - t0, 3), "end_s": round(min(c["end_s"], t1) - t0, 3),
+            c2["contacts"] = [{**c, "start_s": round(max(c["start_s"], t0) - t0, 3),
+                               "end_s": round(min(c["end_s"], t1) - t0, 3),
                                "peak_s": round(min(max(c["peak_s"], t0), t1) - t0, 3),
-                               "from_start": c["from_start"] or c["start_s"] < t0, "to_end": c["to_end"] or c["end_s"] > t1,
+                               "from_start": c["from_start"] or c["start_s"] < t0,
+                               "to_end": c["to_end"] or c["end_s"] > t1,
                                "dips_s": [round(x - t0, 3) for x in c.get("dips_s") or [] if t0 <= x <= t1]}
                               for c in ctx["contacts"] if c["end_s"] >= t0 and c["start_s"] < t1]
         if (ep_dir / "depth.json").exists():

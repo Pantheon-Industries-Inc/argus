@@ -66,8 +66,8 @@ def _run(runs: Path, ep: Path, contacts: list) -> Path:
     labels = {"task_summary": "press the pad", "timeline": [{"start_s": 0.0, "end_s": 9.0, "action": "press"}],
               "completion": {"task_completed": "success", "completed_at_s": 9.0},
               "contacts": [{"id": first["id"], "touch_seen": "no", "first_touch_frame": None, "last_touch_frame": None,
-                            "hand": "right", "object": "nothing visible", "grip": None, "action": None, "slip": "unclear",
-                            "notes": None}],
+                            "hand": "right", "object": "nothing visible", "grip": None, "action": None,
+                            "slip": "unclear", "notes": None}],
               "contacts_missing": [{"t_s": 5.0, "hand": "left", "object": "cup"}]}
     strips = {first["id"]: {"begin": [first["start_s"] + o for o in (-0.3, -0.15, 0.0, 0.15, 0.3)],
                             "end": [first["end_s"] + o for o in (-0.15, 0.0, 0.15)]}}
@@ -103,7 +103,8 @@ def test_board_build_joins_each_contact_with_what_the_model_saw(tmp_path):
 @pytest.mark.skipif(not shutil.which("node"), reason="no node")
 def test_the_touch_lane_and_contact_card_say_what_they_must():
     """tests/touch_lane.js on the page's touch block: a bar per hand, each contact styled by what the model found, the
-    lane's counts, the grasps with no contact on their hand's row, the card's times and sentences, the strength curve."""
+    lane's counts, the grasps with no contact on their hand's row, the card's times and sentences, the strength
+    curve."""
     here = Path(__file__).resolve().parent
     r = subprocess.run([shutil.which("node"), str(here / "touch_lane.js"), str(here.parent / "board" / "serve.py")],
                        capture_output=True, text=True)

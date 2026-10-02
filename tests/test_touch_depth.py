@@ -53,7 +53,8 @@ def _hdf5(path: Path, demos: int = 2, n: int = 40) -> None:
             g.create_dataset("right_pressure", data=_press(n, (12, 26)))
             g.create_dataset("right_hand_landmarks", data=np.random.default_rng(d).normal(0, 0.1, (n, 21, 3)))
             if d == 0:
-                g.create_dataset("labels", data=np.array([(0, 1)], dtype=[("low_light", "u1"), ("hand_out_of_frame", "u1")]))
+                flags = np.array([(0, 1)], dtype=[("low_light", "u1"), ("hand_out_of_frame", "u1")])
+                g.create_dataset("labels", data=flags)
 
 
 def test_an_hdf5_file_of_demos_is_one_episode_per_demo_with_its_pressure_map_and_landmarks(tmp_path):

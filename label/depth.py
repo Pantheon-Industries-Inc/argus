@@ -8,9 +8,10 @@ for depth whose unit is not known, the range of its readings across the whole up
 The conventions, the same in the prompt, the board and the clips:
 - No reading is black: a stored 0, NaN, an infinity, or 65535 in a 16-bit stream (what sensors write where they could
   not measure). Never a distance.
-- Depth in metres is drawn on ONE fixed scale for every episode of every dataset: turbo on a log scale from METRIC_NEAR_M
-  (red) to METRIC_FAR_M (blue). A colour is a distance: the same orange is the same 0.5 m in a head camera's depth and in
-  a scene camera's, in this upload and the next. The log scale keeps a hand at 0.3 m and a wall at 3 m both readable.
+- Depth in metres is drawn on ONE fixed scale for every episode of every dataset: turbo on a log scale from
+  METRIC_NEAR_M (red) to METRIC_FAR_M (blue). A colour is a distance: the same orange is the same 0.5 m in a head
+  camera's depth and in a scene camera's, in this upload and the next. The log scale keeps a hand at 0.3 m and a wall at
+  3 m both readable.
 - Depth whose unit the recording does not state is drawn with the same colours, near red and far blue, scaled across
   the whole upload for that camera (range: the 0.5th to 99.5th percentile of its readings), so a colour means the same
   reading in every episode of the upload, though not a distance in metres.
@@ -156,8 +157,8 @@ def legend(entry_or_rng, scale_m: float | None = None) -> str:
     if entry.get("scale_m"):
         return (f"metric: one fixed scale in every episode, dark red {METRIC_NEAR_M:g} m, orange 0.3 m, yellow 0.5 m, "
                 f"green 1 m, light blue 3 m, dark blue {METRIC_FAR_M:g} m (a log scale), black no reading")
-    return ("red near to blue far, relative to this camera's readings across the upload (the recording does not say its "
-            "unit, so not in metres); black no reading")
+    return ("red near to blue far, relative to this camera's readings across the upload (the recording does not say "
+            "its unit, so not in metres); black no reading")
 
 
 def legend_ticks(entry: dict) -> list[tuple[float, str]]:

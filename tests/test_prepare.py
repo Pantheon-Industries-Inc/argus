@@ -294,7 +294,8 @@ def test_every_other_recorded_signal_reaches_the_model_under_its_own_name(tmp_pa
     table = p.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
     assert "observation.state.chassis (3 values): 0 to 0.9, 0, 0 to 0.3" in table
     # a value the same at every frame is named once, on one line with the others like it
-    assert "The same at every frame: observation.state.torso [0.5, 0.25]" in table and "next.done (1 value): 0 to 1" in table
+    assert "The same at every frame: observation.state.torso [0.5, 0.25]" in table
+    assert "next.done (1 value): 0 to 1" in table
     assert "task_index" not in table and "  index" not in table and "timestamp" not in table
     # an episode that records nothing else gets exactly the prompt it had before
     plain = tmp_path / "plain"

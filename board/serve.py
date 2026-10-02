@@ -6398,10 +6398,10 @@ def render_index(title: str, board: dict, name: str = "", header: str | None = N
     """The page with its title, the board's name and its data source filled in. `board` is {"mode": "api"} for this
     server, or {"mode": "static", "data": <base>, "media": <base>} for a static build (board/static.py); "compare":
     true, "hands": true, "sensors": true and "keypoints": true tell the page the board has other models' labels, hand
-    pose drawings, sensors files or hand keypoint downloads to ask for, and "models" ({model id: name}) shows a model under a site's own name in
-    place of its name in configs/models.json. `header` is a site's own header, for a board served as part of a site: its
-    markup takes the place of the page's title bar and its <style> blocks go into the page's head (a header of another
-    height sets --header-h, which the page's sticky offsets read)."""
+    pose drawings, sensors files or hand keypoint downloads to ask for, and "models" ({model id: name}) shows a model
+    under a site's own name in place of its name in configs/models.json. `header` is a site's own header, for a board
+    served as part of a site: its markup takes the place of the page's title bar and its <style> blocks go into the
+    page's head (a header of another height sets --header-h, which the page's sticky offsets read)."""
     cfg = {**board, "models": {**model_names(), **(board.get("models") or {})}, "reasoning": reasoning_effort()}
     page = INDEX_HTML
     if header is not None:

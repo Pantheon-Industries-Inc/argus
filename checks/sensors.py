@@ -53,7 +53,8 @@ CLOCK_OFFSET_FRAMES = 1.0
 
 NAMES = {"no_reading": "Signal has no reading at many frames", "constant": "Signal never changes",
          "dead_values": "Values of an array never change", "pinned": "Values pinned at the end of their range",
-         "slow_sensor": "Sensor slower than the camera", "clock_offset": "Sensor clocks apart", "depth_invalid": "Depth pictures mostly without readings",
+         "slow_sensor": "Sensor slower than the camera", "clock_offset": "Sensor clocks apart",
+         "depth_invalid": "Depth pictures mostly without readings",
          "depth_frozen": "Depth picture frozen while colour changes",
          "depth_offset": "Depth frames far in time from their colour frames"}
 
@@ -220,9 +221,10 @@ def run_episode(ep_dir: Path) -> dict | None:
         applies |= {"depth_invalid", "depth_frozen", "depth_offset"}
     fired = {f["check"] for f in found}
     return {"notes": found, "flagged": False,
-            "checks": [{"check": c, "name": NAMES[c], "status": "fired" if c in fired else "clear" if c in applies else "na"}
-                       for c in NAMES],
-            "rule": "notes only: a sensor check counts as an issue once every episode it fires on is confirmed on the frames"}
+            "checks": [{"check": c, "name": NAMES[c],
+                        "status": "fired" if c in fired else "clear" if c in applies else "na"} for c in NAMES],
+            "rule": ("notes only: a sensor check counts as an issue once every episode it fires on is confirmed on the "
+                     "frames")}
 
 
 def _constants(d: str) -> dict:
@@ -249,7 +251,8 @@ def main():
     eps = []
     for root in a.roots:
         for d in sorted(root.glob("episode_*")):
-            if (d / "context.json").exists() and (a.force or "sensor_checks" not in json.loads((d / "context.json").read_text())):
+            ctx_path = d / "context.json"
+            if ctx_path.exists() and (a.force or "sensor_checks" not in json.loads(ctx_path.read_text())):
                 eps.append(str(d))
     print(f"episodes to check: {len(eps)}", flush=True)
     done = fired = failed = 0

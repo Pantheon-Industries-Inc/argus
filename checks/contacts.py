@@ -6,9 +6,9 @@ frame of the begin strip that shows touch and the last of the end strip, and whi
 hand clearly takes hold of something that no contact covers. The two sources are compared here:
 
   clock_offset       where touch first shows in the frames against where the signal says it begins (and the same at
-                     the end), over every contact whose strip brackets it: the median is how far the touch sensor's clock
-                     runs from the cameras'. Reported when at least MIN_CONTACTS contacts agree on it and it is more than
-                     OFFSET_FRAMES camera frames
+                     the end), over every contact whose strip brackets it: the median is how far the touch sensor's
+                     clock runs from the cameras'. Reported when at least MIN_CONTACTS contacts agree on it and it is
+                     more than OFFSET_FRAMES camera frames
   touch_not_seen     contacts the signal records but the frames show no touch at (a sensor that fires on its own, a
                      contact on the other hand, a clock far off)
   hand_mismatch      contacts the model sees on the other hand than the signal's name says; when every contact with a
@@ -17,8 +17,8 @@ hand clearly takes hold of something that no contact covers. The two sources are
                      sensor that missed it, or one that was off)
 
 The result is context-free numbers and sentences, written by `python -m board build` into the episode's
-dataset_checks["contact_checks"]. Like checks/sensors.py they are notes, not counted issues, until the datasets they fire
-on are checked on the frames.
+dataset_checks["contact_checks"]. Like checks/sensors.py they are notes, not counted issues, until the datasets they
+fire on are checked on the frames.
 """
 from __future__ import annotations
 
@@ -41,9 +41,9 @@ def _between(strip: list, f, first: bool) -> float | None:
 
 
 def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict | None:
-    """dataset_checks["contact_checks"] for one episode: the model's contacts (labels["contacts"], by id), the recording's
-    (contacts), the strip times each contact picture was built with ({id: {"begin": [...], "end": [...]}}) and the
-    camera's frame rate. None when the episode has no recorded contacts."""
+    """dataset_checks["contact_checks"] for one episode: the model's contacts (labels["contacts"], by id), the
+    recording's (contacts), the strip times each contact picture was built with ({id: {"begin": [...], "end": [...]}})
+    and the camera's frame rate. None when the episode has no recorded contacts."""
     if not contacts:
         return None
     seen = {c.get("id"): c for c in (labels.get("contacts") or []) if isinstance(c, dict)}
@@ -70,13 +70,14 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
         if len({cid for _, cid, _ in offsets}) >= MIN_CONTACTS and abs(float(np.median(ms))) > OFFSET_FRAMES * frame_ms:
             lead = "after" if np.median(ms) > 0 else "before"
             notes.append({"check": "clock_offset", "evidence": (
-                f"the frames show touch begin and end about {abs(float(np.median(ms))):.0f} ms {lead} the touch signal says "
-                f"(median of {len(ms)} measurements over {len({c for _, c, _ in offsets})} contacts, spread "
-                f"{float(np.std(ms)):.0f} ms), more than a camera frame of {frame_ms:.0f} ms")})
+                f"the frames show touch begin and end about {abs(float(np.median(ms))):.0f} ms {lead} the touch "
+                f"signal says (median of {len(ms)} measurements over {len({c for _, c, _ in offsets})} contacts, "
+                f"spread {float(np.std(ms)):.0f} ms), more than a camera frame of {frame_ms:.0f} ms")})
     not_seen = [cid for cid in shown if str(seen[cid].get("touch_seen")).lower() == "no"]
     if not_seen:
         notes.append({"check": "touch_not_seen", "evidence": (
-            f"{len(not_seen)} of the {len(shown)} contacts checked show no touch in the frames ({', '.join(not_seen)})")})
+            f"{len(not_seen)} of the {len(shown)} contacts checked show no touch in the frames "
+            f"({', '.join(not_seen)})")})
     pairs = [(cid, by_id[cid].get("hand"), str(seen[cid].get("hand") or "").lower()) for cid in shown]
     known = [(cid, h, m) for cid, h, m in pairs if h in ("left", "right") and m in ("left", "right")]
     wrong = [(cid, h, m) for cid, h, m in known if h != m]
