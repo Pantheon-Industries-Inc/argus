@@ -7,6 +7,8 @@ The board plays each camera as its own synced <video> and expects one mp4 per ep
   left mounted camera    CLIPS/wrist_left/<episode>.mp4
   right mounted camera   CLIPS/wrist_right/<episode>.mp4
   any other camera       CLIPS/extra1/<episode>.mp4, CLIPS/extra2/..., as the reader numbers them
+  a camera's depth       CLIPS/depth_<camera>/<episode>.mp4 (depth_exo, depth_left, ...), when the recording has a
+                         depth stream for it (depth.json)
 
 Some datasets keep their video packed (MolmoAct2: 12 to 50 episodes per mp4), and some cameras are HEVC or AV1,
 which browsers do not all play. This cuts each episode's own frames out of its source file (sources.json: the
@@ -15,6 +17,13 @@ page shows that camera (the recipe below) and timed on the episode's clock: ever
 camera that started recording after the main one starts that much later. It is a viewing copy only: labelling
 decodes the source files directly and never re-encodes. Idempotent and parallel. An episode with a camera file
 that does not decode is listed in CLIPS/failed.json and left out by set_aside_failed; the rest go on.
+
+A depth clip is cut after its camera's colour clip and timed exactly like it: it has the colour clip's frames at the
+colour clip's timestamps, each showing the depth frame recorded nearest that colour frame (depth_times.npz
+depth_<camera> against times.npz <camera>), drawn by label/depth.py picture() (near red and far blue, metric depth
+on one fixed scale, depth of unknown unit scaled across the upload, no reading black) at the colour clip's size. A
+colour frame with no depth frame within half a depth frame's interval is black. The page switches each camera
+between its colour and its depth clip.
 """
 from __future__ import annotations
 
@@ -48,6 +57,11 @@ def clip_path(mp4_dir: Path, eid: str, cam: str) -> Path:
     return mp4_dir / cam / f"{eid}.mp4"
 
 
+def depth_clip(mp4_dir: Path, eid: str, cam: str) -> Path:
+    """One camera's depth clip."""
+    return mp4_dir / f"depth_{cam}" / f"{eid}.mp4"
+
+
 def clip_paths(mp4_dir: Path, eid: str, cams=CAMS) -> dict:
     return {c: clip_path(mp4_dir, eid, c) for c in cams}
 
@@ -68,6 +82,8 @@ SIDE_BOX = (1280, 1080)      # a side camera: at most this
 CRF = 20                     # with veryfast, the quality of CRF 22 at medium (VMAF at the shown size) in
 PRESET = "veryfast"          # 40% of the time, which the whole board and every Data Review upload pay
 KEY_S = 2                    # a keyframe every 2 s, so a seek decodes at most 2 s of video
+DEPTH_CRF = 26               # a depth clip: its colour shading carries sensor noise that CRF 20 keeps at about
+                             # five times the colour clip's size; 26 halves that and the shapes stay as clear
 # names the recipe; board/static.py folds it into its media names, so a new recipe gets new names
 ENC_TAG = f"h264-crf{CRF}-{PRESET}-main{MAIN_BOX[0]}x{MAIN_BOX[1]}-side{SIDE_BOX[0]}x{SIDE_BOX[1]}-kf{KEY_S}s-srcts-camclock-v4"
 
@@ -182,6 +198,117 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     os.replace(tmp, out_mp4)
 
 
+def depth_frame_map(colour_t, depth_t) -> list:
+    """For each colour frame time, the index of the depth frame recorded nearest it, or None when the nearest is more
+    than half a depth frame's interval away (no depth reading for that frame)."""
+    import numpy as np
+    ct, dt = np.asarray(colour_t, dtype=np.float64), np.asarray(depth_t, dtype=np.float64)
+    if not len(dt):
+        return [None] * len(ct)
+    half = 0.5 * (float(np.median(np.diff(dt))) if len(dt) > 1 else 1.0 / 30)
+    if len(dt) > 1:
+        j = np.clip(np.searchsorted(dt, ct), 1, len(dt) - 1)
+        j = np.where(np.abs(dt[j - 1] - ct) <= np.abs(dt[j] - ct), j - 1, j)
+    else:
+        j = np.zeros(len(ct), dtype=int)
+    return [int(k) if abs(dt[k] - c) <= half + 1e-6 else None for k, c in zip(j, ct)]
+
+
+def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threads: int = 2, fps: float = 30.0) -> None:
+    """The depth clip of one camera (module docstring): the colour clip's frames and timestamps, each the nearest
+    depth frame drawn by label/depth.py picture(), encoded with the colour clip's recipe at its size (at DEPTH_CRF)."""
+    from fractions import Fraction
+
+    import av
+    import numpy as np
+
+    from board.hands import probe_pts
+    from label import depth as dp
+    entry = dp.load(ep_dir)[cam]
+    w, h, tb, pts = probe_pts(colour_mp4)
+    sources = json.loads((ep_dir / "sources.json").read_text())
+    _, skip = start_offsets(ep_dir, sources, fps).get(cam, (0.0, 0))
+    times = {}
+    if (ep_dir / "times.npz").exists():
+        with np.load(ep_dir / "times.npz") as z:
+            times = {k: np.asarray(z[k]) for k in z.files}
+    # the depth stream's frame times and pts: depth_times.npz (prepare/formats.py write_depth), which label/depth.py
+    # load() puts on the entry; an episode prepared before that file existed has them in times.npz
+    if entry.get("pts") is not None:
+        times[f"depth_{cam}_pts"] = np.asarray(entry["pts"])
+        if entry.get("t") is not None:
+            times[f"depth_{cam}"] = np.asarray(entry["t"])
+    dpts = times.get(f"depth_{cam}_pts")
+    if dpts is None:
+        raise RuntimeError(f"{ep_dir.name}: neither depth_times.npz nor times.npz has depth_{cam}_pts")
+    if cam in times and f"depth_{cam}" in times:
+        ct = times[cam][skip:skip + len(pts)]
+        if len(ct) < len(pts):
+            raise RuntimeError(f"{ep_dir.name}: {cam} has {len(ct)} frame times for a {len(pts)}-frame clip")
+        want = depth_frame_map(ct, times[f"depth_{cam}"])
+    else:
+        # no capture times: the depth stream's frames are the camera's own, one for one
+        want = [skip + i if skip + i < len(dpts) else None for i in range(len(pts))]
+    # a camera whose depth unit is not known is drawn on its upload-wide range (prepare writes entry["range"]); an
+    # episode prepared before that was measured falls back to its own readings, never to each frame's
+    rng = None
+    if not entry.get("scale_m") and not entry.get("range"):
+        idx = sorted(set(np.linspace(0, len(dpts) - 1, min(24, len(dpts))).astype(int).tolist()))
+        rng = dp.scale_range(dp.decode(entry, dpts, idx).values())
+    index_of = {int(p): i for i, p in enumerate(dpts)}
+    out_mp4.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
+    black = np.zeros((h, w, 3), np.uint8)
+    try:
+        with av.open(str(entry["packed"])) as src, av.open(str(tmp), "w", format="mp4",
+                                                          options={"movflags": "+faststart"}) as dst:
+            ist = src.streams.video[0]
+            ist.codec_context.thread_count = threads
+            ost = dst.add_stream("libx264", rate=Fraction(round(fps * 1000), 1000))
+            ost.width, ost.height, ost.pix_fmt = w, h, "yuv420p"
+            ost.time_base = tb
+            ost.codec_context.time_base = tb
+            ost.codec_context.thread_count = threads
+            ost.options = {"crf": str(DEPTH_CRF), "preset": PRESET, "profile": "high", "forced-idr": "1"}
+            frames = src.decode(ist)
+            cur_i, cur = -1, None
+            next_key = 0.0
+            for i, p in enumerate(pts):
+                j = want[i]
+                while j is not None and cur_i < j:
+                    fr = next(frames, None)
+                    if fr is None:
+                        j = None
+                        break
+                    k = index_of.get(int(fr.pts)) if fr.pts is not None else None
+                    if k is not None:
+                        cur_i, cur = k, fr
+                if j is not None and cur_i == j:
+                    im = dp.picture(dp._array(cur), entry, rng)
+                    if im.size != (w, h):
+                        im = im.resize((w, h), resample=0)
+                    rgb = np.asarray(im.convert("RGB"))
+                else:
+                    rgb = black
+                vf = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+                vf.pts, vf.time_base = int(p), tb
+                if float(p * tb) >= next_key - 1e-9:
+                    vf.pict_type = av.video.frame.PictureType.I
+                    next_key += KEY_S
+                for pkt in ost.encode(vf):
+                    dst.mux(pkt)
+            for pkt in ost.encode():
+                dst.mux(pkt)
+        frame_lengths(tmp)
+        got = probe_pts(tmp)[3]
+        if got != list(pts):
+            raise RuntimeError(f"{out_mp4.name}: depth clip timestamps differ from the colour clip's "
+                               f"({len(got)} frames, {len(pts)} expected)")
+        os.replace(tmp, out_mp4)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def frame_lengths(mp4: Path) -> bool:
     """Give every video frame of an encoded mp4 its length, so the file plays to the end of its last frame; True when
     it had to. Some ffmpeg builds (7.0.2 and 7.1.5 seen, on an MPEG-4 Part 2 source among others) hand the muxer
@@ -259,6 +386,30 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
             off, skip = offsets.get(cam, (0.0, 0))
             jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, off, skip,
                          ep_dir.name, cam))
+    return jobs
+
+
+def depth_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = "") -> list:
+    """(episode folder, camera, colour clip, depth clip, fps) for each camera of the episode with a depth stream whose
+    colour clip exists and whose depth clip is missing or does not match the colour clip's frame count."""
+    dj = ep_dir / "depth.json"
+    src_p = ep_dir / "sources.json"
+    if not dj.exists() or not src_p.exists():
+        return []
+    eid = board_name(ep_dir.name, prefix)
+    sources = json.loads(src_p.read_text())
+    ctx_p = ep_dir / "context.json"
+    fps = float((json.loads(ctx_p.read_text()) if ctx_p.exists() else {}).get("fps") or 30.0)
+    jobs = []
+    for cam in json.loads(dj.read_text()):
+        if cam not in sources:
+            continue
+        colour, out = clip_path(mp4_dir, eid, cam), depth_clip(mp4_dir, eid, cam)
+        n = clip_frames(colour) if colour.exists() else 0
+        if not n:
+            continue
+        if force or not (out.exists() and clip_frames(out) == n):
+            jobs.append((ep_dir, cam, colour, out, fps))
     return jobs
 
 
@@ -375,6 +526,22 @@ def main() -> int:
                 fail += 1
                 failed.setdefault(ep, {})[cam] = str(e)[:400]
                 sys.stderr.write(f"clip FAIL {o}: {str(e)[:160]}\n")
+    # the depth clips, after the colour clips they are timed against; one that cannot be cut is reported and left
+    # out (the page then offers no depth for that camera), never costing the episode
+    djobs = [j for d in ep_dirs if d.name not in failed for j in depth_jobs(d, args.out, args.force, args.name_prefix)]
+    if djobs:
+        print(f"clips: {len(djobs)} depth clips to cut")
+        dok = 0
+        with ThreadPoolExecutor(max_workers=args.jobs) as ex:
+            futs = {ex.submit(extract_depth, d, cam, colour, out, args.clip_threads, fps): out
+                    for (d, cam, colour, out, fps) in djobs}
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                    dok += 1
+                except Exception as e:
+                    sys.stderr.write(f"depth clip FAIL {futs[f]}: {str(e)[:160]}\n")
+        print(f"clips: depth ok={dok} fail={len(djobs) - dok}")
     # a camera file that does not decode costs its own episode, never the rest (set_aside_failed); the step
     # fails only when no episode came out whole
     args.out.mkdir(parents=True, exist_ok=True)

@@ -16,8 +16,12 @@ page loads is a plain file:
                                          (board/build.py hands/), timed against the web copy of its clip
   <out>/<build_id>/data/keypoints/index.json  the head-camera episodes with a hand keypoints download, each with the
                                          path of its file under media/k/
+  <out>/<build_id>/data/sensors/<file>   the other signals and depth of each episode that has them (board/build.py
+                                         sensors/), byte for byte, with data/sensors/index.json listing them; their
+                                         times are on the main camera's clock, which its web copy keeps
   <out>/<build_id>/BUILD.json            provenance, counts, and which media files are still missing
-  <out>/media/v/<cam>/<eid>.<hash>.mp4   web copies of the clips (board/clips.py's own files, stream-copied)
+  <out>/media/v/<cam>/<eid>.<hash>.mp4   web copies of the clips (board/clips.py's own files, stream-copied), a
+                                         camera's depth clip under v/depth_<cam>/ when it has one
   <out>/media/f/<cam>/<eid>/<ms>.<hash>.jpg  goal frames, the same JPEGs the live /api/frame returns
   <out>/media/k/<eid>.<hash>.json        the hand keypoint downloads, byte for byte as board/build.py wrote them
                                          (hand_keypoints/: the dataset video's own pixels and frame times, so no
@@ -91,7 +95,8 @@ clip_path = sa.clip_path   # the source clip board/serve.py's /api/video serves 
 
 
 def media_key(cam: str) -> str:
-    return cam if cam in ("left", "right") or sa.EXTRA_CAM.fullmatch(cam or "") else "exo"
+    return cam if cam in ("left", "right") or sa.EXTRA_CAM.fullmatch(cam or "") or sa.DEPTH_CAM.fullmatch(cam or "") \
+        else "exo"
 
 
 def shown_cams(d: dict) -> list:
@@ -170,6 +175,12 @@ def hands_dir(qa: Path, given: Path | None = None) -> Path | None:
     return h if h.is_dir() and any(h.glob("episode_*.json")) else None
 
 
+def sensors_dir(qa: Path, given: Path | None = None) -> Path | None:
+    """The board's sensors files (board/build.py sensors/), when it has them."""
+    d = given if given is not None else qa.parent / "sensors"
+    return d if (d / "index.json").exists() else None
+
+
 def keypoints_dir(qa: Path, given: Path | None = None) -> Path | None:
     """The board's hand keypoint downloads (board/build.py hand_keypoints/), when it has them."""
     k = given if given is not None else qa.parent / "hand_keypoints"
@@ -196,6 +207,11 @@ def plan(qa: Path, clips: Path, compare: Path | None = None):
                 media[key] = {"src": src, "rel": video_rel(eid, key, src_sig(src)), "main": cam == cams[0]}
                 # the camera's first frame, the video's poster: the player shows footage from the first paint
                 frames[f"{key}|0"] = {"src": src, "t": 0.0, "rel": frame_rel(eid, key, 0, src_sig(src))}
+                # the camera's depth clip (board/clips.py), which the page's depth switch plays, when it was cut
+                dsrc = clip_path(clips, eid, f"depth_{cam}")
+                if dsrc.exists():
+                    media[f"depth_{cam}"] = {"src": dsrc, "rel": video_rel(eid, f"depth_{cam}", src_sig(dsrc)),
+                                             "main": cam == cams[0]}
             main = cams[0]
             msrc = clip_path(clips, eid, main)
             times = goal_times(d)
@@ -471,8 +487,14 @@ def _git_commit() -> str:
 
 
 def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path | None = None,
-                 keypoints: Path | None = None, frames: list | None = None) -> str:
+                 keypoints: Path | None = None, frames: list | None = None, sensors: Path | None = None) -> str:
     h = hashlib.sha1()
+    if sensors is not None:
+        for f in ["index.json", *files]:
+            sp = sensors / f
+            if sp.exists():
+                st = sp.stat()
+                h.update(f"sensors|{f}|{st.st_size}|{st.st_mtime_ns}\n".encode())
     # the frames on disk are part of the build (the page lists only those), so a build made before the media finish
     # gets a new id once they have
     for rel in frames or []:
@@ -522,8 +544,9 @@ def cmd_site(a):
     files = [e["rec"]["file"] for e in eps]
     hands = hands_dir(a.qa, a.hands)
     keypoints = keypoints_dir(a.qa, a.keypoints)
+    sensors = sensors_dir(a.qa, getattr(a, "sensors", None))
     present = sorted(f["rel"] for e in eps for f in e["frames"].values() if (a.out / "media" / f["rel"]).exists())
-    bid = a.build_id or build_id_for(a.qa, files, compare, hands, keypoints, present)
+    bid = a.build_id or build_id_for(a.qa, files, compare, hands, keypoints, present, sensors)
     out = a.out / bid
     if out.exists() and not a.force:
         print(f"{out} exists (a build id names one set of inputs); pass --force to rewrite it")
@@ -619,10 +642,22 @@ def cmd_site(a):
         (stage / "data/keypoints/index.json").write_text(json.dumps(kidx, separators=(",", ":")))
         kp_res = {"dir": str(keypoints), "files": len(kidx["files"]),
                   "bytes": sum(v["bytes"] for v in kidx["files"].values())}
-    # the page asks for other models' labels, hand pose files and keypoint downloads only when the build has them
-    # (no request that can only fail)
+    sn_res = None
+    if sensors is not None:
+        # the sensors files, byte for byte: their times are on the main camera's clock, which the web copies keep
+        (stage / "data/sensors").mkdir()
+        sidx = json.loads((sensors / "index.json").read_text())
+        listed = set(files)
+        sidx["files"] = {f: v for f, v in sidx["files"].items() if f in listed and (sensors / f).exists()}
+        for f in sidx["files"]:
+            shutil.copyfile(sensors / f, stage / "data/sensors" / f)
+        (stage / "data/sensors/index.json").write_text(json.dumps(sidx, separators=(",", ":")))
+        sn_res = {"dir": str(sensors), "files": len(sidx["files"])}
+    # the page asks for other models' labels, hand pose files, sensors files and keypoint downloads only when the build
+    # has them (no request that can only fail)
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
-           "keypoints": bool(kp_res and kp_res["files"]), "labels_license": sa.labels_license(a.board)}
+           "keypoints": bool(kp_res and kp_res["files"]), "sensors": bool(sn_res and sn_res["files"]),
+           "labels_license": sa.labels_license(a.board)}
     name = sa.board_name(a.board)
     header = sa.read_header(getattr(a, "header", None))
     (stage / "index.html").write_text(sa.render_index(
@@ -641,7 +676,7 @@ def cmd_site(a):
              "qa": str(a.qa), "clips": str(a.clips), "enc": ENC_TAG, "public_base": a.public_base,
              "episodes": len(eps), "datasets": {ds: len(r) for ds, r in by_ds.items()},
              "compare": {"dir": str(compare), "files": n_cmp} if compare is not None else None,
-             "hands": hands_res, "keypoints": kp_res,
+             "hands": hands_res, "keypoints": kp_res, "sensors": sn_res,
              "media": st, "missing_media": missing}
     (stage / "BUILD.json").write_text(json.dumps(build, indent=1))
     if out.exists():
@@ -679,6 +714,7 @@ def main():
     ap.add_argument("--hands", type=Path, default=None, help="hand pose files (default BOARD/hands)")
     ap.add_argument("--keypoints", type=Path, default=None,
                     help="hand keypoint downloads (default BOARD/hand_keypoints)")
+    ap.add_argument("--sensors", type=Path, default=None, help="sensors files (default BOARD/sensors)")
     ap.add_argument("--out", type=Path, default=None, help="output root (default BOARD/static)")
     ap.add_argument("--jobs", type=int, default=4, help="parallel ffmpeg processes (default 4)")
     ap.add_argument("--threads", type=int, default=4, help="threads per ffmpeg (default 4)")

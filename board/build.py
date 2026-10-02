@@ -24,7 +24,8 @@ dataset's newest finished run that is not a dry run (run ids start with their st
         "file_prefix": "..."},                                optional: a prefix for its board file names
        ...],
      "comparisons": [...],                                    optional: other models' runs (compare/metrics.py)
-     "hands": {"src": KEYPOINT_RUN, "clips": CLIPS}}          optional: hand pose overlay (board/hands.py)
+     "hands": {"src": KEYPOINT_RUN, "clips": CLIPS},          optional: hand pose overlay (board/hands.py)
+     "sensors": false}                                        optional: no sensors files (board/sensors.py)
 
 configs/quickstart/board.json is a complete manifest for the quickstart runs.
 
@@ -73,6 +74,12 @@ folder the board plays. They go to BOARD/hands/, one file per label file, timed 
 the episode page draws over the footage, and to BOARD/hand_keypoints/, a download in the dataset video's own
 pixels and frame times (board/hands.py). Neither goes into qa/, so nothing the board counts or exports as labels
 includes them. The keypoints are for non-commercial use only, which every file says.
+
+Episodes whose prepared folder has other signals (signals.npz: a force, joint velocities, a pressure map) or depth
+streams (depth.json) get a sensors file each in BOARD/sensors/, with BOARD/sensors/index.json listing them
+(board/sensors.py), which the episode page draws under its timeline. Nothing in the manifest is needed: the build reads
+the dataset entries' "episodes" folders, and a board none of whose episodes has either gets no sensors/ and the same
+BUILT.json as before. "sensors": false in the manifest turns it off. Like hands/, nothing that reads qa/ reads it.
 """
 from __future__ import annotations
 
@@ -89,7 +96,7 @@ from checks import label_consistency
 
 SEVERITIES = ["low", "medium", "high"]
 # the deterministic checks copied from context.json into the episode's dataset_checks
-CONTEXT_CHECKS = ("stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")
+CONTEXT_CHECKS = ("stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "sensor_checks")
 # the public datasets' publishers and licenses, by the Hub repository an episode's context.json names
 SOURCES = {k: v for k, v in json.loads((Path(__file__).resolve().parent / "dataset_sources.json").read_text()).items()
            if not k.startswith("_")}
@@ -202,6 +209,28 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
             d["dataset_labels_note"] = ctx["annotation_note"]
     if isinstance(ctx.get("publisher_labels"), dict):
         d["dataset_episode_labels"] = ctx["publisher_labels"]
+    add_contacts(d, ctx)
+
+
+def add_contacts(d: dict, ctx: dict) -> None:
+    """The recording's contacts (context["contacts"], label/contacts.py), each with the model's answer when it was shown
+    ("seen"), and the check of one against the other (checks/contacts.py) in dataset_checks["contact_checks"]."""
+    recorded = ctx.get("contacts") or []
+    if not recorded:
+        for k in ("contacts_model", "contact_views"):
+            d.pop(k, None)
+        return
+    from checks import contacts as cc
+    seen = {c.get("id"): c for c in d.pop("contacts_model", None) or []}
+    views = d.pop("contact_views", None) or {}
+    shown = set(views.get("shown") or [])
+    d["contacts"] = [{**c, **({"seen": seen[c["id"]]} if c["id"] in seen else {}), "shown": c["id"] in shown}
+                     for c in recorded]
+    res = cc.check({"contacts": list(seen.values()), "contacts_missing": d.get("contacts_missing") or []}, recorded,
+                   views.get("strips") or {}, float(ctx.get("fps") or 30))
+    if res is not None:
+        d["dataset_checks"] = d.get("dataset_checks") or {}
+        d["dataset_checks"]["contact_checks"] = res
 
 
 def carry_pieces(d: dict, r: dict, ctx: dict) -> None:
@@ -338,6 +367,25 @@ def build_hands(board: Path, spec: dict, qa_new: Path, episodes: dict) -> dict:
             "keypoints": {"written": kres["written"], "skipped": len(kres["skipped"]), "bytes": kres["bytes"]}}
 
 
+def build_sensors(board: Path, episodes: dict) -> dict | None:
+    """The sensors files of the episodes with signals or depth (board/sensors.py), written to BOARD/sensors.new and
+    renamed into place with qa/; None, and nothing written, when no episode has either. episodes maps a board file to
+    its prepared episode folder."""
+    from board import sensors as bs
+    have = {f: ep for f, ep in episodes.items()
+            if (Path(ep) / "signals.npz").exists() or (Path(ep) / "depth.json").exists()}
+    if not have:
+        return None
+    out = board / "sensors.new"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir()
+    res = bs.build(have, out)
+    for sk in res["skipped"]:
+        print(f"sensors: skipped {sk['file']}: {sk['skip']}", file=sys.stderr)
+    return {"written": res["written"], "skipped": len(res["skipped"]), "bytes": res["bytes"]}
+
+
 def resolve_run(p: Path) -> Path:
     """A run folder; RUNS/<dataset>/latest (when no folder has that name) is the newest finished run that is
     not a dry run."""
@@ -457,12 +505,15 @@ def build(board: Path) -> dict:
                              else entry)
     compared = build_comparisons(board, manifest, new, board_src) if manifest.get("comparisons") else None
     hands = build_hands(board, manifest["hands"], new, episodes) if manifest.get("hands") else None
+    sensors = build_sensors(board, episodes) if manifest.get("sensors", True) is not False else None
     _swap(board, "qa", True)
     _swap(board, "compare", compared is not None)
     _swap(board, "hands", hands is not None)
     _swap(board, "hand_keypoints", hands is not None)
+    _swap(board, "sensors", sensors is not None)
     built = {"manifest": {**manifest, "datasets": built_entries}, "counts": counts,
-             **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {})}
+             **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {}),
+             **({"sensors": sensors} if sensors else {})}
     (board / "BUILT.json").write_text(json.dumps(built, indent=1))
     return built
 

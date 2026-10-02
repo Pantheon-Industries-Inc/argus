@@ -179,6 +179,7 @@ def _serve(monkeypatch, board: Path, clips: Path):
     monkeypatch.setattr(serve, "COMPARE_DIR", (board / "compare").resolve())
     monkeypatch.setattr(serve, "HANDS_DIR", (board / "hands").resolve())
     monkeypatch.setattr(serve, "KEYPOINTS_DIR", (board / "hand_keypoints").resolve())
+    monkeypatch.setattr(serve, "SENSORS_DIR", (board / "sensors").resolve())
     monkeypatch.setattr(serve, "BOARD_NAME", serve.board_name(board))
     monkeypatch.setattr(serve, "_LIST_CACHE", {})
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), serve.Handler)
@@ -278,6 +279,32 @@ def _output(ep_dir: Path, model: str, head: bool, parsed: bool = True) -> dict:
             "labels": labels if parsed else {"_raw": "{", "_parse_error": "JSONDecodeError"}}
 
 
+def _sensors(ep: Path) -> None:
+    """The teleop episode's other signals and depth (board/sensors.py reads them): a gripper's effort that rests and
+    rises, a 4 x 4 pressure map, a constant flag, and a depth stream on its main camera; and the contact prepare found
+    in the effort (label/contacts.py)."""
+    import numpy as np
+    n = 300
+    eff = np.zeros((n, 1), np.float32)
+    eff[60:120] = 4.0
+    pmap = (3072.0 + np.random.default_rng(0).normal(0, 2, (n, 16))).astype(np.float32)   # a real sensor's noise
+    pmap[150:200, 6] -= 3072.0 - 1800.0
+    np.savez(ep / "signals.npz", s0=eff, s1=pmap, s2=np.ones((n, 1), np.float32))
+    np.save(ep / "depth_kmap_exo.npy", np.arange(n))
+    (ep / "depth.json").write_text(json.dumps({"exo": {"packed": str(ep / "depth.mkv"), "base_s": 0.0, "n_frames": n,
+                                                        "kmap": "depth_kmap_exo.npy", "scale_m": None}}))
+    (ep / "sources.json").write_text(json.dumps({"exo": {"packed": str(ep / "exo.mp4"), "base_s": 0.0,
+                                                          "n_frames": n}}))
+    ctx = json.loads((ep / "context.json").read_text())
+    (ep / "context.json").write_text(json.dumps({**ctx, "fps": 30, "n_state_frames": n, "depth": {"exo": {
+        "units": "relative", "scale_m": None}}, "signals": [
+        {"name": "gripper effort", "key": "s0", "dims": 1},
+        {"name": "pressure", "key": "s1", "dims": 16, "shape": [4, 4]},
+        {"name": "health", "key": "s2", "dims": 1, "names": ["ok"]}], "contacts": [
+        {"id": "c1", "hand": "right", "signals": ["gripper effort"], "start_s": 2.0, "peak_s": 2.5, "end_s": 3.967,
+         "from_start": False, "to_end": False, "peak_strength": 1.0, "regions": {}, "dips_s": []}]}))
+
+
 def _built_board(tmp: Path) -> Path:
     """Three datasets, one episode each (a public teleop dataset, a public head-camera dataset with hand keypoints,
     and a dataset of your own), built by board/build.py, and one other model over two of the episodes, one of whose
@@ -291,11 +318,22 @@ def _built_board(tmp: Path) -> Path:
         ep = tmp / "episodes" / ds / f"episode_{i:06d}"
         ep.mkdir(parents=True)
         (ep / "context.json").write_text(json.dumps({"dataset": hub, "profile": rig, "duration_s": 10.0}))
+        if ds == "molmo":
+            _sensors(ep)
         run = tmp / "runs" / ds / "r1"
         (run / "out").mkdir(parents=True)
         (run / "run.json").write_text(json.dumps({"run_id": "r1", "code": "abc1234", "kind": "full", "status": "done",
                                                   "slice": str(ep.parent)}))
-        (run / "out" / f"{ep.name}.json").write_text(json.dumps(_output(ep, "openai/gpt-6-astra", rig == "ego_head")))
+        out = _output(ep, "openai/gpt-6-astra", rig == "ego_head")
+        if ds == "molmo":
+            # the model's answer for the episode's one contact, and a grasp it saw that no contact covers
+            out["labels"]["contacts"] = [{"id": "c1", "touch_seen": "yes", "first_touch_frame": 3, "last_touch_frame": 2,
+                                          "hand": "right", "object": "cup", "grip": "pinch", "action": "lifts it",
+                                          "slip": "no", "notes": None}]
+            out["labels"]["contacts_missing"] = [{"t_s": 7.0, "hand": "left", "object": "lid"}]
+            out["contact_views"] = {"shown": ["c1"], "strips": {"c1": {"begin": [1.7, 1.85, 2.0, 2.15, 2.3],
+                                                                       "end": [3.817, 3.967, 4.117]}}}
+        (run / "out" / f"{ep.name}.json").write_text(json.dumps(out))
         entries.append({"dataset": ds, "run": str(run), "episodes": str(ep.parent)})
         if ds != "mine":
             (cmp_slice / ep.name).symlink_to(ep)
@@ -363,6 +401,8 @@ def _smoke(page: str, base: str) -> dict:
 def _check_smoke(res: dict) -> None:
     assert res["episodes"] == 3 and res["rendered"] >= 5 and res["rendered_comparisons"] >= 2
     assert res["footage_lines"] == 2 and res["keypoint_links"] == 1 and res["compare_view"]
+    assert res["sensors_panels"] == 1          # the teleop episode's signals and depth, drawn under its timeline
+    assert res["touch_lanes"] == 1 and res["contact_cards"] == 1 and res["contact_checks"] == 1   # and its contact
     (lb,) = res["labellers"]
     assert lb["key"] == "other" and lb["episodes"] == 2 and "not Astra&rsquo;s labels" in lb["note"]
     assert "labels by Other model" in lb["band"]

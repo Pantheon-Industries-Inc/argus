@@ -147,6 +147,11 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "operator_mistakes": labels.get("operator_mistakes") or [],
         "completion": completion,
         "tasks": tasks,
+        # the model's answer for each contact it was shown, the moments it saw a hand take hold of something no
+        # recorded contact covers, and the strips it was shown (board/build.py joins them to the recording's contacts)
+        **({"contacts_model": [c for c in labels.get("contacts") or [] if isinstance(c, dict)],
+            "contacts_missing": [c for c in labels.get("contacts_missing") or [] if isinstance(c, dict)],
+            "contact_views": result.get("contact_views")} if result.get("contact_views") else {}),
         # the still spans the model was told about, the deterministic checks, and the exact instants it was shown
         "arm_still_spans": result.get("arm_still_spans"),
         "dataset_checks": result.get("dataset_checks"),

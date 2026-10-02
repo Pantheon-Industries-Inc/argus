@@ -12,13 +12,19 @@ labels of some episodes (BOARD/compare, when the manifest names comparisons) are
 control switches the whole board to one model's labels, marked as such, and the comparison view sums them up;
 they never enter the board's counts or its downloads. The hand pose files in BOARD/hands, when the manifest names
 them, are drawn over the head-camera footage, and BOARD/hand_keypoints holds the same keypoints as a download of
-their own. The header shows the page title and the board's name from BOARD/manifest.json, or, for a board that is part
-of a site, the site's own header (--header, an HTML file).
+their own. An episode whose recording has contacts (the spans its touch signals say a hand touches something,
+label/contacts.py, joined with the model's answer for each by board/build.py) gets a Touch lane under the timeline,
+one bar per hand, and a card for the contact under the playhead; the contact checks join the episode's other checks.
+The sensors files in BOARD/sensors (board/sensors.py), for episodes whose recording has other signals or depth
+streams, are drawn under the lanes as every recorded signal (folded away on an episode with contacts), and each
+camera with depth plays its depth clip on request. The header shows the page title and the board's name from
+BOARD/manifest.json, or, for a board that is part of a site, the site's own header (--header, an HTML file).
 
 Endpoints (all GET but the export): / (the page), /api/episodes (one rail record per episode),
 /api/episode?file=F[&download=1], /api/compare/index, /api/compare/metrics, /api/compare/list?key=K (one model's
-rail records), /api/compare/episode?key=K&file=F, /api/hands?file=F, /api/keypoints?file=F[&download=1] (F is a
-label file, or index.json for the list), /api/video?id=EPISODE&cam=exo|left|right[&download=1] (byte ranges),
+rail records), /api/compare/episode?key=K&file=F, /api/hands?file=F, /api/sensors?file=F,
+/api/keypoints?file=F[&download=1] (F is a label file, or index.json for the list),
+/api/video?id=EPISODE&cam=exo|left|right|depth_<camera>[&download=1] (byte ranges),
 /api/footage?id=EPISODE[&t0=S&t1=S][&prepare=1] (every camera in one video, see footage below),
 /api/frame?id=EPISODE&cam=C&t=S&w=W (one JPEG), POST /api/export {"files": [...]} (JSON Lines).
 
@@ -188,16 +194,17 @@ def _remember_frame(key, jpg: bytes) -> None:
 
 
 EXTRA_CAM = re.compile(r"extra\d{1,2}")   # any other camera the recording has (board/clips.py clip_path)
+DEPTH_CAM = re.compile(r"depth_(exo|left|right|extra\d{1,2})")   # a camera's depth clip (board/clips.py depth_clip)
 
 
 def clip_path(clips: Path, eid: str, cam: str) -> Path:
-    """The clip of one camera: cam "left" and "right" are the mounted cameras, extra1, extra2, ... the others, anything
-    else the main one."""
+    """The clip of one camera: cam "left" and "right" are the mounted cameras, extra1, extra2, ... the others,
+    depth_<camera> a camera's depth clip, anything else the main one."""
     if cam == "left":
         return clips / "wrist_left" / f"{eid}.mp4"
     if cam == "right":
         return clips / "wrist_right" / f"{eid}.mp4"
-    if EXTRA_CAM.fullmatch(cam or ""):
+    if EXTRA_CAM.fullmatch(cam or "") or DEPTH_CAM.fullmatch(cam or ""):
         return clips / cam / f"{eid}.mp4"
     return clips / f"{eid}.mp4"
 
@@ -352,6 +359,7 @@ MP4_DIR = HERE / "clips"              # the clips (set by main from --clips)
 COMPARE_DIR = HERE.parent / "compare" # other models' labels, beside qa/ (board/build.py writes them)
 HANDS_DIR = HERE.parent / "hands"     # the hand pose drawn over head-camera footage (board/build.py)
 KEYPOINTS_DIR = HERE.parent / "hand_keypoints"   # the same keypoints as a download, in the dataset video's pixels
+SENSORS_DIR = HERE.parent / "sensors" # the episodes' other signals and depth (board/sensors.py)
 FOOTAGE_DIR = HERE.parent / "footage" # the videos made to download (footage), or $BOARD_FOOTAGE_DIR (set by main)
 BOARD_NAME = ""                     # the manifest's "board" (set by main)
 HEADER = None                         # a site header in place of the title bar (--header)
@@ -1350,6 +1358,155 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .lane-seg.pub.alt { background: rgba(69,129,142,0.28); }
 .lane-seg.pub.now { background: #45818e; }
 .lane-ph { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--fg); pointer-events: none; }
+/* ---------- sensors: the recording's other signals and depth (board/sensors.py) ----------
+   Under the timeline and on its time scale. Each signal that changes is a lane as wide as the timeline, so its playhead
+   stands under the timeline's: its name and the value at the playhead over a strip of its samples, the stretches it
+   spends away from rest shaded. A 2-D array that behaves like touch (a pressure map) is drawn as a heatmap at the
+   playhead beside the lanes' start. Lanes past the first few open with "Show all". */
+/* clear the timeline's tick labels, which hang 16px below it, as the first lane does */
+.timeline + #sn-slot > h3.sn-h, .lane + #sn-slot > h3.sn-h { margin-top: 22px; }
+.sn { margin: 0 0 22px; }
+.sn > .lane:first-child, .sn-maps + .lane { margin-top: 0; }
+.sn .lane { margin-top: 10px; }
+.sn-plot { height: 38px; overflow: hidden; }
+.sn-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.sn-plot path { fill: none; stroke: var(--fg); stroke-width: 1.25; vector-effect: non-scaling-stroke;
+  stroke-linejoin: round; stroke-linecap: round; }
+.sn-plot path.area { fill: rgba(28,28,26,0.10); stroke: none; }
+.sn-span { position: absolute; top: 0; bottom: 0; background: rgba(28,28,26,0.07); pointer-events: none; }
+.sn-hv { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--fg-3); pointer-events: none;
+  opacity: 0; transition: opacity 120ms ease; }
+.sn-plot.hover .sn-hv { opacity: 1; }
+.sn .lane-head { align-items: baseline; }
+/* a long name and its summary wrap onto lines that start at the same left edge */
+.sn .lane-title { flex-wrap: wrap; row-gap: 2px; }
+.sn .lane-now { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 10px; margin-left: auto; }
+.sn-v { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.sn-v i { flex: none; width: 10px; height: 2px; border-radius: 1px; background: var(--fg); }
+.sn-maps { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 14px; }
+.sn-map { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; align-items: start;
+  flex: 1 1 300px; min-width: 0; padding: 12px 14px; background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--r-md); }
+.sn-grid { position: relative; grid-row: 1 / span 3; width: 112px; line-height: 0; }
+.sn-grid canvas { width: 100%; height: auto; image-rendering: pixelated; border-radius: var(--r-sm);
+  box-shadow: 0 0 0 1px var(--border); background: var(--bg); }
+.sn-peak { position: absolute; box-sizing: border-box; border: 1.5px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--fg); border-radius: 1px; pointer-events: none; opacity: 0;
+  transition: opacity 160ms ease, left 90ms linear, top 90ms linear; }
+.sn-peak.on { opacity: 1; }
+.sn-map .lane-title { display: block; margin: 0; overflow-wrap: anywhere; }
+.sn-map .lane-now { display: block; margin: 0; }
+.sn-note { font-size: 12px; line-height: 1.45; color: var(--fg-3); min-width: 0; overflow-wrap: anywhere; }
+.sn > .sn-note { margin-top: 10px; }
+.sn .ck-all-in > .lane:first-child { margin-top: 10px; }
+.sn.open .ck-all { grid-template-rows: 1fr; }
+.sn.open .ck-all-in { opacity: 1; }
+.sn-depth { margin-top: 14px; padding: 12px 14px; background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--r-md); }
+.sn-depth .lane-title { margin: 0 0 4px; }
+.sn-depth + .sn-depth { margin-top: 12px; }
+.sn-bar { position: relative; height: 10px; margin: 10px 0 0; border-radius: var(--r-sm);
+  box-shadow: 0 0 0 1px var(--border); }
+.sn-ticks { position: relative; height: 16px; margin-top: 3px; font: 500 10px/1 var(--mono); color: var(--fg-2); }
+.sn-ticks span { position: absolute; top: 3px; white-space: nowrap; }
+.sn-ticks span::before { content: ""; position: absolute; top: -6px; left: var(--tx, 50%); width: 1px; height: 4px;
+  background: var(--border-strong); }
+/* a camera with depth: a switch on its picture shows its depth clip in place of its colour one, faded over it and
+   played in step with it. It sits under the full-screen button on the main camera and in the top right corner of a
+   side camera, styled like the full-screen button. While the player's own controls show, the strip they cover is
+   dimmed, as over the hand pose. */
+.cam-dp { position: absolute; z-index: 5; top: 8px; right: 8px; height: 26px; padding: 0 8px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px; border: 1px solid rgba(255,255,255,0.18); border-radius: 5px;
+  background: rgba(0,0,0,0.55); color: #fff; font: 500 10px/1 var(--mono); white-space: nowrap;
+  transition: background-color 160ms ease, border-color 160ms ease, opacity 200ms ease; }
+.cam-dp:hover { background: rgba(0,0,0,0.82); }
+.cam-dp[hidden] { display: none; }
+.cam-exo .cam-dp { top: calc(var(--fx-top, 0px) + 40px); right: calc(var(--fx-right, 0px) + 8px); }
+.cam-dp .hp-sw { border-color: rgba(255,255,255,0.45); }
+.cam-dp .hp-sw::after { background: rgba(255,255,255,0.75); }
+.cam-dp[aria-pressed="true"] { border-color: rgba(255,255,255,0.45); }
+.cam-dp[aria-pressed="true"] .hp-sw { background: #fff; border-color: #fff; }
+.cam-dp[aria-pressed="true"] .hp-sw::after { transform: translateX(10px); background: #000; }
+@property --dp-band { syntax: "<number>"; inherits: false; initial-value: 1; }
+.dp-vid { position: absolute; left: 0; top: 0; width: 0; height: 0; object-fit: contain; background: transparent;
+  pointer-events: none; opacity: 0; --dp-band: 1; transition: opacity 220ms ease, --dp-band 200ms ease;
+  -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,var(--dp-band)) var(--dp-bar, 0px),
+    #000 calc(var(--dp-bar, 0px) + 12px));
+  mask-image: linear-gradient(to top, rgba(0,0,0,var(--dp-band)) var(--dp-bar, 0px),
+    #000 calc(var(--dp-bar, 0px) + 12px)); }
+.dp-vid.on { opacity: 1; }
+.dp-vid.ctl { --dp-band: 0.18; }
+@media (prefers-reduced-motion: reduce) { .dp-vid, .sn-peak, .sn-hv { transition: none; } }
+#sn-slot { transition: opacity 220ms ease; }
+#sn-slot.sn-wait { opacity: 0; transition: none; }
+.sn-n { display: inline-block; min-width: 5ch; text-align: left; }
+/* the panel of every recorded signal folds closed on an episode with contacts, which the Touch lane already shows */
+.sn-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 320ms cubic-bezier(.32,.72,0,1); }
+.sn-fold-in { overflow: hidden; min-height: 0; opacity: 0; transition: opacity 240ms ease; }
+.sn.shown .sn-fold { grid-template-rows: 1fr; }
+.sn.shown .sn-fold-in { opacity: 1; }
+.sn-fold-in > .lane:first-child, .sn-fold-in > .sn-maps:first-child { margin-top: 10px; }
+.sn-fold + .ck-more { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) { .sn-fold, .sn-fold-in { transition: none; } }
+/* ---------- touch: the recording's contacts (label/contacts.py) and what the model saw at each ----------
+   One bar per hand on the timeline's time scale. A contact is a box from its begin to its end with its strength drawn
+   inside (its signals' activity over their swing, on one scale for the episode) and a tick where it is strongest; the
+   box's colour is what the model found in the frames. A diamond is a moment the model saw a hand take hold of
+   something that no recorded contact covers. */
+.tc-row + .tc-row { margin-top: 6px; }
+.tc-hand { display: block; margin: 0 0 3px; font: 500 10.5px/1.3 var(--mono); color: var(--fg-2); }
+.lane-bar.tc-bar { height: 24px; }
+.tc-seg { --c: var(--fg-2); position: absolute; top: 2px; bottom: 2px; box-sizing: border-box; overflow: hidden;
+  border: 1px solid var(--c); border-radius: 2px; background: color-mix(in srgb, var(--c) 12%, transparent);
+  cursor: pointer; opacity: .62; transition: opacity .2s, box-shadow .2s; }
+.tc-seg:hover { opacity: .85; }
+.tc-seg.now { opacity: 1; box-shadow: 0 0 0 1px var(--surface), 0 0 0 2px var(--c); z-index: 1; }
+.tc-seg svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.tc-seg path { fill: color-mix(in srgb, var(--c) 55%, transparent); stroke: none; opacity: 0; transition: opacity 220ms ease; }
+.tc-seg path.in { opacity: 1; }
+.st-yes { --c: var(--fg-2); }
+.st-no { --c: var(--danger); }
+.st-unclear, .st-unshown { --c: var(--fg-disabled); }
+.tc-seg.st-unshown { border-style: dashed; }
+.tc-peak { position: absolute; top: -3px; bottom: -3px; width: 1px; margin-left: -0.5px; background: var(--c);
+  pointer-events: none; z-index: 2; }
+.tc-miss { position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; z-index: 3;
+  transform: rotate(45deg); background: var(--danger); border: 1.5px solid var(--surface); border-radius: 1px;
+  box-sizing: border-box; cursor: pointer; transition: transform .15s; }
+.tc-miss:hover { transform: rotate(45deg) scale(1.25); }
+.tc-key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; line-height: 1.45;
+  color: var(--fg-3); }
+.tc-k { display: inline-flex; align-items: center; gap: 6px; }
+.tc-k i { flex: none; width: 14px; height: 9px; box-sizing: border-box; border: 1px solid var(--c); border-radius: 2px;
+  background: color-mix(in srgb, var(--c) 40%, transparent); }
+.tc-k i.st-unshown { border-style: dashed; background: color-mix(in srgb, var(--c) 12%, transparent); }
+.tc-k i.miss { width: 8px; height: 8px; margin: 0 3px; border: 0; transform: rotate(45deg); background: var(--danger); }
+/* the contact card: every contact's card in one cell, so the space they take never changes while the footage plays and
+   the card of the contact under the playhead fades in over the last */
+.tc-cards { display: grid; margin: 12px 0 22px; }
+.tc-card { grid-area: 1 / 1; min-width: 0; margin: 0; opacity: 0; visibility: hidden;
+  transition: opacity 180ms ease, visibility 0s linear 180ms; }
+.tc-card.on { opacity: 1; visibility: visible; transition: opacity 180ms ease, visibility 0s; }
+.tc-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.tc-card-title { font: 700 13px/1.3 var(--sans); color: var(--fg); }
+.tc-pill { font: 600 11px/1.3 var(--mono); color: var(--c); padding: 2px 8px; border-radius: var(--r-pill);
+  border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); background: color-mix(in srgb, var(--c) 8%, transparent);
+  white-space: nowrap; }
+.tc-pill.st-yes { color: var(--fg); }
+.tc-times { margin-top: 6px; font: 500 12px/1.45 var(--mono); color: var(--fg-2); }
+.tc-times [data-t] { cursor: pointer; color: var(--fg); text-decoration: underline; text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px; }
+.tc-times [data-t]:hover { text-decoration-color: var(--fg); }
+.tc-card .tc-kv { margin-top: 8px; padding: 0; }
+.tc-card .kv { grid-template-columns: minmax(84px, 124px) minmax(0, 1fr); gap: 2px 14px; padding: 7px 0; }
+.tc-card .kv .kv-v { overflow-wrap: anywhere; }
+.tc-card .kv-v + .kv-v { grid-column: 2; }
+.tc-plain { margin-top: 8px; font-size: 13px; line-height: 1.5; color: var(--fg-2); }
+.tc-card .sn-maps { margin: 10px 0 0; }
+.tc-card .sn-map { flex-basis: 260px; }
+.tc-card > .sn-note { margin-top: 8px; }
+.tc-empty .tc-plain { margin-top: 0; color: var(--fg-3); }
+@media (prefers-reduced-motion: reduce) { .tc-card, .tc-seg, .tc-seg path { transition: none; } }
 .pub-list .pub-note { font-size: 12px; color: var(--fg-3); margin: 0 0 8px; line-height: 1.45; }
 .pub-list .pub-row { display: grid; grid-template-columns: 112px 1fr; gap: 10px; padding: 4px 6px; cursor: pointer;
   border-radius: 3px; font-size: 13px; line-height: 1.4; }
@@ -2365,6 +2522,7 @@ function fetchEpisode(file) {
   if (p) { _epCache.delete(file); _epCache.set(file, p); return p; }
   p = fetchEpisodeOnce(file);
   p.catch(() => _epCache.delete(file));
+  loadSensors(file);            // the episode's sensors file, when it has one, fetched beside its labels
   _epCache.set(file, p);
   while (_epCache.size > EP_CACHE_MAX) _epCache.delete(_epCache.keys().next().value);
   return p;
@@ -2409,9 +2567,12 @@ async function fetchJson(url) {
   } catch (e) { return null; }
 }
 function episodeDownloadUrl(file) { return STATIC ? episodeUrl(file) : episodeUrl(file) + '&download=1'; }
-// the static build's media key of a camera value: left, right and extra1, extra2, ... are their own, anything else the
-// main camera (board/static.py media_key)
-function mediaKey(cam) { return (cam === 'left' || cam === 'right' || /^extra\d{1,2}$/.test(cam)) ? cam : 'exo'; }
+// the static build's media key of a camera value: left, right, extra1, extra2, ... and a camera's depth clip
+// (depth_exo, depth_left, ...) are their own, anything else the main camera (board/static.py media_key)
+function mediaKey(cam) {
+  return (cam === 'left' || cam === 'right' || /^extra\d{1,2}$/.test(cam) || /^depth_(exo|left|right|extra\d{1,2})$/
+    .test(cam)) ? cam : 'exo';
+}
 // web copy of one camera's clip; cam is the value the page asks /api/video for (left, right, or the top camera)
 function videoSrc(eidEnc, cam) {
   if (!STATIC) return 'api/video?id=' + eidEnc + '&cam=' + cam;
@@ -2754,7 +2915,11 @@ function checksSection(d) {
   // the capture checks test a robot's recording (its state stream, grippers and camera timing); none of them applies to
   // footage from a person's head camera, so a head-camera episode lists none
   const cq = d._rig !== 'ego_head' && dc.capture_qc && Array.isArray(dc.capture_qc.checks) ? dc.capture_qc : null;
-  if (!rows.length && !cq) return '';
+  // checks/sensors.py: the recording's other signals and depth streams, shown as notes (none counts as an issue yet)
+  const sc = dc.sensor_checks && Array.isArray(dc.sensor_checks.checks) ? dc.sensor_checks : null;
+  // checks/contacts.py: the recording's contacts against what the model saw at them, notes as well
+  const tc = dc.contact_checks && typeof dc.contact_checks === 'object' ? dc.contact_checks : null;
+  if (!rows.length && !cq && !sc && !tc) return '';
   const dot = st => `<span class="ck-dot ${st}" aria-hidden="true"></span>`;
   const word = {issue: 'fired', note: 'note', clear: 'clear', na: 'not applicable'};
   const row = r => `<div class="ck-row ${r.st}">${dot(r.st)}<span class="ck-name">${esc(r.name)}</span><span `
@@ -2795,8 +2960,40 @@ function checksSection(d) {
         : `Show all ${all.length} checks`}</button>
     </div>`;
   }
+  let sensors = '';
+  if (sc) {
+    const ev = {};
+    for (const n of sc.notes || []) (ev[n.check] = ev[n.check] || []).push(n.evidence);
+    const all = sc.checks.filter(c => c.status !== 'na').map(c => ({name: c.name,
+      st: c.status === 'fired' ? 'note' : 'clear', text: (ev[c.check] || []).map(sentences).join(' ')}));
+    if (all.length) sensors = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Sensor and depth checks`
+      + `</span><span class="ck-sum">${all.filter(r => r.st === 'note').length} of ${all.length} noted</span></div>`
+      + `${all.map(row).join('')}</div>`;
+  }
+  let touch = '';
+  if (tc) {
+    const ev = {};
+    for (const n of tc.notes || []) if (n && n.evidence) (ev[n.check] = ev[n.check] || []).push(n.evidence);
+    // each evidence sentence as checks/contacts.py wrote it, with its first letter raised and a full stop
+    const asWritten = t => { const x = String(t).trim(); return x.charAt(0).toUpperCase() + x.slice(1)
+      + (/[.!?]$/.test(x) ? '' : '.'); };
+    const ran = (tc.checked || 0) > 0;
+    const all = [['clock_offset', "Touch sensor's clock against the cameras", !!(tc.offset_ms && tc.offset_ms.n)],
+      ['touch_not_seen', 'Contacts the frames show no touch at', ran],
+      ['hand_mismatch', 'Contacts seen on the other hand', ran],
+      ['contact_missing', 'Grasps no recorded contact covers', ran]]
+      .map(([k, name, run]) => ({name, st: ev[k] ? 'note' : run ? 'clear' : 'na', text: (ev[k] || []).map(asWritten)
+        .join(' ')}))
+      .concat(Object.keys(ev).filter(k => !['clock_offset', 'touch_not_seen', 'hand_mismatch', 'contact_missing']
+        .includes(k)).map(k => ({name: k.replace(/_/g, ' '), st: 'note', text: ev[k].map(asWritten).join(' ')})))
+      .filter(r => r.st !== 'na');
+    if (all.length) touch = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Contact checks</span>`
+      + `<span class="ck-sum">${tc.checked || 0} of ${tc.contacts || 0} contacts checked, ${all.filter(r => r.st
+        === 'note').length} of ${all.length} noted</span></div>${all.map(row).join('')}</div>`;
+  }
+  if (!ours && !sensors && !touch && !theirs) return '';
   return `<h3 class="section">Checks <span class="count">every check run on this episode</span></h3><div `
-    + `class="ck">${ours}${theirs}</div>`;
+    + `class="ck">${ours}${sensors}${touch}${theirs}</div>`;
 }
 try { INCLUDE_MINOR = localStorage.getItem('board.includeMinor') === '1'; } catch (e) {}
 // every problem is one family (board/families.py, the classification the board counts with): a listed family
@@ -2967,11 +3164,12 @@ function firstDataset(want) {
   return want && datasets.includes(want) && has(want) ? want : (datasets.find(has) || null);
 }
 async function loadEpisodes() {
-  const [eps, cmp, kp] = await Promise.all([loadAllEpisodes(), BOARD.compare ? fetchJson(compareUrl('index')) : null,
-    BOARD.keypoints ? fetchJson(kpIndexUrl()) : null]);
+  const [eps, cmp, kp, sn] = await Promise.all([loadAllEpisodes(), BOARD.compare ? fetchJson(compareUrl('index'))
+    : null, BOARD.keypoints ? fetchJson(kpIndexUrl()) : null, BOARD.sensors ? fetchJson(snIndexUrl()) : null]);
   ALL_EPS = eps;
   CMP = cmp && (cmp.models || []).length ? cmp : null;
   KP_INDEX = kp && kp.files ? kp.files : null;
+  SN_INDEX = sn && sn.files ? sn.files : null;
   const q = new URLSearchParams(location.search);
   // ?ep=<file> reopens that episode, so a reload or a shared link keeps its place; it takes the file name or the
   // episode id (episode_habit_005733 or episode_habit_005733.json). ?by=<key> keeps a comparison's labels chosen
@@ -3560,6 +3758,675 @@ function setupHandPose(vid, cell, isEgo, on, file) {
   if (HP_ON) set(true, sameVideo && !!data);
 }
 
+// ================= the recording's other signals and depth (board/sensors.py) =================
+// An episode whose recording has other signals (a force, joint velocities, a pressure map) or depth streams has a file
+// of them (<board>/sensors/, served by api/sensors or copied to a static build's data/sensors/), and index.json lists
+// those episodes with the cameras that have depth. The panel under the timeline and each camera's depth switch are
+// drawn from it; nothing here touches the rail, the counts or the downloads.
+let SN_INDEX = null;                 // {file: {signals, constant, depth: [camera view, ...]}}
+const _snCache = new Map();          // file -> Promise of the decoded file (or null), the most recently used last
+const _snData = new Map();           // file -> the decoded file, once loaded
+let SN_OPEN = false;                 // every lane shown, kept across episodes
+let SN_SHOWN = false;                // the folded panel of an episode with contacts opened, kept across episodes
+const DP_ON = new Set();             // the cameras shown in depth, kept across episodes
+const SN_FIRST = 4;                  // lanes shown before "Show all"
+const SN_REST = 0.1;                 // label/signals.py REST_FRACTION: a cell this far from rest (of its swing) is active
+const snIndexUrl = () => STATIC ? BOARD.data + 'sensors/index.json' : 'api/sensors?file=index.json';
+function sensorsUrl(file) {
+  return STATIC ? BOARD.data + 'sensors/' + encodeURIComponent(file) : 'api/sensors?file=' + encodeURIComponent(file);
+}
+// one block of samples (board/sensors.py quantize): rows x values floats, NaN where there is no reading
+function snBlock(blk, rows, bits) {
+  const b = atob(blk.data), u = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+  const q = bits === 16 ? new Uint16Array(u.buffer, 0, u.length >> 1) : u, none = bits === 16 ? 65535 : 255;
+  const lo = [].concat(blk.lo), st = [].concat(blk.step), dims = rows ? q.length / rows : 0;
+  const v = new Float32Array(q.length);
+  for (let i = 0; i < q.length; i++) {
+    const c = lo.length > 1 ? i % dims : 0;
+    v[i] = q[i] === none ? NaN : lo[c] + q[i] * st[c];
+  }
+  return {dims, v};
+}
+function snDecode(doc) {
+  const out = {depth: doc.depth || {}, signals: [], constant: [], t: new Float64Array(0)};
+  if (!doc.signals || !doc.frames) return out;
+  const n = doc.n, stride = doc.stride || 1, ft = new Float64Array(doc.frames), tr = hpReader(doc.times.d);
+  let ms = doc.times.ms0;
+  ft[0] = ms / 1000;
+  for (let i = 1; i < doc.frames; i++) { ms += doc.times.dur + tr.next(); ft[i] = ms / 1000; }
+  out.t = new Float64Array(n);
+  for (let i = 0; i < n; i++) out.t[i] = ft[Math.min(doc.frames - 1, i * stride)];
+  for (const s of doc.signals) {
+    if (s.constant) { out.constant.push(s); continue; }
+    const g = Object.assign({}, s);
+    if (s.values) g.vals = snBlock(s.values, n, 16);
+    if (s.activity) g.act = snBlock(s.activity, n, 16).v;
+    if (s.strength) g.str = snBlock(s.strength, n, 16).v;
+    if (s.map && s.rest && s.swing > 0) { g.map = snBlock(s.map, n, 8).v; g.restArr = Float32Array.from(s.rest); }
+    out.signals.push(g);
+  }
+  // what touches first, then what rests and rises, then the rest, each in the dataset's order
+  const rank = s => s.touch ? 0 : s.rests_and_rises ? 1 : 2;
+  out.signals = out.signals.map((s, i) => [s, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
+  return out;
+}
+function loadSensors(file) {
+  if (!BOARD.sensors || !SN_INDEX || !SN_INDEX[file]) return Promise.resolve(null);
+  let p = _snCache.get(file);
+  if (p) { _snCache.delete(file); _snCache.set(file, p); return p; }
+  p = fetchJson(sensorsUrl(file)).then(doc => {
+    const d = doc && doc.format === 'board-sensors/1' ? snDecode(doc) : null;
+    if (d) _snData.set(file, d);
+    return d;
+  }).catch(() => null);
+  _snCache.set(file, p);
+  while (_snCache.size > EP_CACHE_MAX) { const k = _snCache.keys().next().value; _snCache.delete(k); _snData.delete(k); }
+  return p;
+}
+// the cameras of an episode with a depth clip to switch to
+function depthViews(file) {
+  if (STATIC) {
+    const rec = ALL_EPS.find(e => e.file === file) || {};
+    return Object.keys(rec._media || {}).filter(k => k.startsWith('depth_')).map(k => k.slice(6));
+  }
+  return BOARD.sensors && SN_INDEX && SN_INDEX[file] ? (SN_INDEX[file].depth || []) : [];
+}
+// on its own line after the camera's video, so a camera without depth draws exactly as before
+function dpHtml(v, views) {
+  if (!views.includes(v)) return '';
+  return `\n          <video class="dp-vid" data-view="${esc(v)}" muted playsinline preload="none" aria-hidden="true"></video>`
+    + `<button class="cam-dp" type="button" data-view="${esc(v)}" aria-pressed="false" title="Show this camera's depth `
+    + `in place of its colour picture"><span class="hp-sw" aria-hidden="true"></span>Depth</button>`;
+}
+// three significant digits, as label/signals.py writes a value
+const snNum = v => !isFinite(v) ? '-' : String(Number(v.toPrecision(3)));
+const snOpacity = (i, n) => n > 1 ? (1 - 0.65 * i / (n - 1)).toFixed(2) : '1';
+function snValueNames(s) {
+  const d = s.vals ? s.vals.dims : 0;
+  return s.names && s.names.length === d ? s.names : (d === 1 ? [''] : [...Array(d).keys()].map(i => `[${i}]`));
+}
+// the sample shown at time t: the last one at or before it
+function snIndexAt(ts, t) {
+  if (!ts.length || t < ts[0]) return ts.length ? 0 : -1;
+  let lo = 0, hi = ts.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ts[m] <= t + 1e-3) lo = m; else hi = m - 1; }
+  return lo;
+}
+function snWhat(s) {
+  const sh = s.shape && s.shape.length > 1 ? s.shape.join(' x ') : String(s.dims);
+  let w = s.act ? `${sh} values, drawn as their activity` : `${sh} ${s.dims === 1 ? 'value' : 'values'}`;
+  if (s.touch || s.rests_and_rises) {
+    if (s.direction === 'down') w += ', falls when active';
+    else if (s.direction === 'up') w += ', rises when active';
+    const k = (s.spans || []).length;
+    w += k ? `, away from rest ${k === 1 ? 'once' : k + ' times'}` : '';
+  }
+  return w;
+}
+// one lane's strip: each value a line on one scale (an array, its activity filled from 0), on the timeline's time scale
+function snPlot(s, ts, duration) {
+  const W = 1000, H = 100, pad = 8, x = t => (W * t / duration).toFixed(1);
+  const series = s.vals ? [...Array(s.vals.dims).keys()].map(c => i => s.vals.v[i * s.vals.dims + c]) : [i => s.act[i]];
+  let lo = s.vals ? Infinity : 0, hi = -Infinity;
+  for (let i = 0; i < ts.length; i++) for (const f of series) { const v = f(i); if (isFinite(v)) { lo = Math.min(lo, v);
+    hi = Math.max(hi, v); } }
+  if (!(hi > lo)) { hi = lo + 1; }
+  const y = v => (H - pad - (H - 2 * pad) * (v - lo) / (hi - lo)).toFixed(1);
+  const paths = series.map((f, c) => {
+    let d = '', pen = false;
+    for (let i = 0; i < ts.length && ts[i] <= duration; i++) {
+      const v = f(i);
+      if (!isFinite(v)) { pen = false; continue; }
+      d += `${pen ? 'L' : 'M'}${x(ts[i])} ${y(v)}`;
+      pen = true;
+    }
+    return d;
+  });
+  let svg = '';
+  if (!s.vals && paths[0]) {
+    const last = Math.min(ts.length, snIndexAt(ts, duration) + 1) - 1;
+    svg += `<path class="area" d="${paths[0]}L${x(ts[Math.max(0, last)])} ${y(0)}L${x(ts[0])} ${y(0)}Z"></path>`;
+  }
+  svg += paths.map((d, c) => d ? `<path d="${d}" style="stroke-opacity:${snOpacity(c, paths.length)}"></path>` : '')
+    .join('');
+  const pct = t => (100 * Math.max(0, Math.min(duration, t)) / duration);
+  const spans = (s.spans || []).filter(([a]) => a < duration).map(([a, b]) => `<div class="sn-span" style="left:`
+    + `${pct(a)}%;width:max(2px, ${pct(b) - pct(a)}%)"></div>`).join('');
+  return `${spans}<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${svg}</svg>`
+    + `<div class="sn-hv"></div><div class="lane-ph"></div>`;
+}
+// the readout under the playhead: each value with its name and the swatch of its line, or the array's activity
+function snReadout(s, i) {
+  if (i < 0) return '';
+  if (s.vals) {
+    const names = snValueNames(s), d = s.vals.dims;
+    return names.map((nm, c) => `<span class="sn-v">${d > 1 ? `<i style="opacity:${snOpacity(c, d)}"></i>` : ''}`
+      + `${esc(nm)}${nm ? ' ' : ''}<span class="sn-n">${snNum(s.vals.v[i * d + c])}</span></span>`).join('');
+  }
+  return `<span class="sn-v">activity <span class="sn-n">${snNum(s.act[i])}</span></span>`;
+}
+function snTipText(s, i) {
+  if (s.vals) {
+    const names = snValueNames(s), d = s.vals.dims;
+    return names.map((nm, c) => `${nm ? esc(nm) + ' ' : ''}${snNum(s.vals.v[i * d + c])}`).join(', ');
+  }
+  return `activity ${snNum(s.act[i])}`;
+}
+const snAway = dir => dir === 'down' ? 'below' : dir === 'up' ? 'above' : 'away from';
+// a 2-D array's cells at sample i: each cell's distance from its resting level in the signal's direction, over the
+// swing (the upload's when prepare measured it), clipped to 0..1
+function snCells(s, i) {
+  const n = s.restArr.length, o = i * n, out = new Float32Array(n);
+  let best = -1, bi = -1, none = true;
+  for (let c = 0; c < n; c++) {
+    const v = s.map[o + c];
+    if (!isFinite(v)) { out[c] = NaN; continue; }
+    none = false;
+    const d = s.direction === 'down' ? s.restArr[c] - v : s.direction === 'up' ? v - s.restArr[c] : Math.abs(v
+      - s.restArr[c]);
+    out[c] = Math.max(0, Math.min(1, d / s.swing));
+    if (d > best) { best = d; bi = c; }
+  }
+  return {cells: out, best, bi, none};
+}
+function snMapHtml(s, k) {
+  const [rows, cols] = s.shape;
+  const scope = s.swing_from === 'upload' ? 'the typical swing across the dataset' : 'the typical swing in this episode';
+  // the longer side 112 px, so a long narrow array (21 x 3) stays as short as a square one
+  const w = Math.max(16, Math.round(112 * cols / Math.max(rows, cols)));
+  return `<div class="sn-map" data-k="${k}">
+    <div class="sn-grid" style="width:${w}px"><canvas width="${cols}" height="${rows}"></canvas><div class="sn-peak" style="width:`
+      + `${100 / cols}%;height:${100 / rows}%"></div></div>
+    <span class="lane-title">${esc(s.name)}</span>
+    <span class="lane-now"></span>
+    <span class="sn-note">Each cell's distance from its resting level at the playhead. Darker is farther, and black `
+      + `is ${snNum(s.swing)} ${snAway(s.direction)} rest or more, ${scope}.</span>
+  </div>`;
+}
+function snDepthHtml(D, camName, order) {
+  const groups = new Map();
+  const rank = v => (order.indexOf(v) + 1) || 99;
+  for (const [v, e] of Object.entries(D.depth || {}).sort((a, b) => rank(a[0]) - rank(b[0]))) {
+    const key = JSON.stringify([e.units, e.kind, e.bar, e.ticks]);
+    if (!groups.has(key)) groups.set(key, {e, views: []});
+    groups.get(key).views.push(v);
+  }
+  return [...groups.values()].map(({e, views}) => {
+    const names = views.map(camName);
+    const cams = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+    const one = views.length === 1;
+    const text = (e.units === 'metres'
+      ? 'Red is near and blue is far, in metres on one fixed scale that is the same in every episode. Black is no '
+        + 'reading.'
+      : 'Red is near and blue is far. The recording does not give the unit, so the colours are relative to '
+        + `${one ? "this camera's" : "each camera's"} readings across the upload. Black is no reading.`)
+      + ` The Depth switch on ${one ? 'its picture shows it' : 'each picture shows it'} in place of the colour picture.`;
+    const bar = (e.bar || []).length ? `<div class="sn-bar" style="background:linear-gradient(to right, `
+      + `${e.bar.join(', ')})"></div><div class="sn-ticks">${(e.ticks || []).map(([p, label]) => `<span style="left:`
+      + `${(100 * p).toFixed(2)}%;transform:translateX(-${(100 * p).toFixed(2)}%);--tx:${(100 * p).toFixed(2)}%">`
+      + `${esc(label)}</span>`).join('')}</div>` : '';
+    return `<div class="sn-depth"><span class="lane-title">Depth <span class="lane-sum">${esc(cams)} `
+      + `${one ? 'camera' : 'cameras'}</span></span><div class="sn-note">${text}</div>${bar}</div>`;
+  }).join('');
+}
+// the colours a heatmap is drawn in: the page's background where a cell is at rest, its ink where it is farthest
+function snInk() {
+  const css = getComputedStyle(document.documentElement);
+  const rgb = h => { const m = String(h).trim().match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+    return m ? [1, 2, 3].map(j => parseInt(m[j], 16)) : null; };
+  return [rgb(css.getPropertyValue('--bg')) || [243, 244, 246], rgb(css.getPropertyValue('--fg')) || [28, 28, 26]];
+}
+// one heatmap (snMapHtml) bound to its signal, and drawn at sample i with its strongest cell marked and named
+function snMapBind(el, s) {
+  return {s, el, ctx: el.querySelector('canvas').getContext('2d'), img: null, peak: el.querySelector('.sn-peak'),
+          now: el.querySelector('.lane-now')};
+}
+function snMapDraw(m, i, ink) {
+  const s = m.s, [rows, cols] = s.shape, [c0, c1] = ink;
+  if (!m.img) m.img = m.ctx.createImageData(cols, rows);
+  if (i < 0) return;
+  const {cells, best, bi, none} = snCells(s, i), px = m.img.data;
+  for (let c = 0; c < cells.length; c++) {
+    const x = cells[c], o = 4 * c;
+    for (let k = 0; k < 3; k++) px[o + k] = isFinite(x) ? Math.round(c0[k] + (c1[k] - c0[k]) * x) : c0[k];
+    px[o + 3] = 255;
+  }
+  m.ctx.putImageData(m.img, 0, 0);
+  const active = !none && bi >= 0 && best / s.swing >= SN_REST;
+  if (active) {
+    m.peak.style.left = (100 * (bi % cols) / cols) + '%';
+    m.peak.style.top = (100 * Math.floor(bi / cols) / rows) + '%';
+  }
+  m.peak.classList.toggle('on', active);
+  m.now.textContent = none ? 'No reading at the playhead' : active ? `Row ${Math.floor(bi / cols) + 1}, column `
+    + `${bi % cols + 1} is the strongest, ${snNum(best)} ${snAway(s.direction)} rest` : 'At rest';
+}
+// lay out the panel for the episode renderEp just drew, and wire it to the playhead (its listeners go with the render).
+// On an episode with contacts the Touch lane above shows what matters, so the signals start folded away.
+function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts) {
+  window._sn = null;
+  const slot = document.getElementById('sn-slot');
+  if (!slot || !BOARD.sensors || !SN_INDEX || !SN_INDEX[file]) return;
+  const fill = (D, fade) => {
+    if (!D || !document.body.contains(slot) || file !== _activeFile) return;
+    const sigs = D.signals, maps = sigs.filter(s => s.map && s.shape && s.shape.length === 2);
+    const nDepth = Object.keys(D.depth || {}).length;
+    if (!sigs.length && !D.constant.length && !nDepth) return;
+    const counts = [];
+    if (sigs.length || D.constant.length) counts.push(`${sigs.length} ${sigs.length === 1 ? 'signal changes'
+      : 'signals change'}${D.constant.length ? `, ${D.constant.length} constant` : ''}`);
+    if (nDepth) counts.push(`depth on ${nDepth} ${nDepth === 1 ? 'camera' : 'cameras'}`);
+    const lane = (s, i) => `<div class="lane sn-lane">
+        <div class="lane-head"><span class="lane-title">${esc(s.name)} <span class="lane-sum">${esc(snWhat(s))}`
+          + `</span></span><span class="lane-now" data-i="${i}"></span></div>
+        <div class="lane-bar sn-plot" data-i="${i}">${snPlot(s, D.t, duration)}</div>
+      </div>`;
+    const first = sigs.slice(0, SN_FIRST).map(lane).join('');
+    const more = sigs.slice(SN_FIRST).map((s, j) => lane(s, j + SN_FIRST)).join('');
+    const constHtml = D.constant.length ? `<div class="sn-note">Constant through this episode: ${D.constant.map(s =>
+      `${esc(s.name)} (${s.dims > 4 || !s.value ? `${s.shape && s.shape.length > 1 ? s.shape.join(' x ')
+        : s.dims} values` : s.value.map(snNum).join(', ')})`).join(', ')}.</div>` : '';
+    const signalsHtml = `${maps.length ? `<div class="sn-maps">${maps.map((s) => snMapHtml(s, sigs.indexOf(s)))
+        .join('')}</div>` : ''}
+        ${first}
+        ${more ? `<div class="ck-all"><div class="ck-all-in">${more}</div></div><button class="ck-more sn-more" `
+          + `type="button">${SN_OPEN ? 'Hide the other signals' : `Show all ${sigs.length} signals`}</button>` : ''}
+        ${constHtml}`;
+    const fold = !!hasContacts && (sigs.length > 0 || D.constant.length > 0);
+    const shown = !fold || SN_SHOWN;
+    const foldWord = on_ => on_ ? 'Hide the recorded signals' : `Show all recorded signals`;
+    slot.innerHTML = `<h3 class="section sn-h">All recorded signals <span class="count">${counts.join(', ')}</span></h3>
+      <div class="sn${SN_OPEN ? ' open' : ''}${shown ? ' shown' : ''}">
+        ${fold ? `<div class="sn-fold"><div class="sn-fold-in">${signalsHtml}</div></div><button class="ck-more `
+          + `sn-show" type="button" aria-expanded="${shown}">${foldWord(shown)}</button>` : signalsHtml}
+        ${snDepthHtml(D, camName, order || [])}
+      </div>`;
+    if (fade) { slot.classList.add('sn-wait'); void slot.offsetWidth; slot.classList.remove('sn-wait'); }
+    const box = slot.querySelector('.sn');
+    const moreBtn = slot.querySelector('.sn-more');
+    if (moreBtn) moreBtn.addEventListener('click', () => {
+      SN_OPEN = !SN_OPEN;
+      box.classList.toggle('open', SN_OPEN);
+      moreBtn.textContent = SN_OPEN ? 'Hide the other signals' : `Show all ${sigs.length} signals`;
+    });
+    const showBtn = slot.querySelector('.sn-show');
+    if (showBtn) showBtn.addEventListener('click', () => {
+      SN_SHOWN = !box.classList.contains('shown');
+      box.classList.toggle('shown', SN_SHOWN);
+      showBtn.textContent = foldWord(SN_SHOWN);
+      showBtn.setAttribute('aria-expanded', String(SN_SHOWN));
+    });
+    const ink = snInk();
+    const mapEls = [...slot.querySelectorAll('.sn-map')].map(el => snMapBind(el, sigs[+el.dataset.k]));
+    const nows = [...slot.querySelectorAll('.sn-lane .lane-now')];
+    const phs = [...slot.querySelectorAll('.sn-plot .lane-ph')];
+    let last = -2;
+    function draw(i) {
+      nows.forEach(el => { el.innerHTML = snReadout(sigs[+el.dataset.i], i); });
+      for (const m of mapEls) snMapDraw(m, i, ink);
+    }
+    function sync(t) {
+      const pct = (100 * Math.max(0, Math.min(duration, t)) / duration) + '%';
+      for (const p of phs) p.style.left = pct;
+      const i = snIndexAt(D.t, t);
+      if (i === last) return;
+      last = i;
+      draw(i);
+    }
+    slot.querySelectorAll('.sn-plot').forEach(plot => {
+      const s = sigs[+plot.dataset.i], hv = plot.querySelector('.sn-hv');
+      const tAt = e => { const r = plot.getBoundingClientRect();
+        return Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))) * duration; };
+      plot.addEventListener('pointermove', e => {
+        const t = tAt(e), i = snIndexAt(D.t, t);
+        hv.style.left = (100 * t / duration) + '%';
+        plot.classList.add('hover');
+        if (i < 0) return;
+        plot.dataset.tip = `<b>${snTipText(s, i)}</b>${esc(s.name)} at ${D.t[i].toFixed(2)} s`;
+        tipShow(plot, e.clientX, e.clientY);
+      });
+      plot.addEventListener('pointerleave', () => { plot.classList.remove('hover'); cmpTip.classList.remove('show'); });
+      plot.addEventListener('click', e => { cmpTip.classList.remove('show'); seek(tAt(e)); });
+    });
+    // playing: one update per presented frame, as the hand pose does, so the heatmap keeps up with the footage
+    let rv = 0, raf = 0;
+    const alive = () => document.body.contains(slot) && file === _activeFile;
+    function onVF(now, md) { rv = 0; if (!alive()) return; sync(md.mediaTime); watch(); }
+    function onRaf() { raf = 0; if (!alive() || vid.paused) return; sync(vid.currentTime); raf = requestAnimationFrame(onRaf); }
+    function watch() {
+      if (!vid || vid.paused) return;
+      if (vid.requestVideoFrameCallback) { if (!rv) rv = vid.requestVideoFrameCallback(onVF); }
+      else if (!raf) raf = requestAnimationFrame(onRaf);
+    }
+    if (vid) {
+      on(vid, 'play', watch);
+      on(vid, 'seeked', () => sync(vid.currentTime));
+    }
+    window._epCleanup.push(() => {
+      if (rv && vid && vid.cancelVideoFrameCallback) vid.cancelVideoFrameCallback(rv);
+      if (raf) cancelAnimationFrame(raf);
+      cmpTip.classList.remove('show');
+    });
+    window._sn = {sync};
+    sync(vid ? vid.currentTime : 0);
+    watch();
+  };
+  if (_snData.has(file)) fill(_snData.get(file), false);
+  else loadSensors(file).then(D => fill(D, true));
+}
+// ================= touch: the recording's contacts and what the model saw at each (board/build.py add_contacts) =========
+// d.contacts are the spans in which a hand's touch signals say it touches something (label/contacts.py), each with the
+// model's answer when it was shown frames around it; d.contacts_missing the moments the model saw a hand take hold of
+// something that no contact covers. The Touch lane draws them on the timeline's scale, one bar per hand, and the
+// contact card under it says what is known about the contact under the playhead.
+const TC_WORD = {yes: 'The frames show touch', no: 'The frames show no touch', unclear: 'Unclear in the frames',
+                 unshown: 'Not shown to the model', unanswered: 'Shown, with no answer'};
+// what the model found at a contact: yes, no and unclear as it answered, unshown when it was not shown the contact,
+// unanswered when it was shown and left it out
+function tcState(c) {
+  if (!c.shown) return 'unshown';
+  if (!c.seen) return 'unanswered';
+  const v = String(c.seen.touch_seen || '').toLowerCase();
+  return v === 'yes' || v === 'no' ? v : 'unclear';
+}
+const tcCls = st => st === 'unanswered' ? 'st-unclear' : 'st-' + st;
+const tcHandKey = h => { const v = String(h || '').toLowerCase(); return v === 'left' || v === 'right' ? v : ''; };
+const tcHandName = h => h === 'left' ? 'Left hand' : h === 'right' ? 'Right hand' : 'Hand not named';
+// a list of times in words: 3.8s, 4.1s and 5.0s
+const tcList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
+// the episode's contacts in time order and the model's other grasps, both checked for times
+function tcData(d) {
+  const contacts = (d.contacts || []).filter(c => c && isFinite(c.start_s) && isFinite(c.end_s))
+    .slice().sort((a, b) => a.start_s - b.start_s || String(a.hand).localeCompare(String(b.hand)));
+  const missing = (d.contacts_missing || []).filter(x => x && x.t_s != null && isFinite(parseFloat(x.t_s)))
+    .map(x => ({...x, t_s: parseFloat(x.t_s)})).sort((a, b) => a.t_s - b.t_s);
+  // one row per hand the contacts name (or one row when they name none), and a row for a hand only a missed grasp names
+  const named = new Set(contacts.map(c => tcHandKey(c.hand)));
+  for (const x of missing) if (tcHandKey(x.hand) && named.size && !named.has('')) named.add(tcHandKey(x.hand));
+  const rows = ['left', 'right', ''].filter(h => named.has(h));
+  return {contacts, missing, rows};
+}
+// the rows a missed grasp is marked on: its hand's, or every row when it names none (or both)
+const tcMissRows = (x, rows) => rows.includes(tcHandKey(x.hand)) ? [tcHandKey(x.hand)] : rows;
+// the Touch lane, in the lane markup the Hands out of view lane uses
+function touchLaneHtml(T, lanePct, chev) {
+  const {contacts, missing, rows} = T;
+  if (!contacts.length) return '';
+  const n = contacts.length, st = contacts.map(tcState);
+  const checked = contacts.filter(c => c.shown && c.seen).length, notSeen = st.filter(x => x === 'no').length;
+  const sum = [`${n} ${n === 1 ? 'contact' : 'contacts'}`, `${checked} checked`, `${notSeen} not seen`]
+    .concat(missing.length ? [`${missing.length} ${missing.length === 1 ? 'grasp' : 'grasps'} with no contact`] : []);
+  const seg = (c, i) => {
+    const a = lanePct(c.start_s), b = lanePct(c.end_s), cls = tcCls(st[i]);
+    const tip = `${c.id ? c.id + ', ' : ''}${fmtT(c.start_s)} to ${fmtT(c.end_s)}: ${TC_WORD[st[i]].toLowerCase()}${c.seen && c.seen.object
+      ? ', ' + String(c.seen.object) : ''}`;
+    return `<div class="tc-seg ${cls}" data-c="${i}" title="${esc(tip)}" style="left:${a}%;width:max(3px, ${b - a}%)">`
+      + `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=""></path></svg></div>`
+      + (isFinite(c.peak_s) ? `<div class="tc-peak ${cls}" style="left:${lanePct(c.peak_s)}%"></div>` : '');
+  };
+  const miss = (x, j) => `<div class="tc-miss" data-t="${x.t_s}" data-m="${j}" title="${esc(`${fmtT(x.t_s)}: the model `
+    + `saw ${tcHandKey(x.hand) ? 'the ' + tcHandKey(x.hand) + ' hand' : 'a hand'} take hold of ${x.object || 'something'}`
+    + `, and no recorded contact covers it`)}" style="left:${lanePct(x.t_s)}%"></div>`;
+  const rowHtml = h => `<div class="tc-row">${rows.length > 1 || h ? `<span class="tc-hand">${tcHandName(h)}</span>` : ''}`
+    + `<div class="lane-bar tc-bar">${contacts.map((c, i) => tcHandKey(c.hand) === h || (!rows.includes(tcHandKey(c.hand))
+      && h === rows[0]) ? seg(c, i) : '').join('')}${missing.map((x, j) => tcMissRows(x, rows).includes(h) ? miss(x, j)
+      : '').join('')}<div class="lane-ph"></div></div></div>`;
+  const keys = ['yes', 'no', 'unclear', 'unshown'].filter(k => st.some(x => (x === 'unanswered' ? 'unclear' : x) === k));
+  const key = keys.map(k => `<span class="tc-k"><i class="st-${k}" aria-hidden="true"></i>${k === 'unclear'
+    && st.includes('unanswered') ? 'Unclear in the frames, or no answer' : TC_WORD[k]}</span>`).join('')
+    + (missing.length ? `<span class="tc-k"><i class="miss" aria-hidden="true"></i>A hand takes hold with no recorded `
+      + `contact</span>` : '');
+  return `<div class="lane lane-touch" id="lane-touch">
+      <div class="lane-head">
+        <span class="lane-title">Touch <span class="lane-sum">${sum.join(', ')}</span></span>
+        <span class="lane-nav" role="group" aria-label="Contacts">
+          <button type="button" class="lane-step" data-dir="-1" aria-label="Previous contact">${chev('M6.5 2 3.5 5l3 3')}</button>
+          <span class="lane-pos" id="lane-touch-pos">${n} ${n === 1 ? 'contact' : 'contacts'}</span>
+          <button type="button" class="lane-step" data-dir="1" aria-label="Next contact">${chev('M3.5 2l3 3-3 3')}</button>
+        </span>
+      </div>
+      ${rows.map(rowHtml).join('')}
+      <div class="tc-key">${key}</div>
+    </div>`;
+}
+// where a contact bears: each map's active cells at its strongest, and which of its signals are active
+function tcRegions(c) {
+  const out = [], r = c.regions || {};
+  for (const [nm, x] of Object.entries(r)) {
+    if (nm === 'active_signals' || !x || !Array.isArray(x.of)) continue;
+    const span = (a, w) => a[0] === a[1] ? `${w} ${a[0] + 1}` : `${w}s ${a[0] + 1} to ${a[1] + 1}`;
+    out.push(`${nm}: ${x.cells} of its ${x.of[0] * x.of[1]} cells, ${span(x.rows, 'row')} and ${span(x.columns,
+      'column')} of ${x.of[0]} x ${x.of[1]}`);
+  }
+  if (Array.isArray(r.active_signals)) out.push(r.active_signals.length ? `Active at its strongest: `
+    + `${tcList(r.active_signals)}` : 'None of its signals is active at its strongest');
+  return out;
+}
+function tcCardHtml(c, i, st) {
+  const s = c.seen || {};
+  const tt = t => `<span data-t="${t}">${fmtT(t)}</span>`;
+  const times = [c.from_start ? 'Already touching at the start' : `Begins ${tt(c.start_s)}`,
+    isFinite(c.peak_s) ? `strongest ${tt(c.peak_s)}` : '',
+    c.to_end ? 'still touching at the end' : `ends ${tt(c.end_s)}`].filter(Boolean).join(', ');
+  const kv = (k, vs) => `<div class="kv"><div class="kv-k">${k}</div>${[].concat(vs).map(v => `<div class="kv-v">${v}`
+    + `</div>`).join('')}</div>`;
+  const rows = [];
+  if (c.shown && c.seen) {
+    const told = v => v != null && String(v).trim() !== '' && String(v).toLowerCase() !== 'null';
+    if (told(s.object)) rows.push(kv('Object', esc(s.object)));
+    if (told(s.grip)) rows.push(kv('Grip', esc(s.grip)));
+    if (told(s.action)) rows.push(kv('What it does', esc(s.action)));
+    if (told(s.slip)) rows.push(kv('Slip', esc(String(s.slip).toLowerCase() === 'yes' ? 'Yes, it slips'
+      : String(s.slip).toLowerCase() === 'no' ? 'No' : 'Unclear')));
+    const mh = String(s.hand || '').toLowerCase(), rh = tcHandKey(c.hand);
+    if (mh && mh !== rh && (mh !== 'unclear' || rh)) rows.push(kv('Hand', esc(mh === 'both' ? 'The frames show both hands touching'
+      : mh === 'left' || mh === 'right' ? `The frames show the ${mh} hand${rh ? `, and the signal's name says ${rh}` : ''}`
+      : 'Unclear in the frames')));
+    if (told(s.notes)) rows.push(kv('Notes', esc(s.notes)));
+  }
+  const where = tcRegions(c);
+  rows.push(kv('Signals', esc(tcList(c.signals || []))));
+  if (where.length) rows.push(kv('Where it bears', where.map(esc)));
+  const dips = (c.dips_s || []).filter(isFinite);
+  rows.push(kv('Dips', dips.length ? `${tcList(dips.map(fmtT))}: its strength falls under half its peak and comes back`
+    : 'None: its strength stays above half its peak'));
+  const plain = !c.shown ? `<div class="tc-plain">The model was not shown this contact, so nothing here says what the `
+      + `frames show at it.</div>`
+    : !c.seen ? `<div class="tc-plain">The model was shown this contact and gave no answer for it.</div>` : '';
+  return `<div class="tc-card info-block" data-c="${i}">
+      <div class="tc-card-head"><span class="tc-card-title">${tcHandKey(c.hand) ? tcHandName(tcHandKey(c.hand)) + ', '
+        + 'contact' : 'Contact'} ${esc(c.id || String(i + 1))}</span><span class="tc-pill ${tcCls(st)}">${TC_WORD[st]}</span></div>
+      <div class="tc-times">${times}</div>
+      ${plain}
+      <div class="kv-block tc-kv">${rows.join('')}</div>
+      <div class="tc-maps"></div>
+    </div>`;
+}
+function tcCardsHtml(T) {
+  if (!T.contacts.length) return '';
+  return `<div class="tc-cards" id="tc-cards">
+      <div class="tc-card info-block tc-empty on" data-c="-1"><div class="tc-plain">No contact at the playhead. Click one `
+        + `on the Touch lane, or step through them with its arrows.</div></div>
+      ${T.contacts.map((c, i) => tcCardHtml(c, i, tcState(c))).join('')}
+    </div>`;
+}
+// a contact's strength over its span, from the sensors file: its signals' strength summed per sample, as label/contacts.py
+// sums them, as an area path in a 100 x 100 box scaled to top, the strongest contact of the episode
+function tcCurve(c, D, top) {
+  const sigs = (c.signals || []).map(nm => D.signals.find(s => s.name === nm && s.str)).filter(Boolean);
+  if (!sigs.length || !(c.end_s > c.start_s)) return '';
+  const pts = [];
+  for (let i = 0; i < D.t.length; i++) {
+    const t = D.t[i];
+    if (t < c.start_s - 1e-3 || t > c.end_s + 1e-3) continue;
+    let v = 0;
+    for (const s of sigs) if (isFinite(s.str[i])) v += s.str[i];
+    pts.push([100 * (t - c.start_s) / (c.end_s - c.start_s), 100 - 100 * Math.max(0, Math.min(1, v / top))]);
+  }
+  if (!pts.length) return '';
+  if (pts.length === 1) pts.push([100, pts[0][1]]), pts[0][0] = 0;
+  return `M${pts[0][0].toFixed(1)} 100` + pts.map(([x, y]) => `L${x.toFixed(1)} ${y.toFixed(1)}`).join('')
+    + `L${pts[pts.length - 1][0].toFixed(1)} 100Z`;
+}
+// wire the lane and the cards renderEp drew: which contact the playhead is in, the stepper, clicks, the strength curves
+// and the heatmaps of the shown card once the sensors file is in. Returns {sync(t)}.
+function setupTouch(T, file, duration, seek, on, vid) {
+  const lane = document.getElementById('lane-touch'), box = document.getElementById('tc-cards');
+  if (!lane || !box) return null;
+  const C = T.contacts, n = C.length;
+  const segs = [...lane.querySelectorAll('.tc-seg')], cards = [...box.querySelectorAll('.tc-card')];
+  const pos = document.getElementById('lane-touch-pos');
+  let pinned = -1, shown = -2, D = null, ink = null, maps = [], lastI = -2;
+  const inside = (c, t) => c.start_s <= t + 0.05 && t <= c.end_s + 0.05;
+  // the contact shown: the one clicked while the playhead is in it, else the latest begun of those it is in, else the
+  // one clicked
+  function current(t) {
+    if (pinned >= 0 && inside(C[pinned], t)) return pinned;
+    let k = -1;
+    for (let i = 0; i < n; i++) if (inside(C[i], t)) k = i;
+    if (k >= 0) { if (k !== pinned) pinned = -1; return k; }
+    return pinned;
+  }
+  // every card's heatmaps are laid out when the sensors file is in, so the cards' shared height is set once; only the
+  // shown card's are drawn as the playhead moves
+  function layMaps() {
+    cards.slice(1).forEach((el, k) => {
+      const ms = (C[k].signals || []).map(nm => D.signals.find(s => s.name === nm && s.map && s.shape
+        && s.shape.length === 2)).filter(Boolean);
+      el.querySelector('.tc-maps').innerHTML = ms.length ? `<div class="sn-maps">${ms.map(s => snMapHtml(s,
+        D.signals.indexOf(s))).join('')}</div>` : '';
+    });
+  }
+  function bindMaps(k) {
+    maps = [];
+    lastI = -2;
+    const slot = k >= 0 && D ? cards[k + 1].querySelector('.tc-maps') : null;
+    if (slot) maps = [...slot.querySelectorAll('.sn-map')].map(el => snMapBind(el, D.signals[+el.dataset.k]));
+  }
+  function sync(t) {
+    const k = current(t);
+    if (k !== shown) {
+      shown = k;
+      segs.forEach(g => g.classList.toggle('now', +g.dataset.c === k));
+      cards.forEach(el => el.classList.toggle('on', +el.dataset.c === k));
+      if (pos) pos.textContent = k >= 0 ? `${k + 1} of ${n}` : `${n} ${n === 1 ? 'contact' : 'contacts'}`;
+      bindMaps(k);
+    }
+    if (maps.length) {
+      const i = snIndexAt(D.t, t);
+      if (i !== lastI) { lastI = i; for (const m of maps) snMapDraw(m, i, ink); }
+    }
+  }
+  const go = (k, t) => { pinned = k; shown = -2; seek(t != null ? t : (C[k].from_start ? 0 : C[k].start_s)); };
+  segs.forEach(g => g.addEventListener('click', e => { e.stopPropagation(); go(+g.dataset.c); }));
+  lane.querySelectorAll('.tc-miss').forEach(m => m.addEventListener('click', e => { e.stopPropagation();
+    pinned = -1; seek(m.dataset.t); }));
+  box.querySelectorAll('.tc-times [data-t]').forEach(el => el.addEventListener('click', () => {
+    go(+el.closest('.tc-card').dataset.c, el.dataset.t); }));
+  lane.querySelectorAll('.lane-step').forEach(bt => bt.addEventListener('click', () => {
+    const t = vid ? vid.currentTime : 0, starts = C.map(c => c.from_start ? 0 : c.start_s);
+    // previous: the start of the contact shown once the playhead is over a second into it, else the one before
+    let k;
+    if (bt.dataset.dir === '1') k = shown >= 0 ? shown + 1 : starts.findIndex(a => a > t + 0.05);
+    else k = shown >= 0 && t - starts[shown] > 1 ? shown : (shown >= 0 ? shown - 1 : starts.reduce((j, a, i) =>
+      (a < t - 0.05 ? i : j), -1));
+    if (k >= 0 && k < n) go(k);
+  }));
+  // playing: one update per presented frame, so the card's heatmap keeps up with the footage
+  let rv = 0, raf = 0;
+  const alive = () => document.body.contains(box) && file === _activeFile;
+  function onVF(now, md) { rv = 0; if (!alive()) return; sync(md.mediaTime); watch(); }
+  function onRaf() { raf = 0; if (!alive() || vid.paused) return; sync(vid.currentTime); raf = requestAnimationFrame(onRaf); }
+  function watch() {
+    if (!vid || vid.paused) return;
+    if (vid.requestVideoFrameCallback) { if (!rv) rv = vid.requestVideoFrameCallback(onVF); }
+    else if (!raf) raf = requestAnimationFrame(onRaf);
+  }
+  if (vid) on(vid, 'play', watch);
+  window._epCleanup.push(() => {
+    if (rv && vid && vid.cancelVideoFrameCallback) vid.cancelVideoFrameCallback(rv);
+    if (raf) cancelAnimationFrame(raf);
+  });
+  // the sensors file draws each contact's strength in its bar and the card's heatmaps
+  loadSensors(file).then(got => {
+    if (!got || !alive()) return;
+    D = got;
+    ink = snInk();
+    layMaps();
+    // one scale for the episode: its strongest contact's peak (label/contacts.py sums the same strengths at every frame)
+    const top = Math.max(1e-9, ...C.map(c => isFinite(c.peak_strength) ? c.peak_strength : 0));
+    segs.forEach(g => {
+      const p = g.querySelector('path'), d = tcCurve(C[+g.dataset.c], D, top);
+      if (!d) return;
+      p.setAttribute('d', d);
+      requestAnimationFrame(() => p.classList.add('in'));
+    });
+    shown = -2;
+    sync(vid ? vid.currentTime : 0);
+  });
+  watch();
+  return {sync};
+}
+
+// each camera with depth: its switch, and its depth clip laid over its colour clip and played in step with it
+function setupDepth(file, eidEnc, on) {
+  for (const btn of document.querySelectorAll('.cam-dp')) {
+    const view = btn.dataset.view, cell = btn.closest('.cam-cell');
+    const dv = cell && cell.querySelector('.dp-vid'), cv = cell && cell.querySelector('video:not(.dp-vid)');
+    if (!dv || !cv) { btn.hidden = true; continue; }
+    let want = false, hover = 0, hoverT = 0;
+    const place = () => {
+      Object.assign(dv.style, {left: cv.offsetLeft + 'px', top: cv.offsetTop + 'px', width: cv.offsetWidth + 'px',
+        height: cv.offsetHeight + 'px'});
+      // the player's own controls sit along the bottom of a video with controls: the strip of depth over them is dimmed
+      dv.style.setProperty('--dp-bar', cv.controls ? '52px' : '0px');
+    };
+    const controls = () => dv.classList.toggle('ctl', !!cv.controls && (cv.paused || hover > 0));
+    const follow = () => {
+      if (!want || !dv.getAttribute('src')) return;
+      if (dv.playbackRate !== cv.playbackRate) dv.playbackRate = cv.playbackRate;
+      if (dv.readyState >= 1 && Math.abs(dv.currentTime - cv.currentTime) > 0.1) {
+        try { dv.currentTime = cv.currentTime; } catch (_) {}
+      }
+      if (cv.paused && !dv.paused) dv.pause();
+      else if (!cv.paused && dv.paused) dv.play().catch(() => {});
+    };
+    const show = () => { if (want) requestAnimationFrame(() => { if (want) dv.classList.add('on'); }); };
+    const set = (on_) => {
+      want = on_;
+      btn.setAttribute('aria-pressed', String(on_));
+      if (on_) {
+        place(); controls();
+        if (!dv.getAttribute('src')) {
+          dv.preload = 'auto';
+          dv.src = videoSrc(eidEnc, 'depth_' + view);
+          dv.addEventListener('loadeddata', () => { follow(); show(); }, {once: true});
+        } else { follow(); show(); }
+      } else dv.classList.remove('on');      // the fade out; the clip pauses when it ends (transitionend below)
+    };
+    btn.addEventListener('click', () => {
+      const v = !want;
+      if (v) DP_ON.add(view); else DP_ON.delete(view);
+      set(v);
+    });
+    on(dv, 'transitionend', e => { if (e.propertyName === 'opacity' && !dv.classList.contains('on')) dv.pause(); });
+    on(dv, 'loadedmetadata', follow);
+    // no depth clip to play after all: the switch goes, the colour picture stays
+    on(dv, 'error', () => { want = false; dv.classList.remove('on'); btn.hidden = true; });
+    for (const ev of ['play', 'pause', 'seeked', 'ratechange']) on(cv, ev, () => { follow(); controls(); });
+    const pointer = () => { hover = 1; controls(); clearTimeout(hoverT);
+      hoverT = setTimeout(() => { hover = 0; controls(); }, 2600); };
+    on(cell, 'pointermove', pointer);
+    on(cell, 'pointerleave', () => { clearTimeout(hoverT); hover = 0; controls(); });
+    const ro = new ResizeObserver(place);
+    ro.observe(cv); ro.observe(cell);
+    const iv = setInterval(() => { if (want && !cv.paused) follow(); }, 300);
+    window._epCleanup.push(() => { ro.disconnect(); clearInterval(iv); clearTimeout(hoverT); });
+    if (DP_ON.has(view)) set(true);
+  }
+}
+
 // The rail's "Labels by" block and the episode's header sit side by side from 1230 px up: the divider under each is one
 // line across the page. Their tops are put on one line and both take the taller height, so a header that wraps (a long
 // name, the footage line) never leaves the two dividers at different heights. Stacked, below 1230 px, they are left alone.
@@ -3694,7 +4561,7 @@ function renderEp(d, opts) {
   // switching source keeps the playing footage: the same video elements move into the new layout
   const keep = opts.keepVideo && document.getElementById('video') ? {
     video: document.getElementById('video'),
-    side: [...document.querySelectorAll('.cam-cell.cam-wrist video')].map(el => [el.id, el])} : null;
+    side: [...document.querySelectorAll('.cam-cell.cam-wrist video:not(.dp-vid)')].map(el => [el.id, el])} : null;
   // a new episode: stop the old episode's videos now, so their downloads end instead of running on until the detached
   // elements are collected and competing with the new episode's footage (a fast visitor left several loading at once)
   if (!keep) {
@@ -3774,6 +4641,10 @@ function renderEp(d, opts) {
   }
   if ((d.completion || {}).completed_at_s != null) duration = Math.max(duration, d.completion.completed_at_s);
   if ((d.completion || {}).goal_reached_at_s != null) duration = Math.max(duration, d.completion.goal_reached_at_s);
+  // the recording's contacts and the grasps the model saw with none stay on the timeline too
+  const touch = tcData(d);
+  for (const c of touch.contacts) duration = Math.max(duration, c.end_s);
+  for (const x of touch.missing) duration = Math.max(duration, x.t_s);
   duration = Math.max(duration + 1, 10);
 
   // a head-camera session is a sequence of self-directed tasks (d.tasks), each with its own goal frame; every other
@@ -3872,6 +4743,8 @@ function renderEp(d, opts) {
         + `title="${fmtT(a)} to ${fmtT(b)}" style="left:${lanePct(a)}%;width:max(3px, ${lanePct(b) - lanePct(a)}%)">`
         + `</div>`).join('')}<div class="lane-ph"></div></div>
     </div>`;
+  // the recording's contacts, one bar per hand, and the card of the contact under the playhead below the lanes
+  laneHtml += touchLaneHtml(touch, lanePct, chev);
   if (pubLabels.length) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
     `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" title="${esc(fmtT(x.t0) + ' to '
       + fmtT(x.t1) + ': ' + x.label)}" style="left:${lanePct(x.t0)}%;width:max(2px, `
@@ -3935,6 +4808,11 @@ function renderEp(d, opts) {
   // the side cells' video ids: the two mounted cameras keep theirs, any other camera is video-<its view>
   const sideId = v => v === 'left' ? 'video-wl' : v === 'right' ? 'video-wr' : `video-${v}`;
   const videoUrl = videoSrc(eidEnc, mainCam);
+  const dpViews = depthViews(_activeFile);     // the cameras with a depth clip, each with its switch
+  // under the lanes: the contact card, and the slot the sensors panel fills, only on an episode that has them, so every
+  // other episode's page is what it was
+  const belowLanes = [tcCardsHtml(touch), BOARD.sensors && SN_INDEX && SN_INDEX[_activeFile] ? '<div id="sn-slot"></div>'
+    : ''].filter(Boolean).map(x => '\n    ' + x).join('');
   const videoUrlWL = videoSrc(eidEnc, 'left');
   const videoUrlWR = videoSrc(eidEnc, 'right');
 
@@ -4223,7 +5101,7 @@ function renderEp(d, opts) {
           ${isEgo ? '' : `<span class="cam-label">${esc(camLabel(mainCam))}</span>`}
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
           <video id="video" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${videoUrl}"${posterAttr(eidEnc,
-            mainCam)}`}></video>
+            mainCam)}`}></video>${dpHtml(mainCam, dpViews)}
           ${isEgo ? '<canvas class="hp-canvas" id="hp-canvas" aria-hidden="true"></canvas>' : ''}
           ${isEgo ? `<div class="top-hud" id="top-hud"><div class="top-hud-in">
             <div class="th-l">${progOverlayHtml}</div>
@@ -4243,7 +5121,8 @@ function renderEp(d, opts) {
           <span class="cam-label">${esc(camLabel(v))}</span>
           <video id="${sideId(v)}" preload="auto" muted playsinline${gripOnly
             ? ' controls' : ''}${keep ? '' : ` src="${v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
-            : videoSrc(eidEnc, v)}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>
+            : videoSrc(eidEnc, v)}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
+            dpViews)}
         </div>`).join('')}
       </div>
       ${gripOnly ? `<div class="grip-strip">${sideCams.length ? '' : `<p class="grip-note">A single-arm task: the dataset records one gripper camera.</p>`}${notesHtml}</div>` : ''}
@@ -4256,7 +5135,7 @@ function renderEp(d, opts) {
         + `done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
-    ${laneHtml}
+    ${laneHtml}${belowLanes}
     ${failed ? '' : `
     <h3 class="section">Key events <span class="count">${keyEvents.length}</span></h3>
     <div class="info-block"><div class="key-events">${keyPanelHtml || '<span style="color:var(--fg-3)">none</span>'}`
@@ -4409,7 +5288,7 @@ function renderEp(d, opts) {
   // Hard-resync after each scrub to fight drift introduced by separate
   // video elements decoding at slightly different rates.
   // every camera beside the main one follows it: the two mounted cameras and any others
-  const slaves = [...document.querySelectorAll('.cam-cell.cam-wrist video')];
+  const slaves = [...document.querySelectorAll('.cam-cell.cam-wrist video:not(.dp-vid)')];
   const SYNC_TOL = 0.10;  // seconds; tighter than this won't reseek
   function syncSlavesNow() {
     if (!vid) return;
@@ -4647,11 +5526,14 @@ function renderEp(d, opts) {
     const below = c => c.getBoundingClientRect().bottom - cr.top + 8;
     let top = 8;
     const anchor = topHud || progOverlay;
+    // the main camera's depth switch sits under the full-screen button: the notes go under it too
+    const dpBtn = exoCell.querySelector('.cam-dp:not([hidden])');
     if (anchor && stateToast && !stateToast.closest('.grip-strip')) {
       top = below(anchor);
-      stateToast.style.top = Math.max(top, below(fsBtn || anchor)) + 'px';
+      stateToast.style.top = Math.max(top, below(fsBtn || anchor), dpBtn ? below(dpBtn) : 0) + 'px';
     }
     if (!recOverlay) return;
+    if (dpBtn) top = Math.max(top, below(dpBtn));
     for (const c of [progOverlay, stateToast]) {
       if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
     }
@@ -4817,6 +5699,7 @@ function renderEp(d, opts) {
     document.querySelectorAll('.lane-seg.pub, .pub-row').forEach(el => el.classList.toggle('now',
       Number(el.dataset.i) === idx));
   }
+  let tcWire = null;            // the Touch lane and its card (setupTouch), on an episode with contacts
   function syncAll(t) {
     if (duration > 0 && ph) ph.style.left = (100 * t / duration) + '%';
     // progress + state first so the recovery banner can place itself below the
@@ -4824,11 +5707,17 @@ function renderEp(d, opts) {
     renderProgress(t); renderState(t); renderRecovery(t);
     renderOverlay(t); renderHands(t); renderTaskGoal(t); syncFeed(t); syncKeyEvents(t); renderSceneGraph(t);
       syncLanes(t);
+    if (window._sn) window._sn.sync(t);
+    if (tcWire) tcWire.sync(t);
   }
   if (vid) {
     on(vid, 'timeupdate', () => syncAll(vid.currentTime));
     on(vid, 'seeked', () => syncAll(vid.currentTime));
   }
+  setupSensors(_activeFile, duration, seek, on, vid, v => v === mainCam && isEgo ? 'head' : camLabel(v), camViews,
+    touch.contacts.length > 0);
+  if (touch.contacts.length) tcWire = setupTouch(touch, _activeFile, duration, seek, on, vid);
+  setupDepth(_activeFile, eidEnc, on);
   syncAll(vid && keep ? vid.currentTime : 0);
   setupHandPose(vid, exoCell, isEgo, on, _activeFile);
 }
@@ -5472,8 +6361,8 @@ def read_header(path: Path | None) -> str | None:
 def render_index(title: str, board: dict, name: str = "", header: str | None = None) -> str:
     """The page with its title, the board's name and its data source filled in. `board` is {"mode": "api"} for this
     server, or {"mode": "static", "data": <base>, "media": <base>} for a static build (board/static.py); "compare":
-    true, "hands": true and "keypoints": true tell the page the board has other models' labels, hand pose drawings
-    or hand keypoint downloads to ask for, and "models" ({model id: name}) shows a model under a site's own name in
+    true, "hands": true, "sensors": true and "keypoints": true tell the page the board has other models' labels, hand
+    pose drawings, sensors files or hand keypoint downloads to ask for, and "models" ({model id: name}) shows a model under a site's own name in
     place of its name in configs/models.json. `header` is a site's own header, for a board served as part of a site: its
     markup takes the place of the page's title bar and its <style> blocks go into the page's head (a header of another
     height sets --header-h, which the page's sticky offsets read)."""
@@ -5630,6 +6519,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # the page asks for other models' labels, hand pose files and keypoint downloads only when this board has
             # them (no request that can only fail)
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
+                   "sensors": (SENSORS_DIR / "index.json").is_file(),
                    "footage": FFMPEG is not None,
                    "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
@@ -5697,6 +6587,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             self._send(200, p.read_bytes(), "application/json")
             return
+        if parsed.path == "/api/sensors":
+            # one episode's other signals and depth (board/sensors.py), or index.json for the list; read only by the
+            # page's sensors panel and depth switches, never listed or exported
+            fname = (urllib.parse.parse_qs(parsed.query).get("file") or [""])[0]
+            p = SENSORS_DIR / fname
+            if not fname or "/" in fname or not _under(SENSORS_DIR, p) or not p.is_file() or p.suffix != ".json":
+                self._send(404, {"error": "no sensors for this episode"})
+                return
+            self._send(200, p.read_bytes(), "application/json")
+            return
         if parsed.path == "/api/keypoints":
             # one head-camera episode's hand keypoints, a download of their own (never in the labels or their
             # export); index.json lists the episodes that have them
@@ -5731,7 +6631,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             # download=1: one camera's clip saved as a file of its own, named after its camera, so an extra camera never
             # takes the main camera's name
-            name = f"{eid}_{cam if cam in ('left', 'right') or EXTRA_CAM.fullmatch(cam) else 'main'}.mp4" \
+            own = cam in ("left", "right") or EXTRA_CAM.fullmatch(cam) or DEPTH_CAM.fullmatch(cam)
+            name = f"{eid}_{cam if own else 'main'}.mp4" \
                 if (q.get("download") or [""])[0] == "1" \
                 else None
             self._send_file(mp4, "video/mp4", name)
@@ -5793,7 +6694,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main(argv=None) -> int:
-    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, FOOTAGE_DIR, PORT, PAGE_TITLE, BOARD_NAME, HEADER
+    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, SENSORS_DIR, FOOTAGE_DIR, PORT, PAGE_TITLE, BOARD_NAME
+    global HEADER
     ap = argparse.ArgumentParser(prog="python -m board serve", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", type=Path, required=True, help="a board folder (its qa/ holds the episode files)")
@@ -5809,6 +6711,7 @@ def main(argv=None) -> int:
     COMPARE_DIR = (a.board / "compare").resolve()
     HANDS_DIR = (a.board / "hands").resolve()
     KEYPOINTS_DIR = (a.board / "hand_keypoints").resolve()
+    SENSORS_DIR = (a.board / "sensors").resolve()
     FOOTAGE_DIR = Path(os.environ.get("BOARD_FOOTAGE_DIR") or (a.board / "footage")).resolve()
     PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
     socketserver.ThreadingTCPServer.allow_reuse_address = True

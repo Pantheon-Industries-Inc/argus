@@ -4,7 +4,7 @@ Dense annotations and data-quality checks for robot-learning episodes, from Pant
 
 This is the pipeline behind [*Argus: An Open-Source Annotator for Robotics Data*](https://pantheon.inc/research/argus), in which we audited 3,546 episodes (66.5 hours) across nine public datasets. Every annotation can be browsed on the [data dashboard](https://pantheon.inc/data-board), and [Data Review](https://data.pantheon.inc/review) runs the same pipeline on data you upload.
 
-The pipeline handles teleoperated arms, UMI grippers and human (ego) data, and reads LeRobot datasets, MCAP files, plain video and archives of any of these. It draws on instructions and recorded robot state when a dataset provides them, and works from the footage alone when it does not. For each episode it produces a dense timeline with
+The pipeline handles teleoperated arms, UMI grippers and human (ego) data, and reads LeRobot datasets, MCAP files, HDF5 files, plain video and archives of any of these. It draws on instructions and recorded robot state when a dataset provides them, and works from the footage alone when it does not. For each episode it produces a dense timeline with
 
 - every action phase of each arm, gripper or hand, marked as advancing the task, wasteful or idle
 - progress toward the goal, and key events, the moments a reviewer would mark to judge progress (every fold of a T-shirt, every cup stacked), each with its outcome
@@ -15,6 +15,8 @@ The pipeline handles teleoperated arms, UMI grippers and human (ego) data, and r
 - changes a person made to the scene
 
 Deterministic checks run alongside the model to catch what a model should not be trusted to judge, such as recordings that play faster than real time, camera streams swapped between arms, gripper signals that never change, and poor capture.
+
+When a recording also carries touch sensors or depth, the pipeline puts them to work. It finds each contact from the touch signals, which time when a hand or gripper starts and stops touching more exactly than the frames can, and shows the model frames placed at each one with the sensor's reading and the camera's depth beside them. The model says what each contact touches, how it is held and what it does, and the checks compare those answers with the signals to catch a clock offset between the sensor and the cameras, contacts the frames do not show, grasps the sensor missed and sensors swapped between hands.
 
 We recommend using Astra (`openai/gpt-6-astra`) with this harness, though it also runs unchanged on other VLMs. For each setup it chooses which frames to send and at what resolution, decodes them at exact timestamps, and prompts the model with what the setup is, what counts as a mistake on it, and how to verify what the recording claims against the pixels. All prompts live in `label/`. The repository also includes the dashboard, a comparison of five models on the same harness, and `gate/`, the regression suite the harness is held to.
 
