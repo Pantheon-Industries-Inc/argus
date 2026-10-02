@@ -124,17 +124,39 @@ def test_a_recording_with_other_signals_can_be_labelled_in_parts(tmp_path, monke
         assert len(next(iter(e["signals"].values()))) == int(e["context"]["n_state_frames"])
 
 
-def _long_press(tmp_path, monkeypatch) -> tuple[Path, list[Path]]:
+def _long_press(tmp_path, monkeypatch, measured: bool = True) -> tuple[Path, list[Path]]:
     """A 10 s head camera recording whose right glove is pressed flat by the palm from 3 s to 6 s, written in parts of
-    about 1 s: the parts from 3.7 s to 5.8 s fall inside the press."""
+    about 1 s: the parts from 3.7 s to 5.8 s fall inside the press. Without measured, its context has no contacts (an
+    upload prepared before contacts were measured)."""
     from test_touch_depth import _hdf5
     root = tmp_path / "up"
     root.mkdir()
     _hdf5(root / "kitchen_p1.hdf5", demos=1, n=300, press=(90, 180), palm=True)
     rep = f.convert(root, "ego_head", tmp_path / "eps", "touchset", 900)
     src = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    if not measured:
+        ctx = json.loads((src / "context.json").read_text())
+        del ctx["contacts"]
+        (src / "context.json").write_text(json.dumps(ctx))
     monkeypatch.setitem(pieces.PIECE_MAX_S, "ego_head", 1.0)
     return src, pieces.write_pieces(src, tmp_path / "pieces")
+
+
+def test_a_recording_prepared_without_contacts_gives_each_part_the_whole_recordings_contacts(tmp_path, monkeypatch):
+    """A recording whose context has no contacts has them found once, on the whole recording, and clipped into each
+    part, so a part inside a long press keeps the contact that finding it on the part's own slice would miss."""
+    from label import contacts as lc
+    src, parts = _long_press(tmp_path, monkeypatch, measured=False)
+    assert "contacts" not in json.loads((src / "context.json").read_text())      # the recording's own is unchanged
+    inside = [p for p in parts if 3.0 < me.load(p)["context"]["piece"]["t0_s"]
+              and me.load(p)["context"]["piece"]["t1_s"] < 6.0]
+    assert inside
+    for p in inside:
+        e = me.load(p)
+        assert [c["id"] for c in e["context"]["contacts"]] == ["c1"]
+        assert lc.find(e["signals"], e["signal_meta"], np.arange(len(e["state"])) / 30.0) == []   # its slice alone
+        r = me.build_request(p)
+        assert "contacts" in r["blocks"] and "CONTACTS:" in r["prompt"] and r["contact_views"]["shown"] == ["c1"]
 
 
 def test_a_part_inside_a_long_press_keeps_the_contact_the_whole_recording_shows(tmp_path, monkeypatch):

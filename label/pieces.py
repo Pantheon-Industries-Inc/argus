@@ -156,6 +156,13 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         touch = {s["name"]: bool(sg.is_touch(s["name"], np.asarray(zs[s["key"]][:n], dtype=np.float64), s.get("rest"),
                                              s.get("swing")))
                  for s in ctx["signals"] if s["key"] in zs.files}
+    # the recording's contacts, found once on the whole recording when its context has none (prepared before contacts
+    # were measured, or measuring them failed), so no part's labelling finds contacts on its own slice; the recording's
+    # context.json is not given them
+    contacts = None
+    if "contacts" in ctx or ctx.get("signals"):
+        from label import contacts as lc
+        contacts = lc.of_episode(ep)
     out = []
     count = len(bounds) - 1
     for i in range(count):
@@ -203,7 +210,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if new_times:
             np.savez(d / "times.npz", **new_times)
             c2["real_times"] = "times.npz"
-        if "contacts" in ctx:
+        if contacts is not None:
             # the recording's contacts that overlap the part, on its clock and clipped to it, keeping their ids so the
             # parts' answers join back into one list
             c2["contacts"] = [{**c, "start_s": round(max(c["start_s"], t0) - t0, 3),
@@ -212,7 +219,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                                "from_start": c["from_start"] or c["start_s"] < t0,
                                "to_end": c["to_end"] or c["end_s"] > t1,
                                "dips_s": [round(x - t0, 3) for x in c.get("dips_s") or [] if t0 <= x <= t1]}
-                              for c in ctx["contacts"] if c["end_s"] >= t0 and c["start_s"] < t1]
+                              for c in contacts if c["end_s"] >= t0 and c["start_s"] < t1]
         if (ep_dir / "depth.json").exists():
             # each camera's depth frames for the part's anchor frames; the depth files and their times are the
             # recording's own
@@ -436,8 +443,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
         got = [x for _, r in parts for x in (r.get("config") or {}).get(k) or []]
         if got or k in cfg:
             cfg[k] = list(dict.fromkeys(got))
-    # the recording's contacts that some part was asked about; one no part showed (a contact whose signal is not
-    # touch) is left out, as each part's record leaves it out
+    # a contact of the recording is kept when the record of some part lists it; a part's record lists all its touch
+    # contacts, shown or left out by the cap, so one timed by a signal that is not touch (touch_contacts) is left out
     asked = {c.get("id") for _, r in parts for c in r.get("contacts") or [] if isinstance(c, dict)}
     if excluded:
         L["_excluded"] = excluded
