@@ -232,3 +232,16 @@ def test_a_position_that_leaves_its_level_one_way_or_a_pad_that_only_rounds_is_n
     assert sg.touch_like(flag)
     (c,) = lc.find({"right_contact": flag}, {}, np.arange(n) / 30.0)
     assert c["hand"] == "right"
+
+
+def test_a_lerobot_feature_key_keeps_its_camera_words_and_depth_writes_its_own_folder(tmp_path):
+    """A LeRobot key has dots that are not an extension (observation.images.cam_high), so its camera words are cam and
+    high, matching its depth key; and the depth key map is written even before the episode folder exists."""
+    assert formats.camera_words("observation.images.cam_high") == formats.camera_words("observation.depth.cam_high")
+    assert formats.camera_words("observation.images.cam_high") != formats.camera_words("observation.images.cam_left_wrist")
+    assert formats.camera_words("exo_cam-images-rgb.mp4") == formats.camera_words("exo_cam-images-depth.mkv")
+    ep = tmp_path / "not_yet" / "episode_000000"
+    n = 4
+    t = np.arange(n) / 30.0
+    e, _ = formats.depth_entry(ep, "top", tmp_path / "d.mkv", t, t, np.arange(n), 0.001, "observation.depth.cam_high")
+    assert (ep / "depth_kmap_top.npy").exists()
