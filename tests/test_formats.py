@@ -667,6 +667,46 @@ def test_a_tables_camel_case_clock_places_it_and_is_not_a_value():
         _a_tables_camel_case_clock_places_it_and_is_not_a_value(Path(t))
 
 
+COUNTED_OUT = "counts rows one by one, so it is bookkeeping"
+
+
+def test_a_column_that_counts_rows_one_by_one_is_a_counter():
+    import numpy as np
+    assert f.is_counter(np.arange(60))
+    assert f.is_counter(1000 + np.r_[np.arange(30), np.arange(29, 59)])     # a row stamped twice is still counting
+    assert not f.is_counter(np.arange(60) * 2)                               # steps of 2 are a reading's
+    assert not f.is_counter(np.arange(60) + 0.5)                             # not whole numbers
+
+
+def test_a_sequence_number_is_left_out_of_the_signals_as_bookkeeping_with_the_reason():
+    import numpy as np, pandas as pd
+    n = 60
+    df = pd.DataFrame({"seq": list(np.arange(n)), "frame_id": list(500 + np.arange(n)),
+                       "encoder_ticks": list(np.cumsum(np.r_[np.arange(30) % 3, np.zeros(30)]) * 7),
+                       "gripper": list(np.r_[np.zeros(30), np.ones(30)])})
+    out = f.recorded_signals(df, set(), n)
+    assert "seq" not in out and "seq" not in out.clocks and "frame_id" not in out
+    assert ("seq", COUNTED_OUT) in out.left_out and ("frame_id", COUNTED_OUT) in out.left_out
+    assert "encoder_ticks" in out and "gripper" in out
+
+
+def _a_tables_sequence_number_is_left_out_as_bookkeeping(tmp_path):
+    import numpy as np, pandas as pd
+    n = 60
+    pd.DataFrame({"time_s": np.arange(n) / 30.0, "seq": np.arange(n),
+                  "grip": np.r_[np.zeros(30), np.ones(30)]}).to_csv(tmp_path / "traj.csv", index=False)
+    pts = np.arange(n, dtype=np.int64)
+    out = f.table_signals([tmp_path / "traj.csv"], None, {"pts": pts, "time_base": 1 / 30.0}, {})
+    assert out.meta["traj"]["names"] == ["grip"]
+    assert ("seq in traj.csv", COUNTED_OUT) in out.left_out
+
+
+def test_a_tables_sequence_number_is_left_out_as_bookkeeping():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_tables_sequence_number_is_left_out_as_bookkeeping(Path(t))
+
+
 def _an_mcap_layout_adapters_source_notes_are_kept(tmp_path):
     """convert_mcap adds its format and file to the adapter's source instead of replacing it."""
     import sys

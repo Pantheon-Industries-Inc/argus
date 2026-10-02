@@ -866,6 +866,21 @@ def is_named_clock(name, values) -> bool:
     return is_time_name(name) and is_clock(values)
 
 
+COUNTER_NOTE = "counts rows one by one, so it is bookkeeping"
+
+
+def is_counter(values) -> bool:
+    """Whether a column counts rows one by one (a sequence number, seq, frame_id): whole numbers that never fall and
+    step by exactly 1 at 90% of its rows or more, since a recorder can stamp a row twice. Such a column is bookkeeping,
+    as an MCAP channel's counters are (_counters), so it is left out with COUNTER_NOTE."""
+    x = np.asarray(values, dtype=np.float64).ravel()
+    x = x[np.isfinite(x)]
+    if len(x) < COUNTER_MIN_MESSAGES or not np.all(x == np.round(x)):
+        return False
+    d = np.diff(x)
+    return bool((d >= 0).all() and (d == 1).mean() >= 0.9)
+
+
 def value_names(names, dims: int) -> list[str] | None:
     """One name per value from a dataset's own naming of a feature: a list (["x", "y", "z"]), a dict holding one list
     ({"motors": [...]}), or nested lists in the feature's shape; None when they do not give exactly dims names."""
@@ -918,6 +933,9 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
         if a.shape[1] == 1 and is_named_clock(c, a[:, 0]):
             # a clock: kept for the sync check, not shown
             out.clocks[str(c)] = a[:n, 0]
+            continue
+        if a.shape[1] == 1 and is_counter(a[:, 0]):
+            out.left_out.append((str(c), COUNTER_NOTE))
             continue
         f = features.get(c) or {}
         shape = f.get("shape") if isinstance(f.get("shape"), (list, tuple)) and int(np.prod(f["shape"])) == a.shape[1] \
@@ -1478,7 +1496,10 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             continue                      # text only: the uploader's notes, read by annotation_tables
         clocks = [c for c in num.columns if is_named_clock(c, num[c].to_numpy())]
         tcol = clocks[0] if clocks else None
-        vals = num.drop(columns=[c for c in num.columns if c in clocks or SIGNAL_SKIP.search(str(c))])
+        skip = [c for c in num.columns if c in clocks or SIGNAL_SKIP.search(str(c))]
+        counters = [c for c in num.columns if c not in skip and is_counter(num[c].to_numpy())]
+        out.left_out += [(f"{c} in {p.name}", COUNTER_NOTE) for c in counters]
+        vals = num.drop(columns=skip + counters)
         if vals.shape[1] == 0:
             continue
         v = vals.to_numpy(dtype=np.float64)
