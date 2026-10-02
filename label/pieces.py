@@ -147,6 +147,15 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     z = np.load(ep_dir / "state.npz") if (ep_dir / "state.npz").exists() else None
     zs = np.load(ep_dir / "signals.npz") if ctx.get("signals") else None
     tz = dict(np.load(ep_dir / ctx["real_times"])) if ctx.get("real_times") else None
+    touch = {}
+    if zs is not None:
+        # touch is judged once, on the whole recording, and each part's signal entries carry the verdict
+        # (label/episode.py _touch_signal): a part that falls inside a long press has no rest of its own, so its slice
+        # alone would not read as touch and the part would lose the contact the recording shows
+        from label import signals as sg
+        touch = {s["name"]: bool(sg.is_touch(s["name"], np.asarray(zs[s["key"]][:n], dtype=np.float64), s.get("rest"),
+                                             s.get("swing")))
+                 for s in ctx["signals"] if s["key"] in zs.files}
     out = []
     count = len(bounds) - 1
     for i in range(count):
@@ -218,6 +227,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             np.savez(d / "state.npz", **arrs)
         if zs is not None:          # the context lists the recording's other signals, so the part carries its rows
             np.savez(d / "signals.npz", **{kk: zs[kk][k0:k1] for kk in zs.files})
+            # copies, so the recording's own context.json keeps its entries as prepare wrote them
+            c2["signals"] = [{**s, "touch": touch[s["name"]]} if s["name"] in touch else s for s in ctx["signals"]]
         if ctx.get("annotation_subtasks"):
             # the dataset's timed subtasks are on the recording's clock; the part is shown those that overlap it, on
             # its own clock and clipped to it
@@ -419,6 +430,15 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     routes = [(r.get("config") or {}).get("resolution_route") or {} for _, r in parts]
     cfg["resolution_route"] = {**(routes[0] or {}), "parts": routes,
                                "cost_usd": round(sum(float(x.get("cost_usd") or 0) for x in routes), 6)}
+    # each part's prompt had its own blocks (a contact or depth only some parts hold); the recording's record names
+    # every block and output field any part had, in the order they first appear
+    for k in ("prompt_blocks", "schema_fields"):
+        got = [x for _, r in parts for x in (r.get("config") or {}).get(k) or []]
+        if got or k in cfg:
+            cfg[k] = list(dict.fromkeys(got))
+    # the recording's contacts that some part was asked about; one no part showed (a contact whose signal is not
+    # touch) is left out, as each part's record leaves it out
+    asked = {c.get("id") for _, r in parts for c in r.get("contacts") or [] if isinstance(c, dict)}
     if excluded:
         L["_excluded"] = excluded
     if views["shown"]:
@@ -431,7 +451,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
             "stitched": {"parts": count, "cuts_s": cuts_s},
-            **({"contacts": ctx.get("contacts"), "contact_views": views} if views["shown"] else {})}
+            **({"contacts": [c for c in ctx.get("contacts") or [] if c.get("id") in asked], "contact_views": views}
+               if views["shown"] else {})}
 
 
 if __name__ == "__main__":

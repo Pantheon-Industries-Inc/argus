@@ -779,32 +779,37 @@ def _contact_line(c: dict) -> str:
                if c.get("dips_s") else ""))
 
 
-def _touch_signal(ep: dict, name: str) -> bool:
-    """Whether one of the episode's signals measures touch (label/signals.py is_touch: its name says so and its numbers
-    behave like touch, on the upload's scale), once per signal per episode."""
-    memo = ep.setdefault("_touch", {})
-    if name not in memo:
-        from label import signals as sg
-        a = (ep.get("signals") or {}).get(name)
-        m = (ep.get("signal_meta") or {}).get(name) or {}
-        memo[name] = a is not None and bool(sg.is_touch(name, np.asarray(a, dtype=np.float64), m.get("rest"),
-                                                        m.get("swing")))
-    return memo[name]
+def _touch_signal(ep: dict, name: str, n: int) -> bool:
+    """Whether one of the episode's signals measures touch, the one rule labelling uses for it (the contacts shown and
+    the per-instant readout). A part of a long recording carries the whole recording's verdict in its signal entry
+    ("touch", label/pieces.py write_pieces), because touch is judged once, on the whole recording: a part that falls
+    inside a long press has no rest of its own, and its slice alone would not read as touch. Any other episode is
+    judged by label/signals.py is_touch (its name says so and its numbers behave like touch, on the upload's scale)
+    over its first n frames, the frames the prompt covers (plan()["n"])."""
+    m = (ep.get("signal_meta") or {}).get(name) or {}
+    if "touch" in m:
+        return bool(m["touch"])
+    a = (ep.get("signals") or {}).get(name)
+    if a is None:
+        return False
+    from label import signals as sg
+    return bool(sg.is_touch(name, np.asarray(a[:n], dtype=np.float64), m.get("rest"), m.get("swing")))
 
 
-def touch_contacts(ep: dict, contacts) -> list[dict]:
-    """The contacts timed by at least one touch signal of the episode. A context.json prepared before is_touch can hold
-    a contact found from a signal that only behaved like touch (an intervention flag, odometry); it is not shown."""
-    return [c for c in contacts or [] if any(_touch_signal(ep, nm) for nm in c.get("signals") or [])]
+def touch_contacts(ep: dict, contacts, n: int) -> list[dict]:
+    """The contacts timed by at least one touch signal of the episode (_touch_signal over its first n frames). A
+    context.json prepared before is_touch can hold a contact found from a signal that only behaved like touch (an
+    intervention flag, odometry); it is not shown."""
+    return [c for c in contacts or [] if any(_touch_signal(ep, nm, n) for nm in c.get("signals") or [])]
 
 
-def contacts_block(ep: dict) -> str:
+def contacts_block(ep: dict, pl: dict) -> str:
     """The episode's contacts as the recording gives them (label/contacts.py), what each contact picture shows, and
     what to return for them. Empty when no contact is timed by a touch signal (touch_contacts)."""
-    shown = touch_contacts(ep, ep.get("contacts_shown"))
+    shown = touch_contacts(ep, ep.get("contacts_shown"), pl["n"])
     if not shown:
         return ""
-    rest = [c for c in touch_contacts(ep, ep.get("contacts")) if c["id"] not in {x["id"] for x in shown}]
+    rest = [c for c in touch_contacts(ep, ep.get("contacts"), pl["n"]) if c["id"] not in {x["id"] for x in shown}]
     depth = any(_contact_views(ep, c)[2] for c in shown)
     return ("\nCONTACTS: the recording's touch signals say a hand is touching something in these spans. They are the "
             "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
@@ -841,7 +846,6 @@ def _signals_table(ep: dict, pl: dict) -> str:
         return ""
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
-    sc = {k: ((meta.get(k) or {}).get("rest"), (meta.get(k) or {}).get("swing")) for k in sig}   # the upload's scale
     arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
     lines, still = [], []
     for name, a in arrs.items():
@@ -873,8 +877,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
                          + ("; ".join(ch) if ch else "none changed"))
     # a touch signal's timing is given once, as the episode's contacts (contacts_block), so the frames are read on their
-    # own first and the contacts are checked against them
-    touch = {nm for nm, a in arrs.items() if sg.is_touch(nm, a, *sc[nm])}
+    # own first and the contacts are checked against them; touch is the rule the contacts shown follow (_touch_signal)
+    touch = {nm for nm in arrs if _touch_signal(ep, nm, n)}
     ks = pl["ks"]
     rows = []
     for name, a in arrs.items():
@@ -1013,11 +1017,31 @@ def _state_unaligned(ep: dict, pl: dict) -> bool:
 
 
 def _has_contacts(ep: dict, pl: dict) -> bool:
-    return bool(touch_contacts(ep, ep.get("contacts_shown")))
+    return bool(touch_contacts(ep, ep.get("contacts_shown"), pl["n"]))
 
 
 def _no_state(ep: dict, pl: dict) -> bool:
     return state_kind(ep) == "none"
+
+
+def _has_collection_note(ep: dict, pl: dict) -> bool:
+    return bool(ep["context"].get("collection_note"))
+
+
+def _has_contact_views(ep: dict, pl: dict) -> bool:
+    return bool(pl.get("contact"))
+
+
+def _has_coverage(ep: dict, pl: dict) -> bool:
+    return bool(_coverage_note(ep, pl))
+
+
+def _has_depth(ep: dict, pl: dict) -> bool:
+    return bool(ep.get("depth"))
+
+
+def _has_uploader_notes(ep: dict, pl: dict) -> bool:
+    return bool(ep["context"].get("uploader_annotation"))
 
 
 def _collection_text(ep: dict, pl: dict) -> str:
@@ -1076,20 +1100,19 @@ def _uploader_text(ep: dict, pl: dict) -> str:
 
 
 BLOCKS = (
-    Block("collection_note", "intro", lambda ep, pl: bool(ep["context"].get("collection_note")), _collection_text),
-    Block("contact_views", "frames_detail", lambda ep, pl: bool(pl.get("contact")), _contact_views_text),
-    Block("coverage", "frames", lambda ep, pl: bool(_coverage_note(ep, pl)), _coverage_note),
-    Block("depth", "frames", lambda ep, pl: bool(ep.get("depth")), lambda ep, pl: _depth_note(ep)),
+    Block("collection_note", "intro", _has_collection_note, _collection_text),
+    Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
+    Block("coverage", "frames", _has_coverage, _coverage_note),
+    Block("depth", "frames", _has_depth, lambda ep, pl: _depth_note(ep)),
     Block("state", "state", _has_state, _state_text,
           checks=("still_spans", "timebase", "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")),
     Block("state_unaligned", "state", _state_unaligned, _state_unaligned_text, checks=("camera_windows_match_state",)),
     Block("no_state", "state", _no_state, _no_state_text),
     Block("signals", "signals", _has_signals, _signals_table, checks=("sensors",)),
-    Block("contacts", "after_frames", _has_contacts, lambda ep, pl: contacts_block(ep),
+    Block("contacts", "after_frames", _has_contacts, contacts_block,
           schema_fields=("contacts", "contacts_missing"),
           checks=("contact_checks",)),
-    Block("uploader_notes", "after_task", lambda ep, pl: bool(ep["context"].get("uploader_annotation")),
-          _uploader_text),
+    Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
 )
 
 
@@ -1202,7 +1225,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     ep = load(ep_dir)
     pl = plan(ep)
     from label import contacts as lc
-    ep["contacts"] = touch_contacts(ep, lc.of_episode(ep))
+    ep["contacts"] = touch_contacts(ep, lc.of_episode(ep), pl["n"])
     ep["contacts_shown"] = chosen_contacts(ep, ep["contacts"])
     if ep["contacts_shown"]:
         pl["contact"] = []   # the touch signals' own contacts replace the views chosen from the gripper's value

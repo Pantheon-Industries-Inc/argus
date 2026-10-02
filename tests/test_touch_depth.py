@@ -31,15 +31,22 @@ def _jpeg(shade: int) -> bytes:
     return buf.getvalue()
 
 
-def _press(n: int, on: tuple[int, int], rest: float = 3072.0) -> np.ndarray:
-    """A 16 x 16 glove map that rests at its untouched reading and falls where it is pressed, frames on[0]..on[1]."""
+def _press(n: int, on: tuple[int, int], rest: float = 3072.0, palm: bool = False) -> np.ndarray:
+    """A 16 x 16 glove map that rests at its untouched reading and falls where it is pressed, frames on[0]..on[1]: a
+    fingertip's patch, or with palm the whole map (a palm pressed flat)."""
     a = np.full((n, 16, 16), rest, np.float32)
     a += np.random.default_rng(0).normal(0, 2, a.shape).astype(np.float32)
-    a[on[0]:on[1], 3:8, 5:10] = 900.0
+    if palm:
+        a[on[0]:on[1]] -= 2000.0
+    else:
+        a[on[0]:on[1], 3:8, 5:10] = 900.0
     return a
 
 
-def _hdf5(path: Path, demos: int = 2, n: int = 40) -> None:
+def _hdf5(path: Path, demos: int = 2, n: int = 40, press: tuple[int, int] | None = (12, 26),
+          palm: bool = False) -> None:
+    """Demos of JPEG frames, a clock, a right glove's pressure map pressed over frames press (never, when None; the
+    whole map with palm) and hand landmarks."""
     with h5py.File(path, "w") as f:
         f.attrs["hand_mode"] = "right"
         f.create_dataset("calibration/rgb/T_device_camera", data=np.eye(4))
@@ -50,7 +57,7 @@ def _hdf5(path: Path, demos: int = 2, n: int = 40) -> None:
             for i in range(n):
                 imgs[i] = np.frombuffer(_jpeg(i * 5), np.uint8)
             g.create_dataset("timestamps", data=(np.arange(n) * 33_333_333 + 10**12).astype(np.int64))
-            g.create_dataset("right_pressure", data=_press(n, (12, 26)))
+            g.create_dataset("right_pressure", data=_press(n, press or (0, 0), palm=palm))
             g.create_dataset("right_hand_landmarks", data=np.random.default_rng(d).normal(0, 0.1, (n, 21, 3)))
             if d == 0:
                 flags = np.array([(0, 1)], dtype=[("low_light", "u1"), ("hand_out_of_frame", "u1")])
@@ -277,6 +284,14 @@ def test_an_episode_with_a_contact_shows_it_and_one_without_is_labelled_as_befor
     assert "right_pressure (16 x 16 values)" in table and "right_pressure total" not in table
     strips = r["contact_views"]["strips"]["c1"]
     assert len(strips["begin"]) == 5 and len(strips["end"]) == 3
+    assert "contacts" in r["blocks"] and {"contacts", "contacts_missing"} <= set(r["schema_fields"])
+    # the same glove never pressed: no contact, no word of contacts and no contact fields asked for
+    (tmp_path / "up2").mkdir()
+    _hdf5(tmp_path / "up2" / "kitchen_p2.hdf5", demos=1, press=None)
+    rep = formats.convert(tmp_path / "up2", "ego_head", tmp_path / "eps2", "touchset", 900)
+    r = me.build_request(tmp_path / "eps2" / rep["episodes"][0]["episode_id"])
+    assert "contacts" not in r["blocks"] and not {"contacts", "contacts_missing"} & set(r["schema_fields"])
+    assert "CONTACTS:" not in r["prompt"] and "contact_views" not in r
 
 
 def test_a_depth_video_beside_its_colour_video_goes_with_that_camera(tmp_path):

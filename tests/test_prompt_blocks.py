@@ -246,7 +246,8 @@ def test_every_block_is_tested_and_presence_never_reads_the_rig_or_dataset_name(
     import inspect
     assert {c[0] for c in BLOCK_CASES} == {b.name for b in me.BLOCKS}
     for b in me.BLOCKS:
-        src = inspect.getsource(b.present) if b.present.__name__ != "<lambda>" else ""
+        assert b.present.__name__ != "<lambda>", b.name   # a named test, so its source can be read here
+        src = inspect.getsource(b.present)
         assert "rig(" not in src and "dataset" not in src, b.name
     assert {b.slot for b in me.BLOCKS} <= set(me.PROMPT_SLOTS)
 
@@ -270,10 +271,28 @@ def test_a_contact_timed_only_by_a_signal_that_does_not_measure_touch_is_not_sho
     episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
     assert "contacts" not in [b.name for b in me.present_blocks(ep, pl)] and me.requested_schema(ep, pl) == ()
     assert "CONTACTS:" not in episode and '"contacts"' not in episode
-    assert me.touch_contacts(ep, ep["contacts"]) == []
+    assert me.touch_contacts(ep, ep["contacts"], pl["n"]) == []
     _add_contact(ep, pl)                             # a contact the glove's pressure times is shown
-    assert [c["id"] for c in me.touch_contacts(ep, ep["contacts"])] == ["c1"]
+    assert [c["id"] for c in me.touch_contacts(ep, ep["contacts"], pl["n"])] == ["c1"]
     assert "contacts" in [b.name for b in me.present_blocks(ep, pl)]
+
+
+def test_a_parts_context_carries_the_whole_recordings_touch_verdict_and_presence_leaves_the_episode_as_it_was():
+    """A part of a long recording is told by its context whether each signal is touch (label/pieces.py write_pieces
+    judges it on the whole recording), because a part inside a long press has no rest of its own to judge from."""
+    ep, pl = CASES["teleop_joints"]()
+    _add_contact(ep, pl)
+    ep["signal_meta"]["left_glove_pressure"]["touch"] = False
+    assert not me._has_contacts(ep, pl) and "CONTACTS:" not in me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    # pressed all through, so its own numbers show no rest; the recording's verdict says touch
+    ep["signals"]["left_glove_pressure"] = 2072.0 + np.random.default_rng(1).normal(0, 2, (900, 16))
+    ep["signal_meta"]["left_glove_pressure"]["touch"] = True
+    assert me._has_contacts(ep, pl) and "CONTACTS:" in me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    # the readout agrees: a touch signal's timing is given only as the contacts, never per instant
+    assert "Each signal that changes" not in me._signals_table(ep, pl)
+    before = set(ep)
+    me.present_blocks(ep, pl)
+    assert set(ep) == before                         # presence tests leave the episode as it was
 
 
 def test_an_unaligned_state_no_longer_hides_the_signals():

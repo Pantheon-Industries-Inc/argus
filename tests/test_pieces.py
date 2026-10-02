@@ -124,6 +124,65 @@ def test_a_recording_with_other_signals_can_be_labelled_in_parts(tmp_path, monke
         assert len(next(iter(e["signals"].values()))) == int(e["context"]["n_state_frames"])
 
 
+def _long_press(tmp_path, monkeypatch) -> tuple[Path, list[Path]]:
+    """A 10 s head camera recording whose right glove is pressed flat by the palm from 3 s to 6 s, written in parts of
+    about 1 s: the parts from 3.7 s to 5.8 s fall inside the press."""
+    from test_touch_depth import _hdf5
+    root = tmp_path / "up"
+    root.mkdir()
+    _hdf5(root / "kitchen_p1.hdf5", demos=1, n=300, press=(90, 180), palm=True)
+    rep = f.convert(root, "ego_head", tmp_path / "eps", "touchset", 900)
+    src = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    monkeypatch.setitem(pieces.PIECE_MAX_S, "ego_head", 1.0)
+    return src, pieces.write_pieces(src, tmp_path / "pieces")
+
+
+def test_a_part_inside_a_long_press_keeps_the_contact_the_whole_recording_shows(tmp_path, monkeypatch):
+    """Touch is judged once, on the whole recording: a part inside a long press has no rest of its own, so its slice
+    alone does not read as touch, and the part takes the recording's verdict from its context."""
+    from label import signals as sg
+    src, parts = _long_press(tmp_path, monkeypatch)
+    assert len(parts) >= 3
+    assert all("touch" not in s for s in json.loads((src / "context.json").read_text())["signals"])
+    inside = []
+    for p in parts:
+        e = me.load(p)
+        assert {s["name"]: s["touch"] for s in e["context"]["signals"]} == {"right_pressure": True,
+                                                                            "right_hand_landmarks": False}
+        m = e["signal_meta"]["right_pressure"]
+        a = np.asarray(e["signals"]["right_pressure"], dtype=np.float64)
+        if e["context"]["contacts"] and not sg.is_touch("right_pressure", a, m.get("rest"), m.get("swing")):
+            inside.append(p)
+    assert len(inside) >= 2                          # parts the contact covers whose own numbers do not read as touch
+    for p in inside:
+        r = me.build_request(p)
+        assert "contacts" in r["blocks"] and "CONTACTS:" in r["prompt"] and r["contact_views"]["shown"] == ["c1"]
+
+
+def test_a_stitched_record_keeps_the_contacts_its_parts_showed_and_every_parts_blocks(tmp_path, monkeypatch):
+    """The stitched record lists the recording's contacts some part showed, not the ones no part was asked about, and
+    its config names every block and output field any part had, in the order they first appear."""
+    src, parts = _long_press(tmp_path, monkeypatch)
+    ctx = json.loads((src / "context.json").read_text())
+    ctx["contacts"].append({**ctx["contacts"][0], "id": "c9", "signals": ["right_hand_landmarks"]})
+    (src / "context.json").write_text(json.dumps(ctx))
+    pcs = [json.loads((p / "context.json").read_text()) for p in parts]
+
+    def result(i):
+        shown = i == 1
+        blocks = ["collection_note", "no_state", "signals"] + (["contacts"] if shown else [])
+        return {"episode_dir": str(parts[i]), "parse_ok": True, "model": "m", "usage": {},
+                "config": {"timesteps_s": [0.0], "prompt_blocks": blocks,
+                           "schema_fields": ["contacts", "contacts_missing"] if shown else []},
+                "labels": {"task_summary": f"part {i + 1}"},
+                **({"contacts": [ctx["contacts"][0]], "contact_views": {"shown": ["c1"], "strips": {}}}
+                   if shown else {})}
+    out = pieces.stitch(src, [(pc, result(i)) for i, pc in enumerate(pcs)])
+    assert [c["id"] for c in out["contacts"]] == ["c1"]
+    assert out["config"]["prompt_blocks"] == ["collection_note", "no_state", "signals", "contacts"]
+    assert out["config"]["schema_fields"] == ["contacts", "contacts_missing"]
+
+
 def test_a_part_of_a_long_head_camera_recording_gets_its_subtasks_on_its_own_clock(tmp_path, monkeypatch):
     """The dataset's timed subtasks are on the recording's clock; a part's frames start at 0 at its cut."""
     from prepare import formats
