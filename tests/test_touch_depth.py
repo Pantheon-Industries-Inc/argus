@@ -289,3 +289,21 @@ def test_a_lerobot_feature_key_keeps_its_camera_words_and_depth_writes_its_own_f
     t = np.arange(n) / 30.0
     e, _ = formats.depth_entry(ep, "top", tmp_path / "d.mkv", t, t, np.arange(n), 0.001, "observation.depth.cam_high")
     assert (ep / "depth_kmap_top.npy").exists()
+
+
+def test_loading_an_episode_keeps_each_signals_source_and_companion(tmp_path):
+    """contacts.find groups hand-less signals by source and skips a fast sensor's variation companion; both read the
+    meta load() returns."""
+    ep = tmp_path / "episode_000000"
+    ep.mkdir()
+    n = 10
+    np.savez(ep / "signals.npz", s0=np.zeros((n, 1)), s1=np.zeros((n, 1)))
+    (ep / "sources.json").write_text(json.dumps({"right": {"n_frames": n, "base_s": 0.0}}))
+    (ep / "context.json").write_text(json.dumps({
+        "episode_id": ep.name, "profile": "handheld_gripper", "fps": 30, "n_state_frames": n, "state_kind": "none",
+        "cameras": {}, "signals": [
+            {"name": "pad", "key": "s0", "shape": [1], "source": "mcap channel /pad"},
+            {"name": "pad variation within each frame", "key": "s1", "shape": [1], "variation_of": "pad"}]}))
+    meta = me.load(ep)["signal_meta"]
+    assert meta["pad"]["source"] == "mcap channel /pad"
+    assert meta["pad variation within each frame"]["variation_of"] == "pad"

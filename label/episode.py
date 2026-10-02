@@ -116,7 +116,8 @@ def load(ep_dir: Path) -> dict:
         # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz)
         z = np.load(ep_dir / "signals.npz")
         ep["signals"] = {s["name"]: z[s["key"]] for s in ctx["signals"]}
-        ep["signal_meta"] = {s["name"]: {k: s[k] for k in ("shape", "names", "rate_hz", "rest", "swing") if k in s}
+        ep["signal_meta"] = {s["name"]: {k: s[k] for k in ("shape", "names", "rate_hz", "rest", "swing", "source",
+                                                            "variation_of") if k in s}
                              for s in ctx["signals"]}
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
