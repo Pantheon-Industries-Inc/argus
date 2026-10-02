@@ -2924,6 +2924,17 @@ def mcap_layout(topics: list[str]) -> str:
 MCAP_MAGIC = b"\x89MCAP0\r\n"
 
 
+def convert_mcap_layout_ctx(item: dict, layout: str, ep: Path, dataset: str) -> dict:
+    """The context a recognised MCAP layout's own reader writes (prepare/<layout>.py), with the format, file and
+    dataset added to its source rather than replacing it: the reader's notes on what it left out stay."""
+    import importlib
+    ctx = importlib.import_module(f"prepare.{layout}").convert_upload(item, ep)
+    src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
+    ctx.update({"dataset": dataset, "source": {**src, "format": f"mcap ({layout} layout)", "adapter": layout,
+                                                "file": item["name"]}})
+    return ctx
+
+
 def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
     with open(item["file"], "rb") as fh:
         if fh.read(len(MCAP_MAGIC)) != MCAP_MAGIC:
@@ -2938,9 +2949,7 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
         item.setdefault("notes", []).append("The file ends early, before its index, so it was read from its cameras.")
     if layout == "generic":
         return convert_mcap_generic(item, rig, ep, dataset)
-    import importlib
-    ctx = importlib.import_module(f"prepare.{layout}").convert_upload(item, ep)
-    ctx.update({"dataset": dataset, "source": {"format": f"mcap ({layout} layout)", "adapter": layout, "file": item["name"]}})
+    ctx = convert_mcap_layout_ctx(item, layout, ep, dataset)
     # the rate and the length come from the anchor camera's real capture times (stations record at 30 or 60 Hz,
     # and no camera runs at exactly its nominal rate), so sampling is one instant per second of real time and the
     # footage cap counts real minutes

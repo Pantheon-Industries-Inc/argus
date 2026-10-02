@@ -608,3 +608,26 @@ def test_a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(tmp_pa
     pts = np.arange(n, dtype=np.int64)
     out = formats.table_signals([tmp_path / "traj.csv"], None, {"pts": pts, "time_base": 1 / 30.0}, {})
     assert out.meta["traj"]["names"] == ["odom_x", "grip"]
+
+
+def test_an_mcap_layout_adapters_source_notes_are_kept(tmp_path, monkeypatch):
+    """convert_mcap adds its format and file to the adapter's source instead of replacing it."""
+    import importlib
+    from prepare import formats
+    fake = type("M", (), {})()
+
+    def convert_upload(item, ep):
+        ep.mkdir(parents=True, exist_ok=True)
+        (ep / "context.json").write_text("{}")
+        return {"profile": "ego_head", "cameras": {}, "fps": 30, "n_state_frames": 1, "state_kind": "none",
+                "source": {"unused_signals": ["/imu (not read yet)"], "invalid_ranges": [[0, 1]]}}
+    fake.convert_upload = convert_upload
+    real_import = importlib.import_module
+    # only the made-up layout is faked; every other module still imports as usual
+    monkeypatch.setattr(importlib, "import_module",
+                        lambda name, *a, **k: fake if name == "prepare.fakelayout" else real_import(name, *a, **k))
+    ctx = formats.convert_mcap_layout_ctx({"name": "a.mcap"}, "fakelayout", tmp_path / "ep", "ds")
+    assert ctx["source"]["unused_signals"] == ["/imu (not read yet)"]
+    assert ctx["source"]["invalid_ranges"] == [[0, 1]]
+    assert ctx["source"]["format"] == "mcap (fakelayout layout)" and ctx["source"]["file"] == "a.mcap"
+    assert ctx["dataset"] == "ds"
