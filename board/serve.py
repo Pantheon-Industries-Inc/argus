@@ -648,6 +648,20 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #current-ep-src a:hover { color: var(--fg); border-bottom-color: var(--fg-3); }
 #current-ep-reader { font: 500 11px/1.35 var(--sans); color: var(--fg-3); }
 #current-ep-reader:empty { display: none; }
+/* what the model was not shown: a closed fold on the board's own fold-link look (.ck-more); opened, the list scrolls
+   inside the header so it never pushes the player off screen */
+#current-ep-reader .rn-note { overflow-wrap: anywhere; }
+#current-ep-reader .rn-fold { interpolate-size: allow-keywords; }
+#current-ep-reader .rn-fold > summary { margin-top: 0; padding: 2px 0; font-size: 11px; list-style: none; }
+#current-ep-reader .rn-fold > summary::-webkit-details-marker { display: none; }
+#current-ep-reader .rn-fold::details-content { block-size: 0; overflow: clip;
+  transition: block-size 320ms cubic-bezier(.32,.72,0,1), content-visibility 320ms allow-discrete; }
+#current-ep-reader .rn-fold[open]::details-content { block-size: auto; }
+#current-ep-reader .rn-body { max-height: 40vh; overflow: auto; padding: 4px 0 2px; overflow-wrap: anywhere; }
+#current-ep-reader .rn-k { font-weight: 600; color: var(--fg-2); padding: 6px 0 2px; }
+#current-ep-reader .rn-k:first-child { padding-top: 0; }
+#current-ep-reader .rn-i { font: 500 10.5px/1.4 var(--mono); padding: 1px 0; }
+@media (prefers-reduced-motion: reduce) { #current-ep-reader .rn-fold::details-content { transition: none; } }
 .kp-lic a, .kp-note-in a { white-space: nowrap; color: inherit; text-decoration: underline;
   text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
 .ep-head-dl { flex: none; font: 500 12px/1 var(--sans); color: var(--fg-2); text-decoration: none; white-space: nowrap;
@@ -2405,7 +2419,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   <aside class="left" id="left-pane">
     <div class="ep-head">
       <div class="ep-head-name"><span class="ep-head-k">Episode</span><span id="current-ep"></span><span
-        id="current-ep-raw"></span><span id="current-ep-src"></span><span id="current-ep-reader"></span></div>
+        id="current-ep-raw"></span><span id="current-ep-src"></span><div id="current-ep-reader"></div></div>
       <div class="ep-head-side">
         <div class="ep-head-acts">
           <button id="hp-btn" class="ep-head-dl hp-btn" type="button" aria-pressed="true" hidden
@@ -2781,19 +2795,21 @@ function datasetSourceHtml(s) {
   return `Footage: ${link(s.hub, s.name)}${s.publisher ? ` (${esc(s.publisher)})` : ''}, ${link(s.license_url,
     s.license)}`;
 }
-// what the model was not shown of the upload (board/build.py reader_notes): the reader's note on the recorded state,
-// then the cameras, signals, arrays and depth streams it did not read, each with the reason it gave; nothing when the
-// model was shown it all
+// what the model was not shown of the upload (board/build.py reader_notes): the reader's note on the recorded state as
+// text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it gave, in a fold
+// that is closed until opened (an upload can leave out dozens of signals); nothing when the model was shown it all
 function readerNotesHtml(rn) {
   if (!rn) return '';
   const left = rn.left_out || {};
-  const kinds = [['cameras', 'the cameras'], ['signals', 'the signals'], ['arrays', 'the arrays'],
-                 ['depth', 'the depth streams']].filter(([k]) => (left[k] || []).length)
-    .map(([k, what]) => `${what} ${left[k].map(esc).join(', ')}`);
-  const parts = [];
-  if (rn.state_note) parts.push(esc(rn.state_note));
-  if (kinds.length) parts.push(`The model was not shown ${kinds.join('; ')}.`);
-  return parts.join(' ');
+  const kinds = [['cameras', 'Cameras', 'camera', 'cameras'], ['signals', 'Signals', 'signal', 'signals'],
+                 ['arrays', 'Arrays', 'array', 'arrays'], ['depth', 'Depth streams', 'depth stream', 'depth streams']]
+    .filter(([k]) => (left[k] || []).length);
+  const counts = kinds.map(([k, , one, many]) => `${left[k].length} ${left[k].length === 1 ? one : many}`);
+  const said = counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}` : counts[0];
+  return (rn.state_note ? `<div class="rn-note">${esc(rn.state_note)}</div>` : '')
+    + (kinds.length ? `<details class="rn-fold"><summary class="ck-more">The model was not shown ${said}</summary>`
+      + `<div class="rn-body">${kinds.map(([k, head]) => `<div class="rn-k">${head}</div>`
+        + left[k].map(x => `<div class="rn-i">${esc(x)}</div>`).join('')).join('')}</div></details>` : '');
 }
 function dsLabel(ds) {
   return DS_LABELS[ds] || String(ds).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
