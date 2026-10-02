@@ -539,10 +539,29 @@ MAX_EXTRA_CAMERAS = 4  # cameras beyond the scene and two mounted ones, sent to 
 # camera on a gripper: it is another view, named as the dataset names it, and the pair of them (left and right) are two
 # sensors, not the two eyes of one stereo camera
 SENSING_WORDS = ("tactile", "touch", "gelsight", "digit", "xense", "visuotactile", "haptic", "heatmap", "taxel", "skin")
+# a signal says it measures touch with the same words, or with the words a touch signal's name carries: a pressure, a
+# contact flag, a force, a force-sensing resistor (fsr) or a piezo pad (label/signals.py is_touch)
+TOUCH_WORDS = SENSING_WORDS + ("pressure", "contact", "force", "fsr", "piezo")
+
+
+def _names_word(name: str, words) -> bool:
+    """Whether a word of a name (tokens) is one of words, alone, plural or numbered (tactile, tactiles, digit_0, fsr0),
+    never as part of a longer word: digital is not digit and reinforcement is not force."""
+    for t in tokens(name):
+        stem = t.rstrip("0123456789")
+        if stem in words or (stem.endswith("s") and stem[:-1] in words):
+            return True
+    return False
 
 
 def is_sensing(name: str) -> bool:
-    return any(w in t for t in tokens(name) for w in SENSING_WORDS)
+    """Whether a camera's name says it senses touch (SENSING_WORDS): a GelSight or DIGIT image, a tactile heatmap."""
+    return _names_word(name, SENSING_WORDS)
+
+
+def names_touch(name: str) -> bool:
+    """Whether a signal's name says it measures touch (TOUCH_WORDS): right_pressure, tactile_left_raw, right_contact."""
+    return _names_word(name, TOUCH_WORDS)
 
 
 def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
@@ -2941,7 +2960,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             far = np.zeros(len(q), dtype=bool)
             far[:n_gaps] = True               # only its count is kept (meta "gaps")
             rate = len(t) / max(float(t[-1] - t[0]), 1e-9)
-            if var is not None and a.shape[1] <= VARIATION_MAX_VALUES and _variation_matters(v, var):
+            if var is not None and a.shape[1] <= VARIATION_MAX_VALUES and _variation_matters(s["name"], v, var):
                 out.add(f"{s['name']} variation within each frame", var, shape=shape if len(shape) > 1 else None,
                         names=names, source=f"HDF5 dataset {s['path']}")
                 out.meta[f"{s['name']} variation within each frame"]["variation_of"] = s["name"]
@@ -3407,13 +3426,13 @@ def place_on_frames(t: np.ndarray, v: np.ndarray, q: np.ndarray) -> tuple[np.nda
     return mean, std, int((n == 0).sum())
 
 
-def _variation_matters(a: np.ndarray, var: np.ndarray, samples: bool = False) -> bool:
+def _variation_matters(name: str, a: np.ndarray, var: np.ndarray, samples: bool = False) -> bool:
     """Whether a fast signal's variation within frames is worth a signal of its own: it is where a vibration or a slip
-    shows, so it is kept for a signal that behaves like touch (label/signals.py touch_like) or the loudness of samples
-    in time (a contact microphone), and there only when it reaches VARIATION_MIN_SHARE of the signal's own range
-    somewhere in the episode. An IMU's or a pose's jitter between frames is left out."""
+    shows, so it is kept for a touch signal (label/signals.py is_touch, by its name and its numbers) or the loudness of
+    samples in time (a contact microphone), and there only when it reaches VARIATION_MIN_SHARE of the signal's own
+    range somewhere in the episode. An IMU's or a pose's jitter between frames is left out."""
     from label import signals as sg
-    if not samples and not sg.touch_like(a):
+    if not samples and not sg.is_touch(name, a):
         return False
     with np.errstate(all="ignore"):
         rng = np.nanmax(a, axis=0) - np.nanmin(a, axis=0)
@@ -3574,7 +3593,8 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             out.meta[name].update(r["kind"])
         if gaps:
             out.meta[name]["gaps"] = gaps
-        if var is not None and a.shape[1] <= VARIATION_MAX_VALUES and _variation_matters(a, var, bool(r.get("kind"))):
+        if (var is not None and a.shape[1] <= VARIATION_MAX_VALUES
+                and _variation_matters(name, a, var, bool(r.get("kind")))):
             vn = f"{name} variation within each frame"
             out.add(vn, var, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
             out.meta[vn].update(rate_hz=round(rate, 2), variation_of=name)

@@ -368,7 +368,7 @@ def test_a_signal_that_swings_both_ways_or_a_switching_setting_is_not_touch():
     assert not sg.touch_like(setting)
     t = np.arange(n) / 30.0
     press = _press(n, (60, 120)).reshape(n, -1).astype(np.float64)
-    (c,) = lc.find({"left_glove": press}, {"left_glove": {"shape": [16, 16]}}, t)
+    (c,) = lc.find({"left_glove_pressure": press}, {"left_glove_pressure": {"shape": [16, 16]}}, t)
     assert c["hand"] == "left" and abs(c["start_s"] - 2.0) < 0.05
 
 
@@ -447,6 +447,45 @@ def test_a_second_lerobot_depth_stream_for_one_camera_is_listed_as_left_out(tmp_
     dep, unused = _lerobot_depth_of(tmp_path, "observation.depth.cam_left_wrist", "observation.depth.left_wrist")
     assert dep["left"]["source"] == "observation.depth.cam_left_wrist"
     assert unused == ["observation.depth.left_wrist (depth with no camera of its own)"]
+
+
+HOLD_THEN_RISE = np.r_[np.zeros(30), np.linspace(0, 0.3, 10), np.full(20, 0.3)][:, None]   # rests, then moves one way
+
+
+def test_a_torso_joint_that_holds_and_then_rises_gives_no_contact():
+    """A humanoid's torso joint that holds still and then moves one way rests and rises like a pressure pad; only its
+    name says it is not touch."""
+    t = np.arange(60) / 30.0
+    assert lc.find({"observation.state.torso": HOLD_THEN_RISE}, {}, t) == []
+
+
+def test_the_same_numbers_under_a_touch_name_give_a_contact():
+    t = np.arange(60) / 30.0
+    (c,) = lc.find({"left_pressure": HOLD_THEN_RISE}, {}, t)
+    assert c["hand"] == "left" and c["signals"] == ["left_pressure"]
+
+
+def test_actions_poses_odometry_and_gripper_effort_give_no_contacts():
+    t = np.arange(60) / 30.0
+    for name in ("action.delta_ee", "observation.ee_pose", "odom.position", "gripper_effort"):
+        assert lc.find({name: HOLD_THEN_RISE}, {}, t) == [], name
+
+
+def test_a_contact_flag_named_for_contact_gives_a_contact():
+    t = np.arange(60) / 30.0
+    flag = np.r_[np.zeros(20), np.ones(15), np.zeros(25)][:, None]
+    (c,) = lc.find({"right_contact": flag}, {}, t)
+    assert c["hand"] == "right"
+
+
+def test_a_torso_joint_stays_in_the_per_instant_readout_and_a_pressure_does_not():
+    """A touch signal's timing is given once as the episode's contacts, so its rows leave the readout; a joint's
+    stay."""
+    ep = {"signals": {"observation.state.torso": HOLD_THEN_RISE, "left_pressure": HOLD_THEN_RISE},
+          "signal_meta": {}, "context": {"fps": 30}, "times": None}
+    table = me._signals_table(ep, {"n": 60, "spans": [], "ks": [0, 20, 40, 59]})
+    readout = table.split("    at: ")[1]
+    assert "observation.state.torso:" in readout and "left_pressure:" not in readout
 
 
 def test_loading_an_episode_keeps_each_signals_source_and_companion(tmp_path):

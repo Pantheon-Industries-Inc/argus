@@ -898,6 +898,25 @@ def test_a_depth_stream_with_no_camera_of_its_own_goes_with_the_scene_camera_and
     assert view == "exo" and source.startswith("observations/depth/zed (") and "scene camera" in source
 
 
+def test_a_fast_signals_variation_is_kept_only_for_a_signal_named_for_touch():
+    """A pose's jitter within frames is not where a slip shows, however its numbers rest and rise."""
+    import numpy as np
+    a = np.r_[np.zeros(30), np.linspace(0, 0.3, 10), np.full(20, 0.3)][:, None]
+    var = np.r_[np.zeros(35), np.full(25, 0.1)][:, None]
+    assert f._variation_matters("left_pressure", a, var)
+    assert not f._variation_matters("observation.state.torso", a, var)
+
+
+def test_a_name_says_touch_by_whole_words_alone_plural_or_numbered():
+    for name in ("tactiles", "tactile_left_raw", "right_pressure", "pressure_topic", "fsr0", "left_contact",
+                 "fingertip_force", "gelsight_mini", "observation.images.digit_0"):
+        assert f.names_touch(name), name
+    for name in ("digital_cam", "reinforcement_reward", "observation.state.torso", "gripper_effort", "odom.position",
+                 "contactless_id"):
+        assert not f.names_touch(name), name
+    assert f.is_sensing("tactile_left") and not f.is_sensing("digital_cam")
+
+
 def _mcap_layout_context_with(convert_upload):
     """mcap_layout_context through a made-up layout whose reader is convert_upload: import_module returns a module
     already in sys.modules, so only that layout is faked."""

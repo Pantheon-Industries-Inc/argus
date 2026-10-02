@@ -1,7 +1,7 @@
 """Reading a recording's other signals (prepare/formats.py Signals): what each one does over an episode, in numbers a
 person or a model can check against the frames.
 
-Nothing here knows what a signal is called or what sensor made it. A signal is read by how its numbers behave:
+A signal is read by how its numbers behave, and only whether it measures touch also asks its name (is_touch):
 
 - Its resting level, per value. A vector of SMALL values or fewer (a force, a flag, a position) rests at the end of
   each value's range it sits near most of the time (its 5th or 95th percentile, when its median is within a quarter
@@ -182,6 +182,16 @@ def touch_like(a: np.ndarray, rest=None, swing=None) -> bool:
     if rounding_only(a, rest, swing):
         return False
     return rests_and_rises(a, rest, swing) or (a.shape[1] > SMALL and localized(a, rest, swing))
+
+
+def is_touch(name: str, a: np.ndarray, rest=None, swing=None) -> bool:
+    """Whether a signal measures touch: its own name says so (prepare/formats.py names_touch: tactile, pressure,
+    contact, force and the tactile camera words) and its numbers behave like touch (touch_like). Numbers alone cannot
+    decide it: a humanoid's torso joint that holds still and then moves one way, a mobile base's odometry, an action
+    or a pose rest and rise like a pressure pad, and only the name says which one measures touch. A touch signal
+    whose name says nothing (ch0) is not read as touch until a data dictionary can say it is."""
+    from prepare.formats import names_touch
+    return names_touch(name) and touch_like(a, rest, swing)
 
 
 def active_spans(a: np.ndarray, t: np.ndarray, rest=None, swing=None) -> list[tuple[float, float]]:

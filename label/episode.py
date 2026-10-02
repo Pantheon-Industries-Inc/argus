@@ -899,7 +899,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
                          + ("; ".join(ch) if ch else "none changed"))
     # a touch signal's timing is given once, as the episode's contacts (contacts_block), so the frames are read on their
     # own first and the contacts are checked against them
-    touch = {nm for nm, a in arrs.items() if sg.touch_like(a, *sc[nm])}
+    touch = {nm for nm, a in arrs.items() if sg.is_touch(nm, a, *sc[nm])}
     ks = pl["ks"]
     rows = []
     for name, a in arrs.items():

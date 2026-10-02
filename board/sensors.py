@@ -30,15 +30,15 @@ One file:
 
 A signal: "name", "dims", and when the dataset gives them "shape" ([16, 16]), "names" (one per value), "rate_hz" and
 "source". "constant": true when no value ever changes (its "value" is the first row, or null with no reading); the
-page lists those by name. Otherwise "rests_and_rises" and "touch" (label/signals.py), "direction" ("up", "down" or
-null), "spans" ([[start s, end s], ...] on the clip clock, from every frame, for a signal that rests and rises or
-behaves like touch), for a signal that times one of the episode's contacts (context.json "contacts") its "strength"
-({"lo", "step", "data"}, one value per sample: its activity over its swing, label/contacts.py, so the page sums a
-contact's signals into the curve drawn inside its bar), and its samples:
+page lists those by name. Otherwise "rests_and_rises" and "touch" (label/signals.py; touch is is_touch, by the
+signal's name and its numbers), "direction" ("up", "down" or null), "spans" ([[start s, end s], ...] on the clip clock,
+from every frame, for a signal that rests and rises or is touch), for a signal that times one of the episode's
+contacts (context.json "contacts") its "strength" ({"lo", "step", "data"}, one value per sample: its activity over its
+swing, label/contacts.py, so the page sums a contact's signals into the curve drawn inside its bar), and its samples:
 
   a vector of SMALL values or fewer   "values": {"lo": [...], "step": [...], "data"}: per value v = lo + q * step
   an array of more values             "activity": {"lo": [x], "step": [x], "data"}: its activity (label/signals.py)
-                                      per sample; a 2-D array that behaves like touch also has "map": {"lo", "step",
+                                      per sample; a 2-D array that is touch also has "map": {"lo", "step",
                                       "data"} (every value, one byte each), "rest" (its resting level per value) and
                                       "swing", so the page draws it as a heatmap: distance from rest over swing,
                                       clipped to 0..1, in the signal's direction
@@ -197,7 +197,10 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
     rest = np.asarray(meta["rest"], dtype=np.float64) if meta.get("rest") is not None else None
     swing = float(meta["swing"]) if meta.get("swing") else None
     rr = bool(_call(S.rests_and_rises, a, rest, swing))
-    touch = bool(_call(S.touch_like, a, rest, swing)) if hasattr(S, "touch_like") else rr
+    if hasattr(S, "is_touch"):
+        touch = bool(S.is_touch(meta["name"], a, rest, swing))
+    else:
+        touch = bool(_call(S.touch_like, a, rest, swing)) if hasattr(S, "touch_like") else rr
     doc.update({"constant": False, "rests_and_rises": rr, "touch": touch,
                 "direction": _call(S.direction, a, rest, swing)})
     doc["spans"] = [[round(s, 3), round(e, 3)] for s, e in _spans(S, a, t, rest, swing)] if rr or touch else []

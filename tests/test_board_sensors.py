@@ -320,3 +320,11 @@ def test_the_static_build_publishes_sensors_and_each_depth_clip(tmp_path):
     assert list(json.loads((site / "data" / "sensors" / "index.json").read_text())["files"]) == ["episode_000000.json"]
     (rec,) = json.loads((site / "data" / "lists" / "mine.json").read_text())
     assert rec["_media"]["depth_exo"].startswith("v/depth_exo/episode_000000.")
+
+
+def test_the_boards_touch_flag_needs_a_touch_name_as_the_contacts_do():
+    """A torso joint that rests and rises draws no touch lane; the same numbers named for pressure do."""
+    a = np.r_[np.zeros(30), np.linspace(0, 0.3, 10), np.full(20, 0.3)][:, None]
+    t = np.arange(60) / 30.0
+    assert sensors.signal_doc({"name": "observation.state.torso"}, a, t, 1)["touch"] is False
+    assert sensors.signal_doc({"name": "left_pressure"}, a, t, 1)["touch"] is True

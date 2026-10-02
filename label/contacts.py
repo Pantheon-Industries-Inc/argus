@@ -1,8 +1,8 @@
 """Contacts: the moments a recording's touch signals say a hand or a gripper is touching something.
 
-A touch signal is any signal that behaves like touch (label/signals.py touch_like): a glove's pressure map, a
-fingertip's force, a pad's reading. Nothing here knows what a signal is called, except which hand it is on, read from
-its name the way a camera's side is (prepare/formats.py side_of: right_pressure is on the right hand).
+A touch signal is one whose name says touch and whose numbers behave like touch (label/signals.py is_touch): a glove's
+pressure map, a fingertip's force, a pad's reading. Its name also says which hand it is on, read the way a camera's
+side is (prepare/formats.py side_of: right_pressure is on the right hand).
 
 A contact is a span in which one hand's touch signals are away from rest (label/signals.py active_spans), timed from
 every recorded frame. Spans of the same hand's signals that overlap are one contact (the pads of one hand touching
@@ -59,7 +59,7 @@ def find(signals: dict, meta: dict, t: np.ndarray) -> list[dict]:
         m = meta.get(name) or {}
         if m.get("variation_of") or name.endswith(VARIATION_SUFFIX):
             continue
-        if len(a) == n and sg.touch_like(a, m.get("rest"), m.get("swing")):
+        if len(a) == n and sg.is_touch(name, a, m.get("rest"), m.get("swing")):
             touch[name] = (a, m)
     if not touch:
         return []
