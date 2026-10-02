@@ -759,6 +759,21 @@ def test_a_clock_with_a_missing_stamp_is_still_a_clock():
     assert "recv_time" in out.clocks and "recv_time" not in out
 
 
+def test_a_depth_stream_goes_with_the_camera_whose_name_has_all_its_camera_words():
+    """HDF5 dataset paths and LeRobot feature keys are paired by one rule: the depth's words, less the words for what
+    a file holds (depth, images), are all in the camera's name."""
+    hdf5 = {"exo": "observations/images/cam_high", "left": "observations/images/cam_left_wrist"}
+    depth = "observations/depth/cam_left_wrist"
+    assert f.depth_camera(depth, hdf5, "exo") == ("left", depth)
+    lerobot = {"exo": "observation.images.cam_high", "left": "observation.images.cam_left_wrist"}
+    assert f.depth_camera("observation.depth.cam_high", lerobot, "exo") == ("exo", "observation.depth.cam_high")
+
+
+def test_a_depth_stream_with_no_camera_of_its_own_goes_with_the_scene_camera_and_says_why():
+    view, source = f.depth_camera("observations/depth/zed", {"exo": "top", "left": "wrist_left"}, "exo")
+    assert view == "exo" and source.startswith("observations/depth/zed (") and "scene camera" in source
+
+
 def _an_mcap_layout_adapters_source_notes_are_kept(tmp_path):
     """convert_mcap adds its format and file to the adapter's source instead of replacing it."""
     import sys

@@ -1050,6 +1050,18 @@ def depth_scale_from(folder: Path) -> float | None:
     return found[0] if found and len(set(found)) == 1 else None
 
 
+def depth_camera(depth_name: str, cameras: dict[str, str], scene: str) -> tuple[str, str]:
+    """(view, source note) for a depth stream of an HDF5 file or a LeRobot dataset: the first camera ({view: name})
+    whose name has every word of the depth's name but the words for what a file holds (observations/depth/cam_high
+    goes with observations/images/cam_high, observation.depth.left_wrist with observation.images.cam_left_wrist), else
+    the scene camera, with the reason added to the note."""
+    words = set(tokens(depth_name)) - NON_COLOUR - GENERIC_VIDEO_WORDS
+    view = next((v for v, name in cameras.items() if words and words <= set(tokens(name))), None)
+    if view is not None:
+        return view, depth_name
+    return scene, f"{depth_name} (no camera's name has its words, so it goes with the scene camera)"
+
+
 def depth_entry(ep: Path, view: str, path: Path, t_depth: np.ndarray, t_anchor: np.ndarray, pts: np.ndarray,
                 scale_m: float | None, source: str) -> tuple[dict, dict]:
     """(depth.json entry, times) for one camera's depth stream: its file, its frame for each anchor frame (nearest in
@@ -2331,8 +2343,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
 
 def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int) -> tuple[dict, dict]:
     """(depth.json entries, depth times) of a LeRobot episode's depth videos (features marked video.is_depth_map or named
-    depth), each with the camera whose name it shares once the depth words are left out, else the scene camera. Frames
-    are timed as LeRobot defines them, frame index over fps, from the episode's own window of a packed file."""
+    depth), each with its camera as the HDF5 reader pairs them (depth_camera). Frames are timed as LeRobot defines
+    them, frame index over fps, from the episode's own window of a packed file."""
     dep, tz = {}, {}
     if not r.get("depth_cams") or not vmap:
         return dep, tz
@@ -2344,8 +2356,7 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int) 
         if src is None:
             continue
         path, base, to = (src if isinstance(src, tuple) else (src, None, None))
-        words = camera_words(key)
-        v = next((v for v, k in vmap.items() if camera_words(k) == words), None) or anchor
+        v, source = depth_camera(key, vmap, anchor)
         if v in dep:
             continue
         try:
@@ -2362,7 +2373,7 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int) 
         info = (r["features"].get(key) or {}).get("info") or {}
         scale = next((float(x) for k, x in info.items() if DEPTH_SCALE_KEY.search(str(k).split(".")[-1])
                       and isinstance(x, (int, float)) and 0 < x < 10), None)
-        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, key)
+        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, source)
         e.update(width=pr["width"], height=pr["height"], pix_fmt=pr["pix_fmt"])
         dep[v] = e
         tz.update(t)
@@ -2933,13 +2944,11 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         from label import episode as me
         anchor = me.order_views(files)[0]
         q_abs = times_of(chosen[anchor])
-        # depth: with the camera whose name it shares, else the anchor camera
+        # depth: with the camera whose name has its words, else the anchor camera
         depth = {}
         for d in st["depth"]:
-            words = set(tokens(d["name"])) - NON_COLOUR - GENERIC_VIDEO_WORDS
-            v = next((v for v, (nm, _) in files.items() if words and words <= set(tokens(nm))), None) or \
-                (anchor if anchor not in depth else None)
-            if v is None or v in depth:
+            v, source = depth_camera(d["name"], {v: nm for v, (nm, _) in files.items()}, anchor)
+            if v in depth:
                 unused.append(f"{d['name']} (depth with no camera of its own)")
                 continue
             ds = f[d["path"]]
@@ -2949,7 +2958,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             for i in range(d["n"]):
                 dw.add(float(t[i] - t0), ds[i], scale)
             if dw.close():
-                depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": d["name"]}
+                depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": source}
         signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
         instr, notes = h5_text(f, g, st["text"])
     extra = {"task_label": [item["name"]],

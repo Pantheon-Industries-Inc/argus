@@ -368,17 +368,44 @@ def test_a_position_that_leaves_its_level_one_way_or_a_pad_that_only_rounds_is_n
     assert c["hand"] == "right"
 
 
-def test_a_lerobot_feature_key_keeps_its_camera_words_and_depth_writes_its_own_folder(tmp_path):
+def test_a_lerobot_feature_keys_dots_are_part_of_its_camera_words():
     """A LeRobot key has dots that are not an extension (observation.images.cam_high), so its camera words are cam and
-    high, matching its depth key; and the depth key map is written even before the episode folder exists."""
+    high, matching its depth key, while a video's extension is taken off."""
     assert formats.camera_words("observation.images.cam_high") == formats.camera_words("observation.depth.cam_high")
     assert formats.camera_words("observation.images.cam_high") != formats.camera_words("observation.images.cam_left_wrist")
     assert formats.camera_words("exo_cam-images-rgb.mp4") == formats.camera_words("exo_cam-images-depth.mkv")
+
+
+def test_a_depth_entry_creates_the_episode_folder_it_writes_into(tmp_path):
+    """A LeRobot episode writes its depth before finish_episode makes the episode's folder."""
     ep = tmp_path / "not_yet" / "episode_000000"
-    n = 4
-    t = np.arange(n) / 30.0
-    e, _ = formats.depth_entry(ep, "top", tmp_path / "d.mkv", t, t, np.arange(n), 0.001, "observation.depth.cam_high")
+    t = np.arange(4) / 30.0
+    formats.depth_entry(ep, "top", tmp_path / "d.mkv", t, t, np.arange(4), 0.001, "observation.depth.cam_high")
     assert (ep / "depth_kmap_top.npy").exists()
+
+
+def _lerobot_depth_of(tmp_path, key: str) -> dict:
+    """lerobot_depth's entries for one 16-bit depth video under key, beside a scene and a left wrist camera."""
+    path = tmp_path / f"{key}.mkv"
+    dw = formats.DepthWriter(path)
+    for k in range(6):
+        dw.add(k / 30, np.full((48, 64), 1000 + k, np.uint16), None)
+    assert dw.close()
+    vmap = {"exo": "observation.images.cam_high", "left": "observation.images.cam_left_wrist"}
+    dep, _ = formats.lerobot_depth(tmp_path / "ep", {"depth_cams": [key], "features": {key: {}}},
+                                   {"videos": {key: str(path)}}, vmap, 30.0, 6)
+    return dep
+
+
+def test_lerobot_depth_goes_with_the_camera_whose_name_has_its_words(tmp_path):
+    """The rule the HDF5 reader uses (depth_camera): left_wrist's words are all in cam_left_wrist."""
+    dep = _lerobot_depth_of(tmp_path, "observation.depth.left_wrist")
+    assert list(dep) == ["left"] and dep["left"]["source"] == "observation.depth.left_wrist"
+
+
+def test_lerobot_depth_with_no_camera_of_its_own_goes_with_the_scene_camera_and_says_why(tmp_path):
+    dep = _lerobot_depth_of(tmp_path, "observation.depth.zed")
+    assert list(dep) == ["exo"] and "scene camera" in dep["exo"]["source"]
 
 
 def test_loading_an_episode_keeps_each_signals_source_and_companion(tmp_path):
