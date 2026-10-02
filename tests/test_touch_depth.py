@@ -371,9 +371,10 @@ def test_a_position_that_leaves_its_level_one_way_or_a_pad_that_only_rounds_is_n
 def test_a_lerobot_feature_keys_dots_are_part_of_its_camera_words():
     """A LeRobot key has dots that are not an extension (observation.images.cam_high), so its camera words are cam and
     high, matching its depth key, while a video's extension is taken off."""
-    assert formats.camera_words("observation.images.cam_high") == formats.camera_words("observation.depth.cam_high")
-    assert formats.camera_words("observation.images.cam_high") != formats.camera_words("observation.images.cam_left_wrist")
-    assert formats.camera_words("exo_cam-images-rgb.mp4") == formats.camera_words("exo_cam-images-depth.mkv")
+    words = formats.camera_words
+    assert words("observation.images.cam_high") == words("observation.depth.cam_high")
+    assert words("observation.images.cam_high") != words("observation.images.cam_left_wrist")
+    assert words("exo_cam-images-rgb.mp4") == words("exo_cam-images-depth.mkv")
 
 
 def test_a_depth_entry_creates_the_episode_folder_it_writes_into(tmp_path):

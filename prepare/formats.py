@@ -1066,7 +1066,7 @@ def depth_entry(ep: Path, view: str, path: Path, t_depth: np.ndarray, t_anchor: 
                 scale_m: float | None, source: str) -> tuple[dict, dict]:
     """(depth.json entry, times) for one camera's depth stream: its file, its frame for each anchor frame (nearest in
     time, depth_kmap_<view>.npy), its frame times and exact pts, and metres per unit when known."""
-    ep.mkdir(parents=True, exist_ok=True)       # a LeRobot episode writes its depth before finish_episode makes the folder
+    ep.mkdir(parents=True, exist_ok=True)     # a LeRobot episode writes depth before finish_episode makes its folder
     km = nearest(np.asarray(t_depth, dtype=np.float64), np.asarray(t_anchor, dtype=np.float64))
     np.save(ep / f"depth_kmap_{view}.npy", km)
     entry = {"packed": str(Path(path).resolve()), "base_s": 0.0, "n_frames": int(len(t_depth)),
@@ -1437,12 +1437,11 @@ def colour_videos(rels: list[str]) -> tuple[list[str], list[str]]:
 
 def camera_words(rel: str) -> frozenset:
     """The words of a video's name that name its camera, not what the file holds (exo_cam-images-depth gives exo, cam).
-    Only a video extension is taken off the name: a LeRobot feature key's dots are part of it (observation.images.cam_high
-    gives cam, high)."""
-    name = rel.rsplit("/", 1)[-1]
-    if Path(name).suffix.lower() in VIDEO_EXT:
-        name = name[: -len(Path(name).suffix)]
-    return frozenset(set(tokens(name)) - NON_COLOUR - GENERIC_VIDEO_WORDS)
+    Only a video extension is taken off the name: a LeRobot feature key's dots are part of it
+    (observation.images.cam_high gives cam, high)."""
+    name = Path(rel.rsplit("/", 1)[-1])
+    words = tokens(name.stem if name.suffix.lower() in VIDEO_EXT else name.name)
+    return frozenset(set(words) - NON_COLOUR - GENERIC_VIDEO_WORDS)
 
 
 def depth_videos(rels: list[str]) -> dict[str, str]:
