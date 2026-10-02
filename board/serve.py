@@ -1515,6 +1515,18 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .pub-list .pub-t { font-family: var(--mono); font-size: 11.5px; color: var(--fg-3); }
 .pub-list .pub-ep { font-size: 13px; line-height: 1.6; margin-top: 4px; }
 .pub-list .pub-k { color: var(--fg-3); font-family: var(--mono); font-size: 11px; margin-right: 6px; }
+.pub-list .pub-group + .pub-group, .pub-list .pub-row + .pub-group, .pub-list .pub-ep + .pub-group,
+.pub-list .pub-fold:not(:first-child) { margin-top: 12px; }
+.pub-list .pub-gt { font-family: var(--mono); font-size: 11px; color: var(--fg-3); margin: 0 0 4px; overflow-wrap: anywhere; }
+.pub-list .pub-kv { display: grid; grid-template-columns: 112px 1fr; gap: 10px; padding: 4px 6px; font-size: 13px;
+  line-height: 1.4; }
+.pub-list .pub-kv .pub-k { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
+.pub-list .pub-v { overflow-wrap: anywhere; }
+.pub-list .pub-at { margin-left: 6px; padding: 0; background: none; border: 0; cursor: pointer; font-family: var(--mono);
+  font-size: 11.5px; color: var(--accent); }
+.pub-list .pub-at:hover { text-decoration: underline; }
+.pub-fold.shown .sn-fold { grid-template-rows: 1fr; }
+.pub-fold.shown .sn-fold-in { opacity: 1; }
 .timeline .marker {
   position: absolute; top: 5px; bottom: 9px; width: 2px;
   border-radius: 1px; cursor: pointer; transition: width 100ms;
@@ -4773,6 +4785,21 @@ function renderEp(d, opts) {
         + `</div>` : '')
       + `</div>`;
   }
+  // the notes an upload sent with the episode, as sent: its table rows, then the notes read from its files, folded
+  const upl = d.uploader_notes || [];
+  if (upl.length) {
+    const kv = (it) => `<div class="pub-kv"><span class="pub-k">${esc(it.name)}</span><span class="pub-v">`
+      + `${esc(it.value)}${it.t != null ? `<button type="button" class="pub-at" data-t="${it.t}">at `
+      + `${esc(fmtT(it.t))}</button>` : ''}</span></div>`;
+    const grp = (g) => `<div class="pub-group"><div class="pub-gt">${esc(g.title)}</div>${g.items.map(kv).join('')}</div>`;
+    const notes = upl.filter(g => g.kind !== 'row');
+    const uplHtml = upl.filter(g => g.kind === 'row').map(grp).join('') + (notes.length
+      ? `<div class="pub-fold"><div class="sn-fold"><div class="sn-fold-in">${notes.map(grp).join('')}</div></div>`
+        + `<button class="ck-more pub-show" type="button" aria-expanded="false">Show the notes in the files</button></div>`
+      : '');
+    pubHtml = pubHtml ? pubHtml.slice(0, -'</div>'.length) + uplHtml + '</div>'
+      : `<h3 class="section">The dataset's own labels</h3><div class="info-block pub-list">${uplHtml}</div>`;
+  }
   let markersHtml = '';
   for (const e of eventLabels) {
     if (e.t_s == null) continue;
@@ -5366,9 +5393,15 @@ function renderEp(d, opts) {
       : handStretches.map(([a]) => a).reduce((k, a, j) => (a < t - 1 ? j : k), -1);
     if (i >= 0) seek(handStretches[i][0]);
   }));
-  document.querySelectorAll('.lane .lane-seg[data-t], .pub-list .pub-row[data-t]').forEach(r => {
+  document.querySelectorAll('.lane .lane-seg[data-t], .pub-list .pub-row[data-t], .pub-list .pub-at[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
+  document.querySelectorAll('.pub-show').forEach(b => b.addEventListener('click', () => {
+    const box = b.closest('.pub-fold'), on = !box.classList.contains('shown');
+    box.classList.toggle('shown', on);
+    b.setAttribute('aria-expanded', String(on));
+    b.textContent = on ? 'Hide the notes in the files' : 'Show the notes in the files';
+  }));
   document.querySelectorAll('.rec [data-t]').forEach(r => {
     r.addEventListener('click', e => { e.stopPropagation(); seek(r.dataset.t); });
   });

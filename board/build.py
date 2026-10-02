@@ -209,7 +209,78 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
             d["dataset_labels_note"] = ctx["annotation_note"]
     if isinstance(ctx.get("publisher_labels"), dict):
         d["dataset_episode_labels"] = ctx["publisher_labels"]
+    notes = ctx.get("uploader_notes")
+    if notes is None and ctx.get("uploader_annotation"):
+        try:                       # an episode prepared before uploader_notes kept them only as the prompt's text
+            notes = json.loads(ctx["uploader_annotation"])
+        except ValueError:
+            notes = ctx["uploader_annotation"]
+    groups = uploader_groups(notes, ctx.get("clock_start_s"), d.get("duration_s"))
+    if groups:
+        d["uploader_notes"] = groups
     add_contacts(d, ctx)
+
+
+UPLOADER_LIST_MAX = 24       # a list of more numbers than this (a calibration matrix is 16) is summarised by its length
+
+
+def uploader_groups(notes, start_s, dur_s) -> list[dict]:
+    """The notes an upload sent with an episode (prepare/formats.py uploader_notes), as sent, for the board: each table
+    row that names the episode as one group, the notes read from its files as another, every value under its own
+    name. A number that is a time on the recorder's clock (seconds, ms, us or ns from its size, landing within the
+    episode once its first frame's time clock_start_s is taken off) also carries that moment in the episode, so the
+    board can jump to it. Only a recorder clock far from zero is read this way, so a count or an index is never taken
+    for a time."""
+    if notes in (None, "", {}, []):
+        return []
+    near = start_s is not None and dur_s and abs(float(start_s)) > 100 * float(dur_s)
+
+    def when(v):
+        if not near or isinstance(v, bool):
+            return None
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        for scale in (1.0, 1e-3, 1e-6, 1e-9):
+            t = x * scale - float(start_s)
+            if -0.5 <= t <= float(dur_s) + 0.5:
+                return round(max(0.0, min(t, float(dur_s))), 3)
+        return None
+
+    def flat(x, path, out):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                flat(v, path + [str(k)], out)
+        elif isinstance(x, list) and x and all(isinstance(i, (dict, list)) for i in x):
+            for i, v in enumerate(x):
+                flat(v, path + [str(i + 1)] if len(x) > 1 else path, out)
+        else:
+            if isinstance(x, list):
+                v = (", ".join(str(i) for i in x) if len(x) <= UPLOADER_LIST_MAX
+                     else f"{len(x)} values, {', '.join(str(i) for i in x[:4])}, ...")
+            else:
+                v = str(x)
+            item = {"name": " / ".join(path) or "note", "value": v}
+            t = when(x)
+            if t is not None:
+                item["t"] = t
+            out.append(item)
+
+    groups = []
+    if isinstance(notes, dict) and isinstance(notes.get("table rows"), list):
+        for r in notes["table rows"]:
+            r = dict(r) if isinstance(r, dict) else {"row": r}
+            table = r.pop("table", None)
+            out = []
+            flat(r, [], out)
+            groups.append({"title": f"Row of {table}" if table else "Table row", "kind": "row", "items": out})
+        notes = notes.get("notes")
+    if notes not in (None, "", {}, []):
+        out = []
+        flat(notes, [], out)
+        groups.append({"title": "Notes in the files", "kind": "notes", "items": out})
+    return groups
 
 
 def add_contacts(d: dict, ctx: dict) -> None:
@@ -269,7 +340,7 @@ def normalize_enums(x, key: str | None = None):
 # the episode's context a comparison label carries from the board's own label, so the page lays out the same player
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
-                "dataset_episode_labels", "dataset_source", "camera_views", "camera_labels", "timesteps_s",
+                "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels", "timesteps_s",
                 "task_label")
 
 

@@ -77,6 +77,28 @@ def test_an_hdf5_file_of_demos_is_one_episode_per_demo_with_its_pressure_map_and
     assert c["regions"]["right_pressure"]["rows"] == [3, 7] and c["regions"]["right_pressure"]["columns"] == [5, 9]
 
 
+def test_the_notes_an_upload_sends_reach_the_board_as_sent_with_their_times_on_the_episode(tmp_path):
+    """A table row that names a demo goes to the board under its own column names, beside the notes read from the file,
+    and a value on the recorder's clock (ns here) carries its moment in the episode; a count stays a count."""
+    from board.build import uploader_groups
+    root = tmp_path / "up"
+    root.mkdir()
+    _hdf5(root / "kitchen_p1.hdf5")
+    start_ns = 10**12
+    (root / "notes.csv").write_text("clip_id,object,onset_idx,onset_ts\n"
+                                    f"kitchen_p1::demo_00,cup,12,{start_ns + 400_000_000}\n"
+                                    f"kitchen_p1::demo_01,bowl,3,{start_ns + 100_000_000}\n")
+    rep = formats.convert(root, "ego_head", tmp_path / "eps", "touchset", 900)
+    ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert abs(ctx["clock_start_s"] - 1000.0) < 1e-6
+    rows, notes = uploader_groups(ctx["uploader_notes"], ctx["clock_start_s"], ctx["duration_s"])
+    assert rows["title"] == "Row of notes.csv" and notes["title"] == "Notes in the files"
+    got = {it["name"]: it for it in rows["items"]}
+    assert got["object"]["value"] == "cup" and "t" not in got["onset_idx"]
+    assert abs(got["onset_ts"]["t"] - 0.4) < 1e-6
+    assert any(it["name"].endswith("calibration/rgb/T_device_camera") for it in notes["items"])
+
+
 def test_an_episode_with_a_contact_shows_it_and_one_without_is_labelled_as_before(tmp_path):
     """The contact's picture follows the detail views and the prompt says what it is and what to return; the touch
     signal's timing is given only there. A recording with no touch signal gets no word about contacts."""

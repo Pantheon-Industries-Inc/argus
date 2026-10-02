@@ -737,6 +737,20 @@ def _short(name: str, view: str) -> str:
     return "_".join(kept or words)[:32] or view
 
 
+def set_uploader_notes(ctx: dict, obj) -> None:
+    """The uploader's notes for an episode, as text for the prompt (uploader_annotation) and as sent (uploader_notes,
+    which the board shows beside the labels)."""
+    text = annotation_text(obj)
+    if not text:
+        return
+    ctx["uploader_annotation"] = text
+    try:
+        json.dumps(obj)
+        ctx["uploader_notes"] = obj
+    except (TypeError, ValueError):
+        ctx["uploader_notes"] = text
+
+
 def annotation_text(obj) -> str | None:
     """The uploader's notes for an episode as text for the prompt (label/episode.py shows them as claims)."""
     if obj in (None, "", {}, []):
@@ -1109,6 +1123,12 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     use_real = bool(real) and all(real.get(v) is not None for v in order)
     zero = float(real[anchor][0]) if use_real else \
         float(prs[anchor]["pts"][0] * prs[anchor]["time_base"]) if shared_clock else None
+    # the recorder's time of the episode's first frame, so times the uploader gives on that clock land on the episode's
+    origin = extra.pop("clock_origin_s", None)
+    if use_real:
+        extra["clock_start_s"] = zero
+    elif shared_clock and origin is not None:
+        extra["clock_start_s"] = origin + zero
 
     def seconds_of(v):
         if use_real:
@@ -1594,7 +1614,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["instruction"] = instr
         extra["instruction_note"] = "This instruction is the task text the uploader sent with the episode."
     if ann is not None and not (isinstance(ann, str) and ann.strip() == instr):
-        extra["uploader_annotation"] = annotation_text(ann)
+        set_uploader_notes(extra, ann)
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
@@ -2780,7 +2800,9 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if instr:
         extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the HDF5 file.")
     if notes:
-        extra["uploader_annotation"] = annotation_text(notes)
+        set_uploader_notes(extra, notes)
+    if chosen[anchor]["clock"]:
+        extra["clock_origin_s"] = t0         # the recorder's time at the clips' zero
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth)
 
 
@@ -3611,7 +3633,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             notes.pop(st, None)
             extra["annotation_subtasks"] = subs
     if notes:
-        extra["uploader_annotation"] = annotation_text({t: x for t, x in notes.items()})
+        set_uploader_notes(extra, {t: x for t, x in notes.items()})
+    if t0 is not None:
+        extra["clock_origin_s"] = t0 / 1e9   # the recording's log time at the clips' zero
     # the arms' joints, on the cameras' clock, when the file records them (joint_state)
     state = action = note = None
     prs = {v: probe(p) for v, (_, p) in files.items()}
@@ -3917,12 +3941,13 @@ def add_table_notes(ep: Path, ctx: dict, rows: list[dict]) -> dict:
     and a task text among them (a column named for the task) as its instruction when it has none."""
     if not rows:
         return ctx
-    prev = ctx.get("uploader_annotation")
-    try:
-        prev = json.loads(prev) if prev else prev          # notes already written as JSON stay one object, not a string
-    except (TypeError, ValueError):
-        pass
-    ctx["uploader_annotation"] = annotation_text({"notes": prev, "table rows": rows} if prev else {"table rows": rows})
+    prev = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
+    if isinstance(prev, str):
+        try:
+            prev = json.loads(prev)                        # notes already written as JSON stay one object, not a string
+        except ValueError:
+            pass
+    set_uploader_notes(ctx, {"notes": prev, "table rows": rows} if prev else {"table rows": rows})
     if not ctx.get("instruction"):
         task = next((str(v).strip() for r in rows for k, v in r.items() if TASK_KEY.search(str(k))
                      and isinstance(v, str) and 0 < len(v.strip()) < 400), None)
