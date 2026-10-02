@@ -102,6 +102,28 @@ def test_an_hdf5_rate_inside_a_json_attribute_times_the_frames(tmp_path):
         assert formats.h5_fps(f, "data/demo_0") == 12.0
 
 
+def test_a_direct_rate_attribute_beats_a_json_one_and_a_frame_rate_name_beats_a_generic_one(tmp_path):
+    """Attributes are read in name order, so env_args sorts before fps: a group's own fps (15) still times the frames
+    over the control_freq (20) inside its env_args. Inside JSON a generic name (rate, hz) is used only when no
+    frame-rate name (fps, frame_rate, control_freq) is found anywhere in it, so {"imu": {"rate": 200}} does not time the frames.
+    With two frame-rate names the first in document order wins, so {"camera": {"fps": 15}, "env_kwargs":
+    {"control_freq": 20}} gives 15. A bool is not a rate."""
+    def rate(attrs):
+        with h5py.File(tmp_path / "r.hdf5", "w") as f:
+            g = f.create_group("data")
+            for k, v in attrs.items():
+                g.attrs[k] = v
+            g.create_group("demo_0")
+            return formats.h5_fps(f, "data/demo_0")
+    assert rate({"env_args": json.dumps({"env_kwargs": {"control_freq": 20}}), "fps": 15}) == 15.0
+    assert rate({"env_args": json.dumps({"imu": {"rate": 200}, "env_kwargs": {"control_freq": 20}})}) == 20.0
+    assert rate({"env_args": json.dumps({"audio": {"hz": 48}})}) == 48.0         # a generic name alone still counts
+    assert rate({"env_args": json.dumps({"camera": {"fps": 15}, "env_kwargs": {"control_freq": 20}})}) == 15.0
+    assert rate({"env_args": json.dumps({"rate": True})}) is None
+    assert rate({"env_args": json.dumps({"rate": True, "fps": 12})}) == 12.0
+    assert rate({"env_args": "[" * 100000}) is None                              # nested past the parser's depth
+
+
 def test_a_robomimic_style_demo_without_timestamps_is_timed_at_its_json_rate(tmp_path):
     """The rate reaches the episode: 40 frames at the 20 Hz the data group's env_args states last 2.0 s, not 1.33 s
     (robomimic's 84 x 84 agentview images, two or more demos, actions beside them, no timestamps)."""

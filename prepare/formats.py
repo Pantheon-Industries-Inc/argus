@@ -2428,7 +2428,8 @@ CAMERA_MIN_PX = 64
 H5_CONSTANT_MAX = 64              # a numeric array this small with no clock of its length is a setting, kept as a note
 H5_TIME_NAME = re.compile(r"(^|[_./])(time|times|timestamp|timestamps|stamp|stamps|ts|t)([_.]?(s|ns|us|ms|sec|secs|nsec|usec|msec|nanos|micros|millis))?$",
                           re.I)
-H5_FPS_KEY = re.compile(r"^(fps|frame_?rate|frequency|freq|hz|rate|control_?freq)$", re.I)
+H5_FPS_FRAME = re.compile(r"^(fps|frame_?rate|control_?freq|control_?frequency)$", re.I)
+H5_FPS_KEY = re.compile(r"^(fps|frame_?rate|frequency|freq|hz|rate|control_?freq|control_?frequency)$", re.I)
 TASK_KEY = re.compile(r"(^|_)(instruction|task|task_description|language_instruction|language|prompt|goal)$", re.I)
 
 
@@ -2556,35 +2557,46 @@ def _natural(s: str):
 
 
 def h5_fps(f, group: str) -> float | None:
-    """A frame rate the file states in the attributes of the episode's group or any group above it, under a rate's name
-    (fps, control_freq) either as the attribute itself or inside an attribute that holds JSON (robomimic's env_args
-    keeps env_kwargs.control_freq)."""
-    def found(k, v):
-        if isinstance(v, (dict, list)):
-            kids = v.items() if isinstance(v, dict) else ((k, x) for x in v)
-            return next((x for kk, vv in kids for x in [found(kk, vv)] if x), None)
-        if not H5_FPS_KEY.match(str(k)):
-            return None
+    """A frame rate the file states in the attributes of the episode's group or any group above it, nearest group first.
+    At each group an attribute named for a rate (fps, control_freq) wins; only when none is there does the rate inside an
+    attribute that holds JSON count (robomimic's env_args keeps env_kwargs.control_freq). A frame rate's name (fps,
+    frame_rate, control_freq) beats a generic one (rate, hz, freq), so a sensor's {"imu": {"rate": 200}} does not time
+    the frames. A value counts only between 1 and 1000, and a bool is not a number."""
+    def number(v):
         try:
-            x = float(np.asarray(v).ravel()[0])
+            x = np.asarray(v).ravel()[0]
+            return float(x) if not isinstance(x, (bool, np.bool_)) and 1 <= float(x) <= 1000 else None
         except Exception:
             return None
-        return x if 1 <= x <= 1000 else None
+
+    def found(k, v, names):
+        if isinstance(v, (dict, list)):
+            kids = v.items() if isinstance(v, dict) else ((k, x) for x in v)
+            return next((x for kk, vv in kids for x in [found(kk, vv, names)] if x), None)
+        return number(v) if names.match(str(k)) else None
 
     parts = [p for p in group.split("/") if p]
     for i in range(len(parts), -1, -1):
         g = f["/".join(parts[:i])] if i else f
+        direct, nested = [], []
         for k, v in g.attrs.items():
             if isinstance(v, bytes):
                 v = v.decode("utf-8", "replace")
             if isinstance(v, str) and v.lstrip()[:1] in ("{", "["):
                 try:
-                    v = json.loads(v)
-                except ValueError:
+                    nested.append((k, json.loads(v)))
+                except (ValueError, RecursionError):
                     pass
-            x = found(k, v)
-            if x:
-                return x
+            else:
+                direct.append((k, v))
+        for kind in (direct, nested):
+            for names in (H5_FPS_FRAME, H5_FPS_KEY):
+                try:
+                    x = next((x for k, v in kind for x in [found(k, v, names)] if x), None)
+                except RecursionError:
+                    x = None
+                if x:
+                    return x
     return None
 
 
