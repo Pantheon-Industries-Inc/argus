@@ -584,7 +584,7 @@ def test_a_slow_clock_from_days_of_uptime_keeps_the_steps_reading_and_a_nan_firs
     assert abs(s[1] - 1_788_210_000.001) < 1e-3 and abs((s[2] - s[1]) - 1e-3) < 1e-6
 
 
-def test_a_steadily_rising_reading_stays_a_signal_unless_its_name_says_time(tmp_path):
+def test_a_steadily_rising_reading_stays_a_signal_unless_its_name_says_time():
     """A base driving forward at a steady speed rises by a steady step, as a clock does; only a time's name (timestamp,
     t_ns) makes a column a clock."""
     import numpy as np, pandas as pd
@@ -597,7 +597,7 @@ def test_a_steadily_rising_reading_stays_a_signal_unless_its_name_says_time(tmp_
     assert "sensor_timestamp" not in out and "sensor_timestamp" in out.clocks
 
 
-def test_a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(tmp_path):
+def _a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(tmp_path):
     """The same rule for a CSV table beside the videos: odom_x rises by a steady step and stays a value, while the
     time column is the one that places the table and is not shown."""
     import numpy as np, pandas as pd
@@ -610,9 +610,15 @@ def test_a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(tmp_pa
     assert out.meta["traj"]["names"] == ["odom_x", "grip"]
 
 
-def test_an_mcap_layout_adapters_source_notes_are_kept(tmp_path, monkeypatch):
+def test_a_table_keeps_a_steadily_rising_column_unless_its_name_says_time():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(Path(t))
+
+
+def _an_mcap_layout_adapters_source_notes_are_kept(tmp_path):
     """convert_mcap adds its format and file to the adapter's source instead of replacing it."""
-    import importlib
+    import sys
     from prepare import formats
     fake = type("M", (), {})()
 
@@ -622,12 +628,19 @@ def test_an_mcap_layout_adapters_source_notes_are_kept(tmp_path, monkeypatch):
         return {"profile": "ego_head", "cameras": {}, "fps": 30, "n_state_frames": 1, "state_kind": "none",
                 "source": {"unused_signals": ["/imu (not read yet)"], "invalid_ranges": [[0, 1]]}}
     fake.convert_upload = convert_upload
-    real_import = importlib.import_module
-    # only the made-up layout is faked; every other module still imports as usual
-    monkeypatch.setattr(importlib, "import_module",
-                        lambda name, *a, **k: fake if name == "prepare.fakelayout" else real_import(name, *a, **k))
-    ctx = formats.convert_mcap_layout_ctx({"name": "a.mcap"}, "fakelayout", tmp_path / "ep", "ds")
+    # import_module returns a module already in sys.modules, so only the made-up layout is faked
+    sys.modules["prepare.fakelayout"] = fake
+    try:
+        ctx = formats.convert_mcap_layout_ctx({"name": "a.mcap"}, "fakelayout", tmp_path / "ep", "ds")
+    finally:
+        del sys.modules["prepare.fakelayout"]
     assert ctx["source"]["unused_signals"] == ["/imu (not read yet)"]
     assert ctx["source"]["invalid_ranges"] == [[0, 1]]
     assert ctx["source"]["format"] == "mcap (fakelayout layout)" and ctx["source"]["file"] == "a.mcap"
     assert ctx["dataset"] == "ds"
+
+
+def test_an_mcap_layout_adapters_source_notes_are_kept():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _an_mcap_layout_adapters_source_notes_are_kept(Path(t))
