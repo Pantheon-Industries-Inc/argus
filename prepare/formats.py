@@ -833,10 +833,9 @@ class Signals(dict):
 
 
 def is_clock(x: np.ndarray) -> bool:
-    """Whether a column is a clock or a counter: it never falls, rises at 90% of its rows or more, and rises by a steady
-    step (the spread of its steps under half their median), as a receive time does. A base driving at a steady speed
-    rises as steadily, so callers also require a time's name (H5_TIME_NAME) before they treat a column as a clock. A
-    cumulative reading (a distance travelled) rises unevenly and is not one."""
+    """Whether a column rises like a clock: it never falls, rises at 90% of its rows or more, and by a steady step (the
+    spread of its steps under half their median). A base driving at a steady speed rises the same way, so a column is a
+    clock only when its name says time as well (is_named_clock)."""
     x = np.asarray(x, dtype=np.float64)
     x = x[np.isfinite(x)]
     if len(x) < COUNTER_MIN_MESSAGES:
@@ -846,6 +845,25 @@ def is_clock(x: np.ndarray) -> bool:
         return False
     up = d[d > 0]
     return float(np.std(up)) < 0.5 * float(np.median(up))
+
+
+TIME_WORDS = {"time", "times", "timestamp", "timestamps", "stamp", "stamps", "ts", "t", "epoch"}
+TIME_UNITS = {"s", "ns", "us", "ms", "sec", "secs", "nsec", "nsecs", "usec", "usecs", "msec", "msecs", "nanos",
+              "micros", "millis", "nanosec", "nanosecs", "utc"}
+
+
+def is_time_name(name) -> bool:
+    """Whether a name says it holds times: its last word is a time word (sensorTimestamp, recv_time, t), or a unit
+    after one (epoch_ns, stamp.nanosec, timestampUtc)."""
+    words = tokens(str(name))
+    if words and words[-1] in TIME_UNITS:
+        words = words[:-1]
+    return bool(words) and words[-1] in TIME_WORDS
+
+
+def is_named_clock(name, values) -> bool:
+    """Whether a column is a clock: its name says time (is_time_name) and it rises like one (is_clock)."""
+    return is_time_name(name) and is_clock(values)
 
 
 def value_names(names, dims: int) -> list[str] | None:
@@ -897,9 +915,8 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
         if a.shape[1] > SIGNAL_MAX_VALUES:
             out.left_out.append((str(c), f"{a.shape[1]} values per frame, more than the {SIGNAL_MAX_VALUES} a signal holds"))
             continue
-        if a.shape[1] == 1 and H5_TIME_NAME.search(str(c).lower()) and is_clock(a[:, 0]):
-            # a clock (the time a sensor's reading was received): kept for the sync check, not shown. Only a time's name
-            # makes a column one; a base driving at a steady speed rises by a steady step too
+        if a.shape[1] == 1 and is_named_clock(c, a[:, 0]):
+            # a clock: kept for the sync check, not shown
             out.clocks[str(c)] = a[:n, 0]
             continue
         f = features.get(c) or {}
@@ -1459,9 +1476,9 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
         num = df.select_dtypes("number")
         if num.shape[1] == 0 or len(num) < 2:
             continue                      # text only: the uploader's notes, read by annotation_tables
-        tcol = next((c for c in num.columns if H5_TIME_NAME.search(str(c)) and is_clock(num[c].to_numpy())), None)
-        vals = num.drop(columns=[c for c in num.columns if c == tcol or SIGNAL_SKIP.search(str(c))
-                                 or (H5_TIME_NAME.search(str(c).lower()) and is_clock(num[c].to_numpy()))])
+        clocks = [c for c in num.columns if is_named_clock(c, num[c].to_numpy())]
+        tcol = clocks[0] if clocks else None
+        vals = num.drop(columns=[c for c in num.columns if c in clocks or SIGNAL_SKIP.search(str(c))])
         if vals.shape[1] == 0:
             continue
         v = vals.to_numpy(dtype=np.float64)
@@ -2426,8 +2443,6 @@ def plan_mcap(det: dict, root: Path) -> list[dict]:
 H5_EXT = {".h5", ".hdf5", ".hdf"}
 CAMERA_MIN_PX = 64
 H5_CONSTANT_MAX = 64              # a numeric array this small with no clock of its length is a setting, kept as a note
-H5_TIME_NAME = re.compile(r"(^|[_./])(time|times|timestamp|timestamps|stamp|stamps|ts|t)([_.]?(s|ns|us|ms|sec|secs|nsec|usec|msec|nanos|micros|millis))?$",
-                          re.I)
 TASK_KEY = re.compile(r"(^|_)(instruction|task|task_description|language_instruction|language|prompt|goal)$", re.I)
 
 
@@ -2477,7 +2492,7 @@ def h5_kind(name: str, ds) -> str | None:
     n = shape[0]
     leaf = name.rsplit("/", 1)[-1]
     if dt.kind == "O" or dt.kind == "V" and not dt.names or (dt.kind == "u" and dt.itemsize == 1 and len(shape) == 1
-                                                              and not H5_TIME_NAME.search(leaf)):
+                                                              and not is_time_name(leaf)):
         try:
             first = _h5_bytes(ds[0])
         except Exception:
@@ -2494,7 +2509,7 @@ def h5_kind(name: str, ds) -> str | None:
     if dt.kind not in "biuf":
         return None
     per = shape[1:]
-    if len(per) <= 1 and (not per or per[0] == 1) and n > 1 and H5_TIME_NAME.search(leaf):
+    if len(per) <= 1 and (not per or per[0] == 1) and n > 1 and is_time_name(leaf):
         a = np.asarray(ds[: min(n, 4096)], dtype=np.float64).ravel()
         if np.all(np.diff(a) >= 0) and a[-1] > a[0]:
             return "time"

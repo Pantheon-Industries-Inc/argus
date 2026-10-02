@@ -616,14 +616,55 @@ def test_a_table_keeps_a_steadily_rising_column_unless_its_name_says_time():
         _a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(Path(t))
 
 
-def test_a_clock_name_takes_any_common_time_unit_suffix_and_nothing_else():
-    """A clock's name ends in a time word, alone or with a unit (stamp_nsec, header.t_usec, time_msec, ts_nanos); a name
-    that only contains a t word (left_arm, t_joint_3, base.odom_x, tact) is a reading."""
-    for name in ("stamp_nsec", "header.t_usec", "time_msec", "ts_nanos", "t_micros", "time_millis", "timestamp",
-                 "t_ns", "time.sec", "/obs/ts"):
-        assert f.H5_TIME_NAME.search(name), name
-    for name in ("left_arm", "t_joint_3", "base.odom_x", "tact", "stamp_count", "time_to_go"):
-        assert not f.H5_TIME_NAME.search(name), name
+CLOCK_NAMES = ["timestamp", "sensor_timestamp", "sensorTimestamp", "observation.timestamp", "/hdas/imu.header.stamp",
+               "t_ns", "ros_time", "capture_time_ns", "header.stamp.sec", "stamp_ns", "stamp_nsec", "header.t_usec",
+               "time_msec", "ts_nanos", "timestampUtc", "epoch_ns", "time_nsecs", "stamp.nanosec", "TimeStamp"]
+READING_NAMES = ["left_arm", "t_joint_3", "base.odom_x", "tact", "hat", "header.seq", "timeline_label", "stamped_force"]
+
+
+def test_a_name_whose_last_word_is_a_time_word_or_a_unit_after_one_says_time():
+    """A name's words are read as tokens() splits them (camelCase and separators), so sensorTimestamp, stamp.nanosec
+    and timestampUtc say time as plainly as timestamp_ns does."""
+    for name in CLOCK_NAMES:
+        assert f.is_time_name(name), name
+
+
+def test_a_name_that_only_contains_a_time_word_is_a_reading():
+    for name in READING_NAMES:
+        assert not f.is_time_name(name), name
+
+
+def test_a_named_clock_needs_both_a_time_name_and_a_clocks_rise():
+    import numpy as np
+    rising = 1.79e18 + np.arange(60) * 3.3e7
+    assert f.is_named_clock("sensorTimestamp", rising)
+    assert not f.is_named_clock("base.odom_x", rising)
+    assert not f.is_named_clock("sensorTimestamp", rising[::-1])
+
+
+def test_a_camel_case_clock_column_is_a_clock_not_a_signal():
+    import numpy as np, pandas as pd
+    n = 60
+    df = pd.DataFrame({"sensorTimestamp": list(1.79e18 + np.arange(n) * 3.3e7),
+                       "gripper": list(np.r_[np.zeros(30), np.ones(30)])})
+    out = f.recorded_signals(df, set(), n)
+    assert "sensorTimestamp" in out.clocks and "sensorTimestamp" not in out
+
+
+def _a_tables_camel_case_clock_places_it_and_is_not_a_value(tmp_path):
+    import numpy as np, pandas as pd
+    n = 60
+    pd.DataFrame({"sensorTimestamp": 1.79e18 + np.arange(n) * 3.3e7,
+                  "grip": np.r_[np.zeros(30), np.ones(30)]}).to_csv(tmp_path / "traj.csv", index=False)
+    pts = np.arange(n, dtype=np.int64)
+    out = f.table_signals([tmp_path / "traj.csv"], None, {"pts": pts, "time_base": 1 / 30.0}, {})
+    assert out.meta["traj"]["names"] == ["grip"]
+
+
+def test_a_tables_camel_case_clock_places_it_and_is_not_a_value():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_tables_camel_case_clock_places_it_and_is_not_a_value(Path(t))
 
 
 def _an_mcap_layout_adapters_source_notes_are_kept(tmp_path):
