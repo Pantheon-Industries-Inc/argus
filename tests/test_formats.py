@@ -909,12 +909,30 @@ def test_a_fast_signals_variation_is_kept_only_for_a_signal_named_for_touch():
 
 def test_a_name_says_touch_by_whole_words_alone_plural_or_numbered():
     for name in ("tactiles", "tactile_left_raw", "right_pressure", "pressure_topic", "fsr0", "left_contact",
-                 "fingertip_force", "gelsight_mini", "observation.images.digit_0"):
+                 "right_contact", "finger_force", "wrench.force"):
         assert f.names_touch(name), name
     for name in ("digital_cam", "reinforcement_reward", "observation.state.torso", "gripper_effort", "odom.position",
                  "contactless_id"):
         assert not f.names_touch(name), name
-    assert f.is_sensing("tactile_left") and not f.is_sensing("digital_cam")
+
+
+def test_a_hand_poses_finger_digits_are_not_touch():
+    """digit names a DIGIT tactile camera, but in a hand pose it names a finger, so signals do not use the camera
+    brands' words."""
+    for name in ("hand.digits", "digit_1_tip", "left_hand.digit2.pos"):
+        assert not f.names_touch(name), name
+
+
+def test_a_command_is_never_touch():
+    """A commanded force is not a measured one."""
+    for name in ("action.gripper_force", "gripper_force_cmd", "target_pressure", "desired_contact"):
+        assert not f.names_touch(name), name
+
+
+def test_tactile_camera_names_still_say_they_sense_touch():
+    for name in ("tactile_left_heatmap", "gelsight_left", "digit_0", "xense_right", "tactile_left"):
+        assert f.is_sensing(name), name
+    assert not f.is_sensing("digital_cam")
 
 
 def _mcap_layout_context_with(convert_upload):

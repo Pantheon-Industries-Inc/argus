@@ -186,7 +186,7 @@ def touch_like(a: np.ndarray, rest=None, swing=None) -> bool:
 
 def is_touch(name: str, a: np.ndarray, rest=None, swing=None) -> bool:
     """Whether a signal measures touch: its own name says so (prepare/formats.py names_touch: tactile, pressure,
-    contact, force and the tactile camera words) and its numbers behave like touch (touch_like). Numbers alone cannot
+    contact, force, and never a command) and its numbers behave like touch (touch_like). Numbers alone cannot
     decide it: a humanoid's torso joint that holds still and then moves one way, a mobile base's odometry, an action
     or a pose rest and rise like a pressure pad, and only the name says which one measures touch. A touch signal
     whose name says nothing (ch0) is not read as touch until a data dictionary can say it is."""

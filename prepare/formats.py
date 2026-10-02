@@ -537,11 +537,15 @@ def scene_rank(name: str) -> int:
 MAX_EXTRA_CAMERAS = 4  # cameras beyond the scene and two mounted ones, sent to the model too; more are listed unused
 # a view whose name says it senses touch (a GelSight or DIGIT image, a tactile heatmap) is never the scene camera or the
 # camera on a gripper: it is another view, named as the dataset names it, and the pair of them (left and right) are two
-# sensors, not the two eyes of one stereo camera
-SENSING_WORDS = ("tactile", "touch", "gelsight", "digit", "xense", "visuotactile", "haptic", "heatmap", "taxel", "skin")
-# a signal says it measures touch with the same words, or with the words a touch signal's name carries: a pressure, a
-# contact flag, a force, a force-sensing resistor (fsr) or a piezo pad (label/signals.py is_touch)
-TOUCH_WORDS = SENSING_WORDS + ("pressure", "contact", "force", "fsr", "piezo")
+# sensors, not the two eyes of one stereo camera. A camera and a signal say touch with the words of TOUCH_CORE; a camera
+# also with a tactile camera's brand or picture (gelsight, digit, xense, heatmap), and a signal with what it measures (a
+# pressure, a contact flag, a force, a force-sensing resistor or a piezo pad). A signal never uses the camera words,
+# since digit also names a finger in a hand pose (hand.digits, digit_1_tip).
+TOUCH_CORE = ("tactile", "touch", "visuotactile", "haptic", "taxel", "skin")
+SENSING_WORDS = TOUCH_CORE + ("gelsight", "digit", "xense", "heatmap")
+TOUCH_WORDS = TOUCH_CORE + ("pressure", "contact", "force", "fsr", "piezo")
+# a name with one of these words is a command, not a measurement (action.gripper_force, gripper_force_cmd)
+COMMAND_WORDS = ("action", "cmd", "command", "target", "setpoint", "goal", "desired")
 
 
 def _names_word(name: str, words) -> bool:
@@ -560,8 +564,9 @@ def is_sensing(name: str) -> bool:
 
 
 def names_touch(name: str) -> bool:
-    """Whether a signal's name says it measures touch (TOUCH_WORDS): right_pressure, tactile_left_raw, right_contact."""
-    return _names_word(name, TOUCH_WORDS)
+    """Whether a signal's name says it measures touch (TOUCH_WORDS: right_pressure, tactile_left_raw, right_contact)
+    and is not a command (COMMAND_WORDS): a commanded force is not a measured one."""
+    return _names_word(name, TOUCH_WORDS) and not _names_word(name, COMMAND_WORDS)
 
 
 def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
