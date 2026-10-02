@@ -113,11 +113,11 @@ def load(ep_dir: Path) -> dict:
           "action": action, "times": None, "kmap": {}, "signals": {}}
     if ctx.get("signals"):
         # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals), with
-        # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz)
+        # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz) and everything else its reader wrote,
+        # so a field a reader adds reaches the checks without being listed here
         z = np.load(ep_dir / "signals.npz")
         ep["signals"] = {s["name"]: z[s["key"]] for s in ctx["signals"]}
-        ep["signal_meta"] = {s["name"]: {k: s[k] for k in ("shape", "names", "rate_hz", "rest", "swing", "source",
-                                                            "variation_of") if k in s}
+        ep["signal_meta"] = {s["name"]: {k: v for k, v in s.items() if k not in ("name", "key")}
                              for s in ctx["signals"]}
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and

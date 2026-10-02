@@ -424,3 +424,15 @@ def test_loading_an_episode_keeps_each_signals_source_and_companion(tmp_path):
     meta = me.load(ep)["signal_meta"]
     assert meta["pad"]["source"] == "mcap channel /pad"
     assert meta["pad variation within each frame"]["variation_of"] == "pad"
+
+
+def test_loading_an_episode_keeps_every_field_of_a_signal_but_its_name_and_key(tmp_path):
+    """A field a reader adds later reaches the checks without load() having to list it."""
+    ep = tmp_path / "episode_000000"
+    ep.mkdir()
+    np.savez(ep / "signals.npz", s0=np.zeros((10, 1)))
+    (ep / "sources.json").write_text(json.dumps({"right": {"n_frames": 10, "base_s": 0.0}}))
+    (ep / "context.json").write_text(json.dumps({
+        "episode_id": ep.name, "profile": "handheld_gripper", "fps": 30, "n_state_frames": 10, "state_kind": "none",
+        "cameras": {}, "signals": [{"name": "pad", "key": "s0", "dims": 1, "gaps": 3, "units": "kPa"}]}))
+    assert me.load(ep)["signal_meta"]["pad"] == {"dims": 1, "gaps": 3, "units": "kPa"}
