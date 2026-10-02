@@ -198,8 +198,7 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     arm_cols = set(GALAXEA_COLUMNS[:4]) | {"action.left_arm", "action.left_gripper", "action.right_arm",
                                             "action.right_gripper"}
     formats.write_signals(ep_dir, ctx, formats.recorded_signals(
-        df, set(GALAXEA_COLUMNS[4:]) | (arm_cols if kind != "none" else set()), n,
-        (meta.get("info") or {}).get("features") or {}))
+        df, set(GALAXEA_COLUMNS[4:]) | (arm_cols if kind != "none" else set()), n, features=info.get("features")))
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(coarse + "\n")
     (ep_dir / "context.json").write_text(json.dumps(ctx, indent=2))
