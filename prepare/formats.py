@@ -2517,6 +2517,29 @@ def _seconds(a: np.ndarray) -> np.ndarray:
     return a * _seconds_scale(a)
 
 
+SAME_ORIGIN = 0.01             # clocks whose first values agree to within this share count from the same moment
+
+
+def _clocks_in_seconds(raw: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """{path: seconds} for the clocks of one file. They come from one recorder, so clocks that count from the same
+    moment (first values within SAME_ORIGIN of each other) are in one unit, the one _seconds_scale reads from the
+    slowest of them, whose large step is the least ambiguous. A 1 kHz pad stamped in nanoseconds from boot steps by
+    1e6, which alone reads as microseconds; beside a 30 fps camera on the same clock it is read in nanoseconds."""
+    finite = {p: a[np.isfinite(a)] for p, a in raw.items()}
+    first = {p: float(a[0]) if len(a) else None for p, a in finite.items()}
+    step = {p: float(np.median(np.diff(a))) if len(a) > 1 else 0.0 for p, a in finite.items()}
+
+    def same_origin(p, q):
+        if first[p] is None or first[q] is None:
+            return p == q
+        return abs(first[p] - first[q]) <= SAME_ORIGIN * max(abs(first[p]), abs(first[q]))
+    out = {}
+    for p, a in raw.items():
+        slowest = max((q for q in raw if same_origin(p, q)), key=lambda q: step[q])
+        out[p] = a * _seconds_scale(raw[slowest])
+    return out
+
+
 def h5_kind(name: str, ds) -> str | None:
     """camera, depth, time, signal, text or None (empty, or nothing we read) for one HDF5 dataset."""
     shape, dt = ds.shape, ds.dtype
@@ -2680,7 +2703,8 @@ def h5_streams(f, group: str) -> dict:
     g = f[group] if group else f
     items = _h5_datasets(g)
     kinds = {p: h5_kind(p, ds) for p, ds in items}
-    clocks = {p: _seconds(ds[()]) for p, ds in items if kinds[p] == "time"}
+    clocks = _clocks_in_seconds({p: np.asarray(ds[()], dtype=np.float64).ravel() for p, ds in items
+                                 if kinds[p] == "time"})
     out = {"camera": [], "depth": [], "signal": [], "text": [], "clock": clocks, "unused": []}
     for p, ds in items:
         k = kinds[p]

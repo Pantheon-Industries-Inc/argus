@@ -188,6 +188,29 @@ def test_a_robomimic_style_demo_without_timestamps_is_timed_at_its_json_rate(tmp
     assert abs(ctx["fps"] - 20.0) < 0.1 and abs(ctx["duration_s"] - 2.0) < 0.1
 
 
+def test_a_fast_pad_on_the_cameras_clock_from_boot_is_read_in_the_cameras_unit(tmp_path):
+    """One recorder stamps a 30 fps camera and a 1 kHz pad in nanoseconds from boot (43 minutes up). The pad's step of
+    1e6 alone reads as microseconds, which would put it 1000 times too far along the clock and leave it out; the
+    file's clocks start together, so the pad is read in the camera's unit and kept at its real rate."""
+    root = tmp_path / "up"
+    root.mkdir()
+    boot_ns = 2_600 * 10**9
+    n_cam, n_pad = 40, 1400
+    with h5py.File(root / "glove.hdf5", "w") as f:
+        imgs = f.create_dataset("rgb_images_jpeg", (n_cam,), dtype=h5py.special_dtype(vlen=np.dtype("uint8")))
+        for i in range(n_cam):
+            imgs[i] = np.frombuffer(_jpeg(i * 5), np.uint8)
+        f.create_dataset("timestamps", data=(boot_ns + np.arange(n_cam) * 33_333_333).astype(np.int64))
+        f.create_dataset("pad_timestamps", data=(boot_ns - 10**7 + np.arange(n_pad) * 1_000_000).astype(np.int64))
+        f.create_dataset("pad_pressure", data=np.random.default_rng(0).normal(0, 1, (n_pad, 4)))
+    rep = formats.convert(root, "handheld_gripper", tmp_path / "eps", "glove", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1
+    ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    pad = {s["name"]: s for s in ctx.get("signals", [])}.get("pad_pressure")
+    assert pad is not None, ctx["source"].get("unused_signals")
+    assert abs(pad["rate_hz"] - 1000) < 10
+
+
 def test_the_notes_an_upload_sends_reach_the_board_as_sent_with_their_times_on_the_episode(tmp_path):
     """A table row that names a demo goes to the board under its own column names, beside the notes read from the file,
     and a value on the recorder's clock (ns here) carries its moment in the episode; a count stays a count."""
