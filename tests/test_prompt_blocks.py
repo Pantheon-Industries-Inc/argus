@@ -321,16 +321,27 @@ def test_a_video_only_rig_with_two_wrist_cameras_is_not_told_its_views_follow_a_
     assert "and which recorded motion its view follows." in me.build_prompt(ep2, pl2, cell_w=448, cell_h=252)[1]
 
 
-def test_sensor_data_the_reader_left_unread_shows_its_note_never_a_claim_that_none_exists():
+def test_sensor_data_the_reader_left_unread_never_shows_its_note_or_a_claim_that_none_exists():
+    plain = "RECORDED STATE: none was read from this episode, so the video is all there is."
     ep, pl = CASES["ego_plain"]()
     ep["context"]["state_note"] = ("Labelled from the camera. The hand, body and camera tracks the file records "
                                    "(/hand/left, /hand/right) are not read yet.")
-    episode = me.build_prompt(ep, pl, cell_w=256, cell_h=144)[1]
-    assert "no hand, head or device tracking" not in episode
-    assert ("RECORDED STATE: none was read from this episode, so the video is all there is. The reader's note: "
-            "Labelled from the camera. The hand, body and camera tracks") in episode
+    fixed, episode = me.build_prompt(ep, pl, cell_w=256, cell_h=144)
+    assert "no hand, head or device tracking" not in episode and plain in episode
+    assert "Labelled from the camera" not in fixed + episode and "/hand/left" not in fixed + episode
     ep, pl = CASES["teleop_video_only"]()
     ep["context"]["source"] = {"unused_arrays": ["observations/qpos_raw (8192 values per sample)"]}
-    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
-    assert "records no robot or gripper state" not in episode and "none was read from this episode" in episode
-    assert "qpos_raw" not in episode                 # the list itself goes to the board (Task 4), not the prompt
+    fixed, episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert "records no robot or gripper state" not in episode and plain in episode
+    assert "qpos_raw" not in fixed + episode         # the list itself goes to the board (Task 4), not the prompt
+
+
+def test_the_note_of_a_teleop_file_with_motion_channels_never_puts_a_recorded_motion_into_a_video_only_prompt():
+    ep, pl = CASES["teleop_video_only"]()
+    ep["context"]["state_note"] = ("Labelled from the cameras. The checks on recorded motion read six joints and a "
+                                   "gripper per arm, so they did not run on this file's motion channels "
+                                   "(/left/joint_states, /right/joint_states).")
+    fixed, episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert "recorded motion" not in fixed and "recorded motion" not in episode
+    assert "joint_states" not in fixed + episode
+    assert "RECORDED STATE: none was read from this episode, so the video is all there is." in episode

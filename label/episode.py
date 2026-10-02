@@ -1083,27 +1083,27 @@ def _state_unaligned_text(ep: dict, pl: dict) -> str:
             "as its recorded state, so the state cannot be aligned to the video.")
 
 
-# What in context["source"] says the reader found sensor data and did not read it (prepare/formats.py write_signals,
-# convert_hdf5, plan_video): with any of it, the episode is never told its dataset records no state.
+# What in context["source"] says the reader found sensor data it did not read (prepare/formats.py write_signals,
+# convert_hdf5, plan_video): the arrays and signals it left out, and "sensors", the sensor files whose signals it read
+# (formats.py:1738), so an episode with no signal from them has none read. With any of it, the episode is never told
+# its dataset records no state.
 UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 
 def _no_state_text(ep: dict, pl: dict) -> str:
     """No arm state. With other signals, that none is in the layout our checks read. With none, that the dataset
-    records none, unless the reader left something unread or wrote a note on the state: then the reader's note, or
-    only that none was read. "records no hand, head or device tracking" was false for an MCAP whose hand tracks the
-    reader did not read yet (2026-10-02 audit)."""
+    records none, unless the reader wrote a note on the state or left sensor data unread: then only that none was
+    read, since "records no hand, head or device tracking" was false for an MCAP whose hand tracks the reader did
+    not read yet (2026-10-02 audit). The note and the lists of unread channels go to the board, never to the model:
+    they name the checks and channels that did not run ("the checks on recorded motion ..."), which would put the
+    words about a recorded motion back into a video only prompt."""
     r = rig(ep)
     n = _rig_nouns(r)
     ctx = ep["context"]
     if _has_signals(ep, pl):
         return f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
-    note = (ctx.get("state_note") or "").strip()
     src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
-    if note:
-        return ("\nRECORDED STATE: none was read from this episode, so the video is all there is. The reader's note: "
-                + note.rstrip(".") + ".")
-    if any(src.get(k) for k in UNREAD_SOURCE_KEYS):
+    if (ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS):
         return "\nRECORDED STATE: none was read from this episode, so the video is all there is."
     what = "no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state"
     return f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
@@ -1231,7 +1231,8 @@ def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) ->
 
 def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None) -> tuple[str, str]:
     """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
-    identical for every episode of the dataset, then the facts about THIS episode (episode_text)."""
+    identical for every episode of the same rig, instruction presence and recorded or video only variant (is_recorded),
+    then the facts about THIS episode (episode_text)."""
     ctx = ep["context"]
     r = rig(ep)
     c0 = (ctx.get("cameras") or {}).get(anchor(ep), {})

@@ -1,8 +1,9 @@
 """The instructions every episode of a rig shares, exactly as the model receives them.
 
-A request has three parts: these instructions (identical for every episode of a rig, so the provider serves
-them from its prompt cache), then the facts about one episode (label/episode.py: its dataset, cameras, sampled
-instants, recorded state and instruction), then its frames. The instructions are, in order: what the footage
+A request has three parts: these instructions (identical for every episode of a rig with the same instruction
+presence and the same recorded or video only variant, so the provider serves them from its prompt cache), then
+the facts about one episode (label/episode.py: its dataset, cameras, sampled instants, recorded state and
+instruction), then its frames. The instructions are, in order: what the footage
 is, the output schema, why the episode is labelled and what counts as a problem (the data contract), how to use
 the episode's instruction or the dataset's annotation (or, for a robot episode that has none, how to
 name its task), and the note that keeps the timeline at the level of action phases.
@@ -817,8 +818,10 @@ def lean(r: str) -> str:
 
 def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True) -> str:
     """Everything before the episode's own facts. A head-camera dataset has one variant whether or not it is
-    annotated, so every episode of it shares the cached prefix. recorded False (no recorded state and no other signal,
-    label/episode.py is_recorded) takes out every word about a recorded motion."""
+    annotated, so every episode of it shares the cached prefix. A robot rig has up to four variants (instruction
+    present or not, recorded or video only), and every episode of the same variant shares the prefix. recorded
+    False (no recorded state and no other signal, label/episode.py is_recorded) takes out every word about a
+    recorded motion."""
     head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
     if r == "ego_head":
         return head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + EGO_ANNOTATION_RULES + lean(r)
@@ -843,7 +846,7 @@ say in completion.reason what leaves it uncertain.
 def example_block(r: str, example_dir: str | Path | None) -> str:
     """An in-context example, off by default (the model comparison's with-example runs): one complete annotation
     of a different episode of the same rig, given with its own context. It closes the shared instructions, so it
-    is identical for every episode of a dataset and cached with them."""
+    is identical for every episode that gets the same shared instructions and cached with them."""
     if not example_dir:
         return ""
     f = Path(example_dir) / f"example_{r}.json"
