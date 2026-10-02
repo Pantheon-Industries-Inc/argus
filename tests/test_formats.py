@@ -567,3 +567,18 @@ def test_a_clock_from_boot_in_nanoseconds_is_not_taken_for_milliseconds_from_the
     from prepare.formats import _seconds
     s = _seconds(2.6e12 + np.arange(50) * 33_333_333.0)
     assert abs(s[0] - 2600) < 1 and abs((s[1] - s[0]) - 1 / 30) < 1e-6
+
+
+def test_a_slow_clock_from_days_of_uptime_keeps_the_steps_reading_and_a_nan_first_sample_does_not_hide_an_epoch_clock():
+    """2e15 ns (23 days up) at 200 Hz is 2e9 read as microseconds, but that clock would step 5 s; a stream read as an
+    epoch clock steps between 1 Hz and 100 kHz. The same holds for 2e12 us. A NaN before an epoch clock's first stamp
+    leaves its size readable."""
+    import numpy as np
+    from prepare.formats import _seconds
+    for start, step, unit in ((2e15, 5e6, "ns"), (2e12, 5e3, "us")):
+        s = _seconds(start + np.arange(50) * step)
+        assert abs(s[0] - 2e6) < 1 and abs((s[1] - s[0]) - 5e-3) < 1e-6, unit
+    t = (1_788_210_000.0 + np.arange(50) / 1000.0) * 1e9
+    t[0] = np.nan
+    s = _seconds(t)
+    assert abs(s[1] - 1_788_210_000.001) < 1e-3 and abs((s[2] - s[1]) - 1e-3) < 1e-6

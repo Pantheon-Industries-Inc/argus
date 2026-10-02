@@ -2446,19 +2446,22 @@ def _h5_bytes(x) -> bytes | None:
 
 
 EPOCH_S = (1.0e9, 4.1e9)       # 2001 to 2099: a recorder clock counting from the epoch lands here in its own unit
+EPOCH_STEP_S = (1e-5, 1.0)     # a stream read as an epoch clock steps at 1 Hz to 100 kHz in that unit
 
 
 def _seconds(a: np.ndarray) -> np.ndarray:
     """A clock in seconds. A clock that counts from the epoch says its unit by its size (only nanoseconds put 1.79e18 in
-    this century), provided its step in that unit is under 10 s: nanoseconds from boot (OpenTouch's 2.6e12 after 43
-    minutes) are also 2.6e9 read as milliseconds, but then step 1.5 hours. Any other clock says it by its step (one
-    sample every 1 ms to 10 s), as frame_times reads a recorder's stamps."""
+    this century), provided its step in that unit is a stream's (EPOCH_STEP_S). A clock from boot can also be that size
+    in another unit. OpenTouch's 2.6e12 ns after 43 minutes up is 2.6e9 read as milliseconds, which would step 9 hours
+    at 30 fps, and 2e15 ns after 23 days up is 2e9 read as microseconds, which would step 5 s at 200 Hz. Any other clock
+    says its unit by its step (one sample every 1 ms to 10 s), as frame_times reads a recorder's stamps."""
     a = np.asarray(a, dtype=np.float64).ravel()
-    step = float(np.median(np.diff(a))) if len(a) > 1 else 0.0
     ok = a[np.isfinite(a)]
+    step = float(np.median(np.diff(ok))) if len(ok) > 1 else 0.0
     if len(ok):
         for scale in (1e-9, 1e-6, 1e-3, 1.0):
-            if EPOCH_S[0] <= abs(float(ok[0])) * scale <= EPOCH_S[1] and (step <= 0 or step * scale <= 10):
+            if EPOCH_S[0] <= abs(float(ok[0])) * scale <= EPOCH_S[1] and (
+                    step <= 0 or EPOCH_STEP_S[0] <= step * scale <= EPOCH_STEP_S[1]):
                 return a * scale
     if step > 0:
         return a * (1e-9 if step > 1.5e6 else 1e-6 if step > 1.5e3 else 1e-3 if step > 1.5 else 1.0)
