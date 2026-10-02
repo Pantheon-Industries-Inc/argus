@@ -2428,8 +2428,6 @@ CAMERA_MIN_PX = 64
 H5_CONSTANT_MAX = 64              # a numeric array this small with no clock of its length is a setting, kept as a note
 H5_TIME_NAME = re.compile(r"(^|[_./])(time|times|timestamp|timestamps|stamp|stamps|ts|t)([_.]?(s|ns|us|ms|sec|secs|nsec|usec|msec|nanos|micros|millis))?$",
                           re.I)
-H5_FPS_FRAME = re.compile(r"^(fps|frame_?rate|control_?freq|control_?frequency)$", re.I)
-H5_FPS_KEY = re.compile(r"^(fps|frame_?rate|frequency|freq|hz|rate|control_?freq|control_?frequency)$", re.I)
 TASK_KEY = re.compile(r"(^|_)(instruction|task|task_description|language_instruction|language|prompt|goal)$", re.I)
 
 
@@ -2556,47 +2554,74 @@ def _natural(s: str):
     return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", s)]
 
 
+FRAME_RATE_NAME = re.compile(r"^(fps|frame_?rate|control_?freq|control_?frequency)$", re.I)
+GENERIC_RATE_NAME = re.compile(r"^(frequency|freq|hz|rate)$", re.I)
+FPS_RANGE = (1, 1000)
+
+
 def h5_fps(f, group: str) -> float | None:
-    """A frame rate the file states in the attributes of the episode's group or any group above it, nearest group first.
-    At each group an attribute named for a rate (fps, control_freq) wins; only when none is there does the rate inside an
-    attribute that holds JSON count (robomimic's env_args keeps env_kwargs.control_freq). A frame rate's name (fps,
-    frame_rate, control_freq) beats a generic one (rate, hz, freq), so a sensor's {"imu": {"rate": 200}} does not time
-    the frames. A value counts only between 1 and 1000, and a bool is not a number."""
+    """A frame rate the file states in the attributes of the episode's group or a group above it. In order, the first
+    found wins: an attribute with a frame rate's name (fps, frame_rate, control_freq), nearest group first up to the
+    root; then a frame rate's name inside an attribute that holds JSON (robomimic's env_args keeps
+    env_kwargs.control_freq), nearest group first; then an attribute with a generic name (rate, hz, freq), nearest
+    group first. An attribute named for the frame rate is the file's own statement about its frames, JSON holds a
+    configuration, and a generic name only counts where the file says it plainly: a configuration's {"sensors": {"imu":
+    {"rate": 200}}} is a sensor's rate, never the frames'. A rate counts only within FPS_RANGE, a bool is not one, and
+    per-camera rates ({"fps": {"cam_high": 30, "cam_wrist": 30}}) count when they all agree."""
     def number(v):
         try:
             x = np.asarray(v).ravel()[0]
-            return float(x) if not isinstance(x, (bool, np.bool_)) and 1 <= float(x) <= 1000 else None
+            if isinstance(x, (bool, np.bool_)):
+                return None
+            x = float(x)
         except Exception:
             return None
+        return x if FPS_RANGE[0] <= x <= FPS_RANGE[1] else None
 
-    def found(k, v, names):
-        if isinstance(v, (dict, list)):
-            kids = v.items() if isinstance(v, dict) else ((k, x) for x in v)
-            return next((x for kk, vv in kids for x in [found(kk, vv, names)] if x), None)
-        return number(v) if names.match(str(k)) else None
+    def rate_value(v):
+        if isinstance(v, dict):
+            rates = {number(x) for x in v.values()}
+            return rates.pop() if len(rates) == 1 and None not in rates else None
+        return number(v)
 
-    parts = [p for p in group.split("/") if p]
-    for i in range(len(parts), -1, -1):
-        g = f["/".join(parts[:i])] if i else f
-        direct, nested = [], []
+    def rate_in(key, value, names):
+        # the first value under one of names, in document order; a list's items go under the list's own name
+        todo = [(key, value)]
+        while todo:
+            k, v = todo.pop()
+            x = rate_value(v) if names.match(str(k)) else None
+            if x is not None:
+                return x
+            if isinstance(v, dict):
+                todo += reversed(list(v.items()))
+            elif isinstance(v, list):
+                todo += [(k, item) for item in reversed(v)]
+        return None
+
+    def attrs(g):
+        # (direct, in JSON): each attribute as it is, or parsed when it holds JSON (a string, bytes, or a one-element
+        # string array)
+        direct, in_json = [], []
         for k, v in g.attrs.items():
-            if isinstance(v, bytes):
-                v = v.decode("utf-8", "replace")
-            if isinstance(v, str) and v.lstrip()[:1] in ("{", "["):
+            text = v.ravel()[0] if isinstance(v, np.ndarray) and v.size == 1 and v.dtype.kind in "OSU" else v
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", "replace")
+            if isinstance(text, str) and text.lstrip()[:1] in ("{", "["):
                 try:
-                    nested.append((k, json.loads(v)))
+                    in_json.append((k, json.loads(text)))
                 except (ValueError, RecursionError):
-                    pass
+                    pass                          # malformed, or nested deeper than the parser goes
             else:
                 direct.append((k, v))
-        for kind in (direct, nested):
-            for names in (H5_FPS_FRAME, H5_FPS_KEY):
-                try:
-                    x = next((x for k, v in kind for x in [found(k, v, names)] if x), None)
-                except RecursionError:
-                    x = None
-                if x:
-                    return x
+        return direct, in_json
+
+    parts = [p for p in group.split("/") if p]
+    nearest_first = [attrs(f["/".join(parts[:i])] if i else f) for i in range(len(parts), -1, -1)]
+    for which, names in ((0, FRAME_RATE_NAME), (1, FRAME_RATE_NAME), (0, GENERIC_RATE_NAME)):
+        for found in nearest_first:
+            x = next((x for k, v in found[which] for x in [rate_in(k, v, names)] if x is not None), None)
+            if x is not None:
+                return x
     return None
 
 

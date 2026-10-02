@@ -77,51 +77,96 @@ def test_an_hdf5_file_of_demos_is_one_episode_per_demo_with_its_pressure_map_and
     assert c["regions"]["right_pressure"]["rows"] == [3, 7] and c["regions"]["right_pressure"]["columns"] == [5, 9]
 
 
+def _h5_rate(d: Path, attrs: dict, root_attrs: dict | None = None):
+    """h5_fps of demo_0 in a file whose data group holds attrs and whose root holds root_attrs."""
+    with h5py.File(d / "rate.hdf5", "w") as f:
+        g = f.create_group("data")
+        for k, v in attrs.items():
+            g.attrs[k] = v
+        for k, v in (root_attrs or {}).items():
+            f.attrs[k] = v
+        g.create_group("demo_0")
+        return formats.h5_fps(f, "data/demo_0")
+
+
 def test_an_hdf5_rate_inside_a_json_attribute_times_the_frames(tmp_path):
     """robomimic keeps its control rate in the data group's env_args, a JSON string ({"env_kwargs": {"control_freq":
-    20}}); the demo is timed at that rate, not the 30 fps default. A value under a rate's name counts only between 1
-    and 1000, and an attribute that is not JSON, is bytes, or is malformed JSON is passed over without an error."""
-    p = tmp_path / "robomimic.hdf5"
-    with h5py.File(p, "w") as f:
-        g = f.create_group("data")
-        g.attrs["env_args"] = json.dumps({"env_name": "Lift", "env_kwargs": {"control_freq": 20, "horizon": 400}})
-        g.create_group("demo_0")
-        assert formats.h5_fps(f, "data/demo_0") == 20.0
-    q = tmp_path / "odd.hdf5"
-    with h5py.File(q, "w") as f:
-        g = f.create_group("data")
-        g.attrs["note"] = "pick up the cup"                       # a string that is not JSON
-        g.attrs["blob"] = np.bytes_(b"{not json")                 # bytes that start like JSON but are malformed
-        g.attrs["empty"] = ""
-        g.attrs["list"] = json.dumps([{"fps": 25}])               # JSON at any depth, lists included
-        g.create_group("demo_0")
-        assert formats.h5_fps(f, "data/demo_0") == 25.0
-        g.attrs["list"] = json.dumps({"env_kwargs": {"control_freq": 0.5, "other": {"hz": 5000}}})
-        assert formats.h5_fps(f, "data/demo_0") is None           # outside 1..1000 is not a rate
-        g.attrs["list"] = np.bytes_(json.dumps({"fps": 12}).encode())
-        assert formats.h5_fps(f, "data/demo_0") == 12.0
+    20}}); the demo is timed at that rate, not the 30 fps default."""
+    env_args = json.dumps({"env_name": "Lift", "env_kwargs": {"control_freq": 20, "horizon": 400}})
+    assert _h5_rate(tmp_path, {"env_args": env_args}) == 20.0
 
 
-def test_a_direct_rate_attribute_beats_a_json_one_and_a_frame_rate_name_beats_a_generic_one(tmp_path):
-    """Attributes are read in name order, so env_args sorts before fps: a group's own fps (15) still times the frames
-    over the control_freq (20) inside its env_args. Inside JSON a generic name (rate, hz) is used only when no
-    frame-rate name (fps, frame_rate, control_freq) is found anywhere in it, so {"imu": {"rate": 200}} does not time the frames.
-    With two frame-rate names the first in document order wins, so {"camera": {"fps": 15}, "env_kwargs":
-    {"control_freq": 20}} gives 15. A bool is not a rate."""
-    def rate(attrs):
-        with h5py.File(tmp_path / "r.hdf5", "w") as f:
-            g = f.create_group("data")
-            for k, v in attrs.items():
-                g.attrs[k] = v
-            g.create_group("demo_0")
-            return formats.h5_fps(f, "data/demo_0")
-    assert rate({"env_args": json.dumps({"env_kwargs": {"control_freq": 20}}), "fps": 15}) == 15.0
-    assert rate({"env_args": json.dumps({"imu": {"rate": 200}, "env_kwargs": {"control_freq": 20}})}) == 20.0
-    assert rate({"env_args": json.dumps({"audio": {"hz": 48}})}) == 48.0         # a generic name alone still counts
-    assert rate({"env_args": json.dumps({"camera": {"fps": 15}, "env_kwargs": {"control_freq": 20}})}) == 15.0
-    assert rate({"env_args": json.dumps({"rate": True})}) is None
-    assert rate({"env_args": json.dumps({"rate": True, "fps": 12})}) == 12.0
-    assert rate({"env_args": "[" * 100000}) is None                              # nested past the parser's depth
+def test_an_attribute_that_is_not_json_or_is_malformed_json_is_passed_over(tmp_path):
+    attrs = {"note": "pick up the cup", "blob": np.bytes_(b"{not json"), "empty": "",
+             "env_args": json.dumps({"env_kwargs": {"control_freq": 20}})}
+    assert _h5_rate(tmp_path, attrs) == 20.0
+
+
+def test_json_held_in_bytes_or_in_a_one_element_string_array_is_read(tmp_path):
+    assert _h5_rate(tmp_path, {"env_args": np.bytes_(json.dumps({"fps": 12}).encode())}) == 12.0
+    one = np.array([json.dumps({"fps": 30})], dtype=h5py.string_dtype())
+    assert _h5_rate(tmp_path, {"env_args": one}) == 30.0
+
+
+def test_a_rate_inside_a_json_list_counts(tmp_path):
+    assert _h5_rate(tmp_path, {"cameras": json.dumps([{"name": "agentview"}, {"fps": 25}])}) == 25.0
+
+
+def test_a_rate_outside_1_to_1000_is_not_a_rate(tmp_path):
+    assert _h5_rate(tmp_path, {"env_args": json.dumps({"env_kwargs": {"control_freq": 0.5}})}) is None
+    assert _h5_rate(tmp_path, {"fps": 5000}) is None
+
+
+def test_a_bool_is_not_a_rate(tmp_path):
+    assert _h5_rate(tmp_path, {"fps": np.bool_(True)}) is None
+    assert _h5_rate(tmp_path, {"env_args": json.dumps({"fps": True})}) is None
+    assert _h5_rate(tmp_path, {"env_args": json.dumps({"frame_rate": True, "fps": 12})}) == 12.0
+
+
+def test_the_nearest_groups_frame_rate_wins(tmp_path):
+    assert _h5_rate(tmp_path, {"fps": 15}, root_attrs={"fps": 30}) == 15.0
+
+
+def test_a_direct_frame_rate_beats_one_inside_json_on_the_same_group(tmp_path):
+    """Attributes are read in name order, so env_args sorts before fps; the group's own fps (15) still times the frames
+    over the control_freq (20) inside its env_args."""
+    assert _h5_rate(tmp_path, {"env_args": json.dumps({"env_kwargs": {"control_freq": 20}}), "fps": 15}) == 15.0
+
+
+def test_a_direct_frame_rate_on_the_root_beats_a_frame_rate_inside_a_groups_json(tmp_path):
+    attrs = {"env_args": json.dumps({"env_kwargs": {"control_freq": 20}})}
+    assert _h5_rate(tmp_path, attrs, root_attrs={"fps": 30}) == 30.0
+
+
+def test_a_generic_rate_name_inside_json_never_counts(tmp_path):
+    """A configuration holds its sensors' rates under generic names, so {"sensors": {"imu": {"rate": 200}}} does not
+    time the frames, while a frame rate's name beside it does."""
+    assert _h5_rate(tmp_path, {"sensor_config": json.dumps({"sensors": {"imu": {"rate": 200}}})}) is None
+    assert _h5_rate(tmp_path, {"sensor_config": json.dumps({"audio": {"hz": 48}})}) is None
+    both = json.dumps({"imu": {"rate": 200}, "env_kwargs": {"control_freq": 20}})
+    assert _h5_rate(tmp_path, {"env_args": both}) == 20.0
+
+
+def test_a_direct_generic_rate_counts_only_when_no_frame_rate_is_stated_anywhere(tmp_path):
+    assert _h5_rate(tmp_path, {"rate": 25}) == 25.0
+    assert _h5_rate(tmp_path, {"hz": 200, "env_args": json.dumps({"fps": 30})}) == 30.0
+    assert _h5_rate(tmp_path, {"rate": 200}, root_attrs={"fps": 30}) == 30.0
+
+
+def test_the_first_frame_rate_in_document_order_wins_inside_json(tmp_path):
+    attrs = {"env_args": json.dumps({"camera": {"fps": 15}, "env_kwargs": {"control_freq": 20}})}
+    assert _h5_rate(tmp_path, attrs) == 15.0
+
+
+def test_per_camera_frame_rates_count_when_they_agree(tmp_path):
+    assert _h5_rate(tmp_path, {"meta": json.dumps({"fps": {"cam_high": 30, "cam_wrist": 30}})}) == 30.0
+    assert _h5_rate(tmp_path, {"meta": json.dumps({"fps": {"cam_high": 30, "cam_wrist": 15}})}) is None
+
+
+def test_json_nested_deeper_than_the_parser_allows_is_passed_over_and_deep_json_is_searched(tmp_path):
+    """json.loads stops at about 1000 levels; the search through what it parsed has no depth limit of its own."""
+    assert _h5_rate(tmp_path, {"env_args": "[" * 100000}) is None
+    assert _h5_rate(tmp_path, {"env_args": '{"a":' * 900 + '{"fps": 9}' + "}" * 900}) == 9.0
 
 
 def test_a_robomimic_style_demo_without_timestamps_is_timed_at_its_json_rate(tmp_path):
