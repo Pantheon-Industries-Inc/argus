@@ -2558,34 +2558,36 @@ def _seconds(a: np.ndarray) -> np.ndarray:
     return a * _seconds_scale(a)
 
 
-SAME_ORIGIN = 0.01             # clocks whose first values agree to within this share count from the same moment
-FAR_FROM_ZERO_STEPS = 1000     # a clock counts from a moment far from zero when it starts this many steps past it
+CLOCK_SCALES = (1e-9, 1e-6, 1e-3, 1.0)
+SPAN_MATCH = 2.0               # a clock takes the unit that puts its span within this factor of the reference's
 
 
-def _clocks_in_seconds(raw: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """{path: seconds} for the clocks of one file. They come from one recorder, so clocks that count from the same
-    moment are in one unit, the one _seconds_scale reads from the slowest of them, whose large step is the least
-    ambiguous. A 1 kHz pad stamped in nanoseconds from boot steps by 1e6, which alone reads as microseconds; beside a
-    30 fps camera on the same clock it is read in nanoseconds. Two clocks share a moment only when both start far from
-    zero (more than FAR_FROM_ZERO_STEPS of the larger of their steps, as a clock from boot or the epoch does) and
-    their first values agree to within SAME_ORIGIN. Clocks that start at 0 say nothing about their units (a camera in
-    seconds and an IMU in nanoseconds, both from the recording's start), so each keeps its own."""
+def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None) -> dict[str, np.ndarray]:
+    """{path: seconds} for the clocks of one episode. Every stream of an episode covers about the same stretch of time,
+    while each driver stamps in its own unit: a 1 kHz pad beside a 30 fps camera steps by 1e6 in nanoseconds or 1e3
+    in microseconds, which its step alone reads as microseconds or milliseconds. So the reference clock (reference,
+    the clock of a camera, else the clock with the largest step) is read with its own _seconds_scale, and every other
+    clock takes the unit among CLOCK_SCALES whose span (last minus first) is closest to the reference's on a log scale,
+    when that span is within SPAN_MATCH of it. A clock that matches no unit (a sensor that really ran for a tenth of
+    the episode) or has fewer than two finite values keeps its own _seconds_scale."""
     finite = {p: a[np.isfinite(a)] for p, a in raw.items()}
-    first = {p: float(a[0]) if len(a) else None for p, a in finite.items()}
-    step = {p: float(np.median(np.diff(a))) if len(a) > 1 else 0.0 for p, a in finite.items()}
+    if reference not in raw:
+        steps = {p: float(np.median(np.diff(a))) if len(a) > 1 else 0.0 for p, a in finite.items()}
+        reference = max(raw, key=lambda p: steps[p], default=None)
 
-    def same_origin(p, q):
-        if p == q:
-            return True
-        if first[p] is None or first[q] is None:
-            return False
-        far = FAR_FROM_ZERO_STEPS * max(step[p], step[q])
-        both_far_from_zero = abs(first[p]) > far and abs(first[q]) > far
-        return both_far_from_zero and abs(first[p] - first[q]) <= SAME_ORIGIN * max(abs(first[p]), abs(first[q]))
+    def span(p):
+        a = finite[p]
+        return float(a[-1] - a[0]) if len(a) > 1 else 0.0
+    ref_span = span(reference) * _seconds_scale(raw[reference]) if reference is not None else 0.0
     out = {}
     for p, a in raw.items():
-        slowest = max((q for q in raw if same_origin(p, q)), key=lambda q: step[q])
-        out[p] = a * _seconds_scale(raw[slowest])
+        scale = _seconds_scale(a)
+        if p != reference and span(p) > 0 and ref_span > 0:
+            off = {s: abs(np.log(span(p) * s / ref_span)) for s in CLOCK_SCALES}
+            closest = min(off, key=off.get)
+            if off[closest] <= np.log(SPAN_MATCH):
+                scale = closest
+        out[p] = a * scale
     return out
 
 
@@ -2754,8 +2756,8 @@ def h5_streams(f, group: str) -> dict:
     g = f[group] if group else f
     items = _h5_datasets(g)
     kinds = {p: h5_kind(p, ds) for p, ds in items}
-    clocks = _clocks_in_seconds({p: np.asarray(ds[()], dtype=np.float64).ravel() for p, ds in items
-                                 if kinds[p] == "time"})
+    # raw until the streams are paired with their clocks by length, then in seconds read against a camera's clock
+    clocks = {p: np.asarray(ds[()], dtype=np.float64).ravel() for p, ds in items if kinds[p] == "time"}
     out = {"camera": [], "depth": [], "signal": [], "text": [], "clock": clocks, "unused": []}
     for p, ds in items:
         k = kinds[p]
@@ -2780,6 +2782,8 @@ def h5_streams(f, group: str) -> dict:
                 clock = sorted(cands)[0]
                 break
         out[k].append({"path": f"{group}/{p}" if group else p, "name": p, "n": n, "clock": clock})
+    camera_clock = next((c["clock"] for c in out["camera"] if c["clock"]), None)
+    out["clock"] = _clocks_in_seconds(clocks, reference=camera_clock)
     # names inside the episode: a group every camera and signal sits under (OpenTouch's data/demo_023/ in a file of one
     # demo) says nothing about any one of them, so it is left off their names
     timed = out["camera"] + out["depth"] + out["signal"]

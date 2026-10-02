@@ -607,22 +607,52 @@ def test_an_empty_clock_is_empty():
     assert len(f._seconds(np.array([]))) == 0
 
 
-def test_clocks_from_zero_keep_their_own_units():
-    """Two clocks that both start at 0 (a camera in seconds from the recording's start beside an IMU in nanoseconds
-    from it) do not say they share a unit, so each is read by its own step."""
+BOOT_NS = 2_600e9                # 43 minutes of uptime, in nanoseconds
+
+
+def _step_s(a):
+    import numpy as np
+    return float(np.median(np.diff(a)))
+
+
+def test_a_fast_pad_in_the_cameras_unit_is_read_by_the_span_it_shares_with_the_camera():
+    """A 1 kHz pad and a 30 fps camera, both in nanoseconds from boot: the pad's step of 1e6 alone reads as
+    microseconds, which would make its 1.4 s span 1400 s."""
+    import numpy as np
+    cam = BOOT_NS + np.arange(40) * 33_333_333.0
+    out = f._clocks_in_seconds({"cam": cam, "pad": cam[0] - 1e7 + np.arange(1400) * 1e6}, reference="cam")
+    assert abs(_step_s(out["pad"]) - 1e-3) < 1e-9 and abs(_step_s(out["cam"]) - 1 / 30) < 1e-9
+
+
+def test_a_pad_in_microseconds_beside_a_camera_in_nanoseconds_is_read_in_microseconds():
+    """Each driver stamps in its own unit: a pad in microseconds from boot steps 1e3, which alone reads as
+    milliseconds."""
+    import numpy as np
+    cam = BOOT_NS + np.arange(40) * 33_333_333.0
+    out = f._clocks_in_seconds({"cam": cam, "pad": BOOT_NS / 1e3 + np.arange(1400) * 1e3}, reference="cam")
+    assert abs(_step_s(out["pad"]) - 1e-3) < 1e-9
+
+
+def test_a_camera_in_seconds_and_an_imu_in_nanoseconds_both_from_zero_keep_their_units():
     import numpy as np
     out = f._clocks_in_seconds({"cam": np.arange(40) / 30.0, "imu": np.arange(400) * 5e6})
-    assert abs(np.median(np.diff(out["cam"])) - 1 / 30) < 1e-9
-    assert abs(np.median(np.diff(out["imu"])) - 5e-3) < 1e-9
+    assert abs(_step_s(out["cam"]) - 1 / 30) < 1e-9 and abs(_step_s(out["imu"]) - 5e-3) < 1e-9
 
 
-def test_clocks_from_the_same_moment_far_from_zero_share_the_slowest_ones_unit():
-    """A 1 kHz pad and a 30 fps camera, both in nanoseconds from 43 minutes of uptime: the pad's step of 1e6 alone
-    reads as microseconds, so it takes the camera's unit."""
+def test_a_sensor_that_records_only_part_of_the_episode_keeps_its_own_reading():
+    """A 100 Hz sensor in nanoseconds that ran for the first second of a 10 s episode: no unit puts its span within a
+    factor of 2 of the camera's, so it is read as it would be alone."""
     import numpy as np
-    cam = 2_600e9 + np.arange(40) * 33_333_333.0
-    out = f._clocks_in_seconds({"cam": cam, "pad": cam[0] - 1e7 + np.arange(1400) * 1e6})
-    assert abs(np.median(np.diff(out["pad"])) - 1e-3) < 1e-9
+    cam = BOOT_NS + np.arange(300) * 33_333_333.0
+    short = BOOT_NS + np.arange(100) * 1e7
+    out = f._clocks_in_seconds({"cam": cam, "short": short}, reference="cam")
+    assert np.array_equal(out["short"], f._seconds(short))
+
+
+def test_a_single_clock_is_read_as_it_would_be_alone():
+    import numpy as np
+    cam = BOOT_NS + np.arange(40) * 33_333_333.0
+    assert np.array_equal(f._clocks_in_seconds({"cam": cam})["cam"], f._seconds(cam))
 
 
 def test_a_steadily_rising_reading_stays_a_signal_unless_its_name_says_time():
