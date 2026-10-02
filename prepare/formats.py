@@ -1446,7 +1446,7 @@ def camera_words(rel: str) -> frozenset:
     """The words of a video's name that name its camera, not what the file holds (exo_cam-images-depth gives exo, cam).
     Only a video extension is taken off the name: a LeRobot feature key's dots are part of it
     (observation.images.cam_high gives cam, high)."""
-    name = Path(rel.rsplit("/", 1)[-1])
+    name = Path(rel)
     words = tokens(name.stem if name.suffix.lower() in VIDEO_EXT else name.name)
     return frozenset(set(words) - NON_COLOUR - GENERIC_VIDEO_WORDS)
 
