@@ -607,11 +607,10 @@ def test_a_steadily_rising_reading_stays_a_signal_unless_its_name_says_time():
     """A base driving forward at a steady speed rises by a steady step, as a clock does; only a time's name (timestamp,
     t_ns) makes a column a clock."""
     import numpy as np, pandas as pd
-    from prepare import formats
     n = 60
     df = pd.DataFrame({"base.odom_x": list(np.arange(n) * 0.01), "sensor_timestamp": list(1e9 + np.arange(n) * 3.3e7),
                        "gripper": list(np.r_[np.zeros(30), np.ones(30)])})
-    out = formats.recorded_signals(df, set(), n)
+    out = f.recorded_signals(df, set(), n)
     assert "base.odom_x" in out and "gripper" in out
     assert "sensor_timestamp" not in out and "sensor_timestamp" in out.clocks
 
@@ -620,12 +619,11 @@ def _a_table_keeps_a_steadily_rising_column_unless_its_name_says_time(tmp_path):
     """The same rule for a CSV table beside the videos: odom_x rises by a steady step and stays a value, while the
     time column is the one that places the table and is not shown."""
     import numpy as np, pandas as pd
-    from prepare import formats
     n = 60
     pd.DataFrame({"time_s": np.arange(n) / 30.0, "odom_x": np.arange(n) * 0.01,
                   "grip": np.r_[np.zeros(30), np.ones(30)]}).to_csv(tmp_path / "traj.csv", index=False)
     pts = np.arange(n, dtype=np.int64)
-    out = formats.table_signals([tmp_path / "traj.csv"], None, {"pts": pts, "time_base": 1 / 30.0}, {})
+    out = f.table_signals([tmp_path / "traj.csv"], None, {"pts": pts, "time_base": 1 / 30.0}, {})
     assert out.meta["traj"]["names"] == ["odom_x", "grip"]
 
 
