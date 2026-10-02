@@ -783,3 +783,28 @@ def test_reruns_replace_the_labels_of_the_episodes_they_labelled(tmp_path):
     src = board_build.label_sources(manifest, board)
     assert src["episode_000001.json"] == later / "out" / "episode_demo_000001.json"
     assert src["episode_000000.json"] == runs / "demo" / "20260101-0000_full_abc1234" / "out" / "episode_000000.json"
+
+
+def test_the_readers_note_and_what_the_model_was_not_shown_reach_the_board(tmp_path):
+    """state_note and the source's unused lists, which the prompt states only where they explain an absence, are on
+    every episode's board file by kind; an episode the reader read whole carries none."""
+    ctx = {"profile": "teleop_arms", "fps": 30, "n_state_frames": 30, "state_kind": "none",
+           "state_note": "Labelled from the video: the recorded state has 16 values per frame.",
+           "source": {"format": "lerobot v2.1", "unused_cameras": ["observation.images.cam_high_mask"],
+                      "unused_signals": ["recorder_time_ns (a clock)"], "unused_arrays": []}}
+    d = {}
+    board_build.add_context(d, ctx, tmp_path)
+    assert d["reader_notes"] == {"state_note": ctx["state_note"],
+                                 "left_out": {"cameras": ["observation.images.cam_high_mask"],
+                                              "signals": ["recorder_time_ns (a clock)"]}}
+    whole = {}
+    board_build.add_context(whole, {"profile": "teleop_arms", "fps": 30, "source": {"format": "video files"}}, tmp_path)
+    assert "reader_notes" not in whole
+    assert "reader_notes" in board_build.CONTEXT_KEYS
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="no node")
+def test_the_provenance_line_says_what_the_model_was_not_shown():
+    r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "reader_notes.js"),
+                        str(REPO / "board" / "serve.py")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

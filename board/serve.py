@@ -646,6 +646,8 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #current-ep-src:empty { display: none; }
 #current-ep-src a { color: var(--fg-2); text-decoration: none; border-bottom: 1px solid var(--border-strong); }
 #current-ep-src a:hover { color: var(--fg); border-bottom-color: var(--fg-3); }
+#current-ep-reader { font: 500 11px/1.35 var(--sans); color: var(--fg-3); }
+#current-ep-reader:empty { display: none; }
 .kp-lic a, .kp-note-in a { white-space: nowrap; color: inherit; text-decoration: underline;
   text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
 .ep-head-dl { flex: none; font: 500 12px/1 var(--sans); color: var(--fg-2); text-decoration: none; white-space: nowrap;
@@ -2403,7 +2405,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   <aside class="left" id="left-pane">
     <div class="ep-head">
       <div class="ep-head-name"><span class="ep-head-k">Episode</span><span id="current-ep"></span><span
-        id="current-ep-raw"></span><span id="current-ep-src"></span></div>
+        id="current-ep-raw"></span><span id="current-ep-src"></span><span id="current-ep-reader"></span></div>
       <div class="ep-head-side">
         <div class="ep-head-acts">
           <button id="hp-btn" class="ep-head-dl hp-btn" type="button" aria-pressed="true" hidden
@@ -2778,6 +2780,20 @@ function datasetSourceHtml(s) {
     : esc(text);
   return `Footage: ${link(s.hub, s.name)}${s.publisher ? ` (${esc(s.publisher)})` : ''}, ${link(s.license_url,
     s.license)}`;
+}
+// what the model was not shown of the upload (board/build.py reader_notes): the reader's note on the recorded state,
+// then the cameras, signals, arrays and depth streams it did not read, each with the reason it gave; nothing when the
+// model was shown it all
+function readerNotesHtml(rn) {
+  if (!rn) return '';
+  const left = rn.left_out || {};
+  const kinds = [['cameras', 'the cameras'], ['signals', 'the signals'], ['arrays', 'the arrays'],
+                 ['depth', 'the depth streams']].filter(([k]) => (left[k] || []).length)
+    .map(([k, what]) => `${what} ${left[k].map(esc).join(', ')}`);
+  const parts = [];
+  if (rn.state_note) parts.push(esc(rn.state_note));
+  if (kinds.length) parts.push(`The model was not shown ${kinds.join('; ')}.`);
+  return parts.join(' ');
 }
 function dsLabel(ds) {
   return DS_LABELS[ds] || String(ds).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -3363,6 +3379,7 @@ function renderRail(ds, keepFile, fromSearch) {
     currentEp.textContent = '';
     document.getElementById('current-ep-raw').textContent = '';
     document.getElementById('current-ep-src').innerHTML = '';
+    document.getElementById('current-ep-reader').innerHTML = '';
     updateKpExport();
     return;
   }
@@ -4595,6 +4612,7 @@ function renderEp(d, opts) {
   currentEp.textContent = epName(eid);
   document.getElementById('current-ep-raw').textContent = epName(eid) !== eid ? eid : '';
   document.getElementById('current-ep-src').innerHTML = datasetSourceHtml(d.dataset_source);
+  document.getElementById('current-ep-reader').innerHTML = readerNotesHtml(d.reader_notes);
   document.getElementById('dl-json').href = episodeDownloadUrl(_activeFile);
   if (STATIC) document.getElementById('dl-json').setAttribute('download', _activeFile);
   // the episode's video to download, on a served board (a static build has no server to make it)

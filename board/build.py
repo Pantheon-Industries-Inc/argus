@@ -184,6 +184,24 @@ def apply_rules(d: dict, ctx: dict, rules: list) -> None:
             raise ValueError(f"unknown rule kind {kind!r}")
 
 
+# what the reader did not read of an upload, by kind (prepare/formats.py writes these into context["source"])
+READER_LEFT_OUT = (("unused_cameras", "cameras"), ("unused_signals", "signals"), ("unused_arrays", "arrays"),
+                   ("unused_depth", "depth"))
+
+
+def reader_notes(ctx: dict) -> dict | None:
+    """What the reader says about an episode beyond what it read: its note on the recorded state (state_note) and what
+    of the upload it did not read, each with its reason (context["source"] unused_*). The model never saw these. The
+    prompt states them only where they explain an absence (label/episode.py, the no state block); the board always
+    shows them, so a field the model never saw is never a silent gap. None when there is nothing to say."""
+    src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
+    left = {kind: [str(x) for x in src[key]] for key, kind in READER_LEFT_OUT if src.get(key)}
+    note = (ctx.get("state_note") or "").strip()
+    if not note and not left:
+        return None
+    return {**({"state_note": note} if note else {}), **({"left_out": left} if left else {})}
+
+
 def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
     """What the episode's context.json adds to its label: the rig, the real length, the deterministic checks, the
     dataset's own labels (timed segments, as OpenAoE, Galaxea and Gen-HumanEgo ship them, and episode-level status
@@ -218,6 +236,9 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
     groups = uploader_groups(notes, ctx.get("clock_start_s"), d.get("duration_s"))
     if groups:
         d["uploader_notes"] = groups
+    rn = reader_notes(ctx)
+    if rn:
+        d["reader_notes"] = rn
     add_contacts(d, ctx)
 
 
@@ -341,7 +362,7 @@ def normalize_enums(x, key: str | None = None):
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
                 "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels",
-                "timesteps_s", "task_label")
+                "timesteps_s", "task_label", "reader_notes")
 
 
 def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict) -> dict:
