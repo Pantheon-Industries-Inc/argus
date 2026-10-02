@@ -273,6 +273,22 @@ def test_prompts_are_pinned(rig, has_instruction):
     assert hashlib.sha256(text.encode()).hexdigest() == PINNED[(rig, has_instruction)]
 
 
+@pytest.mark.parametrize("rig,has_instruction", sorted(PINNED))
+def test_a_video_only_episode_gets_the_pinned_instructions_without_the_recorded_motion(rig, has_instruction):
+    """The video only variant is the pinned text with exactly these words taken out, so it needs no hash of its own
+    and the pinned hashes above never change for it."""
+    rec = prompts.fixed_instructions(rig, has_instruction=has_instruction)
+    vid = prompts.fixed_instructions(rig, has_instruction=has_instruction, recorded=False)
+    want = rec.replace(*prompts.VIDEO_ONLY_HEADER, 1)
+    if rig != "ego_head":
+        want = want.replace(*prompts.VIDEO_ONLY_TAG, 1)
+        for old, new in prompts.VIDEO_ONLY_CONTRACT_WORDING:
+            assert rec.count(old) == 1, old
+            want = want.replace(old, new, 1)
+    assert vid == want and vid != rec
+    assert "recorded motion" not in vid and "what is recorded" not in vid and "state_video_mismatch" not in vid
+
+
 def test_an_episode_without_instruction_gets_the_task_rule_and_head_cameras_never_do():
     for r in ("teleop_arms", "handheld_gripper"):
         without, given = prompts.fixed_instructions(r, has_instruction=False), prompts.fixed_instructions(r)

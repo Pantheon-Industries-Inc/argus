@@ -612,7 +612,7 @@ def _camera_facts(ep: dict, v: str) -> str:
             "the rest of the image moves whenever the gripper moves.")
 
 
-def camera_desc(ep: dict) -> str:
+def camera_desc(ep: dict, recorded: bool = True) -> str:
     vs, r = views(ep), rig(ep)
     n = _rig_nouns(r)
     cams = ep["context"].get("cameras") or {}
@@ -660,7 +660,7 @@ def camera_desc(ep: dict) -> str:
               "This naming is bookkeeping only; it does not settle whether the names are right. Whether each "
               "stream really sits on the side its name says is a separate question for the pixels: where the "
               f"other {n['actor']} and the scene appear in it once you have worked out from the frame how that camera "
-              "is turned at that instant, and which recorded motion its view follows.")
+              "is turned at that instant" + (", and which recorded motion its view follows." if recorded else "."))
     elif r == "ego_head":
         s += (" In the output, \"left\", \"right\" and \"both\" name the person's own left and right hands, "
               "as seen from their head. Which hand is which follows the person's body (the forearm it belongs to, "
@@ -1083,11 +1083,29 @@ def _state_unaligned_text(ep: dict, pl: dict) -> str:
             "as its recorded state, so the state cannot be aligned to the video.")
 
 
+# What in context["source"] says the reader found sensor data and did not read it (prepare/formats.py write_signals,
+# convert_hdf5, plan_video): with any of it, the episode is never told its dataset records no state.
+UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
+
+
 def _no_state_text(ep: dict, pl: dict) -> str:
-    n = _rig_nouns(rig(ep))
+    """No arm state. With other signals, that none is in the layout our checks read. With none, that the dataset
+    records none, unless the reader left something unread or wrote a note on the state: then the reader's note, or
+    only that none was read. "records no hand, head or device tracking" was false for an MCAP whose hand tracks the
+    reader did not read yet (2026-10-02 audit)."""
+    r = rig(ep)
+    n = _rig_nouns(r)
+    ctx = ep["context"]
     if _has_signals(ep, pl):
         return f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
-    what = "no hand, head or device tracking" if rig(ep) == "ego_head" else "no robot or gripper state"
+    note = (ctx.get("state_note") or "").strip()
+    src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
+    if note:
+        return ("\nRECORDED STATE: none was read from this episode, so the video is all there is. The reader's note: "
+                + note.rstrip(".") + ".")
+    if any(src.get(k) for k in UNREAD_SOURCE_KEYS):
+        return "\nRECORDED STATE: none was read from this episode, so the video is all there is."
+    what = "no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state"
     return f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
 
 
@@ -1116,9 +1134,18 @@ BLOCKS = (
 )
 
 
+# The blocks that make an episode a recording rather than video only: with none of them, the shared instructions and
+# the camera paragraph say nothing of a recorded motion (label/prompts.py VIDEO_ONLY_CONTRACT_WORDING).
+RECORDED_BLOCKS = ("state", "state_unaligned", "signals")
+
+
 def present_blocks(ep: dict, pl: dict) -> list[Block]:
     """The blocks whose data this episode holds, in prompt order."""
     return [b for b in BLOCKS if b.present(ep, pl)]
+
+
+def is_recorded(ep: dict, pl: dict) -> bool:
+    return any(b.name in RECORDED_BLOCKS for b in present_blocks(ep, pl))
 
 
 def requested_schema(ep: dict, pl: dict) -> tuple:
@@ -1196,7 +1223,7 @@ def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) ->
     got = dict.fromkeys(PROMPT_SLOTS, "")
     for b in present_blocks(ep, pl):
         got[b.slot] += b.text(ep, pl)
-    return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep) + "\n"
+    return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep, is_recorded(ep, pl)) + "\n"
             + _frames_head(ep, cell_w, cell_h, native) + got["frames_detail"] + "\n" + _instants_line(ep)
             + got["frames"] + got["state"] + got["signals"] + BETWEEN_INSTANTS + got["after_frames"] + "\n"
             + task_block(ep) + got["after_task"])
@@ -1210,8 +1237,8 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
     c0 = (ctx.get("cameras") or {}).get(anchor(ep), {})
     native = (c0.get("width") or "native", c0.get("height") or "resolution")
     given = (ctx.get("instruction") or "").strip()
-    return (prompts.fixed_instructions(r, has_instruction=bool(given)) + prompts.example_block(r, example_dir),
-            episode_text(ep, pl, cell_w, cell_h, native))
+    fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl))
+    return fixed + prompts.example_block(r, example_dir), episode_text(ep, pl, cell_w, cell_h, native)
 
 
 EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"

@@ -19,6 +19,22 @@ from pathlib import Path
 FIXED_HEADER = ("HOW TO LABEL. These instructions are the same for every episode; the episode itself "
                 "(its dataset, cameras, frames, recorded motion and instruction) follows after them.\n\n")
 
+# An episode with no recorded state and no other signal is video only (label/episode.py RECORDED_BLOCKS), and its
+# shared instructions say nothing of a recorded motion it does not have. These are the words taken out, from the
+# header, the robot rigs' tag list and the data contract; the 2026-10-02 audit found "the recorded motion" in the
+# instructions of every video only robot episode. The variant is pinned by derivation from the recorded one
+# (tests/test_label.py), so the pinned hashes stay.
+VIDEO_ONLY_HEADER = ("frames, recorded motion and instruction", "frames and instruction")
+VIDEO_ONLY_TAG = ("state_video_mismatch, ", "")
+VIDEO_ONLY_CONTRACT_WORDING = [
+    (" from\n  the recorded motion)", ")"),
+    ("; the recorded motion\n  disagreeing with the video)", ")"),
+    ("(what the cameras show, what the recorded motion says, what the instruction\n  says, and how the task is done)",
+     "(what the cameras show, what the instruction\n  says, and how the task is done)"),
+    ("and breaks the link\n  between what is seen, what is recorded and what is asked",
+     "and breaks the link\n  between what is seen and what is asked"),
+]
+
 # The output schema of the robot rigs. Tags are offered for reuse, so one kind of problem gets one tag across
 # episodes; they are never a closed list. Each timeline segment is a positional row, so its keys are not
 # repeated hundreds of times.
@@ -229,9 +245,11 @@ OPERATOR_MISTAKE_TAGS = ("failed_grasp, dropped_object, knocked_object, collisio
                          "hesitation, unnecessary_motion, goal_undone, incomplete_task")
 
 
-def schema(r: str) -> str:
-    """The output schema for a robot rig (the head camera has its own, EGO_SCHEMA)."""
-    s = SCHEMA.replace("<<ISSUE_TAGS>>", DATA_ISSUE_TAGS).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
+def schema(r: str, recorded: bool = True) -> str:
+    """The output schema for a robot rig (the head camera has its own, EGO_SCHEMA). A video only episode is offered no
+    tag for a state it does not have."""
+    tags = DATA_ISSUE_TAGS if recorded else _replace_once(DATA_ISSUE_TAGS, *VIDEO_ONLY_TAG)
+    s = SCHEMA.replace("<<ISSUE_TAGS>>", tags).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
     if r == "handheld_gripper":
         for old, new in HANDHELD_WORDING:
             s = _replace_once(s, old, new)
@@ -587,10 +605,11 @@ EGO_CONTRACT_WORDING = [
 ]
 
 
-def data_contract(r: str) -> str:
+def data_contract(r: str, recorded: bool = True) -> str:
     """Why the episode is labelled and what counts as a problem, in the words of this rig. The purpose, the two
     lists and the severity scale are shared; what the cameras are, what a mistake looks like and what normal
-    slack is are the rig's own."""
+    slack is are the rig's own. A video only robot episode (recorded False) has the words about a recorded motion
+    taken out (VIDEO_ONLY_CONTRACT_WORDING)."""
     robot = r != "ego_head"
     c = _DATA_CONTRACT_BASE
     c = _replace_once(c, "<<WHY>>", _WHY["robot" if robot else "ego_head"])
@@ -598,6 +617,9 @@ def data_contract(r: str) -> str:
     c = _replace_once(c, "<<VISIBILITY>>", _VISIBILITY[r])
     c = _replace_once(c, "<<MAP>>", _MAP["robot" if robot else "ego_head"])
     c = _replace_once(c, "<<MISTAKES>>", _MISTAKES[r])
+    if robot and not recorded:
+        for old, new in VIDEO_ONLY_CONTRACT_WORDING:
+            c = _replace_once(c, old, new)
     if not robot:
         slack = c[c.index("- NORMAL DEMONSTRATION SLACK"):c.index("- SEVERITY IS TRAINING IMPACT")]
         c = _replace_once(c, slack, _SLACK_EGO + "\n")
@@ -793,12 +815,14 @@ def lean(r: str) -> str:
     return LEAN_NOTE
 
 
-def fixed_instructions(r: str, *, has_instruction: bool = True) -> str:
+def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True) -> str:
     """Everything before the episode's own facts. A head-camera dataset has one variant whether or not it is
-    annotated, so every episode of it shares the cached prefix."""
+    annotated, so every episode of it shares the cached prefix. recorded False (no recorded state and no other signal,
+    label/episode.py is_recorded) takes out every word about a recorded motion."""
+    head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
     if r == "ego_head":
-        return FIXED_HEADER + what_this_is(r) + EGO_SCHEMA + data_contract(r) + EGO_ANNOTATION_RULES + lean(r)
-    return (FIXED_HEADER + what_this_is(r) + schema(r) + data_contract(r)
+        return head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + EGO_ANNOTATION_RULES + lean(r)
+    return (head + what_this_is(r) + schema(r, recorded) + data_contract(r, recorded)
             + (INSTRUCTION_RULES if has_instruction else NO_INSTRUCTION_RULES) + lean(r))
 
 

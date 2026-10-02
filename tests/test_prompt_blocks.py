@@ -219,8 +219,8 @@ BLOCK_CASES = [
     ("uploader_notes", "teleop_joints", _add(uploader_annotation='{"operator": "A"}\n'),
      ("THE UPLOADER'S OWN NOTES",)),
 ]
-# blocks whose presence switches the shared instructions to another variant (none yet; Task 3 adds them)
-CHANGES_FIXED = ()
+# blocks whose presence switches the shared instructions to another variant
+CHANGES_FIXED = ("state", "no_state")
 
 
 @pytest.mark.parametrize("block,base,add,markers", BLOCK_CASES, ids=[c[0] for c in BLOCK_CASES])
@@ -300,3 +300,37 @@ def test_an_unaligned_state_no_longer_hides_the_signals():
     _add_signals(ep, pl)
     episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
     assert "RECORDED STATE: not given" in episode and "OTHER RECORDED SIGNALS" in episode
+
+
+def test_a_video_only_episode_is_never_told_of_a_recorded_motion():
+    ep, pl = CASES["teleop_video_only"]()
+    fixed, episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert "recorded motion" not in fixed + episode
+    ep2, pl2 = CASES["teleop_joints"]()
+    assert "the recorded motion" in me.build_prompt(ep2, pl2, cell_w=448, cell_h=252)[0]
+    ep3, pl3 = CASES["teleop_video_only"]()
+    _add_signals(ep3, pl3)                           # recorded numbers, even without arm state, keep the wording
+    assert "the recorded motion" in me.build_prompt(ep3, pl3, cell_w=448, cell_h=252)[0]
+
+
+def test_a_video_only_rig_with_two_wrist_cameras_is_not_told_its_views_follow_a_recorded_motion():
+    ep, pl = CASES["teleop_video_only_two_wrists"]()
+    fixed, episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert "is turned at that instant." in episode and "recorded motion" not in fixed + episode
+    ep2, pl2 = CASES["teleop_joints"]()
+    assert "and which recorded motion its view follows." in me.build_prompt(ep2, pl2, cell_w=448, cell_h=252)[1]
+
+
+def test_sensor_data_the_reader_left_unread_shows_its_note_never_a_claim_that_none_exists():
+    ep, pl = CASES["ego_plain"]()
+    ep["context"]["state_note"] = ("Labelled from the camera. The hand, body and camera tracks the file records "
+                                   "(/hand/left, /hand/right) are not read yet.")
+    episode = me.build_prompt(ep, pl, cell_w=256, cell_h=144)[1]
+    assert "no hand, head or device tracking" not in episode
+    assert ("RECORDED STATE: none was read from this episode, so the video is all there is. The reader's note: "
+            "Labelled from the camera. The hand, body and camera tracks") in episode
+    ep, pl = CASES["teleop_video_only"]()
+    ep["context"]["source"] = {"unused_arrays": ["observations/qpos_raw (8192 values per sample)"]}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert "records no robot or gripper state" not in episode and "none was read from this episode" in episode
+    assert "qpos_raw" not in episode                 # the list itself goes to the board (Task 4), not the prompt
