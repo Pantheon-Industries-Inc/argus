@@ -546,42 +546,61 @@ def test_an_mcap_keeps_every_other_number_it_records_as_a_signal():
         _an_mcap_keeps_every_other_number_it_records_as_a_signal(Path(t))
 
 
+EPOCH = 1_788_210_000.0          # a moment in 2026, in seconds from the epoch
+
+
 def test_a_fast_epoch_clock_is_read_in_its_own_unit():
     """A 1 kHz clock in nanoseconds steps by 1e6, which the step alone reads as microseconds; its size (1.79e18, which
-    only nanoseconds put in this century) settles the unit. A clock from boot keeps the step's reading."""
+    only nanoseconds put in this century) settles the unit."""
     import numpy as np
-    from prepare.formats import _seconds
     for unit, scale in (("ns", 1e9), ("us", 1e6), ("ms", 1e3)):
-        t = (1_788_210_000.0 + np.arange(50) / 1000.0) * scale       # 1 kHz from the epoch
-        s = _seconds(t)
-        assert abs(s[0] - 1_788_210_000.0) < 1 and abs((s[1] - s[0]) - 1e-3) < 1e-6, unit
-    boot = np.arange(50) * 33_333_333.0                                # 30 fps in ns from boot
-    assert abs(_seconds(boot)[1] - 1 / 30) < 1e-6
-    assert abs(_seconds(np.arange(50) / 30.0)[1] - 1 / 30) < 1e-9      # already seconds
+        s = f._seconds((EPOCH + np.arange(50) / 1000.0) * scale)
+        assert abs(s[0] - EPOCH) < 1 and abs((s[1] - s[0]) - 1e-3) < 1e-6, unit
+
+
+def test_a_clock_from_boot_keeps_the_steps_reading():
+    import numpy as np
+    assert abs(f._seconds(np.arange(50) * 33_333_333.0)[1] - 1 / 30) < 1e-6       # 30 fps in ns from boot
+    assert abs(f._seconds(np.arange(50) / 30.0)[1] - 1 / 30) < 1e-9               # already seconds
 
 
 def test_a_clock_from_boot_in_nanoseconds_is_not_taken_for_milliseconds_from_the_epoch():
     """OpenTouch's HDF5 clock holds 2.6e12 ns after 43 minutes up, which is also a date in 2002 read as milliseconds;
     the step settles it (33 ms of nanoseconds would be 9 hours of milliseconds)."""
     import numpy as np
-    from prepare.formats import _seconds
-    s = _seconds(2.6e12 + np.arange(50) * 33_333_333.0)
+    s = f._seconds(2.6e12 + np.arange(50) * 33_333_333.0)
     assert abs(s[0] - 2600) < 1 and abs((s[1] - s[0]) - 1 / 30) < 1e-6
 
 
-def test_a_slow_clock_from_days_of_uptime_keeps_the_steps_reading_and_a_nan_first_sample_does_not_hide_an_epoch_clock():
+def test_a_slow_clock_from_days_of_uptime_keeps_the_steps_reading():
     """2e15 ns (23 days up) at 200 Hz is 2e9 read as microseconds, but that clock would step 5 s; a stream read as an
-    epoch clock steps between 1 Hz and 100 kHz. The same holds for 2e12 us. A NaN before an epoch clock's first stamp
-    leaves its size readable."""
+    epoch clock steps between 10 us and 1 s. The same holds for 2e12 us."""
     import numpy as np
-    from prepare.formats import _seconds
     for start, step, unit in ((2e15, 5e6, "ns"), (2e12, 5e3, "us")):
-        s = _seconds(start + np.arange(50) * step)
+        s = f._seconds(start + np.arange(50) * step)
         assert abs(s[0] - 2e6) < 1 and abs((s[1] - s[0]) - 5e-3) < 1e-6, unit
-    t = (1_788_210_000.0 + np.arange(50) / 1000.0) * 1e9
+
+
+def test_a_nan_first_sample_does_not_hide_an_epoch_clock():
+    import numpy as np
+    t = (EPOCH + np.arange(50) / 1000.0) * 1e9
     t[0] = np.nan
-    s = _seconds(t)
-    assert abs(s[1] - 1_788_210_000.001) < 1e-3 and abs((s[2] - s[1]) - 1e-3) < 1e-6
+    s = f._seconds(t)
+    assert abs(s[1] - (EPOCH + 0.001)) < 1e-3 and abs((s[2] - s[1]) - 1e-3) < 1e-6
+
+
+def test_a_leading_zero_sentinel_does_not_hide_an_epoch_clock():
+    """A recorder that writes 0 before its first stamp: the clock's size is its median, not its first value."""
+    import numpy as np
+    t = (EPOCH + np.arange(50) / 1000.0) * 1e6
+    t[0] = 0
+    assert f._seconds_scale(t) == 1e-6
+
+
+def test_a_single_stamp_is_read_by_its_size_and_an_empty_clock_is_empty():
+    import numpy as np
+    assert abs(f._seconds(np.array([EPOCH * 1e9]))[0] - EPOCH) < 1
+    assert len(f._seconds(np.array([]))) == 0
 
 
 def test_a_steadily_rising_reading_stays_a_signal_unless_its_name_says_time():
