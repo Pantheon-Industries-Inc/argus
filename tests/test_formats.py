@@ -544,3 +544,26 @@ def test_an_mcap_keeps_every_other_number_it_records_as_a_signal():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _an_mcap_keeps_every_other_number_it_records_as_a_signal(Path(t))
+
+
+def test_a_fast_epoch_clock_is_read_in_its_own_unit():
+    """A 1 kHz clock in nanoseconds steps by 1e6, which the step alone reads as microseconds; its size (1.79e18, which
+    only nanoseconds put in this century) settles the unit. A clock from boot keeps the step's reading."""
+    import numpy as np
+    from prepare.formats import _seconds
+    for unit, scale in (("ns", 1e9), ("us", 1e6), ("ms", 1e3)):
+        t = (1_788_210_000.0 + np.arange(50) / 1000.0) * scale       # 1 kHz from the epoch
+        s = _seconds(t)
+        assert abs(s[0] - 1_788_210_000.0) < 1 and abs((s[1] - s[0]) - 1e-3) < 1e-6, unit
+    boot = np.arange(50) * 33_333_333.0                                # 30 fps in ns from boot
+    assert abs(_seconds(boot)[1] - 1 / 30) < 1e-6
+    assert abs(_seconds(np.arange(50) / 30.0)[1] - 1 / 30) < 1e-9      # already seconds
+
+
+def test_a_clock_from_boot_in_nanoseconds_is_not_taken_for_milliseconds_from_the_epoch():
+    """OpenTouch's HDF5 clock holds 2.6e12 ns after 43 minutes up, which is also a date in 2002 read as milliseconds;
+    the step settles it (33 ms of nanoseconds would be 9 hours of milliseconds)."""
+    import numpy as np
+    from prepare.formats import _seconds
+    s = _seconds(2.6e12 + np.arange(50) * 33_333_333.0)
+    assert abs(s[0] - 2600) < 1 and abs((s[1] - s[0]) - 1 / 30) < 1e-6
