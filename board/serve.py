@@ -648,20 +648,14 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #current-ep-src a:hover { color: var(--fg); border-bottom-color: var(--fg-3); }
 #current-ep-reader { font: 500 11px/1.35 var(--sans); color: var(--fg-3); }
 #current-ep-reader:empty { display: none; }
-/* what the model was not shown: a closed fold on the board's own fold-link look (.ck-more); opened, the list scrolls
-   inside the header so it never pushes the player off screen */
+/* what the model was not shown: the board's own fold (.pub-fold); opened, the list scrolls inside the header so it
+   never pushes the player off screen */
 #current-ep-reader .rn-note { overflow-wrap: anywhere; }
-#current-ep-reader .rn-fold { interpolate-size: allow-keywords; }
-#current-ep-reader .rn-fold > summary { margin-top: 0; padding: 2px 0; font-size: 11px; list-style: none; }
-#current-ep-reader .rn-fold > summary::-webkit-details-marker { display: none; }
-#current-ep-reader .rn-fold::details-content { block-size: 0; overflow: clip;
-  transition: block-size 320ms cubic-bezier(.32,.72,0,1), content-visibility 320ms allow-discrete; }
-#current-ep-reader .rn-fold[open]::details-content { block-size: auto; }
+#current-ep-reader .pub-show { font-size: 11px; padding: 2px 0; text-align: left; }
 #current-ep-reader .rn-body { max-height: 40vh; overflow: auto; padding: 4px 0 2px; overflow-wrap: anywhere; }
 #current-ep-reader .rn-k { font-weight: 600; color: var(--fg-2); padding: 6px 0 2px; }
 #current-ep-reader .rn-k:first-child { padding-top: 0; }
 #current-ep-reader .rn-i { font: 500 10.5px/1.4 var(--mono); padding: 1px 0; }
-@media (prefers-reduced-motion: reduce) { #current-ep-reader .rn-fold::details-content { transition: none; } }
 .kp-lic a, .kp-note-in a { white-space: nowrap; color: inherit; text-decoration: underline;
   text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
 .ep-head-dl { flex: none; font: 500 12px/1 var(--sans); color: var(--fg-2); text-decoration: none; white-space: nowrap;
@@ -2796,8 +2790,9 @@ function datasetSourceHtml(s) {
     s.license)}`;
 }
 // what the model was not shown of the upload (board/build.py reader_notes): the reader's note on the recorded state as
-// text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it gave, in a fold
-// that is closed until opened (an upload can leave out dozens of signals); nothing when the model was shown it all
+// text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it gave, in the same
+// fold as the notes in the files (closed until opened, since an upload can leave out dozens of signals); nothing when
+// the model was shown it all
 function readerNotesHtml(rn) {
   if (!rn) return '';
   const left = rn.left_out || {};
@@ -2805,11 +2800,14 @@ function readerNotesHtml(rn) {
                  ['arrays', 'Arrays', 'array', 'arrays'], ['depth', 'Depth streams', 'depth stream', 'depth streams']]
     .filter(([k]) => (left[k] || []).length);
   const counts = kinds.map(([k, , one, many]) => `${left[k].length} ${left[k].length === 1 ? one : many}`);
-  const said = counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}` : counts[0];
+  const said = `The model was not shown ${counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and `
+    + counts[counts.length - 1] : counts[0]}`;
   return (rn.state_note ? `<div class="rn-note">${esc(rn.state_note)}</div>` : '')
-    + (kinds.length ? `<details class="rn-fold"><summary class="ck-more">The model was not shown ${said}</summary>`
-      + `<div class="rn-body">${kinds.map(([k, head]) => `<div class="rn-k">${head}</div>`
-        + left[k].map(x => `<div class="rn-i">${esc(x)}</div>`).join('')).join('')}</div></details>` : '');
+    + (kinds.length ? `<div class="pub-fold rn-fold"><div class="sn-fold"><div class="sn-fold-in"><div class="rn-body">`
+      + kinds.map(([k, head]) => `<div class="rn-k">${head}</div>`
+        + left[k].map(x => `<div class="rn-i">${esc(x)}</div>`).join('')).join('')
+      + `</div></div></div><button class="ck-more pub-show" type="button" aria-expanded="false" data-closed="${said}" `
+      + `data-open="${said}">${said}</button></div>` : '');
 }
 function dsLabel(ds) {
   return DS_LABELS[ds] || String(ds).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -4830,7 +4828,9 @@ function renderEp(d, opts) {
     const notes = upl.filter(g => g.kind !== 'row');
     const uplHtml = upl.filter(g => g.kind === 'row').map(grp).join('') + (notes.length
       ? `<div class="pub-fold"><div class="sn-fold"><div class="sn-fold-in">${notes.map(grp).join('')}</div></div>`
-        + `<button class="ck-more pub-show" type="button" aria-expanded="false">Show the notes in the files</button></div>`
+        + `<button class="ck-more pub-show" type="button" aria-expanded="false" `
+        + `data-closed="Show the notes in the files" data-open="Hide the notes in the files">`
+        + `Show the notes in the files</button></div>`
       : '');
     pubHtml = pubHtml ? pubHtml.slice(0, -'</div>'.length) + uplHtml + '</div>'
       : `<h3 class="section">The dataset's own labels</h3><div class="info-block pub-list">${uplHtml}</div>`;
@@ -5435,7 +5435,7 @@ function renderEp(d, opts) {
     const box = b.closest('.pub-fold'), on = !box.classList.contains('shown');
     box.classList.toggle('shown', on);
     b.setAttribute('aria-expanded', String(on));
-    b.textContent = on ? 'Hide the notes in the files' : 'Show the notes in the files';
+    b.textContent = on ? b.dataset.open : b.dataset.closed;
   }));
   document.querySelectorAll('.rec [data-t]').forEach(r => {
     r.addEventListener('click', e => { e.stopPropagation(); seek(r.dataset.t); });

@@ -1,6 +1,6 @@
 // The board's provenance line (board/serve.py readerNotesHtml): the reader's note on the recorded state as text, then
-// what the model was not shown of the upload as a closed fold (counts by kind, items one per line, each escaped);
-// nothing for an episode the reader read whole.
+// what the model was not shown of the upload in the page's own fold (the .pub-fold toggled by its .pub-show button,
+// which says the counts by kind; the items one per line, each escaped); nothing for an episode the reader read whole.
 //
 //   node tests/reader_notes.js [PAGE_SOURCE]     (default board/serve.py)
 //
@@ -30,9 +30,11 @@ const h = T.readerNotesHtml({state_note: note + ' <b>',
   left_out: {cameras: ['observation.images.cam_high_mask'], signals: ['recorder_time_ns (a clock) <x>']}});
 check(h.startsWith('<div class="rn-note">Labelled from the video: the recorded state has 16 values per frame. &lt;b&gt;'
   + '</div>'), 'the note first, as text, escaped');
-check(count(h, '<details class="rn-fold">') === 1 && !h.includes('<details class="rn-fold" open'), 'one fold, closed');
-check(h.includes('<summary class="ck-more">The model was not shown 1 camera and 1 signal</summary>'),
-  'the summary counts each kind, singular for one');
+check(count(h, '<div class="pub-fold rn-fold">') === 1 && !/class="[^"]*\bshown\b/.test(h) && !h.includes('<details'),
+  'one fold of the page\'s own kind, closed');
+check(h.includes('<button class="ck-more pub-show" type="button" aria-expanded="false" data-closed="The model was not '
+  + 'shown 1 camera and 1 signal" data-open="The model was not shown 1 camera and 1 signal">The model was not shown 1 '
+  + 'camera and 1 signal</button>'), 'the button counts each kind, singular for one, and says the same open');
 check(h.includes('<div class="rn-k">Cameras</div><div class="rn-i">observation.images.cam_high_mask</div>'),
   'a kind under its heading, cameras first');
 check(h.includes('<div class="rn-k">Signals</div><div class="rn-i">recorder_time_ns (a clock) &lt;x&gt;</div>'),
@@ -42,20 +44,20 @@ check(!h.includes('The reader left out') && !h.includes('Arrays</div>'), 'no wor
 
 // plural rules and joining
 const p = T.readerNotesHtml({left_out: {cameras: many(7, 'c'), signals: many(38, 's')}});
-check(p.includes('>The model was not shown 7 cameras and 38 signals</summary>'), 'two kinds joined with and');
+check(p.includes('>The model was not shown 7 cameras and 38 signals</button>'), 'two kinds joined with and');
 check(count(p, '<div class="rn-i">') === 45, 'one item per line, one element each');
 const q = T.readerNotesHtml({left_out: {cameras: ['a'], signals: ['s', 't'], arrays: ['x', 'y', 'z'], depth: ['d']}});
-check(q.includes('>The model was not shown 1 camera, 2 signals, 3 arrays and 1 depth stream</summary>'),
+check(q.includes('>The model was not shown 1 camera, 2 signals, 3 arrays and 1 depth stream</button>'),
   'three or more kinds joined with commas and a final and');
 check(q.includes('<div class="rn-k">Arrays</div>') && q.includes('<div class="rn-k">Depth streams</div>'),
   'arrays and depth streams have their headings');
-check(T.readerNotesHtml({left_out: {depth: ['d', 'e']}}).includes('>The model was not shown 2 depth streams</summary>'),
+check(T.readerNotesHtml({left_out: {depth: ['d', 'e']}}).includes('>The model was not shown 2 depth streams</button>'),
   'depth streams plural');
 
 // a note alone has no fold, a list alone has no note line
 const n = T.readerNotesHtml({state_note: note});
 check(n === '<div class="rn-note">' + note + '</div>', 'a note alone, no fold');
 const l = T.readerNotesHtml({left_out: {arrays: ['a (1 x 2)', 'b']}});
-check(!l.includes('rn-note') && l.includes('>The model was not shown 2 arrays</summary>')
+check(!l.includes('rn-note') && l.includes('>The model was not shown 2 arrays</button>')
   && l.includes('<div class="rn-i">a (1 x 2)</div><div class="rn-i">b</div>'), 'a list alone, without a note');
 process.exit(bad ? 1 : 0);
