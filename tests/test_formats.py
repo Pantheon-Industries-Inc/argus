@@ -639,14 +639,50 @@ def test_a_camera_in_seconds_and_an_imu_in_nanoseconds_both_from_zero_keep_their
     assert abs(_step_s(out["cam"]) - 1 / 30) < 1e-9 and abs(_step_s(out["imu"]) - 5e-3) < 1e-9
 
 
-def test_a_sensor_that_records_only_part_of_the_episode_keeps_its_own_reading():
-    """A 100 Hz sensor in nanoseconds that ran for the first second of a 10 s episode: no unit puts its span within a
-    factor of 2 of the camera's, so it is read as it would be alone."""
+def test_a_pad_log_longer_than_the_clip_is_read_where_its_range_overlaps_the_cameras():
+    """A 1 kHz pad in nanoseconds from boot that starts 3 s before a 3 s camera clip and ends 3 s after it: its span is
+    three times the camera's, but only nanoseconds put its range over the camera's."""
     import numpy as np
-    cam = BOOT_NS + np.arange(300) * 33_333_333.0
-    short = BOOT_NS + np.arange(100) * 1e7
-    out = f._clocks_in_seconds({"cam": cam, "short": short}, reference="cam")
+    cam = BOOT_NS + np.arange(90) * 33_333_333.0
+    pad = BOOT_NS - 3e9 + np.arange(9000) * 1e6
+    out = f._clocks_in_seconds({"cam": cam, "pad": pad}, reference="cam")
+    assert abs(_step_s(out["pad"]) - 1e-3) < 1e-9 and abs((out["pad"][0] - out["cam"][0]) + 3) < 1e-6
+
+
+def test_a_pad_that_records_part_of_the_episode_is_read_where_its_range_overlaps_the_cameras():
+    """A 1 kHz pad in nanoseconds from boot that ran for 40% of the clip, from 0.5 s in: its step alone reads as
+    microseconds, and no unit puts its span within a factor of 2 of the camera's."""
+    import numpy as np
+    cam = BOOT_NS + np.arange(90) * 33_333_333.0
+    pad = BOOT_NS + 5e8 + np.arange(1200) * 1e6
+    out = f._clocks_in_seconds({"cam": cam, "pad": pad}, reference="cam")
+    assert abs(_step_s(out["pad"]) - 1e-3) < 1e-9 and abs((out["pad"][0] - out["cam"][0]) - 0.5) < 1e-6
+
+
+def test_a_clock_from_zero_whose_span_fits_no_unit_keeps_its_own_reading():
+    """Beside a camera in seconds from the recording's start, a 100 Hz sensor in nanoseconds from that start that ran
+    for a tenth of the clip: its start says nothing about its unit, so it is read as it would be alone."""
+    import numpy as np
+    short = np.arange(100) * 1e7
+    out = f._clocks_in_seconds({"cam": np.arange(300) / 30.0, "short": short}, reference="cam")
     assert np.array_equal(out["short"], f._seconds(short))
+
+
+def test_without_a_camera_clock_an_ambiguous_largest_step_clock_is_no_reference():
+    """A 1 kHz pad in nanoseconds from boot has the largest step, but its size settles no unit (its step alone reads
+    as microseconds), so a 100 Hz encoder in milliseconds is not matched to it and keeps its own 10 ms step."""
+    import numpy as np
+    raw = {"pad": BOOT_NS + np.arange(30000) * 1e6, "encoder": BOOT_NS / 1e6 + np.arange(3000) * 10.0}
+    out = f._clocks_in_seconds(raw)
+    assert abs(_step_s(out["encoder"]) - 1e-2) < 1e-9
+
+
+def test_a_reference_clock_that_never_steps_leaves_the_other_clocks_alone():
+    """A camera clock stuck at one value says nothing about its unit, so nothing is matched to it."""
+    import numpy as np
+    pad = BOOT_NS + np.arange(1000) * 1e6
+    out = f._clocks_in_seconds({"cam": np.full(50, BOOT_NS), "pad": pad}, reference="cam")
+    assert np.array_equal(out["pad"], f._seconds(pad))
 
 
 def test_a_single_clock_is_read_as_it_would_be_alone():

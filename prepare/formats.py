@@ -2528,25 +2528,39 @@ EPOCH_S = (1.0e9, 4.1e9)       # 2001 to 2099: a recorder clock counting from th
 EPOCH_STEP_S = (1e-5, 1.0)
 
 
-def _seconds_scale(a: np.ndarray) -> float:
-    """Seconds per unit of a clock. A clock that counts from the epoch says its unit by its size (only nanoseconds put
-    1.79e18 in this century), provided its step in that unit falls between 10 us and 1 s (EPOCH_STEP_S). Its size is
-    the median of its finite values, so a 0 a recorder writes before its first stamp does not decide it. A clock from
-    boot can also be that size in another unit. OpenTouch's 2.6e12 ns after 43 minutes up is 2.6e9 read as
-    milliseconds, which would step 9 hours at 30 fps, and 2e15 ns after 23 days up is 2e9 read as microseconds, which
-    would step 5 s at 200 Hz. Any other clock says its unit by its step (one sample every 1 ms to 10 s), as frame_times
-    reads a recorder's stamps, and a clock that never steps says it by its size alone."""
+def _clock_facts(a: np.ndarray) -> tuple[np.ndarray, float, float]:
+    """(finite values, median step, size) of a clock. Its size is the median of its finite values, so a 0 a recorder
+    writes before its first stamp does not decide it."""
     ok = np.asarray(a, dtype=np.float64).ravel()
     ok = ok[np.isfinite(ok)]
-    if not len(ok):
-        return 1.0
     step = float(np.median(np.diff(ok))) if len(ok) > 1 else 0.0
-    size = abs(float(np.median(ok)))
+    size = abs(float(np.median(ok))) if len(ok) else 0.0
+    return ok, step, size
+
+
+def _epoch_scale(a: np.ndarray) -> float | None:
+    """The unit a clock's size settles: a clock that counts from the epoch says its unit by its size (only nanoseconds
+    put 1.79e18 in this century), provided its step in that unit falls between 10 us and 1 s (EPOCH_STEP_S). A clock
+    from boot can also be that size in another unit. OpenTouch's 2.6e12 ns after 43 minutes up is 2.6e9 read as
+    milliseconds, which would step 9 hours at 30 fps, and 2e15 ns after 23 days up is 2e9 read as microseconds, which
+    would step 5 s at 200 Hz. None when the size settles nothing."""
+    ok, step, size = _clock_facts(a)
     for scale in (1e-9, 1e-6, 1e-3, 1.0):
         on_epoch = EPOCH_S[0] <= size * scale <= EPOCH_S[1]
         steps_like_a_stream = len(ok) == 1 or EPOCH_STEP_S[0] <= step * scale <= EPOCH_STEP_S[1]
         if on_epoch and steps_like_a_stream:
             return scale
+    return None
+
+
+def _seconds_scale(a: np.ndarray) -> float:
+    """Seconds per unit of a clock: the unit its size settles (_epoch_scale), else the unit its step says (one sample
+    every 1 ms to 10 s), as frame_times reads a recorder's stamps, and for a clock that never steps the unit its size
+    says alone."""
+    scale = _epoch_scale(a)
+    if scale is not None:
+        return scale
+    _, step, size = _clock_facts(a)
     if step > 0:
         return 1e-9 if step > 1.5e6 else 1e-6 if step > 1.5e3 else 1e-3 if step > 1.5 else 1.0
     return 1e-9 if size > 1e17 else 1e-6 if size > 1e14 else 1e-3 if size > 1e11 else 1.0
@@ -2559,34 +2573,55 @@ def _seconds(a: np.ndarray) -> np.ndarray:
 
 
 CLOCK_SCALES = (1e-9, 1e-6, 1e-3, 1.0)
-SPAN_MATCH = 2.0               # a clock takes the unit that puts its span within this factor of the reference's
+FAR_FROM_ZERO_STEPS = 1000     # a clock starts far from zero when its first stamp is more than this many of its steps
+SPAN_MATCH = 2.0               # a clock from near zero takes the unit that puts its span within this factor
 
 
 def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None) -> dict[str, np.ndarray]:
-    """{path: seconds} for the clocks of one episode. Every stream of an episode covers about the same stretch of time,
-    while each driver stamps in its own unit: a 1 kHz pad beside a 30 fps camera steps by 1e6 in nanoseconds or 1e3
-    in microseconds, which its step alone reads as microseconds or milliseconds. So the reference clock (reference,
-    the clock of a camera, else the clock with the largest step) is read with its own _seconds_scale, and every other
-    clock takes the unit among CLOCK_SCALES whose span (last minus first) is closest to the reference's on a log scale,
-    when that span is within SPAN_MATCH of it. A clock that matches no unit (a sensor that really ran for a tenth of
-    the episode) or has fewer than two finite values keeps its own _seconds_scale."""
-    finite = {p: a[np.isfinite(a)] for p, a in raw.items()}
+    """{path: seconds} for the clocks of one episode. Each driver stamps in its own unit: a 1 kHz pad beside a 30 fps
+    camera steps by 1e6 in nanoseconds or 1e3 in microseconds, which its step alone reads as microseconds or
+    milliseconds. So each clock is read against a reference clock, which is read with its own _seconds_scale.
+    - A clock that starts far from zero (more than FAR_FROM_ZERO_STEPS of its own steps, a clock from boot or the
+      epoch), beside a reference that does too, takes the unit among CLOCK_SCALES under which its time range overlaps
+      the reference's. The units are 1000 apart, so at most one does, whether the clock's log runs longer than the
+      camera's clip or covers only part of it.
+    - A clock or a reference that starts near zero says nothing about its unit by its start, so the clock takes the
+      unit that puts its span within SPAN_MATCH of the reference's.
+    - Otherwise, and when it has fewer than two finite values, a clock keeps its own _seconds_scale.
+    The reference is the camera's clock (reference). Without one, the clock with the largest step is a guess, so it is
+    used only when its size settles its unit (_epoch_scale), and otherwise every clock keeps its own reading. A
+    reference that does not step forward (one value, or stuck at one) says nothing about units, so then too every
+    clock keeps its own reading."""
+    facts = {p: _clock_facts(a) for p, a in raw.items()}
     if reference not in raw:
-        steps = {p: float(np.median(np.diff(a))) if len(a) > 1 else 0.0 for p, a in finite.items()}
-        reference = max(raw, key=lambda p: steps[p], default=None)
+        guess = max(raw, key=lambda p: facts[p][1], default=None)
+        reference = guess if guess is not None and _epoch_scale(raw[guess]) is not None else None
+    if reference is None or facts[reference][1] <= 0:
+        return {p: a * _seconds_scale(a) for p, a in raw.items()}
 
-    def span(p):
-        a = finite[p]
-        return float(a[-1] - a[0]) if len(a) > 1 else 0.0
-    ref_span = span(reference) * _seconds_scale(raw[reference]) if reference is not None else 0.0
+    def far_from_zero(p):
+        ok, step, _ = facts[p]
+        return abs(float(ok[0])) > FAR_FROM_ZERO_STEPS * abs(step)
+
+    def bounds(p):
+        ok = facts[p][0]
+        return float(ok.min()), float(ok.max())
+    ref_scale = _seconds_scale(raw[reference])
+    ref_lo, ref_hi = (x * ref_scale for x in bounds(reference))
     out = {}
     for p, a in raw.items():
         scale = _seconds_scale(a)
-        if p != reference and span(p) > 0 and ref_span > 0:
-            off = {s: abs(np.log(span(p) * s / ref_span)) for s in CLOCK_SCALES}
-            closest = min(off, key=off.get)
-            if off[closest] <= np.log(SPAN_MATCH):
-                scale = closest
+        if p != reference and len(facts[p][0]) > 1:
+            lo, hi = bounds(p)
+            if far_from_zero(p) and far_from_zero(reference):
+                overlapping = [s for s in CLOCK_SCALES if lo * s <= ref_hi and hi * s >= ref_lo]
+                if overlapping:
+                    scale = overlapping[0]
+            elif hi > lo and ref_hi > ref_lo:
+                off = {s: abs(np.log((hi - lo) * s / (ref_hi - ref_lo))) for s in CLOCK_SCALES}
+                closest = min(off, key=off.get)
+                if off[closest] <= np.log(SPAN_MATCH):
+                    scale = closest
         out[p] = a * scale
     return out
 
