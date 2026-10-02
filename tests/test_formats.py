@@ -693,6 +693,18 @@ def test_sparse_event_stamps_from_zero_keep_their_own_reading():
     assert abs(_step_s(out["events"]) - 0.015) < 1e-9
 
 
+def test_a_leading_zero_before_a_pads_first_stamp_does_not_hide_its_unit():
+    """A recorder that writes 0 before a 1 kHz pad's first stamp in nanoseconds from boot: the clock's position is read
+    from its median and its range from its 1st and 99th percentiles, so the 0 neither puts it near zero nor stretches
+    its range over every unit."""
+    import numpy as np
+    cam = BOOT_NS + np.arange(90) * 33_333_333.0
+    pad = BOOT_NS + np.arange(3000) * 1e6
+    pad[0] = 0
+    out = f._clocks_in_seconds({"cam": cam, "pad": pad}, reference="cam")
+    assert abs(_step_s(out["pad"][1:]) - 1e-3) < 1e-9
+
+
 def test_a_single_clock_is_read_as_it_would_be_alone():
     import numpy as np
     cam = BOOT_NS + np.arange(40) * 33_333_333.0

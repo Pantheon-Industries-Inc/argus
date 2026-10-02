@@ -2597,7 +2597,8 @@ def _seconds(a: np.ndarray) -> np.ndarray:
 
 
 CLOCK_SCALES = (1e-9, 1e-6, 1e-3, 1.0)
-FAR_FROM_ZERO_STEPS = 1000     # a clock starts far from zero when its first stamp is more than this many of its steps
+FAR_FROM_ZERO_STEPS = 1000     # a clock counts from far from zero when its median is more than this many of its steps
+RANGE_PERCENTILES = (1, 99)    # a clock's time range, so a stray stamp (a 0 before the first) does not stretch it
 SPAN_MATCH = 2.0               # a clock from near zero takes the unit that puts its span within this factor
 
 
@@ -2605,10 +2606,11 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
     """{path: seconds} for the clocks of one episode. Each driver stamps in its own unit: a 1 kHz pad beside a 30 fps
     camera steps by 1e6 in nanoseconds or 1e3 in microseconds, which its step alone reads as microseconds or
     milliseconds. So each clock is read against a reference clock, which is read with its own _seconds_scale.
-    - A clock that starts far from zero (more than FAR_FROM_ZERO_STEPS of its own steps, a clock from boot or the
-      epoch), beside a reference that does too, takes the unit among CLOCK_SCALES under which its time range overlaps
-      the reference's. The units are 1000 apart, so at most one does, whether the clock's log runs longer than the
-      camera's clip or covers only part of it.
+    - A clock that counts from far from zero (its median more than FAR_FROM_ZERO_STEPS of its own steps, a clock from
+      boot or the epoch), beside a reference that does too, takes the unit among CLOCK_SCALES under which its time
+      range (its RANGE_PERCENTILES) overlaps the reference's. The units are 1000 apart, so at most one does, whether
+      the clock's log runs longer than the camera's clip or covers only part of it. The median and the percentiles
+      keep a 0 a recorder writes before its first stamp from putting the clock near zero or stretching its range.
     - A clock or a reference that starts near zero says nothing about its unit by its start, so a sampled stream (at
       least COUNTER_MIN_MESSAGES finite values) takes the unit that puts its span within SPAN_MATCH of the
       reference's. A few event stamps are not a stream and need not span the episode, so they keep their own reading.
@@ -2625,12 +2627,12 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
         return {p: a * _seconds_scale(a) for p, a in raw.items()}
 
     def far_from_zero(p):
-        ok, step, _ = facts[p]
-        return abs(float(ok[0])) > FAR_FROM_ZERO_STEPS * abs(step)
+        _, step, size = facts[p]
+        return size > FAR_FROM_ZERO_STEPS * abs(step)
 
     def bounds(p):
-        ok = facts[p][0]
-        return float(ok.min()), float(ok.max())
+        lo, hi = np.percentile(facts[p][0], RANGE_PERCENTILES)
+        return float(lo), float(hi)
     ref_scale = _seconds_scale(raw[reference])
     ref_lo, ref_hi = (x * ref_scale for x in bounds(reference))
     out = {}
