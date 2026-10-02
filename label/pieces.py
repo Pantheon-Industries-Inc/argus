@@ -446,6 +446,10 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     # a contact of the recording is kept when the record of some part lists it; a part's record lists all its touch
     # contacts, shown or left out by the cap, so one timed by a signal that is not touch (touch_contacts) is left out
     asked = {c.get("id") for _, r in parts for c in r.get("contacts") or [] if isinstance(c, dict)}
+    # the recording's contacts as write_pieces gave them to the parts: stored, or found once on the whole recording
+    # when its context has none, so the ids match
+    from label import contacts as lc
+    recorded = lc.of_episode(ep) if asked else []
     if excluded:
         L["_excluded"] = excluded
     if views["shown"]:
@@ -458,7 +462,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
             "stitched": {"parts": count, "cuts_s": cuts_s},
-            **({"contacts": [c for c in ctx.get("contacts") or [] if c.get("id") in asked], "contact_views": views}
+            **({"contacts": [c for c in recorded if c.get("id") in asked], "contact_views": views}
                if views["shown"] else {})}
 
 

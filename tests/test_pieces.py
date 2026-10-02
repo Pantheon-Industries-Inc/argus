@@ -151,12 +151,21 @@ def test_a_recording_prepared_without_contacts_gives_each_part_the_whole_recordi
     inside = [p for p in parts if 3.0 < me.load(p)["context"]["piece"]["t0_s"]
               and me.load(p)["context"]["piece"]["t1_s"] < 6.0]
     assert inside
+    records = {}
     for p in inside:
         e = me.load(p)
         assert [c["id"] for c in e["context"]["contacts"]] == ["c1"]
         assert lc.find(e["signals"], e["signal_meta"], np.arange(len(e["state"])) / 30.0) == []   # its slice alone
         r = me.build_request(p)
         assert "contacts" in r["blocks"] and "CONTACTS:" in r["prompt"] and r["contact_views"]["shown"] == ["c1"]
+        records[p] = {"contacts": r["contacts"], "contact_views": {"shown": ["c1"], "strips": {}}}
+    # the stitched record lists the contact the parts were asked about, on the recording's own clock
+    out = pieces.stitch(src, [(json.loads((p / "context.json").read_text()),
+                               {"episode_dir": str(p), "parse_ok": True, "model": "m", "usage": {},
+                                "config": {"timesteps_s": [0.0]}, "labels": {"task_summary": p.name},
+                                **records.get(p, {})}) for p in parts])
+    (c,) = out["contacts"]
+    assert c["id"] == "c1" and abs(c["start_s"] - 3.0) < 0.05 and abs(c["end_s"] - 6.0) < 0.05
 
 
 def test_a_part_inside_a_long_press_keeps_the_contact_the_whole_recording_shows(tmp_path, monkeypatch):
