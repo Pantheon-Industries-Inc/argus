@@ -510,6 +510,51 @@ def test_spread_permutation_prefixes_span_the_range():
     assert order[:3] == [4, 1, 6]
 
 
+def _galaxea_folder(root, n: int = 20):
+    """A one-episode Galaxea R1 Lite folder (LeRobot v2.1) with the real feature table's names and shapes, trimmed to
+    the columns the reader and the chassis IMU need."""
+    imu = ["ax", "ay", "az", "gx", "gy", "gz", "qw", "qx", "qy", "qz"]
+    shapes = {"observation.state.left_arm": 6, "observation.state.right_arm": 6, "observation.state.left_gripper": 1,
+              "observation.state.right_gripper": 1, "observation.state.chassis.imu": 10, "action.left_arm": 6,
+              "action.right_arm": 6, "action.left_gripper": 1, "action.right_gripper": 1}
+    feats = {k: {"dtype": "float64", "shape": [d], "names": imu if "imu" in k else None} for k, d in shapes.items()}
+    feats |= {k: {"dtype": "int64", "shape": [1], "names": None} for k in galaxea.GALAXEA_COLUMNS[4:]}
+    feats |= {k: {"dtype": "video", "shape": [H, W, 3]} for k in galaxea.VIDEO_KEYS.values()}
+    info = {"codebase_version": "v2.1", "fps": galaxea.FPS, "chunks_size": 1000, "robot_type": "r1lite",
+            "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+            "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+            "features": feats}
+    (root / "meta").mkdir(parents=True)
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    tasks = ["qualified", "\u62ff\u8d77@pick up the bottle"]
+    (root / "meta" / "tasks.jsonl").write_text("".join(
+        json.dumps({"task_index": i, "task": t}) + "\n" for i, t in enumerate(tasks)))
+    (root / "meta" / "episodes.jsonl").write_text(json.dumps({"episode_index": 0, "tasks": tasks, "length": n}) + "\n")
+    rng = np.random.default_rng(0)
+    cols = {k: list(rng.normal(0, 1, (n, d))) if d > 1 else rng.normal(0, 1, n) for k, d in shapes.items()}
+    cols |= {"coarse_task_index": np.ones(n, dtype=np.int64), "task_index": np.ones(n, dtype=np.int64),
+             "quality_index": np.zeros(n, dtype=np.int64)}
+    (root / "data" / "chunk-000").mkdir(parents=True)
+    pd.DataFrame(cols).to_parquet(root / "data" / "chunk-000" / "episode_000000.parquet")
+    for key in galaxea.VIDEO_KEYS.values():
+        _mp4(root / "videos" / "chunk-000" / key / "episode_000000.mp4", n, pts=[k * 1024 for k in range(n)])
+    return info
+
+
+def test_galaxea_signals_keep_the_dataset_s_value_names(tmp_path):
+    """The chassis IMU is recorded as ten values (acceleration, angular rate, orientation); the reader names each one
+    from the folder's feature table, as the generic reader does, instead of showing 10 anonymous values."""
+    root = tmp_path / "galaxea_one"
+    info = _galaxea_folder(root)
+    assert galaxea.recognizes(info)
+    meta = galaxea.meta_from(lambda rel: root / rel, "galaxea_one")
+    ep = meta["episodes"][0]
+    ctx = galaxea.write_episode(meta, ep, lambda rel: root / rel, tmp_path / "ep", "galaxea_test")
+    sig = {s["name"]: s for s in ctx["signals"]}
+    assert sig["observation.state.chassis.imu"].get("names"), "the chassis IMU's value names are kept"
+    assert sig["observation.state.chassis.imu"]["names"][:3] == ["ax", "ay", "az"]
+
+
 def test_galaxea_habit_and_openaoe_annotation_helpers():
     assert galaxea.spans(np.array([3, 3, 5, 5, 5, 3])) == [(0, 1, 3), (2, 4, 5), (5, 5, 3)]
     assert galaxea.english("拿起@pick up the cup") == "pick up the cup"
