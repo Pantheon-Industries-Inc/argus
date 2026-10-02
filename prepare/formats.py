@@ -2712,8 +2712,8 @@ def h5_fps(f, group: str) -> float | None:
         return None
 
     def attrs(g):
-        # (direct, in JSON): each attribute as it is, or parsed when it holds JSON (a string, bytes, or a one-element
-        # string array)
+        # {"direct": each attribute as it is, "in JSON": each attribute that holds JSON (a string, bytes, or a
+        # one-element string array), parsed}
         direct, in_json = [], []
         for k, v in g.attrs.items():
             text = v.ravel()[0] if isinstance(v, np.ndarray) and v.size == 1 and v.dtype.kind in "OSU" else v
@@ -2726,13 +2726,15 @@ def h5_fps(f, group: str) -> float | None:
                     pass                          # malformed, or nested deeper than the parser goes
             else:
                 direct.append((k, v))
-        return direct, in_json
+        return {"direct": direct, "in JSON": in_json}
 
     parts = [p for p in group.split("/") if p]
     nearest_first = [attrs(f["/".join(parts[:i])] if i else f) for i in range(len(parts), -1, -1)]
-    for which, names in ((0, FRAME_RATE_NAME), (1, FRAME_RATE_NAME), (0, GENERIC_RATE_NAME)):
-        for found in nearest_first:
-            x = next((x for k, v in found[which] for x in [rate_in(k, v, names)] if x is not None), None)
+    precedence = (("direct", FRAME_RATE_NAME), ("in JSON", FRAME_RATE_NAME), ("direct", GENERIC_RATE_NAME))
+    for kind, names in precedence:
+        for group_attrs in nearest_first:
+            rates = (rate_in(k, v, names) for k, v in group_attrs[kind])
+            x = next((x for x in rates if x is not None), None)
             if x is not None:
                 return x
     return None
