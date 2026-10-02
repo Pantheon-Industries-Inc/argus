@@ -488,6 +488,36 @@ def test_a_torso_joint_stays_in_the_per_instant_readout_and_a_pressure_does_not(
     assert "observation.state.torso:" in readout and "left_pressure:" not in readout
 
 
+def _ramps(n: int, d: int) -> np.ndarray:
+    """d values over n frames, value i rising from i to i + 1."""
+    return np.arange(d)[None, :] + np.linspace(0, 1, n)[:, None]
+
+
+def test_a_14_value_signal_gives_each_values_range_under_its_name():
+    """habit's action_tcd has 14 values; each one's range is a claim the model can check, as main gave it."""
+    names = [f"j{i}" for i in range(14)]
+    line = sg.describe("action_tcd", _ramps(30, 14), names=names)
+    assert "(14 values (" + ", ".join(names) + "))" in line
+    assert line.count(" to ") == 14 and "13 to 14" in line and "values from" not in line
+
+
+def test_a_26_value_signal_without_names_gives_each_values_range_by_position():
+    line = sg.describe("observation.state", _ramps(30, 26))
+    assert line.count(" to ") == 26 and line.split(": ", 1)[1].startswith("0 to 1, 1 to 2")
+
+
+def test_a_9_value_constant_gives_its_values_in_the_same_at_every_frame_line():
+    ep = {"signals": {"camera_info K": np.tile(np.arange(1.0, 10.0), (30, 1))}, "signal_meta": {},
+          "context": {"fps": 30}, "times": None}
+    table = me._signals_table(ep, {"n": 30, "spans": [], "ks": [0, 29]})
+    assert "The same at every frame: camera_info K [1, 2, 3, 4, 5, 6, 7, 8, 9]" in table
+
+
+def test_a_256_value_map_keeps_its_pooled_range():
+    line = sg.describe("right_pressure", _ramps(30, 256), shape=[16, 16])
+    assert "values from 0 to 256" in line
+
+
 def test_loading_an_episode_keeps_each_signals_source_and_companion(tmp_path):
     """contacts.find groups hand-less signals by source and skips a fast sensor's variation companion; both read the
     meta load() returns."""

@@ -878,7 +878,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
             # a value repeated at every frame (a setting, a calibration, or a sensor that sent nothing new): named once
             v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
             still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
-                                 " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.SMALL else ""))
+                                 " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else ""))
             continue
         lines.append(sg.describe(name, a, (meta.get(name) or {}).get("shape"), (meta.get(name) or {}).get("names")))
     if still:

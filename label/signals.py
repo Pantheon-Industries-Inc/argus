@@ -39,6 +39,10 @@ REST_FRACTION = 0.1
 MIN_REST = 0.2
 MIN_ACTIVE = 0.02
 SMALL = 4
+# a signal of this many values or fewer is described value by value (each value's range, or its constant values); the
+# widest a prompt showed value by value before arrays were read as wholes, so a 14-joint action or a 9-value camera
+# matrix keeps every number, while a pressure map or hand landmarks get the pooled range of all their values
+PER_VALUE_MAX = 64
 MERGE_GAP_S = 0.15
 HOLD_BAND = 0.02
 SETTING_STATES = 3        # a signal of several values with this many distinct readings or fewer is a setting
@@ -254,13 +258,13 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
 
 
 def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None) -> str:
-    """One line: the signal's name, its shape or value names, and the range each value takes (or, for an array, the
-    range of all its values together)."""
+    """One line: the signal's name, its shape or value names, and the range each value takes, up to PER_VALUE_MAX
+    values (for a wider array, the range of all its values together)."""
     a = np.asarray(a, dtype=np.float64)
     d = a.shape[1]
     what = (f"{' x '.join(str(int(x)) for x in shape)} values" if shape and len(shape) > 1 else
             f"{d} value{'s' if d > 1 else ''}")
-    if names and len(names) == d and d <= 12:
+    if names and len(names) == d and d <= PER_VALUE_MAX:
         what += " (" + ", ".join(names) + ")"
     head = f"  {name} ({what})"
     if not np.isfinite(a).any():
@@ -269,7 +273,7 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     tail = f"; no reading at {gaps} of {len(a)} frames" if gaps else ""
     with np.errstate(all="ignore"):
         lo, hi = np.nanmin(a, axis=0), np.nanmax(a, axis=0)
-    if d > 12:
+    if d > PER_VALUE_MAX:
         if (hi == lo).all():
             return f"{head}: every value constant throughout{tail}"
         return f"{head}: values from {_num(np.nanmin(lo))} to {_num(np.nanmax(hi))}{tail}"
