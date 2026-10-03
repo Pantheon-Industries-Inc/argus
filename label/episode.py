@@ -1767,6 +1767,10 @@ def _state_identity_issues(ep: dict, pl: dict) -> str:
     return "\nRECORDED ACTOR IDENTITY DISAGREES:\n" + "\n".join(issues) + "\n" if issues else ""
 
 
+def _has_state_identity_issues(ep: dict, pl: dict) -> bool:
+    return any(i.get("kind") == "state_identity_conflict" for i in ep["context"].get("reader_issues", []))
+
+
 def _table_number_notes(ep: dict) -> list[str]:
     """Numeric interpretation assumptions that qualify the table values shown to the model."""
     return [issue["what"].strip() for issue in ep["context"].get("reader_issues") or []
@@ -1799,8 +1803,7 @@ BLOCKS = (
           checks=("contact_checks",)),
     Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
     Block("metadata_issues", "after_task", _has_metadata_issues, _metadata_issues),
-    Block("state_identity_issues", "after_task", lambda ep, pl: bool(_state_identity_issues(ep, pl)),
-          _state_identity_issues),
+    Block("state_identity_issues", "after_task", _has_state_identity_issues, _state_identity_issues),
 )
 
 
