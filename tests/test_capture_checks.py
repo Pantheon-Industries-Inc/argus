@@ -280,17 +280,20 @@ def _two_cameras(right_crashes: bool, nan_row: bool = False):
 
 
 def test_a_camera_that_crashes_costs_only_its_own_evidence():
-    """The right camera's record breaks a check: its error is recorded and it is left out. A video check that fired on
-    the left camera stays fired and names the camera that was never checked; one that did not fire is errored with the
-    camera and its error, never clear for a camera nobody checked. The checks that compare every camera with the
-    motion are errored with the error."""
+    """The right camera's record breaks the low contrast check: its error is recorded and it is left out. A video check
+    that fired on the left camera stays fired and names the camera that was never checked; one that did not fire is
+    errored with the camera and its error, never clear for a camera nobody checked. The checks that finished on the
+    right camera before the crash stand as they came out. The checks that compare every camera with the motion are
+    errored with the error."""
     a = cq.assess(_two_cameras(True))
     R = a["checks"]
     assert R["video_frozen_run"]["status"] == "fired" and R["video_frozen_run"]["events"][0]["camera"] == "left"
     assert "camera right" in R["video_frozen_run"]["why"] and "TypeError" in R["video_frozen_run"]["why"]
-    for c in ("camera_state_alignment_mismatch", "video_decode_failure", "video_decode_frame_count_mismatch",
-              "video_extreme_exposure", "video_low_contrast", "video_duplicate_frames"):
+    for c in ("video_low_contrast", "video_duplicate_frames"):
         assert R[c]["status"] == "errored" and "camera right" in R[c]["why"] and "TypeError" in R[c]["why"], (c, R[c])
+    for c in ("camera_state_alignment_mismatch", "video_decode_failure", "video_decode_frame_count_mismatch",
+              "video_extreme_exposure"):
+        assert R[c]["status"] == "clear", (c, R[c])
     assert R["missing_camera"]["status"] == "clear"
     rec = cq.format_result(a)
     row = next(r for r in rec["checks"] if r["check"] == "video_frozen_run")
@@ -301,6 +304,22 @@ def test_a_camera_that_crashes_costs_only_its_own_evidence():
     clean = cq.assess(_two_cameras(False))["checks"]
     assert clean["video_frozen_run"]["status"] == "fired"
     assert clean["visual_change_unexplained_by_action"]["status"] in ("fired", "clear")
+
+
+def test_a_camera_that_crashes_after_its_checks_finished_leaves_them_standing():
+    """The right camera's record breaks only after every video check finished on it with nothing found (its motion
+    change is missing): no video check says it was not run on that camera. The frozen left camera still fires with no
+    such reason, and the checks that compare every camera with the motion are errored, as the camera is left out."""
+    f = _two_cameras(False)
+    f["cams"]["right"]["pchange"] = None
+    a = cq.assess(f)
+    R = a["checks"]
+    assert "AttributeError" in a["cameras"]["right"]["error"]
+    assert R["video_frozen_run"]["status"] == "fired" and not R["video_frozen_run"].get("why"), R["video_frozen_run"]
+    for c in cq.VIDEO_CHECKS:
+        assert R[c]["status"] in ("fired", "clear") and "camera right" not in str(R[c].get("why")), (c, R[c])
+    for c in ("largest_action_not_in_video", "visual_change_unexplained_by_action", "pixel_action_corr_mismatch"):
+        assert R[c]["status"] == "errored" and "right" in R[c]["why"], (c, R[c])
 
 
 def test_a_note_names_the_camera_it_was_not_run_on_after_the_board_build():

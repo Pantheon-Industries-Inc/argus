@@ -740,8 +740,10 @@ def assess(feats: dict) -> dict:
         return ""
 
     for v, c in cams.items():
-        # one camera's checks: a crash costs only its own evidence, never the other cameras' (cam_err)
-        sizes = [len(x) for x in lists]
+        # one camera's checks: a crash costs only its own evidence, never the other cameras' (cam_err). done holds each
+        # check whose work on this camera completed, so a crash after it leaves that check's finding (or its clear
+        # result) standing for this camera
+        done = set()
         try:
             n = c["n"]
             km = ep["kmap"].get(v)
@@ -751,12 +753,15 @@ def assess(feats: dict) -> dict:
             elif km is not None and (len(km) < T or int(np.max(km[:T])) >= n or int(np.min(km[:T])) < 0):
                 align_ev.append(_ev(f"camera {v}'s frame pairing covers {len(km)} of {T} state frames or points "
                                     f"outside its {n} frames", camera=v))
+            done.add("camera_state_alignment_mismatch")
             if c["error"]:
                 dec_ev.append(_ev(f"camera {v} fails to decode: {c['error']}", camera=v))
+            done.add("video_decode_failure")
             if c["decoded"] != n:
                 missing = np.flatnonzero(~np.isfinite(c["means"]))
                 cnt_ev.append(_ev(f"camera {v}: {c['decoded']} of its {n} frames decode at their recorded times",
                                   _cam_t(ep, v, int(missing[0]), c["fps"]) if len(missing) else None, v))
+            done.add("video_decode_frame_count_mismatch")
             means, stds, pair = c["means"], c["stds"], c["pair"]
             ok = np.isfinite(means)
             if ok.any():
@@ -771,6 +776,7 @@ def assess(feats: dict) -> dict:
                                       f"{policy.maximum_extreme_exposure_fraction:.0%}; longest run "
                                       f"{(longest[1] - longest[0] + 1) / c['fps']:.1f} s",
                                       _cam_t(ep, v, longest[0], c["fps"]), v))
+                done.add("video_extreme_exposure")
                 low = ok & (stds < extra["low_contrast_std"])
                 lfrac = float(low[ok].mean())
                 if lfrac > policy.maximum_low_contrast_fraction:
@@ -780,6 +786,7 @@ def assess(feats: dict) -> dict:
                                       f"under {extra['low_contrast_std']:g}); the rule is over "
                                       f"{policy.maximum_low_contrast_fraction:.0%}",
                                       _cam_t(ep, v, longest[0], c["fps"]), v))
+            done.update(("video_extreme_exposure", "video_low_contrast"))    # nothing to judge with no frame decoded
             pok = np.isfinite(pair)
             dupm = pok & (pair < extra["duplicate_pair_mad"])
             if extra["duplicate_motion_mad"]:
@@ -809,6 +816,7 @@ def assess(feats: dict) -> dict:
                 dup_ev.append(_ev(f"camera {v} repeats the same picture on {dfrac:.0%} {where} (mean grey change under "
                                   f"{extra['duplicate_pair_mad']:g}); the rule is over "
                                   f"{policy.maximum_duplicate_pair_fraction:.0%}", camera=v))
+            done.add("video_duplicate_frames")
             runs = _runs(dupm)
             ct = camera_times(ep, v)
 
@@ -852,6 +860,7 @@ def assess(feats: dict) -> dict:
                                   f"consecutive frame changes by under {extra['duplicate_pair_mad']:g} grey "
                                   f"levels{but})" + (f" while {why}" if why else "")
                                   + f"; the rule is over {extra['frozen_run_s']:g} s", t0, v))
+            done.add("video_frozen_run")
             extreme = (means < extra["black_mean"]) | (means > extra["white_mean"])
             cam_metrics[v] = {"frames": n, "decoded": c["decoded"], "fps": round(c["fps"], 2),
                               "extreme_exposure_fraction": round(float(extreme[ok].mean()), 4) if ok.any() else None,
@@ -867,9 +876,9 @@ def assess(feats: dict) -> dict:
                 anchor_pair[v] = ap
                 anchor_pc[v] = np.concatenate([[0.0], pc])
         except Exception as e:  # noqa: BLE001 - recorded on the camera and on the checks that need it
-            # a check's evidence is complete once appended, so a defect found on this camera before the crash stands
-            # and that check counts as run on it; every check that added nothing may not have run (cam_unchecked)
-            cam_unchecked[v] = {chk for chk, x, k in zip(list_checks, lists, sizes) if len(x) == k}
+            # a check whose work on this camera completed before the crash (done) stands, its defect or its clear
+            # result; only the checks that did not finish on it were not run there (cam_unchecked)
+            cam_unchecked[v] = set(list_checks) - done
             for d_ in (anchor_pair, anchor_pc):
                 d_.pop(v, None)
             cam_err[v] = f"{type(e).__name__}: {e}"[:300]
