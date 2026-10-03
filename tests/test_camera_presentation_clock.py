@@ -340,3 +340,21 @@ def test_a_final_single_frame_part_keeps_its_original_packet(tmp_path, monkeypat
             frames = list(video.decode(video=0))
         assert len(frames) == 1
         np.testing.assert_array_equal(frames[0].to_ndarray(format='rgb24'), np.asarray(expected))
+
+
+def test_missing_sensor_rows_use_the_qualified_display_clock_for_their_gap_marker(tmp_path):
+    from prepare.camera_clock import load_times
+    ep = tied_recording(tmp_path, 'all')
+    ctx = json.loads((ep / 'context.json').read_text())
+    src = json.loads((ep / 'sources.json').read_text())
+    raw = load_times(ep, ctx, recorded=True)
+    force = np.arange(60, dtype=np.float32)[:, None]
+    force[30:40] = np.nan
+    ctx = formats.finish_episode(ep, ctx, src, times=raw, signals=formats.Signals({'force': force}))
+    gap = next(x for x in ctx['reader_issues'] if x['kind'] == 'signal_gap')
+    assert gap['t0_s'] == 1 and gap['t1_s'] == 1.3
+    assert 'assumed camera presentation clock' in gap['what']
+    assert ctx['signals'][0]['camera_aligned_by'] == 'assumed camera clock'
+    with np.load(ep / 'times.npz') as z:
+        np.testing.assert_array_equal(z['exo'], raw['exo'])
+        np.testing.assert_array_equal(z['exo_pts'], raw['exo_pts'])

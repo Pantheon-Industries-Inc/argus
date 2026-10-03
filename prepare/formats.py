@@ -2144,6 +2144,8 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         readings.append({"name": k, "key": key, "dims": int(a.shape[1]), **m})
         if k not in quiet:
             for issue in signal_gaps(k, a, t):
+                if m.get("camera_aligned_by") == ALIGNED_CAMERA:
+                    issue["what"] += ". These times use the assumed camera presentation clock."
                 add_issue(ctx, **issue)
     np.savez(ep / "signals.npz", **arrays)
     if readings:
@@ -2431,7 +2433,7 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
             add_issue(ctx, "camera_timestamp_repeated", f"{name} has {note['what']}", camera=name)
         if anchor in notes:
             signals = qualify_camera_signals(ctx, signals, state, action)
-    write_signals(ep, ctx, signals, (times or {}).get(anchor))
+    write_signals(ep, ctx, signals, presentation.get(anchor, (times or {}).get(anchor)))
     if times:
         np.savez(ep / "times.npz", **times)
         ctx["real_times"] = "times.npz"
