@@ -2218,7 +2218,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     # sensor files of the episode's folder (assign_sensors): by their clock on the capture times, from both starts when
     # they share no clock with the footage, or listed (split_sensors)
     by_clock, assumed, unplaced = split_sensors(item, real[anchor], real[anchor] is not None)
-    note_sensors(extra, signals, by_clock, assumed, unplaced)
+    note_sensors(extra, signals, by_clock, assumed, unplaced, q=real[anchor])
     if by_clock:
         mcap_files = [p for p in by_clock if p.suffix.lower() == ".mcap"]
         h5_files = [p for p in by_clock if p.suffix.lower() in H5_EXT]
@@ -4087,7 +4087,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["source"]["unused_arrays"] = st["unused"]
     for i in sensor_extra.get("reader_issues") or []:
         add_issue(extra, **i)
-    note_sensors(extra, signals, by_clock, assumed, unplaced)
+    note_sensors(extra, signals, by_clock, assumed, unplaced, q=q_abs)
     if state_src:
         extra["source"]["state"] = state_src
     if state_note:
@@ -5375,7 +5375,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         merge_signals(signals, h5_file_signals(sensor_h5s, q, len(q)))
     if assumed:
         merge_signals(signals, sensors_from_start(assumed, q - q[0], extra))
-    note_sensors(extra, signals, by_clock, assumed, unplaced)
+    note_sensors(extra, signals, by_clock, assumed, unplaced, q=q)
     # motion the file records but this reader does not use (hand, body or camera poses in a human recording, joints
     # in a layout the checks do not read): named on the job page, so a missing check is never a silent gap
     motion = [t for t in item["topics"] if re.search(r"hand|pose|slam|body|joint|odom|/tf$", t, re.I)
@@ -5788,13 +5788,16 @@ def assign_sensors(items: list[dict], sensors: list[Path]) -> None:
 
 def sensor_times(p: Path) -> np.ndarray | None:
     """A sensor file's own times in seconds, sorted: an MCAP's message log times (from its summary's first and last
-    time and count, or scanned when it has no summary), an HDF5 file's longest clock (h5_streams); None when it has
-    none."""
+    time and count, or scanned when it has no summary or its summary cannot be read, a file cut short, whose
+    messages before the cut are then its times), an HDF5 file's longest clock (h5_streams); None when it has none."""
     try:
         if Path(p).suffix.lower() == ".mcap":
             from mcap.reader import make_reader
-            with open(p, "rb") as fh:
-                s = make_reader(fh).get_summary()
+            try:
+                with open(p, "rb") as fh:
+                    s = make_reader(fh).get_summary()
+            except Exception:
+                s = None                  # cut short: no footer to find the summary by
             st = s.statistics if s is not None else None
             if st and st.message_count:
                 return np.linspace(st.message_start_time, st.message_end_time, max(int(st.message_count), 1)) / 1e9
@@ -5807,6 +5810,37 @@ def sensor_times(p: Path) -> np.ndarray | None:
         return max(clocks, key=len) if clocks else None
     except Exception:
         return None
+
+
+def no_time_why(p: Path) -> str:
+    """Why a sensor file gave no times (sensor_times): it could not be opened at all, or it opened and holds none."""
+    try:
+        if Path(p).suffix.lower() == ".mcap":
+            with open(p, "rb") as fh:
+                if fh.read(len(MCAP_MAGIC)) != MCAP_MAGIC:
+                    raise ValueError("not an MCAP file")
+        else:
+            import h5py
+            with h5py.File(p, "r"):
+                pass
+    except Exception:
+        return "it could not be opened; it may be damaged or cut short"
+    return "no time in it to place it on the footage by"
+
+
+def sensor_cut(p: Path) -> bool:
+    """Whether an MCAP sensor file is cut short: a whole one ends with the MCAP magic after its footer."""
+    if Path(p).suffix.lower() != ".mcap":
+        return False
+    try:
+        with open(p, "rb") as fh:
+            fh.seek(0, 2)
+            if fh.tell() < 2 * len(MCAP_MAGIC):
+                return True
+            fh.seek(-len(MCAP_MAGIC), 2)
+            return fh.read() != MCAP_MAGIC
+    except OSError:
+        return False
 
 
 def recorder_clock(t) -> bool:
@@ -5835,7 +5869,7 @@ def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path],
     for p in own + [Path(x) for x in item.get("state_shared") or [] if Path(x) not in own]:
         t = sensor_times(p)
         if t is None:
-            unplaced.append((p, "no time in it to place it on the footage by"))
+            unplaced.append((p, no_time_why(p)))
         elif on_clock and recorder_clock(t) and overlaps(t, np.asarray(q, dtype=np.float64)):
             by_clock.append(p)
         elif on_clock and recorder_clock(t):
@@ -5849,13 +5883,27 @@ def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path],
     return by_clock, assumed, unplaced
 
 
-def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, unplaced: list) -> None:
+def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, unplaced: list,
+                 q: np.ndarray | None = None) -> None:
     """What became of an episode's sensor files: their names (source "sensors", which says sensor data was read or
     tried, label/episode.py), how each was placed or why it was not (source "sensor_files", which convert gathers into
-    the report), and each file not placed listed among the signals left out with the reason."""
+    the report), and each file not placed listed among the signals left out with the reason. A placed MCAP file cut
+    short (sensor_cut) is read up to the cut, a data issue (sensor_file_cut) giving the span its messages cover in
+    seconds of the footage (q, the footage's frame times on the file's clock when it was placed by its clock; from its
+    own start when it was placed from both starts)."""
     files = [*by_clock, *assumed, *(p for p, _ in unplaced)]
     if not files:
         return
+    for p in [*by_clock, *assumed]:
+        if not sensor_cut(p):
+            continue
+        t = sensor_times(p)
+        zero = float(q[0]) if p in by_clock and q is not None and len(q) else (float(t[0]) if t is not None else 0.0)
+        span = (f"; its messages cover {round(t[0] - zero, 1) + 0.0:.1f} s to {t[-1] - zero:.1f} s of the footage"
+                if t is not None else "")
+        signals.issues.append({"kind": "sensor_file_cut", "what": f"{Path(p).name} is cut short, so only the "
+                                                                  f"messages written before the cut were read{span}",
+                               **({"t0_s": float(t[0] - zero), "t1_s": float(t[-1] - zero)} if t is not None else {})})
     extra.setdefault("source", {})["sensors"] = [Path(p).name for p in files]
     how = {Path(p).name: "placed by its own clock" for p in by_clock}
     how.update({Path(p).name: "placed from both starts" for p in assumed})
@@ -5889,7 +5937,7 @@ def sensors_from_start(paths: list[Path], t_video: np.ndarray, extra: dict) -> S
         p = Path(p)
         t = sensor_times(p)
         if t is None:
-            out.left_out.append((p.name, "no time in it to place it on the footage by"))
+            out.left_out.append((p.name, no_time_why(p)))
             continue
         q = float(t[0]) + t_video
         got = mcap_signals([p], q) if p.suffix.lower() == ".mcap" else h5_file_signals([p], q, len(q))
