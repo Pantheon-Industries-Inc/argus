@@ -187,11 +187,7 @@ def actor_views(ep: dict, names: list[str]) -> list[str | None]:
     """The camera view mounted on each actor (state order), or None. Two actors ride on the left and
     right views; a single handheld gripper on the episode's only mounted view (its actor name is the
     camera's dataset name, e.g. "gripper", not the view key)."""
-    vs = me.views(ep)
-    if len(names) == 2:
-        return [v if v in vs else None for v in ("left", "right")]
-    mounted = [v for v in vs if v in me.MOUNTED]
-    return [mounted[-1] if mounted else None]
+    return me.actor_views(ep)
 
 
 def canonical_states(ep: dict) -> dict:

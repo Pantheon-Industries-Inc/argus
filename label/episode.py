@@ -392,7 +392,8 @@ def contact_views(ep: dict, pl: dict) -> list[tuple[int, list[str]]]:
             rng = float(np.nanmax(v) - np.nanmin(v))
             if rng > 1e-6 and abs(float(v[k] - v[a])) / rng >= CONTACT_MIN_CHANGE:
                 who.append(g)
-        vs = [mounted[g] for g in who if g < len(mounted)] if len(mounted) > 1 else mounted
+        mapped = actor_views(ep)
+        vs = [mapped[g] for g in who if g < len(mapped) and mapped[g] is not None]
         out.append((k, (["exo"] if "exo" in views(ep) else []) + (vs or mounted)))
     return out
 
@@ -408,9 +409,35 @@ def actors(ep: dict) -> list[str]:
         return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
     if ep["state"].shape[1] == 14:
         return ["left", "right"]
-    # the one arm or gripper is named by its own mounted camera, never by an extra camera that sorts after it
+    recorded = ep["context"].get("state_actors")
+    if isinstance(recorded, list) and len(recorded) == 1 and isinstance(recorded[0], str) and recorded[0]:
+        return recorded
+    from prepare.formats import recorded_state_side
+    ctx = ep["context"]
+    source = ctx.get("source") or {}
+    side = ctx.get("state_side") if "state_side" in ctx else recorded_state_side(
+        source.get("state") if source.get("format") == "hdf5" else None)
+    if side in MOUNTED:
+        return [side]
+    # A unique mounted view names the one actor. Two mounted views establish no side for a single state stream.
     mounted = [v for v in views(ep) if v in MOUNTED]
-    return [cam_name(ep, (mounted or views(ep)[:1])[-1])]
+    if len(mounted) == 1:
+        return [cam_name(ep, mounted[0])]
+    noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
+    return [f"recorded {noun} (side unknown)"]
+
+
+def actor_views(ep: dict) -> list[str | None]:
+    """Mounted view for each recorded actor, without assigning an unknown single state to either wrist."""
+    names = actors(ep)
+    vs = views(ep)
+    if len(names) == 2:
+        return [v if v in vs else None for v in MOUNTED]
+    mounted = [v for v in vs if v in MOUNTED]
+    name = names[0]
+    if name in MOUNTED:
+        return [name if name in mounted else None]
+    return [mounted[0] if len(mounted) == 1 and name == cam_name(ep, mounted[0]) else None]
 
 
 def _decode_error(e: Exception) -> bool:

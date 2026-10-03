@@ -788,6 +788,15 @@ def side_of(name: str) -> str | None:
     return None
 
 
+def recorded_state_side(source=None, names=None) -> str | None:
+    """A single state's recorded side, from its source path or its value names, never its cameras."""
+    side = side_of(source) if isinstance(source, str) else None
+    said = {side_of(str(n)) for n in names or []} - {None}
+    if len(said) > 1 or (side is not None and said and said != {side}):
+        return None
+    return side or (next(iter(said)) if len(said) == 1 else None)
+
+
 def is_mount_named(name: str) -> bool:
     return any(t.startswith(w) for t in tokens(name) for w in MOUNTED_WORDS)
 
@@ -2398,6 +2407,10 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
                    signals: dict | None = None) -> dict:
     ep.mkdir(parents=True, exist_ok=True)
     if state is not None and ctx.get("state_kind") != "none":
+        from label import episode as me
+        # Resolve once before clipping or reanchoring can remove a mounted camera. Context copies retain this
+        # identity, while the numeric state and its order remain as recorded.
+        ctx.setdefault("state_actors", me.actors({"context": ctx, "state": state, "sources": sources}))
         arrs = {"state": np.asarray(state, dtype=np.float32)}
         if action is not None and np.shape(action) == np.shape(state):
             arrs["action"] = np.asarray(action, dtype=np.float32)
@@ -2535,6 +2548,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         ctx["placeholder_frames"] = held
     if state is not None:
         ctx["state_kind"] = state_layout(state.shape[1], rig, state_names)[0]
+        if state.shape[1] == JOINT_DIMS and state_names:
+            ctx["state_side"] = recorded_state_side((ctx.get("source") or {}).get("state"), state_names)
     write_depth(ep, ctx, dep, dtimes)
     return finish_episode(ep, ctx, sources, state=state, action=action, times=times, signals=signals)
 
@@ -3470,6 +3485,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if note:
                 no_state(extra, note)
             elif state is not None:
+                extra["state_side"] = joint_state_side(streams)
                 extra["source"]["state"] = [Path(p).name for p in mcap_files]
                 third = third_arms(streams)
                 if third:
@@ -3487,6 +3503,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                     more, rig, real[anchor], [p.stem for p in h5_files] if len(h5_files) > 1 else None)
                 if state is not None:
                     extra["source"]["state"] = state_src
+                    extra["state_side"] = recorded_state_side(state_src, state_names)
                     drop_no_state(extra)                 # a note on the MCAP arm channels, which are not the state
                 elif h5_note and "state_note" not in extra:
                     no_state(extra, h5_note)
@@ -4293,6 +4310,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(feats, state))
+    if state is not None and state.shape[1] == JOINT_DIMS:
+        extra["state_side"] = recorded_state_side(names=state_value_names(feats, state))
     note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
         # no observation.state, or one with no numbers, is a state not recorded; a data file that did not come is
@@ -4627,6 +4646,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             unshown_not_decodable(extra, key)
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
+    if state is not None and state.shape[1] == JOINT_DIMS:
+        extra["state_side"] = recorded_state_side(names=state_value_names(r["features"], state))
     note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
         note = missing_lerobot_state(df)
@@ -5581,6 +5602,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     note_sensors(extra, signals, by_clock, assumed, unplaced, q=q_abs)
     if state_src:
         extra["source"]["state"] = state_src
+        extra["state_side"] = recorded_state_side(state_src, state_names)
     if state_note:
         no_state(extra, state_note)
     if not chosen[anchor]["clock"]:
@@ -6763,6 +6785,15 @@ def arm_streams(streams: dict, role: bool) -> dict:
     return by_side
 
 
+def joint_state_side(streams: dict) -> str | None:
+    """The identity of the one arm joint_state selected, including its own recorded value names."""
+    arms = arm_streams(streams, False)
+    if len(arms) != 1:
+        return None
+    side, key = next(iter(arms.items()))
+    return side if side != "only" else recorded_state_side(_topic(streams, key), streams[key].get("names"))
+
+
 def third_arms(streams: dict) -> list[str]:
     """The recorded arm channels that are neither working arm: those whose topic names no side, beside a left and a
     right arm (a third arm that carries the scene camera, as on a rig whose camera an operator moves). joint_state
@@ -7178,6 +7209,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     motion = [t for t in motion if t not in shown_topics]            # kept as signals, so shown to the model
     if state is not None:
         extra["source"]["state"] = "joint channels"
+        extra["state_side"] = joint_state_side(streams)
     elif note:
         no_state(extra, note)
     elif item["seconds"] is None and mcap_layout(item["topics"]) != "generic":
