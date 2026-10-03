@@ -7413,7 +7413,7 @@ def trim_episode(ep: Path, max_s: float) -> dict:
 
 # ---------------------------------------------------------------- entry point
 
-def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
+def plan(root: Path, grouping: dict | None = None, ownership_context: dict | None = None) -> tuple[dict, list[dict]]:
     """(what was detected, one item per episode) for every format the upload holds (detect), each planned by its own
     reader, then the sensor files no episode took and the files no reader opened named in det["missing"], so nothing
     in the upload goes unmentioned."""
@@ -7437,7 +7437,7 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
                 det["version"] = part["version"]
     table_reads = {"dir": root, "missing": det["missing"], "metadata_read": set(), "metadata_issues": []}
     det["annotation_tables"] = annotation_tables(root, table_reads)
-    attach_structured_notes(items)
+    attach_structured_notes(items, ownership_items(root, items, ownership_context))
     note_issues = {issue["text"] for it in items
                    for view in ([it] if it["kind"] == "video" else [it["side_notes"]] if it.get("side_notes") else [])
                    for issue in episode_notes(view)["issues"]}
@@ -7482,11 +7482,81 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
     return det, items
 
 
-def attach_structured_notes(items: list[dict]) -> None:
+def ownership_items(root: Path, items: list[dict], context: dict | None) -> list[dict]:
+    """Keep outside note ownership from a trusted original upload registry when only a subset is read.
+
+    Container groups come from server inspection, never filename guesses. These descriptors supply names only;
+    absent containers are not opened and never become converted episodes. Every selected container must match its
+    inspected groups exactly, so stale context cannot silently assign another episode's notes.
+    """
+    if context is None:
+        return items
+    if not isinstance(context, dict) or type(context.get("version")) is not int or context["version"] != 1:
+        raise ValueError("the original upload ownership context has an unsupported version")
+    rows = context.get("episodes")
+    if not isinstance(rows, list):
+        raise ValueError("the original upload ownership context has no episode list")
+    descriptors = {}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("kind") not in {"hdf5", "mcap", "video_alias"}:
+            raise ValueError("the original upload ownership context has an unsupported episode")
+        rel = row.get("file")
+        if (not isinstance(rel, str) or not rel or "\\" in rel or Path(rel).is_absolute()
+                or any(part in {"", ".", ".."} for part in rel.split("/"))):
+            raise ValueError("an original upload ownership path is not a relative file path")
+        if hidden(root / rel, root):
+            continue
+        kind = row["kind"]
+        suffixes = H5_EXT if kind == "hdf5" else {".mcap"} if kind == "mcap" else VIDEO_EXT
+        if Path(rel).suffix.lower() not in suffixes:
+            raise ValueError("an original upload ownership file has the wrong container type")
+        if kind == "video_alias":
+            key = kind, rel, ""
+            if key in descriptors:
+                raise ValueError("the original upload ownership context repeats a video filename")
+            descriptors[key] = {"kind": kind, "file": root / rel}
+            continue
+        group = row.get("group", "")
+        if (not isinstance(group, str) or "\\" in group
+                or group and any(part in {"", ".", ".."} for part in group.split("/"))
+                or kind == "mcap" and group):
+            raise ValueError("an original upload ownership group is not a container group path")
+        name = Path(rel).with_suffix("").as_posix() + ("/" + group.rsplit("/", 1)[-1] if group else "")
+        if row.get("name") != name:
+            raise ValueError("an original upload ownership name disagrees with its container and group")
+        key = kind, rel, group
+        if key in descriptors:
+            raise ValueError("the original upload ownership context repeats a container group")
+        descriptors[key] = {"kind": kind, "name": name, "file": root / rel, "group": group}
+    selected = {(it["kind"], Path(it["file"]).relative_to(root).as_posix(), it.get("group", "")): it
+                for it in items if it["kind"] in {"hdf5", "mcap"}}
+    # HDF5 inspection covers every group in a selected file, rather than only a guessed selected episode.
+    for key in selected:
+        if key not in descriptors:
+            raise ValueError("a selected container group is absent from the original upload ownership context")
+    files = {(kind, rel) for kind, rel, _ in selected}
+    if any(key[:2] in files and key not in selected for key in descriptors):
+        raise ValueError("a selected container no longer matches its original inspected groups")
+    videos = {Path(p) for it in items if it["kind"] == "video" for p in it["files"]}
+    all_videos = {p.relative_to(root).as_posix() for p in videos}
+    all_videos |= {key[1] for key in descriptors if key[0] == "video_alias"}
+    _, unshown = colour_videos(sorted(all_videos))
+    paired = set(depth_videos(sorted(all_videos)).values())
+    for key, descriptor in descriptors.items():
+        if key[0] == "video_alias":
+            descriptor["unshown"] = key[1] in unshown and key[1] not in paired
+    return [it for it in items if it["kind"] not in {"hdf5", "mcap"}] + [
+        selected.get(key, descriptor) for key, descriptor in descriptors.items()
+        if key[0] != "video_alias" or descriptor["file"] not in videos]
+
+
+def attach_structured_notes(items: list[dict], registry_items: list[dict] | None = None) -> None:
     """Outside notes use the same filename ownership and task ranks as video notes. A container name identifies
     every episode inside that container; a LeRobot episode uses its recorded index, never a camera number."""
+    registry_items = items if registry_items is None else registry_items
+    selected = {id(it) for it in items}
     by_folder = collections.defaultdict(list)
-    for it in items:
+    for it in registry_items:
         if it["kind"] in ("mcap", "hdf5"):
             d, file = Path(it["file"]).parent, Path(it["file"])
             aliases = [file.stem] + ([it["group"].rsplit("/", 1)[-1]] if it.get("group") else [])
@@ -7499,18 +7569,28 @@ def attach_structured_notes(items: list[dict]) -> None:
         by_folder[d].append((it, file, aliases))
     for d, entries in by_folder.items():
         takes = set(TAKE_NUMBER_WORDS)
-        for _, _, aliases in entries:
-            for alias in aliases:
-                ws = tokens(alias)
-                for i, word in enumerate(ws):
-                    if (m := TAKE_WORD.match(word)) and (m[2] or (i + 1 < len(ws) and ws[i + 1].isdigit())):
-                        takes.add(m[1])
+        aliases_in_folder = [alias for _, _, aliases in entries for alias in aliases]
+        aliases_in_folder += [it["file"].stem for it in registry_items
+                              if it["kind"] == "video_alias" and it["file"].parent == d]
+        for alias in aliases_in_folder:
+            ws = tokens(alias)
+            for i, word in enumerate(ws):
+                if (m := TAKE_WORD.match(word)) and (m[2] or (i + 1 < len(ws) and ws[i + 1].isdigit())):
+                    takes.add(m[1])
         names = collections.defaultdict(set)
         for it, _, aliases in entries:
             for alias in aliases:
                 names[name_words(alias, takes)].add(it["name"])
-        for it in items:
-            if it["kind"] == "video" and item_folder(it) == d:
+        for it in registry_items:
+            if it["kind"] == "video_alias" and it["file"].parent == d:
+                file = it["file"]
+                # An omitted filename has an owner, but never pretends to be a selected converted episode.
+                owner = None if it["unshown"] else ("omitted video", file.as_posix())
+                aliases = [file.stem] + ([name_parts(file.stem)["take"]] if not it["unshown"] else [])
+                for alias in aliases:
+                    if alias:
+                        names[name_words(alias, takes)].add(owner)
+            elif it["kind"] == "video" and item_folder(it) == d:
                 nf = it.get("note_folder")
                 if nf:
                     for words, owners in nf["names"].names.items():
@@ -7521,6 +7601,8 @@ def attach_structured_notes(items: list[dict]) -> None:
         registry = FolderNames(frozenset(takes), {w: frozenset(v) for w, v in names.items() if w}, {},
                                name_words(d.name, takes), frozenset({6}) if any(it["kind"] == "lerobot" for it, _, _ in entries) else frozenset())
         for it, file, aliases in entries:
+            if id(it) not in selected:
+                continue
             videos = (it.get("row") or {}).get("videos") or {}
             camera_files = [Path(v[0] if isinstance(v, tuple) else v) for v in videos.values()]
             it["side_notes"] = {"files": [file], "camera_files": camera_files, "side_metadata": True,
@@ -8218,7 +8300,8 @@ def plain_error(e: Exception) -> str:
     return "it could not be opened (" + type(e).__name__ + ")"
 
 
-def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, grouping: dict | None = None) -> dict:
+def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, grouping: dict | None = None,
+            ownership_context: dict | None = None) -> dict:
     """Convert an upload into episode sidecars under out/, taking episodes in order until max_seconds of
     footage. Returns a report of what was accepted, skipped and why, and what was read and what was not."""
     if rig not in RIGS:
@@ -8226,7 +8309,7 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     root, out = Path(root), Path(out)
     root, opened = open_archives(root, out.parent / "upload_unpacked")
     try:
-        det, items = plan(root, grouping)
+        det, items = plan(root, grouping, ownership_context)
     except ValueError as e:
         if not opened:
             raise
