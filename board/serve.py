@@ -485,16 +485,17 @@ def withheld_status(result: dict) -> dict:
     (checksSection): an error, then not assessed, then fired."""
     if result.get("error"):
         return {"status": "errored", "error": str(result["error"])}
+    flagged = any(bool(result.get(f)) for f in ("flagged", "crossed", "sped_up_recording"))
     if isinstance(result.get("checks"), list):
         st = [c.get("status") for c in result["checks"] if isinstance(c, dict)]
         n = {"fired": st.count("fired"), "errored": st.count("errored"),
              "of": sum(s in ("fired", "clear", "errored") for s in st)}
-        return {"status": "errored" if n["errored"] else "fired" if n["fired"] else "clear" if n["of"]
+        # a result that says it flagged fired, whatever its own list of checks holds
+        return {"status": "errored" if n["errored"] else "fired" if n["fired"] or flagged else "clear" if n["of"]
                 else "not_assessed", **n}
     if result.get("not_assessed"):
         return {"status": "not_assessed", "why": str(result["not_assessed"])}
-    fired = any(bool(result.get(f)) for f in ("flagged", "crossed", "sped_up_recording"))
-    return {"status": "fired" if fired else "clear"}
+    return {"status": "fired" if flagged else "clear"}
 
 
 def episode_view(d: dict) -> dict:

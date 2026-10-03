@@ -123,6 +123,14 @@ def test_a_withheld_check_reads_as_what_it_found():
     assert st({"crossed": False, "left_vs_left": 0.9})["status"] == "clear"
 
 
+def test_a_withheld_check_that_flagged_reads_fired_even_with_no_check_listed():
+    """A withheld result that says it flagged, with no check of its own listed or none that ran, read not assessed."""
+    st = serve.withheld_status
+    assert st({"flagged": True, "checks": []}) == {"status": "fired", "fired": 0, "errored": 0, "of": 0}
+    assert st({"flagged": True, "checks": [{"status": "na"}]})["status"] == "fired"
+    assert st({"flagged": False, "checks": []})["status"] == "not_assessed"
+
+
 def test_render_index_fills_every_placeholder():
     page = serve.render_index("Data <Board>", {"mode": "api", "compare": False}, "trial <one>")
     assert "<title>Data &lt;Board&gt;</title>" in page and '<span class="ph-board">trial &lt;one&gt;</span>' in page
