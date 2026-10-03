@@ -228,9 +228,20 @@ def label_failure(result: dict | None) -> list[dict]:
     if lf is None:
         return gaps
     rest = "so this episode has no labels; its footage, checks and sensors are shown as recorded"
+    if lf["status"] == "no_part":
+        def said(why: str) -> str:
+            w = str(why or "")
+            return ("was cut off at the output limit" if "cut off" in w else "never answered" if "no reply" in w
+                    else "did not parse" if "parse" in w else w or "gave no labels")
+        each = [f"part {g.get('part')} {said(g.get('why'))}" for g in lf["parts"]]
+        listed = ", ".join(each[:-1]) + f" and {each[-1]}" if len(each) > 1 else each[0]
+        return [{"kind": "no_part_labelled",
+                 "what": f"No part of this long recording has labels: {listed}. It is shown with its footage, checks "
+                         "and sensors as recorded."}]
     if lf["status"] == "unreadable":
         return [{"kind": "label_output_unreadable",
-                 "what": f"The labelling run's output file for this episode does not read ({lf.get('error')}), {rest}."}]
+                 "what": f"The labelling run's output file for this episode does not read ({lf.get('error')}), "
+                         f"{rest}."}]
     if lf["status"] == "cut_off":
         n = lf.get("out_tokens")
         return [{"kind": "model_reply_cut_off",

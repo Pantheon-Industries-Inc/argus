@@ -353,6 +353,14 @@ def test_a_long_recording_none_of_whose_parts_parsed_is_still_on_the_board(tmp_p
     assert [g["why"] for g in r["stitched"]["missing"]] == [
         "the model's reply was cut off at the output limit", "the model's reply did not parse",
         "the model gave no reply"]
+    # the board says why for each part, never that the model's reply did not parse
+    from board import build as board_build
     from board import to_board
     d = to_board.convert(r, "demo")
-    assert d["_label_failed"]["status"] == "unparsed" and "no part" in d["_label_failed"]["parse_error"]
+    assert d["_label_failed"]["status"] == "no_part"
+    assert [g["why"] for g in d["_label_failed"]["parts"]] == [g["why"] for g in r["stitched"]["missing"]]
+    board_build.add_reader_issues(d, {}, r)
+    (iss,) = d["dataset_checks"]["reader_issues"]
+    assert iss["kind"] == "no_part_labelled" and iss["family"] == "label-failed"
+    assert ("part 1 was cut off at the output limit" in iss["what"] and "part 2 did not parse" in iss["what"]
+            and "part 3 never answered" in iss["what"]), iss["what"]

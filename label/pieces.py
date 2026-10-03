@@ -347,9 +347,10 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
 
 
 def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: list[dict]) -> dict:
-    """The result of a long recording none of whose parts gave labels: a reply that did not parse
-    (board/to_board.py label_failed), which says why, with the first part's reply that came back, every part's
-    undecodable stretches and cost, and the parts it was cut into."""
+    """The result of a long recording none of whose parts gave labels: no labels, and stitched["missing"] with each
+    part's span and why (board/to_board.py label_failed reads it as no_part, and the board says why for each part),
+    with the first part's reply that came back, every part's undecodable stretches and cost, and the parts it was cut
+    into."""
     first = next((r for _, r in failed if r), {}) or {}
     raw = (first.get("labels") or {}).get("_raw") if isinstance(first.get("labels"), dict) else None
     raw = raw if raw is not None else first.get("content_tail") or ""
@@ -358,7 +359,7 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
                                        for _, r in failed), 4)}
     count = len(missing)
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
-            "config": first.get("config") or {}, "parse_ok": False, "usage": usage,
+            "config": first.get("config") or {}, "parse_ok": False, "no_part": True, "usage": usage,
             "labels": {"_raw": raw, "_parse_error": f"no part of the recording returned labels that parse ({whys})"},
             "stitched": {"parts": count, "cuts_s": [g["t0_s"] for g in missing[1:]], "missing": missing},
             "decode_failed": [x for _, r in failed for x in (r or {}).get("decode_failed") or []]}
