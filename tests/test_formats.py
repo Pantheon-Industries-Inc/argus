@@ -2288,3 +2288,37 @@ def test_every_camera_reaches_the_board_even_when_the_model_is_not_shown_it():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _every_camera_reaches_the_board_even_when_the_model_is_not_shown_it(Path(t))
+
+
+def _an_upload_or_episode_with_no_camera_names_every_file_and_why(tmp_path):
+    """The board shows an episode beside its footage, so an episode with no camera cannot be shown yet. A sensor only
+    upload had been refused with a sentence that named none of its files, and a LeRobot episode with a data file but
+    no video was dropped without a word. The refusal names every file and why, and the report names each such
+    episode's data file."""
+    import numpy as np
+    root = tmp_path / "sensors"
+    root.mkdir()
+    _glove_h5(root / "glove.h5", 30)
+    _json_mcap(root / "imu.mcap", {"/imu": [(k / 30, {"accel": [0.0, 0.0, 9.8]}) for k in range(30)]},
+               1_790_000_000.0)
+    (root / "notes.txt").write_text("left glove")
+    try:
+        f.detect(root)
+    except ValueError as e:
+        msg = str(e)
+    else:
+        raise AssertionError("a sensor only upload was accepted")
+    assert all(name in msg for name in ("glove.h5", "imu.mcap", "notes.txt")), msg
+    assert "no camera" in msg and "video" in msg, msg
+    root = tmp_path / "lerobot"
+    _lerobot(root, {0: {"observation.state": [np.zeros(14)] * 30}, 1: {"observation.state": [np.zeros(14)] * 30}})
+    (root / "videos" / "chunk-000" / "observation.images.cam_high" / "episode_000001.mp4").unlink()
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert len(rep["episodes"]) == 1, rep
+    assert any("episode_000001.parquet" in m and "no video" in m for m in rep["missing"]), rep["missing"]
+
+
+def test_an_upload_or_episode_with_no_camera_names_every_file_and_why():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _an_upload_or_episode_with_no_camera_names_every_file_and_why(Path(t))

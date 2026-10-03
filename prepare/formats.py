@@ -414,11 +414,29 @@ def detect(root: Path) -> dict:
     if parts:
         return {"format": "mixed", "parts": parts, "state": sensors}
     seen = sorted({p.suffix.lower() or p.name for p in files})[:12]
-    if h5s:
-        raise ValueError("the HDF5 files hold no camera (no image frames or encoded images), and there are no videos "
-                         "beside them to place their data against")
+    if sensors:
+        # the board shows an episode beside its footage, so recorded data with no camera cannot be shown or labelled
+        # yet: the refusal names every file and why, so the uploader knows what was found
+        raise ValueError(no_camera_words(root, files, [Path(x) for x in sensors]))
     raise ValueError("the upload holds no LeRobot dataset, MCAP file, HDF5 file or video"
                      + (f" (only {', '.join(seen)} files)" if seen else " (it is empty)"))
+
+
+NO_CAMERA_FILES_MAX = 200
+
+
+def no_camera_words(root: Path, files: list[Path], sensors: list[Path]) -> str:
+    """Why an upload of recorded data with no camera is refused, naming every file (up to NO_CAMERA_FILES_MAX) and
+    why it gives nothing to label."""
+    def why(p):
+        if p in sensors:
+            return ("an HDF5 file with no image frames or encoded images" if p.suffix.lower() in H5_EXT
+                    else "an MCAP file with no camera channel")
+        return "not a recording" if p.suffix.lower() in NOTE_EXT else "not a kind of file a reader opens"
+    named = [f"{p.relative_to(root).as_posix()} ({why(p)})" for p in files[:NO_CAMERA_FILES_MAX]]
+    more = f" and {len(files) - NO_CAMERA_FILES_MAX} more" if len(files) > NO_CAMERA_FILES_MAX else ""
+    return ("the upload holds recorded data but no camera, and an episode is shown and labelled beside its video, so "
+            "nothing could be labelled: " + "; ".join(named) + more)
 
 
 V2_DATA = re.compile(r"^episode_(\d+)\.parquet$")
@@ -2349,7 +2367,7 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
     elif info:
         root["missing"].append(f"No meta/episodes.jsonl{where}, so each uploaded episode file is one episode.")
     idx = sorted(set(rows) | set(data_by) | set(vid_by))
-    absent = 0
+    absent, no_video = 0, []
     for e in idx:
         row = rows.get(e, {})
         vids_e = {}
@@ -2372,7 +2390,10 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
             except (KeyError, IndexError, ValueError):
                 data = None
         if not vids_e and not (root["image_cams"] and data):
-            absent += e in rows
+            if data is not None:
+                no_video.append(data)
+            else:
+                absent += e in rows
             continue
         tasks = row.get("tasks")
         tasks = [str(t) for t in tasks] if isinstance(tasks, list) else ([str(tasks)] if tasks else [])
@@ -2380,6 +2401,21 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
                                  "tasks": tasks, "data": data, "videos": vids_e})
     if absent:
         root["used"].append(f"The metadata{where} lists {absent} more episodes than were uploaded; the uploaded ones were labelled.")
+    no_video_note(root, rdir, no_video)
+
+
+def no_video_note(root: dict, rdir: Path, data_files: list[Path]) -> None:
+    """The episodes of a LeRobot dataset with a data file but no video, named by their data files in the report: an
+    episode is shown and labelled beside its footage, so these cannot be yet, and had been dropped without a word."""
+    if not data_files:
+        return
+    where = f" in {root['rel']}" if root["rel"] else ""
+    names = sorted({Path(p).relative_to(rdir).as_posix() for p in data_files})
+    shown = ", ".join(names[:20]) + (f" and {len(names) - 20} more" if len(names) > 20 else "")
+    root["missing"].append(f"{len(data_files)} episode{'s' if len(data_files) != 1 else ''}{where} "
+                           f"{'have' if len(data_files) != 1 else 'has'} a data file but no video ({shown}); an "
+                           "episode is shown and labelled beside its video, so "
+                           f"{'they were' if len(data_files) != 1 else 'it was'} not labelled.")
 
 
 PACKED_UNALIGNED = "its packed videos could not be lined up with this episode's frames"
@@ -2400,7 +2436,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         root["used"].append(f"Episode list{where} from meta/episodes ({len(eps)} listed).")
         rel_tpl = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
         data_tpl = info.get("data_path", "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet")
-        skipped = 0
+        skipped, no_video = 0, []
         for e in sorted(eps, key=lambda r: int(scalar(r["episode_index"]))):
             eidx = int(scalar(e["episode_index"]))
             vids_e = {}
@@ -2412,9 +2448,6 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
                     continue
                 if mp4.exists():
                     vids_e[key] = (mp4, float(scalar(e[f"videos/{key}/from_timestamp"])), float(scalar(e[f"videos/{key}/to_timestamp"])))
-            if not vids_e:
-                skipped += 1
-                continue
             data = None
             try:
                 dp = inside(rdir, rdir / data_tpl.format(chunk_index=int(scalar(e["data/chunk_index"])),
@@ -2422,6 +2455,12 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
                 data = dp if dp.exists() else None
             except (KeyError, ValueError):
                 pass
+            if not vids_e:
+                if data is not None:
+                    no_video.append(data)
+                else:
+                    skipped += 1
+                continue
             tasks = e.get("tasks")
             tasks = [str(t) for t in tasks] if hasattr(tasks, "__len__") and not isinstance(tasks, str) else ([str(tasks)] if tasks else [])
             root["episodes"].append({"eidx": eidx, "length": int(scalar(e["length"])) if e.get("length") is not None else None,
@@ -2429,6 +2468,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         if skipped:
             root["used"].append(f"The metadata{where} lists {skipped} more episodes than there is uploaded video for; the "
                                 "uploaded ones were labelled.")
+        no_video_note(root, rdir, sorted(set(no_video)))
         return
     # no episode metadata: recover episodes from the data files, accepted only on an exact frame-count match
     root["missing"].append(f"No meta/episodes{where}, which says where each episode sits in the packed videos.")
