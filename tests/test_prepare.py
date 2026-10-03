@@ -810,3 +810,17 @@ def test_an_off_grid_file_without_times_fails_or_shows_the_frame_of_its_time(tmp
     _mp4(tmp_path / "shift.mp4", 4, pts=[512, 1024, 1536, 2048])  # the whole file one frame late
     with pytest.raises(mf.FrameError):
         mf.extract_frames(tmp_path / "shift.mp4", 0.0, 4, [0])
+
+
+def test_an_abc130k_arm_with_a_long_gap_is_not_drawn_as_motion():
+    """abc130k placed its arms with a straight line across any gap, so a recorder that stopped for 2 s was drawn as
+    motion; it places them as the other readers do (formats.fill_rows), on its nanosecond clock."""
+    from prepare import abc130k
+    q = (np.arange(300) / 30.0 * 1e9).astype(np.float64)
+    t = np.arange(-0.05, 10.05, 0.01)
+    keep = (t < 4.0) | (t > 6.0)
+    stream = {"t": (t[keep] * 1e9).astype(np.int64), "pos": np.ones((int(keep.sum()), 7))}
+    rows, gap = abc130k.interp(stream, q)
+    assert rows is None and abs(gap[0] - 3.99) < 0.02 and abs(gap[1] - 6.01) < 0.02
+    rows, gap = abc130k.interp({"t": (t * 1e9).astype(np.int64), "pos": np.ones((len(t), 7))}, q)
+    assert gap is None and rows.shape == (300, 7)
