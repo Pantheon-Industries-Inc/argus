@@ -1829,7 +1829,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             signals = mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals()
             extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
         else:
-            streams = mcap_joint_streams(mcap_files)
+            streams = mcap_joint_streams(mcap_files, real[anchor])
             state, action, note = joint_state(streams, real[anchor])
             signals = mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action))
             if note:
@@ -3613,12 +3613,12 @@ def group_label(group: tuple) -> str:
     return " (" + (", ".join(names) if len(names) <= 3 else f"{names[0]}, {names[1]} and {len(names) - 2} more") + ")"
 
 
-def _join_gripper(groups: list[dict]) -> list[dict]:
+def _join_gripper(groups: list[dict], q: np.ndarray | None = None) -> list[dict]:
     """A channel's two name sets as one arm when one names only a gripper and the other names joints and no gripper
-    (an arm's driver and its gripper's driver both publishing /joint_states): the gripper's readings, placed at the
-    arm's message times, follow the joints as _joint_row puts a gripper field after them. Kept apart when the gripper
-    leaves a gap in the arm's time longer than STATE_EDGE_SLACK_S (fill_rows), or the channel has any other name
-    set."""
+    (an arm's driver and its gripper's driver both publishing /joint_states): the gripper's first value (one finger
+    of two, as _joint_row takes a gripper field's first value), placed at the arm's message times, follows the joints.
+    Kept apart when the gripper leaves a gap longer than STATE_EDGE_SLACK_S (fill_rows) in the footage's frame times q,
+    or in the arm's message times without q, or the channel has any other name set."""
     grip = [g for g in groups if g["names"] and all(STATE_GRIPPER_NAME.search(x) for x in g["names"])]
     if len(groups) != 2 or len(grip) != 1:
         return groups
@@ -3626,21 +3626,22 @@ def _join_gripper(groups: list[dict]) -> list[dict]:
     arm = groups[1] if groups[0] is grip else groups[0]
     if not arm["names"] or any(STATE_GRIPPER_NAME.search(x) for x in arm["names"]) or len(arm["t"]) < 2:
         return groups
-    at_arm, gap = fill_rows(arm["t"], grip["t"], grip["pos"])
-    if gap:
+    one = grip["pos"][:, :1]
+    if fill_rows(arm["t"] if q is None else q, grip["t"], one)[1]:
         return groups
-    pos = np.concatenate([arm["pos"], at_arm], axis=1)
-    return [{"t": arm["t"], "pos": pos, "names": arm["names"] + grip["names"],
+    pos = np.concatenate([arm["pos"], lerp_rows(arm["t"], grip["t"], one)], axis=1)
+    return [{"t": arm["t"], "pos": pos, "names": arm["names"] + grip["names"][:1],
              "fields": arm["fields"] | grip["fields"]}]
 
 
-def mcap_joint_streams(paths: list[Path]) -> dict:
+def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
     """{key: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or None,
     "topic": its channel}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and
     text are not read. A channel's rows are grouped by the names their messages give (name_group), each in its group's
-    order; a channel of one group (or of an arm and its gripper, _join_gripper) is keyed by its topic, and one of
-    several by its topic and each group's label (group_label), with the fields its messages fill ("fields",
-    _joint_fields) so that only the group joint_state reads leaves the signals."""
+    order; a channel of one group (or of an arm and its gripper, _join_gripper, judged on the footage's frame times q
+    when given) is keyed by its topic, and one of several by its topic and each group's label (group_label), with
+    the fields its messages fill ("fields", _joint_fields) so that only the group joint_state reads leaves the
+    signals."""
     from mcap.reader import make_reader
     found, facs = {}, _decoders()
     for p in paths:
@@ -3683,7 +3684,7 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
         read = [{"t": np.asarray(r["t"]), "pos": np.asarray(r["pos"], dtype=np.float64),
                  "names": c["groups"][i][0], "fields": r["fields"], "label": group_label(c["groups"][i])}
                 for i, r in sorted(rows.items())]
-        groups = _join_gripper(read)
+        groups = _join_gripper(read, q)
         apart = len(groups) == len(read) and n_sets > 1
         for g in groups:
             if len(g["t"]) > 1:
@@ -4412,7 +4413,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])          # its frames were written from t0
     used = {}
     if rig == "teleop_arms":
-        streams = mcap_joint_streams([item["file"]])
+        streams = mcap_joint_streams([item["file"]], q)
         state, action, note = joint_state(streams, q)
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)

@@ -836,6 +836,20 @@ def _a_gripper_in_its_own_joint_states_messages_is_never_lost(tmp_path):
     sig = f.mcap_signals([path], q, f.state_fields(st, state, None))
     assert list(sig) == ["/joint_states position (left_wheel, right_wheel)"], list(sig)
     assert sig.meta["/joint_states position (left_wheel, right_wheel)"]["names"] == wheels
+    # a gripper of two fingers joins as one value, as _joint_row takes a gripper field's first value, and its cover is
+    # judged against the footage: an arm channel that runs on past the footage does not keep it apart
+    path = tmp_path / "fingers.mcap"
+    long = np.arange(-2.0, 5.0, 0.01)
+    fingers = ["finger_left", "finger_right"]
+    _json_mcap(path, {"/joint_states": [(s, {"name": joints, "position": [0.2 * np.sin(s + j) for j in range(6)]})
+                                        for s in long]
+                      + [(s + 0.003, {"name": fingers, "position": [0.04 + 0.03 * np.sin(2 * s), 0.0]})
+                         for s in tt]}, t0)
+    st = f.mcap_joint_streams([path], q)
+    assert list(st) == ["/joint_states"], list(st)
+    assert st["/joint_states"]["names"] == joints + ["finger_left"] and st["/joint_states"]["pos"].shape[1] == 7
+    state, _, note = f.joint_state(st, q)
+    assert note is None and np.abs(state[:, 6] - (0.04 + 0.03 * np.sin(2 * (q - t0)))).max() < 0.002
 
 
 def test_a_gripper_in_its_own_joint_states_messages_is_never_lost():
