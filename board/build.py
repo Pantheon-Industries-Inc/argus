@@ -195,8 +195,9 @@ def reader_notes(ctx: dict) -> dict | None:
     prompt states them only where they explain an absence (label/episode.py, the no state block); the board always
     shows them, so a field the model never saw is never a silent gap. None when there is nothing to say."""
     src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
-    left = {kind: [str(x) for x in src[key]] for key, kind in READER_LEFT_OUT if src.get(key)}
-    note = (ctx.get("state_note") or "").strip()
+    left = {kind: [str(x) for x in src[key]] for key, kind in READER_LEFT_OUT
+            if isinstance(src.get(key), (list, tuple)) and src[key]}
+    note = ctx["state_note"].strip() if isinstance(ctx.get("state_note"), str) else ""
     if not note and not left:
         return None
     return {**({"state_note": note} if note else {}), **({"left_out": left} if left else {})}

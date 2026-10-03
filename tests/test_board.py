@@ -801,6 +801,11 @@ def test_the_readers_note_and_what_the_model_was_not_shown_reach_the_board(tmp_p
     board_build.add_context(whole, {"profile": "teleop_arms", "fps": 30, "source": {"format": "video files"}}, tmp_path)
     assert "reader_notes" not in whole
     assert "reader_notes" in board_build.CONTEXT_KEYS
+    # a value of the wrong type is ignored, never iterated into characters or called
+    odd = {"state_note": 7, "source": {"unused_cameras": "observation.images.cam_high_mask", "unused_signals": 3}}
+    assert board_build.reader_notes(odd) is None
+    assert board_build.reader_notes({"state_note": ["x"], "source": {"unused_arrays": ("a", "b")}}) == {
+        "left_out": {"arrays": ["a", "b"]}}
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="no node")

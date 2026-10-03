@@ -33,8 +33,8 @@ check(h.startsWith('<div class="rn-note">Labelled from the video: the recorded s
 check(count(h, '<div class="pub-fold rn-fold">') === 1 && !/class="[^"]*\bshown\b/.test(h) && !h.includes('<details'),
   'one fold of the page\'s own kind, closed');
 check(h.includes('<button class="ck-more pub-show" type="button" aria-expanded="false" data-closed="The model was not '
-  + 'shown 1 camera and 1 signal" data-open="The model was not shown 1 camera and 1 signal">The model was not shown 1 '
-  + 'camera and 1 signal</button>'), 'the button counts each kind, singular for one, and says the same open');
+  + 'shown 1 camera and 1 signal" data-open="Hide the 1 camera and 1 signal the model was not shown">The model was not '
+  + 'shown 1 camera and 1 signal</button>'), 'the button counts each kind, singular for one, and flips when open');
 check(h.includes('<div class="rn-k">Cameras</div><div class="rn-i">observation.images.cam_high_mask</div>'),
   'a kind under its heading, cameras first');
 check(h.includes('<div class="rn-k">Signals</div><div class="rn-i">recorder_time_ns (a clock) &lt;x&gt;</div>'),
@@ -47,7 +47,8 @@ const p = T.readerNotesHtml({left_out: {cameras: many(7, 'c'), signals: many(38,
 check(p.includes('>The model was not shown 7 cameras and 38 signals</button>'), 'two kinds joined with and');
 check(count(p, '<div class="rn-i">') === 45, 'one item per line, one element each');
 const q = T.readerNotesHtml({left_out: {cameras: ['a'], signals: ['s', 't'], arrays: ['x', 'y', 'z'], depth: ['d']}});
-check(q.includes('>The model was not shown 1 camera, 2 signals, 3 arrays and 1 depth stream</button>'),
+check(q.includes('>The model was not shown 1 camera, 2 signals, 3 arrays and 1 depth stream</button>')
+  && q.includes('data-open="Hide the 1 camera, 2 signals, 3 arrays and 1 depth stream the model was not shown"'),
   'three or more kinds joined with commas and a final and');
 check(q.includes('<div class="rn-k">Arrays</div>') && q.includes('<div class="rn-k">Depth streams</div>'),
   'arrays and depth streams have their headings');
@@ -60,4 +61,10 @@ check(n === '<div class="rn-note">' + note + '</div>', 'a note alone, no fold');
 const l = T.readerNotesHtml({left_out: {arrays: ['a (1 x 2)', 'b']}});
 check(!l.includes('rn-note') && l.includes('>The model was not shown 2 arrays</button>')
   && l.includes('<div class="rn-i">a (1 x 2)</div><div class="rn-i">b</div>'), 'a list alone, without a note');
+
+// the shared fold handler has two users, so the files fold's labels are pinned too
+check(src.includes('data-closed="Show the notes in the files"')
+  && src.includes('data-open="Hide the notes in the files"'), 'the notes in the files fold keeps its two labels');
+check(src.includes('b.textContent = on ? b.dataset.open : b.dataset.closed;'),
+  'the handler reads both labels from the button');
 process.exit(bad ? 1 : 0);
