@@ -964,6 +964,7 @@ CASES = {"lerobot_v21_bimanual_7dof": (lerobot_v21_bimanual, "teleop_arms"),
          "video_folder_sidecars": (video_folder, "teleop_arms"),
          "hdf5_ego_mocap": (hdf5_ego, "ego_head")}
 
+
 def build(root: Path, name: str) -> tuple[Path, str]:
     """(upload folder, rig) of one case, built under root."""
     fn, rig = CASES[name]

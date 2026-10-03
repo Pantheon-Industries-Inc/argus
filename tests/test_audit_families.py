@@ -69,6 +69,18 @@ def test_a_bimanual_state_of_seven_joints_and_a_gripper_per_arm_is_shown_value_b
     assert any("cam_high_mask" in x for x in board["reader_notes"]["left_out"]["cameras"])
 
 
+def test_the_same_bimanual_recording_without_its_depth_camera_lands_the_same_with_no_depth_block(landed):
+    """The bimanual case built without cam_high_depth: the same state read the same way, value by value under the
+    same 16 names, and no DEPTH block, while the case with the depth camera has one."""
+    ctx, prompt, _ = landed["lerobot_v21_bimanual_7dof_nodepth"]
+    assert ctx["state_kind"] == "none"
+    assert ("observation.state (16 values (left_joint1, left_joint2, left_joint3, left_joint4, left_joint5, "
+            "left_joint6, left_joint7, left_gripper, right_joint1") in prompt
+    assert "    observation.state left_gripper: " in prompt
+    assert "The joint readings it records (" in prompt
+    assert "\nDEPTH: " not in prompt and "\nDEPTH: cam_high records depth" in landed["lerobot_v21_bimanual_7dof"][1]
+
+
 def test_a_single_arm_named_six_joints_and_a_gripper_is_still_its_state(landed):
     ctx, prompt, _ = landed["lerobot_v21_single_arm_6dof"]
     assert ctx["state_kind"] == "joints" and "RECORDED MOTION" in prompt
@@ -126,6 +138,9 @@ def test_a_head_camera_with_tracks_is_never_told_it_has_no_tracking(landed):
     ctx, prompt, _ = landed["hdf5_ego_mocap"]
     assert ctx["state_kind"] == "none" and "no hand, head or device tracking" not in prompt
     assert "RECORDED STATE: no hand state in the layout our checks read." in prompt
+    assert any(c["signals"] == ["right_glove_pressure"] for c in ctx["contacts"])
+    contacts = prompt.split("\nCONTACTS: ", 1)[1].split("\nAfter the detail views", 1)[0]
+    assert "from right_glove_pressure" in contacts
 
 
 def test_an_intervention_flag_is_never_a_contact_and_keeps_its_row(landed):
