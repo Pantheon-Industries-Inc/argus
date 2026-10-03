@@ -2383,7 +2383,10 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   .ep-head { flex-wrap: wrap; row-gap: 10px; }
   .ep-head-side { flex: 1 0 100%; align-items: stretch; }
   .ep-head .ep-head-acts { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
-  /* the buttons wrap to the pane's left edge here, so the video menu opens from its button's left */
+  /* the buttons wrap to the pane's left edge here, and the Video button can follow another (Hand pose), so its menu is
+     placed against the row of buttons, opening from the pane's left edge under the row, never past the screen */
+  .ep-head .ep-head-acts { position: relative; }
+  .vd { position: static; }
   .vd-menu { right: auto; left: 0; }
   .kp-note-in { text-align: left; }
   .video-overlay { min-width: 0; max-width: 94%; padding: 7px 10px; font-size: 12px; }

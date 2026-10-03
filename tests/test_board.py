@@ -1029,3 +1029,16 @@ def test_the_page_says_when_hand_keypoints_were_laid_a_frame_or_two_off():
     r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "hand_aligned.js"),
                         str(REPO / "board" / "serve.py")], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_video_menu_opens_from_the_row_of_buttons_on_a_narrow_screen():
+    """On a narrow screen the episode's buttons wrap to the pane's left edge, and the Video button can sit after another
+    (Hand pose): its menu is placed against the row of buttons, never against its own button, so it opens inside the
+    pane whatever comes before it (a menu 320 px wide opened from a button 138 px in ran 68 px past a 390 px screen)."""
+    from board import serve
+    page = serve.render_index("t", {"mode": "api"})
+    # the phone's blocks (more than one share the query), where the buttons wrap to the pane's left edge
+    narrow = "".join(x.split("\n}\n", 1)[0] for x in page.split("@media (max-width: 599px) {")[1:])
+    assert ".vd { position: static; }" in narrow
+    assert ".ep-head .ep-head-acts { position: relative;" in narrow
+    assert ".vd-menu { right: auto; left: 0; }" in narrow
