@@ -3411,10 +3411,12 @@ def _joint_row(msg) -> list[float] | None:
 
 def _name_lists(items) -> list[list[str]]:
     """The lists of names among a message's fields (_msg_items): any sequence of nonempty strings, as _vector reads
-    values, so a Protobuf repeated field or a ROS string[] is read like a JSON list."""
+    values, so a Protobuf repeated field or a ROS string[] is read like a JSON list. A field _numbers leaves out (the
+    message's own stamps and bookkeeping, _skipped_field) is never a list of names."""
     out = []
-    for _k, v, _set in items:
-        if v is None or isinstance(v, (str, bytes, bytearray, memoryview, dict)) or not hasattr(v, "__len__"):
+    for k, v, _set in items:
+        if (_skipped_field(str(k)) or v is None or isinstance(v, (str, bytes, bytearray, memoryview, dict))
+                or not hasattr(v, "__len__")):
             continue
         v = list(v)
         if v and all(isinstance(x, str) and x for x in v):
@@ -3424,11 +3426,12 @@ def _name_lists(items) -> list[list[str]]:
 
 def _sibling_names(lists: list[list[str]], n: int) -> list[str] | None:
     """The names of the n values of a numeric array, from the name lists beside it in the same (sub)message
-    (_name_lists): the one list there with exactly n entries. sensor_msgs/JointState's name names its position,
-    velocity and effort this way, and a vendor's names, joint_names or labels beside its own list does the same. None
-    when no list has n entries, or two different ones do, since either could be the names; a list in another
-    message or under another parent never names the array."""
-    found = {tuple(v) for v in lists if len(v) == n}
+    (_name_lists): the one list there with exactly n distinct entries. sensor_msgs/JointState's name names its
+    position, velocity and effort this way, and a vendor's names, joint_names or labels beside its own list does the
+    same. None when no list has n distinct entries (a units list of "rad" three times names nothing), or two different
+    ones do, since either could be the names; a list in another message or under another parent never names the
+    array."""
+    found = {tuple(v) for v in lists if len(v) == n and len(set(v)) == n}
     return list(found.pop()) if len(found) == 1 else None
 
 
@@ -3518,6 +3521,12 @@ def _is_num(x) -> bool:
     return isinstance(x, (bool, int, float, np.number))
 
 
+def _skipped_field(k: str) -> bool:
+    """Whether _numbers leaves a message's field out: its own time and sequence bookkeeping (SIGNAL_SKIP_PARTS,
+    SIGNAL_SKIP) or a private field."""
+    return k in SIGNAL_SKIP_PARTS or k.startswith("_") or bool(SIGNAL_SKIP.search(k))
+
+
 def _numbers(m, path: str = "") -> dict:
     """{name: (values, set, value names, shape)} for the numbers of one decoded message (JSON, Protobuf, ROS): a
     repeated numeric field is one vector under its path, the scalars of one (sub)message one vector under that message's
@@ -3530,7 +3539,7 @@ def _numbers(m, path: str = "") -> dict:
     out, items, lists = {}, _msg_items(m), None
     for k, v, was_set in items:
         k = str(k)
-        if k in SIGNAL_SKIP_PARTS or k.startswith("_") or SIGNAL_SKIP.search(k):
+        if _skipped_field(k):
             continue
         p = f"{path}.{k}" if path else k
         if _is_num(v):
