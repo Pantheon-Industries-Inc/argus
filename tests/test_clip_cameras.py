@@ -316,6 +316,51 @@ def test_two_cameras_short_are_named_together(tmp_path):
     assert "Their cells at those times are empty, and they are left out of a detail view there." in prompt
 
 
+def _cut_in_last_frame(path: Path, frames: int) -> None:
+    """A camera of frames frames (MPEG-4, whose decoder fills in what a frame is missing), a keyframe every 10, its
+    index at the start of the file, and the file cut in the middle of its last frame, as an upload cut off in transfer
+    is: the index still lists every frame."""
+    import av
+    with av.open(str(path), "w", options={"movflags": "+faststart"}) as c:
+        s = c.add_stream("mpeg4", rate=30)
+        s.width, s.height, s.pix_fmt = 160, 120, "yuv420p"
+        s.options = {"g": "10"}
+        rng = np.random.default_rng(1)
+        for _ in range(frames):
+            im = rng.integers(0, 255, (120, 160, 3), dtype=np.uint8)
+            for pk in s.encode(av.VideoFrame.from_ndarray(im, format="rgb24")):
+                c.mux(pk)
+        for pk in s.encode():
+            c.mux(pk)
+    with av.open(str(path)) as c:
+        last = max((pk for pk in c.demux(c.streams.video[0]) if pk.size), key=lambda pk: pk.pos)
+        cut = last.pos + last.size // 2
+    path.write_bytes(path.read_bytes()[:cut])
+
+
+def test_a_frame_cut_short_is_never_sent_as_footage(tmp_path):
+    """A camera file cut in the middle of its last frame, a keyframe: the decoder makes up the missing part of the
+    picture, from the frame before it when decoded in order and from nothing after a seek, which came out smeared and
+    was sent to the model as the camera's view. The decoder marks such a frame as damaged, and it is a frame that could
+    not be decoded: its cell is empty and the prompt says so."""
+    from label import frames as mf
+    up = tmp_path / "up"
+    up.mkdir()
+    _video(up / "top.mp4", 21)
+    _cut_in_last_frame(up / "wrist_left.mp4", 21)
+    with pytest.raises(mf.DamagedFrame):
+        mf.extract_frames(up / "wrist_left.mp4", 0.0, 21, [20])
+    assert list(mf.extract_frames(up / "wrist_left.mp4", 0.0, 21, [19])) == [19]
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    ep = me.load(eps / rep["episodes"][0]["episode_id"])
+    pl = me.plan(ep)
+    assert pl["ks"][-1] == 20
+    imgs = me.frames(ep, pl)
+    assert 20 not in imgs["left"] and ep["decode_failed"] == {"left": [20]}, ep["decode_failed"]
+    assert "left's video could not be decoded at 0.67 s" in me.build_request(ep["dir"])["prompt"].lower()
+
+
 def test_a_camera_damaged_partway_leaves_only_its_own_cells_empty(tmp_path):
     """A camera whose file does not decode for a stretch in the middle: the episode is labelled from a read only
     folder, that camera's cells are empty where it does not decode, the prompt says so, and the request returns the

@@ -362,7 +362,8 @@ def _decode_error(e: Exception) -> bool:
     return isinstance(e, (av.error.FFmpegError, mf.FrameError)) and not isinstance(e, OSError)
 
 
-def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=(), failed: set | None = None):
+def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=(), failed: set | None = None,
+                 damaged: set | None = None):
     """Frames for anchor indices ks. A camera paired to the anchor by real time (kmap) is decoded at
     its own frame nearest each anchor frame; results are keyed by the anchor index. With widths, a frame wider
     than the widest of them is kept full size only at detail_ks, and otherwise only at those widths.
@@ -370,8 +371,9 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
     A camera never fails its episode over its own data. It may have fewer frames than the anchor (a camera that stopped
     first), or its file may end before its own last frame (an upload's every camera one frame short), and then the
     instants after its last frame have no frame. Its file may not decode, or be damaged partway, and then each instant
-    is decoded on its own, so only the instants it cannot decode lose its frame; those go into failed, when given. A
-    missing file still raises (_decode_error)."""
+    is decoded on its own, so only the instants it cannot decode lose its frame; those go into failed, when given, and
+    those whose frame the decoder marks as damaged (label/frames.py DamagedFrame) into damaged too. A missing file
+    still raises (_decode_error)."""
     s = ep["sources"][v]
     km = ep["kmap"].get(v)
     own = [int(km[k]) for k in ks] if km is not None else list(ks)
@@ -396,7 +398,7 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
     except Exception as e:
         if not _decode_error(e):
             raise
-        got, bad = {}, set()
+        got, bad, hurt = {}, set(), set()
         for j in sorted(set(mine)):
             try:
                 got.update(run([j]))
@@ -404,8 +406,12 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
                 if not _decode_error(e1):
                     raise
                 bad.add(j)
+                if isinstance(e1, mf.DamagedFrame):
+                    hurt.add(j)
         if failed is not None:
             failed.update(k for k, j in zip(ks, own) if j in bad)
+        if damaged is not None:
+            damaged.update(k for k, j in zip(ks, own) if j in hurt)
     return {k: got[j] for k, j in zip(ks, own) if j in got}
 
 
@@ -419,19 +425,21 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,
     which recording_at then reports as not recording, so every grid and view leaves it out there; ep["decode_failed"],
     the instants a camera's file could not be decoded at, before its last frame or, for a file none of whose frames
-    decodes, all of them (_coverage_note, decode_failures). A placeholder frame (placeholder_instants) is one that did
-    not decode, wherever it is, so the model is never shown it as footage. Raises only when no camera has any frame."""
+    decodes, all of them (_coverage_note, decode_failures). A frame the decoder marks as damaged and a placeholder frame
+    (placeholder_instants) did not decode, wherever they are, so the model is never shown either as footage. Raises
+    only when no camera has any frame."""
     vs = views(ep)
-    failed = {v: set() for v in vs}
+    failed, damaged = {v: set() for v in vs}, {v: set() for v in vs}
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
-        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks, failed[v]) for v in vs}
+        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks, failed[v], damaged[v])
+                for v in vs}
         got = {v: f.result() for v, f in futs.items()}
-    held = placeholder_instants(ep, pl["ks"])
-    for v, hit in held.items():
+    for v, hit in placeholder_instants(ep, pl["ks"]).items():
         if v in got:
             for k in hit:
                 got[v].pop(k, None)
             failed[v] |= hit
+            damaged[v] |= hit
     ks = sorted(set(pl["ks"]))
     # an instant some camera can show: decoded there and inside its own recording (a camera paired by time that was
     # not recording has only its nearest frame, from another time, which is never shown)
@@ -459,10 +467,10 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
             pl["contact"] = [k for k in pl["contact"] if k in keep]
     ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
     # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
-    # where its file ended), or a placeholder anywhere; a camera with no frame at all that failed to decode does not
-    # decode anywhere. It is recorded whether or not another camera shows the instant, so an instant that left the
-    # request is still flagged
-    bad = {v: sorted(k for k in failed[v] if not got[v] or k < max(got[v]) or k in held.get(v, ())) for v in vs}
+    # where its file ended), or a damaged or placeholder frame anywhere; a camera with no frame at all that failed to
+    # decode does not decode anywhere. It is recorded whether or not another camera shows the instant, so an instant
+    # that left the request is still flagged
+    bad = {v: sorted(k for k in failed[v] if not got[v] or k < max(got[v]) or k in damaged[v]) for v in vs}
     ep["decode_failed"] = {v: ks_ for v, ks_ in bad.items() if ks_}
     ep["undecodable"] = {v for v in ep["decode_failed"] if not got[v]}
     return got
