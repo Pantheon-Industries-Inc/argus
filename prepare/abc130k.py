@@ -235,8 +235,9 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
     # every other number the arms record (joint velocities and torques), under the dataset's names (formats.mcap_signals)
     formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], t_top / 1e9, read_fields(state, action)))
     if gap is not None:
-        context["state_note"] = (f"Labelled from the cameras, because the recorded arm state {gap[0]} "
-                                 f"{formats.gap_words(gap[1], float(q[0]) / 1e9)}.")
+        formats.no_state(context, formats.StateNote(
+            f"Labelled from the cameras, because the recorded arm state {gap[0]} "
+            f"{formats.gap_words(gap[1], float(q[0]) / 1e9)}.", "short"))
     if state is not None:
         np.savez(ep_dir / "state.npz", **({"state": state, "action": action} if action is not None else
                                           {"state": state}))

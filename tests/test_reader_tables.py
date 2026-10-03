@@ -175,14 +175,17 @@ def test_an_arm_file_that_cannot_be_read_leaves_the_episode_with_no_arm_state(tm
     ctx = _recorder_with(tmp_path, "yam_left.mcap")
     assert ctx["state_kind"] == "none" and not (ctx["_ep"] / "state.npz").exists()
     assert "yam_left.mcap is cut short before its first message" in ctx["state_note"]
-    assert "Nothing it records is in the state or the signals" in ctx["state_note"]
+    assert "What it records is unknown, so the other sensor files are not read as the arm state" in ctx["state_note"]
+    assert ctx["state_why"] == "unreadable"
     assert "RECORDED STATE: no arm state" in me.build_request(ctx["_ep"])["prompt"]
 
 
 @pytest.mark.parametrize("name", ["gelsight_pad.mcap", "yam_leader_left.mcap"])
 def test_a_sensor_file_that_cannot_be_read_is_named_and_never_called_an_arm(tmp_path, name):
     ctx = _recorder_with(tmp_path, name)
-    assert ctx["state_kind"] == "none" and name in ctx["state_note"] and " arm" not in ctx["state_note"]
+    assert ctx["state_kind"] == "none" and name in ctx["state_note"] and ctx["state_why"] == "unreadable"
+    assert f"{name} is cut short before its first message, so nothing in it could be read. What it records is " \
+           "unknown" in ctx["state_note"]
 
 
 def test_a_whole_sensor_file_with_no_message_takes_nothing_from_the_arm_state(tmp_path):
@@ -242,6 +245,9 @@ def test_a_damaged_mcap_whose_messages_read_cover_the_footage_raises_no_issue(tm
     _damage_chunk_after(p, 3.0)                     # the footage ends at 2 s
     q = T0 + np.arange(60) / 30.0
     assert not _issues(f.mcap_signals([p], q), "mcap_file_damaged")
+    lost = []
+    streams = f.mcap_joint_streams([p], q, lost)
+    assert lost == [] and "/yam_left/joint_state" in streams
 
 
 def test_a_damaged_mcaps_span_is_given_within_the_footage(tmp_path):
@@ -264,6 +270,138 @@ def test_a_cut_sensor_files_span_is_given_within_the_footage(tmp_path):
     f.note_sensors({}, sig, [p], [], [], q=q)
     (cut,) = _issues(sig, "sensor_file_cut")
     assert cut["t1_s"] == pytest.approx(q[-1] - q[0])
+
+
+def _recorder(tmp_path, change) -> dict:
+    """recorder_folder's episode of 60 frames, its files changed by change(folder), converted; its context.json and
+    its folder under "_ep"."""
+    from test_formats import recorder_folder
+    d = recorder_folder(tmp_path / "upload", n=60)
+    change(d)
+    rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
+    ep = tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"]
+    return json.loads((ep / "context.json").read_text()) | {"_ep": ep}
+
+
+def _damage_whole_chunk(d: Path, name: str = "yam_left.mcap") -> None:
+    """Bytes overwritten inside the file's one chunk, its summary at its end left whole: no message reads."""
+    p = d / name
+    b = bytearray(p.read_bytes())
+    b[len(b) // 3:len(b) // 3 + 200] = b"\xff" * 200
+    p.write_bytes(bytes(b))
+
+
+def _signal_names(ctx: dict) -> set:
+    return {s["name"] for s in ctx.get("signals") or []}
+
+
+def test_an_arm_file_damaged_inside_before_any_message_leaves_no_arm_state(tmp_path):
+    """A follower's file whose summary is whole but whose one chunk does not read had left a state of the other arm
+    alone, its file still named as a source of the state."""
+    ctx = _recorder(tmp_path, _damage_whole_chunk)
+    assert ctx["state_kind"] == "none" and not (ctx["_ep"] / "state.npz").exists()
+    assert ctx["state_why"] == "unreadable" and "state" not in ctx["source"]
+    assert ctx["state_note"].startswith("Labelled from the cameras, because yam_left.mcap is damaged inside, though "
+                                        "its index is whole, so none of its messages could be read. What it records "
+                                        "is unknown, so the other sensor files are not read as the arm state")
+    assert "/yam_right/joint_state joint_pos" in _signal_names(ctx)
+
+
+def _on_its_own_clock(d: Path, name: str, topic: str, gripper: bool = True) -> None:
+    """recorder_folder's sensor file name written again with log times that count from 0, as a recorder without a
+    wall clock writes them: an arm's six joints and its gripper (none when not gripper) on topic."""
+    from mcap.writer import Writer
+    with open(d / name, "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        sid = w.register_schema(name=name, encoding="jsonschema", data=b"{}")
+        ch = w.register_channel(topic=topic, message_encoding="json", schema_id=sid)
+        for i in range(240):
+            t = int(i / 120 * 1e9) + 1
+            msg = {"joint_pos": [0.1 * i / 60] * 6, **({"gripper_pos": [0.5]} if gripper else {})}
+            w.add_message(ch, log_time=t, publish_time=t, data=json.dumps(msg).encode())
+        w.finish()
+
+
+def test_an_arm_file_on_a_clock_of_its_own_beside_arms_on_the_footages_clock_leaves_no_arm_state(tmp_path):
+    """A follower's file whose log times count from 0, beside files on the footage's clock, is placed from both
+    starts and had left a state of the other arm alone."""
+    ctx = _recorder(tmp_path, lambda d: _on_its_own_clock(d, "yam_left.mcap", "/yam_left/joint_state"))
+    assert ctx["state_kind"] == "none" and ctx["state_why"] == "assumed_clock"
+    assert "yam_left.mcap records an arm (/yam_left/joint_state) on a clock the footage does not share" \
+        in ctx["state_note"]
+    assert {"/yam_right/joint_state joint_pos", "/yam_left/joint_state joint_pos"} <= _signal_names(ctx)
+
+
+def test_commands_on_a_clock_of_their_own_leave_the_arms_state_without_an_action(tmp_path):
+    """A leader's commands give the action, never the state, so on a clock of their own they cost only the action,
+    as commands that do not cover the footage do."""
+    ctx = _recorder(tmp_path, lambda d: _on_its_own_clock(d, "yam_leader_left.mcap", "/yam_leader_left/joint_pos"))
+    z = np.load(ctx["_ep"] / "state.npz")
+    assert ctx["state_kind"] == "joints" and z["state"].shape == (60, 14) and "action" not in z.files
+
+
+def test_a_third_arm_on_a_clock_of_its_own_leaves_the_working_arms_state(tmp_path):
+    from test_formats import recorder_folder
+    d = recorder_folder(tmp_path / "upload", n=60, third_arm=True)
+    _on_its_own_clock(d, "yam_camera.mcap", "/yam_camera/joint_state", gripper=False)
+    rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
+    ctx = json.loads((tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert ctx["state_kind"] == "joints" and "state_why" not in ctx
+
+
+def _follower_in_chunks(d: Path, keep: float = 1.0) -> None:
+    """recorder_folder's yam_left.mcap written again in small chunks, its joint and health messages sharing their log
+    times as the recorder writes them, then cut to keep of its bytes."""
+    from mcap.writer import CompressionType, Writer
+    p = d / "yam_left.mcap"
+    with open(p, "wb") as fh:
+        w = Writer(fh, chunk_size=2048, compression=CompressionType.NONE)
+        w.start()
+        sid = w.register_schema(name="yam_left", encoding="jsonschema", data=b"{}")
+        ch = w.register_channel(topic="/yam_left/joint_state", message_encoding="json", schema_id=sid)
+        hc = w.register_channel(topic="/yam_left/health", message_encoding="json", schema_id=sid)
+        for i in range(240):
+            t = int((1_790_000_000.0 - 0.05 + i / 120) * 1e9)
+            msg = {"joint_pos": [0.1 * i / 60] * 6, "joint_vel": [0.0] * 6, "gripper_pos": [0.5]}
+            w.add_message(ch, log_time=t, publish_time=t, data=json.dumps(msg).encode())
+            w.add_message(hc, log_time=t, publish_time=t, data=b'{"ok": true}')
+        w.finish()
+    p.write_bytes(p.read_bytes()[: int(p.stat().st_size * keep)])
+
+
+def test_an_arm_file_whose_channels_share_their_stamps_is_placed_by_its_clock(tmp_path):
+    """The follower's joint and health messages share their log times, so half of its steps are 0 and its median
+    step was 0: cut short, the file looked clockless, was placed from both starts and left a state of the other arm
+    alone. It is placed by its clock and its arm read up to the cut, which here is past the footage."""
+    ctx = _recorder(tmp_path, lambda d: _follower_in_chunks(d, keep=0.97))
+    assert ctx["source"]["sensor_files"]["yam_left.mcap"] == "placed by its own clock"
+    assert ctx["state_kind"] == "joints" and np.load(ctx["_ep"] / "state.npz")["state"].shape == (60, 14)
+    assert [i["kind"] for i in ctx["reader_issues"]] == ["sensor_file_cut"]
+
+
+def test_an_arm_file_cut_inside_the_footage_gives_its_short_span_as_why(tmp_path):
+    ctx = _recorder(tmp_path, lambda d: _follower_in_chunks(d, keep=0.5))
+    assert ctx["source"]["sensor_files"]["yam_left.mcap"] == "placed by its own clock"
+    assert ctx["state_kind"] == "none" and ctx["state_why"] == "short"
+    assert "/yam_left/joint_state has readings from 0.0 s" in ctx["state_note"]
+
+
+def test_a_clock_with_repeated_stamps_steps_by_its_distinct_times():
+    t = np.repeat(T0 + np.arange(100) / 100.0, 2)   # two channels written at each instant
+    assert f._clock_facts(t)[1] == pytest.approx(0.01) and f.recorder_clock(t)
+
+
+def test_the_note_on_an_unreadable_sensor_file_names_the_other_files_only_when_there_are_some():
+    bad = [("yam_left.mcap", "is cut short before its first message, so nothing in it could be read")]
+    alone = f.unread_sensors_note(bad, None)
+    assert alone == ("Labelled from the cameras, because yam_left.mcap is cut short before its first message, so "
+                     "nothing in it could be read. What it records is unknown.")
+    assert alone.why == "unreadable"
+    assert f.unread_sensors_note(bad, "the other sensor files").endswith(
+        "What it records is unknown, so the other sensor files are not read as the arm state, and their channels "
+        "are given as signals.")
+    assert f.unread_sensors_note([], "the other sensor files") is None
 
 
 def test_a_gap_inside_a_stream_is_given_with_the_limit_it_broke():
@@ -818,6 +956,109 @@ def test_a_readme_in_a_lerobot_root_is_named_as_not_read(tmp_path):
     words = " ".join(det["missing"])
     assert "ds/README.md" in words
     assert "info.json" not in words and "episode_000000" not in words
+
+
+# ---------------------------------------------------------------- why an episode has no arm state
+
+def test_the_reasons_for_no_arm_state_are_one_closed_set():
+    assert set(f.STATE_WHY) == {"layout", "not_recorded", "unreadable", "short", "assumed_clock"}
+    with pytest.raises(ValueError):
+        f.StateNote("Labelled from the cameras.", "unknown")
+
+
+def test_an_episode_with_its_arm_state_gives_no_reason_for_none(tmp_path):
+    ctx = _recorder(tmp_path, lambda d: None)
+    assert ctx["state_kind"] == "joints" and "state_why" not in ctx and "state_note" not in ctx
+
+
+def test_arms_on_a_clock_none_of_the_footage_shares_give_the_assumed_clock_as_why(tmp_path):
+    def relative(d):
+        for p in d.glob("*-timestamp.npy"):
+            np.save(p, np.load(p) - np.load(p)[0])
+    ctx = _recorder(tmp_path, relative)
+    assert ctx["state_why"] == "assumed_clock"
+    assert ctx["state_note"] == ("Labelled from the cameras, because the sensor files share no clock with the videos "
+                                 "to place a recorded arm state against; their channels are kept as signals.")
+
+
+def test_the_arm_channels_note_says_why_there_is_no_state():
+    q = np.arange(60) / 30.0
+    arm = lambda d, t=q: {"t": t, "pos": np.ones((len(t), d))}
+    assert f.joint_state({"/arm/joint_state": arm(8)}, q)[2].why == "layout"
+    assert f.joint_state({"/left/joint_state": arm(7), "/arm/joint_state": arm(7)}, q)[2].why == "layout"
+    assert f.joint_state({"/arm/joint_state": arm(7, q[30:])}, q)[2].why == "short"
+    gap = np.concatenate([q[:10], q[50:]])
+    assert f.joint_state({"/arm/joint_state": arm(7, gap)}, q)[2].why == "short"
+
+
+def _mcap_ctx(tmp_path, write) -> dict:
+    root = tmp_path / "upload"
+    root.mkdir()
+    write(root / "rec.mcap")
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "t", 900)
+    return json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+
+
+def test_an_mcap_recording_with_no_robot_state_says_it_records_none(tmp_path):
+    from test_formats import _camera_mcap
+    ctx = _mcap_ctx(tmp_path, lambda p: _camera_mcap(p, ["/cam/image/compressed"]))
+    assert ctx["state_note"] == "Labelled from the cameras, because the file records no robot state."
+    assert ctx["state_why"] == "not_recorded"
+
+
+def test_an_mcap_recording_whose_motion_our_checks_do_not_read_gives_the_layout_as_why(tmp_path):
+    import base64
+    from mcap.writer import Writer
+    from test_formats import _jpeg
+
+    def write(p):
+        with open(p, "wb") as fh:
+            w = Writer(fh)
+            w.start()
+            img = w.register_schema(name="foxglove.CompressedImage", encoding="jsonschema", data=b"{}")
+            pose = w.register_schema(name="foxglove.PoseInFrame", encoding="jsonschema", data=b"{}")
+            cam = w.register_channel(topic="/cam/image/compressed", message_encoding="json", schema_id=img)
+            hand = w.register_channel(topic="/hand/pose", message_encoding="json", schema_id=pose)
+            for k in range(20):
+                ns = int((T0 + k / 30) * 1e9)
+                w.add_message(cam, log_time=ns, publish_time=ns, data=json.dumps(
+                    {"format": "jpeg", "data": base64.b64encode(_jpeg(k * 10)).decode()}).encode())
+                if k == 0:                          # one message, a setting rather than a signal
+                    w.add_message(hand, log_time=ns, publish_time=ns, data=json.dumps({"x": 0.01}).encode())
+            w.finish()
+    ctx = _mcap_ctx(tmp_path, write)
+    assert "did not run on this file's motion channels" in ctx["state_note"] and ctx["state_why"] == "layout"
+
+
+def _lerobot_ctx(tmp_path, cols: dict, data: bytes | None = None) -> dict:
+    from test_formats import _lerobot
+    root = tmp_path / "ds"
+    _lerobot(root, {0: cols})
+    if data is not None:
+        (root / "data" / "chunk-000" / "episode_000000.parquet").write_bytes(data)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "t", 900)
+    return json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+
+
+def test_a_lerobot_episode_says_why_it_has_no_state(tmp_path):
+    rng = np.random.default_rng(1)
+    none = _lerobot_ctx(tmp_path / "a", {"glove": [rng.random(4) for _ in range(30)]})
+    assert none["state_note"].endswith("the dataset records no observation.state.")
+    assert none["state_why"] == "not_recorded"
+    wide = _lerobot_ctx(tmp_path / "b", {"observation.state": [rng.random(5) for _ in range(30)]})
+    assert "5 values per frame" in wide["state_note"] and wide["state_why"] == "layout"
+    short = _lerobot_ctx(tmp_path / "c", {"observation.state": [rng.random(14) for _ in range(10)]})
+    assert "observation.state has no reading from" in short["state_note"] and short["state_why"] == "short"
+    bad = _lerobot_ctx(tmp_path / "d", {"observation.state": [rng.random(14) for _ in range(30)]}, data=b"not parquet")
+    assert "could not be opened" in bad["state_note"] and bad["state_why"] == "unreadable"
+
+
+def test_an_hdf5_episode_says_why_it_has_no_state(tmp_path):
+    from test_touch_depth import _convert
+    t = np.arange(40) / 20.0
+    ctx, _ = _convert(tmp_path, {"observations/robot_state/joint_positions":
+                                 np.stack([np.sin(t + j) for j in range(7)], axis=1)})
+    assert "7 joints and no gripper" in ctx["state_note"] and ctx["state_why"] == "layout"
 
 
 def test_sensor_file_and_signal_span_issues_are_named_data_families():

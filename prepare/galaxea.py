@@ -194,7 +194,7 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     # state does not show
     from prepare import formats
     if state_note:
-        ctx["state_note"] = state_note
+        formats.no_state(ctx, formats.StateNote(state_note, "layout"))
     arm_cols = set(GALAXEA_COLUMNS[:4]) | {"action.left_arm", "action.left_gripper", "action.right_arm",
                                             "action.right_gripper"}
     formats.write_signals(ep_dir, ctx, formats.recorded_signals(

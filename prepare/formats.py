@@ -1009,6 +1009,45 @@ def state_words(name: str) -> list[str]:
     return words[:-1] if len(words) > 1 and words[-1] in STATE_UNIT_WORDS else words
 
 
+# Why an episode has no arm state, in one word, written to context.json "state_why" beside its state_note (no_state):
+# the note says it in full for a reviewer, and labelling chooses its one line on the recorded state from this word, so
+# that line is true for the episode.
+STATE_WHY = {
+    "layout": "a state is recorded, but not in a layout our checks read: its width, its value names, which arm is "
+              "which, or rows that cannot be lined up with the frames",
+    "not_recorded": "the recording holds no state at all",
+    "unreadable": "a file that holds the state, or may hold it, could not be read, or was damaged before any of its "
+                  "messages",
+    "short": "an arm's state does not cover the footage: it starts late, stops early or stops inside it",
+    "assumed_clock": "the state's channels are only on a clock placed on the footage from both starts, an alignment "
+                     "that is assumed",
+}
+
+
+class StateNote(str):
+    """A state note, the sentence that says why an episode has no arm state, carrying that reason in one word (why,
+    one of STATE_WHY), so the reason travels with the sentence from the rule that decided it to no_state."""
+
+    def __new__(cls, text: str, why: str):
+        if why not in STATE_WHY:
+            raise ValueError(f"{why!r} is not one of {sorted(STATE_WHY)}")
+        note = super().__new__(cls, text)
+        note.why = why
+        return note
+
+
+def no_state(ctx: dict, note: StateNote) -> None:
+    """An episode with no arm state: its state_note, and its state_why (STATE_WHY), always written together."""
+    ctx["state_note"] = str(note)
+    ctx["state_why"] = note.why
+
+
+def drop_no_state(ctx: dict) -> None:
+    """An episode whose arm state was read after all: neither its state_note nor its state_why stays."""
+    ctx.pop("state_note", None)
+    ctx.pop("state_why", None)
+
+
 def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[str, str | None]:
     """(state_kind, note). 7 or 14 values per frame are 1 or 2 actors of 6 + gripper; anything else is labelled from
     video. names, one per value when the dataset gives them, settle the layout (STATE_GRIPPER_NAME above); names that
@@ -2525,22 +2564,29 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     # they share no clock with the footage, or listed (split_sensors)
     by_clock, assumed, unplaced = split_sensors(item, real[anchor], real[anchor] is not None)
     note_sensors(extra, signals, by_clock, assumed, unplaced, q=real[anchor])
-    unread = unread_sensors_note(unplaced) if rig != "ego_head" else None
+    mcap_files = [p for p in by_clock if p.suffix.lower() == ".mcap"]
+    h5_files = [p for p in by_clock if p.suffix.lower() in H5_EXT]
+    arm_rig = rig == "teleop_arms"
+    # an arm state only when every arm the sensor files may hold was read on the footage's clock (state_blockers): a
+    # file that could not be read, or was damaged where the footage needs it, and an arm placed from both starts
+    # beside files on the footage's clock leave the episode with no arm state, every channel a signal
+    lost: list = []
+    streams = mcap_joint_streams(mcap_files, real[anchor], lost) if arm_rig and mcap_files else {}
+    bad = unreadable_sensors(unplaced) + damaged_files(lost) if rig != "ego_head" else []
+    others = "the other sensor files" if len(by_clock) + len(assumed) + len(unplaced) > len(bad) else None
+    blocked = state_blockers(bad, assumed_arms(assumed, streams) if arm_rig and by_clock else [], others)
     if by_clock:
-        mcap_files = [p for p in by_clock if p.suffix.lower() == ".mcap"]
-        h5_files = [p for p in by_clock if p.suffix.lower() in H5_EXT]
-        if rig != "teleop_arms" or not mcap_files:
+        if not arm_rig or not mcap_files:
             # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP
             # files record, on the videos' clock (mcap_signals); an MCAP arm channel is read as the state on an arm rig
             # only, and an HDF5 array named as the state below (h5_state)
             merge_signals(signals, mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals())
         else:
-            streams = mcap_joint_streams(mcap_files, real[anchor])
-            state, action, note = joint_state(streams, real[anchor]) if not unread else (None, None, None)
+            state, action, note = joint_state(streams, real[anchor]) if not blocked else (None, None, None)
             merge_signals(signals, mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action)))
             signals.left_out += joint_left_out(streams, state, action)
             if note:
-                extra["state_note"] = note
+                no_state(extra, note)
             elif state is not None:
                 extra["source"]["state"] = [Path(p).name for p in mcap_files]
                 third = third_arms(streams)
@@ -2552,26 +2598,30 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                         descs["exo"] = third_arm_camera_desc(third)
         if h5_files:
             more = h5_file_signals(h5_files, real[anchor], len(real[anchor]))
-            if state is None and rig != "ego_head" and not unread:
+            if state is None and rig != "ego_head" and not blocked:
                 # an HDF5 array named as the state (a robot.h5's qpos beside the videos) is read by the rule an HDF5
                 # episode's is (h5_state), and leaves the signals when it is read
                 state, action, state_names, state_src, h5_note = h5_state(
                     more, rig, real[anchor], [p.stem for p in h5_files] if len(h5_files) > 1 else None)
                 if state is not None:
                     extra["source"]["state"] = state_src
-                    extra.pop("state_note", None)        # a note on the MCAP arm channels, which are not the state
-                elif h5_note:
-                    extra.setdefault("state_note", h5_note)
+                    drop_no_state(extra)                 # a note on the MCAP arm channels, which are not the state
+                elif h5_note and "state_note" not in extra:
+                    no_state(extra, h5_note)
             merge_signals(signals, more)
-    if unread:
-        extra["state_note"] = unread
+    if blocked:
+        no_state(extra, blocked)
     if assumed:
         t_rel = (np.asarray(real[anchor], dtype=np.float64) - float(real[anchor][0])) if real[anchor] is not None \
             else seconds(prs[anchor])
-        if rig == "teleop_arms" and state is None:
-            extra.setdefault("state_note", "Labelled from the cameras, because the sensor files share no clock with "
-                                           "the videos to place a recorded arm state against; their channels are "
-                                           "kept as signals.")
+        if arm_rig and state is None and "state_note" not in extra:
+            # no sensor file on the footage's clock: an arm the files record has nothing to place it against
+            no_state(extra, StateNote(
+                "Labelled from the cameras, because the sensor files share no clock with the videos to place a "
+                "recorded arm state against; their channels are kept as signals.", "assumed_clock")
+                if assumed_arms(assumed, {}) else StateNote(
+                "Labelled from the cameras, because the sensor files beside the videos record no arm state; their "
+                "channels are kept as signals.", "not_recorded"))
         merge_signals(signals, sensors_from_start(assumed, t_rel, extra))
     if item.get("series"):
         more = table_signals(item["series"], real.get(anchor), prs[anchor], extra)
@@ -3183,13 +3233,17 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(feats, state))
+    note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
-        note = ("Labelled from the video: the dataset's observation.state holds no numbers."
+        # no observation.state, or one with no numbers, is a state not recorded; a data file that did not come is
+        # one that could not be read
+        note = (StateNote("Labelled from the video: the dataset's observation.state holds no numbers.", "not_recorded")
                 if df is not None and "observation.state" in df.columns else
-                "Labelled from the video: the dataset records no observation.state."
-                if df is not None or row.get("data") is None else note)
+                StateNote("Labelled from the video: the dataset records no observation.state.", "not_recorded")
+                if df is not None or row.get("data") is None else
+                StateNote(note, "not_recorded") if note else None)
         if row.get("data") is None:
-            note = "Labelled from the video: no data file came with this episode."
+            note = StateNote("Labelled from the video: no data file came with this episode.", "unreadable")
         if notes:
             note = None                  # the read failure already says why, in notes
     packed = all(isinstance(row["videos"][k], tuple) for k in vmap.values())
@@ -3224,7 +3278,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         if un:
             ctx["unshown_cameras"] = un
         if note or notes:
-            ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
+            no_state(ctx, lerobot_state_note(note, notes))
         for i in fixes:
             add_issue(ctx, **i)
         write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
@@ -3266,7 +3320,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if un:
         ctx["unshown_cameras"] = un
     if note or notes:
-        ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
+        no_state(ctx, lerobot_state_note(note, notes))
     for i in fixes:
         add_issue(ctx, **i)
     write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
@@ -3393,6 +3447,12 @@ def state_filled_issue(what: str, k: int, n: int, t0: float, t1: float) -> dict:
                     f"across no gap longer than {STATE_GAP_S:g} s"}
 
 
+def lerobot_state_note(note: StateNote | None, notes: list[str]) -> StateNote:
+    """A LeRobot episode's state note: why its state was not read (note) followed by its data file's read failures
+    (notes), which alone leave it "unreadable"."""
+    return StateNote(" ".join(x for x in [note, *notes] if x), note.why if note else "unreadable")
+
+
 def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, note: str | None) -> tuple:
     """(state, action, kind, note, data issues) of a LeRobot episode's state and action rows (_cells, NaN where a cell
     could not be read) on its n video frames: each row at its frame (frame_rows, on_frames), and a frame with no
@@ -3421,8 +3481,8 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
         return rows, None
     st, why = fit(state, "observation.state")
     if st is None:
-        return state, None, "none", (f"Labelled from the video, because the recorded observation.state {why}; it is "
-                                     "kept among the signals."), issues
+        return state, None, "none", StateNote(f"Labelled from the video, because the recorded observation.state {why}; "
+                                              "it is kept among the signals.", "short"), issues
     act = fit(action, "action")[0] if action is not None else None
     return st, act, kind, note, issues
 
@@ -3490,6 +3550,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
                                                  "camera is not shown.", camera=key)
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
+    note = StateNote(note, "layout") if note else None
     # the state's frames with no reading filled as in convert_lerobot (state_on_frames), one row per image frame
     state, action, kind, note, fixes = state_on_frames(df, state, action, len(df), fps, kind, note)
     for i in fixes:
@@ -3502,7 +3563,9 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         return finish_episode(ep, ctx, json.loads((ep / "sources.json").read_text()), state, action,
                               times={k: v for k, v in np.load(ep / "times.npz").items()}, signals=signals)
     if rig != "ego_head":
-        ctx["state_note"] = note or "Labelled from the video: the recorded state and the image frames cannot be lined up."
+        # no observation.state at all is a state not recorded, whatever the layout note says of its width
+        no_state(ctx, StateNote(note, "not_recorded" if state is None else note.why) if note else StateNote(
+            "Labelled from the video: the recorded state and the image frames cannot be lined up.", "layout"))
         (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
     return ctx
 
@@ -3527,8 +3590,9 @@ def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if any(un):
         extra["unshown_cameras"] = [u for u in un if u]
     if rig != "ego_head":
-        extra["state_note"] = ("Labelled from the video, as one recording: its episodes could not be matched to the "
-                               "packed video exactly.")
+        # the state is recorded, but its rows are not matched to this packed video's episodes, a layout we do not read
+        no_state(extra, StateNote("Labelled from the video, as one recording: its episodes could not be matched to "
+                                  "the packed video exactly.", "layout"))
     signals = None
     if item.get("data") is not None:
         from label import episode as me
@@ -3616,10 +3680,14 @@ EPOCH_STEP_S = (1e-5, 1.0)
 
 def _clock_facts(a: np.ndarray) -> tuple[np.ndarray, float, float]:
     """(finite values, median step, size) of a clock. Its size is the median of its finite values, so a 0 a recorder
-    writes before its first stamp does not decide it."""
+    writes before its first stamp does not decide it. Its step is the median between distinct times: a file whose
+    channels are written at the same instants (an arm's joints and its health, each stamped alike) repeats every
+    time, so half its steps are 0 and their median had been 0, as if it had no clock at all."""
     ok = np.asarray(a, dtype=np.float64).ravel()
     ok = ok[np.isfinite(ok)]
-    step = float(np.median(np.diff(ok))) if len(ok) > 1 else 0.0
+    steps = np.diff(ok)
+    steps = steps[steps != 0]
+    step = float(np.median(steps)) if len(steps) else 0.0
     size = abs(float(np.median(ok))) if len(ok) else 0.0
     return ok, step, size
 
@@ -4063,8 +4131,11 @@ def overlaps(t: np.ndarray, q: np.ndarray) -> bool:
     return len(t) > 0 and len(q) > 0 and float(t[-1]) >= float(q[0]) and float(t[0]) <= float(q[-1])
 
 
+OUTSIDE_FOOTAGE = "outside the footage"      # the end of why a stream recorded none of the footage (outside_words)
+
+
 def outside_words(t: np.ndarray, q: np.ndarray) -> str:
-    return f"recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, outside the footage"
+    return f"recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, {OUTSIDE_FOOTAGE}"
 
 
 def not_finite(name: str, a: np.ndarray, t: np.ndarray, zero: float, out: Signals) -> np.ndarray:
@@ -4210,19 +4281,24 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         # right.h5's qpos, are the same array of each side
         return " ".join(w for w in tokens(own(name)) if side_of(w) is None)
 
-    def fail(name, note):
-        # why an array named as the state is not read, kept by the side its name says and its name without that side,
-        # so only the other side's same array of the arm read (qpos against qpos) cancels a two arm state
+    def fail(name, text, why):
+        # why an array named as the state is not read (a StateNote, STATE_WHY), kept by the side its name says and its
+        # name without that side, so only the other side's same array of the arm read (qpos against qpos) cancels a
+        # two arm state
+        note = StateNote(text, why) if text else None
         notes.append(note)
         failed.setdefault((side_of(name), unsided(name)), note)
     for name in cands:
         if name not in signals and left_out[name] == NOT_FINITE:
             fail(name, f"Labelled from the video, because the recorded state {name} has values that are not all "
-                         "finite numbers.")
+                         "finite numbers.", "unreadable")
             continue
         if name not in signals:
+            # a state recorded outside the footage covers none of it ("short"); rows with no clock to line them up
+            # by are not a layout the checks read ("layout")
             fail(name, f"Labelled from the video, because the recorded state {name} could not be placed on the "
-                         f"camera's frames ({left_out[name]}).")
+                         f"camera's frames ({left_out[name]}).",
+                 "short" if left_out[name].endswith(OUTSIDE_FOOTAGE) else "layout")
             continue
         a = np.asarray(signals[name], dtype=np.float64)
         names = (meta.get(name) or {}).get("names")
@@ -4232,18 +4308,19 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             fail(name, f"Labelled from the video: the array's name says every value is a joint, so its {dims} values "
                          f"are {dims} joints and no gripper, and our checks read "
                          + ("six joints and a gripper per arm." if rig == "teleop_arms" else
-                            "a 6D pose and an opening per gripper.") + f" The recorded state is the HDF5 array {name}.")
+                            "a 6D pose and an opening per gripper.") + f" The recorded state is the HDF5 array {name}.",
+                 "layout")
             continue
         kind, note = state_layout(dims, rig, names)
         if kind == "none":
-            fail(name, f"{note} The recorded state is the HDF5 array {name}." if note else None)
+            fail(name, f"{note} The recorded state is the HDF5 array {name}." if note else None, "layout")
             continue
         miss = np.flatnonzero(~np.isfinite(a).all(axis=1))
         a, why = filled(a)
         if a is None:
             fail(name, f"Labelled from the video: the recorded state {name} has no reading on any frame."
                          if why == "has no reading on any frame" else
-                         f"Labelled from the video, because the recorded state {name} {why}.")
+                         f"Labelled from the video, because the recorded state {name} {why}.", "short")
             continue
         if len(miss):
             filled_at[name] = state_filled_issue(name, len(miss), len(a), float(q[miss[0]] - q[0]),
@@ -4400,7 +4477,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if state_src:
         extra["source"]["state"] = state_src
     if state_note:
-        extra["state_note"] = state_note
+        no_state(extra, state_note)
     if not chosen[anchor]["clock"]:
         extra["source"]["clock_note"] = (f"the file gives no frame times, so frames are {fps:g} per second as it states"
                                          if fps else "the file gives no frame times or rate, so 30 frames per second "
@@ -4617,6 +4694,38 @@ def damaged_issue(p: Path, t0: float | None, t1: float | None, q: np.ndarray) ->
     return {"kind": "mcap_file_damaged", "t0_s": a, "t1_s": b,
             "what": what + f", so only the messages before the damage were read; they cover {a:.1f} s to {b:.1f} s "
                            "of the footage"}
+
+
+def mcap_message_counts(path: Path) -> dict[str, int]:
+    """{topic: how many messages} of an MCAP file by its summary's statistics; {} when it has none to read."""
+    from mcap.reader import make_reader
+    try:
+        with open(path, "rb") as fh:
+            s = make_reader(fh).get_summary()
+    except Exception:
+        return {}
+    if s is None or s.statistics is None:
+        return {}
+    out: dict[str, int] = {}
+    for cid, n in s.statistics.channel_message_counts.items():
+        if cid in s.channels:
+            out[s.channels[cid].topic] = out.get(s.channels[cid].topic, 0) + int(n)
+    return out
+
+
+def damaged_unread(p: Path, chans: list[tuple[str, str]], seen: set, damaged: list, q) -> list[str]:
+    """The channels of an indexed MCAP file damaged inside (damaged, as mcap_messages appends it) that its summary
+    declares with messages (mcap_message_counts; every declared one when it gives no count), that are not a recorder's
+    bookkeeping (bookkeeping_why), and none of whose messages was read (seen). None when no damage was met, or when
+    the messages read cover the footage (q, its frame times on the file's clock; covers_footage): the damage is then
+    past what the footage needs. Such a channel could be an arm, so a state read beside it could lack one."""
+    if not damaged:
+        return []
+    _, first, last = damaged[0]
+    if first is not None and q is not None and covers_footage(first, last, np.asarray(q, dtype=np.float64)):
+        return []
+    counts = mcap_message_counts(p)
+    return sorted(t for t, s in chans if t not in seen and counts.get(t, 1) and not bookkeeping_why(t, s))
 
 
 def _mcap_channels_by_scan(path: Path) -> list[tuple[str, str]]:
@@ -4852,7 +4961,7 @@ def _join_gripper(groups: list[dict], q: np.ndarray | None = None) -> list[dict]
              "fields": arm["fields"] | grip["fields"]}]
 
 
-def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
+def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: list | None = None) -> dict:
     """{key: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or None,
     "topic": its channel}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and
     text are not read. A channel's rows are grouped by the names their messages give (name_group), each in its group's
@@ -4860,14 +4969,19 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
     when given) is keyed by its topic, and one of several by its topic and each group's label (group_label), with
     the fields its messages fill ("fields", _joint_fields) so that only the group joint_state reads leaves the
     signals. A file cut short is read up to its cut (mcap_messages), its rows put in time order, so an arm in it is
-    read as far as it was recorded and joint_state judges whether that covers the footage."""
+    read as far as it was recorded and joint_state judges whether that covers the footage. An indexed file damaged
+    inside is read up to the damage, and when unread is given, each such file that declares channels none of whose
+    messages could be read, where the footage q needs them (damaged_unread), is appended to it as (its path, those
+    channels, whether any of its messages was read): what they hold is unknown, so no arm state is read beside them
+    (state_blockers)."""
     found, facs = {}, _decoders()
     for p in paths:
         chans = [(t, s) for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)]
-        decs, skip = {}, set()
+        decs, skip, seen, damaged = {}, set(), set(), []
         with open(p, "rb") as fh:
             try:
-                for schema, ch, msg in mcap_messages(fh, p, [t for t, _ in chans]):
+                for schema, ch, msg in mcap_messages(fh, p, [t for t, _ in chans], damaged):
+                    seen.add(ch.topic)
                     if ch.topic in skip:
                         continue
                     if ch.id not in decs:
@@ -4893,6 +5007,9 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
                     r["fields"] |= _joint_fields(m)
             except Exception:
                 pass                                  # a cut-off file: the messages before the cut are kept
+        lost = damaged_unread(p, chans, seen, damaged, q) if unread is not None else []
+        if lost:
+            unread.append((Path(p), lost, bool(seen)))
     out = {}
     for topic, c in found.items():
         if c["groups"].overflow:
@@ -5315,37 +5432,39 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     return out
 
 
-def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
+def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, StateNote | None]:
     """(state, action, note): the arms' joints and grippers interpolated onto the anchor camera's frame times q (the
     same clock as the streams), 7 values per arm, left arm first; the leader or command channels, when they match, as
-    the action. None with a note when the streams are not a layout the checks read or do not cover the footage."""
+    the action. None with a note when the streams are not a layout the checks read ("layout") or an arm does not
+    cover the footage ("short", StateNote)."""
     st, act = arm_streams(streams, False), arm_streams(streams, True)
     if not st:
         return None, None, None
     order = [s for s in ("left", "right", "only") if s in st]
     if "only" in order and len(order) > 1:
         if "left" not in st or "right" not in st:
-            return None, None, "Labelled from the cameras, because the recorded arm channels do not say which arm is which."
+            return None, None, StateNote("Labelled from the cameras, because the recorded arm channels do not say "
+                                         "which arm is which.", "layout")
         # an arm that names a side and one that does not could be the same side's arm twice, but a left and a right
         # arm are the two working arms, and an arm beside them that names no side is a third one (third_arms)
         order = ["left", "right"]
     dims = [streams[st[s]]["pos"].shape[1] for s in order]
     if any(d != JOINT_DIMS for d in dims):
-        return None, None, (f"Labelled from the cameras, because the recorded arms have {' and '.join(map(str, dims))} "
-                            "values per frame and our checks read six joints and a gripper per arm.")
+        return None, None, StateNote(f"Labelled from the cameras, because the recorded arms have "
+                                     f"{' and '.join(map(str, dims))} values per frame and our checks read six joints "
+                                     "and a gripper per arm.", "layout")
     for s in order:
         # the channel's own value names settle six joints and a gripper against seven joints (a Franka arm)
         kind, why = state_layout(JOINT_DIMS, "teleop_arms", streams[st[s]].get("names"))
         if kind != "joints":
-            return None, None, why or ("Labelled from the cameras, because the recorded arm channels name their values "
-                                       "as a pose, not six joints and a gripper.")
+            return None, None, StateNote(why or ("Labelled from the cameras, because the recorded arm channels name "
+                                                 "their values as a pose, not six joints and a gripper."), "layout")
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
 
     def covers(topic):
         # the arm's samples must span the footage: a frame np.interp places past the first or last sample holds that
         # sample's value, so the state would seem to record an arm standing still where nothing was recorded
-        t = streams[topic]["t"]
-        return span > 0 and t[0] <= q[0] + edge_slack(span) and t[-1] >= q[-1] - edge_slack(span)
+        return covers_footage(streams[topic]["t"][0], streams[topic]["t"][-1], q)
     short = [st[s] for s in order if not covers(st[s])]
     if short:
         # each arm that falls short is named with the span of the footage it covers, so an arm whose file was cut
@@ -5353,8 +5472,8 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
         def covered(k):
             t0, t1 = (max(float(x) - float(q[0]), 0.0) for x in (streams[k]["t"][0], streams[k]["t"][-1]))
             return f"{k} has readings from {t0:.1f} s to {t1:.1f} s of the footage's {span:.1f} s"
-        return None, None, ("Labelled from the cameras, because the recorded arm state does not cover the footage's "
-                            "time: " + "; ".join(covered(k) for k in short) + ".")
+        return None, None, StateNote("Labelled from the cameras, because the recorded arm state does not cover the "
+                                     "footage's time: " + "; ".join(covered(k) for k in short) + ".", "short")
 
     def fill(topic):
         # the arm's readings on the frames, across no gap longer than the slack (fill_rows)
@@ -5362,8 +5481,8 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     rows = [fill(st[s]) for s in order]
     gap = next(((st[s], g) for s, (_, g) in zip(order, rows) if g), None)
     if gap:
-        return None, None, (f"Labelled from the cameras, because the recorded arm state {gap[0]} "
-                            f"{gap_words(gap[1], float(q[0]))}.")
+        return None, None, StateNote(f"Labelled from the cameras, because the recorded arm state {gap[0]} "
+                                     f"{gap_words(gap[1], float(q[0]))}.", "short")
     state = np.concatenate([r for r, _ in rows], axis=1)
     action = None
     if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS and covers(act[s]) for s in order):
@@ -5744,9 +5863,14 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     sensor_mcaps = [p for p in by_clock if p.suffix.lower() == ".mcap"]
     sensor_h5s = [p for p in by_clock if p.suffix.lower() in H5_EXT]
     if rig == "teleop_arms":
-        streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q)
-        unread = unread_sensors_note(unplaced)
-        state, action, note = joint_state(streams, q) if not unread else (None, None, unread)
+        # an arm state only when every arm the recording and its sensor files may hold was read on its clock
+        # (state_blockers), as beside videos
+        lost: list = []
+        streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q, lost)
+        bad = unreadable_sensors(unplaced) + damaged_files(lost)
+        others = "the recording's other files" if 1 + len(by_clock) + len(assumed) + len(unplaced) > len(bad) else None
+        blocked = state_blockers(bad, assumed_arms(assumed, streams), others)
+        state, action, note = joint_state(streams, q) if not blocked else (None, None, blocked)
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)
     signals = mcap_signals([item["file"]] + sensor_mcaps, q, used)
@@ -5766,20 +5890,23 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if state is not None:
         extra["source"]["state"] = "joint channels"
     elif note:
-        extra["state_note"] = note
+        no_state(extra, note)
     elif item["seconds"] is None and mcap_layout(item["topics"]) != "generic":
         # cut short (no summary), and its messages before the cut hold no arm (mcap_joint_streams reads up to the cut)
-        extra["state_note"] = "Labelled from the cameras, because the file is cut short before any of its robot state."
+        no_state(extra, StateNote("Labelled from the cameras, because the file is cut short before any of its robot "
+                                  "state.", "unreadable"))
     elif motion and rig == "ego_head":
         shown = ", ".join(motion[:4]) + (f" and {len(motion) - 4} more" if len(motion) > 4 else "")
-        extra["state_note"] = (f"Labelled from the camera. The hand, body and camera tracks the file records ({shown}) are "
-                               "not read yet.")
+        no_state(extra, StateNote(f"Labelled from the camera. The hand, body and camera tracks the file records "
+                                  f"({shown}) are not read yet.", "layout"))
     elif motion:
         shown = ", ".join(motion[:4]) + (f" and {len(motion) - 4} more" if len(motion) > 4 else "")
-        extra["state_note"] = (f"Labelled from the cameras. The checks on recorded motion read six joints and a gripper per "
-                               f"arm, so they did not run on this file's motion channels ({shown}).")
+        no_state(extra, StateNote(f"Labelled from the cameras. The checks on recorded motion read six joints and a "
+                                  f"gripper per arm, so they did not run on this file's motion channels ({shown}).",
+                                  "layout"))
     elif rig != "ego_head":
-        extra["state_note"] = "Labelled from the cameras, because the file records no robot state."
+        no_state(extra, StateNote("Labelled from the cameras, because the file records no robot state.",
+                                  "not_recorded"))
     if item.get("notes"):
         extra["source"]["notes"] = item["notes"]
     if item.get("fixed_window_s"):
@@ -6293,20 +6420,97 @@ def no_time_why(p: Path) -> str:
 NO_TIME_WHY = "no time in it to place it on the footage by"     # a whole sensor file that holds no time (no_time_why)
 
 
-def unread_sensors_note(unplaced: list) -> str | None:
-    """The state note of an episode one of whose sensor MCAP files could not be read at all (no_time_why: it could not
-    be opened, or it is cut short before its first message), or None. What such a file held is unknown, so the state
-    of the other files may lack an arm it recorded, and a state of one arm on a two arm rig tells the model one arm
-    works: the episode has no arm state and is labelled from the cameras, every channel of the other files kept as a
-    signal. Each file is named with why. A whole file that holds no message (NO_TIME_WHY) holds nothing the state could
-    lack. The note does not say what the file held, since a tactile pad, a leader's commands or a log is no arm."""
-    bad = [(Path(p).name, why) for p, why in unplaced
-           if Path(p).suffix.lower() == ".mcap" and why != NO_TIME_WHY and sensor_times(p) is None]
+def unreadable_sensors(unplaced: list) -> list[tuple[str, str]]:
+    """[(name, what happened to it)] of an episode's sensor MCAP files that could not be read at all (unplaced, as
+    split_sensors gives them; no_time_why: it could not be opened, or it is cut short before its first message). A
+    whole file that holds no message (NO_TIME_WHY) holds nothing a state could lack, and is not one."""
+    return [(Path(p).name, why.removeprefix("it ")) for p, why in unplaced
+            if Path(p).suffix.lower() == ".mcap" and why != NO_TIME_WHY and sensor_times(p) is None]
+
+
+def damaged_files(lost: list) -> list[tuple[str, str]]:
+    """[(name, what happened to it)] of the MCAP files damaged inside whose channels could not be read where the
+    footage needs them (lost, as mcap_joint_streams appends them: path, channels, whether any message was read)."""
+    head = "is damaged inside, though its index is whole, so "
+    return [(Path(p).name, head + (f"nothing on {_and_words(chans)} could be read" if read else
+                                   "none of its messages could be read")) for p, chans, read in lost]
+
+
+def unread_sensors_note(bad: list[tuple[str, str]], others: str | None) -> StateNote | None:
+    """The state note of an episode with a sensor file whose content is unknown (bad: each file's name and what
+    happened to it, unreadable_sensors and damaged_files), or None. What such a file held is unknown, so a state of the
+    other files (others, as the note names them, or None when there are none) may lack an arm it recorded, and a state
+    of one arm on a two arm rig tells the model one arm works: the episode has no arm state and is labelled from the
+    cameras, every channel of the other files kept as a signal ("unreadable"). The note does not say what the file
+    held, since a tactile pad, a leader's commands or a log is no arm."""
     if not bad:
         return None
-    return ("Labelled from the cameras, because " + "; ".join(f"{name} {why.removeprefix('it ')}" for name, why in bad)
-            + f". Nothing {'they record' if len(bad) > 1 else 'it records'} is in the state or the signals, and the "
-              "recorded state of the other sensor files may lack what it held.")
+    note = ("Labelled from the cameras, because " + "; ".join(f"{name} {why}" for name, why in bad)
+            + f". What {'they record' if len(bad) > 1 else 'it records'} is unknown")
+    if others:
+        note += f", so {others} are not read as the arm state, and their channels are given as signals"
+    return StateNote(note + ".", "unreadable")
+
+
+def h5_state_arrays(p: Path) -> list[str]:
+    """The arrays of an HDF5 file that are named as the state (H5_STATE_NAME, outside an action group)."""
+    import h5py
+    try:
+        with h5py.File(p, "r") as f:
+            return sorted(s["name"] for s in h5_streams(f, "")["signal"]
+                          if H5_STATE_NAME.search(s["name"]) and not H5_ACTION_GROUP.search(s["name"]))
+    except Exception:
+        return []
+
+
+def assumed_arms(paths: list[Path], clocked: dict) -> list[tuple[str, list[str]]]:
+    """[(name, its arm channels)] of the sensor files placed from both starts (split_sensors) that record a working
+    arm: an MCAP channel of an arm's joints (mcap_joint_streams) that is not a command channel (ACTION_TOPIC, which
+    gives the action, never the state) and not a third arm beside a left and a right arm (third_arms, with the arms
+    of the files on the footage's clock, clocked), or an HDF5 array named as the state (h5_state_arrays). Such an arm
+    is never the recorded state, so a state of the other files would lack it (state_blockers)."""
+    out = []
+    for p in map(Path, paths):
+        if p.suffix.lower() == ".mcap":
+            own = {f"{k} ({p.name})": v for k, v in mcap_joint_streams([p]).items()}
+            third = set(third_arms({**clocked, **own}))
+            arms = sorted({_topic(own, k) for k in own if k not in third and not ACTION_TOPIC.search(_topic(own, k))})
+        else:
+            arms = h5_state_arrays(p)
+        if arms:
+            out.append((p.name, arms))
+    return out
+
+
+def assumed_arms_note(arms: list[tuple[str, list[str]]], others: str | None, lead: bool = True) -> StateNote | None:
+    """The state note of an episode with a working arm only on a clock placed from both starts (assumed_arms), beside
+    files on the footage's clock (others, as the note names them): that arm is never the state, and a state of the
+    others alone would lack it, so the episode has no arm state ("assumed_clock"). lead starts the note as every state
+    note starts, and is left off when it follows another (state_blockers)."""
+    if not arms:
+        return None
+    many = len(arms) > 1
+    note = (_and_words([f"{name} records an arm ({', '.join(chans)})" for name, chans in arms])
+            + f" on {'clocks' if many else 'a clock'} the footage does not share, so "
+            + f"{'they were' if many else 'it was'} placed on the footage from both starts, an assumed alignment that "
+            "is never read as the arm state.")
+    if others:
+        note += (f" A state of {others} alone would lack {'those arms' if many else 'that arm'}, so every arm channel "
+                 "is given as a signal.")
+    return StateNote(("Labelled from the cameras, because " if lead else "Also, ") + note, "assumed_clock")
+
+
+def state_blockers(bad: list[tuple[str, str]], arms: list[tuple[str, list[str]]],
+                   others: str | None) -> StateNote | None:
+    """Why no arm state is read beside an episode's sensor files, or None: a file whose content is unknown (bad,
+    unread_sensors_note) or a working arm only on an assumed clock (arms, assumed_arms_note). An arm state is given
+    only when every arm the episode's sensor files may hold was read on the footage's clock, since a state that lacks
+    one tells the model the arms it has did all the work. Both are named when both apply; the reason is the first."""
+    first = unread_sensors_note(bad, others)
+    then = assumed_arms_note(arms, others, lead=first is None)
+    if first and then:
+        return StateNote(f"{first} {then}", first.why)
+    return first or then
 
 
 def sensor_cut(p: Path) -> bool:
