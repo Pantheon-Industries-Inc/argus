@@ -397,6 +397,16 @@ def to_anchor(ep: dict, v: str, own: np.ndarray, T: int) -> np.ndarray | None:
     return out
 
 
+def _camera_or_failure(ep: dict, v: str) -> dict:
+    """camera_features, or, when the camera's frames cannot be read at all (its file gone, a crash computing them),
+    {"failed": the exception, "n": its frame count}, which assess records as that camera's crash: the checks not run
+    on it name it with the error and the other cameras are checked."""
+    try:
+        return camera_features(ep, v)
+    except Exception as e:  # noqa: BLE001 - recorded on the camera by assess
+        return {"failed": e, "n": int(ep["sources"][v]["n_frames"])}
+
+
 def extract(ep_dir: Path) -> dict:
     """Load the sidecars and decode every camera once. The result is all assess() needs. The cameras decode at the
     same time (the decoder runs outside Python's lock), each on its own frames, so the result is the same."""
@@ -404,7 +414,7 @@ def extract(ep_dir: Path) -> dict:
     T = len(ep["state"])
     views = me.views(ep)
     with ThreadPoolExecutor(max_workers=max(1, min(len(views), CAMERA_THREADS))) as pool:
-        feats = list(pool.map(lambda v: camera_features(ep, v), views))
+        feats = list(pool.map(lambda v: _camera_or_failure(ep, v), views))
     return {"ep": ep, "T": T, "cams": dict(zip(views, feats))}
 
 
@@ -559,6 +569,8 @@ def assess(feats: dict) -> dict:
     with _guard(R, ("episode_too_short",)):
         last = [float(ts[-1])] if len(ts) else [0.0]
         for v, c in cams.items():
+            if "failed" in c:
+                continue        # a camera whose frames could not be read gives no length
             ct = camera_times(ep, v)
             last.append(float(ct[c["n"] - 1]) if ct is not None and len(ct) >= c["n"] else (c["n"] - 1) / c["fps"])
         duration = max(last)
@@ -759,6 +771,8 @@ def assess(feats: dict) -> dict:
         # result) standing for this camera
         done = set()
         try:
+            if "failed" in c:
+                raise c["failed"]        # its frames could not be read (_camera_or_failure)
             n = c["n"]
             km = ep["kmap"].get(v)
             if km is None and n != T and has_state:

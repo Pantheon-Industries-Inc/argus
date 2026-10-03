@@ -176,6 +176,26 @@ def test_capture_qc_frozen_camera_while_the_pose_moves(tmp_path):
     assert listed["gripper_never_acts"]["status"] == "not_applicable"      # no verified 0-1 gripper unit
 
 
+def test_a_camera_that_cannot_be_read_costs_only_its_own_capture_evidence(tmp_path):
+    """The frozen left camera of the test above, beside a right camera whose file is gone: reading every camera's
+    frames before the checks stopped at the missing file, so all 38 capture checks of the episode were errored. Only
+    the right camera is left out now, named with its error on the checks it was not run on, and the left camera's
+    frozen picture is still found."""
+    s, vL, vR = two_grippers(3)
+    frozen = vL.copy()
+    frozen[40:100] = 0.0
+    d = write_episode(tmp_path / "episode_000000", s, {"left": levels_for(frozen), "right": levels_for(vR)})
+    (d / "right.mp4").unlink()
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    assert listed["video_frozen_run"]["status"] == "fired" and [f["camera"] for f in r["flags"]
+                                                                if f["check"] == "video_frozen_run"] == ["left"]
+    assert "right" in listed["video_frozen_run"]["why"] and "FileNotFoundError" in listed["video_frozen_run"]["why"]
+    assert "FileNotFoundError" in r["metrics"]["cameras"]["right"]["error"]
+    assert listed["nonfinite_signal"]["status"] == "clear" and listed["episode_too_short"]["status"] in ("fired", "clear")
+    assert len([c for c in r["checks"] if c["status"] == "errored"]) < 10
+
+
 def test_capture_qc_live_camera(tmp_path):
     s, vL, vR = two_grippers(3)
     d = write_episode(tmp_path / "episode_000000", s, {"left": levels_for(vL), "right": levels_for(vR)})
