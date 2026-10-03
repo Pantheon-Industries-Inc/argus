@@ -1277,7 +1277,8 @@ def episode_notes(item: dict) -> dict:
     named for this episode outranks a shared one, as a source
     more about the episode. When several of one rank name different tasks (task_key), none is guessed to be the task:
     each is a note under its file name, and "disagree" names them for a data issue. One that gives none, or is
-    outranked, is not read (opened_notes) and is listed."""
+    outranked, is not read (opened_notes) and is listed. A folder's own JSON remains shared even when a container or
+    video in that folder has the same basename. A folder that is itself the sole episode keeps its primary note."""
     files = note_files(item)
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
@@ -1288,6 +1289,13 @@ def episode_notes(item: dict) -> dict:
     owned = {p for p in files for f in fs if p.parent == f.parent and p.stem.lower() == f.stem.lower()} - named
     camera_owned = {p for p in files for f in item.get("camera_files") or []
                     if p.parent == Path(f).parent and p.stem.lower() == Path(f).stem.lower()}
+    # An actual episode folder keeps its primary note; a container alias cannot give a shared folder that rank.
+    folder_owners = {owner for owners in nf["names"].names.values() for owner in owners
+                     if owner is not None} if nf else set()
+    folder_episode = nf and not item.get("side_metadata") and folder_owners == {nf["episode"]}
+    folder_shared = {p for p in files if nf and not folder_episode
+                     and p.parent == nf["dir"] and p.suffix.lower() == ".json"
+                     and nf["names"].own and name_words(p.stem, nf["names"].takes) == nf["names"].own}
     owned |= camera_owned
     cams = (owned if len(fs) > 1 else set()) | camera_owned
     keys = [p.relative_to(nf["dir"]).as_posix() if nf and nf["dir"] in p.parents else p.name for p in files]
@@ -1313,12 +1321,13 @@ def episode_notes(item: dict) -> dict:
         return None
 
     def own_note(f: Path, ext: str) -> Path | None:
-        return next((p for p in files if p.parent == f.parent and p.name.lower() == (f.stem + ext).lower()), None)
+        return next((p for p in files if p not in folder_shared and p.parent == f.parent
+                     and p.name.lower() == (f.stem + ext).lower()), None)
 
     sources = []                          # (rank, position, task), the ranks of task_rank
     for i, p in enumerate(files):
-        if p in owned:
-            continue                      # a video's own note, weighed below
+        if p in owned or p in folder_shared:
+            continue                      # own and shared folder notes are weighed below
         rank = task_rank(p, named=p in named)
         if rank is not None and (x := task_of(p)):
             sources.append((rank, i, x))
@@ -1333,7 +1342,7 @@ def episode_notes(item: dict) -> dict:
     instr = min(sources)[2] if sources else None
     disagree, absent = [], []
     named_here, shared = [], []           # (file, task) of the folder .json files named for this episode, or for none
-    weighed = {p.resolve() for p in files}
+    weighed = {p.resolve() for p in files if p not in folder_shared}
     extra_dirs = item.get("metadata_dirs") or []
     candidates = [p for d in ([nf["dir"]] + extra_dirs if nf else [])
                   for p in (sorted(d.rglob("*")) if d in extra_dirs else
@@ -1360,7 +1369,7 @@ def episode_notes(item: dict) -> dict:
             issues.append({"kind": "metadata_limit", "text": f"{key} was not read because it exceeds "
                            f"the {NOTE_JSON_MAX_BYTES} byte note limit."})
             continue
-        obj, error = read_note(p)
+        obj, error = (got[p], None) if p in got else read_note(p)
         got[p] = obj
         if error:
             issues.append({"kind": "metadata_unreadable", "text": f"{key} could not be fully parsed: {error}. "
@@ -7704,7 +7713,8 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
 
 def ownership_root_name(root: Path, context: dict | None) -> str:
     """The original root folder is a separate filename fact, absent from relative manifest paths."""
-    name = context.get("root_name", root.name) if context is not None else root.name
+    implicit_name = root.resolve().name if root.name in {"", ".", ".."} else root.name
+    name = context.get("root_name", implicit_name) if context is not None else implicit_name
     if not isinstance(name, str) or not name or name in {".", ".."} or any(c in name for c in ("/", "\\", "\0")):
         raise ValueError("the original upload root name is not a folder name")
     return name
