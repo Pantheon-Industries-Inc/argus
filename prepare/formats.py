@@ -2060,28 +2060,31 @@ TABLE_STREAM_MAX_ROWS = 2_000_000   # a table longer than this keeps every so ma
 TABLE_SEPARATORS = (",", ";", "\t", "|")    # in the order a tie between them is settled
 TABLE_SNIFF_LINES = 20       # a table's separator is judged on its header and the lines after it, up to this many
 DECIMAL_COMMA = re.compile(r"^\s*[-+]?\d*,\d+\s*$")                       # a number with a decimal comma: 0,033
-GROUPED_NUMBER = re.compile(r"^\s*[-+]?\d{1,3}(\.\d{3})+(,\d+)?\s*$")     # thousands grouped by dots: 1.234,56
-NUMBER_LIKE = re.compile(r"^\s*[-+]?[\d.,]+\s*$")                          # digits, dots and commas only
+# Thousands grouped by dots (1.234,56). A first group of 0 is a decimal point (0.896), never thousands, and one dot
+# group alone (1.234) can be a decimal point too, so a column's dots are thousands only when one of its cells has dots
+# that cannot be one (THOUSANDS_PROOF: 1.234,56 or 1.234.567; column_numbers).
+GROUPED_NUMBER = re.compile(r"^\s*[-+]?[1-9]\d{0,2}(\.\d{3})+(,\d+)?\s*$")
+THOUSANDS_PROOF = re.compile(r"^\s*[-+]?[1-9]\d{0,2}((\.\d{3}){2,}(,\d+)?|(\.\d{3})+,\d+)\s*$")
 
 
-def table_format(p: Path) -> tuple[str, str, str | None]:
-    """(separator, decimal mark, thousands mark or None) of a CSV or TSV table, judged on its first TABLE_SNIFF_LINES
-    lines split as a CSV reader splits them, so a separator inside a quoted name ("force [N; x]") splits nothing. A
-    .tsv whose header splits on tabs is tab separated. Otherwise the separator is the one of TABLE_SEPARATORS that
+def table_format(p: Path) -> tuple[str, str]:
+    """(separator, decimal mark) of a CSV or TSV table, judged on its first TABLE_SNIFF_LINES lines split as a CSV
+    reader splits them, so a separator inside a quoted name ("force [N; x]") splits nothing. A .tsv whose header
+    splits on tabs is tab separated. Otherwise the separator is the one of TABLE_SEPARATORS that
     splits every one of those lines into the same number of fields, the most fields when several do (a table written
     with semicolons, as spreadsheets in many locales write it, had been read as one column of text, and counting
     separators in the header alone split a .tsv whose names hold commas on its commas), or when none does, the one
     that splits its header into the most fields; a comma (a tab for a .tsv) for a table of one column. A semicolon
     table whose cells are numbers written with a decimal comma (0,033 or 1.234,56) reads them with it, as those
-    spreadsheets write them, and with a dot between thousands when every dotted number in it is grouped so (1.234,56),
-    or none of its numbers would read as one."""
+    spreadsheets write them, or none of its numbers would read as one. Dots between thousands are a column's, not
+    the table's (column_numbers)."""
     import csv
     with open(p, newline="", errors="replace") as fh:
         lines = [line for line in (fh.readline() for _ in range(TABLE_SNIFF_LINES)) if line.strip()]
     rows = {s: [r for r in csv.reader(lines, delimiter=s) if r] for s in TABLE_SEPARATORS}
     tsv = Path(p).suffix.lower() == ".tsv"
     if tsv and rows["\t"] and len(rows["\t"][0]) > 1:
-        return "\t", ".", None
+        return "\t", "."
     widths = {s: {len(r) for r in rs} for s, rs in rows.items()}
     steady = [s for s in TABLE_SEPARATORS if len(widths[s]) == 1 and min(widths[s]) > 1]
     if steady:
@@ -2092,10 +2095,7 @@ def table_format(p: Path) -> tuple[str, str, str | None]:
         if head[sep] < 2:
             sep = "\t" if tsv else ","
     cells = [c for r in rows[sep][1:] for c in r] if sep == ";" else []
-    if not any(DECIMAL_COMMA.match(c) or GROUPED_NUMBER.match(c) and "," in c for c in cells):
-        return sep, ".", None
-    dotted = [c for c in cells if "." in c and NUMBER_LIKE.match(c)]
-    return sep, ",", "." if dotted and all(GROUPED_NUMBER.match(c) for c in dotted) else None
+    return sep, "," if any(DECIMAL_COMMA.match(c) or GROUPED_NUMBER.match(c) and "," in c for c in cells) else "."
 
 
 def table_separator(p: Path) -> str:
@@ -2113,16 +2113,44 @@ CODE_VALUES_MAX = 8
 UNNAMED_COLUMN = re.compile(r"^Unnamed: \d+$")      # pandas' name for a column whose header cell is blank
 
 
-def number_columns(df) -> tuple:
+def proves_thousands(col) -> bool:
+    """Whether a table column has a cell whose dots can only be between thousands (THOUSANDS_PROOF)."""
+    return bool(col.astype(str).str.strip().str.match(THOUSANDS_PROOF).any())
+
+
+def column_numbers(col, decimal: str = ".", thousands: bool | None = None):
+    """A table column's cells as numbers (NaN where a cell is not one), read as pandas reads a number, and with two
+    marks it does not know. Dots between thousands (GROUPED_NUMBER) are read as such in a column whose cells prove
+    them (proves_thousands, or thousands when the column was judged already), never across a table, so a column of
+    0.896 beside one of 1.234,56 keeps its decimal point. A decimal comma (DECIMAL_COMMA) is read in a table whose
+    decimal mark is a comma (table_format) and in a column with thousands dots, also in a column holding a cell of
+    text, which pandas leaves as text whole. A column pandas read as numbers is kept as it is."""
+    import pandas as pd
+    x = pd.to_numeric(col, errors="coerce")
+    if pd.api.types.is_numeric_dtype(col):
+        return x
+    if thousands is None:
+        thousands = proves_thousands(col)
+    if not thousands and decimal != ",":
+        return x
+    cells = col.astype(str).str.strip()
+    grouped = cells.str.match(GROUPED_NUMBER) if thousands else pd.Series(False, index=col.index)
+    fix = grouped | (cells.str.match(DECIMAL_COMMA) & x.isna())
+    plain = cells.where(~grouped, cells.str.replace(".", "", regex=False)).str.replace(",", ".", regex=False)
+    return x.where(~fix, pd.to_numeric(plain, errors="coerce"))
+
+
+def number_columns(df, decimal: str = ".") -> tuple:
     """(the columns of a table that hold numbers, as floats, [(name, cells that are not numbers, filled cells)] of
-    each filled column that does not). A column holds numbers when its filled cells read as numbers at least
-    NUMBER_COLUMN_SHARE of the time, or when its only text is one mark repeated and its numbers take more than
-    CODE_VALUES_MAX values (a sensor's "-" where it dropped out); each cell that is not a number (a stray "ERR", the
-    mark, an empty cell) is NaN, so a text cell never drops its column (the table's bad cells are flagged where it is
-    placed, table_signals). A column of text or codes (a task, a note, a phase) is left to annotation_tables, and
-    returned so the reader can name it. A named column with no cell filled stays, as one with no reading, flagged where
-    it is placed. A column with neither a name nor a filled cell is no column of the data: a separator at the end of
-    every line, as some writers put one, leaves it, so it is ignored without a word."""
+    each filled column that does not), its cells read by column_numbers with the table's decimal mark. A column holds
+    numbers when its filled cells read as numbers at least NUMBER_COLUMN_SHARE of the time, or when its only text is
+    one mark repeated and its numbers take more than CODE_VALUES_MAX values (a sensor's "-" where it dropped out); each
+    cell that is not a number (a stray "ERR", the mark, an empty cell) is NaN, so a text cell never drops its column
+    (the table's bad cells are flagged where it is placed, table_signals). A column of text or codes (a task, a note, a
+    phase) is left to annotation_tables, and returned so the reader can name it. A named column with no cell filled
+    stays, as one with no reading, flagged where it is placed. A column with neither a name nor a filled cell is no
+    column of the data: a separator at the end of every line, as some writers put one, leaves it, so it is ignored
+    without a word."""
     import pandas as pd
     keep, text = {}, []
     for c in df.columns:
@@ -2133,11 +2161,11 @@ def number_columns(df) -> tuple:
         if pd.api.types.is_numeric_dtype(col) and not pd.api.types.is_bool_dtype(col):
             keep[c] = col.astype(np.float64)
             continue
-        x = pd.to_numeric(col, errors="coerce")
+        x = column_numbers(col, decimal)
         words = col[filled & x.isna()].astype(str).str.strip()
         n_filled = int(filled.sum())
         mark = words.nunique() == 1 and x.nunique() > CODE_VALUES_MAX
-        if not n_filled or len(words) <= (1 - NUMBER_COLUMN_SHARE) * n_filled or mark:
+        if not n_filled or n_filled - len(words) >= NUMBER_COLUMN_SHARE * n_filled or mark:
             keep[c] = x.astype(np.float64)
         else:
             text.append((str(c), len(words), n_filled))
@@ -2147,26 +2175,26 @@ def number_columns(df) -> tuple:
 def read_number_table(p: Path):
     """(the number columns of a CSV or TSV table, number_columns, the columns of it that are not numbers with how many
     of their cells are not, the stride its rows were kept at, how many rows it has), read with its own separator,
-    decimal and thousands marks (table_format). A table up to TABLE_MAX_BYTES is read whole; a larger one in chunks of
-    TABLE_CHUNK_ROWS, keeping the columns its first chunk holds numbers in (a cell that is not a number is NaN), and
-    once more than TABLE_STREAM_MAX_ROWS rows are kept, every other kept row is dropped and the stride doubled, so
-    memory stays bounded and the rows stay spread over the whole recording. A table over 20 MB beside the videos had
-    been ignored."""
+    decimal mark (table_format). A table up to TABLE_MAX_BYTES is read whole; a larger one in chunks of
+    TABLE_CHUNK_ROWS, keeping the columns its first chunk holds numbers in, each read with the thousands its first
+    chunk proves (column_numbers; a cell that is not a number is NaN), and once more than TABLE_STREAM_MAX_ROWS rows
+    are kept, every other kept row is dropped and the stride doubled, so memory stays bounded and the rows stay spread
+    over the whole recording. A table over 20 MB beside the videos had been ignored."""
     import pandas as pd
-    sep, decimal, thousands = table_format(p)
-    read = {"sep": sep, "decimal": decimal, "thousands": thousands}
+    sep, decimal = table_format(p)
     if Path(p).stat().st_size <= TABLE_MAX_BYTES:
-        df, text = number_columns(pd.read_csv(p, **read))
+        df, text = number_columns(pd.read_csv(p, sep=sep, decimal=decimal), decimal)
         return df, text, 1, len(df)
     parts, cols, text, stride, rows, kept = [], None, [], 1, 0, 0
-    for ch in pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **read):
+    for ch in pd.read_csv(p, sep=sep, decimal=decimal, chunksize=TABLE_CHUNK_ROWS):
         if cols is None:
-            first, text = number_columns(ch)
+            first, text = number_columns(ch, decimal)
             cols = list(first.columns)
+            grouped = {c: proves_thousands(ch[c]) for c in cols}
         start = (-rows) % stride
         rows += len(ch)
         # a time column keeps float64: float32 holds about 7 digits, so epoch seconds at 100 Hz collapse together
-        ch = ch[cols].apply(pd.to_numeric, errors="coerce")
+        ch = pd.DataFrame({c: column_numbers(ch[c], decimal, grouped[c]) for c in cols}, index=ch.index)
         ch = ch.astype({c: np.float64 if is_time_name(c) else np.float32 for c in cols}).iloc[start::stride]
         parts.append(ch)
         kept += len(ch)
@@ -2240,8 +2268,8 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
         if num.shape[1] == 0:
             continue                      # text only: the uploader's notes, read by annotation_tables
         # a column of text or codes beside the numbers is named, never dropped without a word (number_columns)
-        out.left_out += [(f"{c} in {p.name}", f"{k} of its {m} filled cells are not numbers, so it is read as text, "
-                                              "not as a signal") for c, k, m in text]
+        out.left_out += [(f"{c} in {p.name}", f"{k} of its {m} filled cells are not numbers, so it is not read as a "
+                                              "signal") for c, k, m in text]
         if len(num) < 2:
             vals = ", ".join(f"{c} {x:g}" for c, x in zip(num.columns[:8], num.iloc[0, :8])) if len(num) else ""
             out.left_out.append((p.name, f"one row ({vals}), so a setting or a report rather than a reading over time"
@@ -6435,10 +6463,10 @@ def _jsonl_rows(p: Path):
 
 def _has_text(row: dict) -> bool:
     """Whether a table row holds a cell of text that is not a number (a name, a task, a note). A number written with a
-    decimal comma or thousands dots (DECIMAL_COMMA, GROUPED_NUMBER: 0,033, 1.234,56) is a number, as table_format reads
-    it, never a note."""
+    decimal comma (DECIMAL_COMMA, 0,033) or with dots that can only be between thousands (THOUSANDS_PROOF, 1.234,56
+    or 1.100.000) is a number, as the table reader reads it in any table (column_numbers), never a note."""
     for v in row.values():
-        if isinstance(v, str) and v.strip() and not (DECIMAL_COMMA.match(v) or GROUPED_NUMBER.match(v)):
+        if isinstance(v, str) and v.strip() and not (DECIMAL_COMMA.match(v) or THOUSANDS_PROOF.match(v)):
             try:
                 float(v)
             except ValueError:

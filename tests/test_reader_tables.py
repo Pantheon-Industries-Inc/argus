@@ -355,7 +355,8 @@ def test_a_column_of_codes_written_as_numbers_and_words_is_not_a_signal(tmp_path
     out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
     assert out.meta["traj"]["names"] == ["force"] and not _issues(out, "signal_bad_cells")
     # named, never dropped without a word
-    assert dict(out.left_out)["phase in traj.csv"].startswith("20 of its 60 filled cells are not numbers")
+    assert dict(out.left_out)["phase in traj.csv"] == "20 of its 60 filled cells are not numbers, so it is not read " \
+                                                      "as a signal"
 
 
 @pytest.mark.parametrize("mark", ["-", "ERR"])
@@ -376,9 +377,63 @@ def test_a_semicolon_table_with_thousands_dots_reads_as_numbers(tmp_path):
     p = tmp_path / "traj.csv"
     p.write_text("time;force\n" + "".join(f"{i / 30:.4f}".replace(".", ",") + f";1.{200 + 3 * i:03d},5\n"
                                          for i in range(n)))
-    assert f.table_format(p) == (";", ",", ".")
+    assert f.table_format(p) == (";", ",")
     out = f.table_signals([p], None, _anchor(n), {})
     assert out["traj"][10, 0] == 1230.5 and not f._table_has_text(p)
+
+
+def test_dot_decimals_beside_decimal_commas_keep_their_decimal_point(tmp_path):
+    """A semicolon table whose time is written with decimal commas and whose force has three places after a dot had
+    its force read as thousands, 1000 times too large."""
+    n = 60
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force;count\n" + "".join(f"{i / 30:.3f}".replace(".", ",") + f";{0.5 + i / 1000:.3f};"
+                                               f"1.{100 + i:03d},5\n" for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out["traj"][10, 0] == pytest.approx(0.51)            # 0.510: a leading 0 is never a thousands group
+    assert out["traj"][10, 1] == 1110.5                           # 1.110,5 proves its own column's dots
+
+
+def test_thousands_dots_are_read_only_in_a_column_whose_cells_prove_them(tmp_path):
+    n = 60
+    p = tmp_path / "traj.csv"
+    p.write_text("time;gain;count\n" + "".join(f"{i / 30:.3f}".replace(".", ",") + f";1.{200 + i:03d};"
+                                               f"1.{200 + i:03d}.000\n" for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out["traj"][10, 0] == pytest.approx(1.21)              # 1.210 alone could be a decimal point
+    assert out["traj"][10, 1] == 1_210_000
+
+
+def test_a_comma_table_of_grouped_thousands_is_a_signal_and_not_notes(tmp_path):
+    """Grouped cells ("1.100.000") were numbers to the notes reader and text to the table reader, so the table was
+    neither notes nor a signal."""
+    n = 60
+    p = tmp_path / "traj.csv"
+    p.write_text("time,count\n" + "".join(f'{i / 30:.4f},"1.{100 + i:03d}.000"\n' for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["count"] and out["traj"][10, 0] == 1_110_000
+    assert not f._table_has_text(p) and not out.left_out
+
+
+def test_a_text_cell_in_a_decimal_comma_column_leaves_its_other_cells_numbers(tmp_path):
+    n = 60
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force\n" + "".join(f"{i / 30:.3f}".replace(".", ",") + (";ERR\n" if i == 7 else f";{i},5\n")
+                                         for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out["traj"][10, 0] == 10.5 and np.isnan(out["traj"][7, 0])
+    assert len(_issues(out, "signal_bad_cells")) == 1
+
+
+@pytest.mark.parametrize("words", [["ERR"], ["ERR", "NaN?"]])
+def test_a_column_of_exactly_nine_tenths_numbers_is_a_signal(tmp_path, words):
+    n = 60
+    p = tmp_path / "traj.csv"
+    grip = [words[i // 10 % len(words)] if i % 10 == 5 else i % 2 for i in range(n)]     # 6 words in 60 cells
+    p.write_text("time,grip,force\n" + "".join(f"{i / 30:.4f},{grip[i]},{np.sin(i / 9):.4f}\n" for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["grip", "force"] and not out.left_out
+    assert "grip has 6 of 60" in _issues(out, "signal_bad_cells")[0]["what"]
 
 
 def test_a_table_is_judged_on_its_first_lines_read_once(tmp_path, monkeypatch):
