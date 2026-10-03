@@ -315,3 +315,20 @@ def test_a_sparse_table_records_its_rate(tmp_path):
         tmp_path / "traj.csv", index=False)
     out = f.table_signals([tmp_path / "traj.csv"], real, _anchor(n), {})
     assert out.meta["traj"]["rate_hz"] == pytest.approx(1.25, abs=0.01)
+
+
+# ---------------------------------------------------------------- the minutes limit skips, then keeps trying
+
+def test_an_episode_past_the_minutes_left_is_skipped_and_later_ones_still_tried(tmp_path):
+    for name, frames in (("ep1", 30), ("ep2", 90), ("ep3", 30)):
+        _clip(tmp_path / "up" / name / "top.mp4", frames)
+    rep = f.convert(tmp_path / "up", "teleop_arms", tmp_path / "out" / "eps", "t", 2.5)
+    assert [e["name"] for e in rep["episodes"]] == ["ep1/top", "ep3/top"]
+    assert [s["name"] for s in rep["skipped"]] == ["ep2/top"] and "minutes" in rep["skipped"][0]["why"]
+
+
+def test_episodes_under_the_minutes_are_all_taken(tmp_path):
+    for name in ("ep1", "ep2"):
+        _clip(tmp_path / "up" / name / "top.mp4", 30)
+    rep = f.convert(tmp_path / "up", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
+    assert len(rep["episodes"]) == 2 and not rep["skipped"]

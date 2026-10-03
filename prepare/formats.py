@@ -6318,14 +6318,16 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     if det.get("packaging"):
         report["packaging"] = det["packaging"]
     tables = annotation_tables(root)
-    for i, it in enumerate(items):
+    past = f"past the first {max_seconds / 60:g} minutes"
+    full = False
+    for it in items:
         known = it["seconds"] if it["seconds"] is not None else 0.0      # unknown until converted; measured below
         first = not report["episodes"]
-        if total + known > max_seconds and not first:
-            # episodes are taken in order until the cap, as the page shows; the rest are listed
-            for rest in items[i:]:
-                report["skipped"].append({"name": rest["name"], "why": f"past the first {max_seconds / 60:g} minutes"})
-            break
+        if full or (total + known > max_seconds + 1 and not first):
+            # an episode that does not fit what is left of the minutes is listed, and the later ones are still tried,
+            # in upload order, as the upload page chooses them (read.js chooseEpisodes)
+            report["skipped"].append({"name": it["name"], "why": past})
+            continue
         try:
             if it["kind"] == "lerobot":
                 ctx = convert_lerobot_item(it, rig, out, dataset)
@@ -6362,14 +6364,12 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
                 secs = float(ctx["duration_s"])
                 total += secs
                 report["episodes"].append(episode_row(it, ctx, secs))
-                rest_from = i + 1
+                full = True               # the minutes are used up: every later episode is listed
             else:
                 import shutil
                 shutil.rmtree(out / ctx["episode_id"], ignore_errors=True)
-                rest_from = i
-            for rest in items[rest_from:]:
-                report["skipped"].append({"name": rest["name"], "why": f"past the first {max_seconds / 60:g} minutes"})
-            break
+                report["skipped"].append({"name": it["name"], "why": past})
+            continue
         total += secs
         report["episodes"].append(episode_row(it, ctx, secs))
     used, missing = sensor_lines(out, report["episodes"])
