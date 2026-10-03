@@ -824,3 +824,14 @@ def test_an_abc130k_arm_with_a_long_gap_is_not_drawn_as_motion():
     assert rows is None and abs(gap[0] - 3.99) < 0.02 and abs(gap[1] - 6.01) < 0.02
     rows, gap = abc130k.interp({"t": (t * 1e9).astype(np.int64), "pos": np.ones((len(t), 7))}, q)
     assert gap is None and rows.shape == (300, 7)
+
+
+def test_abc130k_leaves_the_arm_positions_out_of_the_signals_only_when_it_read_them():
+    """abc130k always left every arm's and command's position out of the signals, so an episode whose state was
+    unread lost them from everything. They leave the signals only as the state (and the action) they were read as,
+    as formats.state_fields does."""
+    from prepare import abc130k
+    state, action = np.zeros((3, 14)), np.zeros((3, 14))
+    assert abc130k.read_fields(state, action) == {t: {"position"} for t in abc130k.ARM + abc130k.ARM_ACT}
+    assert abc130k.read_fields(state, None) == {t: {"position"} for t in abc130k.ARM}
+    assert abc130k.read_fields(None, None) == {}

@@ -116,6 +116,12 @@ def interp(stream: dict, q: np.ndarray) -> tuple[np.ndarray | None, tuple[float,
                              np.asarray(stream["pos"], dtype=np.float64))
 
 
+def read_fields(state, action) -> dict:
+    """{topic: {"position"}} of the arm channels read as the state, and of the command channels when they were read as
+    the action, for mcap_signals to leave out; positions that were not read stay signals (formats.state_fields)."""
+    return {t: {"position"} for t in (ARM if state is not None else ()) + (ARM_ACT if action is not None else ())}
+
+
 def gaps(t_ns: list[int]) -> dict:
     """Timing facts of one stream: frames missing (an interval over 1.5x the median), and frames
     stamped less than 1 ms after the previous one (a duplicated or glitched timestamp)."""
@@ -227,8 +233,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         "stream_checks": checks,
     }
     # every other number the arms record (joint velocities and torques), under the dataset's names (formats.mcap_signals)
-    formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], t_top / 1e9,
-                                                                {t: {"position"} for t in ARM + ARM_ACT}))
+    formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], t_top / 1e9, read_fields(state, action)))
     if gap is not None:
         context["state_note"] = (f"Labelled from the cameras, because the recorded arm state {gap[0]} "
                                  f"{formats.gap_words(gap[1], float(q[0]) / 1e9)}.")
