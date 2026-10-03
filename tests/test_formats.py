@@ -3074,6 +3074,30 @@ def test_a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task():
         _a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task(Path(t))
 
 
+def _a_folder_json_named_for_its_episodes_outranks_a_shared_one(tmp_path):
+    """ep1_meta.json and session_meta.json naming different tasks had given ep1 no task, though the file named for ep1
+    is about it alone, as live read it. A file named for this episode outranks a shared one, and only files of one
+    rank can disagree; tasks that differ only in case or spacing agree; a file named for several takes
+    (ep1_ep2_summary.json) gives each of them its task."""
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "a", takes, {"d/ep1_meta.json": {"task": "pick the red cup"},
+                                                   "d/session_meta.json": {"prompt": "pick a cup"}})
+    assert ctx["d/ep1"]["instruction"] == "pick the red cup" and ctx["d/ep2"]["instruction"] == "pick a cup", ctx
+    assert not any(c.get("reader_issues") for c in ctx.values()), ctx
+    ctx, _ = _upload_notes(tmp_path / "b", ["ep1/top.mp4", "ep1/wrist.mp4"],
+                           {"ep1/a.json": {"task": "pick  the cup"},
+                            "ep1/session_meta.json": {"prompt": "Pick the cup"}})
+    assert ctx["ep1"]["instruction"] == "pick  the cup" and not ctx["ep1"].get("reader_issues"), ctx
+    ctx, _ = _upload_notes(tmp_path / "c", takes, {"d/ep1_ep2_summary.json": {"task": "pick the cup"}})
+    assert [c.get("instruction") for c in ctx.values()] == ["pick the cup"] * 2, ctx
+
+
+def test_a_folder_json_named_for_its_episodes_outranks_a_shared_one():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_folder_json_named_for_its_episodes_outranks_a_shared_one(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a

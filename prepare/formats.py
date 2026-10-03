@@ -49,17 +49,17 @@ HDF5 files with no camera go with the episodes of their folder, whatever format 
 An archive (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz) is read as the folder it holds (open_archives). Data
 Review's upload page opens archives in the browser and sends their files; this is for archives on disk.
 
-Anything else the uploader sends next to an episode (a .txt, .json, .jsonl or .md with the same name as a
-video, or instruction.txt / annotations.json inside an episode folder or the folder of a video that is the only
-episode there) is passed to the model as the uploader's own annotation, a claim to check against the video, never as
-truth; every such file is read, and several are given each under its file name. The instruction comes from a JSON
-note's task keys, then a plain text note named for the task (instruction.txt, task.txt), then one named for the
-episode, then a video's own .txt; any other text note stays a note. A recorder's metadata file in an episode's folder
-that names the task (its prompt, instruction or task) gives the instruction to the folder's episodes when its name
-names nothing there, and to the episodes it names when it names only episodes; a file whose name holds the words of
-another episode, a video that is no episode's, a camera every episode there has (as its whole name) or a subfolder
-holding an episode is never an episode's task, and one named for a take that is not in the upload is named as not
-read for that reason (named_for). Files that name
+Anything else the uploader sends next to an episode (a .txt, .json, .jsonl or .md with the same name as a video, or
+instruction.txt / annotations.json inside an episode folder or the folder of a video that is the only episode there)
+is passed to the model as the uploader's own annotation, a claim to check against the video, never as truth; every
+such file is read, and several are given each under its file name. The instruction comes from a JSON note's task
+keys, then a plain text note named for the task (instruction.txt, task.txt), then one named for the episode, then a
+video's own .txt; any other text note stays a note. A recorder's metadata file in an episode's folder that names the
+task (its prompt, instruction or task) gives the instruction to the folder's episodes when its name names nothing
+there, and to the episodes it names when it names only episodes; a file whose name holds the words of another
+episode, a video that is no episode's, a camera every episode there has (as its whole name) or a subfolder holding
+an episode is never an episode's task, and one named for a take that is not in the upload is named as not read for
+that reason (named_for). A file named for the episode outranks a shared one, and files of one rank that name
 different tasks give none of them: each is given as a note and the disagreement is a data issue of the episode. One
 that names neither the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
@@ -1048,9 +1048,10 @@ def episode_notes(item: dict) -> dict:
     one (ep1_meta.json, ep1_ep2_summary.json) is theirs; one named for anything else (ep2_meta.json, an infrared
     video's file, top.json beside takes that each have a top camera, ep2.json beside the subfolder ep2 holding an
     episode) is never this episode's task, and one named for a take that is not in the upload (ep3.json beside ep1
-    and ep2) is "absent", which no episode reads. When several of this episode's name different tasks, none is
-    guessed to be the task: each is a note under its file name, and "disagree" names them for a data issue. One that
-    gives none is not read (opened_notes) and is listed."""
+    and ep2) is "absent", which no episode reads. A file named for this episode outranks a shared one, as a source
+    more about the episode. When several of one rank name different tasks (task_key), none is guessed to be the task:
+    each is a note under its file name, and "disagree" names them for a data issue. One that gives none, or is
+    outranked, is not read (opened_notes) and is listed."""
     files = note_files(item)
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
@@ -1085,7 +1086,8 @@ def episode_notes(item: dict) -> dict:
         if all(owns) and len({t for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
-    read, disagree, absent, found = list(files), [], [], []
+    read, disagree, absent = list(files), [], []
+    named_here, shared = [], []           # (file, task) of the folder .json files named for this episode, or for none
     weighed = {p.resolve() for p in files}
     for p in folder_json(nf["dir"]) if nf else []:
         if p.resolve() in weighed or p.stat().st_size > NOTE_JSON_MAX_BYTES:
@@ -1093,13 +1095,16 @@ def episode_notes(item: dict) -> dict:
         owners, gone = named_for(p, nf["names"])
         if gone:
             absent.append(p)              # named for a take that is not in the upload
-        elif not instr and (not owners or None not in owners and nf["episode"] in owners):
-            # named for nothing (shared), or for episodes that include this one
-            if x := instruction_from(_read_json(p)):
-                found.append((p, x))
+        elif not instr and (x := instruction_from(_read_json(p))):
+            if not owners:
+                shared.append((p, x))
+            elif None not in owners and nf["episode"] in owners:
+                named_here.append((p, x))
     if not instr:
+        # a file named for this episode outranks the folder's shared ones; only files of one rank can disagree
+        found = named_here or shared
         read += [p for p, _ in found]
-        if len({x for _, x in found}) == 1:
+        if len({task_key(x) for _, x in found}) == 1:
             instr = found[0][1]
         elif found:
             # files that name different tasks: none is guessed to be the task, and each is a note under its name
@@ -1172,6 +1177,12 @@ def named_for(p: Path, fn: FolderNames) -> tuple[frozenset, bool]:
     bare = [i for i in range(len(w)) if num[i] and not beside(i, i + 1) and len(raw[i]) in fn.bare_digits]
     absent = any(i not in named for i in taken + bare)
     return frozenset(who for i, j in longest for who in fn.names[w[i:j]]), absent
+
+
+def task_key(text: str) -> str:
+    """A task text as two folder .json files are compared by (episode_notes): lower case, its spaces collapsed, so
+    "Pick the cup" and "pick  the cup" name one task."""
+    return " ".join(text.lower().split())
 
 
 def task_rank(p: Path, named_for_episode: bool) -> int | None:
