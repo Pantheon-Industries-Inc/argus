@@ -285,6 +285,27 @@ def test_bad_cells_of_a_table_are_missing_and_flagged_value_by_value(tmp_path):
     assert any(name == "q in traj.csv" for name, _ in out.left_out)
 
 
+def test_an_inf_is_never_written_to_the_signals(tmp_path):
+    n = 30
+    ctx = {"n_state_frames": n, "fps": 30.0}
+    a = np.ones((n, 2))
+    a[5, 1] = np.inf
+    f.write_signals(tmp_path, ctx, {"s": a})
+    with np.load(tmp_path / "signals.npz") as z:
+        assert not np.isinf(z["s0"]).any() and np.isnan(z["s0"][5, 1])
+    assert _issues(ctx, "signal_not_finite")
+
+
+def test_an_inf_in_a_lerobot_column_is_flagged():
+    n = 30
+    col = [[1.0, 2.0]] * n
+    col[7] = [1.0, float("inf")]
+    out = f.recorded_signals(pd.DataFrame({"force": col}), set(), n)
+    assert not np.isinf(out["force"]).any()
+    bad = [i for i in out.issues if i.get("signal") == "force"]
+    assert bad and "1 of 30" in bad[0]["what"]
+
+
 # ---------------------------------------------------------------- a sparse table keeps its rate
 
 def test_a_sparse_table_records_its_rate(tmp_path):

@@ -1322,6 +1322,9 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
         if bad:
             bad_cells_issue(out, str(c), bad, len(a), "cells that are empty or not of its "
                                                       f"{a.shape[1]} value{'s' if a.shape[1] != 1 else ''}")
+        inf = int(np.isinf(a).any(axis=1).sum())
+        if inf:
+            bad_cells_issue(out, str(c), inf, len(a), "cells holding a value that is not a finite number")
         a = on_frames(a, at, n)
         # a row has a reading when any of its values does, as checks/sensors.py counts it: a pressure map with one dead
         # cell still reads at every frame. A column with few readings is kept, NaN where it has none (write_signals
@@ -1517,10 +1520,23 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         m.pop("shape", None)
         m.update(names=list(SUMMARY_NAMES), summary_of=width)
         add_issue(ctx, **summary_issue(k, width))
+    stored = {}
     for k, v in keep.items():
-        for i in signal_gaps(k, np.asarray(v[:n]).reshape(n, -1), t):
+        # an inf is never stored: it is a missing reading (NaN), as each reader reads it, and a data issue here when
+        # the reader had not already made it NaN, so no range shown for the signal reads "- to -"
+        a = np.asarray(v[:n], dtype=np.float32)
+        inf = np.isinf(a)
+        if inf.any():
+            a = np.where(inf, np.float32(np.nan), a)
+            rows = np.flatnonzero(inf.reshape(n, -1).any(axis=1))
+            add_issue(ctx, "signal_not_finite", f"{k} has {int(inf.sum())} value{'s' if inf.sum() != 1 else ''} that "
+                                                f"{'are' if inf.sum() != 1 else 'is'} not a finite number in "
+                                                f"{len(rows)} frame{'s' if len(rows) != 1 else ''}; read as missing",
+                      signal=k, t0_s=float(t[rows[0]] - t[0]), t1_s=float(t[rows[-1]] - t[0]))
+        stored[k] = a
+        for i in signal_gaps(k, a.reshape(n, -1), t):
             add_issue(ctx, **i)
-    np.savez(ep / "signals.npz", **{f"s{i}": np.asarray(v[:n], dtype=np.float32) for i, v in enumerate(keep.values())})
+    np.savez(ep / "signals.npz", **{f"s{i}": a for i, a in enumerate(stored.values())})
     ctx["signals"] = [{"name": k, "key": f"s{i}", "dims": int(v.shape[1]), **(meta.get(k) or {})}
                       for i, (k, v) in enumerate(keep.items())]
 
