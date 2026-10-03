@@ -490,8 +490,12 @@ def test_an_arm_channel_that_names_seven_joints_and_no_gripper_is_not_read_as_si
             return iter(self.xs)
 
     class Msg:
-        name = Repeated(["a", "b"])
-        position = Repeated([0.0, 1.0])
+        """A decoded ROS message: its fields are slots."""
+        __slots__ = ("name", "position")
+
+        def __init__(self):
+            self.name = Repeated(["a", "b"])
+            self.position = Repeated([0.0, 1.0])
     assert formats._joint_names(Msg(), 2) == ["a", "b"] and formats._joint_names({"name": "ab"}, 2) is None
 
 
@@ -535,6 +539,84 @@ def test_an_mcap_joint_channel_keeps_the_names_its_messages_give():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _an_mcap_joint_channel_keeps_the_names_its_messages_give(Path(t))
+
+
+def test_a_list_of_names_beside_a_numeric_array_names_its_values():
+    """A JointState's name gives one name per value of position, velocity and effort beside it, in a dict (JSON) and
+    in a decoded ROS message with slots. Names with another count, names under another parent, two lists that could
+    both name the array, and a field that already names its values give none of their own."""
+    msg = {"header": {"stamp": {"sec": 1, "nanosec": 0}, "frame_id": "base"}, "name": ["j1", "j2", "j3"],
+           "position": [0.0, 0.1, 0.2], "velocity": [1.0, 1.1, 1.2], "effort": [2.0, 2.1, 2.2]}
+    nums = f._numbers(msg)
+    for k in ("position", "velocity", "effort"):
+        assert nums[k][2] == ["j1", "j2", "j3"], (k, nums[k])
+    assert f._numbers({**msg, "name": ["j1", "j2"]})["position"][2] is None
+    assert f._numbers({**msg, "name": []})["position"][2] is None
+    nested = f._numbers({"names": ["a", "b", "c"], "arm": {"position": [0.0, 0.1, 0.2]}})
+    assert nested["arm.position"][2] is None
+    nested = f._numbers({"arm": {"names": ["a", "b", "c"]}, "position": [0.0, 0.1, 0.2]})
+    assert nested["position"][2] is None
+    two = f._numbers({"name": ["a", "b", "c"], "units": ["rad", "rad", "rad"], "position": [0.0, 0.1, 0.2]})
+    assert two["position"][2] is None
+    own = f._numbers({"name": ["a", "b"], "x": 1.0, "y": 2.0, "points": [{"u": 1.0}, {"u": 2.0}]})
+    assert own[""][2] == ["x", "y"] and own["points"][2] == ["0.u", "1.u"]
+
+    class Repeated:
+        """A Protobuf repeated field: a sequence, but not a list."""
+        def __init__(self, xs):
+            self.xs = list(xs)
+
+        def __len__(self):
+            return len(self.xs)
+
+        def __iter__(self):
+            return iter(self.xs)
+
+    class JointState:
+        """A decoded ROS message: its fields are slots."""
+        __slots__ = ("name", "position")
+
+        def __init__(self):
+            self.name = Repeated(["a", "b"])
+            self.position = Repeated([0.0, 1.0])
+    assert f._numbers(JointState())["position"][2] == ["a", "b"]
+
+
+def _a_joint_channel_that_is_not_the_state_keeps_its_joint_names_as_signals(tmp_path):
+    """A JointState channel read as signals, not as the state (the Franka of seven joints and no gripper): its
+    position and velocity carry the joint names, and the rows at each instant are labelled by them, not [0] to [6]."""
+    import json
+    import numpy as np
+    from mcap.writer import Writer
+    from label import signals as sg
+    t0 = 1_790_000_000.0
+    path = tmp_path / "arm.mcap"
+    joints = [f"fr3_left_joint{j}" for j in range(1, 8)]
+    with open(path, "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        sid = w.register_schema(name="sensor_msgs/msg/JointState", encoding="jsonschema", data=b"{}")
+        ch = w.register_channel(topic="/left/joint_states", message_encoding="json", schema_id=sid)
+        for i in range(330):
+            ts = int((t0 - 0.1 + i / 100) * 1e9)
+            w.add_message(ch, log_time=ts, publish_time=ts, data=json.dumps(
+                {"header": {"stamp": {"sec": ts // 10**9, "nanosec": ts % 10**9}, "frame_id": ""}, "name": joints,
+                 "position": [0.01 * i + j for j in range(7)], "velocity": [0.02 * i * (j + 1) for j in range(7)],
+                 "effort": []}).encode())
+        w.finish()
+    q = t0 + np.arange(90) / 30
+    sig = f.mcap_signals([path], q)
+    for field in ("position", "velocity"):
+        name = f"/left/joint_states {field}"
+        assert sig.meta[name]["names"] == joints, (name, sig.meta[name])
+        rows = sg.summary_rows(name, sig[name], [0, 45, 89], names=sig.meta[name]["names"])
+        assert [r for r, _ in rows] == [f"{name} {j}" for j in joints], rows
+
+
+def test_a_joint_channel_that_is_not_the_state_keeps_its_joint_names_as_signals():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_joint_channel_that_is_not_the_state_keeps_its_joint_names_as_signals(Path(t))
 
 
 def test_an_accented_name_keeps_its_letters_in_the_episode_id():

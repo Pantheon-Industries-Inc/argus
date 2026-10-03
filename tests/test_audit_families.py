@@ -127,6 +127,10 @@ def test_a_franka_of_seven_named_joints_is_no_state_and_its_gripper_is_no_longer
     assert any(n.startswith("/left/franka_gripper/joint_states") and "position" in n for n in names)
     assert "RECORDED MOTION" not in prompt and "RECORDED STATE: no arm state in the layout our checks read." in prompt
     assert "7 joints and no gripper" in board["reader_notes"]["state_note"]
+    # the joint names each JointState message gives name its values in the signals too, not [0] to [6]
+    assert "    /left/joint_states position fr3_left_joint1: " in prompt
+    assert "    /left/joint_states velocity fr3_left_joint7: " in prompt
+    assert not any(" position [0]: " in row for row in prompt.splitlines() if "/joint_states " in row)
 
 
 def test_a_video_folders_imu_keeps_all_ten_values(landed):

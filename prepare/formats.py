@@ -3409,21 +3409,39 @@ def _joint_row(msg) -> list[float] | None:
     return joints + grip[:1] if grip else joints
 
 
+def _name_lists(items) -> list[list[str]]:
+    """The lists of names among a message's fields (_msg_items): any sequence of nonempty strings, as _vector reads
+    values, so a Protobuf repeated field or a ROS string[] is read like a JSON list."""
+    out = []
+    for _k, v, _set in items:
+        if v is None or isinstance(v, (str, bytes, bytearray, memoryview, dict)) or not hasattr(v, "__len__"):
+            continue
+        v = list(v)
+        if v and all(isinstance(x, str) and x for x in v):
+            out.append(v)
+    return out
+
+
+def _sibling_names(lists: list[list[str]], n: int) -> list[str] | None:
+    """The names of the n values of a numeric array, from the name lists beside it in the same (sub)message
+    (_name_lists): the one list there with exactly n entries. sensor_msgs/JointState's name names its position,
+    velocity and effort this way, and a vendor's names, joint_names or labels beside its own list does the same. None
+    when no list has n entries, or two different ones do, since either could be the names; a list in another
+    message or under another parent never names the array."""
+    found = {tuple(v) for v in lists if len(v) == n}
+    return list(found.pop()) if len(found) == 1 else None
+
+
 def _joint_names(msg, n: int) -> list[str] | None:
-    """The names a joint message gives the values of its row (sensor_msgs/JointState's name), with "gripper" for a
-    gripper reading _joint_row appended from its own field; None when the message names none, or not one per value.
-    Any sequence of names is read, as _vector reads values, so a Protobuf repeated field keeps its names."""
-    v = _field(msg, "name")
-    if v is None or isinstance(v, (str, bytes, dict)) or not hasattr(v, "__len__"):
-        return None
-    v = list(v)
-    if not v or not all(isinstance(x, str) and x for x in v):
-        return None
-    if len(v) == n:
-        return v
-    if len(v) == n - 1 and next((g for g in (_vector(_field(msg, k)) for k in GRIPPER_KEYS) if g), None):
-        return v + ["gripper"]
-    return None
+    """The names a joint message gives the values of its row (_sibling_names, so sensor_msgs/JointState's name), with
+    "gripper" for a gripper reading _joint_row appended from its own field; None when the message names none, or not
+    one per value."""
+    lists = _name_lists(_msg_items(msg))
+    names = _sibling_names(lists, n)
+    if names is None and next((g for g in (_vector(_field(msg, k)) for k in GRIPPER_KEYS) if g), None):
+        names = _sibling_names(lists, n - 1)
+        return names + ["gripper"] if names else None
+    return names
 
 
 def mcap_joint_streams(paths: list[Path]) -> dict:
@@ -3506,9 +3524,11 @@ def _numbers(m, path: str = "") -> dict:
     path (each value named by its field, so a position reads x, y, z), set when any of them was written (_msg_items). A
     repeated field of messages (the 21 joints of a tracked hand as a list of poses, the taxels of a glove as a list of
     readings) is one array under its path, shaped (count, numbers per element), when every element carries the same
-    numbers. Strings, bytes and the message's own stamps are left out."""
-    out = {}
-    for k, v, was_set in _msg_items(m):
+    numbers. A list of names beside a numeric array with one name per value names its values (_sibling_names, a
+    JointState's name for its position, velocity and effort). Strings, bytes and the message's own stamps are left
+    out."""
+    out, items, lists = {}, _msg_items(m), None
+    for k, v, was_set in items:
         k = str(k)
         if k in SIGNAL_SKIP_PARTS or k.startswith("_") or SIGNAL_SKIP.search(k):
             continue
@@ -3521,7 +3541,8 @@ def _numbers(m, path: str = "") -> dict:
         elif hasattr(v, "__len__") and not isinstance(v, dict) and not hasattr(v, "DESCRIPTOR"):
             vals = list(v)
             if vals and all(_is_num(x) for x in vals):
-                out[p] = ([float(x) for x in vals], True, None, None)
+                lists = _name_lists(items) if lists is None else lists
+                out[p] = ([float(x) for x in vals], True, _sibling_names(lists, len(vals)), None)
             elif vals and all(_is_num(y) for x in vals if isinstance(x, (list, tuple)) for y in x) \
                     and all(isinstance(x, (list, tuple)) and len(x) == len(vals[0]) and len(x) for x in vals):
                 out[p] = ([float(y) for x in vals for y in x], True, None, (len(vals), len(vals[0])))
