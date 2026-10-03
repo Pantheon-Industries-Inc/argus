@@ -2077,3 +2077,58 @@ def test_every_camera_that_holds_a_picture_is_read():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _every_camera_that_holds_a_picture_is_read(Path(t))
+
+
+def _lerobot_v3(root: Path, cams: dict, data: dict | None) -> None:
+    """A LeRobot v3.0 folder without meta/episodes: one packed file per camera ({key: frames}) and, when given, one
+    packed data file of these columns."""
+    import json
+    import pandas as pd
+    feats = {k: {"dtype": "video", "shape": [36, 64, 3]} for k in cams}
+    (root / "meta").mkdir(parents=True)
+    (root / "meta" / "info.json").write_text(json.dumps({"codebase_version": "v3.0", "fps": 30, "features": {
+        **feats, "observation.state": {"dtype": "float32", "shape": [3]}}}))
+    for k, n in cams.items():
+        d = root / "videos" / k / "chunk-000"
+        d.mkdir(parents=True)
+        _clip(d / "file-000.mp4", n)
+    if data is not None:
+        (root / "data" / "chunk-000").mkdir(parents=True)
+        pd.DataFrame(data).to_parquet(root / "data" / "chunk-000" / "file-000.parquet")
+
+
+def _lerobot_v3_without_its_episode_list_keeps_every_camera_it_can(tmp_path):
+    """Without meta/episodes, an episode found in the data had been kept only when every camera's packed video placed
+    it, a camera packed differently was dropped from whole recordings without a word on the episode, and a whole
+    recording lost its data file's signals. An episode is kept with the cameras that place it, the others listed on
+    it with the reason, and a recording keeps the signals of a data file with one row per frame."""
+    import numpy as np
+    rng = np.random.default_rng(4)
+    top, wrist = "observation.images.top", "observation.images.wrist_left"
+    lengths = [10, 12, 8]
+    root = tmp_path / "placed"
+    _lerobot_v3(root, {top: 30, wrist: 25}, {
+        "episode_index": np.repeat([0, 1, 2], lengths), "frame_index": np.concatenate([np.arange(m) for m in lengths]),
+        "timestamp": np.concatenate([np.arange(m) / 30 for m in lengths]), "observation.state": list(rng.random((30, 3)))})
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps_placed", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 3, rep
+    for e in rep["episodes"]:
+        ctx = _episode_ctx(tmp_path / "eps_placed", rep, e["name"])
+        assert [c["key"] for c in ctx["cameras"].values()] == [top], ctx["cameras"]
+        assert any(u.startswith(wrist) and "lined up" in u for u in ctx["source"]["unused_cameras"]), ctx["source"]
+        assert [i["camera"] for i in _issues(ctx, "camera_not_aligned")] == [wrist], ctx.get("reader_issues")
+    root = tmp_path / "whole"
+    _lerobot_v3(root, {top: 30, wrist: 25}, {"observation.state": list(rng.random((30, 3))),
+                                              "timestamp": np.arange(30) / 30})
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps_whole", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1, rep
+    ctx = _episode_ctx(tmp_path / "eps_whole", rep, "file-000")
+    assert ctx.get("unsplit") and "observation.state" in [s["name"] for s in ctx.get("signals") or []], ctx
+    assert any(u.startswith(wrist) for u in ctx["source"]["unused_cameras"]), ctx["source"]
+    assert [i["camera"] for i in _issues(ctx, "camera_not_aligned")] == [wrist], ctx.get("reader_issues")
+
+
+def test_lerobot_v3_without_its_episode_list_keeps_every_camera_it_can():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _lerobot_v3_without_its_episode_list_keeps_every_camera_it_can(Path(t))

@@ -2274,6 +2274,9 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         root["used"].append(f"The metadata{where} lists {absent} more episodes than were uploaded; the uploaded ones were labelled.")
 
 
+PACKED_UNALIGNED = "its packed videos could not be lined up with this episode's frames"
+
+
 def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path]) -> None:
     import pandas as pd
     info, where = root["info"] or {}, (f" in {root['rel']}" if root["rel"] else "")
@@ -2354,14 +2357,22 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         root["fps"] = float(np.median([x for x in fps_ts if x]))
     fps = root["fps"]
     places = {k: _place_episodes(by_key[k], sorted(lengths.items())) for k in keys} if lengths else {}
-    common = sorted(set.intersection(*[set(p) for p in places.values()])) if places and all(places.values()) else []
-    if common and fps:
-        for eidx in common:
-            vids_e = {k: (places[k][eidx][0], places[k][eidx][1] / fps, (places[k][eidx][1] + lengths[eidx]) / fps) for k in keys}
+    # an episode is kept with the cameras whose packed videos place it frame for frame; a camera that does not place it
+    # is listed on the episode with the reason (convert_lerobot), never the reason to drop the episode
+    placed = sorted(set().union(*[set(p) for p in places.values()])) if places else []
+    if placed and fps:
+        part = 0
+        for eidx in placed:
+            have = [k for k in keys if eidx in places[k]]
+            vids_e = {k: (places[k][eidx][0], places[k][eidx][1] / fps, (places[k][eidx][1] + lengths[eidx]) / fps)
+                      for k in have}
+            part += len(have) < len(keys)
             root["episodes"].append({"eidx": eidx, "length": lengths[eidx], "tasks": tasks_of.get(eidx, []),
-                                     "data": data_of.get(eidx), "videos": vids_e})
-        root["used"].append(f"{len(common)} episodes{where} found in the data files and matched to every camera's packed "
-                            "videos frame for frame.")
+                                     "data": data_of.get(eidx), "videos": vids_e,
+                                     "unplaced": {k: PACKED_UNALIGNED for k in keys if k not in have}})
+        root["used"].append(f"{len(placed)} episodes{where} found in the data files and matched to the packed videos "
+                            "frame for frame" + (f"; {part} of them by only some of the cameras, and each lists the "
+                                                 "cameras that could not be lined up." if part else "."))
         return
     # no certain placement: each packed video of the scene camera is one recording; another camera joins it only
     # when its file has the same name and the same number of frames (otherwise its footage is not the same time)
@@ -2372,7 +2383,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
     counts = {}
     dropped = set()
     for p in by_key[lead]:
-        files = {lead: p}
+        files, unaligned = {lead: p}, {}
         for k in keys:
             if k == lead:
                 continue
@@ -2383,8 +2394,14 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
                 if abs(a - b) <= 2:
                     files[k] = q
                     continue
+                unaligned[k] = f"its packed file has {b} frames and the {lead} file {a}, so the two cannot be lined up"
+            else:
+                unaligned[k] = f"it has no packed file of the same name as the {lead} file"
             dropped.add(k)
-        root["recordings"].append({"name": p.relative_to(rdir).with_suffix("").as_posix(), "files": files})
+        # the data file packed under the same name, read when it holds one row per frame (convert_recording)
+        dp = rdir / "data" / p.parent.name / (p.stem + ".parquet")
+        root["recordings"].append({"name": p.relative_to(rdir).with_suffix("").as_posix(), "files": files,
+                                   "unaligned": unaligned, "data": dp if dp.exists() else None})
     if dropped:
         root["missing"].append(f"The {', '.join(sorted(dropped))} videos{where} are packed differently from the {lead} "
                                "videos and, without the episode list, cannot be lined up with them in time, so they were "
@@ -2433,7 +2450,7 @@ def _place_episodes(files: list[Path], lengths: list[tuple[int, int]]) -> dict:
                 continue
             fi = max(k for k in range(len(files)) if bounds[k] <= a)
             if z > bounds[fi + 1]:
-                return {}                  # an episode across a file boundary: the placement is wrong
+                continue                   # an episode across a file boundary is not placed; the others are
             out[e] = (files[fi], a - bounds[fi])
         if len(out) > len(best):
             best = out
@@ -2466,6 +2483,7 @@ def plan_lerobot(det: dict, root: Path) -> tuple[list[dict], list[str], list[str
             items.append({"kind": "lerobot", "name": f"{prefix}{e['eidx']:06d}", "root": r, "row": e, "seconds": secs})
         for rec in r["recordings"]:
             items.append({"kind": "recording", "name": prefix + rec["name"], "root": r, "files": rec["files"],
+                          "unaligned": rec.get("unaligned") or {}, "data": rec.get("data"),
                           "seconds": max((_safe_duration(p) or 0) for p in rec["files"].values()) or None})
     return items, used, missing, roots
 
@@ -2589,8 +2607,12 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if not video_cams and r["image_cams"] and df is not None:
         return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes)
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
-    # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused too
-    unused = unused + [k for k in r["cams"] if k not in video_cams]
+    # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused
+    # too, and one whose packed video could not be placed on this episode says why (_episodes_v3)
+    unplaced = row.get("unplaced") or {}
+    unused = unused + [f"{k} ({unplaced[k]})" if k in unplaced else k for k in r["cams"] if k not in video_cams]
+    for k in unplaced:
+        add_issue(extra, "camera_not_aligned", f"The camera {k} is not shown: {unplaced[k]}.", camera=k)
     if r["image_cams"]:
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
@@ -2830,18 +2852,44 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
 
 def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
     """A packed LeRobot video whose episodes could not be placed with certainty: the whole file is one
-    recording, labelled from video."""
+    recording, labelled from video. A camera packed differently is listed with the reason and is a data issue, and
+    the data file packed under the same name gives the recording its signals when it holds exactly one row per frame
+    of the scene camera's file (a row is a frame, in order); otherwise it is listed with its row count."""
+    import pandas as pd
     keys = list(item["files"])
     vmap, unused = pick_cameras(keys, rig, keys)
     files = {v: (k, item["files"][k]) for v, k in vmap.items()}
+    unaligned = item.get("unaligned") or {}
     extra = {"task_label": [item["name"]],
              "source": {"format": f"lerobot {item['root']['version']} (packed video kept whole)", "file": item["name"],
-                        "unused_cameras": unused},
+                        "unused_cameras": unused + [f"{k} ({why})" for k, why in unaligned.items()]},
              "unsplit": True}
+    for k, why in unaligned.items():
+        add_issue(extra, "camera_not_aligned", f"The camera {k} is not shown: {why}.", camera=k)
     if rig != "ego_head":
         extra["state_note"] = ("Labelled from the video, as one recording: its episodes could not be matched to the "
                                "packed video exactly.")
-    return video_views_episode(unique_dir(out, episode_name(item["name"])), files, rig, dataset, extra)
+    signals = None
+    if item.get("data") is not None:
+        from label import episode as me
+        lead = files[me.order_views(files)[0]][1]
+        signals = Signals()
+        try:
+            df = pd.read_parquet(item["data"])
+            order = [c for c in ("episode_index", "frame_index") if c in df.columns]
+            df = df.sort_values(order, kind="stable") if order else df
+            n = _frame_count(lead)
+        except Exception as e:
+            signals.left_out.append((Path(item["data"]).name, f"could not be read ({type(e).__name__})"))
+        else:
+            if len(df) == n:
+                signals = recorded_signals(df.drop(columns=["frame_index"], errors="ignore"), set(), n,
+                                           item["root"]["features"])
+            else:
+                signals.left_out.append((Path(item["data"]).name, f"{len(df)} rows while the video has {n} frames, so "
+                                                                  "its rows cannot be placed on the frames"))
+    return video_views_episode(unique_dir(out, episode_name(item["name"])), files, rig, dataset, extra,
+                               signals=signals)
 
 
 # ---------------------------------------------------------------- MCAP
