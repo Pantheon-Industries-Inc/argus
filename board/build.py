@@ -293,6 +293,35 @@ def off_schema(result: dict) -> list[dict]:
     return out
 
 
+STEP_SLACK_S = 0.5      # a step may end this far past the episode's end (a reply rounding its last time up)
+
+
+def steps_outside(d: dict) -> list[dict]:
+    """The data issue of a timeline whose steps lie past the episode's end, or end before they start: kind
+    model_steps_outside_episode, naming how many of each. The steps are kept as the model gave them; the page draws
+    the timeline to the episode's length with each such step at its edge. Nothing when the episode's length is not
+    known (or only estimated) or every step lies within it."""
+    dur = d.get("duration_s")
+    if not dur or d.get("duration_estimated"):
+        return []
+    steps = [e for e in d.get("event_labels") or [] if isinstance(e, dict)]
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    past = [e for e in steps if any(num(e.get(k)) and e[k] > dur + STEP_SLACK_S for k in ("t_s", "end_s"))]
+    back = [e for e in steps if num(e.get("t_s")) and num(e.get("end_s")) and e["end_s"] < e["t_s"]]
+    if not past and not back:
+        return []
+    one = lambda xs, a, b: a if len(xs) == 1 else b
+    said = []
+    if past:
+        said.append(f"{len(past)} of its {len(steps)} steps {one(past, 'lies', 'lie')} past the episode's end at "
+                    f"{dur:.1f} s")
+    if back:
+        said.append(f"{len(back)} {one(back, 'ends before it starts', 'end before they start')}")
+    return [{"kind": "model_steps_outside_episode",
+             "what": "The model's timeline does not fit the episode: " + " and ".join(said) + ". They are kept as "
+                     "given, and the timeline is drawn to the episode's length with them at its edge."}]
+
+
 def reader_issues(ctx: dict, result: dict | None = None) -> list[dict]:
     """The problems an episode was kept and flagged with, each with the family it raises (board/families.py
     reader_family), so the page shows each as a data issue under that family's name: context.json reader_issues
@@ -356,6 +385,10 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
             d["dataset_checks"] = d.get("dataset_checks") or {}
             d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
     add_reader_issues(d, ctx, result)
+    outside = [{**x, "family": _FAMILIES.reader_family(x["kind"])} for x in steps_outside(d)]
+    if outside:
+        d["dataset_checks"] = d.get("dataset_checks") or {}
+        d["dataset_checks"]["reader_issues"] = (d["dataset_checks"].get("reader_issues") or []) + outside
     subs = [s for s in ctx.get("annotation_subtasks") or [] if isinstance(s, dict) and s.get("label")]
     if subs:
         d["dataset_labels"] = [dataset_label(s) for s in subs]

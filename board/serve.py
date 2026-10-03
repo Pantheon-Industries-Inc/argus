@@ -4913,9 +4913,12 @@ function renderEp(d, opts) {
   const touch = tcData(d);
   for (const c of touch.contacts) duration = Math.max(duration, c.end_s);
   for (const x of touch.missing) duration = Math.max(duration, x.t_s);
-  // the recording's own length when the episode has one, so the timeline, its lanes and the video end together;
-  // without it, the last labelled time with a second's margin
-  duration = d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
+  // the recording's own length when the episode has one, so the timeline, its lanes and the video end together, and a
+  // step the model placed past the end is drawn at the end (board/build.py flags it) rather than stretching the
+  // timeline; without a length, or with one estimated from the sampled times, the last labelled time with a margin
+  duration = d.duration_s > 0 && !d.duration_estimated ? d.duration_s
+    : d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
+  const onTl = t => Math.max(0, Math.min(duration, Number(t)));     // a time as drawn: on the episode's timeline
 
   // a head-camera session is a sequence of self-directed tasks (d.tasks), each with its own goal frame; every other
   // episode has one completion and one goal
@@ -4964,7 +4967,8 @@ function renderEp(d, opts) {
   let progOverlayHtml = '';
   if (progPts.length >= 2) {
     const W = 100, H = 24;
-    const full = progPts.map(pt => `${(pt.t / duration * W).toFixed(2)},${((1 - pt.p) * H).toFixed(2)}`).join(' ');
+    const full = progPts.map(pt => `${(onTl(pt.t) / duration * W).toFixed(2)},${((1 - pt.p) * H).toFixed(2)}`)
+      .join(' ');
     progOverlayHtml = `<div class="prog-overlay" id="prog-overlay">
       <span class="po-pct" id="po-pct">0%</span>
       <svg class="po-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
@@ -5064,7 +5068,7 @@ function renderEp(d, opts) {
   let markersHtml = '';
   for (const e of eventLabels) {
     if (e.t_s == null) continue;
-    const pct = (e.t_s / duration) * 100;
+    const pct = (onTl(e.t_s) / duration) * 100;
     const cls = contribClass(e.contribution);
     const tip = `${fmtT(e.t_s)}   ${esc(e.verb_class || '')}`;
     markersHtml += `<div class="marker seg ${cls}" style="left:${pct}%" data-t="${e.t_s}"><div class="tip">${esc(tip)}`
@@ -5120,7 +5124,7 @@ function renderEp(d, opts) {
     : ((k.outcome || '').toLowerCase() === 'failure' ? 'var(--danger)' : 'var(--fg-2)');
   let keyMarkersHtml = '';
   for (const k of keyEvents) {
-    const pct = (k.t_s / duration) * 100;
+    const pct = (onTl(k.t_s) / duration) * 100;
     const oc = (k.outcome || '').toLowerCase();
     keyMarkersHtml += `<div class="marker key" style="left:${pct}%;background:${keyColor(k)}" data-t="${k.t_s}"><div `
       + `class="tip">${esc(fmtT(k.t_s))}   ${k.kind ? esc(kindName(k.kind)) + ': ' : ''}${esc(k.label || '')}${oc
@@ -5425,10 +5429,10 @@ function renderEp(d, opts) {
     </div>
     <div class="timeline" id="timeline">
       ${markersHtml}${keyMarkersHtml}${comp.completed_at_s != null ? `<div class="marker goal" `
-        + `style="left:${(comp.completed_at_s / duration) * 100}%" data-t="${comp.completed_at_s}"><div `
+        + `style="left:${(onTl(comp.completed_at_s) / duration) * 100}%" data-t="${comp.completed_at_s}"><div `
         + `class="tip">goal reached ${fmtT(comp.completed_at_s)}</div></div>` : ''}${taskGoalTimes.map((gt,
-        i) => `<div class="marker goal" style="left:${(gt / duration) * 100}%" data-t="${gt}"><div class="tip">task `
-        + `done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
+        i) => `<div class="marker goal" style="left:${(onTl(gt) / duration) * 100}%" data-t="${gt}"><div `
+        + `class="tip">task done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
     ${laneHtml}${belowLanes}

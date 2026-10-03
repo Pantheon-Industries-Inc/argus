@@ -123,6 +123,14 @@
    ]
   },
   {
+   "slug": "label-times",
+   "list": "labelling",
+   "name": "Model steps fall outside the episode",
+   "reader_issues": [
+    "model_steps_outside_episode"
+   ]
+  },
+  {
    "slug": "read-with-a-limit",
    "list": "handling",
    "name": "Read or shown with a limit of ours",

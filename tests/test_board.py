@@ -1237,3 +1237,35 @@ def test_an_episode_the_board_cannot_read_is_kept_with_its_reply_and_the_error(t
     assert any(x["kind"] == "model_reply_not_shown" for x in bad["dataset_checks"]["reader_issues"])
     good = json.loads((board / "qa" / "episode_000000.json").read_text())
     assert "_label_failed" not in good and good["completion"]["task_completed"] == "success"
+
+
+def test_steps_past_the_episode_end_are_kept_and_flagged(tmp_path):
+    """Steps past an 8 s episode's end stretched its timeline to 208 s with no flag. They are kept as given, flagged as
+    a labelling issue (not counted) naming how many lie past the end and how many end before they start, and the page
+    draws the timeline to the episode's length. A step ending within half a second of the end is a rounding."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    for name, extra in (("episode_000000", [{"start_s": 9.0, "end_s": 10.3, "action": "rounding"}]),
+                        ("episode_000001", [{"start_s": 108.0, "end_s": 208.0, "action": "past the end"},
+                                            {"start_s": 5.0, "end_s": 2.0, "action": "backwards"}])):
+        out = _output(name)
+        out["episode_dir"] = str(eps / name)
+        out["labels"]["timeline"] += extra
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    ok = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert not any(x["kind"] == "model_steps_outside_episode" for x in ok["dataset_checks"].get("reader_issues") or [])
+    d = json.loads((board / "qa" / "episode_000001.json").read_text())
+    assert [e["verb_class"] for e in d["event_labels"]][-2:] == ["past the end", "backwards"]
+    (iss,) = [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "model_steps_outside_episode"]
+    assert iss["family"] == "label-times" and Families().list_of("label-times") == "labelling"
+    assert "1 of its 5 steps lies past the episode's end at 10.0 s and 1 ends before it starts" in iss["what"]
+    page = (REPO / "board" / "serve.py").read_text()
+    assert "duration = d.duration_s > 0 && !d.duration_estimated ? d.duration_s" in page
