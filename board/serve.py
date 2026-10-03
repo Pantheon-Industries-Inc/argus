@@ -835,6 +835,11 @@ body.lb-swap #ep-list, body.lb-swap .issue-filter, body.lb-swap .coverage .cv-nu
 .ep-head-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
 .kp-note { width: 0; min-width: 100%; }
 .kp-note-in { padding-top: 7px; text-align: right; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
+/* a note shown on few episodes (hand keypoints laid a frame or two off) takes no room while hidden: its gap is a margin,
+   eased to nothing with the fold, since padding inside the fold would keep 7 px of it and move the buttons above */
+.kp-note.gap-fold { margin-top: 7px; }
+.kp-note.gap-fold.off { margin-top: 0; }
+.kp-note.gap-fold .kp-note-in { padding-top: 0; }
 #kp-dl[hidden] { display: none; }
 
 /* ---------- main grid ---------- */
@@ -2473,7 +2478,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           rel="noreferrer">ACE-Ego-Hand</a> (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank"
           rel="noreferrer">CC BY-NC 4.0</a>), which uses <a href="https://mano.is.tue.mpg.de/license.html"
           target="_blank" rel="noreferrer">MANO</a>.</div></div>
-        <div class="kp-note off" id="hp-aligned"><div class="kp-note-in"></div></div>
+        <div class="kp-note gap-fold off" id="hp-aligned"><div class="kp-note-in"></div></div>
       </div>
     </div>
     <div id="left-col"></div>
