@@ -839,6 +839,9 @@ STATE_NOT_POSITION_WORDS = {"vel", "velocity", "velocities", "speed", "effort", 
                             "current", "currents", "force", "forces", "acc", "accel", "acceleration"}
 STATE_FRAME_WORDS = {"cartesian", "eef", "ee", "tcp", "pose", "effector", "flange", "tool", "rot", "rotation",
                      "orientation"}
+STATE_PART_POSE_NOTE = ("Labelled from the video: the recorded state's value names give a position for some values "
+                        "({}) but not a pose our checks read, and our checks read six joints and a gripper per arm or "
+                        "a 6D pose and an opening per gripper.")
 STATE_UNAXED_NOTE = ("Labelled from the video: the recorded state's value names give a position or a pose without the "
                      "axes our checks read ({}), not six joints and a gripper per arm.")
 
@@ -898,6 +901,10 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
             return "none", STATE_UNAXED_NOTE.format(framed)
         if all(STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
             return "joints", None
+        # a name of a position axis (x, y or z) in a group that is no full pose is never read by width
+        placed = next((x for g in groups for x in g[:6] if last[x] in STATE_POSITION_AXES), None)
+        if placed:
+            return "none", STATE_PART_POSE_NOTE.format(placed)
         return kind, None
     if any(STATE_GRIPPER_NAME.search(x) for x in names):
         return "none", ("Labelled from the video: the recorded state's value names put a gripper elsewhere than "
@@ -907,6 +914,9 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
     if all(STATE_JOINT_NAME.search(x) for x in names):
         return "none", (f"Labelled from the video: the recorded state's value names give {dims} joints and no gripper, "
                         "and our checks read six joints and a gripper per arm.")
+    placed = next((x for g in groups for x in g[:6] if last[x] in STATE_POSITION_AXES), None)
+    if placed:
+        return "none", STATE_PART_POSE_NOTE.format(placed)
     return kind, None
 
 

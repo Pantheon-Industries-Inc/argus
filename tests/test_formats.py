@@ -727,6 +727,10 @@ def test_a_value_name_with_no_words_says_nothing_and_never_raises():
         # the other names still decide: a velocity named beside it is still not a position
         kind, note = f.state_layout(7, "teleop_arms", [blank] + j + ["gripper_vel"])
         assert kind == "none" and "gripper_vel" in note
+        # a group that names a position for some values but is not a full pose is never read by width
+        for rig in ("teleop_arms", "handheld_gripper"):
+            kind, note = f.state_layout(7, rig, ["x", "y", "z", "roll", "pitch", blank, "gripper"])
+            assert kind == "none" and "position for some values" in note, (rig, kind, note)
 
 
 def test_joint_state_reads_only_the_layout_the_checks_read():
