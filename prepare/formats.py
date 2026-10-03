@@ -7450,7 +7450,7 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
     if ownership_context is None:
         loose = [p for part in parts if part["format"] == "video" for p in part["files"]]
         original_items = items + unassigned_video_names(items, loose)
-    assign_episode_names(items, original_items)
+    assign_episode_names(items, original_items, root, ownership_context)
     if ownership_context is not None:
         selected = {id(it) for it in items}
         for kind in dict.fromkeys(it["kind"] for it in original_items):
@@ -7507,15 +7507,43 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
     return det, items
 
 
-def assign_episode_names(items: list[dict], original_items: list[dict]) -> None:
+def assign_episode_names(items: list[dict], original_items: list[dict], root: Path, context: dict | None) -> None:
     """Allocate output identities from the original plan, so omitted sources never change collision suffixes.
 
     The same episode_dirs rule handles full and selected uploads. MCAP names that normalize alike must also keep
     separate directories rather than overwrite the first recording.
     """
-    selected = {id(it) for it in items}
     episodes = [it for it in original_items if it["kind"] != "video_alias"]
-    for it, path in zip(episodes, episode_dirs(Path("."), [it["name"] for it in episodes])):
+    original_files = None
+    if context is not None and "original_files" in context:
+        rels = context["original_files"]
+        if (not isinstance(rels, list) or any(not isinstance(rel, str) or not rel or "\\" in rel
+                or Path(rel).is_absolute() or any(part in {"", ".", ".."} for part in rel.split("/")) for rel in rels)
+                or len(rels) != len(set(rels))):
+            raise ValueError("the original upload file manifest is not a list of relative filenames")
+        original_files = {root / rel for rel in rels if not hidden(root / rel, root)}
+    if context is not None and original_files is None and any(
+            it["kind"] == "video" and any(Path(p).name == "raw_video.mp4" for p in it["files"]) for it in episodes):
+        raise ValueError("original adapter identity requires the original upload file manifest")
+    if original_files is not None and any(
+            Path(p) not in original_files for it in original_items
+            for p in it.get("files", [it["file"]] if "file" in it else [])):
+        raise ValueError("an original source is absent from the original upload file manifest")
+    selected = {id(it) for it in items}
+    names = []
+    for it in episodes:
+        name = it["name"]
+        if it["kind"] == "video":
+            for mod in upload_adapters("video"):
+                naming = getattr(mod, "upload_episode_name", None)
+                if naming and original_files is not None and id(it) in selected:
+                    if naming(it) != naming(it, original_files=original_files):
+                        raise ValueError("a selected adapter no longer matches its original annotation filenames")
+                if naming and (adapted := naming(it, original_files=original_files)) is not None:
+                    name = adapted
+                    break
+        names.append(name)
+    for it, path in zip(episodes, episode_dirs(Path("."), names)):
         if id(it) in selected:
             it["output_name"] = path.name
 

@@ -85,11 +85,18 @@ def prepare_clip(d: Path, clip: str, ep: Path) -> None:
     formats.video_views_episode(ep, {"exo": ("raw_video", d / "raw_video.mp4")}, "ego_head", REPO, clip_extra(d, clip))
 
 
-def recognizes(item: dict) -> bool:
+def recognizes(item: dict, *, original_files: set[Path] | None = None) -> bool:
     """A video upload in this dataset's clip layout: one raw_video.mp4 with its ego_annotation beside it."""
     fs = item.get("files") or []
-    return (len(fs) == 1 and Path(fs[0]).name == "raw_video.mp4"
-            and (Path(fs[0]).parent / "ego_annotation" / "ego_action_annotation.json").exists())
+    if len(fs) != 1 or Path(fs[0]).name != "raw_video.mp4":
+        return False
+    annotation = Path(fs[0]).parent / "ego_annotation" / "ego_action_annotation.json"
+    return annotation.exists() if original_files is None else annotation in original_files
+
+
+def upload_episode_name(item: dict, *, original_files: set[Path] | None = None) -> str | None:
+    """The adapter's existing clip identity, recognized from actual or trusted original annotation filenames."""
+    return Path(item["files"][0]).parent.name if recognizes(item, original_files=original_files) else None
 
 
 def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
@@ -98,7 +105,7 @@ def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
     extra["source"]["upload"] = item["name"]
     if rig != "ego_head":
         extra["rig_note"] = f"the upload was marked {rig}; this dataset's clips are from a head-worn phone"
-    ep = formats.unique_dir(out, formats.episode_name(d.name))
+    ep = formats.unique_dir(out, item.get("output_name") or formats.episode_name(d.name))
     return formats.video_views_episode(ep, {"exo": ("raw_video", d / "raw_video.mp4")}, "ego_head", dataset, extra)
 
 

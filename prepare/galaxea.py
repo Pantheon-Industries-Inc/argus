@@ -93,7 +93,7 @@ def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
     meta = meta_from(get, item["root"]["rel"] or root.name)
     eidx = int(item["row"]["eidx"])
     ep = next(e for e in meta["episodes"] if int(e["episode_index"]) == eidx)
-    return write_episode(meta, ep, get, out / formats.episode_name(item["name"]), dataset)
+    return write_episode(meta, ep, get, out / (item.get("output_name") or formats.episode_name(item["name"])), dataset)
 
 
 def episode_dir_name(folder: str, index: int) -> str:
