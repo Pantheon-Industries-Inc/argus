@@ -7,7 +7,9 @@ The board plays each camera as its own synced <video> and expects one mp4 per ep
   left mounted camera    CLIPS/wrist_left/<episode>.mp4
   right mounted camera   CLIPS/wrist_right/<episode>.mp4
   any other camera       CLIPS/extra1/<episode>.mp4, CLIPS/extra2/..., as the reader numbers them
-  a camera's depth       CLIPS/depth_<camera>/<episode>.mp4 (depth_exo, depth_left, ...), when the recording has a
+  a camera the model     CLIPS/unshown1/<episode>.mp4, ..., in the order of context.json unshown_cameras
+  is not shown           (unshown_views); one that does not decode is flagged on the episode (record_unshown)
+  a camera's depth      CLIPS/depth_<camera>/<episode>.mp4 (depth_exo, depth_left, ...), when the recording has a
                          depth stream for it (depth.json)
 
 Some datasets keep their video packed (MolmoAct2: 12 to 50 episodes per mp4), and some cameras are HEVC or AV1,
@@ -422,6 +424,46 @@ def board_name(eid: str, prefix: str = "") -> str:
     return eid.replace("episode_", f"episode_{prefix}", 1) if prefix else eid
 
 
+UNSHOWN = "unshown"        # the view of a camera the model is not shown: unshown1, unshown2, ... (unshown_views)
+UNSHOWN_NOT_DECODABLE = "unshown_camera_not_decodable"
+
+
+def unshown_views(ctx: dict) -> list[tuple[str, dict]]:
+    """[(view, entry)] of the cameras the model is not shown (context.json unshown_cameras, prepare/formats.py: more
+    extra cameras than it is shown, a stereo camera's second eye, every camera but one on a head rig, an infrared,
+    thermal or mask video) that have a video: unshown1, unshown2, ... in their order. The board cuts each like any
+    other camera into CLIPS/unshown<N>/ (episode_jobs) and the page plays it, named as not shown to the model; the
+    model's request never reads them."""
+    out = []
+    for e in ctx.get("unshown_cameras") or []:
+        if isinstance(e, dict) and e.get("packed") and e.get("n_frames"):
+            out.append((f"{UNSHOWN}{len(out) + 1}", e))
+    return out
+
+
+def record_unshown(ep_dir: Path, cut: set, broken: dict) -> None:
+    """The cameras the model is not shown that this run cut (cut) or could not decode (broken: {view: why}) in the
+    episode's context.json reader_issues: one entry of kind unshown_camera_not_decodable per camera that does not
+    decode, in place of an earlier run's for the same camera, and none for one that cut. The episode keeps every
+    other camera and its labels."""
+    ctx = _context(ep_dir)
+    names = {v: str(e.get("name") or v) for v, e in unshown_views(ctx)}
+    old = ctx.get("reader_issues") or []
+    redo = set(cut) | set(broken)
+    new = [x for x in old if not (isinstance(x, dict) and x.get("kind") == UNSHOWN_NOT_DECODABLE
+                                  and x.get("camera") in redo)]
+    new += [{"kind": UNSHOWN_NOT_DECODABLE, "camera": v,
+             "what": f"The {names.get(v, v)} camera, which the model is not shown, could not be decoded, so the board "
+                     f"cannot play it ({str(why)[:160]})."} for v, why in sorted(broken.items())]
+    if new == old:
+        return
+    if new:
+        ctx["reader_issues"] = new
+    else:
+        ctx.pop("reader_issues", None)
+    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+
+
 def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     src_p = ep_dir / "sources.json"
     if not src_p.exists():
@@ -429,9 +471,10 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     eid = board_name(ep_dir.name, prefix)
     sources = json.loads(src_p.read_text())
     ctx_p = ep_dir / "context.json"
+    ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
     # half a frame before the episode's first frame, at the episode's own rate (packed LeRobot v3 files
     # at 50 fps put the previous episode's last frame closer than half a 30 fps frame)
-    fps = float((json.loads(ctx_p.read_text()) if ctx_p.exists() else {}).get("fps") or 30.0)
+    fps = float(ctx.get("fps") or 30.0)
     cams = cams_of(sources)           # FastUMI has no fixed camera; single-gripper tasks have one camera
     outs = clip_paths(mp4_dir, eid, cams)
     big = main_cam(sources) if cams else None
@@ -444,6 +487,16 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
             off, skip = offsets.get(cam, (0.0, 0))
             jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, off, skip,
                          ep_dir.name, cam))
+    # the cameras the model is not shown, as side cameras at their own start on the episode's clock: one that started
+    # before the clock drops its frames from before it, as start_offsets does
+    for view, e in unshown_views(ctx):
+        o = clip_path(mp4_dir, eid, view)
+        if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
+            f = float(e.get("fps") or fps)
+            start = float(e.get("start_s") or 0.0)
+            skip = int(round(-start * f)) if start < 0 else 0
+            jobs.append((str(e["packed"]), float(e.get("base_s") or 0.0), int(e["n_frames"]), o, f, False,
+                         max(0.0, start + skip / f), skip, ep_dir.name, view))
     return jobs
 
 
@@ -845,11 +898,25 @@ def main() -> int:
     broken: dict[str, dict[str, str]] = {}      # episode folder -> {camera: why its video did not decode}
     short: dict[str, dict[str, dict]] = {}      # episode folder -> {camera: its clip's and the episode's frames}
     cut: dict[str, set] = {}                    # episode folder -> the cameras cut on this run
+    unshown_cut: dict[str, set] = {}            # the same for the cameras the model is not shown (unshown_views)
+    unshown_broken: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip): (o, ep, cam)
                 for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
+            if cam.startswith(UNSHOWN):
+                # a camera the model is not shown: kept as cut, or flagged when it does not decode (record_unshown),
+                # never taken out of the episode, whose cameras it is not among
+                try:
+                    f.result()
+                    ok += 1
+                    unshown_cut.setdefault(ep, set()).add(cam)
+                except Exception as e:
+                    fail += 1
+                    unshown_broken.setdefault(ep, {})[cam] = str(e)[:400]
+                    sys.stderr.write(f"clip FAIL {o}: {str(e)[:160]}\n")
+                continue
             try:
                 counts = f.result()
                 ok += 1
@@ -862,6 +929,9 @@ def main() -> int:
                 fail += 1
                 broken.setdefault(ep, {})[cam] = str(e)[:400]
                 sys.stderr.write(f"clip FAIL {o}: {str(e)[:160]}\n")
+    for d in ep_dirs:
+        if d.name in unshown_cut or d.name in unshown_broken:
+            record_unshown(d, unshown_cut.get(d.name, set()), unshown_broken.get(d.name, {}))
     # an episode is left out only when none of its cameras can be cut; one with a camera that works keeps it, the
     # cameras that do not decode are taken out of it, and both kinds of problem are recorded in its context.json
     failed: dict[str, dict[str, str]] = {}
@@ -880,6 +950,8 @@ def main() -> int:
             # every clip is timed on it (start_offsets); each camera's frames are recorded as they come out
             redo, again = {}, set()
             for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in episode_jobs(d, args.out, True, args.name_prefix):
+                if cam.startswith(UNSHOWN):
+                    continue            # cut above, at its own start, which the main camera does not move
                 try:
                     counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip)
                     again.add(cam)

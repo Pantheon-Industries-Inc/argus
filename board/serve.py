@@ -193,7 +193,8 @@ def _remember_frame(key, jpg: bytes) -> None:
             _FRAME_CACHE.popitem(last=False)
 
 
-EXTRA_CAM = re.compile(r"extra\d{1,2}")   # any other camera the recording has (board/clips.py clip_path)
+# any other camera the recording has, and a camera the model is not shown (board/clips.py clip_path, unshown_views)
+EXTRA_CAM = re.compile(r"(?:extra|unshown)\d{1,2}")
 DEPTH_CAM = re.compile(r"depth_(exo|left|right|extra\d{1,2})")   # a camera's depth clip (board/clips.py depth_clip)
 
 
@@ -237,7 +238,7 @@ def footage_cams(clips: Path, eid: str) -> list:
     """[(cam, clip)] of the episode's clips on disk, the main camera first: the fixed or head camera, else the first
     gripper camera, as the page shows them."""
     extra = sorted((d.name for d in clips.iterdir() if d.is_dir() and EXTRA_CAM.fullmatch(d.name)),
-                   key=lambda n: int(n[5:])) if clips.is_dir() else []
+                   key=lambda n: (n.startswith("unshown"), int(re.sub(r"\D", "", n)))) if clips.is_dir() else []
     return [(c, clip_path(clips, eid, c)) for c in ("exo", "left", "right", *extra) if clip_path(clips, eid, c).is_file()]
 
 
@@ -1155,6 +1156,11 @@ aside.left .grip-strip .state-toast.active { position: static; order: 3; transfo
 .cam-cell.cam-exo:-webkit-full-screen { background: #000; width: 100vw; height: 100vh; }
 .cam-cell.cam-exo:-webkit-full-screen video { max-height: 100vh; width: 100%; height: 100%; object-fit: contain; }
 /* each camera's label sits 8px in from the image's corner, the same line as the chips over the main camera's image */
+/* the line under the cameras that names the ones the model was not shown, and why */
+aside.left .unshown-note { margin: 0; padding: 6px 12px 8px; background: #000; font-family: var(--mono);
+  font-size: 10px; line-height: 1.45; color: rgba(255,255,255,0.72); }
+/* its label wraps inside a narrow cell instead of running past it */
+aside.left .cam-unshown .cam-label { white-space: normal; max-width: calc(100% - 28px); border-radius: var(--r-sm); }
 aside.left .cam-label {
   position: absolute; top: 8px; left: 8px; z-index: 2;
   padding: 1px 6px;
@@ -2609,8 +2615,8 @@ function episodeDownloadUrl(file) { return STATIC ? episodeUrl(file) : episodeUr
 // the static build's media key of a camera value: left, right, extra1, extra2, ... and a camera's depth clip
 // (depth_exo, depth_left, ...) are their own, anything else the main camera (board/static.py media_key)
 function mediaKey(cam) {
-  return (cam === 'left' || cam === 'right' || /^extra\d{1,2}$/.test(cam) || /^depth_(exo|left|right|extra\d{1,2})$/
-    .test(cam)) ? cam : 'exo';
+  return (cam === 'left' || cam === 'right' || /^(extra|unshown)\d{1,2}$/.test(cam)
+    || /^depth_(exo|left|right|extra\d{1,2})$/.test(cam)) ? cam : 'exo';
 }
 // web copy of one camera's clip; cam is the value the page asks /api/video for (left, right, or the top camera)
 function videoSrc(eidEnc, cam) {
@@ -2876,8 +2882,8 @@ function setAsideHtml(d) {
       </div></div>`).concat(ck.map(c => `<div class="di-row low minor">
       <span class="di-sev">check</span>
       <div class="di-body">
-        <div class="di-issue">${esc(fam[c.check] ? famName(fam[c.check]) : tagName(c.check, 'data_issues'))}, ${c.flagged
-          ? 'fired' : 'clear'}, not counted on this dataset</div>
+        <div class="di-issue">${esc(fam[c.check] ? famName(fam[c.check]) : tagName(c.check, 'data_issues'))}, ${
+          c.flagged ? 'fired' : 'clear'}, not counted on this dataset</div>
         ${c.reason ? `<div class="di-ev">${esc(why(c.reason))}</div>` : ''}
       </div></div>`));
   const closed = `Show the ${n} set aside by this dataset's rules`;
@@ -2885,6 +2891,31 @@ function setAsideHtml(d) {
   return `<div class="pub-fold sa-fold"><div class="sn-fold"><div class="sn-fold-in"><div class="info-block di-block">`
     + rows.join('') + `</div></div></div><button class="ck-more pub-show" type="button" aria-expanded="false" `
     + `data-closed="${closed}" data-open="${opened}">${closed}</button></div>`;
+}
+// The cameras the model is not shown (board/build.py unshown_cameras: more extra cameras than it is shown, a stereo
+// camera's second eye, every camera but one on a head rig, an infrared, thermal or mask video). Each plays in a cell
+// of its own after the other cameras, synced as a side camera, named as not shown to the model, and one line under the
+// cameras says why for each. Nothing is drawn for an episode the model was shown whole.
+function unshownCams(d) {
+  return (Array.isArray(d.unshown_cameras) ? d.unshown_cameras : []).filter(u => u && u.view);
+}
+// kept: the footage playing now moves into the new cells (renderEp keepVideo), so they get no source of their own
+function unshownCellsHtml(d, eidEnc, kept) {
+  return unshownCams(d).map(u => `
+        <div class="cam-cell cam-wrist cam-unshown">
+          <span class="cam-label">${esc(u.name || u.view)}, not shown to the model</span>
+          <video id="video-${esc(u.view)}" preload="auto" muted playsinline${kept ? ''
+            : ` src="${videoSrc(eidEnc, u.view)}"${posterAttr(eidEnc, u.view)}`} `
+            + `onloadedmetadata="this.currentTime=0.03"></video>
+        </div>`).join('');
+}
+function unshownNote(d) {
+  const us = unshownCams(d);
+  if (!us.length) return '';
+  const each = us.map(u => `${esc(u.name || u.view)}${u.why ? ` (${esc(u.why)})` : ''}`);
+  const list = each.length > 1 ? `${each.slice(0, -1).join(', ')} and ${each[each.length - 1]}` : each[0];
+  return `<p class="unshown-note">The model was not shown ${us.length === 1 ? 'the camera' : 'the cameras'} ${list}. `
+    + `${us.length === 1 ? 'It plays' : 'They play'} here so every camera of the upload can be watched.</p>`;
 }
 // What the model was not shown of the upload, from board/build.py reader_notes. It draws the reader's note on the
 // recorded state as text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it
@@ -4918,8 +4949,9 @@ function renderEp(d, opts) {
   laneHtml += touchLaneHtml(touch, lanePct, chev);
   // a label with no time is listed below, never drawn on the lane
   if (pubLabels.some(x => x.t0 != null)) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
-    x.t0 == null ? '' : `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" title="${esc(fmtT(x.t0) + ' to '
-      + fmtT(x.t1) + ': ' + x.label)}" style="left:${lanePct(x.t0)}%;width:max(2px, `
+    x.t0 == null ? '' : `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" `
+      + `title="${esc(fmtT(x.t0) + ' to ' + fmtT(x.t1) + ': ' + x.label)}" `
+      + `style="left:${lanePct(x.t0)}%;width:max(2px, `
       + `calc(${lanePct(x.t1) - lanePct(x.t0)}% - 1px))"></div>`).join(''));
   const pubEp = d.dataset_episode_labels || null;
   const spanText = (xs) => (xs && xs.length) ? xs.map(sp => Array.isArray(sp) ? `${fmtT(sp[0])} to ${fmtT(sp[1])}`
@@ -5318,8 +5350,8 @@ function renderEp(d, opts) {
             ? ' controls' : ''}${keep ? '' : ` src="${v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
             : videoSrc(eidEnc, v)}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
             dpViews)}
-        </div>`).join('')}
-      </div>
+        </div>`).join('')}${unshownCellsHtml(d, eidEnc, !!keep)}
+      </div>${unshownNote(d)}
       ${gripOnly ? `<div class="grip-strip">${sideCams.length ? '' : `<p class="grip-note">A single-arm task: the dataset records one gripper camera.</p>`}${notesHtml}</div>` : ''}
     </div>
     <div class="timeline" id="timeline">

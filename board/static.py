@@ -110,6 +110,9 @@ def shown_cams(d: dict) -> list:
                 c = v if v in ("left", "right") or sa.EXTRA_CAM.fullmatch(v) else "right"
                 if c not in cams:
                     cams.append(c)
+    # the cameras the model is not shown, which the page plays on every rig (board/build.py unshown_cameras)
+    cams += [u["view"] for u in d.get("unshown_cameras") or []
+             if isinstance(u, dict) and sa.EXTRA_CAM.fullmatch(str(u.get("view") or "")) and u["view"] not in cams]
     return cams
 
 

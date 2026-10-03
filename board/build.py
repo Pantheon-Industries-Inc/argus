@@ -319,6 +319,13 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     rn = reader_notes(ctx)
     if rn:
         d["reader_notes"] = rn
+    # the cameras the model is not shown, which board clips cut like any other (board/clips.py unshown_views): the page
+    # plays each, named as not shown to the model, with why
+    from board.clips import unshown_views
+    unshown = [{"view": v, "name": str(e.get("name") or v), "why": str(e.get("why") or "")}
+               for v, e in unshown_views(ctx)]
+    if unshown:
+        d["unshown_cameras"] = unshown
     add_contacts(d, ctx, result)
 
 
@@ -444,7 +451,7 @@ def normalize_enums(x, key: str | None = None):
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
                 "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels",
-                "timesteps_s", "task_label", "reader_notes")
+                "timesteps_s", "task_label", "reader_notes", "unshown_cameras")
 
 
 def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict) -> dict:

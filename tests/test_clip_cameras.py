@@ -414,3 +414,49 @@ def test_a_single_cameras_damaged_stretch_is_flagged(tmp_path):
     req = me.build_request(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
     (bad,) = req["decode_failed"]
     assert bad["camera"] == "exo" and 4.0 <= bad["t0_s"] <= bad["t1_s"] <= 5.5
+
+
+
+def test_a_camera_the_model_is_not_shown_is_cut_for_the_board(tmp_path):
+    """A camera in context.json unshown_cameras (prepare/formats.py: one the model is not shown) is cut like any other
+    camera, at its own offset on the episode's clock, into CLIPS/unshown<N>/; one whose video does not decode is
+    flagged on the episode and costs nothing else. The episode's own cameras and the prompt are unchanged."""
+    rep, eps, ep = _upload(tmp_path, {"top": 60})
+    before = me.build_request(ep)["prompt"]
+    _video(tmp_path / "ir.mp4", 45)
+    (tmp_path / "mask.mp4").write_bytes(b"not a video" * 40)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["unshown_cameras"] = [
+        {"name": "cam_ir", "why": "an infrared video", "packed": str(tmp_path / "ir.mp4"), "base_s": 0.0,
+         "n_frames": 45, "start_s": 0.5, "fps": 30.0},
+        {"name": "cam_mask", "why": "a mask video", "packed": str(tmp_path / "mask.mp4"), "base_s": 0.0,
+         "n_frames": 45, "start_s": 0.0, "fps": 30.0}]
+    (ep / "context.json").write_text(json.dumps(ctx))
+    jobs = {j[-1]: j for j in clips.episode_jobs(ep, tmp_path / "clips", False)}
+    assert set(jobs) == {"exo", "unshown1", "unshown2"}
+    assert jobs["unshown1"][3] == tmp_path / "clips" / "unshown1" / f"{ep.name}.mp4"
+    assert jobs["unshown1"][5] is False and jobs["unshown1"][6] == 0.5        # a side camera, 0.5 s into the clock
+    r = _clips(eps, tmp_path / "clips")
+    assert r.returncode == 0, r.stderr
+    ir = tmp_path / "clips" / "unshown1" / f"{ep.name}.mp4"
+    assert clips.clip_frames(ir) == 45 and not (tmp_path / "clips" / "unshown2" / f"{ep.name}.mp4").exists()
+    ri = json.loads((ep / "context.json").read_text())["reader_issues"]
+    assert [(x["kind"], x["camera"]) for x in ri] == [("unshown_camera_not_decodable", "unshown2")]
+    assert "cam_mask" in ri[0]["what"] and json.loads((ep / "sources.json").read_text()).keys() == {"exo"}
+    assert me.build_request(ep)["prompt"] == before
+
+
+def test_a_camera_the_model_is_not_shown_reaches_the_board_named_with_why(tmp_path):
+    from board import build as board_build
+    from board import serve, static
+    d = {}
+    board_build.add_context(d, {"profile": "ego_head", "fps": 30, "unshown_cameras": [
+        {"name": "cam_ir", "why": "an infrared video", "packed": "/x/ir.mp4", "n_frames": 45},
+        {"name": "no file", "why": "x"}]}, tmp_path)
+    assert d["unshown_cameras"] == [{"view": "unshown1", "name": "cam_ir", "why": "an infrared video"}]
+    assert serve.clip_path(tmp_path, "e", "unshown1") == tmp_path / "unshown1" / "e.mp4"
+    assert static.media_key("unshown1") == "unshown1"
+    assert static.shown_cams({**d, "_rig": "ego_head", "camera_views": ["exo"]}) == ["exo", "unshown1"]
+    r = subprocess.run(["node", str(REPO / "tests" / "unshown_cameras.js"), str(REPO / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
