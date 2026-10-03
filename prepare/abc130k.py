@@ -35,6 +35,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
@@ -244,7 +245,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
     np.savez(ep_dir / "times.npz", **times)
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(context["instruction"] + "\n")
-    (ep_dir / "context.json").write_text(json.dumps(context, indent=2))
+    write_atomic(ep_dir / "context.json", context, indent=2)
     return context
 
 

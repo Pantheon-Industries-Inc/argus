@@ -144,6 +144,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare.state_notes import STATE_WHY
 from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_ASSUMED, COARSE_CLOCK
 
@@ -672,8 +673,8 @@ EDGE_SLACK_SHARE = 0.1
 
 def edge_slack(span_s: float) -> float:
     """The lead or tail of an episode of span_s seconds that a stream may miss without a data issue: the smaller of
-    EDGE_SLACK_S and EDGE_SLACK_SHARE of the episode. One rule for every such fact, a camera that starts late or ends
-    early, paired by time or not (camera_span_issues, on the anchor's span), and depth that does (depth_gap_issues)."""
+    EDGE_SLACK_S and EDGE_SLACK_SHARE of the episode. Cameras, depth, signals and arm state all use this boundary
+    so no span called missing is shown as recorded stillness."""
     return min(EDGE_SLACK_S, EDGE_SLACK_SHARE * span_s)
 
 
@@ -1990,21 +1991,6 @@ def _nested(x):
     return x
 
 
-# A stream's lead or tail with no reading at the footage's ends is a recorder starting up or stopping, not data
-# missing, while it is within both of these: half a second is nothing in a minute of footage, but 40 percent of a 1 s
-# episode is a sensor that missed it. One rule for every stream: a signal's lead within it is no data issue
-# (signal_gaps), and an arm state is held from its first or last reading across it and never further (fill_rows,
-# joint_state), so no stretch the signals call missing is shown as recorded stillness.
-EDGE_SLACK_S = 0.5
-EDGE_SLACK_SHARE = 0.1
-
-
-def edge_slack(span_s: float) -> float:
-    """The lead or tail with no reading that a stream is allowed in footage of span_s seconds: the smaller of
-    EDGE_SLACK_S and EDGE_SLACK_SHARE of the footage."""
-    return min(EDGE_SLACK_S, EDGE_SLACK_SHARE * span_s)
-
-
 def covers_footage(t0: float, t1: float, q: np.ndarray) -> bool:
     """Whether readings from t0 to t1 cover the footage whose frames are at times q (the same clock): they start and
     end within the edge slack (edge_slack) of its first and last frame."""
@@ -2396,7 +2382,7 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
         ctx["real_times"] = "times.npz"
     (ep / "sources.json").write_text(json.dumps(sources, indent=1))
     (ep / "instruction.txt").write_text((ctx.get("instruction") or "") + "\n")
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    write_atomic(ep / "context.json", ctx, indent=1, default=str)
     return ctx
 
 
@@ -3767,7 +3753,8 @@ def read_root(rdir: Path, rel: str) -> dict:
 
 def chunk_size(info: dict) -> int | None:
     """The episodes per chunk folder a LeRobot info.json gives (chunks_size, 1000 when it gives none), which fills its
-    path templates (data_path, video_path); None when it is not a whole number above 0."""
+    path templates (data_path, video_path); None when it is not a whole number above 0. The browser mirror is
+    read.js chunkSize."""
     x = info.get("chunks_size", 1000)
     try:
         n = int(x) if not isinstance(x, bool) and float(x) == int(x) else 0
@@ -4155,7 +4142,7 @@ def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
         set_uploader_notes(ctx, {"recorded notes": previous, "metadata claims": notes} if previous else notes, files=True)
         ctx.setdefault("source", {}).setdefault("note_files", []).extend(notes)
     if mod is not None or notes:
-        (out / ctx["episode_id"] / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+        write_atomic(out / ctx["episode_id"] / "context.json", ctx, indent=1, default=str)
     return ctx
 
 
@@ -4593,7 +4580,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         # no observation.state at all is a state not recorded, whatever the layout note says of its width
         no_state(ctx, note if note else StateNote(
             "Labelled from the video: the recorded state and the image frames cannot be lined up.", "layout"))
-        (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+        write_atomic(ep / "context.json", ctx, indent=1, default=str)
     return ctx
 
 
@@ -5700,7 +5687,7 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
         ctx["source"].setdefault("unused_signals", []).extend(f"{p.name} ({why})" for p in extra_files)
         ctx["source"]["sensors"] = [p.name for p in extra_files]
         ctx["source"]["sensor_files"] = {p.name: f"not placed: {why}" for p in extra_files}
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    write_atomic(ep / "context.json", ctx, indent=1, default=str)
     return ctx
 
 
@@ -7420,7 +7407,7 @@ def trim_episode(ep: Path, max_s: float) -> dict:
     ctx["n_state_frames"] = keep
     ctx["duration_s"] = ctx["trimmed"]["to_s"]
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    write_atomic(ep / "context.json", ctx, indent=1, default=str)
     return ctx
 
 
@@ -7565,7 +7552,7 @@ def add_side_notes(ep: Path, ctx: dict, item: dict) -> dict:
         previous = ctx.setdefault("source", {}).get("note_files", [])
         names = [str(p.relative_to(item["note_folder"]["dir"])) for p in got["read"]]
         ctx["source"]["note_files"] = list(dict.fromkeys(previous + names))
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    write_atomic(ep / "context.json", ctx, indent=1, default=str)
     return ctx
 
 
@@ -7740,7 +7727,7 @@ def item_folder(it: dict) -> Path:
 
 def episodes_near(items: list[dict], folder: Path, root: Path) -> list[dict]:
     """The episodes of a folder (item_folder), or, when it holds none, those in and below the nearest folder above it,
-    up to the upload's root, that holds any."""
+    up to the upload's root, that holds any. The browser uses the same rule in read.js inspectVideos."""
     here = [it for it in items if item_folder(it) == folder]
     if here:
         return here
@@ -8197,7 +8184,7 @@ def add_table_notes(ep: Path, ctx: dict, rows: list[dict]) -> dict:
             ctx["instruction_note"] = "This instruction is the task text in a table the uploader sent with the episode."
             (ep / "instruction.txt").write_text(task + "\n")
     ctx.setdefault("source", {})["tables"] = sorted({r["table"] for r in rows})
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    write_atomic(ep / "context.json", ctx, indent=1, default=str)
     return ctx
 
 
@@ -8288,7 +8275,7 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
                 add_issue(ctx, issue["kind"], issue["text"])
                 if issue["text"] not in report["missing"]:
                     report["missing"].append(issue["text"])
-            (out / ctx["episode_id"] / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+            write_atomic(out / ctx["episode_id"] / "context.json", ctx, indent=1, default=str)
         if tables:
             ctx = add_table_notes(out / ctx["episode_id"], ctx, table_rows_for(tables, it))
         secs = float(ctx.get("duration_s") or ctx["n_state_frames"] / float(ctx["fps"]))
@@ -8395,7 +8382,7 @@ def measure_contacts(out: Path, ids: list[str]) -> int:
             continue
         ctx = json.loads((d / "context.json").read_text())
         ctx["contacts"] = found
-        (d / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+        write_atomic(d / "context.json", ctx, indent=1, default=str)
         total += len(found)
     return total
 
@@ -8481,7 +8468,7 @@ def measure_signal_scales(out: Path, ids: list[str]) -> dict:
                 if s["name"] == name:
                     s.update(rest=sc["rest"], swing=sc["swing"], scale_note=f"measured across the {sc['episodes']} "
                                                                              "episodes of this upload")
-            p.write_text(json.dumps(ctx, indent=1, default=str))
+            write_atomic(p, ctx, indent=1, default=str)
     return scales
 
 
@@ -8514,5 +8501,5 @@ def measure_gripper_range(out: Path, ids: list[str]) -> list | None:
         c = ctxs[d]
         c["gripper_range"] = rng
         c["gripper_range_note"] = f"measured across the {len(todo)} episodes of this upload"
-        (d / "context.json").write_text(json.dumps(c, indent=1, default=str))
+        write_atomic(d / "context.json", c, indent=1, default=str)
     return rng

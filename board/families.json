@@ -1,5 +1,5 @@
 {
- "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, reader_issues the kinds of problem an episode was kept and flagged with (context.json reader_issues) that raise it, completion the outcomes that raise it, and datasets limits a family to those datasets. list is data for a fault in the recording, the scene or the label, mistake for an operator mistake, labelling for a model reply that gave no labels and handling for a limit of how we read or showed the recording or a property of the recording that is not a fault in it (a camera that is not colour); the last two are shown on the episode and never counted.",
+ "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, reader_issues the kinds of problem an episode was kept and flagged with (context.json reader_issues) that raise it, completion the outcomes that raise it, and datasets limits a family to those datasets. list is data for a fault in the recording, the scene or the label, mistake for an operator mistake, labelling for a model reply that gave no labels and handling for a limit of how we read or showed the recording or a property of the recording that is not a fault in it (a camera that is not colour); the last two are shown on the episode and never counted. Every reader_issues kind written by the readers and board has one explicit entry here. Unknown kinds from older saved jobs remain visible through the fallback family.",
  "families": [
   {
    "slug": "privacy-blur",
@@ -89,7 +89,8 @@
    "reader_issues": [
     "camera_not_decodable",
     "camera_decode_failed",
-    "frames_not_decodable"
+    "frames_not_decodable",
+    "unshown_camera_not_decodable"
    ]
   },
   {
@@ -115,7 +116,9 @@
    "name": "Depth missing or does not decode",
    "reader_issues": [
     "depth_not_decodable",
-    "depth_partial"
+    "depth_partial",
+    "depth_not_read",
+    "depth_clip_partial"
    ]
   },
   {
@@ -329,6 +332,73 @@
    "name": "Distinct camera frames share recorded timestamps",
    "reader_issues": [
     "camera_timestamp_repeated"
+   ]
+  },
+  {
+   "slug": "camera-unaligned",
+   "list": "data",
+   "name": "Camera files cannot be aligned",
+   "reader_issues": [
+    "camera_not_aligned"
+   ]
+  },
+  {
+   "slug": "signal-bad-values",
+   "list": "data",
+   "name": "Signal values could not be read",
+   "reader_issues": [
+    "signal_bad_cells",
+    "signal_not_finite"
+   ]
+  },
+  {
+   "slug": "signal-gap",
+   "list": "data",
+   "name": "Signal has missing readings",
+   "reader_issues": [
+    "signal_gap"
+   ]
+  },
+  {
+   "slug": "signal-alignment-assumed",
+   "list": "data",
+   "name": "Signal placement needs an assumption",
+   "reader_issues": [
+    "signal_alignment_assumed"
+   ]
+  },
+  {
+   "slug": "state-filled",
+   "list": "data",
+   "name": "Missing state readings were filled",
+   "reader_issues": [
+    "state_filled"
+   ]
+  },
+  {
+   "slug": "state-unaligned",
+   "list": "data",
+   "name": "Recorded state cannot be aligned",
+   "reader_issues": [
+    "state_unaligned"
+   ]
+  },
+  {
+   "slug": "state-partial",
+   "list": "data",
+   "name": "Recorded state covers only part of the footage",
+   "reader_issues": [
+    "state_partial"
+   ]
+  },
+  {
+   "slug": "table-length",
+   "list": "data",
+   "name": "Table rows or span differ from the footage",
+   "reader_issues": [
+    "table_short",
+    "table_long",
+    "table_span_differs"
    ]
   }
  ]

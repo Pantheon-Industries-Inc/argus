@@ -107,7 +107,7 @@ def test_board_signals_use_anchor_frames_even_when_the_only_signal_has_another_l
         np.savez(tmp_path / "times.npz", exo=np.array([12., 12.2, 12.5]))
     doc = bs.episode_doc(tmp_path)
     assert doc["frames"] == 3
-    assert np.allclose(bs.decode_times(doc["times"]), [0, .2, .5] if real_clock else [0, .1, .2])
+    assert np.allclose(bs.decode_times(doc["times"]), [12, 12.2, 12.5] if real_clock else [0, .1, .2])
     sig = doc["signals"][0]
     assert sig["constant"] and sig["value"] == [1.]
     assert sig.get("no_reading_frames", 0) == (1 if rows == 2 else 0)

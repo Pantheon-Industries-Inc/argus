@@ -99,7 +99,7 @@ def test_a_camera_the_model_is_not_shown_that_cannot_be_opened_is_named(tmp_path
     rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
     ctx = _ctx(tmp_path / "eps", rep)
     assert len(ctx["cameras"]) == 3 and not ctx.get("unshown_cameras")
-    assert [i["camera"] for i in _issues(ctx, "camera_not_decodable")] == ["cam_mask"], ctx.get("reader_issues")
+    assert [i["camera"] for i in _issues(ctx, "unshown_camera_not_decodable")] == ["cam_mask"], ctx.get("reader_issues")
 
 
 def test_an_episode_none_of_whose_cameras_opens_names_every_camera(tmp_path):

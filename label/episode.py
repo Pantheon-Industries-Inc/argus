@@ -55,7 +55,7 @@ from label import frames as mf
 from label import lens
 from label import prompts
 from label import state as ms
-from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, UNREADABLE
+from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, STATE_WHY, UNREADABLE
 
 FPS = 30
 VIEW_ORDER = ("exo", "left", "right")          # harness view keys with a role: the scene camera, the two mounted ones
@@ -178,10 +178,15 @@ def number(x) -> float | None:
     return v + 0.0 if math.isfinite(v) else None
 
 
+def _seconds_number(t: float, places: int) -> str:
+    """Round displayed seconds once, removing the sign when the rounded value is zero."""
+    return f"{round(float(t), places) + 0.0:.{places}f}"
+
+
 def tenths(t: float) -> str:
     """A time as the prompt gives a dataset's label time, to the tenth of a second, never as -0.0s: a time that rounds
     to zero is zero, not a time before the episode."""
-    return f"{round(float(t), 1) + 0.0:.1f}s"
+    return _seconds_number(t, 1) + "s"
 
 
 def order_views(keys) -> list[str]:
@@ -217,7 +222,7 @@ def seconds(t: float) -> str:
     """A time as the prompt says it, to the hundredth of a second. A recorder's clock can put a frame a hair before
     the episode's zero, and that instant is said as 0.00 s, never as -0.00 s, which reads as a time before the
     episode."""
-    return f"{round(float(t), 2) + 0.0:.2f} s"
+    return _seconds_number(t, 2) + " s"
 
 
 def describe_spans(ep: dict, spans) -> list[dict]:
@@ -1617,7 +1622,7 @@ UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 # Request wording for the reader's shared reasons (prepare.state_notes). The note names the particular channel or
 # clock limitation; a leading sentence must hold even when other recorded channels use the footage clock.
-STATE_WHY = {
+STATE_WORDING = {
     LAYOUT: None,
     NOT_RECORDED: "as the recording holds none",
     UNREADABLE: "as a sensor file that may hold it could not be read",
@@ -1671,7 +1676,7 @@ def _no_state_text(ep: dict, pl: dict) -> str:
         if why == LAYOUT or why is None and not (short and note):
             head = f"no {n['actor']} state in the layout our checks read."
         else:
-            reason = STATE_WHY.get(why) if why is not None else None
+            reason = STATE_WORDING.get(why) if why is not None else None
             # a recording that holds no state needs no note: the reader's note can only say so again (the board
             # shows it)
             head = (f"no {n['actor']} state was read{f', {reason}' if reason else ''}."

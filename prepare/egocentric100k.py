@@ -31,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 
@@ -149,7 +150,7 @@ def prepare_clip(shard: str, member: str, raw: Path, out_root: Path) -> dict:
         ctx["real_times"] = "times.npz"
     src = {"exo": {"packed": str(mp4.resolve()), "base_s": 0.0, "n_frames": n}}
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep / "context.json", ctx, indent=1)
     return ctx
 
 

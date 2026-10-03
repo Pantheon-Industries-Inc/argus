@@ -58,6 +58,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from label.atomic import write_atomic
+
 CAMS = ("exo", "left", "right")
 
 
@@ -572,7 +574,7 @@ def record_depth(ep_dir: Path, cam: str, issues: list[dict]) -> None:
         ctx["reader_issues"] = new
     else:
         ctx.pop("reader_issues", None)
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep_dir / "context.json", ctx, indent=1)
 
 
 def frame_lengths(mp4: Path) -> bool:
@@ -670,7 +672,7 @@ def record_unshown(ep_dir: Path, cut: set, broken: dict) -> None:
         ctx["reader_issues"] = new
     else:
         ctx.pop("reader_issues", None)
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep_dir / "context.json", ctx, indent=1)
 
 
 def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
@@ -856,7 +858,7 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
     if src:
         respan(ep_dir, ctx, src)
     (ep_dir / "sources.json").write_text(json.dumps(src, indent=1))
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep_dir / "context.json", ctx, indent=1)
     return main, issues
 
 
@@ -1049,7 +1051,7 @@ def recheck(ep_dir: Path) -> None:
                     if c.get("check") == "dead_values":
                         c["status"] = "fired"
         ctx[key] = new
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep_dir / "context.json", ctx, indent=1)
 
 
 # the kinds of reader issue (context.json reader_issues) board clips records
@@ -1144,7 +1146,7 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
             ctx["reader_issues"] = issues
         else:
             ctx.pop("reader_issues", None)
-        (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+        write_atomic(ep_dir / "context.json", ctx, indent=1)
     if broken:
         recheck(ep_dir)
     return main

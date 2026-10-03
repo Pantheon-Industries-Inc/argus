@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 
@@ -201,7 +202,7 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
         df, set(GALAXEA_COLUMNS[4:]) | (arm_cols if kind != "none" else set()), n, features=info.get("features")))
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(coarse + "\n")
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=2))
+    write_atomic(ep_dir / "context.json", ctx, indent=2)
     return ctx
 
 

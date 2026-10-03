@@ -929,9 +929,9 @@ def test_each_reader_issue_raises_its_family_at_any_severity(tmp_path):
     d = {}
     board_build.add_context(d, ctx, tmp_path)
     assert [(x["kind"], x["family"]) for x in d["dataset_checks"]["reader_issues"]] == [
-        ("clip_frame_count", "clip-frames"), ("signal_gap", "d:Signal gap")]
+        ("clip_frame_count", "clip-frames"), ("signal_gap", "signal-gap")]
     fam = Families()
-    assert set(fam.classify(d)["counted"]) == {"clip-frames", "d:Signal gap"}
+    assert set(fam.classify(d)["counted"]) == {"clip-frames", "signal-gap"}
     assert fam.catalog()["camera-undecodable"] == {"name": "Camera video does not decode", "list": "data",
                                                    "check": True}
     none = {}

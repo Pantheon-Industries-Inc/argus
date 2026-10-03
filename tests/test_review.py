@@ -223,7 +223,7 @@ def test_a_camera_clip_a_frame_short_keeps_the_episode_and_is_a_data_issue(tmp_p
     assert set(json.loads((ep / "sources.json").read_text())) == {"exo", "left"}
     d = _board_episode(tmp_path, eps, ep)
     # the canned label's steps run past this 1 s episode, which the board flags beside it (model_steps_outside_episode)
-    assert [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "clip_frame_count"] == [
+    assert [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "camera_short"] == [
         {**ctx["reader_issues"][0], "family": "clip-frames"}]
     assert "clip-frames" in serve._families(d)["families"]
     clips.note_camera_problems(rep, eps)

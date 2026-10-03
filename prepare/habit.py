@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
@@ -159,7 +160,7 @@ def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dic
                                  "high_jerk_spans_s": spans(df["is_high_jerk_segment"].to_numpy(), fps),
                                  "sid": r.get("sid"), "unit_name": r.get("unit_name")})
     formats.drop_no_state(ctx)
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep / "context.json", ctx, indent=1)
     return ctx
 
 

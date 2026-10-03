@@ -423,8 +423,8 @@ def test_a_depth_stream_that_does_not_decode_is_a_fault_in_the_recording(tmp_pat
     np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
     np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
     out = tmp_path / "clips"
-    for (pk, b, du, o, fps, main, off, skip, _, _) in clips.episode_jobs(ep, out, False):
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+    for job in clips.episode_jobs(ep, out, False):
+        clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:12])
     (job,) = clips.depth_jobs(ep, out, False)
     with pytest.raises(Exception) as got:
         clips.extract_depth(*job[:4], 1, job[4])
@@ -458,8 +458,8 @@ def test_only_a_depth_file_that_opens_and_does_not_decode_is_a_fault_in_the_reco
         np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
         np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
         out = tmp / "clips"
-        for (pk, b, du, o, fps, main, off, skip, _, _) in clips.episode_jobs(ep, out, False):
-            clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+        for job in clips.episode_jobs(ep, out, False):
+            clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:12])
         (job,) = clips.depth_jobs(ep, out, False)
         with pytest.raises(Exception) as got:
             clips.extract_depth(*job[:4], 1, job[4])

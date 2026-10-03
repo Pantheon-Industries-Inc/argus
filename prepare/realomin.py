@@ -33,6 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
@@ -183,7 +184,7 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
             **{t.replace("/vio/eef_pose", "/sim/robot_info"): None for t in POSE_TOPICS}}
     formats.write_signals(ep, ctx, formats.mcap_signals([mcap_path], left_t / 1e9, used))
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep / "context.json", ctx, indent=1)
     return ctx
 
 
