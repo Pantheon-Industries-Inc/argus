@@ -88,6 +88,8 @@ ENC_TAG = bc.ENC_TAG
 # upload again) every published file; the tag changes only when the published bytes do
 MEDIA_TAG = "h264-crf20-veryfast-main1280-1920x1080-side1280x1080-kf2s-srcts-camclock-v4"
 FRAME_TAG = "frame-640-v2"   # serve.extract_frame at w=640, using exact display intervals
+# Frame lookup uses JavaScript decimal millisecond keys. Larger integers can change their text or precision.
+MAX_EXACT_FRAME_MS = (1 << 53) - 1
 
 
 # ---------------------------------------------------------------- what the page shows
@@ -134,8 +136,8 @@ def goal_times(d: dict) -> list:
     for t in out:
         try:
             value = float(t)
-            # Saved labels can predate finite JSON validation. Keep them, but a nonfinite time has no frame.
-            if math.isfinite(value):
+            # Keep saved labels, but do not clamp negative times or request keys the browser cannot name exactly.
+            if math.isfinite(value) and value >= 0 and ms_key(value) <= MAX_EXACT_FRAME_MS:
                 res.append(value)
         except (TypeError, ValueError, OverflowError):
             pass
