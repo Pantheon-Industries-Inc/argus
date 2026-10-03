@@ -9,7 +9,7 @@ from board import build, clips, sensors
 from board.hands import probe_pts
 from label import episode, pieces
 from prepare import formats
-from test_camera_timing import recording
+from test_camera_timing import recording, video
 
 
 def clock_recording(tmp_path, zero=0.5):
@@ -72,7 +72,7 @@ def test_unshown_clips_trim_only_pre_zero_frames_and_encode_the_episode_start(tm
     (ep / "context.json").write_text(json.dumps(ctx))
     raw = (ep / "context.json").read_bytes()
     job = [j for j in clips.episode_jobs(ep, tmp_path / "clips", True) if j[-1] == "unshown1"][0]
-    clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:11])
+    clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:12])
     _, _, tb, pts = probe_pts(job[3])
     assert job[7] == skip and job[6] == pytest.approx(first)
     assert len(pts) == 90 - skip and float(pts[0] * tb) == pytest.approx(first, abs=1e-6)
@@ -98,6 +98,39 @@ def test_parts_move_depth_capture_times_with_colour_times_without_moving_packet_
             assert np.array_equal(times["depth_exo_pts"], np.arange(90))
     with np.load(ep / "depth_times.npz") as times:
         assert np.array_equal(times["depth_exo"], depth_t)
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_part_clips_decode_the_same_saved_packets_as_the_request(tmp_path, monkeypatch, packed):
+    ep = recording(tmp_path, 0.5 + np.arange(90) / 30)
+    source = tmp_path / "exo.mp4"
+    prefix = 5 if packed else 0
+    video(source, 90 + prefix, pattern=True)
+    starts = 0.4 + np.cumsum(np.resize([0.021, 0.045, 0.034], 90 + prefix))
+    clips.retime(source, starts, main=True)
+    _, _, tb, pts = probe_pts(source)
+    with np.load(ep / "times.npz") as z:
+        times = {key: z[key] for key in z.files}
+    times["exo_pts"] = np.asarray(pts[prefix:])
+    np.savez(ep / "times.npz", **times)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["clock_zero_s"] = 0.5
+    (ep / "context.json").write_text(json.dumps(ctx))
+    monkeypatch.setattr(pieces, "piece_max", lambda ctx: 1.0)
+    for part in pieces.write_pieces(ep, tmp_path / "parts"):
+        loaded = episode.load(part)
+        n = int(loaded["sources"]["exo"]["n_frames"])
+        selected = [0, n // 2, n - 1]
+        expected = episode._decode_view(loaded, "exo", selected)
+        job = clips.episode_jobs(part, tmp_path / "clips", True)[0]
+        clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:12])
+        with av.open(str(job[3])) as src:
+            frames = list(src.decode(video=0))
+        assert len(frames) == n
+        for k in selected:
+            got = frames[k].to_ndarray(format="rgb24")
+            want = np.asarray(expected[k].convert("RGB"))
+            assert np.abs(got.astype(float) - want).mean() < 12
 
 
 def test_camera_cut_issues_round_trip_on_the_capture_clock_without_drift(tmp_path):
@@ -159,7 +192,7 @@ def test_depth_decode_issues_round_trip_with_the_actual_colour_capture_times(tmp
                                                        "scale_m": 0.001}}))
     np.savez(ep / "depth_times.npz", depth_exo=0.5 + np.arange(90) / 30, depth_exo_pts=pr["pts"])
     job = clips.episode_jobs(ep, tmp_path / "clips", True)[0]
-    clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:11])
+    clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:12])
     decode = clips.decoded_frames
     def damaged(src, stream):
         return (fr for fr in decode(src, stream) if fr.pts != pr["pts"][30])
@@ -175,5 +208,4 @@ def test_depth_decode_issues_round_trip_with_the_actual_colour_capture_times(tmp
         assert "from 1.00 s to 1.00 s" in issue["what"]
         assert raw["reader_issues"][0] == original["reader_issues"][0]
         assert probe_pts(tmp_path / "depth.mp4")[3] == probe_pts(job[3])[3]
-
 

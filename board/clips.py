@@ -207,7 +207,7 @@ def clip_times(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
 
 def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
                 ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0,
-                skip: int = 0, times=None, query_s=None, query_map=None) -> dict | None:
+                skip: int = 0, times=None, query_s=None, query_map=None, source_pts=None) -> dict | None:
     """Exactly the episode's n_frames, starting at its first frame. Packed files are on an exact frame grid,
     so seeking half a frame before the episode's offset lands on its first frame whichever way the decimal
     rounds, and -frames:v stops after the last one (never a frame of the next episode). Per-episode files
@@ -220,7 +220,8 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     neither another stream that starts first (an audio track) nor the seek's half-frame lead shifts it off the
     episode's clock; the frames after it keep their own spacing, so a variable-rate recording plays as recorded. With
     times (the camera's capture times on the episode's clock, clip_times) the frames are placed by them instead
-    (retime).
+    (retime). source_pts gives the exact source packets of a part. Its cut seeks to the first packet's absolute
+    timestamp, independent of the file's first timestamp, rather than using the parent's fixed-grid base_s.
 
     Returns None when the clip has the episode's frames. A clip with fewer (the camera's file ends before the
     episode does) is kept as cut and its counts returned, {"clip_frames", "episode_frames"}, for record_cameras; a
@@ -231,7 +232,15 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     w, h, resample = source_size(ffmpeg, packed)
     want = int(n_frames) - int(skip)
     timing = ((f"select=gte(n\\,{int(skip)})",) if skip else ()) + ("setpts=PTS-STARTPTS",)
-    cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), "-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}",
+    seek = ["-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}"]
+    if source_pts is not None and len(source_pts):
+        import av
+        import math
+        with av.open(str(packed)) as source:
+            start = float(int(source_pts[0]) * source.streams.video[0].time_base)
+        # Truncate the seek to microseconds so decimal rounding cannot put it after the wanted packet.
+        seek = ["-seek_timestamp", "1", "-ss", f"{math.floor(start * 1_000_000) / 1_000_000:.6f}"]
+    cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), *seek,
            "-i", packed, "-map", "0:v:0", "-frames:v", str(want), "-an", "-fps_mode", "passthrough",
            *video_args(w, h, main, threads, resample, pre=timing),
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
@@ -647,6 +656,10 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     offsets = start_offsets(ep_dir, sources, fps)
     times = clip_times(ep_dir, sources, fps)
     import numpy as np
+    packets = {}
+    if ctx.get("piece") and ctx.get("real_times"):
+        with np.load(ep_dir / ctx["real_times"]) as z:
+            packets = {cam: z[f"{cam}_pts"] for cam in cams if f"{cam}_pts" in z.files}
     query = times.get(big)
     jobs = []
     for cam in cams:
@@ -657,7 +670,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
             km = (np.load(ep_dir / s["kmap"]) if s.get("kmap") else
                   np.arange(len(query)) if query is not None else None)
             jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, off, skip,
-                         times.get(cam), query, km, ep_dir.name, cam))
+                         times.get(cam), query, km, packets.get(cam), ep_dir.name, cam))
     # the cameras the model is not shown, as side cameras at their own start on the episode's clock: one that started
     # before the clock drops its frames from before it, as start_offsets does
     for view, e in unshown_views(ctx):
@@ -667,7 +680,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
             start = float(e.get("start_s") or 0.0) - float(ctx.get("clock_zero_s") or 0.0)
             skip = int(round(-start * f)) if start < 0 else 0
             jobs.append((str(e["packed"]), float(e.get("base_s") or 0.0), int(e["n_frames"]), o, f, False,
-                         max(0.0, start + skip / f), skip, None, None, None, ep_dir.name, view))
+                         max(0.0, start + skip / f), skip, None, None, None, None, ep_dir.name, view))
     return jobs
 
 
@@ -1168,8 +1181,8 @@ def main() -> int:
     unshown_cut: dict[str, set] = {}            # the same for the cameras the model is not shown (unshown_views)
     unshown_broken: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km):
-                (o, ep, cam) for (pk, b, du, o, fps, is_main, off, skip, t, q, km, ep, cam) in jobs}
+        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km, pts):
+                (o, ep, cam) for (pk, b, du, o, fps, is_main, off, skip, t, q, km, pts, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
             if cam.startswith(UNSHOWN):
@@ -1217,10 +1230,10 @@ def main() -> int:
             # every clip is timed on it (start_offsets); each camera's frames are recorded as they come out
             # the cameras the model is not shown too, at their start on the moved clock (CLOCK_TIME_KEYS)
             redo, again, u_cut, u_broken = {}, set(), set(), {}
-            for (pk, b, du, o, fps, is_main, off, skip, t, q, km, ep, cam) in episode_jobs(d, args.out, True,
+            for (pk, b, du, o, fps, is_main, off, skip, t, q, km, pts, ep, cam) in episode_jobs(d, args.out, True,
                                                                                     args.name_prefix):
                 try:
-                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km)
+                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km, pts)
                     if cam.startswith(UNSHOWN):
                         u_cut.add(cam)
                         continue
