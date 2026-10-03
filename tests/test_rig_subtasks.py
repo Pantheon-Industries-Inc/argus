@@ -70,6 +70,17 @@ def test_existing_ego_annotation_bytes_stay_exact():
         "  about these annotations: Original step declarations.\n")
 
 
+@pytest.mark.parametrize("rig", ["ego_head", "teleop_arms", "handheld_gripper"])
+def test_legacy_text_and_unlabelled_steps_remain_recorded_claims(rig):
+    steps = [{"t0": 0.5, "t1": 1.5, "text": "move"},
+             {"t0": None, "source": "operator log", "unexpected": 17}]
+    _, text = prompt(rig, subtasks=steps)
+    assert "0.5-1.5s  move" in text
+    assert "recorded annotation without a label or text" in text
+    assert '"source": "operator log"' in text and '"unexpected": 17' in text
+    assert "goal:" not in text
+
+
 @pytest.mark.parametrize("reverse", [False, True])
 def test_mcap_episode_task_wins_over_language_steps_and_health(reverse):
     base = 1_000_000_000

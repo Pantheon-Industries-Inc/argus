@@ -3691,7 +3691,7 @@ def test_lerobot_root_recorder_names_are_not_official_metadata_paths():
         _, episodes = _converted_notes(root, Path(t) / 'out')
         for ctx, prompt in episodes:
             for name in ('info', 'stats'):
-                assert ctx['uploader_notes'][name + '.json']['note'] == name + ' recorder note'
+                assert ctx['uploader_notes']['outside files'][name + '.json']['note'] == name + ' recorder note'
                 assert name + ' recorder note' in prompt
             assert 'instruction' not in ctx
 
@@ -3739,9 +3739,10 @@ def test_structured_text_notes_keep_owned_and_shared_claims_without_tasks():
                 assert 'instruction' not in ctx
                 for ext in ('.txt', '.md'):
                     for stem in (own + '_operator_notes', 'operator_notes'):
-                        assert ctx['uploader_notes'][stem + ext] == stem + ' camera loose'
+                        notes = ctx['uploader_notes']['outside files'] if kind == 'lerobot' else ctx['uploader_notes']
+                        assert notes[stem + ext] == stem + ' camera loose'
                         assert stem + ' camera loose' in prompt
-                    assert 'ep99_operator_notes' + ext not in ctx['uploader_notes']
+                    assert 'ep99_operator_notes' + ext not in notes
 
 
 def test_structured_notes_preserve_distinct_relative_paths_during_task_disagreement():
@@ -3874,8 +3875,8 @@ def test_custom_annotation_files_are_recorder_notes_at_supported_extensions_only
         (root / 'meta/annotation.txt').write_text('operator stopped early')
         _, episodes = _converted_notes(root, Path(t) / 'out')
         ctx, prompt = episodes[0]
-        assert ctx['uploader_notes']['meta/annotation.json'] == {'note': 'camera loose'}
-        assert ctx['uploader_notes']['meta/annotation.txt'] == 'operator stopped early'
+        assert ctx['uploader_notes']['outside files']['meta/annotation.json'] == {'note': 'camera loose'}
+        assert ctx['uploader_notes']['outside files']['meta/annotation.txt'] == 'operator stopped early'
         assert 'instruction' not in ctx
         assert 'camera loose' in prompt and 'operator stopped early' in prompt
 

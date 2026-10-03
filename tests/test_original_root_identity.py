@@ -155,7 +155,7 @@ def test_unreadable_shared_root_note_is_retained_with_one_issue_per_episode(tmp_
         assert ctx["uploader_notes"]["a.json"] == '{"task": "incomplete shared task"'
 
 
-def test_single_container_keeps_shared_task_conflicts_without_inventing_group_ownership(tmp_path):
+def test_single_numbered_demo_keeps_its_owned_task_and_shared_claim(tmp_path):
     from test_ownership_context import containers
 
     original = containers(tmp_path / "a")
@@ -167,10 +167,12 @@ def test_single_container_keeps_shared_task_conflicts_without_inventing_group_ow
     report = formats.convert(original, "ego_head", output, "identity", 900)
     assert not report["failed"] and len(report["episodes"]) == 1
     row = report["episodes"][0]
-    assert not row.get("instruction")
+    assert row.get("instruction") == "move the demo zero object"
     ctx = json.loads((output / row["episode_id"] / "context.json").read_text())
-    assert any(issue["kind"] == "task_files_disagree" for issue in ctx["reader_issues"])
+    assert ctx["source"]["group"] == "data/demo_0"
     assert {"a.json", "demo0_meta.json"} <= ctx["uploader_notes"].keys()
+    assert ctx["uploader_notes"]["a.json"]["task"] == "shared root task"
+    assert ctx["uploader_notes"]["demo0_meta.json"]["task"] == ctx["instruction"]
 
 
 @pytest.mark.parametrize("camera,other_note", [("top", "instruction.txt"), ("recording", "instruction.txt"),

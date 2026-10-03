@@ -91,7 +91,10 @@ def test_a_single_arm_named_six_joints_and_a_gripper_is_still_its_state(landed):
 def test_a_humanoid_and_its_base_are_shown_under_their_own_names(landed):
     ctx, prompt, _ = landed["lerobot_v30_humanoid_base_ft"]
     assert ctx["state_kind"] == "none"
-    assert "observation.state (26 values (left_arm_j1," in prompt and "right_hand_pinky" in prompt
+    assert "observation.state (26 values, value names retained in episode metadata): ranges by value index" in prompt
+    names = _signals(ctx)["observation.state"]["names"]
+    assert len(names) == 26 and names[0] == "left_arm_j1" and names[-1] == "right_hand_pinky"
+    assert all(f"    observation.state {name}: " in prompt for name in names)
     assert "    observation.base.odom vx: " in prompt and "observation.base.odom total activity" not in prompt
 
 
@@ -143,7 +146,8 @@ def test_a_video_folders_imu_keeps_all_ten_values(landed):
 def test_a_head_camera_with_tracks_is_never_told_it_has_no_tracking(landed):
     ctx, prompt, _ = landed["hdf5_ego_mocap"]
     assert ctx["state_kind"] == "none" and "no hand, head or device tracking" not in prompt
-    assert "RECORDED STATE: no hand state in the layout our checks read." in prompt
+    assert ("RECORDED STATE: no tracked actor state was read; the recorded signals below retain their own "
+            "shapes and names.") in prompt
     assert any(c["signals"] == ["right_glove_pressure"] for c in ctx["contacts"])
     contacts = prompt.split("\nCONTACTS: ", 1)[1].split("\nAfter the detail views", 1)[0]
     assert "from right_glove_pressure" in contacts

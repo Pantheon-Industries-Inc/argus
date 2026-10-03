@@ -1599,7 +1599,13 @@ def annotation_lines(ctx: dict) -> list[str]:
         t0, t1 = number(x.get("t0")), number(x.get("t1"))
         return ("no time" if t0 is None else tenths(t0) if t1 is None or t1 == t0
                 else f"{tenths(t0)[:-1]}-{tenths(t1)}")
-    lines = [f"  {when(x)}  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
+    def label(x):
+        if "label" in x:
+            return x["label"]
+        if "text" in x:
+            return x["text"]
+        return "recorded annotation without a label or text: " + json.dumps(x, ensure_ascii=False, default=str)
+    lines = [f"  {when(x)}  {label(x)}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
              for x in (ctx.get("annotation_subtasks") or []) if isinstance(x, dict)]
     return lines
 
