@@ -1403,12 +1403,15 @@ UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 
 def _no_state_text(ep: dict, pl: dict) -> str:
-    """No arm state. With other signals, that none is in the layout our checks read. With none, that the dataset
-    records none, unless the reader wrote a note on the state or left sensor data unread: then only that none was
-    read, since "records no hand, head or device tracking" was false for an MCAP whose hand tracks the reader did
-    not read yet (2026-10-02 audit). The note and the lists of unread channels go to the board, never to the model:
-    they name the checks and channels that did not run ("the checks on recorded motion ..."), which would put the
-    words about a recorded motion back into a video only prompt."""
+    """No arm state. With other signals, that none is in the layout our checks read, unless a signal whose name says
+    joints or a state stops short of the episode: then the layout is not why (an arm sensor file cut before the
+    footage ends), and the line gives the reader's note on the state, which says why. With no other signal, that the
+    dataset records none, unless the reader wrote a note on the state or left sensor data unread: then only that none
+    was read, since "records no hand, head or device tracking" was false for an MCAP whose hand tracks the reader did
+    not read yet (2026-10-02 audit). There the note and the lists of unread channels go to the board, never to the
+    model: they name the checks and channels that did not run ("the checks on recorded motion ..."), which would put
+    the words about a recorded motion back into a video only prompt; with other signals the prompt is a recording's
+    already."""
     r = rig(ep)
     n = _rig_nouns(r)
     ctx = ep["context"]
@@ -1425,7 +1428,14 @@ def _no_state_text(ep: dict, pl: dict) -> str:
                                    (meta.get(nm) or {}).get("names"))]
         one = len(joints) == 1
         named = all(len((meta.get(nm) or {}).get("names") or []) == np.shape(ep["signals"][nm])[1] for nm in joints)
-        return (f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
+        # a joints or state signal with no reading over part of the episode says the state's data stops short (a sensor
+        # file cut before the footage ends), so the layout is not why none was read: the reader's own note says why
+        short = [nm for nm, a in ep["signals"].items() if sg.names_joints_or_state(nm) and len(a)
+                 and np.isnan(np.asarray(a, dtype=np.float64)).all(axis=1).any()]
+        note = (ctx.get("state_note") or "").strip()
+        head = (f"no {n['actor']} state was read. The reader's note on it: {note}" if short and note
+                else f"no {n['actor']} state in the layout our checks read.")
+        return (f"\nRECORDED STATE: {head}"
                 + (f" The signal{'' if one else 's'} whose name{' says' if one else 's say'} joints or a state "
                    f"({', '.join(joints)}) {'is' if one else 'are'} given value by value"
                    + (" under their own names" if named else "") + " among the other recorded signals below."

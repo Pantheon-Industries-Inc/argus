@@ -682,3 +682,35 @@ def test_a_signal_that_stops_short_or_never_reads_is_counted_over_every_frame(tm
     st = {c["check"]: c for c in r["checks"]}
     assert st["pinned"]["not_run_on"] == "probe unread (it has no reading at any frame)"
     assert "not_run_on" not in st["no_reading"]
+
+
+def test_a_state_that_stops_short_is_told_by_the_readers_note_not_as_a_layout(tmp_path):
+    """An arm sensor file cut at 17.6 s of 39.1 s leaves no state (its readings do not cover the footage), and the
+    RECORDED STATE line said the episode has no arm state in the layout our checks read, which is false: the layout is
+    fine and the arm data stops early. When a signal whose name says joints or a state has no reading over part of the
+    episode, the line gives the reader's own note on the state. A state that is all there in a layout the checks do not
+    read keeps the line as it was."""
+    from test_board_sensors import _episode
+    note = ("Labelled from the cameras, because the recorded arm state does not cover the footage's time: "
+            "/yam_left/joint_state has readings from 0.0 s to 5.0 s of the footage's 10.0 s.")
+
+    def line(stops_short: bool, state_note: str) -> str:
+        ep = _episode(tmp_path / f"eps_{stops_short}_{len(state_note)}")
+        z = dict(np.load(ep / "signals.npz"))
+        joints = np.tile(np.linspace(0, 1, 300, dtype=np.float32)[:, None], (1, 6))
+        if stops_short:
+            joints[150:] = np.nan
+        z["s3"] = joints
+        np.savez(ep / "signals.npz", **z)
+        ctx = json.loads((ep / "context.json").read_text())
+        ctx["signals"].append({"name": "/yam_left/joint_state joint_pos", "key": "s3", "dims": 6,
+                               "names": [f"j{i}" for i in range(6)]})
+        (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none", "state_note": state_note}))
+        e = me.load(ep)
+        return me._no_state_text(e, me.plan(e)).strip().splitlines()[0]
+    cut = line(True, note)
+    assert cut.startswith("RECORDED STATE: no arm state was read. The reader's note on it: " + note)
+    assert "layout" not in cut
+    layout = ("Labelled from the video: the recorded state has 6 values per frame, and our checks expect 7 per arm "
+              "(six joints and a gripper).")
+    assert line(False, layout).startswith("RECORDED STATE: no arm state in the layout our checks read.")
