@@ -54,9 +54,9 @@ video, or instruction.txt / annotations.json inside an episode folder or the fol
 episode there) is passed to the model as the uploader's own annotation, a claim to check against the video, never as
 truth; every such file is read, and several are given each under its file name. The instruction comes from a JSON
 note's task keys, then a plain text note named for the task (instruction.txt, task.txt), then one named for the
-episode, then a video's own .txt; any other text note stays a note. A recorder's metadata file in a folder of one
-episode that names the task (its prompt, instruction or task) gives the instruction; one that names neither the task
-nor a depth scale is listed as not read.
+episode, then a video's own .txt; any other text note stays a note. A recorder's metadata file in an episode's folder
+that names the task (its prompt, instruction or task) gives the instruction to the folder's episodes, unless it is
+named for one video or episode of the folder; one that names neither the task nor a depth scale is listed as not read.
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
 arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
@@ -1013,10 +1013,11 @@ def episode_notes(item: dict) -> dict:
     task. A video's own note (top.txt beside top.mp4) is the episode's when the episode is that one video. Beside
     several cameras it is about its camera: never the task beside differently named cameras (top.txt beside top.mp4
     and wrist.mp4), and in camera folders (top/ep1.txt, wrist/ep1.txt) the task only when every camera's own note gives
-    the same one. A lower source is a note under its file name. When none gives a task and the note folder holds this
-    one episode, the folder's other .json files are searched for a recorder's metadata that names it
-    (session_meta.json), except one named for a video or a camera, which is about that video; in a folder of several
-    episodes such a file may be about any of them, so it is not read (opened_notes) and is listed."""
+    the same one. A lower source is a note under its file name. When none gives a task, the note folder's other .json
+    files (up to NOTE_JSON_MAX_BYTES) are searched in name order for a recorder's metadata that names it
+    (session_meta.json), which the folder's episodes share. One named for a video of the folder, a camera of the
+    episode or an episode of the folder (ep2.json, top_ep2.json beside the takes ep1 and ep2) is about that one, so it
+    is never this episode's task; one that gives none is not read (opened_notes) and is listed."""
     files = note_files(item)
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
@@ -1051,9 +1052,10 @@ def episode_notes(item: dict) -> dict:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
     read = list(files)
-    if not instr and nf and nf["alone"]:
+    if not instr and nf:
         weighed = {p.resolve() for p in files}
-        about = {p.stem for p in nf["dir"].iterdir() if p.suffix.lower() in VIDEO_EXT} | set(item.get("cams") or {})
+        about = {p.stem for p in nf["dir"].iterdir() if p.suffix.lower() in VIDEO_EXT} | set(item.get("cams") or {}) \
+            | set(nf["episodes"])
         for p in sorted(nf["dir"].glob("*.json")):
             if p.resolve() in weighed or p.stem in about or p.stat().st_size > NOTE_JSON_MAX_BYTES:
                 continue
@@ -2253,10 +2255,12 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
                                                         ", since nothing said they are one take.")))
     # the folder whose notes each episode reads (note_files): its episode folder, or the folder of a video that is the
     # only episode there (ep1/top.mp4 alone), named as such an episode would be; a video beside others that are
-    # episodes of their own has none. "alone" when the folder holds no other episode, as only then can a recorder's
-    # file in it be about this episode alone (episode_notes)
+    # episodes of their own has none. "episodes" names every episode of that folder (its take or its video's name), so
+    # a file there named for one of them is never another one's task (episode_notes)
     home = lambda e: e["dir"] if e["dir"] is not None else e["cams"][0][1].rpartition("/")[0]
-    held = collections.Counter(home(e) for e in eps)
+    held = collections.defaultdict(list)
+    for e in eps:
+        held[home(e)].append(e["name"].rsplit("/", 1)[-1])
     items = []
     for e in eps:
         files = [root / r for _, r in e["cams"]]
@@ -2265,8 +2269,8 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
         items.append({"kind": "video", "name": e["name"], "files": files,
                       "dir": (root / e["dir"]) if e["dir"] is not None else None,
                       "cams": {c: root / r for c, r in e["cams"]},
-                      "note_folder": {"dir": root / d, "name": name, "alone": held[d] == 1}
-                      if e["dir"] is not None or held[d] == 1 else None,
+                      "note_folder": {"dir": root / d, "name": name, "episodes": held[d]}
+                      if e["dir"] is not None or len(held[d]) == 1 else None,
                       "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}, "unshown": []})
     # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, or
     # the one whose take its name gives), never to the model

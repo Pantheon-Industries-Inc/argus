@@ -2819,8 +2819,8 @@ def _unread_line(rep) -> str:
 def _another_episodes_note_never_gives_an_episode_its_task(tmp_path):
     """Two takes in one folder (top_ep1, wrist_ep1, top_ep2, wrist_ep2) and a note of the second take (ep2.json, or its
     top camera's top_ep2.json) had given the first take that task, through the search of the folder's .json files;
-    so had ep2.json at the root of camera folders (top/ep1.mp4, top/ep2.mp4). A folder's .json is searched for the task
-    only when the folder holds this one episode, and a file named for a video of the folder is never its task."""
+    so had ep2.json at the root of camera folders (top/ep1.mp4, top/ep2.mp4). A folder's .json gives an episode its task
+    only for a file named for no video and no episode of the folder, which the folder's episodes share."""
     takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
     ctx, _ = _upload_notes(tmp_path / "a", takes, {"d/ep2.json": {"task": "pour the tea"}})
     assert "instruction" not in ctx["d/ep1"] and ctx["d/ep2"]["instruction"] == "pour the tea"
@@ -2830,9 +2830,10 @@ def _another_episodes_note_never_gives_an_episode_its_task(tmp_path):
     folders = ["top/ep1.mp4", "wrist/ep1.mp4", "top/ep2.mp4", "wrist/ep2.mp4"]
     ctx, _ = _upload_notes(tmp_path / "c", folders, {"ep2.json": {"task": "pour the tea"}})
     assert "instruction" not in ctx["ep1"] and ctx["ep2"]["instruction"] == "pour the tea"
-    # a recorder's file in a folder of several takes may be about any of them: it is named as not read
+    # a recorder's file named for no video and no episode of the folder is shared by the folder: every take's task
     ctx, rep = _upload_notes(tmp_path / "d", takes, {"d/session_meta.json": {"prompt": "pour the tea"}})
-    assert not any("instruction" in c for c in ctx.values()) and "d/session_meta.json" in _unread_line(rep)
+    assert [c.get("instruction") for c in ctx.values()] == ["pour the tea", "pour the tea"], ctx
+    assert "session_meta.json" not in _unread_line(rep), rep["missing"]
     # in a folder of one episode, the file of a video that is not one of its cameras (an infrared video) is not its task
     ctx, rep = _upload_notes(tmp_path / "e", ["ep1/top.mp4", "ep1/wrist.mp4", "ep1/top_ir.mp4"],
                              {"ep1/top_ir.json": {"task": "calibrate the infrared camera"}})
