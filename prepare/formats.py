@@ -1289,8 +1289,7 @@ def episode_notes(item: dict) -> dict:
     # An actual episode folder keeps its primary note; a container alias cannot give a shared folder that rank.
     folder_owners = {owner for owners in nf["names"].names.values() for owner in owners
                      if owner is not None} if nf else set()
-    folder_episode = nf and not item.get("side_metadata") and folder_owners == {nf["episode"]} and (
-        name_words(nf["episode"].rsplit("/", 1)[-1], nf["names"].takes) == nf["names"].own)
+    folder_episode = nf and not item.get("side_metadata") and folder_owners == {nf["episode"]}
     folder_shared = {p for p in files if nf and not folder_episode
                      and p.parent == nf["dir"] and p.suffix.lower() == ".json"
                      and nf["names"].own and name_words(p.stem, nf["names"].takes) == nf["names"].own}

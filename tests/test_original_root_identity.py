@@ -173,6 +173,34 @@ def test_single_container_keeps_shared_task_conflicts_without_inventing_group_ow
     assert {"a.json", "demo0_meta.json"} <= ctx["uploader_notes"].keys()
 
 
+@pytest.mark.parametrize("camera,other_note", [("top", "instruction.txt"), ("recording", "instruction.txt"),
+                                             ("top_demo_1", "instruction.txt"), ("top_demo_1", "demo1_meta.json")])
+def test_single_video_episode_folder_keeps_its_primary_json_task_after_selection(tmp_path, camera, other_note):
+    from test_adapter_output_identity import original_context
+
+    original = tmp_path / "original"
+    home = original / "ep2"
+    home.mkdir(parents=True)
+    _clip(home / (camera + ".mp4"), 10)
+    (home / "ep2.json").write_text(json.dumps({"task": "pour the tea", "note": "original episode note"}))
+    (home / other_note).write_text(json.dumps({"task": "pick the cup"}) if other_note.endswith(".json")
+                                   else "pick the cup")
+    context = original_context(original)
+    context["root_name"] = original.name
+    whole_dir = tmp_path / "whole"
+    whole = formats.convert(original, "ego_head", whole_dir, "identity", 900)
+    selected = tmp_path / "selected"
+    shutil.copytree(original, selected)
+    subset_dir = tmp_path / "subset"
+    subset = formats.convert(selected, "ego_head", subset_dir, "identity", 900, ownership_context=context)
+    assert not whole["failed"] and not subset["failed"]
+    assert len(whole["episodes"]) == len(subset["episodes"]) == 1
+    name = whole["episodes"][0]["episode_id"]
+    assert whole["episodes"][0]["instruction"] == "pour the tea"
+    assert subset["episodes"][0]["instruction"] == "pour the tea"
+    assert episode.build_request(subset_dir / name) == episode.build_request(whole_dir / name)
+
+
 def test_root_openaoe_does_not_guess_identity_when_context_omits_root_name(tmp_path):
     original = tmp_path / "original_clip"
     original.mkdir()
