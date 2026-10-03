@@ -1187,15 +1187,21 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     if _has_signals(ep, pl):
         from label import signals as sg
         meta = ep.get("signal_meta") or {}
-        # only joint readings whose every value is at each instant in the readout below (_signal_readout): one left
-        # out of it in whole or in part, or with no rows there (constant, no reading, touch), is not named
-        whole = _readout_of(ep, pl)[1]
-        joints = [nm for nm, a in ep["signals"].items() if nm in whole and sg.JOINT_LIKE.search(nm)
+        # a signal of several values whose name says joints or a state (label/signals.py names_joints_or_state), and
+        # only one whose every value is at each instant in the readout below (_signal_readout): one left out of it in
+        # whole or in part, or with no rows there (constant, no reading, touch), is not named. The line says only what
+        # is true by construction: what the names say, and "under their own names" only when every value has one
+        joints = [nm for nm, a in ep["signals"].items() if nm in _readout_of(ep, pl)[1] and np.shape(a)[1] > 1
+                  and sg.names_joints_or_state(nm)
                   and sg.per_value(nm, np.shape(a)[1], (meta.get(nm) or {}).get("shape"),
                                    (meta.get(nm) or {}).get("names"))]
+        one = len(joints) == 1
+        named = all(len((meta.get(nm) or {}).get("names") or []) == np.shape(ep["signals"][nm])[1] for nm in joints)
         return (f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
-                + (f" The joint readings it records ({', '.join(joints)}) are given value by value under their own "
-                   "names among the other recorded signals below." if joints else ""))
+                + (f" The signal{'' if one else 's'} whose name{' says' if one else 's say'} joints or a state "
+                   f"({', '.join(joints)}) {'is' if one else 'are'} given value by value"
+                   + (" under their own names" if named else "") + " among the other recorded signals below."
+                   if joints else ""))
     src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
     if (ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS):
         return "\nRECORDED STATE: none was read from this episode, so the video is all there is."

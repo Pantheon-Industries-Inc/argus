@@ -425,9 +425,43 @@ def test_a_humanoid_state_and_a_bases_odometry_are_shown_value_by_value_under_th
     # new: one row per value at each instant, and the state line names the joint readings
     assert "    observation.state left_arm_j1: " in episode and "    observation.base.odom vx: " in episode
     assert "total activity" not in episode
-    assert ("RECORDED STATE: no arm state in the layout our checks read. The joint readings it records "
-            "(observation.state) are given value by value under their own names among the other recorded signals "
+    assert ("RECORDED STATE: no arm state in the layout our checks read. The signal whose name says joints or a state "
+            "(observation.state) is given value by value under their own names among the other recorded signals "
             "below.") in episode
+
+
+def test_the_state_line_names_only_signals_of_several_values_whose_names_say_joints_or_a_state():
+    """A flag or a level whose name ends in state (battery_state, estop_state, gripper_state) is one value and no joint
+    reading; /teleop/fsm_state is the state of a teleop program, not of the robot; /left/joint_command is a command.
+    None is named. An unnamed 26 value observation.state is, without "under their own names", since its rows are
+    labelled only by position."""
+    ep, pl = CASES["teleop_video_only"]()
+    t = np.arange(450) / 30.0
+    sweep = lambda d: np.stack([0.3 * np.sin(0.4 * t + j) for j in range(d)], axis=1)
+    ep["signals"] = {"battery_state": (90 - 0.01 * np.arange(450))[:, None],
+                     "estop_state": ((t > 5) & (t < 7)).astype(float)[:, None],
+                     "gripper_state": (0.5 + 0.5 * np.sin(t))[:, None],
+                     "/teleop/fsm_state": np.stack([(t // 3) % 4, (t // 5) % 2], axis=1),
+                     "/left/joint_command position": sweep(6)}
+    ep["signal_meta"] = {k: {} for k in ep["signals"]}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert "    /left/joint_command position [0]: " in episode and "    /teleop/fsm_state [1]: " in episode
+    assert "RECORDED STATE: no arm state in the layout our checks read.\n" in episode
+    assert "whose name" not in episode and "joint readings" not in episode
+    ep["signals"]["observation.state"] = sweep(26)
+    ep["signal_meta"]["observation.state"] = {}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert ("RECORDED STATE: no arm state in the layout our checks read. The signal whose name says joints or a state "
+            "(observation.state) is given value by value among the other recorded signals below.\n") in episode
+    ep["signals"]["/left/joint_states position"] = sweep(6)
+    ep["signal_meta"]["/left/joint_states position"] = {"names": [f"j{i}" for i in range(6)]}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert ("The signals whose names say joints or a state (observation.state, /left/joint_states position) are given "
+            "value by value among the other recorded signals below.\n") in episode
+    del ep["signals"]["observation.state"]
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert ("The signal whose name says joints or a state (/left/joint_states position) is given value by value under "
+            "their own names among the other recorded signals below.\n") in episode
 
 
 def test_a_signal_slower_than_the_frames_says_its_rate_and_one_at_the_frame_rate_does_not():
@@ -515,15 +549,15 @@ def _humanoid_overflow(state_w, vel_w):
 
 
 def test_over_the_budget_the_state_line_names_the_joint_readings_only_when_every_row_of_them_is_shown():
-    named = ("The joint readings it records (observation.state) are given value by value under their own names among "
-             "the other recorded signals below.")
+    named = ("The signal whose name says joints or a state (observation.state) is given value by value under their own "
+             "names among the other recorded signals below.")
     episode, left, shown = _humanoid_overflow(0.4, 0.8)
     assert shown == 26 and "observation.state" not in left and "observation.velocity (26 values" in left
     assert named in episode
     episode, left, shown = _humanoid_overflow(0.8, 0.4)
     assert 0 < shown < 26 and f"observation.state (26 values, {26 - shown} of its 26 rows)" in left
     assert "RECORDED STATE: no arm state in the layout our checks read.\n" in episode
-    assert "joint readings" not in episode
+    assert "says joints or a state" not in episode
 
 
 def _sweeps_wide_and_flags():

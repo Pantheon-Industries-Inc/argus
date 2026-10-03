@@ -76,6 +76,18 @@ def per_value(name: str, d: int, shape=None, names=None) -> bool:
     return d <= JOINT_NAME_MAX and bool(JOINT_LIKE.search(name))
 
 
+def names_joints_or_state(name: str) -> bool:
+    """Whether a signal's name says it holds joints or a state, as the no state line names it (label/episode.py): a word
+    of it is joint or qpos (left_joint1, /left/joint_states, observations/qpos), or the last part of it, after its last
+    / or ., is state or states (observation.state), and no word of it says a command (prepare/formats.py
+    COMMAND_WORDS). A name that only ends in state is the state of something else (battery_state, /teleop/fsm_state),
+    and /left/joint_command is what the arm was told, not what it did."""
+    from prepare.formats import COMMAND_WORDS, _names_word
+    parts = [p.strip() for p in re.split(r"[/.]", name.lower()) if p.strip()]
+    return ((_names_word(name, ("joint", "qpos")) or bool(parts) and parts[-1] in ("state", "states"))
+            and not _names_word(name, COMMAND_WORDS))
+
+
 def _num(x: float) -> str:
     return "-" if not np.isfinite(x) else f"{float(x):.3g}"
 
