@@ -573,6 +573,94 @@ def probe(path: Path) -> dict:
             "codec": codec, "fps": float(rate) if rate else None, "rotation": rot, **extra}
 
 
+def open_cameras(files: dict, extra: dict, prs: dict | None = None) -> dict:
+    """{view: probe} of the cameras of one episode ({view: (camera name, path)}) that open, each probed on its own. A
+    camera that cannot be opened, or holds no frame, is taken out of files and is a camera_not_decodable issue on
+    extra naming it and why, and is listed among the unused cameras; the camera first in row order of the rest is the
+    episode's anchor, as board/clips.py drop_cameras makes it when a main camera does not decode. One camera had
+    dropped its whole episode. Raises, naming every camera and why, only when none opens."""
+    prs = dict(prs or {})
+    broken = {}
+    for v, (name, path) in list(files.items()):
+        try:
+            if v not in prs:
+                prs[v] = probe(Path(path))
+            if not len(prs[v]["pts"]):
+                raise ValueError("it holds no frame")
+        except Exception as e:
+            broken[v] = (name, plain_error(e))
+            prs.pop(v, None)
+            del files[v]
+    note_broken_cameras(extra, dict(broken.values()), bool(files))
+    return prs
+
+
+CAMERA_SPAN_SLACK_S = 0.5    # a camera is flagged when it starts or ends more than this before or after the main one
+
+
+def camera_span_issues(extra: dict, times: dict, anchor: str, names: dict, ctx: dict) -> None:
+    """Each camera's span against the episode's, as issues on extra; times {view: its frame times on the episode's
+    clock}, names {view: camera name}, ctx the episode's profile and cameras (board/clips.py camera_label names
+    them). The episode is the anchor camera's frames, from its first to one frame past its last. A camera that starts
+    or ends more than CAMERA_SPAN_SLACK_S inside it is camera_short, with the stretch it shows nothing for. The
+    anchor stays the main camera even when it is the short one, since the views name the cameras' roles (a wrist
+    camera made the anchor would be taken for the scene camera): it is then main_camera_short, with the stretch the
+    other cameras cover past it, which the board shows and the labels do not. Board clips compared a clip only with
+    its own camera's frame count, so a camera that ended early was never flagged."""
+    from board.clips import camera_label
+    step = lambda t: float(np.median(np.diff(t))) if len(t) > 1 else 1 / 30
+    span = {v: (float(t[0]), float(t[-1]) + step(t)) for v, t in times.items() if len(t)}
+    if anchor not in span:
+        return
+    a0, a1 = span[anchor]
+    label = lambda v: camera_label(v, ctx)
+    for v, (t0, t1) in span.items():
+        if v == anchor:
+            continue
+        if t1 < a1 - CAMERA_SPAN_SLACK_S:
+            add_issue(extra, "camera_short", f"The {label(v)} video ends at {t1 - a0:.2f} s, before the episode ends at "
+                                             f"{a1 - a0:.2f} s, so it shows nothing after that.",
+                      camera=names[v], t0_s=t1 - a0, t1_s=a1 - a0)
+        if t0 > a0 + CAMERA_SPAN_SLACK_S:
+            add_issue(extra, "camera_short", f"The {label(v)} video starts at {t0 - a0:.2f} s, after the episode "
+                                             "starts, so it shows nothing before that.",
+                      camera=names[v], t0_s=0.0, t1_s=t0 - a0)
+    later = [v for v, (_, t1) in span.items() if t1 > a1 + CAMERA_SPAN_SLACK_S]
+    if later:
+        end = max(span[v][1] for v in later)
+        add_issue(extra, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, ends at "
+                                              f"{a1 - a0:.2f} s, while the {_and_words([label(v) for v in later])} "
+                                              f"{'goes' if len(later) == 1 else 'go'} on to {end - a0:.2f} s; that "
+                                              "part is shown on the board but not labelled.",
+                  camera=names[anchor], t0_s=a1 - a0, t1_s=end - a0)
+    earlier = [v for v, (t0, _) in span.items() if t0 < a0 - CAMERA_SPAN_SLACK_S]
+    if earlier:
+        start = min(span[v][0] for v in earlier)
+        add_issue(extra, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, starts "
+                                              f"{a0 - start:.2f} s after the {_and_words([label(v) for v in earlier])}"
+                                              "; what was recorded before it is not labelled or shown.",
+                  camera=names[anchor], t0_s=start - a0, t1_s=0.0)
+
+
+def unshown_not_decodable(extra: dict, name: str) -> None:
+    """A camera the model is not shown none of whose frames could be read, named as a camera_not_decodable issue on
+    extra: it had been left off the board without a word."""
+    add_issue(extra, "camera_not_decodable", f"No frame of the camera {name}, which the model is not shown, could be "
+                                             "decoded, so the board cannot show it.", camera=name)
+
+
+def note_broken_cameras(extra: dict, broken: dict, any_left: bool) -> None:
+    """The cameras ({camera name: why}) that could not be opened, each a camera_not_decodable issue on extra and an
+    unused camera with its reason (open_cameras); raises, naming every one, when no camera of the episode is left."""
+    if not any_left:
+        raise ValueError("no camera of the episode could be opened ("
+                         + "; ".join(f"{name}: {why}" for name, why in broken.items()) + ")")
+    for name, why in broken.items():
+        add_issue(extra, "camera_not_decodable", f"The camera {name} could not be opened ({why}), so the episode is "
+                                                 "labelled and shown without it.", camera=name)
+        extra.setdefault("source", {}).setdefault("unused_cameras", []).append(f"{name} (could not be opened: {why})")
+
+
 def seconds(pr: dict) -> np.ndarray:
     t = pr["pts"].astype(np.float64) * float(pr["time_base"])
     return t - t[0] if len(t) else t
@@ -1681,7 +1769,9 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     the same recorder clock, or None), "scale_m", "source"}} is each camera's depth stream (depth_entry), timed as its
     colour camera is. state_names gives the state's value names for state_layout."""
     from label import episode as me
-    prs = prs or {v: probe(p) for v, (_, p) in files.items()}
+    if prs is None:
+        files = dict(files)
+        prs = open_cameras(files, extra)
     order = me.order_views(files)
     anchor = order[0]
     use_real = bool(real) and all(real.get(v) is not None for v in order)
@@ -1717,6 +1807,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         cams[v] = camera_entry(v, name, pr, rig)
         if (descs or {}).get(v):
             cams[v]["desc"] = descs[v]
+    camera_span_issues(extra, {v: times[v] for v in order}, anchor, {v: files[v][0] for v in order},
+                       {"profile": rig, "cameras": cams})
     dep, dtimes = {}, {}
     for v, d in (depth or {}).items():
         if v not in files:
@@ -2216,7 +2308,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             "notes.txt")] + (own if len({f.stem for f in fs}) == 1 else []))
     extra = {"task_label": [item["name"]], "source": {"format": "video files", "upload": item["name"]}}
     if item["dir"] is not None:
-        extra["source"]["unused_cameras"] = unused
+        extra["source"]["unused_cameras"] = list(unused)
     instr = instruction_from(ann)
     if not instr and item["dir"] is not None:
         # a recorder's own metadata file in the episode folder (session_meta.json) that names the task
@@ -2230,7 +2322,16 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
-    prs = {v: probe(p) for v, (_, p) in files.items()}
+    # each camera opened on its own: one that cannot be opened is left out and flagged, never the episode
+    chosen = dict(files)
+    prs = open_cameras(files, extra)
+    for v, (nm, p) in chosen.items():
+        dp = (item.get("depth") or {}).get(str(p))
+        if v not in files and dp is not None:
+            add_issue(extra, "depth_not_read", f"The depth video {Path(dp).name} is not used: its colour camera {nm} "
+                                               "could not be opened.", camera=Path(dp).stem)
+            extra["source"].setdefault("unused_depth", []).append(
+                f"{Path(dp).name} (its colour camera could not be opened)")
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
     state = action = state_names = None
     descs = {}
@@ -2327,11 +2428,15 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             t = None
         return float(t[0] - zero) if t is not None and len(t) else 0.0
     shown = [nm for nm, _ in files.values()]
-    unshown = [unshown_entry(nm, by[nm], unshown_why(nm, rig, shown), start_s=start_of(by[nm]))
-               for nm in (unused if item["dir"] is not None else [])]
-    unshown += [unshown_entry(Path(q).stem, q, unshown_why(Path(q).stem, rig, shown) if not_rgb(Path(q).stem) else
-                              "an infrared, mask or unmatched depth video, not the colour picture the model reads",
-                              start_s=start_of(q)) for q in item.get("unshown") or []]
+    unshown = []
+    for nm, q, why in ([(nm, by[nm], unshown_why(nm, rig, shown)) for nm in (unused if item["dir"] is not None else [])]
+                       + [(Path(q).stem, q, unshown_why(Path(q).stem, rig, shown) if not_rgb(Path(q).stem) else
+                           "an infrared, mask or unmatched depth video, not the colour picture the model reads")
+                          for q in item.get("unshown") or []]):
+        e = unshown_entry(nm, q, why, start_s=start_of(q))
+        unshown.append(e)
+        if e is None:
+            unshown_not_decodable(extra, nm)
     if any(unshown):
         extra["unshown_cameras"] = [u for u in unshown if u]
     ep = unique_dir(out, episode_name(item["name"]))
@@ -2912,7 +3017,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             k0 = next(iter(vmap.values()))
             pr0 = probe(row["videos"][k0][0])
             fps = measured_fps(seconds(pr0)) or pr0["fps"] or 30.0
-        sources, cameras = {}, {}
+        sources, cameras, broken = {}, {}, {}
         for v, key in vmap.items():
             mp4, base, to = row["videos"][key]
             n = int(round((to - base) * fps))
@@ -2923,11 +3028,19 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             w, h = _shown_size(mp4)
             codec = vi.get("video.codec")
             if not w or not codec:
-                pr = _stream_facts(mp4)
+                try:
+                    pr = _stream_facts(mp4)
+                except Exception as e:
+                    # a packed file that cannot be opened leaves this camera out (open_cameras), never the episode
+                    sources.pop(v)
+                    broken[key] = plain_error(e)
+                    continue
                 w, h, codec = w or pr["width"], h or pr["height"], codec or pr["codec"]
             cameras[v] = describe({"key": key, "name": _short(key, v), "width": w, "height": h, "codec": codec}, v, key, rig)
             if key in descs:
                 cameras[v]["desc"] = descs[key]
+        note_broken_cameras(extra, broken, bool(sources))
+        vmap = {v: k for v, k in vmap.items() if v in sources}
         n_frames = min(s["n_frames"] for s in sources.values())
         state, action, kind, note, fixes = state_on_frames(df, state, action, n_frames, fps, kind, note)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
@@ -2947,7 +3060,9 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
     # frames, so frames on the exact k/fps grid need no times; frames off it are decoded by their own pts and
     # timed by frame index, as the dataset defines them
-    prs = {v: probe(row["videos"][key]) for v, key in vmap.items()}
+    opened = {v: (key, row["videos"][key]) for v, key in vmap.items()}
+    prs = open_cameras(opened, extra)
+    vmap = {v: k for v, k in vmap.items() if v in opened}
     from label import episode as me
     anchor = me.order_views(prs)[0]
     if not fps:
@@ -2969,7 +3084,12 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         for v, pr in prs.items():
             times[v] = np.arange(len(pr["pts"])) / fps
             times[f"{v}_pts"] = pr["pts"]
-    n_video = min(s["n_frames"] for s in sources.values())
+    # the episode is as long as its main camera, as its frames are what the table's rows and the labels are on; a
+    # shorter camera is flagged with what it does not cover (camera_span_issues). The shortest camera had cut the
+    # whole episode, labels and signals included, to its length
+    n_video = sources[anchor]["n_frames"]
+    camera_span_issues(extra, {v: np.arange(s["n_frames"]) / fps for v, s in sources.items()}, anchor,
+                       {v: k for v, k in vmap.items()}, {"profile": rig, "cameras": cameras})
     state, action, kind, note, fixes = state_on_frames(df, state, action, sources[anchor]["n_frames"], fps, kind, note)
     ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
