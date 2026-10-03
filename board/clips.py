@@ -595,7 +595,9 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
       - paired by time, with no capture times left: nothing places the arrays on its frames, so the state and signals
         are marked unaligned (context.json state_unaligned, which label/episode.py never treats as aligned and the
         checks that compare the state with the video do not assess) and a reader issue says why.
-    keep_clock: the episode is labelled already, so its clock never moves (reanchor)."""
+    The reader's issues of cameras that start late or end early are measured against the main camera, so they are
+    measured again on the cameras left (respan). keep_clock: the episode is labelled already, so its clock never
+    moves (reanchor)."""
     views = set(views)
     src = json.loads((ep_dir / "sources.json").read_text())
     ctx = _context(ep_dir)
@@ -635,9 +637,40 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
                 issues.append({"kind": "state_unaligned", "what": f"The recorded state and signals are on the frames "
                                f"of the {old_name}, which could not be decoded, and the episode has no capture times "
                                f"to place them on the {camera_label(main, ctx)}'s frames, so they are not used."})
+    if src:
+        respan(ep_dir, ctx, src)
     (ep_dir / "sources.json").write_text(json.dumps(src, indent=1))
     (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
     return main, issues
+
+
+SPAN_KINDS = ("camera_short", "main_camera_short")    # the reader's camera span issues (camera_span_issues)
+
+
+def respan(ep_dir: Path, ctx: dict, src: dict) -> None:
+    """The reader's issues of cameras that start late or end early (prepare/formats.py camera_span_issues, kinds
+    SPAN_KINDS), measured again in ctx on the cameras of src, the main camera first: each camera's frame times on the
+    episode's clock (times.npz), or its frame index over the rate where the episode has no capture times, as the
+    reader measures them. A short clip that board clips found itself (record_cameras) is kept."""
+    import numpy as np
+
+    from prepare.formats import camera_span_issues
+    cams = cams_of(src)
+    fps = float(ctx.get("fps") or 30.0)
+    tp = ep_dir / (ctx.get("real_times") or "times.npz")
+    t = {}
+    if tp.exists():
+        with np.load(tp) as z:
+            t = {v: np.asarray(z[v], dtype=np.float64) for v in cams if v in z.files}
+    if set(t) != set(cams):
+        t = {v: np.arange(int(src[v]["n_frames"])) / fps for v in cams}
+    extra = {"reader_issues": [x for x in ctx.get("reader_issues") or []
+                               if not (isinstance(x, dict) and x.get("kind") in SPAN_KINDS and "clip_frames" not in x)]}
+    camera_span_issues(extra, t, cams[0], {v: src[v].get("camera_key") or v for v in cams}, ctx)
+    if extra["reader_issues"]:
+        ctx["reader_issues"] = extra["reader_issues"]
+    else:
+        ctx.pop("reader_issues", None)
 
 
 def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, old_name: str,

@@ -188,9 +188,9 @@ def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligne
     ctx = json.loads((ep / "context.json").read_text())
     assert ctx["state_unaligned"]
     kinds = [x["kind"] for x in ctx["reader_issues"]]
-    # the left camera starts 0.5 s in and the right one goes on 0.5 s past the top camera
-    assert kinds == ["camera_short", "main_camera_short", "camera_not_decodable", "state_unaligned"]
-    assert "main camera" in ctx["reader_issues"][3]["what"]
+    # measured again on the left camera, now main, by frame index: the right one goes on 0.5 s past it
+    assert kinds == ["main_camera_short", "camera_not_decodable", "state_unaligned"]
+    assert "main camera" in ctx["reader_issues"][2]["what"]
     e = me.load(ep)
     assert not me.plan(e)["state_usable"] and not e["signals"]
     req = me.build_request(ep)
@@ -234,6 +234,29 @@ def test_a_main_camera_taken_out_of_a_shared_frame_index_keeps_the_state(tmp_pat
     e = me.load(ep)
     assert me.anchor(e) == "left" and me.plan(e)["state_usable"]
     assert "state" in me.build_request(ep)["blocks"]
+
+
+def test_the_cameras_spans_are_measured_again_on_the_new_main_camera(tmp_path):
+    """A main camera whose index is whole and none of whose frames decode, beside a wrist camera half as long: the
+    reader flagged the wrist camera as ending before the main one, and that issue had stayed after board clips took
+    the main camera out, though the wrist camera is now the episode. The span issues are measured again on the cameras
+    left: alone, the wrist camera covers its whole episode."""
+    up = tmp_path / "up"
+    up.mkdir()
+    _video(up / "top.mp4", 60)
+    _video(up / "wrist_left.mp4", 30)
+    b = bytearray((up / "top.mp4").read_bytes())
+    i = b.find(b"mdat")
+    n = int.from_bytes(b[i - 4:i], "big") - 8
+    b[i + 4:i + 4 + n] = np.random.default_rng(0).bytes(n)
+    (up / "top.mp4").write_bytes(bytes(b))
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    ep = eps / rep["episodes"][0]["episode_id"]
+    assert [x["kind"] for x in json.loads((ep / "context.json").read_text())["reader_issues"]] == ["camera_short"]
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    assert [x["kind"] for x in ctx["reader_issues"]] == ["camera_not_decodable"], ctx["reader_issues"]
 
 
 def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_frame(tmp_path):
