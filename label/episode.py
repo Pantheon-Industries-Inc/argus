@@ -55,6 +55,7 @@ from label import frames as mf
 from label import lens
 from label import prompts
 from label import state as ms
+from prepare.signal_alignment import ALIGNED_CAMERA
 from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, STATE_WHY, UNREADABLE
 
 FPS = 30
@@ -136,9 +137,13 @@ def load(ep_dir: Path) -> dict:
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
-        t = np.load(ep_dir / ctx["real_times"])
+        from prepare.camera_clock import load_times
+        t = load_times(ep_dir, ctx)
         zero = float(ctx.get("clock_zero_s") or 0.0)
-        ep["times"] = {k: t[k] if k.endswith("_pts") else t[k] - zero for k in t.files}
+        ep["times"] = {k: t[k] if k.endswith("_pts") else t[k] - zero for k in t}
+        if ctx.get("presentation_times"):
+            original = load_times(ep_dir, ctx, recorded=True)
+            ep["recorded_times"] = {k: original[k] if k.endswith("_pts") else original[k] - zero for k in original}
     for v, d in src.items():
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
@@ -828,7 +833,7 @@ def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
     strips = []
     begin, end = contact_strips(c)
     # a contact placed from both starts says so on its picture: its begin and end are the placement's, not recorded
-    by = ", placed from both starts" if c.get("aligned_by") else ""
+    by = ", " + contact_placement(c) if c.get("aligned_by") else ""
     if begin:
         strips.append((f"touch begins by the recording{by}",
                        [min(max(c["start_s"] + o, 0.0), t_end) for o in STRIP_OFFSETS_S]))
@@ -1172,12 +1177,18 @@ CONTACT_ASSUMED = (" (these times are placed from both starts, as the touch sign
                    "so they are not recorded times)")
 
 
+def contact_placement(c: dict) -> str:
+    """Name the particular assumption a contact inherits, preserving existing common start wording."""
+    return "placed on the assumed camera clock" if c.get("aligned_by") == ALIGNED_CAMERA else "placed from both starts"
+
+
 def _contact_line(c: dict) -> str:
     hand = f"{c['hand']} hand" if c.get("hand") else "hand not named by the recording"
     when = (f"{c['start_s']:.2f} s" + (" (already touching at the first frame)" if c.get("from_start") else "")
             + f" to {c['end_s']:.2f} s" + (" (still touching at the last frame)" if c.get("to_end") else "")
             + f", strongest at {c['peak_s']:.2f} s"
-            + (CONTACT_ASSUMED if c.get("aligned_by") else ""))
+            + (" (these times use the assumed camera presentation clock, not measured capture times)"
+               if c.get("aligned_by") == ALIGNED_CAMERA else CONTACT_ASSUMED if c.get("aligned_by") else ""))
     where = []
     for nm, r in (c.get("regions") or {}).items():
         if nm == "active_signals":
@@ -1248,7 +1259,7 @@ def contacts_block(ep: dict, pl: dict) -> str:
             "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
             + (("  The signals record more contacts that are not shown: "
                 + "; ".join(f"{c['id']} {c['start_s']:.2f}-{c['end_s']:.2f} s"
-                            + (" placed from both starts" if c.get("aligned_by") else "") for c in rest)
+                            + (" " + contact_placement(c) if c.get("aligned_by") else "") for c in rest)
                 + ".\n") if rest else "")
             + "After the detail views, each contact above has one picture: " + "".join(p + ", " for p in picture)
             + ("and " if picture else "") + "the moment it is strongest"
@@ -1306,7 +1317,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
                 continue
             m = meta.get(name) or {}
             lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
-                                     fps=ep_fps(ep), aligned_by=m.get("aligned_by")))
+                                     fps=ep_fps(ep), aligned_by=m.get("aligned_by"),
+                                     camera_aligned_by=m.get("camera_aligned_by")))
         except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
             lines.append(f"  {name}: could not be read ({type(e).__name__})")
     if still:
@@ -1810,11 +1822,17 @@ def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
     first = frame_time(ep, 0)
     origin = ("the episode clock's zero" if round(first, 2) != 0 else "the episode's first frame")
     start = f"The first recorded frame is at {seconds(first)} on this clock. " if round(first, 2) != 0 else ""
+    assumed = ep["context"].get("camera_clock") or {}
+    precision = ("The column times are assumed presentation instants, not measured capture times. "
+                 "Use these times for this presentation. " if anchor(ep) in assumed else
+                 "The times are exact: use them, do not invent your own. ")
+    qualification = "".join(f"{cam_name(ep, v)}. {note['what']} " for v, note in assumed.items() if v in views(ep))
+    time_word = "assumed presentation time" if anchor(ep) in assumed else "exact time"
     return (
         f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
-        "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
+        f"bottom), COLUMNS are instants left to right, and each column is headed with its {time_word} in "
         f"seconds from {origin}. {start}Read each grid left to right and the grids in order. "
-        "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
+        f"{precision}{qualification}Each grid cell is the camera frame "
         f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's {ends} are "
         f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
         "small detail (lettering, a display, fine alignment).")

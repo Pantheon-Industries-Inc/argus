@@ -40,7 +40,7 @@ def test_each_part_reads_the_recording_at_its_own_span(monkeypatch):
     monkeypatch.setitem(pieces.PIECE_MAX_S, "teleop_arms", 1.0)
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "upload"
-        recorder_folder(root, n=90)
+        recorder_folder(root, n=90, duplicate_stamps=False)
         rep = f.convert(root, "teleop_arms", Path(t) / "eps", "test", 900)
         src = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
         whole = me.load(src)
@@ -74,7 +74,7 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
     monkeypatch.setattr(pieces, "CUT_GUARD_S", 0.2)          # the guard, scaled to a 3-second recording
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "upload"
-        recorder_folder(root, n=90)
+        recorder_folder(root, n=90, duplicate_stamps=False)
         rep = f.convert(root, "teleop_arms", Path(t) / "eps", "test", 900)
         src = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
         parts = pieces.write_pieces(src, Path(t) / "pieces")
@@ -292,7 +292,7 @@ def _three_parts(t: Path, monkeypatch) -> tuple[Path, Path, list[Path]]:
     """A recording cut into three parts, written where a job keeps them: job/pieces."""
     monkeypatch.setitem(pieces.PIECE_MAX_S, "teleop_arms", 1.0)
     root = t / "upload"
-    recorder_folder(root, n=90)
+    recorder_folder(root, n=90, duplicate_stamps=False)
     rep = f.convert(root, "teleop_arms", t / "eps", "test", 900)
     src = t / "eps" / rep["episodes"][0]["episode_id"]
     job = t / "job"

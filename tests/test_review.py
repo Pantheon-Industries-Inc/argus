@@ -92,7 +92,7 @@ def test_review_runs_every_stage_on_a_recorders_folder_in_free_mode():
     builds every request without calling the model."""
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "upload"
-        recorder_folder(root, n=90)
+        recorder_folder(root, n=90, duplicate_stamps=False)
         job = Path(t) / "job"
         p = subprocess.run([sys.executable, "-m", "review", "--data", str(root), "--rig", "teleop_arms", "--out",
                             str(job), "--dataset", "mine", "--free"], cwd=REPO, capture_output=True, text=True)
@@ -301,7 +301,7 @@ def test_review_runs_the_sensor_checks_as_data_review_does(tmp_path, monkeypatch
     import pytest
     import review.__main__ as rv
     root = tmp_path / "upload"
-    recorder_folder(root, n=30)
+    recorder_folder(root, n=30, duplicate_stamps=False)
     steps = []
 
     def record(job, step, cmd, env, ok_codes=(0,)):
@@ -327,7 +327,7 @@ def test_review_says_why_when_no_episode_can_be_put_on_the_board(tmp_path, monke
     import pytest
     import review.__main__ as rv
     root = tmp_path / "upload"
-    recorder_folder(root, n=30)
+    recorder_folder(root, n=30, duplicate_stamps=False)
     real = rv.run_step
 
     def fake(job, step, cmd, env, ok_codes=(0,)):

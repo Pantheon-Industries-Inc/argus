@@ -39,7 +39,7 @@ import warnings
 
 import numpy as np
 
-from prepare.signal_alignment import ALIGNED_ROWS, COARSE_CLOCK
+from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_CAMERA, COARSE_CLOCK
 
 REST_FRACTION = 0.1
 MIN_REST = 0.2
@@ -592,7 +592,7 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
 
 
 def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None, rate_hz=None,
-             fps=None, aligned_by=None) -> str:
+             fps=None, aligned_by=None, camera_aligned_by=None) -> str:
     """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
     (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
     to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it has as many rows as the
@@ -613,8 +613,12 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
         what += ", placed one row per frame as it has as many rows as the video has frames"
     elif aligned_by == COARSE_CLOCK:
         what += ", tied readings placed within each stamp interval as an assumption"
+    elif aligned_by == ALIGNED_CAMERA:
+        what += ", placed on footage through its assumed camera presentation clock"
     elif aligned_by:
         what += ", placed from both starts as no clock is shared"
+    if camera_aligned_by == ALIGNED_CAMERA and aligned_by != ALIGNED_CAMERA:
+        what += ", shown on footage through its assumed camera presentation clock"
     head = f"  {name} ({what})"
     if not np.isfinite(a).any():
         return f"{head}: no reading"

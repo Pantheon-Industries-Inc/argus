@@ -171,8 +171,9 @@ def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     if not tp.exists() or not cams or (len(cams) < 2 and zero is None):
         return {}
     import numpy as np
-    with np.load(tp) as z:
-        t = {c: np.asarray(z[c], dtype=np.float64) for c in cams if c in z.files and len(z[c])}
+    from prepare.camera_clock import load_times
+    z = load_times(ep_dir, _context(ep_dir))
+    t = {c: np.asarray(z[c], dtype=np.float64) for c in cams if c in z and len(z[c])}
     main = main_cam(sources)
     if main not in t:
         return {}
@@ -199,9 +200,10 @@ def clip_times(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     cams = cams_of(sources)
     if not tp.exists() or not cams:
         return {}
-    with np.load(tp) as z:
-        t = {c: np.asarray(z[c], dtype=np.float64) for c in cams if c in z.files
-             and len(z[c]) == int(sources[c].get("n_frames") or -1)}
+    from prepare.camera_clock import load_times
+    z = load_times(ep_dir, _context(ep_dir))
+    t = {c: np.asarray(z[c], dtype=np.float64) for c in cams if c in z
+         and len(z[c]) == int(sources[c].get("n_frames") or -1)}
     main = main_cam(sources)
     if main not in t:
         return {}
@@ -236,6 +238,7 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
     w, h, resample = source_size(ffmpeg, packed)
     want = int(n_frames) - int(skip)
+    dense = False
     timing = ((f"select=gte(n\\,{int(skip)})",) if skip else ()) + ("setpts=PTS-STARTPTS",)
     seek = ["-ss", f"{max(0.0, base_s - 0.5 / fps):.6f}"]
     if source_pts is not None and len(source_pts):
@@ -243,11 +246,24 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
         import math
         with av.open(str(packed)) as source:
             start = float(int(source_pts[0]) * source.streams.video[0].time_base)
+            tb = source.streams.video[0].time_base
+            dense = (len(source_pts) > 1 and min(int(b) - int(a) for a, b in zip(source_pts, source_pts[1:]))
+                     * tb.numerator * DISPLAY_TICKS_PER_S <= tb.denominator)
+            if dense:
+                # Microsecond packet separation retains tied captures, but an accurate seek can discard the whole
+                # short stream. Select its exact display indices from original PTS instead.
+                packets = sorted(p.pts for p in source.demux(video=0) if p.size and p.pts is not None)
+                first = packets.index(int(source_pts[0]))
         # Truncate the seek to microseconds so decimal rounding cannot put it after the wanted packet.
         seek = ["-seek_timestamp", "1", "-ss", f"{math.floor(start * 1_000_000) / 1_000_000:.6f}"]
+        if dense:
+            seek = []
+            timing = (f"select=between(n\\,{first + int(skip)}\\,{first + len(source_pts) - 1})",
+                      "setpts=PTS-STARTPTS")
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-threads", str(threads), *seek,
            "-i", packed, "-map", "0:v:0", "-frames:v", str(want), "-an", "-fps_mode", "passthrough",
            *video_args(w, h, main, threads, resample, pre=timing),
+           *(["-movie_timescale", str(DISPLAY_TICKS_PER_S)] if dense else []),
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
@@ -713,6 +729,19 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
         o = clip_path(mp4_dir, eid, view)
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
             f = float(e.get("fps") or fps)
+            from prepare.camera_clock import unshown_times
+            own_clock = unshown_times(ep_dir, e, float(ctx.get("clock_zero_s") or 0.0))
+            if own_clock is not None:
+                ts, pts = own_clock
+                skip = int(np.searchsorted(ts, -0.5 / f, side="left"))
+                if skip >= len(ts):
+                    continue
+                off = max(0.0, float(ts[skip]))
+                from prepare.formats import nearest
+                km = nearest(ts, query) if query is not None else None
+                jobs.append((str(e["packed"]), float(e.get("base_s") or 0.0), len(ts), o, f, False,
+                             off, skip, ts, query, km, pts, ep_dir.name, view))
+                continue
             start = float(e.get("start_s") or 0.0) - float(ctx.get("clock_zero_s") or 0.0)
             skip = int(round(-start * f)) if start < 0 else 0
             jobs.append((str(e["packed"]), float(e.get("base_s") or 0.0), int(e["n_frames"]), o, f, False,
@@ -827,6 +856,7 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
         src.pop(v, None)
         (ctx.get("cameras") or {}).pop(v, None)
         (ctx.get("placeholder_frames") or {}).pop(v, None)
+        (ctx.get("camera_clock") or {}).pop(v, None)
     dj = ep_dir / "depth.json"
     if dj.exists():
         depth = json.loads(dj.read_text())
@@ -839,8 +869,8 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
         tp = ep_dir / (ctx.get("real_times") or "times.npz")
         t = {}
         if tp.exists():
-            with np.load(tp) as z:
-                t = {k: np.asarray(z[k], dtype=np.float64) for k in z.files}
+            from prepare.camera_clock import load_times
+            t = load_times(ep_dir, ctx)
         if not paired:
             pass
         elif old_main in t and main in t and len(t[old_main]) and len(t[main]):
@@ -855,6 +885,20 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
                 issues.append({"kind": "state_unaligned", "what": f"The recorded state and signals are on the frames "
                                f"of the {old_name}, which could not be decoded, and the episode has no capture times "
                                f"to place them on the {camera_label(main, ctx)}'s frames, so they are not used."})
+    if main in (ctx.get("camera_clock") or {}):
+        from prepare.formats import Signals, qualify_camera_signals, write_signals
+        sig = Signals()
+        if ctx.get("signals"):
+            with np.load(ep_dir / "signals.npz") as z:
+                for m in ctx["signals"]:
+                    sig[m["name"]] = z[m["key"]]
+                    sig.meta[m["name"]] = {k: v for k, v in m.items() if k not in ("key", "name")}
+        state, action = None, None
+        if ctx.get("state_kind") != "none" and (ep_dir / "state.npz").exists():
+            with np.load(ep_dir / "state.npz") as z:
+                state, action = z["state"], z["action"] if "action" in z.files else None
+        sig = qualify_camera_signals(ctx, sig, state, action)
+        write_signals(ep_dir, ctx, sig, load_times(ep_dir, ctx)[main])
     if src:
         respan(ep_dir, ctx, src)
     (ep_dir / "sources.json").write_text(json.dumps(src, indent=1))
@@ -878,8 +922,9 @@ def respan(ep_dir: Path, ctx: dict, src: dict) -> None:
     tp = ep_dir / (ctx.get("real_times") or "times.npz")
     t = {}
     if tp.exists():
-        with np.load(tp) as z:
-            t = {v: np.asarray(z[v], dtype=np.float64) for v in cams if v in z.files}
+        from prepare.camera_clock import load_times
+        z = load_times(ep_dir, ctx)
+        t = {v: np.asarray(z[v], dtype=np.float64) for v in cams if v in z}
     if set(t) != set(cams):
         t = {v: np.arange(int(src[v]["n_frames"])) / fps for v in cams}
     extra = {"reader_issues": [x for x in ctx.get("reader_issues") or []
@@ -956,11 +1001,15 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
         with np.load(ep_dir / "depth_times.npz") as z:
             dt = {k: np.asarray(z[k]) for k in z.files}
     if dj.exists():
+        recorded_new = t_new
+        if ctx.get("presentation_times"):
+            from prepare.camera_clock import load_times
+            recorded_new = load_times(ep_dir, ctx, recorded=True)[new]
         for v, e in json.loads(dj.read_text()).items():
             td = dt.get(f"depth_{v}", t.get(f"depth_{v}"))
             kp = ep_dir / e["kmap"]
             if td is not None and len(td):
-                np.save(kp, depth_kmap(td, t_new))        # no reading where no depth frame is within a frame
+                np.save(kp, depth_kmap(td, recorded_new))        # no reading where no depth frame is within a frame
             elif kp.exists():
                 np.save(kp, np.load(kp)[idx])            # no depth times: the depth frame of the nearest old frame
     # the clock: its start is clock_zero_s, or 0 as in the request, moved
@@ -970,7 +1019,18 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
     issues = []
     shift = 0.0 if keep_clock else min(first.values()) - zero
     if shift:
+        for entry in ctx.get("unshown_cameras") or []:
+            if entry.get("camera_times"):
+                entry["camera_clock_offset_s"] = float(entry.get("camera_clock_offset_s") or 0.0) + shift
+                entry["start_s"] = float(entry.get("start_s") or 0.0) - shift
         moved = {k: (a if k.endswith("_pts") else a - shift) for k, a in t.items()}
+        if ctx.get("presentation_times"):
+            from prepare.camera_clock import load_times
+            original = load_times(ep_dir, ctx, recorded=True)
+            moved = {k: a if k.endswith("_pts") else np.asarray(a, dtype=np.float64) - shift
+                     for k, a in original.items()}
+            with np.load(ep_dir / ctx["presentation_times"]) as z:
+                np.savez(ep_dir / ctx["presentation_times"], **{k: z[k] - shift for k in z.files})
         np.savez(ep_dir / (ctx.get("real_times") or "times.npz"), **moved)
         if dt:
             np.savez(ep_dir / "depth_times.npz", **{k: (a if k.endswith("_pts") else np.asarray(a, dtype=np.float64)
@@ -1070,9 +1130,10 @@ def clip_end_s(ep_dir: Path, ctx: dict, src: dict, cam: str, got: int) -> float:
     off, skip = start_offsets(ep_dir, src, fps).get(cam, (0.0, 0))
     tp = ep_dir / (ctx.get("real_times") or "times.npz")
     if tp.exists():
-        with np.load(tp) as z:
-            t = np.asarray(z[cam], dtype=np.float64) if cam in z.files else None
-            main = np.asarray(z[main_cam(src)], dtype=np.float64) if main_cam(src) in z.files else None
+        from prepare.camera_clock import load_times
+        z = load_times(ep_dir, ctx)
+        t = np.asarray(z[cam], dtype=np.float64) if cam in z else None
+        main = np.asarray(z[main_cam(src)], dtype=np.float64) if main_cam(src) in z else None
         if t is not None and main is not None and len(t) > skip + got:
             zero = float(ctx.get("clock_zero_s") or 0.0)
             return float(t[skip + got]) - zero

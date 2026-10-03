@@ -166,6 +166,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     z = np.load(ep_dir / "state.npz") if (ep_dir / "state.npz").exists() else None
     zs = np.load(ep_dir / "signals.npz") if ctx.get("signals") else None
     tz = dict(np.load(ep_dir / ctx["real_times"])) if ctx.get("real_times") else None
+    presentation = dict(np.load(ep_dir / ctx["presentation_times"])) if ctx.get("presentation_times") else None
     touch = {}
     if zs is not None:
         # touch is judged once, on the whole recording, and each part's signal entries carry the verdict
@@ -192,7 +193,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             shutil.rmtree(d)
         d.mkdir(parents=True)
         t0, t1 = float(t[k0]), (float(t[k1]) if k1 < n else total)
-        new_src, new_times = {}, {}
+        new_src, new_times, new_presentation = {}, {}, {}
         for v, s in src.items():
             s2 = {kk: vv for kk, vv in s.items() if kk != "kmap"}
             km = ep["kmap"].get(v)
@@ -213,7 +214,10 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             else:
                 s2["base_s"] = round(float(s["base_s"]) + j0 / fps, 9)
             if tz is not None and v in tz:
-                new_times[v] = tz[v][j0:j1] - float(tz[a][k0])
+                origin = float(presentation.get(a, tz[a])[k0]) if presentation else float(tz[a][k0])
+                new_times[v] = tz[v][j0:j1] - origin
+                if presentation and v in presentation:
+                    new_presentation[v] = presentation[v][j0:j1] - origin
             new_src[v] = s2
         c2 = {kk: vv for kk, vv in ctx.items() if kk not in (
             "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "stream_checks", "pieces",
@@ -226,6 +230,12 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             c2["placeholder_frames"] = held       # on the part's own frames
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
+        if ctx.get("recorded_camera_ns"):
+            c2["recorded_camera_ns"] = str((ep_dir / ctx["recorded_camera_ns"]).resolve())
+        if ctx.get("unshown_cameras"):
+            from prepare.camera_clock import unshown_span
+            c2["unshown_cameras"] = unshown_span(ep_dir, ctx["unshown_cameras"], t0, t1,
+                                                float(ctx.get("clock_zero_s") or 0.0), shift=True)
         c2 = shift_context_times(c2, -t0)
         parent_notes = []
         if t0:
@@ -254,6 +264,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if new_times:
             np.savez(d / "times.npz", **new_times)
             c2["real_times"] = "times.npz"
+        if new_presentation:
+            np.savez(d / ctx["presentation_times"], **new_presentation)
         if contacts is not None:
             # the recording's contacts that overlap the part, on its clock and clipped to it, keeping their ids so the
             # parts' answers join back into one list

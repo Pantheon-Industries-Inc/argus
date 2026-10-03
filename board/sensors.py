@@ -176,10 +176,11 @@ def clip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
     src_p = ep_dir / "sources.json"
     if tp.exists() and src_p.exists():
         views = order_views(json.loads(src_p.read_text()))
-        with np.load(tp) as z:
-            if views and views[0] in z.files and len(z[views[0]]) >= n > 0:
-                t = np.asarray(z[views[0]][:n], dtype=np.float64)
-                return t - float(ctx.get("clock_zero_s") or 0.0)
+        from prepare.camera_clock import load_times
+        z = load_times(ep_dir, ctx)
+        if views and views[0] in z and len(z[views[0]]) >= n > 0:
+            t = np.asarray(z[views[0]][:n], dtype=np.float64)
+            return t - float(ctx.get("clock_zero_s") or 0.0)
     fps = float(ctx.get("fps") or 30.0)
     return np.arange(n, dtype=np.float64) / fps
 
@@ -214,7 +215,7 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         a = a[:, None]
     d = a.shape[1]
     doc = {"name": meta["name"], "dims": d}
-    for k in ("shape", "names", "rate_hz", "source", "aligned_by"):
+    for k in ("shape", "names", "rate_hz", "source", "aligned_by", "camera_aligned_by"):
         if meta.get(k) is not None:
             doc[k] = meta[k]
     fin = np.isfinite(a)

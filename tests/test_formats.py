@@ -338,7 +338,8 @@ def _clip(path: Path, n: int) -> None:
     c.close()
 
 
-def recorder_folder(root: Path, n: int = 12, t0: float = 1_790_000_000.0, third_arm: bool = False) -> Path:
+def recorder_folder(root: Path, n: int = 12, t0: float = 1_790_000_000.0, third_arm: bool = False,
+                    duplicate_stamps: bool = True) -> Path:
     """One episode as a capture stack records it: each camera's colour and depth video with a file of its frames'
     capture times (two frames stamped alike), each arm's joints (follower, joint_pos and gripper_pos) and commands
     (leader, seven values) as JSON MCAP channels beside a health channel, and a metadata file naming the task.
@@ -354,7 +355,8 @@ def recorder_folder(root: Path, n: int = 12, t0: float = 1_790_000_000.0, third_
         for kind in ("rgb", "depth"):
             _clip(d / f"{cam}-images-{kind}.mp4", n)
             ts = t0 + 0.01 * k + np.arange(n) / 30
-            ts[3] = ts[2]
+            if duplicate_stamps:
+                ts[3] = ts[2]
             np.save(d / f"{cam}-{kind}-timestamp.npy", ts)
     arms = [(f"yam_{'leader_' if leader else ''}{side}", leader, True)
             for side in ("left", "right") for leader in (False, True)]
@@ -403,7 +405,8 @@ def test_a_recorders_folder_is_one_episode_with_its_arm_state():
         assert not rep["failed"] and len(rep["episodes"]) == 1
         ep = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
         ctx = json.loads((ep / "context.json").read_text())
-        assert ctx["state_kind"] == "joints" and ctx["instruction"] == "Pick up the cube" and not ctx.get("state_note")
+        assert ctx["state_kind"] == "none" and ctx["state_why"] == "assumed_clock"
+        assert ctx["instruction"] == "Pick up the cube" and ctx["camera_clock"]["exo"]
         assert ctx["cameras"]["exo"]["name"] == "exo_cam"
         assert ctx["source"]["unused_cameras"] == []
         z = np.load(ep / "state.npz")
@@ -421,7 +424,7 @@ def test_a_third_arm_that_carries_the_scene_camera_is_neither_working_arm():
     import numpy as np
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "upload"
-        recorder_folder(root, third_arm=True)
+        recorder_folder(root, third_arm=True, duplicate_stamps=False)
         rep = f.convert(root, "teleop_arms", Path(t) / "eps", "test", 900)
         assert not rep["failed"] and len(rep["episodes"]) == 1
         ep = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
@@ -1283,7 +1286,7 @@ def _an_mcap_keeps_every_other_number_it_records_as_a_signal(tmp_path):
     import numpy as np
     from mcap.writer import Writer
     root = tmp_path / "upload"
-    d = recorder_folder(root, n=60)          # 2 s of footage
+    d = recorder_folder(root, n=60, duplicate_stamps=False)          # 2 s of footage
     t0 = 1_790_000_000.0
     with open(d / "imu.mcap", "wb") as fh:
         w = Writer(fh)

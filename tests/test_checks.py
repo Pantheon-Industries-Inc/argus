@@ -466,7 +466,7 @@ def test_a_one_arm_recorders_folder_builds_its_request(tmp_path):
     episode with 7 values of joint state and the leader as action, which must build its request."""
     from prepare import formats
     from test_formats import recorder_folder
-    d = recorder_folder(tmp_path / "upload", n=90)
+    d = recorder_folder(tmp_path / "upload", n=90, duplicate_stamps=False)
     for p in list(d.iterdir()):
         if "right" in p.name:
             p.unlink()

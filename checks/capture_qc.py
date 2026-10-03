@@ -176,7 +176,8 @@ def anchor_times(ep: dict) -> np.ndarray:
 
 
 def camera_times(ep: dict, v: str) -> np.ndarray | None:
-    """Real capture times of camera v's own frames, when the dataset has them."""
+    """Camera v's selected clock, including explicitly qualified presentation times. Clock defect checks read
+    recorded_times instead, so assumed placement cannot hide repeated recorded timestamps."""
     if ep.get("times") is not None and v in ep["times"]:
         return np.asarray(ep["times"][v], dtype=np.float64)
     return None
@@ -698,14 +699,16 @@ def assess(feats: dict) -> dict:
         R["state_time_too_short"] = _fired([_ev(f"the recording has {len(ts)} frame time{'s' if len(ts) != 1 else ''}, "
                                                 f"fewer than two")] if len(ts) < 2 else [])
         if real_times:
-            dup, gap, m = clock(ts, "state_time", me.anchor(ep))
+            recorded = ep.get("recorded_times") or ep.get("times")
+            raw_anchor = np.asarray(recorded[me.anchor(ep)], dtype=np.float64)[:len(ts)]
+            dup, gap, m = clock(raw_anchor, "state_time", me.anchor(ep))
             R["state_time_non_monotonic_or_duplicate"] = _fired(dup, metrics=m)
             R["state_timestamp_gap"] = _fired(gap, metrics=m)
             nev, nm = [], {}
             for v in me.views(ep):
                 if v == me.anchor(ep):
                     continue
-                ct = camera_times(ep, v)
+                ct = recorded.get(v)
                 if ct is None:
                     continue
                 d2, g2, m2 = clock(ct[:cams[v]["n"]], f"native_camera_{v}", v)
@@ -1087,11 +1090,15 @@ def assess(feats: dict) -> dict:
         why = f"The recorded state is not on these cameras' frames. {ctx['state_unaligned']}"
         for c in STATE_VS_VIDEO + (("video_frozen_run",) if extra["frozen_needs_motion"] else ()):
             R[c] = _na(why)
+    if ctx.get("camera_clock"):
+        for c in CAMERA_MOTION_CHECKS:
+            R[c] = _na("Camera placement uses an assumed presentation clock rather than measured capture timing.")
     if state_error is not None:
         R.update({c: _errored(state_error) for c in STATE_CHECKS})
     return {"checks": R, "cameras": cam_metrics, "actors": actor_metrics,
             "episode": {"duration_s": round(duration, 2), "rig": rig, "state_kind": kind, "gripper_unit": unit,
-                        "clock": "capture times" if real_times else "frame_index / fps"}}
+                        "clock": ("assumed camera presentation" if ctx.get("camera_clock") else
+                                  "capture times" if real_times else "frame_index / fps")}}
 
 
 # ------------------------------------------------------------------------------------------ disposition

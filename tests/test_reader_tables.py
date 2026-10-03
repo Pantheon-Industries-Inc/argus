@@ -154,7 +154,7 @@ def _recorder_with(tmp_path, name: str, third_arm: bool = False, cut: bool = Tru
     no message when not cut), converted; its context.json, and its folder under "_ep"."""
     from mcap.writer import Writer
     from test_formats import recorder_folder
-    d = recorder_folder(tmp_path / "upload", third_arm=third_arm)
+    d = recorder_folder(tmp_path / "upload", third_arm=third_arm, duplicate_stamps=False)
     p = d / name
     if cut:
         p.write_bytes((p if p.exists() else d / "yam_left.mcap").read_bytes()[:64])
@@ -278,7 +278,7 @@ def _recorder(tmp_path, change) -> dict:
     """recorder_folder's episode of 60 frames, its files changed by change(folder), converted; its context.json and
     its folder under "_ep"."""
     from test_formats import recorder_folder
-    d = recorder_folder(tmp_path / "upload", n=60)
+    d = recorder_folder(tmp_path / "upload", n=60, duplicate_stamps=False)
     change(d)
     rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
     ep = tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"]
@@ -344,7 +344,7 @@ def test_commands_on_a_clock_of_their_own_leave_the_arms_state_without_an_action
 
 def test_a_third_arm_on_a_clock_of_its_own_leaves_the_working_arms_state(tmp_path):
     from test_formats import recorder_folder
-    d = recorder_folder(tmp_path / "upload", n=60, third_arm=True)
+    d = recorder_folder(tmp_path / "upload", n=60, third_arm=True, duplicate_stamps=False)
     _on_its_own_clock(d, "yam_camera.mcap", "/yam_camera/joint_state", gripper=False)
     rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
     ctx = json.loads((tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())

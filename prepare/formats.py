@@ -145,8 +145,9 @@ from pathlib import Path
 import numpy as np
 
 from label.atomic import write_atomic
+from prepare.camera_clock import UNKNOWN_CAMERA_FPS, coarse_rows, presentation_clock
 from prepare.state_notes import STATE_WHY
-from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_ASSUMED, COARSE_CLOCK
+from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_ASSUMED, ALIGNED_CAMERA, COARSE_CLOCK
 
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -2366,6 +2367,31 @@ def shift_context_times(ctx: dict, delta_s: float) -> dict:
     return out
 
 
+def qualify_camera_signals(ctx: dict, signals: dict | None, state=None, action=None) -> Signals:
+    """Keep recorded arrays as signals when their camera placement cannot establish measured state timing.
+    Existing sensor clock qualifications and arbitrary metadata remain beside the camera qualification."""
+    if signals is None:
+        signals = Signals()
+    elif not isinstance(signals, Signals):
+        signals = Signals(signals)
+    for name, values in (("recorded state", state), ("recorded action", action)):
+        if values is not None:
+            base, i = name, 2
+            while name in signals:
+                name, i = f"{base} ({i})", i + 1
+            signals[name] = values
+    for name in signals:
+        meta = signals.meta.setdefault(name, {})
+        meta["camera_aligned_by"] = ALIGNED_CAMERA
+        meta.setdefault("aligned_by", ALIGNED_CAMERA)
+    if state is not None and ctx.get("state_kind") != "none":
+        ctx["state_kind"] = "none"
+        no_state(ctx, StateNote("Labelled from the cameras, because the anchor camera has tied capture "
+                               "timestamps. Its assumed presentation clock cannot establish measured arm "
+                               "state timing; the recorded state and action remain signals.", "assumed_clock"))
+    return signals
+
+
 def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None,
                    signals: dict | None = None) -> dict:
     ep.mkdir(parents=True, exist_ok=True)
@@ -2376,6 +2402,35 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
         np.savez(ep / "state.npz", **arrs)
     from label import episode as me
     anchor = next(iter(me.order_views(ctx.get("cameras") or sources or {})), None)
+    presentation, notes = {}, {}
+    for view in sources:
+        if times and view in times:
+            placed, note = presentation_clock(times[view])
+            if note:
+                presentation[view], notes[view] = placed, note
+    if presentation:
+        ctx.update(presentation_times="presentation_times.npz", camera_clock=notes)
+        np.savez(ep / ctx["presentation_times"], **presentation)
+        placed = {v: presentation.get(v, times[v]) for v in sources if v in times}
+        if anchor in placed:
+            ta = placed[anchor]
+            step = float(np.median(np.diff(ta))) if len(ta) > 1 else 1 / UNKNOWN_CAMERA_FPS
+            ctx.update(fps=round(1 / step, 3), duration_s=round(float(ta[-1]) + step, 3))
+            for view in placed:
+                if view != anchor:
+                    km = nearest(placed[view], ta)
+                    if len(km) == len(placed[view]) and np.array_equal(km, np.arange(len(km))):
+                        sources[view].pop("kmap", None)
+                    else:
+                        np.save(ep / f"kmap_{view}.npy", km)
+                        sources[view]["kmap"] = f"kmap_{view}.npy"
+        for view, note in notes.items():
+            name = sources[view].get("camera_key") or view
+            ctx["reader_issues"] = [x for x in ctx.get("reader_issues") or []
+                                    if x.get("kind") != "camera_timestamp_repeated" or x.get("camera") != name]
+            add_issue(ctx, "camera_timestamp_repeated", f"{name} has {note['what']}", camera=name)
+        if anchor in notes:
+            signals = qualify_camera_signals(ctx, signals, state, action)
     write_signals(ep, ctx, signals, (times or {}).get(anchor))
     if times:
         np.savez(ep / "times.npz", **times)
@@ -4709,24 +4764,6 @@ def _clock_facts(a: np.ndarray) -> tuple[np.ndarray, float, float]:
 
 
 
-def coarse_rows(t: np.ndarray) -> tuple[np.ndarray, float | None]:
-    """Times for a single row stream, and its coarse resolution when adjacent rows share a rising stamp. Only one
-    channel and value group calls this rule, never times aggregated across MCAP channels. Tied rows keep order within
-    the interval to the next stamp, evenly spaced as an assumption; the last interval uses the median distinct step. This preserves
-    readings without inventing precise recorded instants or treating a coarse second as a gap with no rows."""
-    t = np.asarray(t, dtype=np.float64)
-    d = np.diff(t)
-    if len(t) < 2 or not np.isfinite(t).all() or not (d >= 0).all() or not (d == 0).any() or not (d > 0).any():
-        return t, None
-    resolution = float(np.median(d[d > 0]))
-    starts = np.r_[0, np.flatnonzero(d > 0) + 1]
-    out = t.copy()
-    for a, b in zip(starts, np.r_[starts[1:], len(t)]):
-        width = float(t[b] - t[a]) if b < len(t) else resolution
-        out[a:b] = t[a] + np.arange(b - a) * width / (b - a)
-    return out, resolution
-
-
 def coarse_issue(name: str, resolution: float) -> dict:
     """A row clock's recorded uncertainty, visible beside the assumed timing of its retained readings."""
     return {"kind": "signal_clock_coarse", "signal": name,
@@ -5610,7 +5647,8 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Sign
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "signal_alignment", "state_notes", "videos"}
+NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux",
+                "signal_alignment", "state_notes", "videos", "camera_clock"}
 
 
 def upload_adapters(kind: str) -> list:
@@ -7012,6 +7050,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     for t in missing:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {t} could be decoded, so it is not shown.",
                   camera=t)
+    from label import episode as me
     un = []
     for t, name in unshown_of.items():
         w = writers.get(t)
@@ -7019,8 +7058,24 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             fps_u = measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)
             why = ("depth with no colour camera of its own, drawn as a picture of near and far" if t in pictured else
                    unshown_why(t, rig, list(vmap.values())))
-            un.append((t, unshown_entry(t, ep / name, why, n_frames=counts[t], start_s=w.pts[0] / TIME_BASE_DEN,
-                                        fps=fps_u)))
+            entry = unshown_entry(t, ep / name, why, n_frames=counts[t], start_s=w.pts[0] / TIME_BASE_DEN,
+                                  fps=fps_u)
+            stamps = np.asarray(capture_ns.get(t, []), dtype=np.int64)
+            if entry and len(stamps) == len(w.pts):
+                anchor_topic = files[me.order_views(files)[0]][0]
+                # Match the shown cameras' recorder clock normalization. Original integer stamps stay separate.
+                origin_ns = capture_ns[anchor_topic][0]
+                recorded = stamps.astype(np.float64) / 1e9 - float(origin_ns) / 1e9
+                shown, note = presentation_clock(recorded)
+                if note:
+                    clock_file = Path(name).stem + "_times.npz"
+                    np.savez(ep / clock_file, capture_ns=stamps, capture=recorded,
+                             pts=np.asarray(w.pts, dtype=np.int64), presentation=shown)
+                    entry.update(camera_times=clock_file, camera_clock=note,
+                                 fps=round(float(1 / np.median(np.diff(shown))), 3), start_s=float(shown[0]),
+                                 why=entry["why"] + ". " + note["what"])
+                    add_issue(extra, "camera_timestamp_repeated", f"{t} frames. {note['what']}", camera=t)
+            un.append((t, entry))
         else:
             un.append((t, None))
     set_unshown(extra, un)
@@ -7064,6 +7119,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         paired = all(len(capture_ns.get(topic, [])) == len(prs[v]["pts"]) for v, (topic, _) in files.items())
         if paired:
             real = {v: np.asarray(capture_ns[topic], dtype=np.float64) / 1e9 for v, (topic, _) in files.items()}
+            extra["recorded_camera_ns"] = "recorded_camera_ns.npz"
+            np.savez(ep / extra["recorded_camera_ns"],
+                     **{v: np.asarray(capture_ns[topic], dtype=np.int64) for v, (topic, _) in files.items()})
             q = real[me.order_views(files)[0]]
             for d in depth.values():
                 dp = probe_depth(Path(d["path"]))
@@ -7358,6 +7416,10 @@ def trim_episode(ep: Path, max_s: float) -> dict:
     from label import episode as me
     e = me.load(ep)
     ctx = e["context"]
+    if ctx.get("unshown_cameras"):
+        from prepare.camera_clock import unshown_span
+        ctx["unshown_cameras"] = unshown_span(ep, ctx["unshown_cameras"], 0.0, max_s,
+                                             float(ctx.get("clock_zero_s") or 0.0))
     a = me.anchor(e)
     n = int(e["sources"][a]["n_frames"])
     t = np.array([me.frame_time(e, k) for k in range(n)])
@@ -7374,12 +7436,19 @@ def trim_episode(ep: Path, max_s: float) -> dict:
             s_["n_frames"] = min(int(s_["n_frames"]), keep)
     if e.get("times") is not None:
         tz = dict(e["times"])
+        if ctx.get("presentation_times"):
+            from prepare.camera_clock import load_times
+            tz = load_times(ep, ctx, recorded=True)
         for v in src:
             if v in tz:
                 tz[v] = tz[v][:src[v]["n_frames"]]
             if f"{v}_pts" in tz:
                 tz[f"{v}_pts"] = tz[f"{v}_pts"][:src[v]["n_frames"]]
         np.savez(ep / ctx["real_times"], **tz)
+        if ctx.get("presentation_times"):
+            with np.load(ep / ctx["presentation_times"]) as z:
+                np.savez(ep / ctx["presentation_times"], **{v: z[v][:src[v]["n_frames"]]
+                                                          for v in z.files if v in src})
     if (ep / "state.npz").exists():
         z = np.load(ep / "state.npz")
         np.savez(ep / "state.npz", **{k: z[k][:keep] for k in z.files})

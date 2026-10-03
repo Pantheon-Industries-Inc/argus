@@ -36,6 +36,7 @@ from __future__ import annotations
 import numpy as np
 
 from label import signals as sg
+from prepare.signal_alignment import ALIGNED_CAMERA
 
 DIP_BELOW = 0.5      # a dip is a fall under this share of the contact's peak
 VARIATION_SUFFIX = " variation within each frame"   # prepare/formats.py's name for a fast signal's companion
@@ -133,6 +134,11 @@ def mark_aligned(contacts: list[dict], meta: dict) -> list[dict]:
     a recorded clock is returned as it was."""
     out = []
     for c in contacts:
+        camera = any((meta.get(nm) or {}).get("camera_aligned_by") == ALIGNED_CAMERA
+                     for nm in c.get("signals") or [])
+        if camera:
+            out.append({**c, "aligned_by": ALIGNED_CAMERA})
+            continue
         by = next((m["aligned_by"] for nm in c.get("signals") or [] if (m := meta.get(nm) or {}).get("aligned_by")),
                   None)
         out.append({**c, "aligned_by": by} if by and not c.get("aligned_by") else c)

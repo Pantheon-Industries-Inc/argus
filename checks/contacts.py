@@ -71,8 +71,12 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
     shown = [cid for cid in by_id if cid in seen]
     frame_ms = 1000.0 / float(fps or 30.0)
     out = {"contacts": len(by_id), "checked": len(shown), "notes": []}
-    if placed:
-        out["placed_from_both_starts"] = placed
+    camera_placed = [cid for cid in placed if by_id[cid]["aligned_by"] == "assumed camera clock"]
+    start_placed = [cid for cid in placed if cid not in camera_placed]
+    if start_placed:
+        out["placed_from_both_starts"] = start_placed
+    if camera_placed:
+        out["placed_on_assumed_camera_clock"] = camera_placed
     if offsets:
         ms = np.array([o for _, _, o in offsets]) * 1000.0
         out["offset_ms"] = {"median": round(float(np.median(ms)), 1), "spread": round(float(np.std(ms)), 1),

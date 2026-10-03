@@ -132,8 +132,9 @@ def episode_seconds(ctx: dict, ep_dir: Path | None = None) -> float | None:
         return float(ctx["duration_s"])
     if ep_dir is not None and ctx.get("real_times") and (ep_dir / ctx["real_times"]).exists():
         import numpy as np
-        z = np.load(ep_dir / ctx["real_times"])
-        cam = next((k for k in ("exo", "left", "right") if k in z.files), None)
+        from prepare.camera_clock import load_times
+        z = load_times(ep_dir, ctx)
+        cam = next((k for k in ("exo", "left", "right") if k in z), None)
         if cam is not None and len(z[cam]) > 1:
             t = z[cam].astype(float)
             return float(t[-1] - t[0] + np.median(np.diff(t)))
