@@ -2779,3 +2779,23 @@ def test_the_episode_budget_holds_while_signals_are_read():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _the_episode_budget_holds_while_signals_are_read(Path(t))
+
+
+def test_a_signal_removed_or_replaced_gives_its_budget_back():
+    """A signal taken out of the signals (h5_state reads it as the state) or replaced under its name had stayed in the
+    running total, so a later signal could be summarised for room no longer used."""
+    import numpy as np
+    saved = f.SIGNAL_EPISODE_BYTES
+    f.SIGNAL_EPISODE_BYTES = 400_000                       # one 40 x 2000 float32 array (320 kB) fits, two do not
+    try:
+        out = f.Signals()
+        wide = lambda: np.random.default_rng(7).random((40, 2000)).astype(np.float32)
+        out.add("qpos", wide())
+        out.pop("qpos")
+        out.add("a", wide())
+        out.add("a", wide())                               # replaced under its name: counted once
+        del out["a"]
+        out.add("b", wide())
+    finally:
+        f.SIGNAL_EPISODE_BYTES = saved
+    assert out["b"].shape == (40, 2000) and not out.issues and out.bytes == 40 * 2000 * 4, (out.issues, out.bytes)

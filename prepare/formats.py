@@ -1112,6 +1112,7 @@ class Signals(dict):
         self.clocks: dict[str, np.ndarray] = {}      # per-frame clocks the recording keeps (write_signals)
         self.issues: list[dict] = []                 # problems with what was kept, as add_issue's entries
         self.bytes = 0                               # the kept signals' size as float32, for SIGNAL_EPISODE_BYTES
+        self._sizes: dict[str, int] = {}             # what keep counted for each name, given back when it leaves
 
     def fits(self, rows: int, values: int) -> bool:
         """Whether a signal of rows x values keeps the running total within SIGNAL_EPISODE_BYTES."""
@@ -1119,7 +1120,9 @@ class Signals(dict):
 
     def keep(self, name: str, a: np.ndarray, m: dict) -> None:
         """a kept under name with its meta m, as its summary per frame (summarise_rows, a data issue) when it would take
-        the running total past SIGNAL_EPISODE_BYTES."""
+        the running total past SIGNAL_EPISODE_BYTES. A signal kept under a name already held replaces it, and gives
+        its size back first."""
+        self._release(name)
         a = np.asarray(a)
         width = int(a.shape[1]) if a.ndim > 1 else 1
         if not self.fits(len(a), width) and width > len(SUMMARY_NAMES):
@@ -1128,9 +1131,23 @@ class Signals(dict):
             m.update(names=list(SUMMARY_NAMES), summary_of=width)
             self.issues.append(summary_issue(name, width))
             width = len(SUMMARY_NAMES)
-        self.bytes += len(a) * width * 4
+        self._sizes[name] = len(a) * width * 4
+        self.bytes += self._sizes[name]
         self[name] = a
         self.meta[name] = m
+
+    def _release(self, name: str) -> None:
+        """The size keep counted for name given back to the running total."""
+        self.bytes -= self._sizes.pop(name, 0)
+
+    def pop(self, name, *default):
+        """A signal taken out (h5_state reads it as the state) gives its size back to the running total."""
+        self._release(name)
+        return super().pop(name, *default)
+
+    def __delitem__(self, name) -> None:
+        self._release(name)
+        super().__delitem__(name)
 
     def add(self, name: str, a: np.ndarray, shape=None, names=None, source: str | None = None) -> None:
         m = {}
@@ -5802,9 +5819,9 @@ def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path],
     (clocked: capture times, an MCAP's log times, an HDF5 camera's clock) and the file's times are on one too and
     overlap the footage; when both are on a recorder's clock and the file covers none of the footage, it recorded
     something else and is listed as recorded outside the footage. Otherwise an own file is placed from both starts, an
-    alignment that is assumed (its signals
-    are marked so and never read as the arm state), while a shared file is listed on the episode with the reason: it
-    could be any of the folder's episodes' recording, and placing it from both starts on each would be a guess."""
+    alignment that is assumed (its signals are marked so and never read as the arm state), while a shared file is
+    listed on the episode with the reason: it could be any of the folder's episodes' recording, and placing it from
+    both starts on each would be a guess."""
     by_clock, assumed, unplaced = [], [], []
     on_clock = bool(clocked) and q is not None and recorder_clock(q)
     own = [Path(x) for x in item.get("state") or []]
