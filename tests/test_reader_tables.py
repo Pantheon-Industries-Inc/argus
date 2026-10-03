@@ -332,3 +332,67 @@ def test_episodes_under_the_minutes_are_all_taken(tmp_path):
         _clip(tmp_path / "up" / name / "top.mp4", 30)
     rep = f.convert(tmp_path / "up", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
     assert len(rep["episodes"]) == 2 and not rep["skipped"]
+
+
+# ---------------------------------------------------------------- a recorder's own logs, calibration and start up
+
+def _ros_mcap(path: Path, lead_s: float = 0.25) -> None:
+    from mcap.writer import Writer
+    with open(path, "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        chans = {}
+        for topic, schema in (("/rosout", "rcl_interfaces/msg/Log"), ("/diag", "diagnostic_msgs/msg/DiagnosticArray"),
+                              ("/cam/camera_info", "sensor_msgs/msg/CameraInfo"), ("/imu", "sensor_msgs/msg/Imu")):
+            sid = w.register_schema(name=schema, encoding="jsonschema", data=b"{}")
+            chans[topic] = w.register_channel(topic=topic, message_encoding="json", schema_id=sid)
+        for i in range(120):
+            s = i / 30.0
+            ns = int((T0 + s) * 1e9)
+            w.add_message(chans["/imu"], log_time=ns, publish_time=ns,
+                          data=json.dumps({"x": float(np.sin(i / 7)), "y": float(np.cos(i / 5))}).encode())
+            w.add_message(chans["/rosout"], log_time=ns, publish_time=ns,
+                          data=json.dumps({"level": 20 + i % 3, "line": 100 + i, "msg": "tick"}).encode())
+            w.add_message(chans["/diag"], log_time=ns, publish_time=ns,
+                          data=json.dumps({"status": [{"level": i % 2, "values": []}]}).encode())
+            if s >= lead_s:
+                w.add_message(chans["/cam/camera_info"], log_time=ns, publish_time=ns,
+                              data=json.dumps({"height": 480, "width": 640, "k": [600.0, 0, 320, 0, 600, 240, 0, 0, 1]})
+                              .encode())
+        w.finish()
+
+
+def test_ros_logs_and_diagnostics_are_bookkeeping_named_not_signals(tmp_path):
+    p = tmp_path / "rec.mcap"
+    _ros_mcap(p)
+    q = T0 + np.arange(120) / 30.0
+    out = f.mcap_signals([p], q)
+    assert not [k for k in out if k.startswith(("/rosout", "/diag"))]
+    assert any(k.startswith("/imu") for k in out) and any(k.startswith("/cam/camera_info") for k in out)
+    left = dict(out.left_out)
+    assert "log" in left["/rosout"] and "diagnostics" in left["/diag"]
+
+
+def test_camera_info_keeps_its_values_and_gets_no_gap_issue(tmp_path):
+    p = tmp_path / "rec.mcap"
+    _ros_mcap(p, lead_s=1.0)
+    q = T0 + np.arange(120) / 30.0
+    out = f.mcap_signals([p], q)
+    ctx = {"n_state_frames": 120, "fps": 30.0}
+    f.write_signals(tmp_path, ctx, out, t=q)
+    info = [s for s in ctx["signals"] if s["name"].startswith("/cam/camera_info")]
+    assert info
+    assert not [i for i in ctx.get("reader_issues", []) if str(i.get("signal", "")).startswith("/cam/camera_info")]
+
+
+def test_a_short_start_up_lead_is_not_a_gap_but_a_real_gap_is():
+    t = np.arange(120) / 30.0
+    a = np.ones((120, 1))
+    a[:7] = np.nan                                  # first reading at 0.23 s: the recorder starting up
+    assert f.signal_gaps("s", a, t) == []
+    a[60:75] = np.nan                               # half a second with no reading in the middle
+    got = f.signal_gaps("s", a, t)
+    assert [i["kind"] for i in got] == ["signal_gap"] and "15 of its 120" in got[0]["what"]
+    b = np.ones((120, 1))
+    b[-5:] = np.nan                                 # the last reading 0.17 s before the end
+    assert f.signal_gaps("s", b, t) == []

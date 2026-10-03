@@ -2564,13 +2564,17 @@ def test_signals_over_the_episode_budget_are_kept_as_summaries():
         _signals_over_the_episode_budget_are_kept_as_summaries(Path(t))
 
 
-def test_a_short_gap_at_the_start_of_a_signal_is_reported():
+def test_a_short_lead_at_the_start_of_a_signal_is_no_issue_and_a_short_gap_inside_it_is():
+    """A first reading within the edge slack (STATE_EDGE_SLACK_S) is a recorder starting up, as a camera's calibration
+    first sent 0.2 s in; three frames with no reading inside the signal are a gap."""
     import numpy as np
     a = np.ones((60, 2))
     a[:3] = np.nan
+    assert f.signal_gaps("force", a, np.arange(60) / 30) == []
+    a[30:33] = np.nan
     got = f.signal_gaps("force", a, np.arange(60) / 30)
-    assert got and got[0]["t0_s"] == 0.0 and "3 of its 60 frames" in got[0]["what"], got
-    assert "0.07 s" in got[0]["what"], got
+    assert got and got[0]["t0_s"] == 1.0 and "3 of its 60 frames" in got[0]["what"], got
+    assert "1.07 s" in got[0]["what"], got
 
 
 def test_a_short_channel_whose_name_says_time_is_a_clock_not_a_reading():

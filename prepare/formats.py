@@ -1145,6 +1145,7 @@ class Signals(dict):
         self.left_out: list[tuple[str, str]] = []
         self.clocks: dict[str, np.ndarray] = {}      # per-frame clocks the recording keeps (write_signals)
         self.issues: list[dict] = []                 # problems with what was kept, as add_issue's entries
+        self.no_gaps: set[str] = set()               # signals whose frames with no reading are no issue (write_signals)
         self.bytes = 0                               # the kept signals' size as float32, for SIGNAL_EPISODE_BYTES
         self._sizes: dict[str, int] = {}             # what keep counted for each name, given back when it leaves
 
@@ -1202,6 +1203,7 @@ def merge_signals(into: Signals, more: Signals) -> Signals:
     into.left_out += list(getattr(more, "left_out", []) or [])
     into.clocks.update(getattr(more, "clocks", {}) or {})
     into.issues += list(getattr(more, "issues", []) or [])
+    into.no_gaps |= set(getattr(more, "no_gaps", ()) or ())
     return into
 
 
@@ -1442,7 +1444,9 @@ def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
     """The data issues of a kept signal's frames with no reading (a row with no finite value), in seconds of the
     episode (t, its frames' times): before its first reading or after its last one, when longer than
     STATE_EDGE_SLACK_S, a signal_partial_span each (a sensor started late or stopped early), and every other frame
-    without a reading counted in one signal_gap with its longest run."""
+    without a reading counted in one signal_gap with its longest run. A lead or a tail within STATE_EDGE_SLACK_S, the
+    slack a state is allowed at its edges (fill_rows), is a recorder starting up or stopping, no issue: a camera's
+    calibration first sent 0.2 s in had made a gap issue of every value it holds."""
     none = ~np.isfinite(np.asarray(a)).any(axis=1)
     n = len(none)
     if not none.any() or none.all() or len(t) != n:
@@ -1455,12 +1459,12 @@ def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
         out.append({"kind": "signal_partial_span", "signal": name, "t0_s": 0.0, "t1_s": float(t[first]),
                     "what": f"{name} has no reading before {t[first]:.1f} s, so it is missing over the start of the "
                             "footage"})
-        none[:first] = False
+    none[:first] = False
     if last < n - 1 and t[-1] - t[last] > STATE_EDGE_SLACK_S:
         out.append({"kind": "signal_partial_span", "signal": name, "t0_s": float(t[last]), "t1_s": float(t[-1]),
                     "what": f"{name} has no reading after {t[last]:.1f} s, so it is missing over the end of the "
                             "footage"})
-        none[last + 1:] = False
+    none[last + 1:] = False
     if none.any():
         edges = np.diff(np.concatenate([[0], none.astype(np.int8), [0]]))
         runs = list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1))
@@ -1520,7 +1524,7 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         m.pop("shape", None)
         m.update(names=list(SUMMARY_NAMES), summary_of=width)
         add_issue(ctx, **summary_issue(k, width))
-    stored = {}
+    stored, quiet = {}, set(getattr(signals, "no_gaps", ()) or ())
     for k, v in keep.items():
         # an inf is never stored: it is a missing reading (NaN), as each reader reads it, and a data issue here when
         # the reader had not already made it NaN, so no range shown for the signal reads "- to -"
@@ -1534,6 +1538,8 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
                                                 f"{len(rows)} frame{'s' if len(rows) != 1 else ''}; read as missing",
                       signal=k, t0_s=float(t[rows[0]] - t[0]), t1_s=float(t[rows[-1]] - t[0]))
         stored[k] = a
+        if k in quiet:
+            continue
         for i in signal_gaps(k, a.reshape(n, -1), t):
             add_issue(ctx, **i)
     np.savez(ep / "signals.npz", **{f"s{i}": a for i, a in enumerate(stored.values())})
@@ -4955,6 +4961,23 @@ def _multiplexed(r: dict) -> int | None:
     return None
 
 
+# A recorder's own log and health reports (ROS's /rosout and /diagnostics, by message type or by name) are its
+# bookkeeping, not a reading of the task: each is named among the signals left out with BOOKKEEPING_NOTE, never shown
+# as a signal and never dropped without a word.
+BOOKKEEPING_SCHEMA = re.compile(r"(^|[/.])(msg/)?Log$|rosgraph_msgs|rcl_interfaces|diagnostic_msgs", re.I)
+BOOKKEEPING_TOPIC = re.compile(r"^/?(rosout(_agg)?|diagnostics(_agg|_toplevel_state)?)$", re.I)
+BOOKKEEPING_NOTE = "the recorder's own log or diagnostics, bookkeeping rather than a reading"
+# A camera's calibration (sensor_msgs CameraInfo) repeats one set of values: it stays a signal, listed with its
+# values, and a stretch with no message of it is no data issue, since nothing it says changes over the episode.
+CALIBRATION_SCHEMA = re.compile(r"CameraInfo$", re.I)
+CALIBRATION_TOPIC = re.compile(r"camera_info$", re.I)
+
+
+def bookkeeping_why(topic: str, schema: str) -> str | None:
+    """BOOKKEEPING_NOTE for a log or diagnostics topic, by its message type or its name; None for any other."""
+    return BOOKKEEPING_NOTE if BOOKKEEPING_SCHEMA.search(schema or "") or BOOKKEEPING_TOPIC.search(topic) else None
+
+
 def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> Signals:
     """{name: (len(q), values) array} of every numeric field these MCAP files record on channels that are not cameras
     or text, sampled at the recorded message nearest each anchor frame time q (seconds, the files' log-time clock).
@@ -4972,9 +4995,14 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     q = np.asarray(q, dtype=np.float64)
     rows: dict[tuple, dict] = {}
     sets: dict[tuple, NameSets] = {}      # (topic, field): its name sets (name_group)
+    books: dict[str, str] = {}            # a recorder's own log and diagnostics topics, named and not read
+    kinds: dict[str, str] = {}            # each topic's message type
     for p in paths:
-        chans = [t for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)
-                 and not (t in used and used[t] is None)]
+        everything = mcap_channels(p)
+        books.update({t: bookkeeping_why(t, s) for t, s in everything if bookkeeping_why(t, s)})
+        kinds.update(everything)
+        chans = [t for t, s in everything if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)
+                 and not (t in used and used[t] is None) and t not in books]
         decs = {}
         with open(p, "rb") as fh:
             try:
@@ -5023,6 +5051,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             except Exception:
                 pass                                  # a cut-off file: the messages before the cut are kept
     out = Signals()
+    out.left_out += sorted(books.items())
     named, by_field = {}, {}
     for (topic, field, i), r in rows.items():
         by_field.setdefault((topic, field), {})[i] = r
@@ -5100,6 +5129,8 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
         a, var, gaps = place_on_frames(t, v, q)
         out.add(name, a, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
         out.meta[name]["rate_hz"] = round(rate, 2)
+        if CALIBRATION_SCHEMA.search(kinds.get(r["topic"], "")) or CALIBRATION_TOPIC.search(r["topic"]):
+            out.no_gaps.add(name)
         if r.get("kind"):
             out.meta[name].update(r["kind"])
         if gaps:
