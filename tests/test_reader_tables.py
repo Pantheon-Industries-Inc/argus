@@ -210,6 +210,20 @@ def test_a_sensor_file_copied_over_at_the_same_size_and_time_is_read_again(tmp_p
     assert f.sensor_times(p)[0] - T0 == pytest.approx(100.0, abs=0.01)
 
 
+def test_an_indexed_mcap_damaged_inside_is_flagged_with_the_span_read(tmp_path):
+    p = tmp_path / "yam_left.mcap"
+    _arm_mcap(p)
+    b = bytearray(p.read_bytes())
+    b[len(b) // 2:len(b) // 2 + 400] = b"\xff" * 400
+    p.write_bytes(bytes(b))
+    assert not f.sensor_cut(p)
+    out = f.mcap_signals([p], T0 + np.arange(120) / 30.0)
+    hit = _issues(out, "mcap_file_damaged")
+    assert len(hit) == 1 and "yam_left.mcap" in hit[0]["what"]
+    assert hit[0]["t0_s"] == 0.0 and 0.5 < hit[0]["t1_s"] < 3.9
+    assert f"{hit[0]['t1_s']:.1f} s of the footage" in hit[0]["what"]
+
+
 # ---------------------------------------------------------------- a damaged archive
 
 _RNG = np.random.default_rng(0)

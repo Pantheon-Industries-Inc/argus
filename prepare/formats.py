@@ -4532,20 +4532,43 @@ def _mcap_stream(path: Path, topics: set | None = None):
             return                  # the cut: everything before it has been yielded
 
 
-def mcap_messages(fh, path: Path, topics):
+def mcap_messages(fh, path: Path, topics, damaged: list | None = None):
     """(schema, channel, message) of these topics in an open MCAP file fh (at path): by its index in log time order
     when it has a summary that can be read, and record by record otherwise (_mcap_stream), a file cut short, whose
     messages before the cut are then all it holds: its index had made every reader of it throw, so its arms and
-    signals were lost."""
+    signals were lost. An indexed file damaged inside (a chunk that does not read, its summary whole) gives the
+    messages before the damage, and (its path, the first and last log time read in seconds, None when none was) is
+    appended to damaged, so the reader can say so: the file is whole by every other sign (sensor_cut)."""
     from mcap.reader import make_reader
     try:
         indexed = make_reader(fh).get_summary() is not None
     except Exception:
         indexed = False
     fh.seek(0)
-    if indexed:
-        return make_reader(fh).iter_messages(topics=sorted(topics), log_time_order=True)
-    return _mcap_stream(path, set(topics))
+    if not indexed:
+        yield from _mcap_stream(path, set(topics))
+        return
+    first = last = None
+    try:
+        for schema, ch, msg in make_reader(fh).iter_messages(topics=sorted(topics), log_time_order=True):
+            first, last = first if first is not None else msg.log_time / 1e9, msg.log_time / 1e9
+            yield schema, ch, msg
+    except Exception:
+        if damaged is not None:
+            damaged.append((Path(path), first, last))
+
+
+def damaged_issue(p: Path, t0: float | None, t1: float | None, zero: float) -> dict:
+    """The data issue of an MCAP file whose messages stop at damage inside it (mcap_messages), with the span its
+    messages read cover in seconds of the footage (zero its first frame on the file's clock; a message before the
+    footage starts it at 0)."""
+    what = f"{Path(p).name} is damaged inside, though its index is whole"
+    if t0 is None:
+        return {"kind": "mcap_file_damaged", "what": what + ", and none of its messages could be read"}
+    a, b = max(t0 - zero, 0.0), max(t1 - zero, 0.0)
+    return {"kind": "mcap_file_damaged", "t0_s": a, "t1_s": b,
+            "what": what + f", so only the messages before the damage were read; they cover {a:.1f} s to {b:.1f} s "
+                           "of the footage"}
 
 
 def _mcap_channels_by_scan(path: Path) -> list[tuple[str, str]]:
@@ -5098,6 +5121,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     sets: dict[tuple, NameSets] = {}      # (topic, field): its name sets (name_group)
     books: dict[str, str] = {}            # a recorder's own log and diagnostics topics, named and not read
     kinds: dict[str, str] = {}            # each topic's message type
+    damaged: list = []                    # files whose index is whole but whose messages stop at damage (mcap_messages)
     for p in paths:
         everything = mcap_channels(p)
         books.update({t: bookkeeping_why(t, s) for t, s in everything if bookkeeping_why(t, s)})
@@ -5107,7 +5131,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
         decs = {}
         with open(p, "rb") as fh:
             try:
-                for schema, ch, msg in mcap_messages(fh, p, chans):
+                for schema, ch, msg in mcap_messages(fh, p, chans, damaged):
                     if ch.id not in decs:
                         decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
                     try:
@@ -5145,6 +5169,8 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                 pass                                  # a cut-off file: the messages before the cut are kept
     out = Signals()
     out.left_out += sorted(books.items())
+    for p, t0, t1 in damaged:
+        out.issues.append(damaged_issue(p, t0, t1, float(q[0]) if len(q) else 0.0))
     named, by_field = {}, {}
     for (topic, field, i), r in rows.items():
         by_field.setdefault((topic, field), {})[i] = r
