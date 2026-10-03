@@ -3563,6 +3563,40 @@ def name_group(groups: NameSets, names, vals: list) -> tuple[int | None, list]:
     return i, vals
 
 
+def merge_unnamed(groups: NameSets, rows: dict, lists: tuple) -> tuple[dict, int]:
+    """({group index: row} of the name sets read, how many sets the channel or field has once its unnamed rows are
+    placed). rows {group index: {"t": times, and each of lists: values}} come from name_group. A message without names
+    is read as the reader read it before name sets: its rows join the only named set of their width when there is
+    exactly one (a JointState with an empty name list for its first second), and are left with that set when the set
+    is read elsewhere (the state). Otherwise the unnamed rows of the first unnamed message's width are one set and
+    rows of any other width are dropped, counted in that set's "dropped" so a reason given for it can say so."""
+    named: dict = {}
+    for i, (gn, w) in enumerate(groups):
+        if gn is not None:
+            named.setdefault(w, []).append(i)
+    home = lambda i: named[groups[i][1]][0] if len(named.get(groups[i][1], [])) == 1 else None
+    rest = [i for i in rows if groups[i][0] is None and home(i) is None]
+    keep = min(rest, key=lambda i: rows[i]["t"][0]) if rest else None
+    out = {i: r for i, r in rows.items() if groups[i][0] is not None or i == keep}
+    for i in sorted(rows):
+        if groups[i][0] is not None or i == keep:
+            continue
+        h, r = home(i), rows[i]
+        if h is None:
+            out[keep]["dropped"] = out[keep].get("dropped", 0) + len(r["t"])
+        elif h in out:
+            m = out[h]
+            order = np.argsort(np.concatenate([m["t"], r["t"]]), kind="stable")
+            for k in ("t",) + lists:
+                both = list(m[k]) + list(r[k])
+                m[k] = [both[j] for j in order]
+            if "set" in m:
+                m["set"] = m["set"] or r["set"]
+            if "fields" in m:
+                m["fields"] = m["fields"] | r["fields"]
+    return out, sum(1 for gn, _ in groups if gn is not None) + (keep is not None)
+
+
 def group_label(group: tuple) -> str:
     """How a name set (name_group) is told apart from the others on its channel: its names, the first two and a count
     past three, or its width when it names none."""
@@ -3638,15 +3672,18 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
     for topic, c in found.items():
         if c["groups"].overflow:
             continue                                  # mcap_signals names it as left out, with the reason
-        groups = _join_gripper([{"t": np.asarray(r["t"]), "pos": np.asarray(r["pos"], dtype=np.float64),
-                                 "names": c["groups"][i][0], "fields": r["fields"],
-                                 "label": group_label(c["groups"][i])} for i, r in enumerate(c["rows"])])
+        rows, n_sets = merge_unnamed(c["groups"], dict(enumerate(c["rows"])), ("pos",))
+        read = [{"t": np.asarray(r["t"]), "pos": np.asarray(r["pos"], dtype=np.float64),
+                 "names": c["groups"][i][0], "fields": r["fields"], "label": group_label(c["groups"][i])}
+                for i, r in sorted(rows.items())]
+        groups = _join_gripper(read)
+        apart = len(groups) == len(read) and n_sets > 1
         for g in groups:
             if len(g["t"]) > 1:
                 s = {"t": g["t"], "pos": g["pos"], "names": g["names"], "topic": topic}
-                if len(groups) > 1:
+                if apart:
                     s["fields"] = g["fields"]
-                out[topic + (g["label"] if len(groups) > 1 else "")] = s
+                out[topic + (g["label"] if apart else "")] = s
     return out
 
 
@@ -3917,15 +3954,18 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             except Exception:
                 pass                                  # a cut-off file: the messages before the cut are kept
     out = Signals()
-    named = {}
+    named, by_field = {}, {}
     for (topic, field, i), r in rows.items():
+        by_field.setdefault((topic, field), {})[i] = r
+    for (topic, field), field_rows in by_field.items():
         name, groups = f"{topic} {field}".strip(), sets[(topic, field)]
         if groups.overflow:
-            if name not in [x for x, _ in out.left_out]:
-                out.left_out.append((name, f"its messages name its values in more than {NAME_SETS_MAX} different "
-                                           "ways, so no value is one reading over time"))
+            out.left_out.append((name, f"its messages name its values in more than {NAME_SETS_MAX} different "
+                                       "ways, so no value is one reading over time"))
             continue
-        named[name + (group_label(groups[i]) if len(groups) > 1 else "")] = r
+        field_rows, n_sets = merge_unnamed(groups, field_rows, ("v",))
+        for i, r in sorted(field_rows.items()):
+            named[name + (group_label(groups[i]) if n_sets > 1 else "")] = r
     rows = named
     # bookkeeping values (a counter, a device clock) leave the row; a row that names its sensor per message is split
 
@@ -3971,16 +4011,22 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
         t = np.asarray(r["t"])
         if not r["set"] or not r["d"] or span <= 0:
             continue
+        # rows of another width than its first message's were dropped (merge_unnamed): a reason says so
+        some = (f"only {len(t)} of its {len(t) + r['dropped']} messages carry the {r['d']} values of its first "
+                "message, ") if r.get("dropped") else ""
         if len(t) < 2 or len(t) / span < SIGNAL_MIN_HZ:
-            sparse.append(name)               # a setting, a calibration or a status report, not a per-frame record
+            if some:
+                out.left_out.append((name, f"{some}fewer than {SIGNAL_MIN_HZ:g} a second"))
+            else:
+                sparse.append(name)           # a setting, a calibration or a status report, not a per-frame record
             continue
         if r["d"] > SIGNAL_MAX_VALUES:
             out.left_out.append((name, f"{r['d']} values per message, more than the {SIGNAL_MAX_VALUES} a signal "
                                        "holds"))
             continue
         if t[0] > q[0] + STATE_EDGE_SLACK_S or t[-1] < q[-1] - STATE_EDGE_SLACK_S:
-            out.left_out.append((name, f"recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, not over the whole "
-                                       "footage"))
+            out.left_out.append((name, f"{some}recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, not over "
+                                       "the whole footage"))
             continue
         v = np.asarray(r["v"], dtype=np.float64)
         if not np.isfinite(v).all():
@@ -4063,13 +4109,21 @@ def _topic(streams: dict, key: str) -> str:
     return streams[key].get("topic", key)
 
 
+def _arm_rank(streams: dict, key: str) -> tuple:
+    # six joints and a gripper first, then the widest; within a channel, the name set that fits the layout, a named one
+    # over an unnamed one, and the one with the most readings, never the first label
+    s = streams[key]
+    dims, names = s["pos"].shape[1], s.get("names")
+    fits = names is not None and state_layout(dims, "teleop_arms", names)[0] == "joints"
+    return dims != JOINT_DIMS, -dims, _topic(streams, key), not fits, names is None, -len(s["t"]), key
+
+
 def arm_streams(streams: dict, role: bool) -> dict:
     """{side: key} of the arm streams joint_state reads, the commands when role: per side its channel names (left,
     right, or "only"), a stream of six joints and a gripper when there is one (an arm can also record other vectors),
     else the widest, so a channel's arm is chosen over the gripper published apart from it."""
     by_side = {}
-    dims = lambda t: streams[t]["pos"].shape[1]
-    for t in sorted(streams, key=lambda t: (dims(t) != JOINT_DIMS, -dims(t), t)):
+    for t in sorted(streams, key=lambda t: _arm_rank(streams, t)):
         if bool(ACTION_TOPIC.search(_topic(streams, t))) == role:
             by_side.setdefault(side_of(_topic(streams, t)) or "only", t)
     return by_side

@@ -690,6 +690,60 @@ def _a_joint_states_rows_follow_their_own_names(tmp_path):
                                                                "different ways, so no value is one reading over time")]
 
 
+def _a_message_without_names_reads_with_the_named_set_of_its_width(tmp_path):
+    """A JointState whose name list is empty for its first second (a driver before it starts), or on every tenth
+    message, had its unnamed rows made a group of their own, which sorted first by its label and lost the state or
+    built it from the unnamed tenth. A message without names joins the only named set of its width, as the reader
+    read it before name sets. The arm is the named set that fits the layout with the most readings, never the first
+    label. An unnamed field of varying width is read as before name sets, by its first message's width, and when that
+    leaves it out the reason says so."""
+    import numpy as np
+    t0 = 1_790_000_000.0
+    names = [f"joint{i}" for i in range(1, 7)] + ["gripper"]
+    tt = np.arange(0, 10.0, 0.01)
+    q = np.arange(0, 10, 1 / 30)
+    truth = np.stack([np.sin(tt + j) for j in range(7)], axis=1)
+    ref = np.stack([np.interp(q, tt, truth[:, j]) for j in range(7)], axis=1)
+    for label, unnamed in (("early", tt < 1.0), ("tenth", np.arange(len(tt)) % 10 == 0)):
+        path = tmp_path / f"{label}.mcap"
+        _json_mcap(path, {"/left_arm/joint_states": [(s, {"name": [] if unnamed[k] else names,
+                                                          "position": truth[k].tolist()})
+                                                     for k, s in enumerate(tt)]}, t0)
+        st = f.mcap_joint_streams([path])
+        assert list(st) == ["/left_arm/joint_states"] and st["/left_arm/joint_states"]["pos"].shape == (1000, 7)
+        state, _, note = f.joint_state(st, t0 + q)
+        assert note is None and np.abs(state - ref).max() < 1e-6, (label, note)
+        sig = f.mcap_signals([path], t0 + q, f.state_fields(st, state, None))
+        assert not list(sig) and not sig.left_out, (label, list(sig), sig.left_out)
+    # two named sets that both fit the layout: the one with the most readings is the arm, whatever its label
+    path = tmp_path / "two_sets.mcap"
+    other = [f"a{i}" for i in range(1, 7)] + ["gripper"]
+    _json_mcap(path, {"/left_arm/joint_states": [(s, {"name": names, "position": truth[k].tolist()})
+                                                 for k, s in enumerate(tt)]
+                      + [(s + 0.001, {"name": other, "position": [0.0] * 7}) for s in tt[::10]]}, t0)
+    st = f.mcap_joint_streams([path])
+    state, _, note = f.joint_state(st, t0 + q)
+    assert note is None and np.abs(state - ref).max() < 1e-6
+    # an unnamed field of varying width keeps its first message's width, as before name sets
+    path = tmp_path / "widths.mcap"
+    _json_mcap(path, {"/contacts": [(s, {"pressures": [1.0 + np.sin(s)] * (5 if k % 7 == 3 else 3)})
+                                    for k, s in enumerate(tt)]}, t0)
+    sig = f.mcap_signals([path], t0 + q)
+    assert list(sig) == ["/contacts pressures"] and sig["/contacts pressures"].shape == (300, 3) and not sig.left_out
+    path = tmp_path / "widths_rare.mcap"
+    _json_mcap(path, {"/contacts": [(s, {"pressures": [1.0 + np.sin(s)] * (9 if k % 333 == 0 else 10)})
+                                    for k, s in enumerate(tt)]}, t0)
+    sig = f.mcap_signals([path], t0 + q)
+    assert not sig and sig.left_out == [("/contacts pressures", "only 4 of its 1000 messages carry the 9 values of "
+                                         "its first message, fewer than 1 a second")], sig.left_out
+
+
+def test_a_message_without_names_reads_with_the_named_set_of_its_width():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_message_without_names_reads_with_the_named_set_of_its_width(Path(t))
+
+
 def test_a_field_whose_names_change_every_message_is_grouped_in_linear_time():
     """Each row was compared with every name set seen, so a detector's 7200 messages of new labels took 1.6 s where
     the reader took 0.06 s. Name sets are looked up by set, and a field stops being grouped once it passes
