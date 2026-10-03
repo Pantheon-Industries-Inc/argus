@@ -1249,6 +1249,16 @@ def test_a_reply_that_breaks_the_format_is_told_in_plain_words_once():
     assert what({}) == {"model_reply_off_schema": (
         "The model's reply has no timeline, so this episode has no steps. It leaves out the task summary, key events, "
         "data issues and operator mistakes, and gives nothing else.")}
+    # a field given as null is not given, and the timeline is never among what it gives
+    assert what({"timeline": None, "task_summary": "x", "key_events": [], "data_issues": None,
+                 "operator_mistakes": []}) == {"model_reply_off_schema": (
+        "The model's reply has no timeline, so this episode has no steps. It leaves out the data issues, and gives "
+        "only the key events, operator mistakes and task summary; what it gives is shown.")}
+    # every field given in the wrong form: none of it is in the format, which the other issue names
+    w = what({"timeline": {"a": 1}, "task_summary": ["a"], "key_events": "x", "data_issues": 3,
+              "operator_mistakes": {}})
+    assert w["model_reply_off_schema"] == ("The model's reply gives its timeline as an object, not a list, so this "
+                                           "episode has no steps. Nothing else it gives keeps to the output format.")
     assert what({"timeline": {"a": 1}, "task_summary": "x", "key_events": [], "data_issues": [],
                  "operator_mistakes": []}) == {"model_reply_off_schema": (
         "The model's reply gives its timeline as an object, not a list, so this episode has no steps. It gives only "
@@ -1261,7 +1271,10 @@ def test_a_reply_that_breaks_the_format_is_told_in_plain_words_once():
                           "1 row of the key events is"),
                          ({**good, "key_events": ["a", "b"], "tasks": "pour"},
                           "2 rows of the key events and the tasks (text, not a list) are"),
-                         ({**good, "scene": {"objects": ["cup"]}}, "1 row of the scene objects is")):
+                         ({**good, "scene": {"objects": ["cup"]}}, "1 row of the scene objects is"),
+                         ({**good, "contacts_missing": "none"}, "the missing contacts (text, not a list) are"),
+                         ({**good, "recovery": {}}, "the recovery (an object, not a list) is"),
+                         ({**good, "scene_graph": 3}, "the scene graph (a number, not a list) is")):
         assert what(labels) == {"model_reply_fields_dropped": lead + said + tail}, labels
     fam = Families()
     assert fam.reader_family("model_reply_off_schema") == "label-format"
@@ -1402,5 +1415,25 @@ def test_steps_past_the_episode_end_are_kept_and_flagged(tmp_path):
     assert iss["family"] == "label-times" and Families().list_of("label-times") == "labelling"
     assert ("1 of its 6 steps lies past the episode's end at 10.0 s, 1 starts before the episode does, 1 ends before "
             "it starts and 1 of its 3 key events lies outside the episode") in iss["what"]
+    assert iss["what"].endswith("They are kept as given, and the timeline is drawn to the episode's length with "
+                                "the times outside it at its edge.")
+
+
+def test_times_that_fit_the_episode_but_not_their_order_or_part_are_never_said_to_be_drawn_at_its_edge():
+    """A step that ends before it starts, and a part's time outside its own part but inside the episode, were said
+    to be drawn at the episode's edge, which they are not; parts were listed with commas that ran into the commas of
+    their spans; a length that is not a number crashed nothing but judged every time against it."""
+    from board.build import steps_outside
+    d = {"duration_s": 10.0, "event_labels": [{"t_s": 5.0, "end_s": 2.0}], "key_events": []}
+    (iss,) = steps_outside(d)
+    assert iss["what"] == ("The model's timeline does not fit the episode: 1 ends before it starts. They are kept as "
+                           "given.")
+    r = {"stitched": {"outside_part": [{"part": 2, "t0_s": 3.0, "t1_s": 6.0, "steps": 1},
+                                       {"part": 3, "t0_s": 6.0, "t1_s": 9.0, "steps": 2, "key_events": 1}]}}
+    (iss,) = steps_outside({"duration_s": 10.0, "event_labels": [], "key_events": []}, r)
+    assert iss["what"] == ("The model's timeline does not fit the episode: 1 step of part 2 lies outside that part's "
+                           "footage, from 3.0 s to 6.0 s; and 2 steps and 1 key event of part 3 lie outside that "
+                           "part's footage, from 6.0 s to 9.0 s. They are kept as given.")
+    assert steps_outside({"duration_s": float("nan"), "event_labels": [{"t_s": 50.0}], "key_events": []}) == []
     page = (REPO / "board" / "serve.py").read_text()
     assert "duration = d.duration_s > 0 && !d.duration_estimated ? d.duration_s" in page

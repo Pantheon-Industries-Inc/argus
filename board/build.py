@@ -94,6 +94,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -292,9 +293,14 @@ def off_schema(result: dict) -> list[dict]:
         lead = ("The model's reply has no timeline" if given is None else
                 f"The model's reply gives its timeline as {json_kind(given)}, not a list")
         missing = [field_words(k) for k in SCHEMA_KEYS if k != "timeline" and raw.get(k) is None]
-        gave = sorted(field_words(k) for k in labels if not str(k).startswith("_"))
-        said = (f"It leaves out the {and_list(missing)}, and " if missing else "It ") + (
-            f"gives only the {and_list(gave)}; what it gives is shown." if gave else "gives nothing else.")
+        # what it gives in the output format: a field given as null is not given, and the timeline is named above
+        gave = sorted(field_words(k) for k, v in labels.items()
+                      if not str(k).startswith("_") and k != "timeline" and v is not None)
+        wrong = [x for x in dropped if "row" not in x and x.get("field") != "timeline"]
+        rest = (f"gives only the {and_list(gave)}; what it gives is shown." if gave else
+                "nothing else it gives keeps to the output format." if wrong else "gives nothing else.")
+        said = f"It leaves out the {and_list(missing)}, and {rest}" if missing else (
+            f"It {rest}" if gave or not wrong else rest[0].upper() + rest[1:])
         out.append({"kind": "model_reply_off_schema", "what": f"{lead}, so this episode has no steps. {said}"})
         # the timeline is named there once, never again among the fields left out
         dropped = [x for x in dropped if x.get("field") != "timeline" or "row" in x]
@@ -312,14 +318,15 @@ def steps_outside(d: dict, result: dict | None = None) -> list[dict]:
     they start, and how many key events lie outside it, and for a long recording labelled in parts (result, its
     stitched record) how many steps and key events of each part lie outside that part's own footage, which the stitch
     put in a neighbouring part's (label/pieces.py outside_part). They are kept as the model gave them; the page draws
-    the timeline to the episode's length with each at its edge. A time within STEP_SLACK_S of an edge is a rounding.
-    The episode's edges are judged only when its length is known (not estimated)."""
+    the timeline to the episode's length with each time outside it at its edge, which the sentence says only when there
+    is one. A time within STEP_SLACK_S of an edge is a rounding. The episode's edges are judged only when its length
+    is a known number (not estimated)."""
     from label.episode import STEP_SLACK_S
     dur = d.get("duration_s")
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
     one = lambda xs, a, b: a if len(xs) == 1 else b
-    said = []
-    if dur and not d.get("duration_estimated"):
+    said, edge, parts = [], False, []
+    if num(dur) and math.isfinite(dur) and dur > 0 and not d.get("duration_estimated"):
         lo, hi = -STEP_SLACK_S, dur + STEP_SLACK_S
         steps = [e for e in d.get("event_labels") or [] if isinstance(e, dict)]
         keys = [k for k in d.get("key_events") or [] if isinstance(k, dict)]
@@ -333,6 +340,7 @@ def steps_outside(d: dict, result: dict | None = None) -> list[dict]:
                 f"{len(back)} {one(back, 'ends before it starts', 'end before they start')}" if back else "",
                 f"{len(stray)} of its {len(keys)} key events {one(stray, 'lies', 'lie')} outside the episode"
                 if stray else ""]
+        edge = bool(past or early or stray)
     st = (result or {}).get("stitched") if isinstance((result or {}).get("stitched"), dict) else {}
     for p in st.get("outside_part") or []:
         if not isinstance(p, dict) or not (num(p.get("t0_s")) and num(p.get("t1_s"))):
@@ -342,15 +350,18 @@ def steps_outside(d: dict, result: dict | None = None) -> list[dict]:
                 if k else ""]
         what = [x for x in what if x]
         if what:
-            said.append(f"{' and '.join(what)} of part {p.get('part')} {'lies' if n + k == 1 else 'lie'} outside that "
-                        f"part's footage, from {p['t0_s']:.1f} s to {p['t1_s']:.1f} s")
-    said = [x for x in said if x]
+            parts.append(f"{' and '.join(what)} of part {p.get('part')} {'lies' if n + k == 1 else 'lie'} outside that "
+                         f"part's footage, from {p['t0_s']:.1f} s to {p['t1_s']:.1f} s")
+    said = [x for x in said if x] + parts
     if not said:
         return []
+    # a part's span holds commas, so a list with one is told with semicolons
+    listed = (and_list(said) if not parts else said[0] if len(said) == 1
+              else "; ".join(said[:-1]) + f"; and {said[-1]}")
     return [{"kind": "model_steps_outside_episode",
-             "what": "The model's timeline does not fit the episode: "
-                     + (", ".join(said[:-1]) + " and " if len(said) > 1 else "") + said[-1] + ". They are kept as "
-                     "given, and the timeline is drawn to the episode's length with them at its edge."}]
+             "what": f"The model's timeline does not fit the episode: {listed}. They are kept as given"
+                     + (", and the timeline is drawn to the episode's length with the times outside it at its edge."
+                        if edge else ".")}]
 
 
 def reader_issues(ctx: dict, result: dict | None = None) -> list[dict]:

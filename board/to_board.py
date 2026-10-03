@@ -92,10 +92,17 @@ def typed(result: dict) -> tuple[dict, list[dict]]:
     return labels, [x for x in labels.pop("_dropped", None) or [] if isinstance(x, dict)]
 
 
+# the fields of the output format whose plain words are plural (the key events are, the timeline is), and the fields
+# whose plain words are not their own words with spaces
+PLURAL_FIELDS = frozenset(("key_events", "state_changes", "data_issues", "operator_mistakes", "tasks", "contacts",
+                           "contacts_missing", "instruction_variants", "scene.objects"))
+FIELD_WORDS = {"contacts_missing": "missing contacts"}
+
+
 def field_words(field: str) -> str:
     """A field of the output format in plain words for the page: key_events is "key events", scene.objects is
-    "scene objects"."""
-    return str(field).replace("_", " ").replace(".", " ")
+    "scene objects", contacts_missing is "missing contacts"."""
+    return FIELD_WORDS.get(str(field)) or str(field).replace("_", " ").replace(".", " ")
 
 
 def and_list(items: list[str]) -> str:
@@ -106,7 +113,7 @@ def and_list(items: list[str]) -> str:
 def off_schema_text(dropped: list[dict]) -> str | None:
     """What of a parsed reply the board leaves out for breaking the output format (typed's dropped), as the subject and
     verb of a sentence, or None when nothing was: "2 rows of the key events and the task summary (a list, not text)
-    are". One field takes the verb its plain words take (the tasks are, the timeline is)."""
+    are". One field takes the verb its own number takes (PLURAL_FIELDS: the tasks are, the timeline is)."""
     rows, whole = {}, []
     for x in dropped:
         if "row" in x:
@@ -122,7 +129,7 @@ def off_schema_text(dropped: list[dict]) -> str | None:
     elif rows:
         verb = "is" if next(iter(rows.values())) == 1 else "are"
     else:
-        verb = "are" if field_words(whole[0]["field"]).endswith("s") else "is"
+        verb = "are" if whole[0]["field"] in PLURAL_FIELDS else "is"
     return f"{and_list(each)} {verb}"
 
 
