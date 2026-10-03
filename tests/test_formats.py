@@ -942,6 +942,15 @@ def test_a_long_gap_in_an_arms_readings_is_not_drawn_as_motion():
     state, action, note = f.joint_state({"/left/joint_state": streams["/left/joint_state"],
                                          "/right/joint_state": {"t": t, "pos": pos}, **lead}, q)
     assert state is not None and action is None and note is None
+    # a gap is measured inside the footage: one latched message 3 s before the first frame, then readings from 0.2 s
+    late = np.concatenate([[-3.0], np.arange(0.2, 10.05, 0.01)])
+    rows = np.stack([np.sin(late + j) for j in range(7)], axis=1)
+    state, _, note = f.joint_state({"/left/joint_state": {"t": late, "pos": rows},
+                                    "/right/joint_state": {"t": t, "pos": pos}}, q)
+    assert note is None and state.shape == (300, 14), note
+    for first, want in ((0.3, None), (0.8, (0.0, 0.8))):
+        tt = np.concatenate([[-3.0], np.arange(first, 10.0, 0.01)])
+        assert f.fill_rows(q, tt, np.zeros((len(tt), 1)))[1] == want, first
 
 
 def _frame_times_read_relative_millisecond_stamps_as_milliseconds(tmp_path):
