@@ -3046,6 +3046,32 @@ def test_a_take_number_is_read_by_its_value():
         _a_take_number_is_read_by_its_value(Path(t))
 
 
+def _a_take_word_is_learned_from_separated_or_glued_episode_names(tmp_path):
+    """A take word before a separate number had not been learned, so demo1_meta.json was shared beside demo_1
+    and demo_2. Both spellings identify the numbered take, including a take that was not uploaded."""
+    for word in ("demo", "seq", "sequence", "clip", "part", "seg", "segment", "shot", "rec", "recording",
+                 "session", "chunk"):
+        for sep in ("_", "-", "", "."):
+            videos = [f"d/{c}_{word}{sep}{i}.mp4" for i in (1, 2) for c in ("top", "wrist")]
+            for meta_sep in ("", "_"):
+                name = f"{word}{meta_sep}1_meta.json"
+                ctx, _ = _upload_notes(tmp_path / word / (sep or "glued") / (meta_sep or "glued"), videos,
+                                       {f"d/{name}": {"task": "pick the cup"}})
+                take = word + ("_" if sep else "")
+                assert ctx[f"d/{take}1"]["instruction"] == "pick the cup", ctx
+                assert "instruction" not in ctx[f"d/{take}2"], ctx
+            absent = f"{word}3_meta.json"
+            ctx, rep = _upload_notes(tmp_path / word / (sep or "glued") / "absent", videos,
+                                     {f"d/{absent}": {"task": "stack the blocks"}})
+            assert not any("instruction" in c for c in ctx.values()), ctx
+            assert f"d/{absent}" in _absent_line(rep), rep["missing"]
+
+
+def test_a_take_word_is_learned_from_separated_or_glued_episode_names():
+    with tempfile.TemporaryDirectory() as t:
+        _a_take_word_is_learned_from_separated_or_glued_episode_names(Path(t))
+
+
 def _a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task(tmp_path):
     """ep3.json, ep3_meta.json or take3.json beside the takes ep1 and ep2, 3.json beside the takes 1 and 2, and
     ep2.json in the folder of the one episode ep1 named no episode there, so every take was given the task of a take

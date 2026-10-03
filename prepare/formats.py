@@ -2392,7 +2392,12 @@ def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path
     out = {}
     for d, here in by_home.items():
         spelt = [episode_note_name(e) or "" for e in here] + [Path(r).stem for e in here for _, r in e["cams"]]
-        takes = TAKE_NUMBER_WORDS | {m[1] for x in spelt for t in tokens(x) if (m := TAKE_WORD.match(t)) and m[2]}
+        takes = set(TAKE_NUMBER_WORDS)
+        for x in spelt:
+            words = tokens(x)
+            for i, t in enumerate(words):
+                if (m := TAKE_WORD.match(t)) and (m[2] or (i + 1 < len(words) and words[i + 1].isdigit())):
+                    takes.add(m[1])
         names, cams = collections.defaultdict(set), collections.defaultdict(set)
         for e in here:
             for x in [episode_note_name(e) or ""] + [Path(r).stem for _, r in e["cams"]]:
@@ -6647,4 +6652,3 @@ def measure_gripper_range(out: Path, ids: list[str]) -> list | None:
         c["gripper_range_note"] = f"measured across the {len(todo)} episodes of this upload"
         (d / "context.json").write_text(json.dumps(c, indent=1, default=str))
     return rng
-
