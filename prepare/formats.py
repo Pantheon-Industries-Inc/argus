@@ -3492,12 +3492,85 @@ def _joint_names(msg, n: int) -> list[str] | None:
     return names
 
 
+def _joint_fields(msg) -> set:
+    """{(field, its value names as a frozenset, or None)} of the joint vector and the gripper reading _joint_row reads
+    from a message, as mcap_signals names those fields (_numbers), so a channel's other name sets stay signals."""
+    lists, out = _name_lists(_msg_items(msg)), set()
+    for keys in (JOINT_KEYS, GRIPPER_KEYS):
+        k, v = next(((k, v) for k, v in ((k, _vector(_field(msg, k))) for k in keys) if v), (None, None))
+        if k is not None:
+            names = _sibling_names(lists, len(v))
+            out.add((k, frozenset(names) if names else None))
+    return out
+
+
+# A channel's messages need not all name the same values: ROS's /joint_states carries every driver's joints, each in
+# messages of its own, and a merged JointState can list the same joints in another order message by message. Rows are
+# read by their names (name_group), never by position under the first message's names; a field whose messages name
+# their values in more than NAME_SETS_MAX ways (a detector's labels) holds no value that is one reading over time.
+NAME_SETS_MAX = 8
+
+
+def name_group(groups: list, names, vals: list) -> tuple[int, list]:
+    """(the index in groups of one message's row, its values in that group's order). groups [(names, width)] is one
+    channel's (or one field's) name sets in the order first seen, extended here. A row whose names give one distinct
+    name per value is grouped with the rows that name the same set and reordered by name to the group's first order;
+    a row without such names is grouped with the unnamed rows of its width."""
+    n = len(vals)
+    if names is not None and len(names) == n and len(set(names)) == n:
+        key = frozenset(names)
+        for i, (gn, _) in enumerate(groups):
+            if gn is not None and frozenset(gn) == key:
+                if list(names) != list(gn):
+                    at = {x: j for j, x in enumerate(names)}
+                    vals = [vals[at[x]] for x in gn]
+                return i, vals
+        groups.append((list(names), n))
+        return len(groups) - 1, vals
+    for i, (gn, w) in enumerate(groups):
+        if gn is None and w == n:
+            return i, vals
+    groups.append((None, n))
+    return len(groups) - 1, vals
+
+
+def group_label(group: tuple) -> str:
+    """How a name set (name_group) is told apart from the others on its channel: its names, the first two and a count
+    past three, or its width when it names none."""
+    names, n = group
+    if names is None:
+        return f" ({n} values)"
+    return " (" + (", ".join(names) if len(names) <= 3 else f"{names[0]}, {names[1]} and {len(names) - 2} more") + ")"
+
+
+def _join_gripper(groups: list[dict]) -> list[dict]:
+    """A channel's two name sets as one arm when one names only a gripper and the other names joints and no gripper
+    (an arm's driver and its gripper's driver both publishing /joint_states): the gripper's readings, placed at the
+    arm's message times, follow the joints as _joint_row puts a gripper field after them. Kept apart when the gripper
+    does not cover the arm's time to within STATE_EDGE_SLACK_S, or the channel has any other name set."""
+    grip = [g for g in groups if g["names"] and all(STATE_GRIPPER_NAME.search(x) for x in g["names"])]
+    if len(groups) != 2 or len(grip) != 1:
+        return groups
+    grip = grip[0]
+    arm = groups[1] if groups[0] is grip else groups[0]
+    if not arm["names"] or any(STATE_GRIPPER_NAME.search(x) for x in arm["names"]) or len(arm["t"]) < 2 \
+            or len(grip["t"]) < 2 or grip["t"][0] > arm["t"][0] + STATE_EDGE_SLACK_S \
+            or grip["t"][-1] < arm["t"][-1] - STATE_EDGE_SLACK_S:
+        return groups
+    pos = np.concatenate([arm["pos"], lerp_rows(arm["t"], grip["t"], grip["pos"])], axis=1)
+    return [{"t": arm["t"], "pos": pos, "names": arm["names"] + grip["names"],
+             "fields": arm["fields"] | grip["fields"]}]
+
+
 def mcap_joint_streams(paths: list[Path]) -> dict:
-    """{topic: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or
-    None}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and text are not
-    read."""
+    """{key: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or None,
+    "topic": its channel}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and
+    text are not read. A channel's rows are grouped by the names their messages give (name_group), each in its group's
+    order; a channel of one group (or of an arm and its gripper, _join_gripper) is keyed by its topic, and one of
+    several by its topic and each group's label (group_label), with the fields its messages fill ("fields",
+    _joint_fields) so that only the group joint_state reads leaves the signals."""
     from mcap.reader import make_reader
-    out, facs = {}, _decoders()
+    found, facs = {}, _decoders()
     for p in paths:
         chans = [(t, s) for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)]
         decs, skip = {}, set()
@@ -3514,18 +3587,32 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
                         row = _joint_row(m) if m is not None else None
                     except Exception:
                         m, row = None, None
-                    s = out.get(ch.topic)
-                    if row is None or (s and len(row) != len(s["pos"][0])):
-                        if s is None:
+                    if row is None:
+                        if ch.topic not in found:
                             skip.add(ch.topic)        # not a joint channel (health, status, poses)
                         continue
-                    s = out.setdefault(ch.topic, {"t": [], "pos": [], "names": _joint_names(m, len(row))})
-                    s["t"].append(msg.log_time / 1e9)
-                    s["pos"].append(row)
+                    c = found.setdefault(ch.topic, {"groups": [], "rows": []})
+                    i, row = name_group(c["groups"], _joint_names(m, len(row)), row)
+                    if i == len(c["rows"]):
+                        c["rows"].append({"t": [], "pos": [], "fields": set()})
+                    r = c["rows"][i]
+                    r["t"].append(msg.log_time / 1e9)
+                    r["pos"].append(row)
+                    r["fields"] |= _joint_fields(m)
             except Exception:
                 pass                                  # a cut-off file: the messages before the cut are kept
-    return {t: {"t": np.asarray(s["t"]), "pos": np.asarray(s["pos"], dtype=np.float64), "names": s["names"]}
-            for t, s in out.items() if len(s["t"]) > 1}
+    out = {}
+    for topic, c in found.items():
+        groups = _join_gripper([{"t": np.asarray(r["t"]), "pos": np.asarray(r["pos"], dtype=np.float64),
+                                 "names": c["groups"][i][0], "fields": r["fields"],
+                                 "label": group_label(c["groups"][i])} for i, r in enumerate(c["rows"])])
+        for g in groups:
+            if len(g["t"]) > 1:
+                s = {"t": g["t"], "pos": g["pos"], "names": g["names"], "topic": topic}
+                if len(groups) > 1:
+                    s["fields"] = g["fields"]
+                out[topic + (g["label"] if len(groups) > 1 else "")] = s
+    return out
 
 
 # Every other number an MCAP records (a gripper's IMU, an arm's joint velocities and torques, a base's odometry), read
@@ -3710,11 +3797,15 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     state. The name is the topic, then the field path ("/robot0/sensor/imu angular_velocity"); each signal keeps its
     values' names and its shape (Signals.meta), and a field that is read but not kept is named with the reason
     (Signals.left_out): too few messages to be a per-frame record, not covering the footage, values that are not
-    finite, or wider than SIGNAL_MAX_VALUES."""
+    finite, or wider than SIGNAL_MAX_VALUES. A field's messages are grouped by the names they give its values
+    (name_group), each put in its group's order, and a field of several groups is one signal per group, its name
+    followed by the group's label (group_label). used names a field, or a (field, its value names) pair for a field
+    of that name set only (state_fields)."""
     from mcap.reader import make_reader
     used, facs = used or {}, _decoders()
     q = np.asarray(q, dtype=np.float64)
-    rows: dict[str, dict] = {}
+    rows: dict[tuple, dict] = {}
+    sets: dict[tuple, list] = {}          # (topic, field): its name sets (name_group)
     for p in paths:
         chans = [t for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)
                  and not (t in used and used[t] is None)]
@@ -3737,7 +3828,11 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                     except Exception:
                         nums = {}
                     for field, (vals, was_set, names, shape) in list(nums.items()):
-                        if field in (used.get(ch.topic) or ()):
+                        # a field the reader already shows (the state) is still grouped, so the name sets beside it
+                        # keep the label that tells them from it
+                        u = used.get(ch.topic) or ()
+                        if field in u or (field, frozenset(names) if names else None) in u:
+                            name_group(sets.setdefault((ch.topic, field), []), names, vals)
                             continue
                         # samples in time beside a sample rate (a contact microphone's 512 samples at 48 kHz): kept as
                         # their loudness, root mean square and peak, not as 512 channels
@@ -3750,17 +3845,27 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                             x = np.asarray(vals, dtype=np.float64)
                             vals, names, kind = [float(np.sqrt(np.mean(x ** 2))), float(np.max(np.abs(x)))], \
                                 ["root mean square", "peak"], {"kind": "samples", "sample_rate": float(rate)}
-                        r = rows.setdefault(f"{ch.topic} {field}".strip(),
+                        i, vals = name_group(sets.setdefault((ch.topic, field), []), names, vals)
+                        r = rows.setdefault((ch.topic, field, i),
                                             {"t": [], "v": [], "d": len(vals), "set": False, "names": names,
                                              "shape": shape, "topic": ch.topic, "kind": kind})
-                        if len(vals) == r["d"]:
-                            r["t"].append(msg.log_time / 1e9)
-                            r["v"].append(vals)
-                            r["set"] |= was_set
+                        r["t"].append(msg.log_time / 1e9)
+                        r["v"].append(vals)
+                        r["set"] |= was_set
             except Exception:
                 pass                                  # a cut-off file: the messages before the cut are kept
-    # bookkeeping values (a counter, a device clock) leave the row; a row that names its sensor per message is split
     out = Signals()
+    named = {}
+    for (topic, field, i), r in rows.items():
+        name, groups = f"{topic} {field}".strip(), sets[(topic, field)]
+        if len(groups) > NAME_SETS_MAX:
+            if name not in [x for x, _ in out.left_out]:
+                out.left_out.append((name, f"its messages name its values in {len(groups)} different ways, so no "
+                                           "value is one reading over time"))
+            continue
+        named[name + (group_label(groups[i]) if len(groups) > 1 else "")] = r
+    rows = named
+    # bookkeeping values (a counter, a device clock) leave the row; a row that names its sensor per message is split
 
     def no_counters(name, r):
         cnt = _counters(r)
@@ -3845,14 +3950,7 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     """(state, action, note): the arms' joints and grippers interpolated onto the anchor camera's frame times q (the
     same clock as the streams), 7 values per arm, left arm first; the leader or command channels, when they match, as
     the action. None with a note when the streams are not a layout the checks read or do not cover the footage."""
-    def arms(role):
-        # per side, a channel of six joints and a gripper when there is one (an arm can also record other vectors)
-        by_side = {}
-        for t in sorted(streams, key=lambda t: (streams[t]["pos"].shape[1] != JOINT_DIMS, t)):
-            if bool(ACTION_TOPIC.search(t)) == role:
-                by_side.setdefault(side_of(t) or "only", t)
-        return by_side
-    st, act = arms(False), arms(True)
+    st, act = arm_streams(streams, False), arm_streams(streams, True)
     if not st:
         return None, None, None
     order = [s for s in ("left", "right", "only") if s in st]
@@ -3891,24 +3989,53 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     return state, action, None
 
 
+def _topic(streams: dict, key: str) -> str:
+    # the channel a stream was read from: its key, or the key without the label of its name set (mcap_joint_streams)
+    return streams[key].get("topic", key)
+
+
+def arm_streams(streams: dict, role: bool) -> dict:
+    """{side: key} of the arm streams joint_state reads, the commands when role: per side its channel names (left,
+    right, or "only"), a stream of six joints and a gripper when there is one (an arm can also record other vectors),
+    else the widest, so a channel's arm is chosen over the gripper published apart from it."""
+    by_side = {}
+    dims = lambda t: streams[t]["pos"].shape[1]
+    for t in sorted(streams, key=lambda t: (dims(t) != JOINT_DIMS, -dims(t), t)):
+        if bool(ACTION_TOPIC.search(_topic(streams, t))) == role:
+            by_side.setdefault(side_of(_topic(streams, t)) or "only", t)
+    return by_side
+
+
 def third_arms(streams: dict) -> list[str]:
     """The recorded arm channels that are neither working arm: those whose topic names no side, beside a left and a
     right arm (a third arm that carries the scene camera, as on a rig whose camera an operator moves). joint_state
     reads the two sided arms and leaves these out."""
-    st = [t for t in streams if not ACTION_TOPIC.search(t)]
-    if not {"left", "right"} <= {side_of(t) for t in st}:
+    st = [t for t in streams if not ACTION_TOPIC.search(_topic(streams, t))]
+    if not {"left", "right"} <= {side_of(_topic(streams, t)) for t in st}:
         return []
-    return sorted(t for t in st if side_of(t) is None)
+    return sorted(t for t in st if side_of(_topic(streams, t)) is None)
 
 
 def state_fields(streams: dict, state, action) -> dict:
     """{topic: fields} of the joint channels joint_state read as the state (and the action, when it matched), for
-    mcap_signals to leave out; a third arm's joints, and every joint channel when no state was read, stay signals."""
+    mcap_signals to leave out; a third arm's joints, and every joint channel when no state was read, stay signals. Of
+    a channel whose messages name several sets of values (mcap_joint_streams), only the sets joint_state read leave,
+    each as (field, its value names) pairs, so a gripper or wheels named apart from the arm stay signals."""
     if state is None:
         return {}
     third = set(third_arms(streams))
-    return {t: set(JOINT_KEYS) | set(GRIPPER_KEYS) for t in streams
-            if t not in third and (action is not None or not ACTION_TOPIC.search(t))}
+    read = set(arm_streams(streams, False).values()) | (set(arm_streams(streams, True).values()) if action is not None
+                                                        else set())
+    out = {}
+    for t, s in streams.items():
+        topic = _topic(streams, t)
+        if t in third or (action is None and ACTION_TOPIC.search(topic)):
+            continue
+        if "fields" not in s:
+            out[topic] = set(JOINT_KEYS) | set(GRIPPER_KEYS)
+        elif t in read:
+            out.setdefault(topic, set()).update(s["fields"])
+    return out
 
 
 def third_arm_camera_desc(topics: list[str]) -> str:

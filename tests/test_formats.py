@@ -637,6 +637,127 @@ def test_an_mcap_joint_channel_keeps_the_names_its_messages_give():
         _an_mcap_joint_channel_keeps_the_names_its_messages_give(Path(t))
 
 
+def _json_mcap(path: Path, chans: dict, t0: float) -> None:
+    """chans {topic: [(seconds after t0, message dict)]} as JSON channels of one MCAP, in time order."""
+    import json
+    from mcap.writer import Writer
+    with open(path, "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        sid = w.register_schema(name="sensor_msgs/msg/JointState", encoding="jsonschema", data=b"{}")
+        ids = {t: w.register_channel(topic=t, message_encoding="json", schema_id=sid) for t in chans}
+        for s, t, m in sorted((s, t, m) for t, ms in chans.items() for s, m in ms):
+            ns = int((t0 + s) * 1e9)
+            w.add_message(ids[t], log_time=ns, publish_time=ns, data=json.dumps(m).encode())
+        w.finish()
+
+
+def _a_joint_states_rows_follow_their_own_names(tmp_path):
+    """A JointState merged from several drivers lists the same joints in another order on every other message; its
+    rows had been appended by position under the first message's names, so joints were swapped (0.9 rad off) in the
+    state and in the signals. Each message's values are put in its name set's first order, by name."""
+    import numpy as np
+    t0 = 1_790_000_000.0
+    names = [f"joint{i}" for i in range(1, 7)] + ["gripper"]
+    tt = np.arange(-0.1, 3.1, 0.01)
+    truth = np.stack([0.1 * (j + 1) * np.sin(tt + j) for j in range(6)] + [0.04 + 0.02 * np.sin(tt)], axis=1)
+    order = [3, 0, 6, 1, 5, 2, 4]
+    msgs = [(s, {"name": [names[i] for i in (order if k % 2 else range(7))],
+                 "position": [float(truth[k, i]) for i in (order if k % 2 else range(7))],
+                 "velocity": [float(10 * truth[k, i]) for i in (order if k % 2 else range(7))]})
+            for k, s in enumerate(tt)]
+    path = tmp_path / "reorder.mcap"
+    _json_mcap(path, {"/left_arm/joint_states": msgs}, t0)
+    st = f.mcap_joint_streams([path])
+    assert list(st) == ["/left_arm/joint_states"] and st["/left_arm/joint_states"]["names"] == names
+    assert np.abs(st["/left_arm/joint_states"]["pos"] - truth).max() < 1e-9
+    q = np.arange(0, 3, 1 / 30)
+    state, _, note = f.joint_state(st, t0 + q)
+    ref = np.stack([np.interp(q, tt, truth[:, j]) for j in range(7)], axis=1)
+    assert note is None and np.abs(state - ref).max() < 1e-6
+    sig = f.mcap_signals([path], t0 + q)
+    for field, scale in (("position", 1), ("velocity", 10)):
+        name = f"/left_arm/joint_states {field}"
+        assert sig.meta[name]["names"] == names, sig.meta[name]
+        assert np.abs(sig[name] - scale * ref).max() < 0.05 * scale, field
+    # a detector whose labels change from message to message names no value that is one reading over time
+    objects = ["cup", "bowl", "spoon", "fork", "plate", "lid", "box", "bag", "can", "jar"]
+    path = tmp_path / "detections.mcap"
+    _json_mcap(path, {"/detections": [(s, {"labels": [objects[k % 10], objects[(k + 3) % 10]], "scores": [0.9, 0.8]})
+                                      for k, s in enumerate(tt)]}, t0)
+    sig = f.mcap_signals([path], t0 + q)
+    assert not sig and sig.left_out == [("/detections scores", "its messages name its values in 10 different ways, "
+                                                               "so no value is one reading over time")], sig.left_out
+
+
+def test_a_joint_states_rows_follow_their_own_names():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_joint_states_rows_follow_their_own_names(Path(t))
+
+
+def _a_gripper_in_its_own_joint_states_messages_is_never_lost(tmp_path):
+    """/joint_states that carries an arm's six joints and its gripper in messages of their own had every gripper
+    message skipped (rows of another width), so the gripper was neither state, signal nor named as left out. A name
+    set whose every name is a gripper's joins the channel's one other name set as its gripper, placed at the arm's
+    message times, when it covers them; otherwise each name set is its own stream and its own signal. A name set
+    beside the arm's that is not a gripper (wheels) stays a signal when the arm is read as the state."""
+    import numpy as np
+    t0 = 1_790_000_000.0
+    joints = [f"joint{i}" for i in range(1, 7)]
+    tt = np.arange(-0.1, 3.1, 0.01)
+    arm = np.stack([0.2 * np.sin(tt + j) for j in range(6)], axis=1)
+    grip = 0.04 + 0.03 * np.sin(2 * tt)
+    q = t0 + np.arange(0, 3, 1 / 30)
+
+    def split(until):
+        msgs = [(s, {"name": joints, "position": arm[k].tolist()}) for k, s in enumerate(tt)]
+        return msgs + [(s + 0.003, {"name": ["finger_joint"], "position": [float(grip[k])]})
+                       for k, s in enumerate(tt) if s < until]
+    path = tmp_path / "split.mcap"
+    _json_mcap(path, {"/joint_states": split(99)}, t0)
+    st = f.mcap_joint_streams([path])
+    assert list(st) == ["/joint_states"], list(st)
+    s = st["/joint_states"]
+    assert s["names"] == joints + ["finger_joint"] and s["pos"].shape == (len(tt), 7)
+    assert np.abs(s["pos"][:, 6] - grip).max() < 0.002                # the gripper at the arm's message times
+    state, _, note = f.joint_state(st, q)
+    assert note is None and state.shape == (len(q), 7)
+    sig = f.mcap_signals([path], q, f.state_fields(st, state, None))
+    assert not [k for k in sig if "position" in k] and not [x for x, _ in sig.left_out if "position" in x]
+    # a gripper that stops halfway does not cover the arm: each name set is its own stream and signal
+    path = tmp_path / "half.mcap"
+    _json_mcap(path, {"/joint_states": split(1.5)}, t0)
+    st = f.mcap_joint_streams([path])
+    assert sorted(st) == ["/joint_states (finger_joint)", "/joint_states (joint1, joint2 and 4 more)"], sorted(st)
+    state, _, note = f.joint_state(st, q)
+    assert state is None and "6 values per frame" in note, note
+    sig = f.mcap_signals([path], q, f.state_fields(st, state, None))
+    assert sig.meta["/joint_states position (joint1, joint2 and 4 more)"]["names"] == joints
+    assert ("/joint_states position (finger_joint)", "recorded from -0.1 s to 1.5 s, not over the whole footage") \
+        in sig.left_out, sig.left_out
+    # the arm with its gripper is the state; wheels on the same channel stay a signal
+    path = tmp_path / "wheels.mcap"
+    named = joints + ["gripper"]
+    wheels = ["left_wheel", "right_wheel"]
+    _json_mcap(path, {"/joint_states": [(s, {"name": named, "position": arm[k].tolist() + [float(grip[k])]})
+                                        for k, s in enumerate(tt)]
+                      + [(s + 0.003, {"name": wheels, "position": [float(s), float(-s)]}) for s in tt]}, t0)
+    st = f.mcap_joint_streams([path])
+    state, _, note = f.joint_state(st, q)
+    assert note is None and state.shape == (len(q), 7)
+    assert np.abs(state[:, 0] - np.interp(q - t0, tt, arm[:, 0])).max() < 1e-6
+    sig = f.mcap_signals([path], q, f.state_fields(st, state, None))
+    assert list(sig) == ["/joint_states position (left_wheel, right_wheel)"], list(sig)
+    assert sig.meta["/joint_states position (left_wheel, right_wheel)"]["names"] == wheels
+
+
+def test_a_gripper_in_its_own_joint_states_messages_is_never_lost():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_gripper_in_its_own_joint_states_messages_is_never_lost(Path(t))
+
+
 def test_a_list_of_names_beside_a_numeric_array_names_its_values():
     """A JointState's name gives one name per value of position, velocity and effort beside it, in a dict (JSON) and
     in a decoded ROS message with slots. Names with another count, names under another parent, a list with repeated
