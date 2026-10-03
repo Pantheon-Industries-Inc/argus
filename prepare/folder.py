@@ -24,6 +24,10 @@ one naming only absent takes is not read. --max-minutes stops after that much fo
 
 Writes EPISODES/episode_<name>/ with context.json, sources.json, state.npz when the recording has usable state,
 times.npz and instruction.txt, and prints a report of what was read, used, skipped and why.
+MCAP and HDF5 container notes apply to their contained episodes. LeRobot notes use the recorded episode index.
+Outside files retain their filenames as uploader notes, and recorded instruction text keeps priority.
+Process diagnostics and standard logs stay in source bookkeeping and saved arrays, outside model sensor claims.
+
 """
 from __future__ import annotations
 

@@ -3473,3 +3473,55 @@ def test_a_signal_removed_or_replaced_gives_its_budget_back():
     finally:
         f.SIGNAL_EPISODE_BYTES = saved
     assert out["b"].shape == (40, 2000) and not out.issues and out.bytes == 40 * 2000 * 4, (out.issues, out.bytes)
+
+
+def _structured_recordings_read_owned_side_notes(tmp_path):
+    import json
+    import h5py
+    import numpy as np
+    for kind in ('mcap', 'hdf5', 'hdf5_empty', 'lerobot'):
+        root, out = tmp_path / kind / 'upload', tmp_path / kind / 'eps'
+        root.mkdir(parents=True)
+        if kind == 'mcap':
+            _camera_mcap(root / 'bag_0.mcap', ['/front/image/compressed'])
+            own = 'bag_0'
+        elif kind.startswith('hdf5'):
+            with h5py.File(root / 'lift_ph.h5', 'w') as h:
+                for name in ('demo_0', 'demo_1'):
+                    g = h.create_group('data/' + name)
+                    g['obs/front'] = np.full((10, 36, 64, 3), 80, dtype=np.uint8)
+                    if kind == 'hdf5':
+                        g.attrs['instruction'] = 'recorded task'
+            own = 'lift_ph'
+        else:
+            _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10}})
+            own = 'episode_000000'
+        (root / (own + '.json')).write_text(json.dumps({'task': 'owned outside task', 'note': 'lens glare'}))
+        (root / 'session_meta.json').write_text(json.dumps({'task': 'shared outside task', 'operator': 'A'}))
+        (root / 'Instruction.txt').write_text('outside text task')
+        (root / 'ep99_meta.json').write_text(json.dumps({'task': 'absent task'}))
+        (root / 'broken_meta.json').write_text('{broken')
+        if kind == 'lerobot':
+            (root / 'meta' / 'Session.JSON').write_text(json.dumps({'note': 'root metadata'}))
+        rep = f.convert(root, 'teleop_arms', out, 'test', 900)
+        assert not rep['failed'], rep
+        for ep in rep['episodes']:
+            ctx = json.loads((out / ep['episode_id'] / 'context.json').read_text())
+            assert ctx['instruction'] == ('recorded task' if kind == 'hdf5' else 'owned outside task'), ctx
+            notes = ctx['uploader_notes']
+            notes = notes.get('outside files', notes)
+            assert notes[own + '.json']['note'] == 'lens glare', notes
+            assert notes['session_meta.json']['operator'] == 'A', notes
+            assert notes['Instruction.txt'] == 'outside text task', notes
+            if kind == 'lerobot':
+                assert notes['meta/Session.JSON']['note'] == 'root metadata'
+            assert 'ep99_meta.json' not in notes and 'broken_meta.json' not in notes, notes
+        _, items = f.plan(root)
+        opened = {p.name for p in f.opened_notes(items)}
+        assert {own + '.json', 'session_meta.json', 'Instruction.txt'} <= opened, opened
+        assert 'ep99_meta.json' not in opened and 'broken_meta.json' not in opened, opened
+
+
+def test_structured_recordings_read_owned_side_notes():
+    with tempfile.TemporaryDirectory() as t:
+        _structured_recordings_read_owned_side_notes(Path(t))

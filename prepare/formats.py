@@ -64,6 +64,11 @@ identified uploaded owners; the absent take is reported separately, and a file n
 different tasks give none of them: each is given as a note and the disagreement is a data issue of the episode. One
 that names neither the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
+MCAP and HDF5 container sidecars belong to the episodes in that container. LeRobot sidecars name the recorded
+episode index. Applicable outside files retain their filenames as uploader notes. Recorded instruction text keeps
+priority over every outside task. Standard log channels and named process diagnostics remain in the saved signal
+arrays and source bookkeeping, while only sensor readings are given to the model as signals.
+
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
 arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
 it (state_layout): seven named joints and no gripper stay signals. Every other number the recording keeps is a signal
@@ -1016,7 +1021,7 @@ def note_files(item: dict) -> list[Path]:
     cands = [(f.parent, f.stem + x) for f in fs for x in NOTE_OWN_EXT]
     nf = item.get("note_folder")
     if nf:
-        named = [f"{nf['name']}{x}" for x in (".json", ".txt")] if nf["name"] else []
+        named = [f"{name}{x}" for name in nf.get("aliases", [nf["name"]]) if name for x in (".json", ".txt")]
         cands = [(nf["dir"], n) for n in named + list(NOTE_NAMES)] + cands
     listing: dict[Path, dict] = {}
     out, seen = [], set()
@@ -1058,7 +1063,8 @@ def episode_notes(item: dict) -> dict:
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
     one_name = len({f.stem for f in fs}) == 1
-    own_names = {f"{nf['name']}{x}".lower() for x in (".json", ".txt")} if nf and nf["name"] else set()
+    own_names = {f"{name}{x}".lower() for name in nf.get("aliases", [nf["name"]]) if name
+                 for x in (".json", ".txt")} if nf else set()
     named = {p for p in files if p.parent == nf["dir"] and p.name.lower() in own_names} if nf else set()
     owned = {p for p in files for f in fs if p.parent == f.parent and p.stem.lower() == f.stem.lower()} - named
     cams = owned if len(fs) > 1 else set()
@@ -1097,7 +1103,10 @@ def episode_notes(item: dict) -> dict:
     read, disagree, absent, attributed = list(files), [], [], []
     named_here, shared = [], []           # (file, task) of the folder .json files named for this episode, or for none
     weighed = {p.resolve() for p in files}
-    for p in folder_json(nf["dir"]) if nf else []:
+    extra_dirs = item.get("metadata_dirs") or []
+    candidates = [p for d in ([nf["dir"]] + extra_dirs if nf else []) for p in folder_json(d)
+                  if p.name.lower() not in item.get("metadata_reserved", ())]
+    for p in candidates:
         if p.resolve() in weighed or p.stat().st_size > NOTE_JSON_MAX_BYTES:
             continue
         owners, gone = named_for(p, nf["names"])
@@ -1108,12 +1117,17 @@ def episode_notes(item: dict) -> dict:
                 shared.append((p, x))
             elif None not in owners and nf["episode"] in owners:
                 named_here.append((p, x))
-                continue
-        if gone and nf["episode"] in owners:
+                if not item.get("side_metadata"):
+                    continue
+        side_owner = item.get("side_metadata") and not gone and (not owners or nf["episode"] in owners)
+        if (gone and nf["episode"] in owners) or side_owner:
             # a known owner keeps the file as a note when it does not supply the task
-            notes.append((p.name, read_annotation(p)))
-            read.append(p)
-            attributed.append(p.name)
+            obj = _read_json(p) if item.get("side_metadata") else read_annotation(p)
+            if obj is not None:
+                key = p.relative_to(nf["dir"]).as_posix()
+                notes.append((key, obj))
+                read.append(p)
+                attributed.append(key)
     if not instr:
         # a file named for this episode outranks the folder's shared ones; only files of one rank can disagree
         found = named_here or shared
@@ -6029,6 +6043,7 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
             det["missing"] += part["missing"]
             if part.get("version"):
                 det["version"] = part["version"]
+    attach_structured_notes(items)
     sensors = [Path(p) for p in det.get("state") or []]
     # a folder's episodes are counted across every format, so one sensor file never joins two episodes as its own
     assign_sensors(items, sensors)
@@ -6062,6 +6077,71 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
     if len(parts) > 1:
         det["format"] = " and ".join(p["format"] for p in parts)
     return det, items
+
+
+def attach_structured_notes(items: list[dict]) -> None:
+    """Outside notes use the same filename ownership and task ranks as video notes. A container name identifies
+    every episode inside that container; a LeRobot episode uses its recorded index, never a camera number."""
+    by_folder = collections.defaultdict(list)
+    for it in items:
+        if it["kind"] in ("mcap", "hdf5"):
+            d, file = Path(it["file"]).parent, Path(it["file"])
+            aliases = [file.stem] + ([it["group"].rsplit("/", 1)[-1]] if it.get("group") else [])
+        elif it["kind"] == "lerobot":
+            d = Path(it["root"]["dir"])
+            aliases = [f"episode_{it['row']['eidx']:06d}", f"{it['row']['eidx']:06d}"]
+            file = d / aliases[0]
+        else:
+            continue
+        by_folder[d].append((it, file, aliases))
+    for d, entries in by_folder.items():
+        takes = set(TAKE_NUMBER_WORDS)
+        for _, _, aliases in entries:
+            for alias in aliases:
+                ws = tokens(alias)
+                for i, word in enumerate(ws):
+                    if (m := TAKE_WORD.match(word)) and (m[2] or (i + 1 < len(ws) and ws[i + 1].isdigit())):
+                        takes.add(m[1])
+        names = collections.defaultdict(set)
+        for it, _, aliases in entries:
+            for alias in aliases:
+                names[name_words(alias, takes)].add(it["name"])
+        for it in items:
+            if it["kind"] == "video" and item_folder(it) == d:
+                nf = it.get("note_folder")
+                if nf:
+                    for words, owners in nf["names"].names.items():
+                        names[words] |= owners
+                else:
+                    for file in it["files"]:
+                        names[name_words(Path(file).stem, takes)].add(it["name"])
+        registry = FolderNames(frozenset(takes), {w: frozenset(v) for w, v in names.items() if w}, {},
+                               name_words(d.name, takes), frozenset({6}) if any(it["kind"] == "lerobot" for it, _, _ in entries) else frozenset())
+        for it, file, aliases in entries:
+            it["side_notes"] = {"files": [file], "side_metadata": True,
+                                "metadata_dirs": [d / "meta"] if it["kind"] == "lerobot" else [],
+                                "metadata_reserved": {"info.json", "stats.json"},
+                                "note_folder": {"dir": d, "name": aliases[0], "aliases": aliases,
+                                                "episode": it["name"], "names": registry}}
+
+
+def add_side_notes(ep: Path, ctx: dict, item: dict) -> dict:
+    """Recorded task text keeps priority. Applicable outside files remain attributed claims from the uploader."""
+    got = episode_notes(item)
+    notes = dict(got["notes"])
+    if not ctx.get("instruction") and got["instruction"]:
+        ctx["instruction"] = got["instruction"]
+        ctx["instruction_note"] = "This instruction is the task text the uploader sent with the episode."
+        (ep / "instruction.txt").write_text(ctx["instruction"] + "\n")
+    if notes:
+        previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
+        set_uploader_notes(ctx, {"recorded notes": previous, "outside files": notes} if previous else notes, files=True)
+    if got["disagree"] and not ctx.get("instruction"):
+        add_issue(ctx, "task_files_disagree", f"{_and_words(got['disagree'])} name different tasks, so each is given as a note")
+    if got["read"]:
+        ctx.setdefault("source", {})["note_files"] = [str(p.relative_to(item["note_folder"]["dir"])) for p in got["read"]]
+    (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    return ctx
 
 
 def possible_duplicates(root: Path, items: list[dict]) -> list[str]:
@@ -6099,6 +6179,8 @@ def opened_notes(items: list[dict]) -> set[Path]:
     out = set()
     adapters = upload_adapters("video")
     for it in items:
+        if it.get("side_notes"):
+            out |= set(episode_notes(it["side_notes"])["read"])
         if it.get("kind") != "video":
             continue
         if any(m.recognizes(it) for m in adapters):
@@ -6114,7 +6196,8 @@ def opened_notes(items: list[dict]) -> set[Path]:
 def absent_take_notes(items: list[dict]) -> set[Path]:
     """The .json files of episodes' folders naming a take that is not in the upload (named_for). Uploaded owners
     still read them; the report names the absent take apart from the files no reader opens."""
-    return {p for it in items if it.get("kind") == "video" for p in episode_notes(it)["absent"]}
+    return {p for it in items for view in ([it] if it.get("kind") == "video" else [it["side_notes"]] if it.get("side_notes") else [])
+            for p in episode_notes(view)["absent"]}
 
 
 def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
@@ -6131,7 +6214,11 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
-        if any(r in p.parents for r in rdirs) or p.resolve() in notes:
+        internal = any(r in p.parents and (p.relative_to(r).parts[0] in ("data", "videos")
+                       or p.parent == r / "meta" and p.name.lower() in
+                       {"info.json", "stats.json", "tasks.jsonl", "episodes.jsonl", "episodes_stats.jsonl"}
+                       or (r / "meta" / "episodes") in p.parents) for r in rdirs)
+        if internal or p.resolve() in notes:
             continue
         if x == ".jsonl" and next(_jsonl_rows(p), None) is None:
             out.append(p.relative_to(root).as_posix())
@@ -6491,6 +6578,8 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
             report["failed"].append({"name": it["name"], "why": plain_error(e)})
             print(f"convert: {it['name']}: {type(e).__name__}: {e}", file=sys.stderr)
             continue
+        if it.get("side_notes"):
+            ctx = add_side_notes(out / ctx["episode_id"], ctx, it["side_notes"])
         if tables:
             ctx = add_table_notes(out / ctx["episode_id"], ctx, table_rows_for(tables, it))
         secs = float(ctx.get("duration_s") or ctx["n_state_frames"] / float(ctx["fps"]))
