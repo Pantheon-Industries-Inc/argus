@@ -225,3 +225,41 @@ def test_duplicate_groups_do_not_overwrite_capture_metrics():
     assert names == ["left (recorded group 1)", "left (recorded group 2)"]
     assessed = capture_qc.assess(feats)
     assert list(assessed["actors"]) == names
+
+
+def test_stream_pairing_compares_each_wrist_with_its_proven_actor(tmp_path):
+    from checks import stream_pairing
+    from test_checks import two_grippers, levels_for, write_episode
+    state, first, second = two_grippers()
+    ctx = {}
+    formats.record_state_identity(ctx, "state", RIGHT + LEFT, 14)
+    path = write_episode(tmp_path / "episode", state,
+                         {"right": levels_for(first), "left": levels_for(second)}, **ctx)
+    result = stream_pairing.pairing(path)
+    assert result["crossed"] is False
+    assert result["right_vs_right"] > .9 and result["left_vs_left"] > .9
+
+
+@pytest.mark.parametrize("names", [MIXED + LEFT, LEFT + LEFT])
+def test_stream_pairing_does_not_guess_an_unresolved_or_duplicate_wrist(tmp_path, names):
+    from checks import stream_pairing
+    from test_checks import two_grippers, levels_for, write_episode
+    state, first, second = two_grippers()
+    ctx = {}
+    formats.record_state_identity(ctx, "state", names, 14)
+    path = write_episode(tmp_path / "episode", state,
+                         {"left": levels_for(first), "right": levels_for(second)}, **ctx)
+    result = stream_pairing.pairing(path)
+    assert "not_assessed" in result and "crossed" not in result
+
+
+def test_recorded_jumps_cannot_map_a_conflict_through_a_camera_display_name(tmp_path):
+    from checks import stream_pairing
+    from test_checks import two_grippers, levels_for, write_episode
+    state, first, _ = two_grippers(1)
+    state[60:, 0] += .1
+    ctx = {"cameras": {"left": {"name": "recorded gripper (side unknown)"}}}
+    formats.record_state_identity(ctx, "left/state", RIGHT)
+    path = write_episode(tmp_path / "episode", state[:, :7], {"left": levels_for(first)}, **ctx)
+    result = stream_pairing.jumps(path)
+    assert result["events"] and all(event["camera"] is None for event in result["events"])
