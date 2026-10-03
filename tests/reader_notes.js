@@ -62,6 +62,14 @@ const l = T.readerNotesHtml({left_out: {arrays: ['a (1 x 2)', 'b']}});
 check(!l.includes('rn-note') && l.includes('>The model was not shown 2 arrays</button>')
   && l.includes('<div class="rn-i">a (1 x 2)</div><div class="rn-i">b</div>'), 'a list alone, without a note');
 
+// a kind whose value is not a list (an older or hand edited qa file) is passed over, never a crash
+const safe = rn => { try { return T.readerNotesHtml(rn); } catch (e) { return 'threw ' + e.message; } };
+const odd = safe({left_out: {cameras: 'cam_high', signals: ['s'], arrays: {a: 1}, depth: 3}});
+check(odd.includes('>The model was not shown 1 signal</button>') && !odd.includes('cam_high')
+  && !odd.includes('Cameras</div>') && !odd.includes('Arrays</div>') && !odd.includes('Depth streams</div>'),
+  'a kind whose value is not a list is passed over: ' + odd);
+check(safe({left_out: {cameras: 'cam_high'}}) === '', 'only kinds that are not lists draw nothing');
+
 // the shared fold handler has two users, so the files fold's labels are pinned too
 check(src.includes('data-closed="Show the notes in the files"')
   && src.includes('data-open="Hide the notes in the files"'), 'the notes in the files fold keeps its two labels');

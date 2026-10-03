@@ -2802,7 +2802,8 @@ function readerNotesHtml(rn) {
   const left = rn.left_out || {};
   const kinds = [['cameras', 'Cameras', 'camera', 'cameras'], ['signals', 'Signals', 'signal', 'signals'],
                  ['arrays', 'Arrays', 'array', 'arrays'], ['depth', 'Depth streams', 'depth stream', 'depth streams']]
-    .filter(([k]) => (left[k] || []).length);
+    // a value that is not a list (an older or hand edited qa file) is passed over, as board/build.py reader_notes does
+    .filter(([k]) => Array.isArray(left[k]) && left[k].length);
   const counts = kinds.map(([k, , one, many]) => `${left[k].length} ${left[k].length === 1 ? one : many}`);
   const n = counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}` : counts[0];
   const closed = `The model was not shown ${n}`, opened = `Hide the ${n} the model was not shown`;
