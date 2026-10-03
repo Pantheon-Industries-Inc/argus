@@ -437,7 +437,8 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     """{view: {k: PIL image}} for every planned k a camera has a frame at. With widths (the cell widths a request can
     be built at), frames outside detail_ks are kept only at those widths (label/frames.py Shrunk).
 
-    An instant no camera has a frame at is named and replaced by a nearby readable frame at its own time. When the episode's last instants are past every
+    An instant no camera has a frame at is named and replaced by a nearby readable frame at its own time. When the
+    episode's last instants are past every
     camera's last frame (an upload whose every camera's file ends a frame before the episode does), the last frame any
     camera has takes their place, so the last detail view is the end of the footage (ep["footage_end"]). The episode
     keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,
@@ -467,7 +468,8 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     ep["fallback_instants"] = {}
 
     def usable(k):
-        more = {v: _decode_view(ep, v, [k], gate, failed=failed[v], damaged=damaged[v]) for v in vs}
+        more = {v: _decode_view(ep, v, [k], gate, widths, detail_ks, failed[v], damaged[v])
+                if _in_span(ep, v, k) else {} for v in vs}
         for v, hit in placeholder_instants(ep, [k]).items():
             more.get(v, {}).pop(k, None)
             failed[v] |= hit
@@ -477,18 +479,45 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
         return any(k in more[v] and _in_span(ep, v, k) for v in vs)
 
     # The sampling schedule can land entirely on damaged rows. Search the episode's real frame indices before
-    # concluding that it has no footage, and keep each replacement under its own capture time.
+    # concluding that it has no footage. Read and sort the capture clock once, then expand out from each target.
+    # Equal distances keep the earlier frame index, including groups of equal capture times.
+    if unavailable:
+        captures = np.fromiter((frame_time(ep, k) for k in range(pl["n"])), dtype=float)
+        order = np.argsort(captures, kind="stable")
+        sorted_t = captures[order]
+
+    def nearby(missing):
+        target = captures[missing]
+        right = int(np.searchsorted(sorted_t, target))
+        left = right - 1
+        while left >= 0 or right < len(order):
+            a = int(np.searchsorted(sorted_t, sorted_t[left])) if left >= 0 else 0
+            b = int(np.searchsorted(sorted_t, sorted_t[right], side="right")) if right < len(order) else right
+            ld = abs(sorted_t[left] - target) if left >= 0 else float("inf")
+            rd = abs(sorted_t[right] - target) if right < len(order) else float("inf")
+            group = []
+            if ld <= rd:
+                group.extend(order[a:left + 1])
+                left = a - 1
+            if rd <= ld:
+                group.extend(order[right:b])
+                right = b
+            yield from sorted(int(k) for k in group)
+
     checked = set(ks)
+    kept = set(keep)
     for missing in unavailable:
-        candidates = sorted(range(pl["n"]), key=lambda k: (abs(frame_time(ep, k) - frame_time(ep, missing)), k))
-        for k in candidates:
-            if k in checked and k not in keep:
+        for k in nearby(missing):
+            if k in checked and k not in kept:
                 continue
-            if k in keep or usable(k):
-                keep = sorted(set(keep) | {k})
+            if k in kept or usable(k):
+                kept.add(k)
+                keep = sorted(kept)
                 ep["fallback_instants"][missing] = k
                 break
             checked.add(k)
+        if not kept and len(checked) == pl["n"]:
+            break
     if not keep:
         raise mf.FrameError(f"{ep.get('dir', '?')}: no camera has a decodable frame")
     ep.pop("footage_end", None)
@@ -510,6 +539,13 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
         pl["ks"] = keep
         if pl.get("contact"):
             pl["contact"] = [k for k in pl["contact"] if k in keep]
+        # Replacement grid cells stay small; only the new first and last detail views need their native pixels.
+        if widths:
+            for k in (keep[0], keep[-1]):
+                if k not in detail_ks:
+                    for v in vs:
+                        if k in got[v]:
+                            got[v].update(_decode_view(ep, v, [k], gate))
     ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
     # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
     # where its file ended), or a damaged or placeholder frame anywhere; a camera with no frame at all that failed to

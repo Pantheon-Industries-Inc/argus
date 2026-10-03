@@ -77,6 +77,37 @@ def test_a_paired_camera_keeps_its_existing_span_sentence():
         "and it is left out of a detail view there.")
 
 
+def test_fallback_search_reads_each_capture_once_and_keeps_only_endpoint_details_full_size(monkeypatch):
+    n = 1000
+    missing = list(range(0, n, 100))
+    clock_reads, decodes = [], []
+    ep = {"sources": {"exo": {}}, "context": {}}
+    monkeypatch.setattr(episode, "views", lambda ep: ["exo"])
+    monkeypatch.setattr(episode, "_in_span", lambda ep, v, k: True)
+    monkeypatch.setattr(episode, "placeholder_instants", lambda ep, ks: {})
+
+    def clock(ep, k):
+        clock_reads.append(k)
+        return k / 30
+
+    def decode(ep, v, ks, gate=None, widths=None, detail_ks=(), failed=None, damaged=None):
+        decodes.append((tuple(ks), widths))
+        if failed is not None:
+            failed.update(k for k in ks if k in missing)
+        if damaged is not None:
+            damaged.update(k for k in ks if k in missing)
+        return {k: object() for k in ks if k not in missing}
+
+    monkeypatch.setattr(episode, "frame_time", clock)
+    monkeypatch.setattr(episode, "_decode_view", decode)
+    pl = {"n": n, "ks": missing}
+    episode.frames(ep, pl, widths=[128], detail_ks={missing[0], missing[-1]})
+    assert len(clock_reads) <= n + 2 * len(missing)
+    full = [ks for ks, widths in decodes if widths is None]
+    assert full == [(pl["ks"][0],), (pl["ks"][-1],)]
+    assert all(widths == [128] for ks, widths in decodes if ks not in full)
+
+
 def test_board_and_sensor_times_use_the_request_zero_when_the_first_capture_is_above_zero(tmp_path):
     main = 0.0122 + np.arange(90) / 30
     side = main - 0.008
