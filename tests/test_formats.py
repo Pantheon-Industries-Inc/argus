@@ -2652,6 +2652,81 @@ def test_unread_files_are_exactly_those_no_reader_opened():
         _unread_files_are_exactly_those_no_reader_opened(Path(t))
 
 
+def _every_note_file_of_an_episode_is_read_and_named(tmp_path):
+    """An episode folder with two cameras and a note beside each (top.txt, wrist.md) had neither note read, and one
+    with annotations.json, notes.txt and a recorder's operator.json had only annotations.json read, while the list of
+    files no reader opens named none of them. Every note file is read, each under its file name, a camera's own
+    note is never taken for the episode's task, and a .json of the folder that gives neither the task nor a depth
+    scale is named as not read."""
+    import json
+    root = tmp_path / "upload"
+    ep1 = root / "ep1"
+    ep1.mkdir(parents=True)
+    _clip(ep1 / "top.mp4", 10)
+    _clip(ep1 / "wrist.mp4", 10)
+    (ep1 / "top.txt").write_text("the operator dropped the cup at 0.5 s")
+    (ep1 / "wrist.md").write_text("wrist camera loose")
+    ep2 = root / "ep2"
+    ep2.mkdir()
+    _clip(ep2 / "top.mp4", 10)
+    _clip(ep2 / "wrist.mp4", 10)
+    (ep2 / "annotations.json").write_text(json.dumps({"task": "pick the cup"}))
+    (ep2 / "notes.txt").write_text("wrist camera came loose at the end")
+    (ep2 / "operator.json").write_text(json.dumps({"operator_comment": "second attempt"}))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = {}
+    for e in rep["episodes"]:
+        c = json.loads((tmp_path / "eps" / e["episode_id"] / "context.json").read_text())
+        ctx[c["source"]["upload"]] = c
+    assert ctx["ep1"]["uploader_notes"] == {"top.txt": "the operator dropped the cup at 0.5 s",
+                                            "wrist.md": "wrist camera loose"}, ctx["ep1"]
+    assert "instruction" not in ctx["ep1"]
+    assert ctx["ep2"]["instruction"] == "pick the cup"
+    assert ctx["ep2"]["uploader_notes"] == {"annotations.json": {"task": "pick the cup"},
+                                            "notes.txt": "wrist camera came loose at the end"}, ctx["ep2"]
+    line = next((m for m in rep["missing"] if "no reader opens" in m), "")
+    assert "ep2/operator.json" in line, rep["missing"]
+    assert not any(x in line for x in ("top.txt", "wrist.md", "annotations.json", "notes.txt")), line
+
+
+def test_every_note_file_of_an_episode_is_read_and_named():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _every_note_file_of_an_episode_is_read_and_named(Path(t))
+
+
+def _one_note_file_is_read_as_it_was_sent(tmp_path):
+    """One note file stays its own text, never put under its file name (a note of one line is the task, as before),
+    and a recorder's metadata that gives the task is read."""
+    import json
+    root = tmp_path / "upload"
+    ep1 = root / "ep1"
+    ep1.mkdir(parents=True)
+    _clip(ep1 / "top.mp4", 10)
+    _clip(ep1 / "wrist.mp4", 10)
+    (ep1 / "notes.txt").write_text("wrist camera came loose\nat the end")
+    (ep1 / "session_meta.json").write_text(json.dumps({"prompt": "Pick up the cube"}))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert ctx["uploader_notes"] == "wrist camera came loose\nat the end"
+    assert ctx["uploader_annotation"] == "wrist camera came loose\nat the end"
+    assert ctx["instruction"] == "Pick up the cube"
+    assert not any("no reader opens" in m for m in rep["missing"]), rep["missing"]
+
+
+def test_one_note_file_is_read_as_it_was_sent():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _one_note_file_is_read_as_it_was_sent(Path(t))
+
+
+def test_notes_cut_for_the_prompt_name_the_files_left_out():
+    notes = {"a.txt": "x" * (f.ANNOTATION_MAX_CHARS - 20), "b.txt": "y" * 100, "c.txt": "z"}
+    txt = f.annotation_text(notes, files=True)
+    assert txt.endswith(" [truncated, the end of b.txt and all of c.txt left out]"), txt[-120:]
+    assert f.annotation_text("x" * (f.ANNOTATION_MAX_CHARS + 5)).endswith("x [truncated]")
+
+
 def _the_no_camera_refusal_accounts_for_every_file(tmp_path):
     root = tmp_path / "sensors"
     root.mkdir()
