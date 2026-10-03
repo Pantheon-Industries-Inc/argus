@@ -1002,8 +1002,8 @@ def note_files(item: dict) -> list[Path]:
 
 
 def episode_notes(item: dict) -> dict:
-    """What an episode's note files give (note_files): "notes", each file's notes as sent under its file name (with its
-    folder where two share a name, and always for a camera folder's own file, whose folder names the camera);
+    """What an episode's note files give (note_files): "notes", each file's notes as sent under its path from the
+    episode's note folder (ep1.txt, or top/ep1.txt in camera folders, whose folder names the camera);
     "instruction", the task text; "repeats", the notes whose whole text is the task, which need not be given again;
     "camera_notes", the notes that are about one of several cameras; and "read", every file read.
 
@@ -1024,9 +1024,7 @@ def episode_notes(item: dict) -> dict:
     named = {(nf["dir"] / f"{nf['name']}{x}").resolve() for x in (".json", ".txt")} if nf and nf["name"] else set()
     owned = {f.with_suffix(x).resolve() for f in fs for x in NOTE_OWN_EXT} - named
     cams = owned if len(fs) > 1 else set()
-    names = [p.name for p in files]
-    keys = [f"{p.parent.name}/{p.name}" if names.count(p.name) > 1 or (one_name and p.resolve() in cams) else p.name
-            for p in files]
+    keys = [p.relative_to(nf["dir"]).as_posix() if nf and nf["dir"] in p.parents else p.name for p in files]
     notes = [(k, read_annotation(p)) for k, p in zip(keys, files)]
     got = {p.resolve(): o for p, (_, o) in zip(files, notes)}
 

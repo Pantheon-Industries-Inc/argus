@@ -2907,6 +2907,10 @@ def _a_camera_folders_own_note_is_that_cameras(tmp_path):
     assert ctx["ep1"]["uploader_notes"] == {"top/ep1.json": {"task": "calibrate the top camera"}}
     ctx, _ = _upload_notes(tmp_path / "c", cams, {"top/ep1.txt": "pick the cup", "wrist/ep1.txt": "pick the cup"})
     assert ctx["ep1"]["instruction"] == "pick the cup" and "uploader_notes" not in ctx["ep1"]
+    # the episode's own note beside the camera folders shares the camera note's file name, and keeps its own: each is
+    # named by its path from the episode's folder, never by the name of the folder the upload sits in
+    ctx, _ = _upload_notes(tmp_path / "d", cams, {"ep1.json": {"operator": "A"}, "top/ep1.json": {"exposure": 3}})
+    assert ctx["ep1"]["uploader_notes"] == {"ep1.json": {"operator": "A"}, "top/ep1.json": {"exposure": 3}}
 
 
 def test_a_camera_folders_own_note_is_that_cameras():
