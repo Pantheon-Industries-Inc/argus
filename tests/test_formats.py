@@ -1921,8 +1921,8 @@ def _png(a) -> bytes:
 
 
 def _lerobot(root: Path, episodes: dict, feats: dict | None = None, n_video: int = 30) -> None:
-    """A LeRobot v2.1 folder of one scene camera (n_video frames) and, per episode index, its data table's columns
-    (episodes {index: {column: cells}}), with frame_index, episode_index and timestamp added."""
+    """A LeRobot v2.1 folder of one scene camera (n_video frames, none when 0) and, per episode index, its data table's
+    columns (episodes {index: {column: cells}}), with frame_index, episode_index and timestamp added."""
     import json
     import numpy as np
     import pandas as pd
@@ -1936,11 +1936,13 @@ def _lerobot(root: Path, episodes: dict, feats: dict | None = None, n_video: int
     (root / "data" / "chunk-000").mkdir(parents=True)
     for e, cols in episodes.items():
         m = len(next(iter(cols.values())))
-        pd.DataFrame({**cols, "frame_index": np.arange(m), "episode_index": np.full(m, e),
-                      "timestamp": np.arange(m) / 30}).to_parquet(root / "data" / "chunk-000" / f"episode_{e:06d}.parquet")
-        d = root / "videos" / "chunk-000" / "observation.images.cam_high"
-        d.mkdir(parents=True, exist_ok=True)
-        _clip(d / f"episode_{e:06d}.mp4", n_video)
+        table = pd.DataFrame({**cols, "frame_index": np.arange(m), "episode_index": np.full(m, e),
+                              "timestamp": np.arange(m) / 30})
+        table.to_parquet(root / "data" / "chunk-000" / f"episode_{e:06d}.parquet")
+        if n_video:
+            d = root / "videos" / "chunk-000" / "observation.images.cam_high"
+            d.mkdir(parents=True, exist_ok=True)
+            _clip(d / f"episode_{e:06d}.mp4", n_video)
 
 
 def _a_lerobot_episode_keeps_every_usable_value(tmp_path):
@@ -1993,3 +1995,85 @@ def test_a_lerobot_episode_keeps_every_usable_value():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _a_lerobot_episode_keeps_every_usable_value(Path(t))
+
+
+def _jpeg(shade: int, w: int = 64, h: int = 48) -> bytes:
+    import io
+    import numpy as np
+    from PIL import Image
+    b = io.BytesIO()
+    Image.fromarray(np.full((h, w, 3), shade, np.uint8)).save(b, format="JPEG")
+    return b.getvalue()
+
+
+def _camera_mcap(path: Path, topics: list[str], n: int = 20, t0: float = 1_790_000_000.0) -> None:
+    import base64
+    import json
+    from mcap.writer import Writer
+    with open(path, "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        sid = w.register_schema(name="foxglove.CompressedImage", encoding="jsonschema", data=b"{}")
+        ch = {t: w.register_channel(topic=t, message_encoding="json", schema_id=sid) for t in topics}
+        for k in range(n):
+            ns = int((t0 + k / 30) * 1e9)
+            for t in topics:
+                w.add_message(ch[t], log_time=ns, publish_time=ns, data=json.dumps(
+                    {"format": "jpeg", "data": base64.b64encode(_jpeg(k * 10 % 256)).decode()}).encode())
+        w.finish()
+
+
+def _every_camera_that_holds_a_picture_is_read(tmp_path):
+    """Cameras had been lost to rules that match too much or too little: a name with seg, conf or vis_ inside a word
+    (segway_cam) was taken for a mask or depth view, an MCAP whose only camera is infrared failed, an HDF5 camera
+    stored channel first, as floats or under 64 pixels was not a camera, and one LeRobot camera whose images in the
+    data file do not decode failed the episode. Each is now read, and a camera that cannot be read is listed and is a
+    data issue."""
+    import json
+    import h5py
+    import numpy as np
+    assert not f.not_rgb("/segway_cam/image") and not f.not_rgb("conference_room") and not f.not_rgb("visual_top")
+    assert f.not_rgb("/camera/depth/image") and f.not_rgb("/thermal/image") and f.not_rgb("ir_cam")
+    assert f.not_rgb("/camera/infra1/image_rect_raw") and f.not_rgb("hand_mask")
+    assert set(f.pick_cameras(["/segway_cam/image", "/top/image"], "teleop_arms")[0].values()) == {
+        "/segway_cam/image", "/top/image"}
+    root = tmp_path / "mcap"
+    root.mkdir()
+    _camera_mcap(root / "ir_only.mcap", ["/ir/image/compressed"])
+    rep = f.convert(root, "ego_head", tmp_path / "eps_mcap", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1, rep
+    ctx = _episode_ctx(tmp_path / "eps_mcap", rep, "ir_only")
+    assert [i["camera"] for i in _issues(ctx, "camera_not_colour")] == ["/ir/image/compressed"], ctx
+    root = tmp_path / "h5"
+    root.mkdir()
+    n = 12
+    with h5py.File(root / "ep.h5", "w") as h:
+        h["front"] = np.random.default_rng(0).integers(0, 255, (n, 3, 48, 48)).astype(np.uint8)
+        h["wrist_left"] = np.random.default_rng(1).random((n, 40, 40, 3)).astype(np.float32)
+        h["wrist_right"] = np.random.default_rng(2).integers(0, 255, (n, 32, 32, 3)).astype(np.uint8)
+    assert f.h5_has_camera(root / "ep.h5")
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps_h5", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps_h5", rep, "ep")
+    assert {c["key"] for c in ctx["cameras"].values()} == {"front", "wrist_left", "wrist_right"}, ctx["cameras"]
+    root = tmp_path / "lerobot"
+    good = [{"bytes": _jpeg(k * 8, 96, 72)} for k in range(10)]
+    bad = [{"bytes": b"not an image"} for _ in range(10)]
+    _lerobot(root, {0: {"observation.state": [np.zeros(14)] * 10, "observation.images.top": good,
+                        "observation.images.wrist_left": bad}},
+             feats={"observation.images.top": {"dtype": "image", "shape": [72, 96, 3]},
+                    "observation.images.wrist_left": {"dtype": "image", "shape": [72, 96, 3]},
+                    "observation.images.cam_high": {"dtype": "image", "shape": [72, 96, 3]}}, n_video=0)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps_lr", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1, rep
+    ctx = _episode_ctx(tmp_path / "eps_lr", rep, "000000")
+    assert [c["key"] for c in ctx["cameras"].values()] == ["observation.images.top"], ctx["cameras"]
+    assert [i["camera"] for i in _issues(ctx, "camera_not_decodable")] == ["observation.images.wrist_left"]
+    assert any(u.startswith("observation.images.wrist_left") for u in ctx["source"]["unused_cameras"])
+    assert json.dumps(ctx)
+
+
+def test_every_camera_that_holds_a_picture_is_read():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _every_camera_that_holds_a_picture_is_read(Path(t))

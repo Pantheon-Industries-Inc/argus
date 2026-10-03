@@ -649,7 +649,18 @@ def _stereo_twin(a: str, b: str) -> bool:
     return a != b and swap(a).lower() == b.lower()
 
 
-NOT_RGB = re.compile(r"depth|conf|disparity|mask|seg|thermal|infrared|(^|/)ir(/|$)|vis_", re.I)
+# a camera whose name says it is not a colour picture: depth, confidence, disparity, a mask or segmentation, thermal,
+# infrared (RealSense's infra1), or a visualisation. Matched by whole words (not_rgb): the pattern it replaced matched
+# inside words, so segway_cam, a conference room and visual_top were taken for masks and confidence maps
+NOT_RGB_WORDS = ("depth", "conf", "confidence", "disparity", "mask", "seg", "segmentation", "thermal", "infrared",
+                 "infra", "ir", "vis")
+
+
+def not_rgb(name: str) -> bool:
+    """Whether a camera's name says it is not a colour picture (NOT_RGB_WORDS), by whole words (_names_word)."""
+    return _names_word(name, NOT_RGB_WORDS)
+
+
 TEXT_TOPIC = re.compile(r"instruction|task|annotation|language|prompt", re.I)
 TEXT_MSGS_MAX = 50           # a text topic with more distinct messages than this is a log (a heartbeat), not notes
 # a topic named for the task itself (/task, /instruction), which a sub-topic (/task/subtask, /task/health) is not
@@ -764,7 +775,7 @@ def depth_partner(depth_topic: str, cams: dict) -> str | None:
 def pick_cameras(topics: list[str], rig: str, all_topics: list[str] | None = None) -> tuple[dict, list]:
     """{view: topic} among an episode's cameras. A head-camera rig gets exactly one camera: the one the
     recording computes depth for when there is one (its primary camera), else the best-named one."""
-    rgb = [t for t in topics if not NOT_RGB.search(t)] or list(topics)
+    rgb = [t for t in topics if not not_rgb(t)] or list(topics)
     skipped = [t for t in topics if t not in rgb]
     if rig != "ego_head":
         vm, unused = assign_views(rgb, rig)
@@ -1094,10 +1105,10 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
     those frames, however few frames have one (the 2026-10-03 audit found a column dropped for reading at fewer than
     half), and a cell or image that cannot be read is NaN at its frame (_cells_rows, _image_cells, a data issue).
     An array per frame keeps its shape (a pressure map is 16 x 16, not 256 numbers in a row) and the names the dataset
-    gives its values (features: meta/info.json's, with "shape" and "names"). The harness shows them to the model as they are (label/episode.py), so
-    nothing a dataset records is dropped because our checks do not know what it means: a mobile robot's base and torso,
-    joint velocities, forces, a tactile glove's pressure map. A column left out (wider than SIGNAL_MAX_VALUES, with no
-    reading at all, a counter) is listed in left_out with the reason."""
+    gives its values (features: meta/info.json's, with "shape" and "names"). The harness shows them to the model as
+    they are (label/episode.py), so nothing a dataset records is dropped because our checks do not know what it means:
+    a mobile robot's base and torso, joint velocities, forces, a tactile glove's pressure map. A column left out
+    (wider than SIGNAL_MAX_VALUES, with no reading at all, a counter) is listed in left_out with the reason."""
     out = Signals()
     if df is None:
         return out
@@ -2770,12 +2781,15 @@ def _shown_size(p: Path) -> tuple[int, int]:
 def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra, notes) -> dict:
     """Cameras stored as encoded images inside the data file: each written to H.264 at its frame time."""
     r = item["root"]
-    vmap, unused = pick_cameras(list(r["image_cams"]), rig, list(r["features"]))
+    # a camera meta/info.json lists whose column is not in this episode's data file is listed, never a failure
+    absent = [k for k in r["image_cams"] if k not in df.columns]
+    vmap, unused = pick_cameras([k for k in r["image_cams"] if k in df.columns], rig, list(r["features"]))
+    unused = unused + [f"{k} (listed in meta/info.json, not in the data file)" for k in absent]
     ep.mkdir(parents=True, exist_ok=True)
     fi = df["frame_index"].to_numpy() if "frame_index" in df.columns else np.arange(len(df))
     t = df["timestamp"].to_numpy(dtype=np.float64) if "timestamp" in df.columns else fi / fps
     t = t - t[0]
-    files = {}
+    files, undecoded = {}, []
     for v, key in vmap.items():
         w = FrameWriter(ep / f"{v}.mp4", "")
         for ts, cell in zip(t, df[key].to_numpy()):
@@ -2783,10 +2797,18 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             if isinstance(b, (bytes, bytearray)) and b:
                 w.add(float(ts), bytes(b))
         if not w.close():
-            raise ValueError(f"the {key} images in the data file could not be decoded")
+            # one camera whose images do not decode leaves the others, never fails the episode
+            undecoded.append(key)
+            unused.append(f"{key} (none of its images in the data file could be decoded)")
+            continue
         files[v] = (key, ep / f"{v}.mp4")
+    if not files:
+        raise ValueError(f"the {', '.join(undecoded)} images in the data file could not be decoded")
     extra = {**extra}
     extra["source"]["unused_cameras"] = unused
+    for key in undecoded:
+        add_issue(extra, "camera_not_decodable", f"None of the {key} images in the data file could be decoded, so the "
+                                                 "camera is not shown.", camera=key)
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
     # the state's frames with no reading filled as in convert_lerobot (state_on_frames), one row per image frame
@@ -3014,7 +3036,7 @@ def h5_kind(name: str, ds) -> str | None:
         a = np.asarray(ds[: min(n, 4096)], dtype=np.float64).ravel()
         if np.all(np.diff(a) >= 0) and a[-1] > a[0]:
             return "time"
-    if len(per) == 3 and per[2] in (3, 4) and dt == np.uint8 and min(per[:2]) >= CAMERA_MIN_PX:
+    if _picture_axes(per) is not None and (dt == np.uint8 or (dt.kind == "f" and _picture_values(ds))):
         return "camera"
     if len(per) == 2 and min(per) >= CAMERA_MIN_PX:
         wide_numeric_picture = int(np.prod(per)) > SIGNAL_MAX_VALUES and dt.kind in "uf" and dt.itemsize >= 2
@@ -3025,6 +3047,46 @@ def h5_kind(name: str, ds) -> str | None:
     if int(np.prod(per)) <= SIGNAL_MAX_VALUES:
         return "signal"
     return None
+
+
+H5_PICTURE_MIN_PX = 16     # a colour picture (three or four channels) at least this many pixels on a side is a camera
+
+
+def _picture_axes(per) -> tuple[int, int, bool] | None:
+    """(height, width, channel first) of one sample's shape when it is a colour picture: three or four channels last
+    (H, W, 3) or first (3, H, W), and at least H5_PICTURE_MIN_PX pixels on a side. A camera had needed 64 pixels and
+    uint8 channels last, so a 48 x 48 picture or one stored channel first was no camera at all."""
+    per = tuple(int(x) for x in per)
+    if len(per) != 3:
+        return None
+    if per[2] in (3, 4) and min(per[:2]) >= H5_PICTURE_MIN_PX:
+        return per[0], per[1], False
+    if per[0] in (3, 4) and min(per[1:]) >= H5_PICTURE_MIN_PX:
+        return per[1], per[2], True
+    return None
+
+
+def _picture_values(ds) -> bool:
+    """Whether a float array's first sample reads as a picture: finite values from 0 to 1, or 0 to 255."""
+    try:
+        a = np.asarray(ds[0], dtype=np.float64)
+    except Exception:
+        return False
+    return bool(a.size and np.isfinite(a).all() and a.min() >= 0 and a.max() <= 255)
+
+
+def picture(a: np.ndarray, scale: float = 1.0):
+    """One sample of an HDF5 camera as an RGB or grey PIL image: channels moved last when stored first, floats times
+    scale (255 for a picture stored 0 to 1) and clipped to 0 to 255, a fourth channel dropped."""
+    from PIL import Image
+    a = np.asarray(a)
+    if a.ndim == 3 and a.shape[0] in (3, 4) and a.shape[2] not in (3, 4):
+        a = np.moveaxis(a, 0, -1)
+    if a.dtype != np.uint8:
+        a = np.clip(np.nan_to_num(a.astype(np.float64) * scale), 0, 255).astype(np.uint8)
+    if a.ndim == 3 and a.shape[2] == 4:
+        a = a[:, :, :3]
+    return Image.fromarray(np.ascontiguousarray(a)).convert("RGB")
 
 
 def _h5_datasets(g, base: str = "") -> list[tuple[str, object]]:
@@ -3503,21 +3565,23 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         chosen = {v: by_name[nm] for v, nm in vmap.items()}
         t0 = min(float(times_of(s)[0]) for s in chosen.values())
         files, real = {}, {}
+        undecoded = []
         for v, s in chosen.items():
             ds = f[s["path"]]
             t = times_of(s)
             w = FrameWriter(ep / f"{v}.mp4", "")
+            # a float picture stored 0 to 1 is scaled to 0 to 255, judged on its first frame
+            scale = 255.0 if ds.dtype.kind == "f" and s["n"] and float(np.nanmax(ds[0])) <= 1.0 else 1.0
             for i in range(s["n"]):
                 x = ds[i]
                 b = _h5_bytes(x) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
                 if b is not None:
                     w.add(float(t[i] - t0), b)
                 else:
-                    a = np.asarray(x)
-                    im = Image.fromarray(a if a.ndim == 3 else a.astype(np.uint8)).convert("RGB")
-                    w.add_image(float(t[i] - t0), im)
+                    w.add_image(float(t[i] - t0), picture(x, scale))
             if not w.close():
                 unused.append(f"{s['name']} (no frame could be decoded)")
+                undecoded.append(s["name"])
                 continue
             files[v] = (s["name"], ep / f"{v}.mp4")
         if not files:
@@ -3552,6 +3616,9 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         instr, notes = h5_text(f, g, st["text"])
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
+    for nm in undecoded:
+        add_issue(extra, "camera_not_decodable", f"No frame of the camera {nm} could be decoded, so it is not shown.",
+                  camera=nm)
     if st["unused"]:
         extra["source"]["unused_arrays"] = st["unused"]
     if item.get("state"):
@@ -4649,7 +4716,12 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         chan_topics = [(c.topic, schema_of[c.id]) for c in chans]
     else:
         chan_topics = _mcap_channels_by_scan(item["file"])
-    video_topics = sorted({t for t, s in chan_topics if CAMERA_SCHEMA.search(s) and not NOT_RGB.search(t)})
+    cam_topics = sorted({t for t, s in chan_topics if CAMERA_SCHEMA.search(s)})
+    video_topics = [t for t in cam_topics if not not_rgb(t)]
+    # a recording whose only cameras are infrared, thermal or a mask is labelled from them, as a data issue; a depth
+    # channel alone is distances, not a picture to label
+    not_colour = [] if video_topics else [t for t in cam_topics if not DEPTH_TOPIC.search(t)]
+    video_topics = video_topics or not_colour
     raw_topics = {t for t, s in chan_topics if RAW_IMAGE_SCHEMA.search(s)}
     if not video_topics:
         raise ValueError("the file has no colour camera channel"
@@ -4739,6 +4811,13 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     files = {v: (t, ep / f"{v}.mp4") for v, t in vmap.items()}
     extra = {"task_label": [item["name"]], "source": {"format": "mcap (cameras and text channels)", "file": item["name"],
                                                       "unused_cameras": unused}}
+    for t in missing:
+        add_issue(extra, "camera_not_decodable", f"No frame of the camera {t} could be decoded, so it is not shown.",
+                  camera=t)
+    for t in (t for t in vmap.values() if t in not_colour):
+        add_issue(extra, "camera_not_colour", f"{t} is the recording's only camera and its name says it is not a "
+                                              "colour camera (infrared, thermal or a mask); the episode is labelled "
+                                              "from it.", camera=t)
     instr, notes = mcap_task_texts(texts, n_text, t0)
     if instr:
         extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the MCAP.")
