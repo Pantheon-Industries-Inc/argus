@@ -3141,14 +3141,19 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             return a, None
         rows, gap = fill_rows(q, q[ok], a[ok])
         return rows, (gap_words(gap, q[0]) if gap else None)
-    notes, read = [], []
+    notes, read, failed = [], [], {}
+
+    def fail(name, note):
+        # why an array named as the state is not read, kept by the side its name says for a two arm state
+        notes.append(note)
+        failed.setdefault(side_of(name), note)
     for name in cands:
         if name not in signals and left_out[name] == NOT_FINITE:
-            notes.append(f"Labelled from the video, because the recorded state {name} has values that are not all "
+            fail(name, f"Labelled from the video, because the recorded state {name} has values that are not all "
                          "finite numbers.")
             continue
         if name not in signals:
-            notes.append(f"Labelled from the video, because the recorded state {name} could not be placed on the "
+            fail(name, f"Labelled from the video, because the recorded state {name} could not be placed on the "
                          f"camera's frames ({left_out[name]}).")
             continue
         a = np.asarray(signals[name], dtype=np.float64)
@@ -3156,18 +3161,18 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         dims = a.shape[1]
         if names is None and H5_JOINT_ARRAY.search(own(name)) and dims in (7, 14):
             # the file names no value, but the array's name says every value is a joint, so there is no gripper
-            notes.append(f"Labelled from the video: the array's name says every value is a joint, so its {dims} values "
+            fail(name, f"Labelled from the video: the array's name says every value is a joint, so its {dims} values "
                          f"are {dims} joints and no gripper, and our checks read "
                          + ("six joints and a gripper per arm." if rig == "teleop_arms" else
                             "a 6D pose and an opening per gripper.") + f" The recorded state is the HDF5 array {name}.")
             continue
         kind, note = state_layout(dims, rig, names)
         if kind == "none":
-            notes.append(f"{note} The recorded state is the HDF5 array {name}." if note else None)
+            fail(name, f"{note} The recorded state is the HDF5 array {name}." if note else None)
             continue
         a, why = filled(a)
         if a is None:
-            notes.append(f"Labelled from the video: the recorded state {name} has no reading on any frame."
+            fail(name, f"Labelled from the video: the recorded state {name} has no reading on any frame."
                          if why == "has no reading on any frame" else
                          f"Labelled from the video, because the recorded state {name} {why}.")
             continue
@@ -3180,6 +3185,11 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
     other = next((r for r in read[1:] if side_of(first[0]) and side_of(r[0]) not in (None, side_of(first[0]))), None)
     arms = sorted([first, other], key=lambda r: side_of(r[0]) != "left") \
         if rig == "teleop_arms" and other and first[1].shape[1] == other[1].shape[1] == JOINT_DIMS else [first]
+    # one side's arm whose other side's array failed is half a state, so neither is read, as joint_state reads no arm
+    # when one side's channel is not the layout; the note gives the side that failed and why
+    lost = {"left": "right", "right": "left"}.get(side_of(first[0]))
+    if rig == "teleop_arms" and len(arms) == 1 and lost and failed.get(lost):
+        return None, None, None, None, failed[lost]
 
     def command(name, shape):
         # the array named as the action beside it: of its shape, of its side when it is one side's arm
@@ -3328,12 +3338,13 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Sign
             with h5py.File(p, "r") as f:
                 st = h5_streams(f, "")
                 got = h5_signals(f, {**st, "signal": [s for s in st["signal"] if s["clock"]]}, q_abs, None, n_anchor)
+                # with several files each array, kept or left out, carries its file's name first
+                named = (lambda k: f"{p.stem} {k}") if len(paths) > 1 else (lambda k: k)
                 for k, v in got.items():
-                    name = f"{p.stem} {k}" if len(paths) > 1 else k
-                    out[name] = v
-                    out.meta[name] = got.meta[k]
-                out.left_out += got.left_out
-                out.left_out += [(s["name"], "no clock to place it against the videos") for s in st["signal"]
+                    out[named(k)] = v
+                    out.meta[named(k)] = got.meta[k]
+                out.left_out += [(named(k), why) for k, why in got.left_out]
+                out.left_out += [(named(s["name"]), "no clock to place it against the videos") for s in st["signal"]
                                  if not s["clock"]]
         except Exception as e:
             out.left_out.append((p.name, f"could not be read ({type(e).__name__})"))

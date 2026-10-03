@@ -639,6 +639,38 @@ def test_a_side_from_value_names_only_completes_a_pair():
         _a_side_from_value_names_only_completes_a_pair(Path(t))
 
 
+def _one_side_of_two_hdf5_arms_that_fails_reads_neither(tmp_path):
+    """A left.h5 and a right.h5 beside videos whose right qpos cannot be read (an infinity, or nine values) had the
+    left arm read alone as a one arm state with no note. As joint_state leaves both MCAP arms unread when one side's
+    channel is not the layout, neither arm is read, and the note names the side that failed and why."""
+    import json
+    import h5py
+    import numpy as np
+    t0 = 1_790_000_000.0
+    th = t0 - 0.1 + np.arange(60) / 100
+    for case, dims in (("inf", 7), ("wide", 9)):
+        root = tmp_path / case / "upload"
+        d = _videos_with_an_hdf5_arm_state(root)
+        (d / "robot.h5").unlink()
+        for side, n in (("left", 7), ("right", dims)):
+            a = np.stack([0.3 * np.sin(th - t0 + j) for j in range(n)], axis=1)
+            if side == "right" and case == "inf":
+                a[20, 2] = np.inf
+            with h5py.File(d / f"{side}.h5", "w") as h:
+                h["timestamps"] = (th * 1e9).astype(np.int64)
+                h["qpos"] = a
+        rep = f.convert(root, "teleop_arms", tmp_path / case / "eps", "test", 900)
+        ctx = json.loads((tmp_path / case / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+        assert ctx["state_kind"] == "none" and "right qpos" in ctx["state_note"], (case, ctx.get("state_note"))
+        assert "left qpos" in {x["name"] for x in ctx.get("signals") or []}
+
+
+def test_one_side_of_two_hdf5_arms_that_fails_reads_neither():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _one_side_of_two_hdf5_arms_that_fails_reads_neither(Path(t))
+
+
 def test_two_arms_in_their_own_files_or_messages():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
