@@ -595,37 +595,49 @@ def open_cameras(files: dict, extra: dict, prs: dict | None = None) -> dict:
     return prs
 
 
-CAMERA_SPAN_SLACK_S = 0.5    # a camera is flagged when it starts or ends more than this before or after the main one
+# A stretch at the start or end of an episode that one of its streams does not cover is a recorder starting up or
+# stopping, no data issue, while it is within EDGE_SLACK_S and within EDGE_SLACK_SHARE of the episode: half a second is
+# nothing in a minute of footage, but 40 percent of a 1 s episode is a stream that missed it, so a short episode still
+# gets its issue.
+EDGE_SLACK_S = 0.5
+EDGE_SLACK_SHARE = 0.1
+
+
+def edge_slack(span_s: float) -> float:
+    """The lead or tail of an episode of span_s seconds that a stream may miss without a data issue: the smaller of
+    EDGE_SLACK_S and EDGE_SLACK_SHARE of the episode. One rule for every such fact, a camera that starts late or ends
+    early, paired by time or not (camera_span_issues, on the anchor's span), and depth that does (depth_gap_issues)."""
+    return min(EDGE_SLACK_S, EDGE_SLACK_SHARE * span_s)
 
 
 def camera_span_issues(extra: dict, times: dict, anchor: str, names: dict, ctx: dict) -> None:
     """Each camera's span against the episode's, as issues on extra; times {view: its frame times on the episode's
     clock}, names {view: camera name}, ctx the episode's profile and cameras (board/clips.py camera_label names
     them). The episode is the anchor camera's frames, from its first to one frame past its last. A camera that starts
-    or ends more than CAMERA_SPAN_SLACK_S inside it is camera_short, with the stretch it shows nothing for. The
+    or ends more than the edge slack (edge_slack) inside it is camera_short, with the stretch it shows nothing for. The
     anchor stays the main camera even when it is the short one, since the views name the cameras' roles (a wrist
     camera made the anchor would be taken for the scene camera): it is then main_camera_short, with the stretch the
-    other cameras cover past it, which the board shows and the labels do not. Board clips compared a clip only with
-    its own camera's frame count, so a camera that ended early was never flagged."""
+    other cameras cover past it, which the board shows and the labels do not."""
     from board.clips import camera_label
     step = lambda t: float(np.median(np.diff(t))) if len(t) > 1 else 1 / 30
     span = {v: (float(t[0]), float(t[-1]) + step(t)) for v, t in times.items() if len(t)}
     if anchor not in span:
         return
     a0, a1 = span[anchor]
+    slack = edge_slack(a1 - a0)
     label = lambda v: camera_label(v, ctx)
     for v, (t0, t1) in span.items():
         if v == anchor:
             continue
-        if t1 < a1 - CAMERA_SPAN_SLACK_S:
+        if t1 < a1 - slack:
             add_issue(extra, "camera_short", f"The {label(v)} video ends at {t1 - a0:.2f} s, before the episode ends at "
                                              f"{a1 - a0:.2f} s, so it shows nothing after that.",
                       camera=names[v], t0_s=t1 - a0, t1_s=a1 - a0)
-        if t0 > a0 + CAMERA_SPAN_SLACK_S:
+        if t0 > a0 + slack:
             add_issue(extra, "camera_short", f"The {label(v)} video starts at {t0 - a0:.2f} s, after the episode "
                                              "starts, so it shows nothing before that.",
                       camera=names[v], t0_s=0.0, t1_s=t0 - a0)
-    later = [v for v, (_, t1) in span.items() if t1 > a1 + CAMERA_SPAN_SLACK_S]
+    later = [v for v, (_, t1) in span.items() if t1 > a1 + slack]
     if later:
         end = max(span[v][1] for v in later)
         add_issue(extra, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, ends at "
@@ -633,7 +645,7 @@ def camera_span_issues(extra: dict, times: dict, anchor: str, names: dict, ctx: 
                                               f"{'goes' if len(later) == 1 else 'go'} on to {end - a0:.2f} s; that "
                                               "part is shown on the board but not labelled.",
                   camera=names[anchor], t0_s=a1 - a0, t1_s=end - a0)
-    earlier = [v for v, (t0, _) in span.items() if t0 < a0 - CAMERA_SPAN_SLACK_S]
+    earlier = [v for v, (t0, _) in span.items() if t0 < a0 - slack]
     if earlier:
         start = min(span[v][0] for v in earlier)
         add_issue(extra, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, starts "
@@ -1676,13 +1688,18 @@ def depth_kmap(t_depth: np.ndarray, t_anchor: np.ndarray) -> np.ndarray:
 
 def depth_gap_issues(extra: dict, name: str, km: np.ndarray, t_anchor: np.ndarray) -> None:
     """The stretches of the anchor's frames with no depth reading (depth_kmap -1) as depth_partial issues on extra,
-    one per stretch, on the episode's clock (t_anchor, the anchor's frame times on it)."""
+    one per stretch, on the episode's clock (t_anchor, the anchor's frame times on it). A stretch at the episode's
+    start or end within the edge slack (edge_slack) is a recorder starting or stopping, no issue."""
     miss = np.flatnonzero(np.asarray(km) < 0)
     if not len(miss):
         return
     ta = np.asarray(t_anchor, dtype=np.float64)
+    step = float(np.median(np.diff(ta))) if len(ta) > 1 else 1 / 30
+    slack = edge_slack(float(ta[-1] - ta[0]) + step)
     for run in np.split(miss, np.flatnonzero(np.diff(miss) > 1) + 1):
         t0, t1 = float(ta[run[0]]), float(ta[run[-1]])
+        if (run[0] == 0 or run[-1] == len(ta) - 1) and t1 - t0 + step <= slack:
+            continue
         add_issue(extra, "depth_partial", f"The {name} camera's depth has no frame from {t0:.2f} s to {t1:.2f} s, so "
                                           "there is no depth reading for that part of the episode.",
                   camera=name, t0_s=t0, t1_s=t1)

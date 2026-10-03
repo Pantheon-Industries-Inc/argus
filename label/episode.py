@@ -87,7 +87,10 @@ CONTACT_EVERY_S = 4.0
 CONTACT_MAX = 8
 CONTACT_MIN_CHANGE = 0.25    # of the channel's own range over the episode, between consecutive instants
 CONTACT_MIN_GAP_S = 2.0
-PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
+# A camera paired by time is shown at an instant up to this far outside its own first and last frame: a pairing
+# tolerance, whether its nearest frame still stands for that instant (a wrist camera whose first frame comes 0.034 s
+# after the anchor's), not the edge a stream may miss without a data issue (prepare/formats.py edge_slack)
+PAIRED_SPAN_SLACK_S = 0.1
 GRID_GUTTER = 84
 GRID_HEADER = 30
 
@@ -913,42 +916,43 @@ def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
 
 def _coverage_note(ep: dict, pl: dict) -> str:
     """A camera that has no frame at some instants (recording_at), said so its empty cells are read as what they are:
-    when it records (_in_span), the instants after its file ends (frames), and the instants its file could not be
+    the instants before its video starts or after it ends (a camera paired by time that was not recording, _in_span,
+    or a camera whose file ends first, frames), each said the same way for both, and the instants its file could not be
     decoded at (all of them for a file none of whose frames decodes). One camera can have more than one of these, and
     each is said. When every camera's file ends before the episode does, the last instant is the last frame they have
     (frames, ep["footage_end"]), which is said too."""
-    gaps, ended, broken, never = [], [], [], []
+    starts, ended, broken, never = [], [], [], []
     at = lambda ks: ", ".join(f"{frame_time(ep, k):.2f} s" for k in sorted(ks))
     for v in views(ep):
         if all(recording_at(ep, v, k) for k in pl["ks"]):
             continue
         name = cam_name(ep, v)
-        if not all(_in_span(ep, v, k) for k in pl["ks"]):
-            t = ep["times"][v]
-            gaps.append(f"{name} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
-        # the instants of the request it could not decode (one no camera could show has left the request)
-        bad = set((ep.get("decode_failed") or {}).get(v) or ()) & set(pl["ks"])
         if v in (ep.get("undecodable") or ()):
             never.append(f"{name}'s video could not be decoded at any instant")
-        elif bad:
+            continue
+        # the instants of the request it could not decode (one no camera could show has left the request)
+        bad = set((ep.get("decode_failed") or {}).get(v) or ()) & set(pl["ks"])
+        out_of = [k for k in pl["ks"] if not recording_at(ep, v, k) and k not in bad]
+        t = (ep.get("times") or {}).get(v) if (ep.get("kmap") or {}).get(v) is not None else None
+        before = [k for k in out_of if t is not None and frame_time(ep, k) < float(t[0])]
+        after = [k for k in out_of if k not in before]
+        if before:
+            starts.append(f"{name}'s video starts after the episode does, so it has no frame at {at(before)}")
+        if after:
+            ended.append(f"{name}'s video ends before the episode does, so it has no frame at {at(after)}")
+        if bad:
             broken.append(f"{name}'s video could not be decoded at {at(bad)}")
-        ends = {k for k in (ep.get("no_frame") or {}).get(v, ()) if k not in bad and _in_span(ep, v, k)}
-        if ends:
-            ended.append(f"{name}'s video ends before the episode does, so it has no frame at {at(ends)}")
     out = ""
-    span_tail = ("so {its} cells are empty at the instants outside that time, and {it} {is_} left out of a detail view "
-                 "there.")
     gone_tail = "{Its} cells at those times are empty, and {it} {is_} left out of a detail view there."
     never_tail = "{Its} cells are all empty, and {it} {is_} left out of every detail view."
-    for parts, tail in ((gaps, span_tail), (ended + broken, gone_tail), (never, never_tail)):
+    for parts, tail in ((starts + ended + broken, gone_tail), (never, never_tail)):
         if not parts:
             continue
         one = len(parts) == 1
         words = {"its": "its" if one else "their", "Its": "Its" if one else "Their", "it": "it" if one else "they",
                  "is_": "is" if one else "are"}
         s = "; ".join(parts)
-        lead = " " + s[0].upper() + s[1:]
-        out += lead + (", " if tail.startswith("so") else ". ") + tail.format(**words)
+        out += " " + s[0].upper() + s[1:] + ". " + tail.format(**words)
     if ep.get("footage_end") is not None:
         out += (" Every camera's video ends before the episode does, so the last instant is the last frame they have, "
                 f"at {frame_time(ep, ep['footage_end']):.2f} s.")

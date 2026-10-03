@@ -228,6 +228,35 @@ def test_a_main_camera_that_ends_early_is_flagged_with_what_the_others_cover_pas
     assert not _issues(ctx, "camera_short")
 
 
+def test_the_edge_a_camera_may_miss_without_an_issue_is_at_most_a_tenth_of_the_episode(tmp_path):
+    """A camera missing the last 0.2 s of a 1 s episode had raised no issue, since any edge under half a second was
+    allowed. The edge a camera may miss is the smaller of half a second and a tenth of the episode (edge_slack), the
+    rule a signal's edges follow, so it is flagged there and a camera missing 0.33 s of 20 s is not."""
+    for secs, short, flagged in ((1.0, 24, True), (20.0, 590, False)):
+        root = tmp_path / f"up{secs:g}"
+        _mp4(root / "ep1" / "top.mp4", int(secs * 30))
+        _mp4(root / "ep1" / "wrist_left.mp4", short)
+        rep = f.convert(root, "teleop_arms", tmp_path / f"eps{secs:g}", "test", 900)
+        assert bool(_issues(_ctx(tmp_path / f"eps{secs:g}", rep), "camera_short")) is flagged, secs
+
+
+def test_a_camera_paired_by_time_that_ends_early_or_starts_late_is_named_as_an_unpaired_one_is(tmp_path):
+    """A camera paired by capture time that stopped first had been described as having frames only between two times,
+    in other words than a camera that is not paired. Both say the video ends before the episode does, or starts after
+    it, and the instants it has no frame at."""
+    from label import episode as me
+    up = tmp_path / "up"
+    files = {"exo": ("top", _mp4(up / "top.mp4", 60)), "left": ("wrist_left", _mp4(up / "wrist_left.mp4", 30)),
+             "right": ("wrist_right", _mp4(up / "wrist_right.mp4", 30))}
+    ep_dir = tmp_path / "eps" / "episode_a"
+    f.video_views_episode(ep_dir, files, "teleop_arms", "probe", {},
+                          real={"exo": np.arange(60) / 30, "left": np.arange(30) / 30, "right": 1.0 + np.arange(30) / 30})
+    prompt = me.build_request(ep_dir)["prompt"]
+    assert "left's video ends before the episode does, so it has no frame at 1.50 s, 1.97 s" in prompt.lower(), prompt
+    assert "right's video starts after the episode does, so it has no frame at 0.00 s" in prompt.lower(), prompt
+    assert "has frames only" not in prompt
+
+
 def test_cameras_of_one_length_raise_no_issue(tmp_path):
     root = tmp_path / "up"
     _three_cameras(root)
@@ -428,6 +457,25 @@ def test_depth_as_long_as_its_camera_reads_at_every_frame(tmp_path):
     assert not _issues(ctx)
     note = me._depth_note({**me.load(ep), "depth": dp.load(ep)})
     assert note.endswith("at that instant.")
+
+
+def test_depth_that_misses_only_an_edge_within_the_slack_reads_no_issue(tmp_path):
+    """Depth that stops three frames before its 2 s colour camera has no reading for the last two frames, and the
+    prompt says so, but that tail is within the edge a stream may miss (edge_slack), so it is no data issue."""
+    from label import depth as dp
+    from label import episode as me
+    d = tmp_path / "up" / "ep1"
+    _mp4(d / "exo_cam-images-rgb.mp4", 60)
+    dw = f.DepthWriter(d / "exo_cam-images-depth.mkv")
+    for k in range(57):
+        dw.add(k / 30, np.full((48, 64), 800 + k, np.uint16), 0.001)
+    dw.close()
+    rep = f.convert(tmp_path / "up", "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    ep = tmp_path / "eps" / ctx["episode_id"]
+    assert (np.load(ep / "depth_kmap_exo.npy")[-2:] < 0).all()
+    assert not _issues(ctx, "depth_partial")
+    assert "no depth" in me._depth_note({**me.load(ep), "depth": dp.load(ep)})
 
 
 # ---------------------------------------------------------------- MCAP depth topics

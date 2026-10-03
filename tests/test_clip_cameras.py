@@ -188,8 +188,9 @@ def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligne
     ctx = json.loads((ep / "context.json").read_text())
     assert ctx["state_unaligned"]
     kinds = [x["kind"] for x in ctx["reader_issues"]]
-    assert kinds == ["camera_not_decodable", "state_unaligned"]
-    assert "main camera" in ctx["reader_issues"][1]["what"]
+    # the left camera starts 0.5 s in and the right one goes on 0.5 s past the top camera
+    assert kinds == ["camera_short", "main_camera_short", "camera_not_decodable", "state_unaligned"]
+    assert "main camera" in ctx["reader_issues"][3]["what"]
     e = me.load(ep)
     assert not me.plan(e)["state_usable"] and not e["signals"]
     req = me.build_request(ep)

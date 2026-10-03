@@ -209,7 +209,7 @@ BLOCK_CASES = [
     ("collection_note", "teleop_joints", _add(collection_note="consecutive 3-minute clips of a shift."),
      ("How the dataset cuts its recordings",)),
     ("contact_views", "teleop_joints", _add_contact_views, ("So are the instants just after",)),
-    ("coverage", "teleop_joints", _add_late_camera, ("has frames only from",)),
+    ("coverage", "teleop_joints", _add_late_camera, ("video starts after the episode does",)),
     ("depth", "teleop_joints", _add_depth, ("DEPTH:",)),
     ("state", "teleop_video_only", _add_arm_state, ("RECORDED STILL SPANS", "RECORDED MOTION")),
     ("state_unaligned", "teleop_joints", _misalign, ("RECORDED STATE: not given",)),
