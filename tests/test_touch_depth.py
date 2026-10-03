@@ -863,3 +863,17 @@ def test_a_depth_frame_that_does_not_decode_is_left_out_and_the_rest_are_read(mo
     monkeypatch.setattr(av, "open", lambda *a, **kw: Container())
     got = dp.decode({"packed": "depth.mkv"}, list(range(10)), [2, 5, 7])
     assert sorted(got) == [2, 7] and int(got[7][0, 0]) == 7
+
+
+def test_a_value_with_no_reading_reads_its_rest_as_zero_without_a_warning():
+    """A value with no reading in the whole episode (an all-NaN column) rests at 0, in an array and in a small vector,
+    and reading it warns of nothing (a warning in the run's output would hide a real one)."""
+    import warnings
+    big = np.full((30, 8), 3072.0)
+    big[5:9, 2] -= 900
+    big[:, 6] = np.nan
+    small = np.c_[np.zeros(30), np.full(30, np.nan)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        rb, rs = sg.resting_level(big), sg.resting_level(small)
+    assert rb[6] == 0.0 and rb[0] == 3072.0 and rs.tolist() == [0.0, 0.0]

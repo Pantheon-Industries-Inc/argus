@@ -167,7 +167,9 @@ def resting_level(a: np.ndarray, rest=None) -> np.ndarray:
         return np.asarray(rest, dtype=np.float64)
     if not _any_finite(a):
         return np.zeros(a.shape[1])
-    with np.errstate(all="ignore"):
+    # a value with no reading at all rests at 0 (nan_to_num); the percentile of its empty column is NaN, said quietly
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
         if a.shape[1] > SMALL:
             end = _pooled_end(a)
             # value by value, a few thousand values at a time
