@@ -3037,10 +3037,51 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
     return out
 
 
+# An HDF5 array is the episode's recorded state when its own name says so: ALOHA's observations/qpos, a recorder's
+# state or robot_state, or joint_positions. It is then read by the same rule as a LeRobot observation.state
+# (state_layout). An array named for joint positions names every value a joint, so DROID's seven Franka joints are not
+# taken for six joints and a gripper; robomimic's obs/robot0_joint_pos is not named as the state and stays a signal.
+H5_STATE_NAME = re.compile(r"(^|/)(qpos|state|states|robot_state|joint_positions?|joint_pos)$", re.I)
+H5_JOINT_ARRAY = re.compile(r"(^|/)joint_pos(itions?)?$", re.I)
+H5_ACTION_NAME = re.compile(r"(^|/)actions?$", re.I)
+
+
+def h5_state(signals: Signals, rig: str) -> tuple:
+    """(state, action, value names, the state array's name, note) of an HDF5 episode, from its signals (h5_signals,
+    already one row per anchor frame): the array named as the state (H5_STATE_NAME, the shortest name when several
+    are), laid out by state_layout with the names the file gives its values, and the array named as the action when
+    it has the state's shape. Both leave the signals when the state is read; otherwise they stay, and note says why.
+    All None on a head camera or when no array is named as the state."""
+    if rig == "ego_head":
+        return None, None, None, None, None
+    cands = sorted((k for k in signals if H5_STATE_NAME.search(k)), key=len)
+    if not cands:
+        return None, None, None, None, None
+    name = cands[0]
+    a = np.asarray(signals[name], dtype=np.float64)
+    meta = getattr(signals, "meta", {}) or {}
+    names = (meta.get(name) or {}).get("names")
+    if names is None and H5_JOINT_ARRAY.search(name):
+        names = [f"joint {i + 1}" for i in range(a.shape[1])]
+    kind, note = state_layout(a.shape[1], rig, names)
+    if kind == "none":
+        return None, None, None, None, note
+    if not np.isfinite(a).all():
+        return None, None, None, None, f"Labelled from the video: the recorded state {name} has frames with no reading."
+    act = next((k for k in signals if H5_ACTION_NAME.search(k) and np.shape(signals[k]) == a.shape
+                and np.isfinite(np.asarray(signals[k], dtype=np.float64)).all()), None)
+    action = np.asarray(signals.pop(act), dtype=np.float64) if act else None
+    signals.pop(name)
+    for k in (name, act):
+        meta.pop(k, None)
+    return a, action, names, name, None
+
+
 def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     """One HDF5 episode: its cameras written to H.264 at their frame times (encoded images as they are decoded, raw
     frames as they are), its depth to 16-bit FFV1, every signal on the anchor camera's frames, and its text as the
-    instruction and the uploader's notes (h5_streams says what each array is)."""
+    instruction and the uploader's notes (h5_streams says what each array is). An array named as the state is read as
+    the state by the same rule as LeRobot's (h5_state)."""
     import h5py
     from PIL import Image
     if item.get("error"):
@@ -3102,11 +3143,16 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if dw.close():
                 depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": source}
         signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
+        state, action, state_names, state_src, state_note = h5_state(signals, rig)
         instr, notes = h5_text(f, g, st["text"])
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
     if st["unused"]:
         extra["source"]["unused_arrays"] = st["unused"]
+    if state_src:
+        extra["source"]["state"] = state_src
+    if state_note:
+        extra["state_note"] = state_note
     if not chosen[anchor]["clock"]:
         extra["source"]["clock_note"] = (f"the file gives no frame times, so frames are {fps:g} per second as it states"
                                          if fps else "the file gives no frame times or rate, so 30 frames per second "
@@ -3117,7 +3163,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         set_uploader_notes(extra, notes)
     if chosen[anchor]["clock"]:
         extra["clock_origin_s"] = t0         # the recorder's time at the clips' zero
-    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth)
+    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth,
+                               state=state, action=action, state_names=state_names)
 
 
 def depth_scale_attr(ds) -> float | None:

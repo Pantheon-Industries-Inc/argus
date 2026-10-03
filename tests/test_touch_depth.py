@@ -561,3 +561,52 @@ def test_loading_an_episode_keeps_every_field_of_a_signal_but_its_name_and_key(t
         "episode_id": ep.name, "profile": "handheld_gripper", "fps": 30, "n_state_frames": 10, "state_kind": "none",
         "cameras": {}, "signals": [{"name": "pad", "key": "s0", "dims": 1, "gaps": 3, "units": "kPa"}]}))
     assert me.load(ep)["signal_meta"]["pad"] == {"dims": 1, "gaps": 3, "units": "kPa"}
+
+
+def _h5_rig(path: Path, arrays: dict, n: int = 40) -> None:
+    """An HDF5 episode of one 20 fps scene camera on a ns clock from boot, with these arrays beside it."""
+    with h5py.File(path, "w") as f:
+        f.create_dataset("observations/timestamps", data=(10**12 + np.arange(n) * 50_000_000).astype(np.int64))
+        f.create_dataset("observations/images/cam_high",
+                         data=np.random.default_rng(0).integers(0, 255, (n, 96, 128, 3), dtype=np.uint8))
+        for k, v in arrays.items():
+            f.create_dataset(k, data=v)
+
+
+def test_an_hdf5_state_is_read_by_the_same_rule_as_a_lerobot_one(tmp_path):
+    """ALOHA keeps two arms of six joints and a gripper in observations/qpos and the commands in action: the state
+    and action of the episode, no longer signals. Its velocities stay a signal."""
+    n = 40
+    t = np.arange(n) / 20.0
+    q = np.stack([0.3 * np.sin(t + j) for j in range(14)], axis=1)
+    q[:, 6] = q[:, 13] = (t > 1).astype(float)
+    root = tmp_path / "up"
+    root.mkdir()
+    _h5_rig(root / "episode_0.hdf5", {"observations/qpos": q, "observations/qvel": np.gradient(q, axis=0),
+                                      "action": q + 0.01})
+    rep = formats.convert(root, "teleop_arms", tmp_path / "eps", "aloha", 900)
+    assert not rep["failed"]
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == "observations/qpos"
+    z = np.load(ep / "state.npz")
+    assert z["state"].shape == (n, 14) and z["action"].shape == (n, 14)
+    names = {s["name"] for s in ctx.get("signals") or []}
+    assert "observations/qvel" in names and "observations/qpos" not in names and "action" not in names
+    assert "RECORDED MOTION" in me.build_request(ep)["prompt"]
+
+
+def test_an_hdf5_array_named_for_joint_positions_names_every_value_a_joint(tmp_path):
+    """DROID keeps a Franka's seven joints in robot_state/joint_positions and its gripper on its own; the array's name
+    says every value is a joint, so seven of them stay a signal, with the reason as the state note."""
+    n = 40
+    t = np.arange(n) / 20.0
+    root = tmp_path / "up"
+    root.mkdir()
+    joints = np.stack([np.sin(t + j) for j in range(7)], axis=1)
+    _h5_rig(root / "droid.hdf5", {"observations/robot_state/joint_positions": joints,
+                                  "observations/robot_state/gripper_position": np.linspace(0, 1, n)[:, None]})
+    rep = formats.convert(root, "teleop_arms", tmp_path / "eps", "droid", 900)
+    ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert ctx["state_kind"] == "none" and "7 joints and no gripper" in ctx["state_note"]
+    assert any(s["name"].endswith("robot_state/joint_positions") for s in ctx["signals"])
