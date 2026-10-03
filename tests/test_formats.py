@@ -2846,6 +2846,26 @@ def test_another_episodes_note_never_gives_an_episode_its_task():
         _another_episodes_note_never_gives_an_episode_its_task(Path(t))
 
 
+def _a_note_is_found_by_its_name_in_any_case(tmp_path):
+    """Instruction.TXT and top.TXT were read on a filesystem that does not tell case apart and also listed as not read,
+    and on one that does were never read; ep2.JSON gave its take the task and was listed as not read. A note's name is
+    compared casefolded, so it is found, read and not listed on every filesystem."""
+    ctx, rep = _upload_notes(tmp_path / "a", ["ep1/top.mp4", "ep2/top.mp4"],
+                             {"ep1/Instruction.TXT": "pick the cup", "ep2/top.TXT": "pour the tea"})
+    assert ctx["ep1/top"]["instruction"] == "pick the cup" and ctx["ep2/top"]["instruction"] == "pour the tea", ctx
+    assert not _unread_line(rep), rep["missing"]
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    ctx, rep = _upload_notes(tmp_path / "b", takes, {"d/ep2.JSON": {"task": "pour the tea"}})
+    assert "instruction" not in ctx["d/ep1"] and ctx["d/ep2"]["instruction"] == "pour the tea", ctx
+    assert not _unread_line(rep), rep["missing"]
+
+
+def test_a_note_is_found_by_its_name_in_any_case():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_note_is_found_by_its_name_in_any_case(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a

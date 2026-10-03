@@ -963,9 +963,9 @@ def read_annotation(p: Path):
     UTF-8 without a byte order mark, which an editor can save at the start and which would otherwise lead the task."""
     text = p.read_text(encoding="utf-8-sig", errors="replace")
     try:
-        if p.suffix == ".json":
+        if p.suffix.lower() == ".json":
             return json.loads(text)
-        if p.suffix == ".jsonl":
+        if p.suffix.lower() == ".jsonl":
             return [json.loads(l) for l in text.splitlines() if l.strip()]
     except ValueError:
         pass
@@ -977,27 +977,48 @@ NOTE_OWN_EXT = (".json", ".txt", ".jsonl", ".md")
 TASK_NOTE_NAMES = ("instruction.txt", "task.txt")
 NOTE_NAMES = ("annotations.json", "annotation.json", "meta.json") + TASK_NOTE_NAMES + ("annotations.jsonl", "notes.txt")
 # the largest .json of an episode's folder read for its task or a depth scale: a recorder's metadata is small, and Data
-# Review's page sends such a file only up to this size and names a larger one as not sent, so the reader never weighs
-# a file the page would not have sent
+# Review's page sends such a file only up to this size (read.js FOLDER_JSON_MAX) and names a larger one as not sent,
+# so the reader never weighs a file the page would not have sent
 NOTE_JSON_MAX_BYTES = 1_000_000
+
+
+def files_by_name(d: Path) -> dict[str, list[Path]]:
+    """The files of folder d by their casefolded names. A note is looked up by its name in any case (Instruction.TXT is
+    instruction.txt), one rule whether the filesystem tells case apart or not; on one that does not, a lookup by the
+    lower case name had found the file while the listing of what was read held the other spelling."""
+    out: dict[str, list[Path]] = {}
+    if Path(d).is_dir():
+        for p in sorted(Path(d).iterdir()):
+            if p.is_file():
+                out.setdefault(p.name.casefold(), []).append(p)
+    return out
+
+
+def folder_json(d: Path) -> list[Path]:
+    """The .json files of folder d in name order, the extension in any case (ep2.JSON)."""
+    return [p for ps in files_by_name(d).values() for p in ps if p.suffix.lower() == ".json"]
 
 
 def note_files(item: dict) -> list[Path]:
     """The note files of a video item that exist, in the order their notes are given: in the episode's note folder
     (note_folder) the notes named for the episode, then NOTE_NAMES, then each video's own .json, .txt, .jsonl and .md
     (top.txt beside top.mp4, or ep1.txt beside each camera folder's ep1.mp4); a video with no note folder (one of
-    several episodes of its folder) has only its own."""
+    several episodes of its folder) has only its own. Names are compared casefolded (files_by_name)."""
     fs = [Path(f) for f in item["files"]]
-    cands = [f.with_suffix(x) for f in fs for x in NOTE_OWN_EXT]
+    cands = [(f.parent, f.stem + x) for f in fs for x in NOTE_OWN_EXT]
     nf = item.get("note_folder")
     if nf:
-        named = [nf["dir"] / f"{nf['name']}{x}" for x in (".json", ".txt")] if nf["name"] else []
-        cands = named + [nf["dir"] / n for n in NOTE_NAMES] + cands
+        named = [f"{nf['name']}{x}" for x in (".json", ".txt")] if nf["name"] else []
+        cands = [(nf["dir"], n) for n in named + list(NOTE_NAMES)] + cands
+    listing: dict[Path, dict] = {}
     out, seen = [], set()
-    for p in cands:
-        if p.is_file() and p.resolve() not in seen:
-            seen.add(p.resolve())
-            out.append(p)
+    for d, n in cands:
+        if d not in listing:
+            listing[d] = files_by_name(d)
+        for p in listing[d].get(n.casefold(), []):
+            if p.resolve() not in seen:
+                seen.add(p.resolve())
+                out.append(p)
     return out
 
 
@@ -1022,32 +1043,33 @@ def episode_notes(item: dict) -> dict:
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
     one_name = len({f.stem for f in fs}) == 1
-    named = {(nf["dir"] / f"{nf['name']}{x}").resolve() for x in (".json", ".txt")} if nf and nf["name"] else set()
-    owned = {f.with_suffix(x).resolve() for f in fs for x in NOTE_OWN_EXT} - named
+    own_names = {f"{nf['name']}{x}".casefold() for x in (".json", ".txt")} if nf and nf["name"] else set()
+    named = {p for p in files if p.parent == nf["dir"] and p.name.casefold() in own_names} if nf else set()
+    owned = {p for p in files for f in fs if p.parent == f.parent and p.stem.casefold() == f.stem.casefold()} - named
     cams = owned if len(fs) > 1 else set()
     keys = [p.relative_to(nf["dir"]).as_posix() if nf and nf["dir"] in p.parents else p.name for p in files]
     notes = [(k, read_annotation(p)) for k, p in zip(keys, files)]
-    got = {p.resolve(): o for p, (_, o) in zip(files, notes)}
+    got = {p: o for p, (_, o) in zip(files, notes)}
 
-    def task_of(p: Path) -> str | None:
-        o = got.get(p.resolve())
-        if p.suffix == ".json":
-            return instruction_from(o) if isinstance(o, dict) else None
-        return instruction_from(o) if p.suffix == ".txt" and isinstance(o, str) else None
+    def task_of(p: Path | None) -> str | None:
+        ext, o = (p.suffix.lower() if p else ""), got.get(p)
+        return instruction_from(o) if ext == ".json" and isinstance(o, dict) or ext == ".txt" and isinstance(o, str) \
+            else None
 
-    # (rank, position, task): JSON task keys 0, a task file 1, the episode's text file 2, a video's own .txt 3
-    sources = []
+    def own_note(f: Path, ext: str) -> Path | None:
+        return next((p for p in files if p.parent == f.parent and p.name.casefold() == (f.stem + ext).casefold()), None)
+
+    sources = []                          # (rank, position, task), the ranks of task_rank
     for i, p in enumerate(files):
-        r = p.resolve()
-        if r in owned:
+        if p in owned:
             continue                      # a video's own note, weighed below
-        rank = 0 if p.suffix == ".json" else 2 if r in named else 1 if p.name in TASK_NOTE_NAMES else None
+        rank = task_rank(p, p in named)
         if rank is not None and (x := task_of(p)):
             sources.append((rank, i, x))
     if one_name:
         # a video's own note gives the episode's task when every video's own note gives the same one
         owns = [next(((rank, t) for x, rank in ((".json", 0), (".txt", 3))
-                      if (t := task_of(f.with_suffix(x)))), None) for f in fs]
+                      if (t := task_of(own_note(f, x)))), None) for f in fs]
         if all(owns) and len({t for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
@@ -1056,7 +1078,7 @@ def episode_notes(item: dict) -> dict:
         weighed = {p.resolve() for p in files}
         about = {p.stem for p in nf["dir"].iterdir() if p.suffix.lower() in VIDEO_EXT} | set(item.get("cams") or {}) \
             | set(nf["episodes"])
-        for p in sorted(nf["dir"].glob("*.json")):
+        for p in folder_json(nf["dir"]):
             if p.resolve() in weighed or p.stem in about or p.stat().st_size > NOTE_JSON_MAX_BYTES:
                 continue
             if x := instruction_from(_read_json(p)):
@@ -1065,7 +1087,18 @@ def episode_notes(item: dict) -> dict:
                 break
     return {"notes": notes, "instruction": instr, "read": read,
             "repeats": [k for k, o in notes if instr and isinstance(o, str) and o.strip() == instr],
-            "camera_notes": [k for k, p in zip(keys, files) if p.resolve() in cams]}
+            "camera_notes": [k for k, p in zip(keys, files) if p in cams]}
+
+
+def task_rank(p: Path, named_for_episode: bool) -> int | None:
+    """Where a note file of an episode stands among the sources of its task (episode_notes, the lower the first): a
+    JSON note's task keys 0, a task file (TASK_NOTE_NAMES) 1, the text file named for the episode 2; a video's own .txt
+    is 3, weighed apart. None for a note that never gives the task (notes.txt, a .jsonl or .md)."""
+    if p.suffix.lower() == ".json":
+        return 0
+    if named_for_episode:
+        return 2
+    return 1 if p.name.casefold() in TASK_NOTE_NAMES else None
 
 
 # A state's value names settle what the 7 values of one actor are, when the dataset gives them. A seventh value named
@@ -1646,7 +1679,7 @@ def depth_scales(folder: Path) -> dict[Path, list[float]]:
         elif isinstance(x, list):
             for v in x[:200]:
                 walk(v, found)
-    for p in sorted(Path(folder).glob("*.json")):
+    for p in folder_json(folder):
         if p.stat().st_size <= NOTE_JSON_MAX_BYTES:
             found = []
             walk(_read_json(p) or {}, found)
