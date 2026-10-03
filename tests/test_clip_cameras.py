@@ -157,8 +157,9 @@ def test_placeholder_frames_move_onto_the_new_main_cameras_frames(tmp_path):
     entry goes with it and every other camera's moves onto the new main camera's frames by capture time, so labelling
     still leaves out exactly the frames that are placeholders."""
     eps, ep = _recording(tmp_path)
-    files = {"exo": ("top", eps.parent / "up" / "top.mp4"), "left": ("wrist_left", eps.parent / "up" / "wrist_left.mp4"),
-             "right": ("wrist_right", eps.parent / "up" / "wrist_right.mp4")}
+    up = eps.parent / "up"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4"),
+             "right": ("wrist_right", up / "wrist_right.mp4")}
     shutil.rmtree(ep)
     formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": T_LEFT,
                                                                              "right": T_RIGHT},

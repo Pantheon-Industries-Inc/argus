@@ -250,7 +250,8 @@ def test_a_camera_paired_by_time_that_ends_early_or_starts_late_is_named_as_an_u
              "right": ("wrist_right", _mp4(up / "wrist_right.mp4", 30))}
     ep_dir = tmp_path / "eps" / "episode_a"
     f.video_views_episode(ep_dir, files, "teleop_arms", "probe", {},
-                          real={"exo": np.arange(60) / 30, "left": np.arange(30) / 30, "right": 1.0 + np.arange(30) / 30})
+                          real={"exo": np.arange(60) / 30, "left": np.arange(30) / 30,
+                                "right": 1.0 + np.arange(30) / 30})
     prompt = me.build_request(ep_dir)["prompt"]
     assert "left's video ends before the episode does, so it has no frame at 1.50 s, 1.97 s" in prompt.lower(), prompt
     assert "right's video starts after the episode does, so it has no frame at 0.00 s" in prompt.lower(), prompt

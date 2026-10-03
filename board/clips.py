@@ -18,8 +18,8 @@ file, the episode's offset and its exact frame count) into a browser-native H.26
 page shows that camera (the recipe below) and timed on the episode's clock: a camera whose capture times the episode
 keeps (times.npz) plays each frame at its capture time, the times the frames the model is sent are chosen by (retime),
 so a labelled time shows the same instant on the board as in the request; any other camera's frames keep their source
-times. A camera that started recording after the main one starts that much later. It is a viewing copy only: labelling decodes the source files directly and never re-encodes. Idempotent and
-parallel.
+times. A camera that started recording after the main one starts that much later. It is a viewing copy only:
+labelling decodes the source files directly and never re-encodes. Idempotent and parallel.
 
 An episode with any camera that decodes is always kept, labelled and put on the board from the cameras that work. A
 camera whose clip comes out with fewer frames than the episode keeps its clip as cut, and the board plays it; a
@@ -36,10 +36,11 @@ colour clip's timestamps, each showing the depth frame recorded nearest that col
 depth_<camera> against times.npz <camera>), drawn by label/depth.py picture() (near red and far blue, metric depth
 on one fixed scale, depth of unknown unit scaled across the upload, no reading black) at the colour clip's size. A
 colour frame with no depth frame within a frame of it (depth_frame_map, the model's rule) is black, and so is one
-whose depth frame does not decode, which is flagged with its stretch while every other depth frame is kept. The page switches each camera
-between its colour and its depth clip. A depth clip that comes out imperfect (the camera's capture times stop before
-its clip does, or the clip's timestamps differ from the colour clip's) is kept, and one that cannot be cut is left
-out; either is recorded in the episode's reader_issues (record_depth), so the board flags it.
+whose depth frame does not decode, which is flagged with its stretch while every other depth frame is kept. The page
+switches each camera between its colour and its depth clip. A depth clip that comes out imperfect (the camera's
+capture times stop before its clip does, or the clip's timestamps differ from the colour clip's) is kept, and one
+that cannot be cut is left out; either is recorded in the episode's reader_issues (record_depth), so the board flags
+it.
 """
 from __future__ import annotations
 
@@ -960,19 +961,20 @@ def is_end(x: dict) -> bool:
 
 
 def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: bool = False) -> str | None:
-    """Record what board clips found wrong with an episode's cameras in its context.json, in reader_issues, the list
-    of problems an episode was kept and flagged with ({"kind", "what", "camera"}: a short tag, one plain sentence a
+    """Record what board clips found wrong with an episode's cameras in its context.json, in reader_issues, the list of
+    problems an episode was kept and flagged with ({"kind", "what", "camera"}: a short tag, one plain sentence a
     reviewer reads on the board, the camera's name as the reader gives it, or its view). short is {camera:
     extract_one's counts} for the clips that came out with fewer frames than the camera's video lists, which end
-    before the episode does (kind camera_short, with its counts, clip_frames and episode_frames: one issue per camera,
-    in place of the reader's of the camera ending early, as both say it shows nothing past a time), broken {camera:
-    why} for the cameras whose video does not decode (kind camera_not_decodable), which are taken out of the episode
-    (drop_cameras, whose own issues are added), and cut the cameras cut on this run. Other entries are never touched;
-    a camera cut again on a later run is recorded as it came out then, and one not cut again keeps its entry. board/build.py copies the list into
-    the episode's dataset_checks, where each entry raises a data issue (board/families.py), so every board build shows
-    it. The cameras are taken out first, which can move the episode's clock and every time in the context with it,
-    and the context's reader issues are read again after that. keep_clock: the episode is labelled already
-    (drop_cameras). Returns the new main camera when the main camera was taken out, else None."""
+    before the episode does (kind camera_short, with its counts, clip_frames and episode_frames: one issue per
+    camera, in place of the reader's of the camera ending early, as both say it shows nothing past a time), broken
+    {camera: why} for the cameras whose video does not decode (kind camera_not_decodable), which are taken out of
+    the episode (drop_cameras, whose own issues are added), and cut the cameras cut on this run. Other entries are
+    never touched; a camera cut again on a later run is recorded as it came out then, and one not cut again keeps
+    its entry. board/build.py copies the list into the episode's dataset_checks, where each entry raises a data
+    issue (board/families.py), so every board build shows it. The cameras are taken out first, which can move the
+    episode's clock and every time in the context with it, and the context's reader issues are read again after
+    that. keep_clock: the episode is labelled already (drop_cameras). Returns the new main camera when the main
+    camera was taken out, else None."""
     ctx = _context(ep_dir)
     src = json.loads((ep_dir / "sources.json").read_text())
     name = lambda v: str((src.get(v) or {}).get("camera_key") or v)
