@@ -51,7 +51,8 @@ the uploader's own annotation, a claim to check against the video, never as trut
 file in an episode folder that names the task (its prompt, instruction or task) gives the instruction.
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
-arms; x y z roll pitch yaw plus opening for handheld grippers). Every other number the recording keeps is a signal
+arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
+it (state_layout): seven named joints and no gripper stay signals. Every other number the recording keeps is a signal
 (Signals), under its own name, with its shape (a 16 x 16 pressure map stays 16 x 16) and its values' names: counters
 and clocks are bookkeeping, a topic that names its sensor per message is split, a sensor faster than the camera is
 summarised per frame (place_on_frames), and a frame with no reading near it is NaN. Anything read but not kept is
@@ -815,15 +816,57 @@ def read_annotation(paths: list[Path]):
     return None
 
 
-def state_layout(dims: int, rig: str) -> tuple[str, str | None]:
-    """(state_kind, note). 7 or 14 values per frame are 1 or 2 actors of 6 + gripper; anything else is
-    labelled from video."""
+# A state's value names settle what the 7 values of one actor are, when the dataset gives them. A seventh value named
+# for a gripper (left_gripper.pos, gripper) is six values and a gripper, and six named for a position and an
+# orientation (x, y, z, roll, pitch, yaw) make that a pose whatever the rig; seven joints and no gripper (a Franka arm,
+# fr3_left_joint1..7, read as six joints and a gripper until the 2026-10-02 audit) or a quaternion are not the layout
+# the checks read. Names that say none of these (position_0, motor_3) leave the width rule.
+STATE_GRIPPER_NAME = re.compile(r"grip|finger|jaw|claw|opening", re.I)
+STATE_JOINT_NAME = re.compile(r"joint|(^|[^a-z])j\d|waist|shoulder|elbow|forearm|wrist", re.I)
+STATE_POSE_NAME = re.compile(r"(^|[._/ -])(x|y|z|roll|pitch|yaw|rx|ry|rz)$", re.I)
+STATE_QUAT_NAME = re.compile(r"(^|[._/ ])q[wxyz]$|quat", re.I)
+
+
+def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[str, str | None]:
+    """(state_kind, note). 7 or 14 values per frame are 1 or 2 actors of 6 + gripper; anything else is labelled from
+    video. names, one per value when the dataset gives them, settle the layout (STATE_GRIPPER_NAME above); names that
+    say neither a gripper, joints nor a pose keep the width rule."""
     if rig == "ego_head":
         return "none", None
-    if dims in (7, 14):
-        return STATE_KIND[rig], None
-    return "none", (f"Labelled from the video: the recorded state has {dims} values per frame, and our checks expect 7 per "
-                    + ("arm (six joints and a gripper)." if rig == "teleop_arms" else "gripper (a 6D pose and an opening)."))
+    per = "arm (six joints and a gripper)." if rig == "teleop_arms" else "gripper (a 6D pose and an opening)."
+    if dims not in (7, 14):
+        return "none", (f"Labelled from the video: the recorded state has {dims} values per frame, and our checks "
+                        "expect 7 per " + per)
+    kind = STATE_KIND[rig]
+    if not names or len(names) != dims:
+        return kind, None
+    names = [str(x) for x in names]
+    groups = [names[i:i + 7] for i in range(0, dims, 7)]
+    if any(STATE_QUAT_NAME.search(x) for x in names):
+        return "none", ("Labelled from the video: the recorded state's value names give a quaternion, and our checks "
+                        "read a position, a roll, pitch and yaw and an opening per gripper.")
+    seventh = all(STATE_GRIPPER_NAME.search(g[6]) for g in groups)
+    if seventh and not any(STATE_GRIPPER_NAME.search(x) for g in groups for x in g[:6]):
+        if all(STATE_POSE_NAME.search(x) for g in groups for x in g[:6]):
+            return "ee_pose", None
+        if all(STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
+            return "joints", None
+        return kind, None
+    if any(STATE_GRIPPER_NAME.search(x) for x in names):
+        return "none", ("Labelled from the video: the recorded state's value names put a gripper elsewhere than "
+                        "seventh in each group of seven, and our checks read six values and then the gripper.")
+    if all(STATE_JOINT_NAME.search(x) for x in names):
+        return "none", (f"Labelled from the video: the recorded state's value names give {dims} joints and no gripper, "
+                        "and our checks read six joints and a gripper per arm.")
+    return kind, None
+
+
+def state_value_names(feats: dict, state) -> list[str] | None:
+    """The names a LeRobot dataset gives observation.state's values in meta/info.json, one per value, for
+    state_layout; None when there is no state or the names do not give one per value."""
+    if state is None:
+        return None
+    return value_names((feats.get("observation.state") or {}).get("names"), state.shape[1])
 
 
 # Per-frame columns that are the table's bookkeeping, not a recording: never kept as a signal
@@ -1198,7 +1241,8 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
                         prs: dict | None = None, real: dict | None = None, state=None, action=None,
-                        descs: dict | None = None, signals: dict | None = None, depth: dict | None = None) -> dict:
+                        descs: dict | None = None, signals: dict | None = None, depth: dict | None = None,
+                        state_names: list | None = None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
@@ -1207,7 +1251,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     action are rows on the anchor's frames (joint_state). descs {view: text} describes a camera the reader knows
     more about than its slot says (the prompt's camera line). depth {view: {"path", "real" (its own capture times on
     the same recorder clock, or None), "scale_m", "source"}} is each camera's depth stream (depth_entry), timed as its
-    colour camera is."""
+    colour camera is. state_names gives the state's value names for state_layout."""
     from label import episode as me
     prs = prs or {v: probe(p) for v, (_, p) in files.items()}
     order = me.order_views(files)
@@ -1276,7 +1320,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
            "robot_type": None, "fps": round(float(fps), 3), "n_state_frames": int(len(ta)),
            "duration_s": round(float(ta[-1]) + step, 3) if len(ta) else 0.0, "cameras": cams, **extra}
     if state is not None:
-        ctx["state_kind"] = state_layout(state.shape[1], rig)[0]
+        ctx["state_kind"] = state_layout(state.shape[1], rig, state_names)[0]
     write_depth(ep, ctx, dep, dtimes)
     return finish_episode(ep, ctx, sources, state=state, action=action, times=times, signals=signals)
 
@@ -2287,7 +2331,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if r["image_cams"]:
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
-    kind, note = state_layout(state.shape[1] if state is not None else 0, rig)
+    kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(feats, state))
     if state is None and rig != "ego_head":
         note = ("Labelled from the video: the dataset records no observation.state."
                 if df is not None or row.get("data") is None else note)
@@ -2460,7 +2504,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     extra = {**extra}
     extra["source"]["unused_cameras"] = unused
     extra["source"]["images_in_parquet"] = True
-    kind, note = state_layout(state.shape[1] if state is not None else 0, rig)
+    kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
     # the table's other numbers go with the frames as they do beside videos (recorded_signals)
     signals = recorded_signals(df, _used_columns(kind) | set(r["image_cams"]), 0, r["features"])
     ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals)
@@ -3282,9 +3326,24 @@ def _joint_row(msg) -> list[float] | None:
     return joints + grip[:1] if grip else joints
 
 
+def _joint_names(msg, n: int) -> list[str] | None:
+    """The names a joint message gives the values of its row (sensor_msgs/JointState's name), with "gripper" for a
+    gripper reading _joint_row appended from its own field; None when the message names none, or not one per value."""
+    v = _field(msg, "name")
+    if not isinstance(v, (list, tuple)) or not v or not all(isinstance(x, str) and x for x in v):
+        return None
+    v = [str(x) for x in v]
+    if len(v) == n:
+        return v
+    if len(v) == n - 1 and next((g for g in (_vector(_field(msg, k)) for k in GRIPPER_KEYS) if g), None):
+        return v + ["gripper"]
+    return None
+
+
 def mcap_joint_streams(paths: list[Path]) -> dict:
-    """{topic: {"t": seconds on the recording's clock, "pos": rows}} for every channel of these MCAP files that
-    carries an arm's joints (JOINT_KEYS); cameras and text are not read."""
+    """{topic: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or
+    None}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and text are not
+    read."""
     from mcap.reader import make_reader
     out, facs = {}, _decoders()
     for p in paths:
@@ -3299,20 +3358,21 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
                     if ch.id not in decs:
                         decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
                     try:
-                        row = _joint_row(decs[ch.id](msg.data)) if decs[ch.id] else None
+                        m = decs[ch.id](msg.data) if decs[ch.id] else None
+                        row = _joint_row(m) if m is not None else None
                     except Exception:
-                        row = None
+                        m, row = None, None
                     s = out.get(ch.topic)
                     if row is None or (s and len(row) != len(s["pos"][0])):
                         if s is None:
                             skip.add(ch.topic)        # not a joint channel (health, status, poses)
                         continue
-                    s = out.setdefault(ch.topic, {"t": [], "pos": []})
+                    s = out.setdefault(ch.topic, {"t": [], "pos": [], "names": _joint_names(m, len(row))})
                     s["t"].append(msg.log_time / 1e9)
                     s["pos"].append(row)
             except Exception:
                 pass                                  # a cut-off file: the messages before the cut are kept
-    return {t: {"t": np.asarray(s["t"]), "pos": np.asarray(s["pos"], dtype=np.float64)}
+    return {t: {"t": np.asarray(s["t"]), "pos": np.asarray(s["pos"], dtype=np.float64), "names": s["names"]}
             for t, s in out.items() if len(s["t"]) > 1}
 
 
@@ -3637,6 +3697,12 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     if any(d != JOINT_DIMS for d in dims):
         return None, None, (f"Labelled from the cameras, because the recorded arms have {' and '.join(map(str, dims))} "
                             "values per frame and our checks read six joints and a gripper per arm.")
+    for s in order:
+        # the channel's own value names settle six joints and a gripper against seven joints (a Franka arm)
+        kind, why = state_layout(JOINT_DIMS, "teleop_arms", streams[st[s]].get("names"))
+        if kind != "joints":
+            return None, None, why or ("Labelled from the cameras, because the recorded arm channels name their values "
+                                       "as a pose, not six joints and a gripper.")
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
 
     def covers(topic):

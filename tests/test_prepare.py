@@ -182,6 +182,41 @@ def test_state_layout_reads_seven_values_per_actor_else_video_only():
     assert formats.state_layout(14, "ego_head") == ("none", None)
 
 
+def test_state_value_names_settle_six_joints_and_a_gripper_against_seven_joints_or_a_pose():
+    """The names datasets on disk give observation.state. A seventh value named for a gripper is the layout, and its
+    first six named for a position and an orientation make it a pose on any rig; seven joints and no gripper (a
+    Franka arm), a quaternion, or a gripper out of place stay signals; names that say neither keep the width rule."""
+    j = lambda side: [f"{side}_joint_{i}.pos" for i in range(6)] + [f"{side}_gripper.pos"]
+    pose = ["x", "y", "z", "roll", "pitch", "yaw", "gripper"]
+    cases = [
+        (14, "teleop_arms", j("left") + j("right"), "joints"),                        # MolmoAct2 bi_yam
+        (7, "teleop_arms", pose, "ee_pose"),                                           # lerobot_franka_finger_tactile
+        (7, "handheld_gripper", pose, "ee_pose"),                                       # FastUMI
+        (14, "teleop_arms", [f"position_{i}" for i in range(14)], "joints"),           # HABIT, names say neither
+        (7, "teleop_arms", [f"fr3_left_joint{i}" for i in range(1, 8)], "none"),       # a Franka arm, no gripper
+        (7, "handheld_gripper", ["x", "y", "z", "qx", "qy", "qz", "qw"], "none"),       # a quaternion and no opening
+        (7, "teleop_arms", ["gripper"] + [f"joint{i}" for i in range(1, 7)], "none"),  # the gripper first
+        (7, "teleop_arms", None, "joints"), (14, "teleop_arms", None, "joints"),
+        (7, "handheld_gripper", None, "ee_pose"),
+        (16, "teleop_arms", [f"j{i}" for i in range(16)], "none"), (14, "ego_head", j("left") + j("right"), "none"),
+    ]
+    for dims, rig, names, want in cases:
+        kind, note = formats.state_layout(dims, rig, names)
+        assert kind == want, (dims, rig, names, kind)
+        assert (note is None) == (want != "none" or rig == "ego_head"), (names, note)
+    assert "7 joints and no gripper" in formats.state_layout(7, "teleop_arms", [f"a_joint{i}" for i in range(7)])[1]
+
+
+def test_a_state_without_informative_names_reads_as_it_always_did():
+    """No existing fixture names its state, so none changes: no names, or names that say neither joints, a gripper
+    nor a pose, give exactly the width rule's answer for every width and rig."""
+    for dims in range(0, 30):
+        for rig in ("teleop_arms", "handheld_gripper", "ego_head"):
+            want = formats.state_layout(dims, rig)
+            assert formats.state_layout(dims, rig, None) == want
+            assert formats.state_layout(dims, rig, [f"motor_{i}" for i in range(dims)]) == want
+
+
 # ---- the sidecar writer on a real mp4 ----
 
 def test_video_views_episode_times_frames_by_their_pts(tmp_path):

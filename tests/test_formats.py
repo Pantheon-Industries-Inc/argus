@@ -457,6 +457,28 @@ def test_joint_state_reads_only_the_layout_the_checks_read():
     assert f.third_arms({"/left/joint_state": arm(7), "/right/joint_state": arm(7)}) == []
 
 
+def test_an_arm_channel_that_names_seven_joints_and_no_gripper_is_not_read_as_six_and_a_gripper():
+    """sensor_msgs/JointState names its values. Seven joints named and no gripper is a Franka arm, not six joints and
+    a gripper; nothing is claimed as state, so every joint field stays a signal. The same channels unnamed keep the
+    width rule."""
+    import numpy as np
+    from prepare import formats
+    q = np.arange(0, 3, 1 / 30)
+    t = np.arange(-0.1, 3.1, 0.01)
+    pos = np.stack([np.sin(t + j) for j in range(7)], axis=1)
+    named = {f"/{s}/joint_states": {"t": t, "pos": pos, "names": [f"fr3_{s}_joint{j}" for j in range(1, 8)]}
+             for s in ("left", "right")}
+    state, action, note = formats.joint_state(named, q)
+    assert state is None and action is None and "7 joints and no gripper" in note
+    assert formats.state_fields(named, state, action) == {}
+    unnamed = {k: {"t": v["t"], "pos": v["pos"]} for k, v in named.items()}
+    state, _, note = formats.joint_state(unnamed, q)
+    assert state.shape == (len(q), 14) and note is None
+    msg = {"name": ["j1", "j2"], "position": [0.0, 0.1], "gripper_pos": [0.5]}
+    assert formats._joint_names(msg, 3) == ["j1", "j2", "gripper"] and formats._joint_names(msg, 2) == ["j1", "j2"]
+    assert formats._joint_names({"name": [], "position": [0.0]}, 1) is None
+
+
 def test_an_accented_name_keeps_its_letters_in_the_episode_id():
     assert f.episode_name("Día 1 – cocina/toma 1 瓶子 🍶") == "episode_Dia_1_cocina_toma_1"
     assert f.episode_name("Überprüfung_Greifer-3") == "episode_Uberprufung_Greifer_3"
