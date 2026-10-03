@@ -2253,3 +2253,38 @@ def test_an_episode_longer_than_its_header_is_trimmed_to_the_cap():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _an_episode_longer_than_its_header_is_trimmed_to_the_cap(Path(t))
+
+
+def _every_camera_reaches_the_board_even_when_the_model_is_not_shown_it(tmp_path):
+    """Cameras the model is not shown (the second eye of a stereo camera, an infrared video, every camera but one on a
+    head rig, more extra cameras than the model takes) had no footage on the board at all. Each is written to the
+    episode's context.json unshown_cameras with its file, its frames and the reason, so the board can play it named as
+    not shown to the model; an MCAP or HDF5 camera is written to a video of its own for it."""
+    import json
+    root = tmp_path / "videos" / "take1"
+    root.mkdir(parents=True)
+    for cam in ("zed_left", "zed_right", "zed_ir"):
+        _clip(root / f"{cam}.mp4", 20)
+    rep = f.convert(tmp_path / "videos", "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1, rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "take1")
+    un = {u["name"]: u for u in ctx.get("unshown_cameras") or []}
+    assert set(un) == {"zed_right", "zed_ir"}, ctx.get("unshown_cameras")
+    assert "stereo" in un["zed_right"]["why"] and "colour" in un["zed_ir"]["why"], un
+    assert all(Path(u["packed"]).exists() and u["n_frames"] == 20 for u in un.values()), un
+    root = tmp_path / "mcap"
+    root.mkdir()
+    _camera_mcap(root / "head.mcap", ["/cam_a/image/compressed", "/cam_b/image/compressed"])
+    rep = f.convert(root, "ego_head", tmp_path / "eps_mcap", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps_mcap", rep, "head")
+    un = ctx.get("unshown_cameras") or []
+    assert len(un) == 1 and "one head camera" in un[0]["why"], un
+    assert Path(un[0]["packed"]).exists() and un[0]["n_frames"] == 20 and abs(un[0]["start_s"]) < 1e-6, un
+    assert json.dumps(ctx)
+
+
+def test_every_camera_reaches_the_board_even_when_the_model_is_not_shown_it():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _every_camera_reaches_the_board_even_when_the_model_is_not_shown_it(Path(t))

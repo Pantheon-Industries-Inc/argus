@@ -97,6 +97,12 @@ camera_not_decodable, ...), "what": one plain sentence a reviewer reads on the b
 "signal", "t0_s" and "t1_s" (seconds of the episode)}. add_issue appends one entry and never overwrites the others;
 the board shows them as the episode's data issues. What could not be used at all is still listed with its reason
 (context["source"] unused_*), and an episode with nothing to label is listed in the report with why.
+
+Every camera reaches the board. A camera the model is not shown (more extra cameras than MAX_EXTRA_CAMERAS, the second
+eye of a stereo camera, every camera but one on a head rig, an infrared, thermal or mask video) is listed in
+context.json's unshown_cameras, [{"name", "why" (the reason the model is not shown it), "packed" (its video file),
+"base_s" (the episode's offset in it), "n_frames", "start_s" (its first frame on the episode's clock), "fps"}], so the
+board plays it named as not shown to the model; an MCAP or HDF5 camera is written to a video of its own for it.
 """
 from __future__ import annotations
 
@@ -640,6 +646,35 @@ def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
             out[f"extra{n_extra + 1}"] = nm
     unused = [nm for nm in names if nm not in out.values()]
     return out, unused
+
+
+def unshown_why(name: str, rig: str, shown: list[str]) -> str:
+    """Why the model is not shown a camera pick_cameras left unused, in words for the board."""
+    if not_rgb(name):
+        return "not a colour camera (depth, infrared, thermal or a mask), so the model is not shown it"
+    if rig == "ego_head":
+        return "the model is shown one head camera"
+    if any(_stereo_twin(name, c) for c in shown):
+        return "the other eye of a stereo camera the model is shown"
+    return f"beyond the {MAX_EXTRA_CAMERAS} extra cameras the model is shown"
+
+
+def unshown_entry(name: str, path: Path, why: str, base_s: float = 0.0, n_frames: int | None = None,
+                  start_s: float = 0.0, fps: float | None = None) -> dict | None:
+    """One camera the model is not shown, as context.json's unshown_cameras holds it (the module docstring); its frame
+    count and rate from the file when not given. None when the file cannot be read."""
+    if n_frames is None or fps is None:
+        try:
+            pr = probe(Path(path))
+        except Exception:
+            return None
+        n_frames = len(pr["pts"]) if n_frames is None else n_frames
+        fps = fps or measured_fps(seconds(pr)) or pr["fps"]
+    if not n_frames:
+        return None
+    return {"name": str(name), "why": why, "packed": str(Path(path).resolve()), "base_s": round(float(base_s), 6),
+            "n_frames": int(n_frames), "start_s": round(float(start_s), 6),
+            "fps": round(float(fps), 3) if fps else None}
 
 
 def _stereo_twin(a: str, b: str) -> bool:
@@ -1951,7 +1986,14 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
         items.append({"kind": "video", "name": e["name"], "files": files,
                       "dir": (root / e["dir"]) if e["dir"] is not None else None,
                       "cams": {c: root / r for c, r in e["cams"]},
-                      "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}})
+                      "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}, "unshown": []})
+    # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, or
+    # the one whose take its name gives), never to the model
+    for r in left_out:
+        here = [it for it in items if item_folder(it) == (root / r).parent]
+        take = name_parts(Path(r).stem)["take"]
+        for it in here if len(here) == 1 else [it for it in here if take and item_take(it) == take]:
+            it["unshown"].append(root / r)
     for it in items:
         try:
             it["seconds"] = max((durations.get(Path(f).relative_to(root).as_posix()) or _duration(f)) for f in it["files"])
@@ -2125,6 +2167,26 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             continue
         depth[v] = {"path": dp, "real": frame_times(Path(dp), n_d, depth=True) if n_d else None,
                     "scale_m": depth_scale_from(Path(dp).parent), "source": Path(dp).name}
+    # the cameras the model is not shown go to the board (unshown_cameras), timed on the recorder's clock when the
+    # videos carry capture times, else from their own first frame as every separate video file is
+    zero = real.get(anchor)[0] if real.get(anchor) is not None else None
+
+    def start_of(path):
+        if zero is None:
+            return 0.0
+        try:
+            t = frame_times(Path(path), _frame_count(Path(path)))
+        except Exception:
+            t = None
+        return float(t[0] - zero) if t is not None and len(t) else 0.0
+    shown = [nm for nm, _ in files.values()]
+    unshown = [unshown_entry(nm, by[nm], unshown_why(nm, rig, shown), start_s=start_of(by[nm]))
+               for nm in (unused if item["dir"] is not None else [])]
+    unshown += [unshown_entry(Path(q).stem, q, unshown_why(Path(q).stem, rig, shown) if not_rgb(Path(q).stem) else
+                              "an infrared, mask or unmatched depth video, not the colour picture the model reads",
+                              start_s=start_of(q)) for q in item.get("unshown") or []]
+    if any(unshown):
+        extra["unshown_cameras"] = [u for u in unshown if u]
     ep = unique_dir(out, episode_name(item["name"]))
     return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
                                descs=descs, signals=signals, depth=depth, state_names=state_names)
@@ -2653,6 +2715,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if not video_cams and r["image_cams"] and df is not None:
         return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes)
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
+    unshown_keys = list(unused)
     descs = colour_depth_views(r, row, vmap)
     # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused
     # too, and one whose packed video could not be placed on this episode says why (_episodes_v3)
@@ -2701,6 +2764,9 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
                "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(min(s["n_frames"] for s in sources.values())),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
+        un = lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps)
+        if un:
+            ctx["unshown_cameras"] = un
         if note or notes:
             ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
         for i in fixes:
@@ -2740,6 +2806,9 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
            "cameras": cameras, "stream_checks": {"frames_on_grid": grid, "episode_length_meta": row.get("length")},
            **extra}
+    un = lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps)
+    if un:
+        ctx["unshown_cameras"] = un
     if note or notes:
         ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
     for i in fixes:
@@ -2775,6 +2844,26 @@ def colour_depth_views(r: dict, row: dict, vmap: dict) -> dict:
         vmap[f"extra{1 + sum(1 for x in vmap if x.startswith('extra'))}"] = key
         out[key] = (f"the depth of {cams[v]}, stored by the dataset as an ordinary picture, with its own shading of "
                     "near and far")
+    return out
+
+
+def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str], fps: float | None) -> list[dict]:
+    """The episode's cameras the model is not shown (pick_cameras' unused), for the board (unshown_cameras): a packed
+    camera by its window of the shared file, a per episode file whole."""
+    out = []
+    for k in keys:
+        src = row["videos"].get(k)
+        if src is None:
+            continue
+        why = unshown_why(k, rig, shown)
+        if isinstance(src, tuple):
+            mp4, base, to = src
+            e = unshown_entry(k, mp4, why, base_s=base, n_frames=int(round((to - base) * float(fps or 30.0))),
+                              fps=fps)
+        else:
+            e = unshown_entry(k, src, why)
+        if e:
+            out.append(e)
     return out
 
 
@@ -2957,6 +3046,9 @@ def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
              "unsplit": True}
     for k, why in unaligned.items():
         add_issue(extra, "camera_not_aligned", f"The camera {k} is not shown: {why}.", camera=k)
+    un = [unshown_entry(k, item["files"][k], unshown_why(k, rig, list(vmap.values()))) for k in unused]
+    if any(un):
+        extra["unshown_cameras"] = [u for u in un if u]
     if rig != "ego_head":
         extra["state_note"] = ("Labelled from the video, as one recording: its episodes could not be matched to the "
                                "packed video exactly.")
@@ -3727,6 +3819,24 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             files[v] = (s["name"], ep / f"{v}.mp4")
         if not files:
             raise ValueError("no frame of the HDF5 episode's cameras could be decoded")
+        # the cameras the model is not shown are written too, for the board (unshown_cameras)
+        unshown = []
+        for i, nm in enumerate(x for x in unused if x in by_name):
+            s = by_name[nm]
+            ds, t = f[s["path"]], times_of(s)
+            w = FrameWriter(ep / f"unshown{i + 1}.mp4", "")
+            scale = 255.0 if ds.dtype.kind == "f" and s["n"] and float(np.nanmax(ds[0])) <= 1.0 else 1.0
+            for k in range(s["n"]):
+                b = _h5_bytes(ds[k]) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
+                if b is not None:
+                    w.add(float(t[k] - t0), b)
+                else:
+                    w.add_image(float(t[k] - t0), picture(ds[k], scale))
+            n_u = w.close()
+            if n_u:
+                unshown.append(unshown_entry(nm, ep / f"unshown{i + 1}.mp4", unshown_why(nm, rig, names_shown(files)),
+                                             n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
+                                             fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)))
         from label import episode as me
         anchor = me.order_views(files)[0]
         q_abs = times_of(chosen[anchor])
@@ -3760,6 +3870,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     for nm in undecoded:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {nm} could be decoded, so it is not shown.",
                   camera=nm)
+    if any(unshown):
+        extra["unshown_cameras"] = [u for u in unshown if u]
     if st["unused"]:
         extra["source"]["unused_arrays"] = st["unused"]
     if item.get("state"):
@@ -3780,6 +3892,10 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["clock_origin_s"] = t0         # the recorder's time at the clips' zero
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth,
                                state=state, action=action, state_names=state_names)
+
+
+def names_shown(files: dict) -> list[str]:
+    return [nm for nm, _ in files.values()]
 
 
 def depth_scale_attr(ds) -> float | None:
@@ -4878,7 +4994,10 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 depth_of[t] = v
             else:
                 unused.append(f"{t} (depth with no camera of its own)")
-    want = set(vmap.values()) | set(text_topics) | set(depth_of)
+    # the cameras the model is not shown are written too, for the board (unshown_cameras)
+    unshown_of = {t: f"unshown{i + 1}.mp4" for i, t in enumerate(x for x in unused if x in cam_topics
+                                                                  and not DEPTH_TOPIC.search(x))}
+    want = set(vmap.values()) | set(text_topics) | set(depth_of) | set(unshown_of)
     view_of_topic = {t: v for v, t in vmap.items()}
     dwriters: dict[str, DepthWriter] = {}
     writers: dict[str, FrameWriter] = {}
@@ -4910,12 +5029,17 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                             dw = dwriters[ch.topic] = DepthWriter(ep / f"depth_{depth_of[ch.topic]}.mkv")
                         dw.add((int(msg.log_time) - t0) / 1e9, got[0], got[1])
                     continue
-                if ch.topic in view_of_topic:
-                    t0 = int(msg.log_time) if t0 is None else t0          # every camera on the recording's one clock
+                if ch.topic in unshown_of and t0 is None:
+                    continue                      # before the first frame the model is shown: no clock to place it on
+                if ch.topic in view_of_topic or ch.topic in unshown_of:
+                    if ch.topic in view_of_topic:
+                        t0 = int(msg.log_time) if t0 is None else t0      # every camera on the recording's one clock
                     w = writers.get(ch.topic)
                     if w is None:
-                        w = writers[ch.topic] = FrameWriter(ep / f"{view_of_topic[ch.topic]}.mp4",
-                                                            "raw" if ch.topic in raw_topics else str(_field(dec, "format") or "").lower())
+                        out_mp4 = ep / (f"{view_of_topic[ch.topic]}.mp4" if ch.topic in view_of_topic
+                                        else unshown_of[ch.topic])
+                        w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics
+                                                            else str(_field(dec, "format") or "").lower())
                     if ch.topic in raw_topics:
                         im = raw_image(dec)
                         if im is not None:
@@ -4954,6 +5078,15 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     for t in missing:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {t} could be decoded, so it is not shown.",
                   camera=t)
+    un = []
+    for t, name in unshown_of.items():
+        w = writers.get(t)
+        if counts.get(t) and w is not None:
+            fps_u = measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)
+            un.append(unshown_entry(t, ep / name, unshown_why(t, rig, list(vmap.values())), n_frames=counts[t],
+                                    start_s=w.pts[0] / TIME_BASE_DEN, fps=fps_u))
+    if any(un):
+        extra["unshown_cameras"] = [u for u in un if u]
     for t in (t for t in vmap.values() if t in not_colour):
         add_issue(extra, "camera_not_colour", f"{t} is the recording's only camera and its name says it is not a "
                                               "colour camera (infrared, thermal or a mask); the episode is labelled "
@@ -5194,6 +5327,10 @@ def trim_episode(ep: Path, max_s: float) -> dict:
         np.savez(ep / "state.npz", **{k: z[k][:keep] for k in z.files})
     step = float(np.median(np.diff(t))) if n > 1 else 1 / 30
     ctx["trimmed"] = {"to_s": round(float(t[keep - 1]) + step, 3), "of_s": round(float(t[-1]) + step, 3)}
+    for u in ctx.get("unshown_cameras") or []:
+        # a camera the model is not shown keeps its frames up to the same time, at its own rate
+        rate = float(u.get("fps") or ctx.get("fps") or 30.0)
+        u["n_frames"] = int(min(u["n_frames"], max(0, np.ceil((ctx["trimmed"]["to_s"] - u["start_s"]) * rate))))
     ctx["n_state_frames"] = keep
     ctx["duration_s"] = ctx["trimmed"]["to_s"]
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
