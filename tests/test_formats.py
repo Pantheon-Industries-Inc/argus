@@ -1910,3 +1910,86 @@ def test_one_bad_value_never_drops_a_signal():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _one_bad_value_never_drops_a_signal(Path(t))
+
+
+def _png(a) -> bytes:
+    import io
+    from PIL import Image
+    b = io.BytesIO()
+    Image.fromarray(a).save(b, format="PNG")
+    return b.getvalue()
+
+
+def _lerobot(root: Path, episodes: dict, feats: dict | None = None, n_video: int = 30) -> None:
+    """A LeRobot v2.1 folder of one scene camera (n_video frames) and, per episode index, its data table's columns
+    (episodes {index: {column: cells}}), with frame_index, episode_index and timestamp added."""
+    import json
+    import numpy as np
+    import pandas as pd
+    info = {"codebase_version": "v2.1", "fps": 30, "chunks_size": 1000,
+            "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+            "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+            "features": {"observation.images.cam_high": {"dtype": "video", "shape": [36, 64, 3]},
+                         "observation.state": {"dtype": "float32", "shape": [14]}, **(feats or {})}}
+    (root / "meta").mkdir(parents=True)
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    (root / "data" / "chunk-000").mkdir(parents=True)
+    for e, cols in episodes.items():
+        m = len(next(iter(cols.values())))
+        pd.DataFrame({**cols, "frame_index": np.arange(m), "episode_index": np.full(m, e),
+                      "timestamp": np.arange(m) / 30}).to_parquet(root / "data" / "chunk-000" / f"episode_{e:06d}.parquet")
+        d = root / "videos" / "chunk-000" / "observation.images.cam_high"
+        d.mkdir(parents=True, exist_ok=True)
+        _clip(d / f"episode_{e:06d}.mp4", n_video)
+
+
+def _a_lerobot_episode_keeps_every_usable_value(tmp_path):
+    """A LeRobot episode had lost a whole signal for one empty or odd sized cell or one undecodable pad image, every
+    signal when its table was shorter than the video, and its state for one NaN frame (the episode was then told the
+    dataset records no observation.state). Each is kept: a bad cell or image is NaN at its frame, a short table is NaN
+    past its last row, a state with a short gap is filled and read, and each is a data issue."""
+    import json
+    import numpy as np
+    rng = np.random.default_rng(3)
+    root = tmp_path / "upload"
+    state = np.cumsum(rng.normal(0, 0.01, (30, 14)), axis=0)
+    state[5] = np.nan
+    glove = [rng.random(16) for _ in range(30)]
+    glove[10], glove[11] = None, rng.random(15)
+    pad = [{"bytes": _png((rng.random((8, 8)) * 255).astype(np.uint8))} for _ in range(30)]
+    pad[7] = {"bytes": b"not a png"}
+    short = np.cumsum(rng.normal(0, 0.01, (10, 14)), axis=0)
+    _lerobot(root, {0: {"observation.state": list(state), "glove": glove, "tactile.pad": pad},
+                    1: {"observation.state": list(short), "glove": [rng.random(16) for _ in range(10)],
+                        "tactile.pad": pad[:7]  + pad[8:11]}},
+             feats={"tactile.pad": {"dtype": "image", "shape": [8, 8, 1]}})
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 2, rep
+    ctx0 = _episode_ctx(tmp_path / "eps", rep, "000000")
+    ep0 = tmp_path / "eps" / ctx0["episode_id"]
+    assert ctx0["state_kind"] == "joints", ctx0.get("state_note")
+    st = np.load(ep0 / "state.npz")["state"]
+    assert st.shape == (30, 14) and np.isfinite(st).all()
+    assert _issues(ctx0, "state_filled"), ctx0.get("reader_issues")
+    z = np.load(ep0 / "signals.npz")
+    sig = {s["name"]: z[s["key"]] for s in ctx0["signals"]}
+    assert np.isnan(sig["glove"][[10, 11]]).all() and np.isfinite(np.delete(sig["glove"], [10, 11], 0)).all()
+    assert np.isnan(sig["tactile.pad"][7]).all()
+    assert np.isfinite(np.delete(sig["tactile.pad"], 7, 0)).all()
+    assert {i["signal"] for i in _issues(ctx0, "signal_bad_cells")} == {"glove", "tactile.pad"}
+    ctx1 = _episode_ctx(tmp_path / "eps", rep, "000001")
+    ep1 = tmp_path / "eps" / ctx1["episode_id"]
+    assert ctx1["state_kind"] == "none" and "records no observation.state" not in (ctx1.get("state_note") or "")
+    assert "observation.state" in (ctx1.get("state_note") or ""), ctx1.get("state_note")
+    z = np.load(ep1 / "signals.npz")
+    sig = {s["name"]: z[s["key"]] for s in ctx1["signals"]}
+    assert sig["observation.state"].shape == (30, 14) and np.isnan(sig["observation.state"][10:]).all()
+    assert sig["glove"].shape == (30, 16) and np.isfinite(sig["glove"][:10]).all()
+    assert _issues(ctx1, "table_short"), ctx1.get("reader_issues")
+    assert json.dumps(ctx1)
+
+
+def test_a_lerobot_episode_keeps_every_usable_value():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_lerobot_episode_keeps_every_usable_value(Path(t))

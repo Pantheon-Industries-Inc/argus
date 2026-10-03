@@ -1088,11 +1088,13 @@ def value_names(names, dims: int) -> list[str] | None:
 
 def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
     """Every other numeric per-frame column of an episode's table, under the dataset's own name, as (n, values) arrays:
-    the columns that are not bookkeeping (SIGNAL_SKIP), not already read (used: the state, the action, the cameras)
-    and at least n rows long. A reading missing at some frames is still a reading, NaN at those frames, however few
-    frames have one (the 2026-10-03 audit found a column dropped for reading at fewer than half). An array per frame keeps its shape (a
-    pressure map is 16 x 16, not 256 numbers in a row) and the names the dataset gives its values (features:
-    meta/info.json's, with "shape" and "names"). The harness shows them to the model as they are (label/episode.py), so
+    the columns that are not bookkeeping (SIGNAL_SKIP) and not already read (used: the state, the action, the
+    cameras), each row on its frame (frame_rows, on_frames), so a table shorter than the video is NaN past its last
+    row (a data issue, table_issue) rather than dropped. A reading missing at some frames is still a reading, NaN at
+    those frames, however few frames have one (the 2026-10-03 audit found a column dropped for reading at fewer than
+    half), and a cell or image that cannot be read is NaN at its frame (_cells_rows, _image_cells, a data issue).
+    An array per frame keeps its shape (a pressure map is 16 x 16, not 256 numbers in a row) and the names the dataset
+    gives its values (features: meta/info.json's, with "shape" and "names"). The harness shows them to the model as they are (label/episode.py), so
     nothing a dataset records is dropped because our checks do not know what it means: a mobile robot's base and torso,
     joint velocities, forces, a tactile glove's pressure map. A column left out (wider than SIGNAL_MAX_VALUES, with no
     reading at all, a counter) is listed in left_out with the reason."""
@@ -1100,20 +1102,31 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
     if df is None:
         return out
     features = features or {}
+    at = frame_rows(df, n)
+    if n and len(df):
+        table_issue(out, df, at, n)
     for c in df.columns:
         if c in used or SIGNAL_SKIP.search(str(c)) or str(c).startswith("observation.images"):
             continue
         if (features.get(c) or {}).get("dtype") == "video":
             continue
         if (features.get(c) or {}).get("dtype") == "image":
-            a = _image_cells(df[c])               # only the small per-pad images reach here (read_root image_signals)
-            if a is None:
+            got = _image_cells(df[c])             # only the small per-pad images reach here (read_root image_signals)
+            if got is None:
+                out.left_out.append((str(c), "none of its images could be decoded"))
                 continue
-            out.add(str(c), a[0][:n] if len(a[0]) >= n else a[0], shape=a[1], source="image column " + str(c))
+            a, shape, bad = got
+            if bad:
+                bad_cells_issue(out, str(c), bad, len(a), "images that could not be decoded")
+            out.add(str(c), on_frames(a, at, n), shape=shape, source="image column " + str(c))
             continue
-        a = _cells(df[c])
-        if a is None or not a.shape[1] or len(a) < n:
-            continue
+        a, bad = _cells_rows(df[c])
+        if a is None or not a.shape[1]:
+            continue                      # text (a task, a note): read by the task and note readers, not a signal
+        if bad:
+            bad_cells_issue(out, str(c), bad, len(a), "cells that are empty or not of its "
+                                                      f"{a.shape[1]} value{'s' if a.shape[1] != 1 else ''}")
+        a = on_frames(a, at, n)
         # a row has a reading when any of its values does, as checks/sensors.py counts it: a pressure map with one dead
         # cell still reads at every frame. A column with few readings is kept, NaN where it has none (write_signals
         # records the gaps); only one with no reading at all says nothing
@@ -1128,7 +1141,7 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
             continue
         if a.shape[1] == 1 and is_named_clock(c, a[:, 0]):
             # a clock: kept for the sync check, not shown
-            out.clocks[str(c)] = a[:n, 0]
+            out.clocks[str(c)] = a[:n, 0] if n else a[:, 0]
             continue
         if a.shape[1] == 1 and is_counter(a[:, 0]):
             out.left_out.append((str(c), COUNTER_NOTE))
@@ -1136,28 +1149,82 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
         f = features.get(c) or {}
         shape = f.get("shape") if isinstance(f.get("shape"), (list, tuple)) and int(np.prod(f["shape"])) == a.shape[1] \
             else _cell_shape(df[c], a.shape[1])
-        out.add(str(c), a[:n], shape=shape, names=value_names(f.get("names"), a.shape[1]), source="column " + str(c))
+        out.add(str(c), a[:n] if n else a, shape=shape, names=value_names(f.get("names"), a.shape[1]),
+                source="column " + str(c))
     return out
 
 
+def frame_rows(df, n: int) -> np.ndarray | None:
+    """The frame each row of an episode's table belongs to, from its frame_index when that numbers frames once each
+    (a LeRobot table, where a row is a frame), else None (rows are frames in order)."""
+    if not n or df is None or "frame_index" not in df.columns:
+        return None
+    try:
+        fi = np.asarray(df["frame_index"].to_numpy(), dtype=np.int64)
+    except (TypeError, ValueError):
+        return None
+    fi = fi - fi.min() if len(fi) else fi
+    return fi if len(np.unique(fi)) == len(fi) else None
+
+
+def on_frames(a: np.ndarray, at: np.ndarray | None, n: int) -> np.ndarray:
+    """A table's rows on n frames: each at its frame (frame_rows) or in order, a frame no row reaches NaN, and rows past
+    the last frame not shown. n 0 keeps the rows as they are."""
+    if not n:
+        return a
+    out = np.full((n, a.shape[1]), np.nan)
+    if at is None:
+        out[:min(n, len(a))] = a[:n]
+    else:
+        keep = at < n
+        out[at[keep]] = a[keep]
+    return out
+
+
+def table_issue(out: Signals, df, at: np.ndarray | None, n: int) -> None:
+    """A data issue when an episode's table and its video do not cover the same frames: a table shorter than the video
+    (table_short), whose signals are NaN where it has no row, or longer (table_long), whose rows past the video's last
+    frame have no picture to show them with."""
+    rows = np.arange(len(df)) if at is None else at
+    have = int(np.count_nonzero(np.unique(rows[rows < n]) >= 0))
+    past = int(np.count_nonzero(rows >= n))
+    if have < n:
+        out.issues.append({"kind": "table_short", "what": f"The episode's data table has rows for {have} of its {n} "
+                                                          "video frames, so its signals have no reading at the "
+                                                          f"other {n - have}."})
+    if past:
+        out.issues.append({"kind": "table_long", "what": f"The episode's data table has {past} row"
+                                                         f"{'s' if past != 1 else ''} past the video's last frame, "
+                                                         "which have no picture to be shown with."})
+
+
+def bad_cells_issue(out: Signals, name: str, bad: int, rows: int, what: str) -> None:
+    out.issues.append({"kind": "signal_bad_cells", "signal": name,
+                       "what": f"{name} has {bad} of {rows} {what}; those frames are kept as missing readings"})
+
+
 def _image_cells(col):
-    """(rows, (h, w)) of a column of small encoded images (PNG bytes, as LeRobot stores an image feature), each read as
-    grey values; None when they do not decode to one size."""
+    """(rows, (h, w), how many images could not be read) of a column of small encoded images (PNG bytes, as LeRobot
+    stores an image feature), each read as grey values at the size most of them have; an image that does not decode
+    or has another size is a row of NaN, never a reason to drop the column. None when no image decodes."""
     import io
     from PIL import Image
-    rows, shape = [], None
+    got = []
     for cell in col.to_numpy():
         b = cell.get("bytes") if isinstance(cell, dict) else cell
         try:
-            a = np.asarray(Image.open(io.BytesIO(bytes(b))).convert("L"), dtype=np.float64)
+            got.append(np.asarray(Image.open(io.BytesIO(bytes(b))).convert("L"), dtype=np.float64))
         except Exception:
-            return None
-        if shape is None:
-            shape = a.shape
-        if a.shape != shape:
-            return None
-        rows.append(a.ravel())
-    return (np.stack(rows), list(shape)) if rows else None
+            got.append(None)
+    shapes = [a.shape for a in got if a is not None]
+    if not shapes:
+        return None
+    shape = max(set(shapes), key=shapes.count)
+    rows = np.full((len(got), int(np.prod(shape))), np.nan)
+    for i, a in enumerate(got):
+        if a is not None and a.shape == shape:
+            rows[i] = a.ravel()
+    return rows, list(shape), sum(1 for a in got if a is None or a.shape != shape)
 
 
 def _cell_shape(col, dims: int):
@@ -2415,21 +2482,39 @@ def _read_episode_table(path: Path, eidx: int, columns: list[str] | None, exclud
     return df
 
 
+def _cells_rows(col) -> tuple[np.ndarray | None, int]:
+    """(a column as (rows, values), how many of its cells could not be read). Each cell is flattened, a list of lists
+    (a 16 x 16 pressure map, which parquet gives as an array of arrays) in its own order; the width is the size most
+    cells have, and a cell that is empty, not numbers or of another size is a row of NaN, never a reason to drop the
+    column (the 2026-10-03 audit found a glove dropped for one None cell in a hundred). None when no cell holds
+    numbers (a text column)."""
+    flat, sizes = [], {}
+    for x in col.to_numpy():
+        try:
+            v = np.asarray(_nested(x), dtype=np.float64).reshape(-1)
+        except Exception:
+            v = None
+        if v is not None and v.size == 0:
+            v = None
+        flat.append(v)
+        if v is not None:
+            sizes[v.size] = sizes.get(v.size, 0) + 1
+    if not sizes:
+        return None, len(flat)
+    w = max(sizes, key=lambda k: (sizes[k], k))
+    a = np.full((len(flat), w), np.nan)
+    bad = 0
+    for i, v in enumerate(flat):
+        if v is not None and v.size == w:
+            a[i] = v
+        else:
+            bad += 1
+    return a, bad
+
+
 def _cells(col) -> np.ndarray | None:
-    """A column as (rows, values), each cell flattened; a cell that is a list of lists (a 16 x 16 pressure map, which
-    parquet gives as an array of arrays) is flattened in its own order. None when the cells are not numbers of one
-    size."""
-    try:
-        a = np.stack([np.asarray(_nested(x), dtype=np.float64).reshape(-1) for x in col.to_numpy()])
-        return a if a.ndim == 2 else None
-    except Exception:
-        return None
-
-
-def _stack(col) -> np.ndarray | None:
-    """A column as (rows, values) (_cells) when every value is a finite number, else None."""
-    a = _cells(col)
-    return a if a is not None and np.isfinite(a).all() else None
+    """A column as (rows, values) (_cells_rows), a cell it cannot read a row of NaN; None for a text column."""
+    return _cells_rows(col)[0]
 
 
 def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
@@ -2470,8 +2555,10 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     fps = r["fps"]
     if fps is None and df is not None and "timestamp" in df.columns and len(df) > 2:
         fps = measured_fps(np.sort(df["timestamp"].to_numpy(dtype=np.float64)))
-    state = _stack(df["observation.state"]) if df is not None and "observation.state" in df.columns else None
-    action = _stack(df["action"]) if df is not None and "action" in df.columns else None
+    # every row as it is, NaN where a cell cannot be read; a frame with no reading is filled or the state is left a
+    # signal (state_on_frames), never dropped for one NaN frame
+    state = _cells(df["observation.state"]) if df is not None and "observation.state" in df.columns else None
+    action = _cells(df["action"]) if df is not None and "action" in df.columns else None
     tasks = list(row.get("tasks") or [])
     if not tasks and df is not None and "task_index" in df.columns and len(df):
         ti = int(df["task_index"].iloc[0])
@@ -2498,7 +2585,9 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     extra["source"]["unused_cameras"] = unused
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(feats, state))
     if state is None and rig != "ego_head":
-        note = ("Labelled from the video: the dataset records no observation.state."
+        note = ("Labelled from the video: the dataset's observation.state holds no numbers."
+                if df is not None and "observation.state" in df.columns else
+                "Labelled from the video: the dataset records no observation.state."
                 if df is not None or row.get("data") is None else note)
         if row.get("data") is None:
             note = "Labelled from the video: no data file came with this episode."
@@ -2526,24 +2615,18 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
                 w, h, codec = w or pr["width"], h or pr["height"], codec or pr["codec"]
             cameras[v] = describe({"key": key, "name": _short(key, v), "width": w, "height": h, "codec": codec}, v, key, rig)
         n_frames = min(s["n_frames"] for s in sources.values())
-        if state is not None and kind != "none" and len(state) != n_frames:
-            if abs(len(state) - n_frames) <= 1:
-                n = min(len(state), n_frames)          # one frame of rounding in the packed window
-                state, action = state[:n], (action[:n] if action is not None else None)
-                for s in sources.values():
-                    s["n_frames"] = min(s["n_frames"], n)
-            else:
-                kind, note = "none", (f"Labelled from the video: the recorded state has {len(state)} frames and the "
-                                      f"video {n_frames}, so the two cannot be lined up.")
+        state, action, kind, note, fixes = state_on_frames(df, state, action, n_frames, fps, kind, note)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
                "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(min(s["n_frames"] for s in sources.values())),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
         if note or notes:
             ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
+        for i in fixes:
+            add_issue(ctx, **i)
         write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused))
         return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
-                              signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"],
-                                                       feats))
+                              signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
+                                                       ctx["n_state_frames"], feats))
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
     # frames, so frames on the exact k/fps grid need no times; frames off it are decoded by their own pts and
     # timed by frame index, as the dataset defines them
@@ -2568,23 +2651,19 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             times[v] = np.arange(len(pr["pts"])) / fps
             times[f"{v}_pts"] = pr["pts"]
     n_video = min(s["n_frames"] for s in sources.values())
-    if state is not None and kind != "none" and len(state) != sources[anchor]["n_frames"]:
-        if abs(len(state) - sources[anchor]["n_frames"]) <= 1:
-            n = min(len(state), sources[anchor]["n_frames"])
-            state, action = state[:n], (action[:n] if action is not None else None)
-        else:
-            kind, note = "none", (f"Labelled from the video: the recorded state has {len(state)} frames and the {anchor} "
-                                  f"camera {sources[anchor]['n_frames']}, so the two cannot be lined up.")
+    state, action, kind, note, fixes = state_on_frames(df, state, action, sources[anchor]["n_frames"], fps, kind, note)
     ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
            "cameras": cameras, "stream_checks": {"frames_on_grid": grid, "episode_length_meta": row.get("length")},
            **extra}
     if note or notes:
         ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
+    for i in fixes:
+        add_issue(ctx, **i)
     write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused))
     return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
-                          signals=recorded_signals(df, _used_columns(kind) | set(hold_back), ctx["n_state_frames"],
-                                                   feats))
+                          signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
+                                                   ctx["n_state_frames"], feats))
 
 
 def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, unused: list) -> tuple[dict, dict]:
@@ -2628,10 +2707,50 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
     return dep, tz
 
 
-def _used_columns(kind: str) -> set:
+def _used_columns(kind: str, state=None, action=None) -> set:
     """The columns already read as the state and action. A state that does not fit the arm layout (kind "none") is not
-    read as one, so it stays a signal the model is shown."""
-    return {"observation.state", "action"} if kind != "none" else set()
+    read as one, so it stays a signal the model is shown, and so does an action finish_episode does not keep (not read,
+    or of another shape than the state), which had been dropped without a word."""
+    if kind == "none":
+        return set()
+    kept = action is not None and (state is None or np.shape(action) == np.shape(state))
+    return {"observation.state"} | ({"action"} if kept else set())
+
+
+def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, note: str | None) -> tuple:
+    """(state, action, kind, note, data issues) of a LeRobot episode's state and action rows (_cells, NaN where a cell
+    could not be read) on its n video frames: each row at its frame (frame_rows, on_frames), and a frame with no
+    reading filled from the readings around it across no gap longer than STATE_EDGE_SLACK_S (fill_rows), as the MCAP
+    and HDF5 state readers fill an arm's frames, with a state_filled issue. A state with a longer gap (a table shorter
+    than its video) is not read as the state, with the gap in the note; its column stays a signal (_used_columns). A
+    state with one NaN frame had been dropped and the episode told the dataset records no observation.state."""
+    issues = []
+    if state is None or kind == "none" or not n:
+        return state, action, kind, note, issues
+    at = frame_rows(df, n)
+    t = np.arange(n) / float(fps or 30.0)
+
+    def fit(a, what):
+        a = on_frames(np.asarray(a, dtype=np.float64), at, n)
+        ok = np.isfinite(a).all(axis=1)
+        if ok.all():
+            return a, None
+        if not ok.any():
+            return None, "has no reading on any frame"
+        rows, gap = fill_rows(t, t[ok], a[ok])
+        if gap:
+            return None, gap_words(gap, 0.0)
+        miss = np.flatnonzero(~ok)
+        issues.append({"kind": "state_filled", "signal": what, "t0_s": float(t[miss[0]]), "t1_s": float(t[miss[-1]]),
+                       "what": f"{what} has no reading at {len(miss)} of its {n} frames; they were filled from the "
+                               f"readings around them, across no gap longer than {STATE_EDGE_SLACK_S:g} s"})
+        return rows, None
+    st, why = fit(state, "observation.state")
+    if st is None:
+        return state, None, "none", (f"Labelled from the video, because the recorded observation.state {why}; it is "
+                                     "kept among the signals."), issues
+    act = fit(action, "action")[0] if action is not None else None
+    return st, act, kind, note, issues
 
 
 def _stream_facts(p: Path) -> dict:
@@ -2670,8 +2789,12 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     extra["source"]["unused_cameras"] = unused
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
+    # the state's frames with no reading filled as in convert_lerobot (state_on_frames), one row per image frame
+    state, action, kind, note, fixes = state_on_frames(df, state, action, len(df), fps, kind, note)
+    for i in fixes:
+        add_issue(extra, **i)
     # the table's other numbers go with the frames as they do beside videos (recorded_signals)
-    signals = recorded_signals(df, _used_columns(kind) | set(r["image_cams"]), 0, r["features"])
+    signals = recorded_signals(df, _used_columns(kind, state, action) | set(r["image_cams"]), 0, r["features"])
     ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals)
     if state is not None and kind != "none" and len(state) == ctx["n_state_frames"]:
         ctx["state_kind"] = kind

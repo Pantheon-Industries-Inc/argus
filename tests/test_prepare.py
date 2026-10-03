@@ -425,7 +425,10 @@ def test_recorded_signals_skip_bookkeeping_and_what_an_adapter_holds_back():
     assert list(every) == ["observation.velocity", "is_error_segment"]
     # a column too wide to be a signal is named with the reason, never dropped without a word
     assert [k for k, _ in every.left_out] == ["picture"]
-    assert formats.recorded_signals(df, set(), n + 1) == {}          # a column shorter than the episode is not kept
+    # a table shorter than the episode is kept, NaN past its last row, and says so
+    longer = formats.recorded_signals(df, set(), n + 1)
+    assert longer["observation.velocity"].shape == (n + 1, 2) and np.isnan(longer["observation.velocity"][n]).all()
+    assert [i["kind"] for i in longer.issues] == ["table_short"]
 
 
 def test_a_tactile_map_keeps_its_shape_and_its_value_names():
