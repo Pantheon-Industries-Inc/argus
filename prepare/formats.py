@@ -4433,10 +4433,11 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         return None, None, None, None, failed[lost]
 
     def command(name, shape):
-        # the array named as the action beside it: of its shape, of its side when it is one side's arm
+        # matching commands need recorded timing, as the lag checks compare them with precise follower state
         side = side_of(name) if len(arms) > 1 else None
         return next((k for k in signals if H5_ACTION_NAME.search(own(k)) and np.shape(signals[k]) == shape
                      and (side is None or side_of(k) == side)
+                     and (meta.get(k) or {}).get("aligned_by") != COARSE_CLOCK
                      and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
     acts = [command(name, a.shape) for name, a, _ in arms]
     action = None
@@ -7302,4 +7303,3 @@ def measure_gripper_range(out: Path, ids: list[str]) -> list | None:
         c["gripper_range_note"] = f"measured across the {len(todo)} episodes of this upload"
         (d / "context.json").write_text(json.dumps(c, indent=1, default=str))
     return rng
-

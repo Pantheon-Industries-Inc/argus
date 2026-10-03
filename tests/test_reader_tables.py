@@ -1487,3 +1487,37 @@ def test_existing_signal_alignment_descriptions_stay_exact():
         '  force (1 value, placed one row per frame as it has as many rows as the video has frames): 0 to 2')
     assert sg.describe('force', a, aligned_by='assumed start') == (
         '  force (1 value, placed from both starts as no clock is shared): 0 to 2')
+
+
+@pytest.mark.parametrize("step", [None, 0.1, 1.0])
+def test_hdf5_commands_with_coarse_stamps_stay_signals_beside_precise_state(tmp_path, step):
+    import h5py
+    from label import episode as me
+    def change(d):
+        for p in d.glob("*.mcap"):
+            p.unlink()
+        with h5py.File(d / "robot.h5", "w") as h:
+            h["observations/qpos"] = np.tile(np.sin(np.arange(66))[:, None], (1, 14))
+            h["observations/timestamp"] = T0 + np.arange(66) / 30
+            h["commands/action"] = np.tile(np.cos(np.arange(66))[:, None], (1, 14))
+            h["commands/timestamp"] = T0 + (np.arange(66) / 30 if step is None else
+                                          np.floor(np.arange(66) / 30 / step + 1e-5) * step)
+    ctx = _recorder(tmp_path, change)
+    ep = ctx["_ep"]
+    assert ctx["state_kind"] == "joints"
+    with np.load(ep / "state.npz") as z:
+        assert z["state"].shape == (60, 14)
+        assert ("action" in z.files) == (step is None)
+    req = me.build_request(ep)
+    assert ("timebase" in req["plan"]["checks"]) == (step is None)
+    if step is not None:
+        command = next(s for s in ctx["signals"] if s["name"] == "commands/action")
+        assert command["aligned_by"] == "coarse clock"
+        with np.load(ep / "signals.npz") as z:
+            assert z[command["key"]].shape == (60, 14)
+            assert np.isfinite(z[command["key"]]).all()
+        text = "\n".join(c["text"] for c in req["content"] if c["type"] == "text")
+        line = next(line for line in text.splitlines() if line.startswith("  commands/action ("))
+        assert "tied readings placed within each stamp interval as an assumption" in line
+    else:
+        assert not any(s["name"] == "commands/action" for s in ctx.get("signals", []))
