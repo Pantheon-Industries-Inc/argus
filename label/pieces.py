@@ -129,8 +129,8 @@ def choose_cuts(t: np.ndarray, m: np.ndarray, max_s: float) -> list[dict]:
         if not len(idx):
             idx = np.array([int(np.searchsorted(t, target))])
         k = int(idx[np.argmin(sm[idx])])
-        cuts.append({"frame": k, "t_s": round(float(t[k] - t[0]), 3), "still": bool(sm[k] <= still_level),
-                     "motion": round(float(sm[k]), 4), "target_s": round(target - float(t[0]), 1)})
+        cuts.append({"frame": k, "t_s": round(float(t[k]), 3), "still": bool(sm[k] <= still_level),
+                     "motion": round(float(sm[k]), 4), "target_s": round(target, 1)})
         prev_t = float(t[k])
     return cuts
 
@@ -153,7 +153,10 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     cuts = choose_cuts(t, m, piece_max(ctx))
     n = len(t)
     bounds = [0] + [c["frame"] for c in cuts] + [n]
-    total = duration(ctx)
+    # The parent's first capture need not be zero. Join offsets and typed metadata use its consumer clock, while
+    # each part's arrays start at its own first capture. Keep the last part through the actual final capture.
+    step = float(np.median(np.diff(t))) if len(t) > 1 else 1.0 / me.ep_fps(ep)
+    total = max(duration(ctx), float(t[-1]) + step)
     a = me.anchor(ep)
     fps = me.ep_fps(ep)
     src = ep["sources"]
@@ -185,7 +188,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if d.exists():
             shutil.rmtree(d)
         d.mkdir(parents=True)
-        t0, t1 = float(t[k0] - t[0]), (float(t[k1] - t[0]) if k1 < n else total)
+        t0, t1 = float(t[k0]), (float(t[k1]) if k1 < n else total)
         new_src, new_times = {}, {}
         for v, s in src.items():
             s2 = {kk: vv for kk, vv in s.items() if kk != "kmap"}
@@ -221,7 +224,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
         c2 = shift_context_times(c2, -t0)
-        note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total)} recording, from "
+        note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total - float(t[0]))} recording, from "
                 f"{fmt_clock(t0)} to {fmt_clock(t1)} of it. The labelling pipeline cut the recording into parts at "
                 "moments of little motion to label it; activity that carries across a cut is expected, and a part "
                 "that starts or ends in the middle of an activity is how we cut it, not a truncated or cut-off "

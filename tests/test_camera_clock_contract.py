@@ -60,6 +60,45 @@ def test_parts_place_every_typed_contributor_on_their_own_capture_clock(tmp_path
             assert ctx["contacts"][0]["dips_s"] == pytest.approx([1.6 - t0], abs=0.001)
 
 
+@pytest.mark.parametrize("explicit_zero", [True, False])
+def test_parts_keep_parent_join_offsets_when_its_first_capture_is_after_zero(tmp_path, monkeypatch, explicit_zero):
+    ep, raw = clock_recording(tmp_path)
+    if explicit_zero:
+        raw["clock_zero_s"] = 0.0
+    else:
+        raw.pop("clock_zero_s")
+    (ep / "context.json").write_text(json.dumps(raw))
+    parent = episode.load(ep)
+    before = parent["context"]
+    monkeypatch.setattr(pieces, "piece_max", lambda ctx: 1.0)
+    parts = pieces.write_pieces(ep, tmp_path / "parts")
+    offset, stitched = 0, []
+    for part in parts:
+        loaded = episode.load(part)
+        ctx, n = loaded["context"], len(loaded["state"])
+        start = episode.frame_time(parent, offset)
+        assert ctx["piece"]["t0_s"] == pytest.approx(start, abs=0.001)
+        assert episode.frame_time(loaded, 0) == 0
+        assert ctx["reader_issues"][0]["t0_s"] == pytest.approx(1.7 - start, abs=0.001)
+        assert ctx["reader_issues"][0]["t1_s"] == pytest.approx(1.8 - start, abs=0.001)
+        assert ctx["unshown_cameras"][0]["start_s"] == pytest.approx(1.1 - start, abs=0.001)
+        assert sensors.clip_times(part, ctx, n)[0] == 0
+        stitched.append((ctx, {"episode_dir": str(part), "parse_ok": True, "model": "m", "usage": {},
+                              "config": {"timesteps_s": [0]}, "labels": {"task_summary": "move"},
+                              "contacts": ctx["contacts"], "contact_views": {"shown": ["c1"], "strips": {}}}))
+        offset += n
+    assert offset == 90 and parts
+    first = episode.load(parts[0])["context"]
+    assert first["annotation_subtasks"][0]["t0"] == pytest.approx(0.55, abs=0.001)
+    assert episode.load(parts[-1])["context"]["piece"]["t1_s"] == 3.5
+    joined = pieces.stitch(ep, stitched)["contacts"][0]
+    assert joined["start_s"] == 1.1 and joined["end_s"] == 3.2
+    assert joined["peak_s"] == 2.0 and joined["dips_s"] == [2.1]
+    saved = json.loads((ep / "context.json").read_text())
+    assert {k: v for k, v in saved.items() if k != "pieces"} == raw
+    assert {k: v for k, v in episode.load(ep)["context"].items() if k != "pieces"} == before
+
+
 @pytest.mark.parametrize("zero,start,skip,first", [(0.5, 0.6, 0, 0.1), (0.5, 0.4, 3, 0.0),
                                                   (0.5, None, 15, 0.0), (0.0, 0.6, 0, 0.6),
                                                   (0.0, -0.1, 3, 0.0)])
@@ -208,4 +247,3 @@ def test_depth_decode_issues_round_trip_with_the_actual_colour_capture_times(tmp
         assert "from 1.00 s to 1.00 s" in issue["what"]
         assert raw["reader_issues"][0] == original["reader_issues"][0]
         assert probe_pts(tmp_path / "depth.mp4")[3] == probe_pts(job[3])[3]
-
