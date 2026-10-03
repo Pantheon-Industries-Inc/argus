@@ -364,10 +364,11 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
 
 
 def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None, rate_hz=None,
-             fps=None) -> str:
+             fps=None, aligned_by=None) -> str:
     """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
-    (rate_hz below RATE_SLOWER of fps), and the range each value takes, up to PER_VALUE_MAX values (for a wider
-    array, the range of all its values together)."""
+    (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
+    to place it by (aligned_by, prepare/formats.py mark_assumed), and the range each value takes, up to PER_VALUE_MAX
+    values (for a wider array, the range of all its values together)."""
     a = np.asarray(a, dtype=np.float64)
     d = a.shape[1]
     what = (f"{' x '.join(str(int(x)) for x in shape)} values" if shape and len(shape) > 1 else
@@ -376,6 +377,8 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
         what += " (" + ", ".join(names) + ")"
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
         what += f", recorded at {_num(float(rate_hz))} Hz"
+    if aligned_by:
+        what += ", placed from both starts as no clock is shared"
     head = f"  {name} ({what})"
     if not np.isfinite(a).any():
         return f"{head}: no reading"

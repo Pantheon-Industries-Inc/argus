@@ -2420,3 +2420,272 @@ def test_every_mcap_camera_is_named_and_the_models_choice_is_kept():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _every_mcap_camera_is_named_and_the_models_choice_is_kept(Path(t))
+
+
+def test_a_streamed_table_keeps_its_epoch_times_and_rows_sit_on_their_frame_index():
+    """A table read in chunks had every column cast to float32, which collapsed epoch seconds at 100 Hz into a few
+    distinct times, and a table whose frame_index starts at 3 was moved to start at frame 0. A time column stays
+    float64, and a row sits at the frame its frame_index gives."""
+    import numpy as np
+    import pandas as pd
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "traj.csv"
+        n = 3000
+        ts = 1_790_000_000.0 + np.arange(n) / 100.0
+        pd.DataFrame({"timestamp": ts, "x": np.sin(np.arange(n) / 50)}).to_csv(p, index=False)
+        saved = f.TABLE_MAX_BYTES
+        f.TABLE_MAX_BYTES = 10
+        try:
+            big, _, _ = f.read_number_table(p)
+        finally:
+            f.TABLE_MAX_BYTES = saved
+    assert big["timestamp"].dtype == np.float64 and big["timestamp"].nunique() == n
+    df = pd.DataFrame({"frame_index": np.arange(3, 10), "force": np.arange(3, 10, dtype=float)})
+    out = f.recorded_signals(df, set(), 10)
+    assert np.flatnonzero(np.isfinite(out["force"][:, 0])).tolist() == list(range(3, 10))
+    assert out["force"][3, 0] == 3.0
+    st = np.stack([np.arange(3, 10, dtype=float)] * 14, axis=1)
+    state, _, kind, note, _ = f.state_on_frames(df, st, None, 10, 30.0, "joints", None)
+    assert kind == "joints" and state[3, 0] == 3.0 and state[9, 0] == 9.0, (kind, note)
+
+
+def _a_table_placed_from_both_starts_is_marked_signal_by_signal(tmp_path):
+    """A table beside videos with no capture times is placed from both starts. It had no data issue, a second table
+    overwrote the first's note, and nothing told the model the alignment was assumed. Each such signal is a data
+    issue naming it, carries aligned_by in its meta, and its line in the prompt says so."""
+    import numpy as np
+    from label import episode as me
+    root = tmp_path / "upload"
+    root.mkdir()
+    _clip(root / "top.mp4", 30)
+    for name in ("traj", "grip"):
+        t = np.arange(50) / 25
+        (root / f"{name}.csv").write_text("time,v\n" + "\n".join(f"{x:.3f},{np.sin(x + len(name)):.4f}"
+                                                                  for x in t) + "\n")
+    rep = f.convert(root, "ego_head", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "top")
+    sig = {s["name"]: s for s in ctx["signals"]}
+    assert set(sig) == {"traj", "grip"} and all(s.get("aligned_by") == "assumed start" for s in sig.values()), sig
+    assert {i["signal"] for i in _issues(ctx, "signal_alignment_assumed")} == {"traj", "grip"}, ctx["reader_issues"]
+    ep = me.load(tmp_path / "eps" / ctx["episode_id"])
+    text = me.build_prompt(ep, me.plan(ep), cell_w=448, cell_h=252)[1]
+    lines = [x for x in str(text).splitlines() if x.strip().startswith(("traj (", "grip ("))]
+    assert len(lines) == 2 and all("both starts" in x for x in lines), lines
+
+
+def test_a_table_placed_from_both_starts_is_marked_signal_by_signal():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_table_placed_from_both_starts_is_marked_signal_by_signal(Path(t))
+
+
+def _lerobot_image_cameras_the_model_is_not_shown_reach_the_board(tmp_path):
+    """A LeRobot episode whose cameras are images in its data file wrote no clip for a camera the model is not shown
+    (a mask). It is written to a video of its own and listed in unshown_cameras."""
+    import numpy as np
+    root = tmp_path / "upload"
+    good = [{"bytes": _jpeg(k * 8, 96, 72)} for k in range(10)]
+    feat = {"dtype": "image", "shape": [72, 96, 3]}
+    _lerobot(root, {0: {"observation.state": [np.zeros(14)] * 10, "observation.images.top": good,
+                        "observation.images.top_mask": good}},
+             feats={"observation.images.top": feat, "observation.images.top_mask": feat,
+                    "observation.images.cam_high": feat}, n_video=0)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "000000")
+    un = ctx.get("unshown_cameras") or []
+    assert [u["name"] for u in un] == ["observation.images.top_mask"] and un[0]["n_frames"] == 10, un
+    assert Path(un[0]["packed"]).exists()
+
+
+def test_lerobot_image_cameras_the_model_is_not_shown_reach_the_board():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _lerobot_image_cameras_the_model_is_not_shown_reach_the_board(Path(t))
+
+
+def test_messages_of_another_width_on_an_arm_channel_read_as_the_state_are_listed():
+    """An arm channel read as the state whose messages sometimes carry another number of values had those messages
+    dropped without a word, since the field read as the state is not a signal. They are listed with the reason."""
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        t0 = 1_790_000_000.0
+        tt = np.arange(-0.1, 3.1, 0.01)
+        extra = lambda k: [0.0, 0.0] if k % 50 == 7 else []
+        msgs = lambda: [(s, {"joint_pos": [0.1 * np.sin(s + j) for j in range(7)] + extra(k)})
+                        for k, s in enumerate(tt)]
+        path = Path(t) / "arms.mcap"
+        _json_mcap(path, {"/left/joint_state": msgs(), "/right/joint_state": msgs()}, t0)
+        q = t0 + np.arange(0, 3, 1 / 30)
+        st = f.mcap_joint_streams([path], q)
+        state, action, note = f.joint_state(st, q)
+        assert state is not None and note is None
+        left = f.joint_left_out(st, state, action)
+        assert sorted(k for k, _ in left) == ["/left/joint_state joint_pos", "/right/joint_state joint_pos"], left
+        assert all("9 values" in why for _, why in left), left
+
+
+def _signals_over_the_episode_budget_are_kept_as_summaries(tmp_path):
+    """A wide array was read as float64 several times over (a 480 MB signal took 5.9 GB). Arrays are read in their
+    own float32, and the signals of an episode past SIGNAL_EPISODE_BYTES keep their widest as a summary per frame
+    (the lowest, mean and highest value), a data issue, so an episode's signals fit in memory."""
+    import h5py
+    import numpy as np
+    root = tmp_path / "upload"
+    root.mkdir()
+    n = 40
+    rng = np.random.default_rng(5)
+    with h5py.File(root / "ep.h5", "w") as h:
+        h["cam"] = rng.integers(0, 255, (n, 64, 64, 3)).astype(np.uint8)
+        h["timestamps"] = 1_790_000_000.0 + np.arange(n) / 30
+        h["cloud"] = rng.random((n, 6000)).astype(np.float32)
+        h["force"] = rng.random((n, 3))
+    saved = f.SIGNAL_EPISODE_BYTES
+    f.SIGNAL_EPISODE_BYTES = 100_000
+    try:
+        rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    finally:
+        f.SIGNAL_EPISODE_BYTES = saved
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "ep")
+    sig = {s["name"]: s for s in ctx["signals"]}
+    assert sig["force"]["dims"] == 3 and sig["cloud"]["dims"] == 3 and sig["cloud"]["summary_of"] == 6000, sig
+    assert sig["cloud"]["names"] == ["lowest", "mean", "highest"]
+    assert [i["signal"] for i in _issues(ctx, "signal_summarised")] == ["cloud"], ctx.get("reader_issues")
+    z = np.load(tmp_path / "eps" / ctx["episode_id"] / "signals.npz")
+    c = z[sig["cloud"]["key"]]
+    assert c.shape == (n, 3) and (c[:, 0] <= c[:, 1]).all() and (c[:, 1] <= c[:, 2]).all()
+
+
+def test_signals_over_the_episode_budget_are_kept_as_summaries():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _signals_over_the_episode_budget_are_kept_as_summaries(Path(t))
+
+
+def test_a_short_gap_at_the_start_of_a_signal_is_reported():
+    import numpy as np
+    a = np.ones((60, 2))
+    a[:3] = np.nan
+    got = f.signal_gaps("force", a, np.arange(60) / 30)
+    assert got and got[0]["t0_s"] == 0.0 and "3 of its 60 frames" in got[0]["what"], got
+    assert "0.07 s" in got[0]["what"], got
+
+
+def test_a_short_channel_whose_name_says_time_is_a_clock_not_a_reading():
+    """A slow sensor's own stamp (/d360_0/ght_topic ts, at 1.7 Hz) has too few messages to be judged a counter, and
+    was shown to the model as a reading. A value whose name says time and that rises is a clock however few its
+    messages."""
+    import numpy as np
+    import pandas as pd
+    with tempfile.TemporaryDirectory() as t:
+        t0 = 1_790_000_000.0
+        path = Path(t) / "ght.mcap"
+        _json_mcap(path, {"/ght": [(s, {"ts": 6.48e6 + 600 * k, "sensor_ts": 4.14e8 + 600 * k,
+                                         "temperature": 72.0 + 0.1 * k}) for k, s in enumerate(np.arange(0, 5, 0.6))]},
+                   t0)
+        sig = f.mcap_signals([path], t0 + np.arange(0, 5, 1 / 30))
+    assert list(sig) == ["/ght"] and sig.meta["/ght"]["names"] == ["temperature"], (list(sig), sig.meta)
+    out = f.recorded_signals(pd.DataFrame({"recv_time": [1.79e9 + k for k in range(8)],
+                                           "v": np.arange(8.0)}), set(), 8)
+    assert "recv_time" in out.clocks and "recv_time" not in out
+
+
+def test_a_float_picture_is_judged_on_more_than_its_first_frame():
+    """A float array whose first frame lies within 0 to 1 but whose later frames reach 1000 is not a picture."""
+    import h5py
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        with h5py.File(Path(t) / "x.h5", "w") as h:
+            a = np.random.default_rng(0).random((20, 32, 32, 3)).astype(np.float32)
+            a[5:] *= 1000
+            h["flow"] = a
+            b = np.random.default_rng(1).random((20, 32, 32, 3)).astype(np.float32)
+            b[0] = 0.0
+            h["cam"] = b
+            assert f.h5_kind("flow", h["flow"]) != "camera"
+            assert f.h5_kind("cam", h["cam"]) == "camera" and f.picture_scale(h["cam"]) == 255.0
+
+
+def _trimming_an_episode_drops_the_issues_past_its_new_end(tmp_path):
+    root = tmp_path / "upload"
+    root.mkdir()
+    _clip(root / "a.mp4", 90)
+    rep = f.convert(root, "ego_head", tmp_path / "eps", "test", 900)
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    import json
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["reader_issues"] = [{"kind": "signal_gap", "what": "early", "t0_s": 0.2, "t1_s": 2.5},
+                            {"kind": "signal_gap", "what": "late", "t0_s": 2.0, "t1_s": 2.5},
+                            {"kind": "table_short", "what": "untimed"}]
+    (ep / "context.json").write_text(json.dumps(ctx))
+    ctx = f.trim_episode(ep, 1.5)
+    assert [i["what"] for i in ctx["reader_issues"]] == ["early", "untimed"], ctx["reader_issues"]
+    assert ctx["reader_issues"][0]["t1_s"] <= 1.5
+
+
+def test_trimming_an_episode_drops_the_issues_past_its_new_end():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _trimming_an_episode_drops_the_issues_past_its_new_end(Path(t))
+
+
+def _unread_files_are_exactly_those_no_reader_opened(tmp_path):
+    """A notes file no reader opens (a YAML file, a text file beside no episode) had been left off the list of files
+    not read, by its extension alone, while a video's notes beside it are read."""
+    root = tmp_path / "upload"
+    (root / "a").mkdir(parents=True)
+    _clip(root / "a" / "take.mp4", 10)
+    (root / "a" / "take.txt").write_text("pick up the cube")
+    (root / "a" / "calib.yaml").write_text("k: 1")
+    (root / "misc").mkdir()
+    (root / "misc" / "readme.txt").write_text("hello")
+    det, _ = f.plan(root)
+    line = next((m for m in det["missing"] if "no reader opens" in m), "")
+    assert "a/calib.yaml" in line and "misc/readme.txt" in line and "take.txt" not in line, det["missing"]
+
+
+def test_unread_files_are_exactly_those_no_reader_opened():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _unread_files_are_exactly_those_no_reader_opened(Path(t))
+
+
+def _the_no_camera_refusal_accounts_for_every_file(tmp_path):
+    root = tmp_path / "sensors"
+    root.mkdir()
+    for k in range(5):
+        _glove_h5(root / f"glove{k}.h5", 10)
+    (root / "a.bin").write_bytes(b"x")
+    saved = f.NO_CAMERA_FILES_MAX
+    f.NO_CAMERA_FILES_MAX = 2
+    try:
+        f.detect(root)
+    except ValueError as e:
+        msg = str(e)
+    finally:
+        f.NO_CAMERA_FILES_MAX = saved
+    assert "6 files" in msg and "5 HDF5 files" in msg and "1 other file" in msg, msg
+
+
+def test_the_no_camera_refusal_accounts_for_every_file():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _the_no_camera_refusal_accounts_for_every_file(Path(t))
+
+
+def _an_mcap_beside_videos_of_the_same_length_is_noted_as_a_possible_duplicate(tmp_path):
+    root = tmp_path / "upload"
+    root.mkdir()
+    _camera_mcap(root / "rec.mcap", ["/cam/image/compressed"], n=30)
+    _clip(root / "rec_cam.mp4", 30)
+    det, items = f.plan(root)
+    assert len(items) == 2
+    assert any("rec.mcap" in u and "same footage" in u for u in det["used"]), det["used"]
+
+
+def test_an_mcap_beside_videos_of_the_same_length_is_noted_as_a_possible_duplicate():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _an_mcap_beside_videos_of_the_same_length_is_noted_as_a_possible_duplicate(Path(t))

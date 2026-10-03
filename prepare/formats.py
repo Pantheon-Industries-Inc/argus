@@ -96,7 +96,11 @@ list of {"kind": a short snake_case tag (signal_not_finite, signal_partial_span,
 camera_not_decodable, ...), "what": one plain sentence a reviewer reads on the board, and when they apply "camera",
 "signal", "t0_s" and "t1_s" (seconds of the episode)}. add_issue appends one entry and never overwrites the others;
 the board shows them as the episode's data issues. What could not be used at all is still listed with its reason
-(context["source"] unused_*), and an episode with nothing to label is listed in the report with why.
+(context["source"] unused_*), and an episode with nothing to label is listed in the report with why. A signal placed
+from both starts, because the reader had no clock in common to place it by, also carries "aligned_by": "assumed start"
+in its context.json signal entry (mark_assumed), which the prompt's signal line states; it is never read as the arm
+state. A signal past the episode's SIGNAL_EPISODE_BYTES is kept as its lowest, mean and highest value at each frame,
+with "summary_of" giving its width.
 
 Every camera reaches the board. A camera the model is not shown (more extra cameras than MAX_EXTRA_CAMERAS, the second
 eye of a stereo camera, every camera but one on a head rig, an infrared, thermal or mask video) is listed in
@@ -426,17 +430,23 @@ NO_CAMERA_FILES_MAX = 200
 
 
 def no_camera_words(root: Path, files: list[Path], sensors: list[Path]) -> str:
-    """Why an upload of recorded data with no camera is refused, naming every file (up to NO_CAMERA_FILES_MAX) and
-    why it gives nothing to label."""
+    """Why an upload of recorded data with no camera is refused: every file counted by kind, and each named with why it
+    gives nothing to label (up to NO_CAMERA_FILES_MAX names)."""
     def why(p):
         if p in sensors:
             return ("an HDF5 file with no image frames or encoded images" if p.suffix.lower() in H5_EXT
                     else "an MCAP file with no camera channel")
         return "not a recording" if p.suffix.lower() in NOTE_EXT else "not a kind of file a reader opens"
     named = [f"{p.relative_to(root).as_posix()} ({why(p)})" for p in files[:NO_CAMERA_FILES_MAX]]
-    more = f" and {len(files) - NO_CAMERA_FILES_MAX} more" if len(files) > NO_CAMERA_FILES_MAX else ""
+    kinds = {"HDF5 file": 0, "MCAP file": 0, "other file": 0}
+    for p in files:
+        kinds["HDF5 file" if p.suffix.lower() in H5_EXT else "MCAP file" if p.suffix.lower() == ".mcap"
+              else "other file"] += 1
+    count = ", ".join(f"{k_} {name}{'s' if k_ != 1 else ''}" for name, k_ in kinds.items() if k_)
+    more = f"; and {len(files) - NO_CAMERA_FILES_MAX} more" if len(files) > NO_CAMERA_FILES_MAX else ""
     return ("the upload holds recorded data but no camera, and an episode is shown and labelled beside its video, so "
-            "nothing could be labelled: " + "; ".join(named) + more)
+            f"nothing could be labelled. It holds {len(files)} file{'s' if len(files) != 1 else ''} ({count}): "
+            + "; ".join(named) + more)
 
 
 V2_DATA = re.compile(r"^episode_(\d+)\.parquet$")
@@ -1044,18 +1054,45 @@ SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
 # model reads one by one; it is listed among the signals left out, never dropped without a word. A tactile pressure map
 # of 64 x 64 cells is still a signal.
 SIGNAL_MAX_VALUES = 4096
-# An array wider than SIGNAL_MAX_VALUES is still kept, as a map the prompt summarises (label/signals.py), up to
-# SIGNAL_MAX_BYTES as float32 over the episode's frames; only a larger one is left out, named with its size.
-SIGNAL_MAX_BYTES = 512_000_000
+# An array wider than SIGNAL_MAX_VALUES is still kept, as a map the prompt summarises (label/signals.py), read and
+# placed in float32 so it is never copied as float64. An episode's kept signals hold at most SIGNAL_EPISODE_BYTES as
+# float32 together: past it the widest are kept as a summary per frame (summarise_rows), a data issue, and an array
+# that alone holds more is summarised as it is read, so an episode's signals always fit in memory.
+SIGNAL_EPISODE_BYTES = 1_000_000_000
+SUMMARY_NAMES = ["lowest", "mean", "highest"]
+SUMMARY_CHUNK_ROWS = 256
 
 
-def signal_fits(n: int, values: int) -> bool:
-    return int(n) * int(values) * 4 <= SIGNAL_MAX_BYTES
+def float_rows(a) -> np.ndarray:
+    """Rows of numbers as floats without a copy when they already are: float64 for a signal of up to SIGNAL_MAX_VALUES
+    values, float32 for a wider one."""
+    a = np.asarray(a)
+    wide = a.ndim > 1 and int(np.prod(a.shape[1:])) > SIGNAL_MAX_VALUES
+    if a.dtype.kind == "f" and (wide or a.dtype == np.float64):
+        return a
+    return a.astype(np.float32 if wide else np.float64)
 
 
-def too_big_words(n: int, values: int) -> str:
-    return (f"{values:,} values per frame over {n:,} frames, more than the {SIGNAL_MAX_BYTES / 1e6:g} MB a signal "
-            "holds")
+def summarise_rows(a) -> np.ndarray:
+    """(n, 3) float32: each row's lowest, mean and highest finite value (SUMMARY_NAMES), NaN where a row has none,
+    computed a block of rows at a time."""
+    n = len(a)
+    out = np.full((n, 3), np.nan, dtype=np.float32)
+    with np.errstate(all="ignore"):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            for i in range(0, n, SUMMARY_CHUNK_ROWS):
+                b = np.asarray(a[i:i + SUMMARY_CHUNK_ROWS], dtype=np.float32)
+                b = b.reshape(len(b), -1)
+                out[i:i + len(b)] = np.stack([np.nanmin(b, 1), np.nanmean(b, 1), np.nanmax(b, 1)], axis=1)
+    return out
+
+
+def summary_issue(name: str, values: int) -> dict:
+    return {"kind": "signal_summarised", "signal": name,
+            "what": f"{name} has {values:,} values per frame, more than an episode's signals hold together, so it is "
+                    "kept as its lowest, mean and highest value at each frame"}
 
 
 class Signals(dict):
@@ -1123,9 +1160,17 @@ def is_time_name(name) -> bool:
     return bool(words) and words[-1] in TIME_WORDS
 
 
+def short_rising(values) -> bool:
+    """Whether a column too short to be judged a counter (under COUNTER_MIN_MESSAGES readings) never falls and rises."""
+    x = np.asarray(values, dtype=np.float64).ravel()
+    x = x[np.isfinite(x)]
+    return 2 <= len(x) < COUNTER_MIN_MESSAGES and bool((np.diff(x) >= 0).all()) and x[-1] > x[0]
+
+
 def is_named_clock(name, values) -> bool:
-    """Whether a column is a clock: its name says time (is_time_name) and it rises like one (is_clock)."""
-    return is_time_name(name) and is_clock(values)
+    """Whether a column is a clock: its name says time (is_time_name) and it rises like one (is_clock), or, with too
+    few readings to judge, never falls and rises (a slow sensor's own stamp at 1.7 Hz)."""
+    return is_time_name(name) and (is_clock(values) or short_rising(values))
 
 
 COUNTER_NOTE = "counts rows one by one, so it is bookkeeping"
@@ -1212,9 +1257,6 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
             out.left_out.append((str(c), "no reading at any frame"))
             continue
         a = np.where(np.isfinite(a), a, np.nan)
-        if not signal_fits(len(a), a.shape[1]):
-            out.left_out.append((str(c), too_big_words(len(a), a.shape[1])))
-            continue
         if a.shape[1] == 1 and is_named_clock(c, a[:, 0]):
             # a clock: kept for the sync check, not shown
             out.clocks[str(c)] = a[:n, 0] if n else a[:, 0]
@@ -1239,7 +1281,7 @@ def frame_rows(df, n: int) -> np.ndarray | None:
         fi = np.asarray(df["frame_index"].to_numpy(), dtype=np.int64)
     except (TypeError, ValueError):
         return None
-    fi = fi - fi.min() if len(fi) else fi
+    # as given: a table whose first rows are missing starts at a later frame, never moved to frame 0
     return fi if len(np.unique(fi)) == len(fi) else None
 
 
@@ -1252,7 +1294,7 @@ def on_frames(a: np.ndarray, at: np.ndarray | None, n: int) -> np.ndarray:
     if at is None:
         out[:min(n, len(a))] = a[:n]
     else:
-        keep = at < n
+        keep = (at >= 0) & (at < n)
         out[at[keep]] = a[keep]
     return out
 
@@ -1262,8 +1304,8 @@ def table_issue(out: Signals, df, at: np.ndarray | None, n: int) -> None:
     (table_short), whose signals are NaN where it has no row, or longer (table_long), whose rows past the video's last
     frame have no picture to show them with."""
     rows = np.arange(len(df)) if at is None else at
-    have = int(np.count_nonzero(np.unique(rows[rows < n]) >= 0))
-    past = int(np.count_nonzero(rows >= n))
+    have = len(np.unique(rows[(rows >= 0) & (rows < n)]))
+    past = int(np.count_nonzero((rows >= n) | (rows < 0)))
     if have < n:
         out.issues.append({"kind": "table_short", "what": f"The episode's data table has rows for {have} of its {n} "
                                                           "video frames, so its signals have no reading at the "
@@ -1324,7 +1366,7 @@ def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
     episode (t, its frames' times): before its first reading or after its last one, when longer than
     STATE_EDGE_SLACK_S, a signal_partial_span each (a sensor started late or stopped early), and every other frame
     without a reading counted in one signal_gap with its longest run."""
-    none = ~np.isfinite(np.asarray(a, dtype=np.float64)).any(axis=1)
+    none = ~np.isfinite(np.asarray(a)).any(axis=1)
     n = len(none)
     if not none.any() or none.all() or len(t) != n:
         return []
@@ -1349,7 +1391,7 @@ def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
         k = int(none.sum())
         out.append({"kind": "signal_gap", "signal": name, "t0_s": float(t[a0]), "t1_s": float(t[a1]),
                     "what": f"{name} has no reading at {k} of its {n} frames"
-                            + (f"; the longest gap runs from {t[a0]:.1f} s to {t[a1]:.1f} s" if a1 > a0 else "")})
+                            + (f"; the longest gap runs from {t[a0]:.2f} s to {t[a1]:.2f} s" if a1 > a0 else "")})
     return out
 
 
@@ -1387,8 +1429,22 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         return
     t = np.asarray(t, dtype=np.float64)[:n] if t is not None and len(t) >= n else \
         np.arange(n) / float(ctx.get("fps") or 30.0)
+    # past SIGNAL_EPISODE_BYTES together, the widest signals are kept as a summary per frame, a data issue each
+    meta = {k: dict(m) for k, m in meta.items()}
+    size = lambda v: int(np.prod(np.shape(v)[1:])) * n * 4
+    while sum(size(v) for v in keep.values()) > SIGNAL_EPISODE_BYTES:
+        k = max((k for k in keep if np.shape(keep[k])[1] > len(SUMMARY_NAMES)), key=lambda k: np.shape(keep[k])[1],
+                default=None)
+        if k is None:
+            break
+        width = int(np.shape(keep[k])[1])
+        keep[k] = summarise_rows(keep[k][:n])
+        m = meta.setdefault(k, {})
+        m.pop("shape", None)
+        m.update(names=list(SUMMARY_NAMES), summary_of=width)
+        add_issue(ctx, **summary_issue(k, width))
     for k, v in keep.items():
-        for i in signal_gaps(k, np.asarray(v[:n], dtype=np.float64).reshape(n, -1), t):
+        for i in signal_gaps(k, np.asarray(v[:n]).reshape(n, -1), t):
             add_issue(ctx, **i)
     np.savez(ep / "signals.npz", **{f"s{i}": np.asarray(v[:n], dtype=np.float32) for i, v in enumerate(keep.values())})
     ctx["signals"] = [{"name": k, "key": f"s{i}", "dims": int(v.shape[1]), **(meta.get(k) or {})}
@@ -1897,7 +1953,9 @@ def read_number_table(p: Path):
             cols = list(ch.select_dtypes("number").columns)
         start = (-rows) % stride
         rows += len(ch)
-        ch = ch[cols].apply(pd.to_numeric, errors="coerce").astype(np.float32).iloc[start::stride]
+        # a time column keeps float64: float32 holds about 7 digits, so epoch seconds at 100 Hz collapse together
+        ch = ch[cols].apply(pd.to_numeric, errors="coerce")
+        ch = ch.astype({c: np.float64 if is_time_name(c) else np.float32 for c in cols}).iloc[start::stride]
         parts.append(ch)
         kept += len(ch)
         while kept > TABLE_STREAM_MAX_ROWS:
@@ -1913,7 +1971,8 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
     name without its take: "traj"), its numeric columns as the named values. A table is placed on the anchor camera's
     frames by its time column (a rising column named for time) on the recorder's clock when the videos carry capture
     times, row by row when it has exactly one row per frame, and otherwise by its time column from the videos' start,
-    which the source notes say; a table that cannot be placed is left out with the reason."""
+    an alignment that is assumed: each such signal is marked (mark_assumed) and a data issue. A table that cannot be
+    placed is left out with the reason."""
     import pandas as pd
     out = Signals()
     n = int(len(pr_anchor["pts"]))
@@ -1943,6 +2002,7 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
         v = vals.to_numpy(dtype=np.float64)
         parts = name_parts(p.stem)
         name = parts["cam"] or p.stem
+        assumed = False
         if tcol is not None:
             t = _seconds(num[tcol].to_numpy(dtype=np.float64))
         if tcol is not None and real_anchor is not None and t[0] < real_anchor[-1] and t[-1] > real_anchor[0]:
@@ -1951,14 +2011,19 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             a, gaps = v, 0
         elif tcol is not None:
             a, var, gaps = place_on_frames(t - t[0], v, t_vid)
-            extra.setdefault("source", {})["series_note"] = (f"{p.name} was placed on the video from both starts, "
-                                                             "since the videos carry no capture times on its clock")
+            assumed = True
         else:
             out.left_out.append((p.name, f"{len(v)} rows and no time column, while the video has {n} frames"))
             continue
         out.add(name, a, names=[str(c) for c in vals.columns], source=f"table {p.name}")
         if gaps:
             out.meta[name]["gaps"] = gaps
+        if assumed:
+            # its time column shares no clock with the videos: placed from both starts, marked and flagged
+            one = Signals()
+            one.add(name, a)
+            mark_assumed(one, extra, p.name)
+            out.meta[name]["aligned_by"] = ALIGNED_ASSUMED
     return out
 
 
@@ -2119,6 +2184,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             streams = mcap_joint_streams(mcap_files, real[anchor])
             state, action, note = joint_state(streams, real[anchor])
             merge_signals(signals, mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action)))
+            signals.left_out += joint_left_out(streams, state, action)
             if note:
                 extra["state_note"] = note
             elif state is not None:
@@ -2673,7 +2739,7 @@ def _cells_rows(col) -> tuple[np.ndarray | None, int]:
     if not sizes:
         return None, len(flat)
     w = max(sizes, key=lambda k: (sizes[k], k))
-    a = np.full((len(flat), w), np.nan)
+    a = np.full((len(flat), w), np.nan, dtype=np.float32 if w > SIGNAL_MAX_VALUES else np.float64)
     bad = 0
     for i, v in enumerate(flat):
         if v is not None and v.size == w:
@@ -2964,6 +3030,13 @@ def _used_columns(kind: str, state=None, action=None) -> set:
     return {"observation.state"} | ({"action"} if kept else set())
 
 
+def state_filled_issue(what: str, k: int, n: int, t0: float, t1: float) -> dict:
+    """The data issue of a state whose frames with no reading were filled (fill_rows)."""
+    return {"kind": "state_filled", "signal": what, "t0_s": t0, "t1_s": t1,
+            "what": f"{what} has no reading at {k} of its {n} frames; they were filled from the readings around them, "
+                    f"across no gap longer than {STATE_EDGE_SLACK_S:g} s"}
+
+
 def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, note: str | None) -> tuple:
     """(state, action, kind, note, data issues) of a LeRobot episode's state and action rows (_cells, NaN where a cell
     could not be read) on its n video frames: each row at its frame (frame_rows, on_frames), and a frame with no
@@ -2988,9 +3061,7 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
         if gap:
             return None, gap_words(gap, 0.0)
         miss = np.flatnonzero(~ok)
-        issues.append({"kind": "state_filled", "signal": what, "t0_s": float(t[miss[0]]), "t1_s": float(t[miss[-1]]),
-                       "what": f"{what} has no reading at {len(miss)} of its {n} frames; they were filled from the "
-                               f"readings around them, across no gap longer than {STATE_EDGE_SLACK_S:g} s"})
+        issues.append(state_filled_issue(what, len(miss), n, float(t[miss[0]]), float(t[miss[-1]])))
         return rows, None
     st, why = fit(state, "observation.state")
     if st is None:
@@ -3020,6 +3091,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     # a camera meta/info.json lists whose column is not in this episode's data file is listed, never a failure
     absent = [k for k in r["image_cams"] if k not in df.columns]
     vmap, unused = pick_cameras([k for k in r["image_cams"] if k in df.columns], rig, list(r["features"]))
+    not_shown = list(unused)
     unused = unused + [f"{k} (listed in meta/info.json, not in the data file)" for k in absent]
     ep.mkdir(parents=True, exist_ok=True)
     fi = df["frame_index"].to_numpy() if "frame_index" in df.columns else np.arange(len(df))
@@ -3042,6 +3114,21 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         raise ValueError(f"the {', '.join(undecoded)} images in the data file could not be decoded")
     extra = {**extra}
     extra["source"]["unused_cameras"] = unused
+    # the cameras the model is not shown are written too, for the board (unshown_cameras)
+    un = []
+    for i, key in enumerate(not_shown):
+        w = FrameWriter(ep / f"unshown{i + 1}.mp4", "")
+        for ts, cell in zip(t, df[key].to_numpy()):
+            b = cell.get("bytes") if isinstance(cell, dict) else cell
+            if isinstance(b, (bytes, bytearray)) and b:
+                w.add(float(ts), bytes(b))
+        n_u = w.close()
+        if n_u:
+            un.append(unshown_entry(key, ep / f"unshown{i + 1}.mp4", unshown_why(key, rig, list(vmap.values())),
+                                    n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
+                                    fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)))
+    if any(un):
+        extra["unshown_cameras"] = [u for u in un if u]
     for key in undecoded:
         add_issue(extra, "camera_not_decodable", f"None of the {key} images in the data file could be decoded, so the "
                                                  "camera is not shown.", camera=key)
@@ -3310,9 +3397,9 @@ def h5_kind(name: str, ds) -> str | None:
         if dt == np.uint8:
             return "camera"
     # an array wider than SIGNAL_MAX_VALUES (a point cloud, a flattened picture) is a signal kept as a map, when it fits
-    if int(np.prod(per)) <= SIGNAL_MAX_VALUES or signal_fits(n, int(np.prod(per))):
-        return "signal"
-    return None
+    # an array wider than SIGNAL_MAX_VALUES (a point cloud, a flattened picture) is a signal kept as a map or, past the
+    # episode's budget, as a summary (h5_signals)
+    return "signal"
 
 
 H5_PICTURE_MIN_PX = 16     # a colour picture (three or four channels) at least this many pixels on a side is a camera
@@ -3332,13 +3419,32 @@ def _picture_axes(per) -> tuple[int, int, bool] | None:
     return None
 
 
-def _picture_values(ds) -> bool:
-    """Whether a float array's first sample reads as a picture: finite values from 0 to 1, or 0 to 255."""
+PICTURE_SAMPLE_FRAMES = 5
+
+
+def _picture_frames(ds) -> np.ndarray | None:
+    """PICTURE_SAMPLE_FRAMES samples spread over an array (the first, the last and between), as float64."""
     try:
-        a = np.asarray(ds[0], dtype=np.float64)
+        n = len(ds)
+        idx = sorted({int(x) for x in np.linspace(0, n - 1, PICTURE_SAMPLE_FRAMES)}) if n else []
+        return np.stack([np.asarray(ds[i], dtype=np.float64) for i in idx]) if idx else None
     except Exception:
-        return False
-    return bool(a.size and np.isfinite(a).all() and a.min() >= 0 and a.max() <= 255)
+        return None
+
+
+def _picture_values(ds) -> bool:
+    """Whether a float array reads as a picture: finite values from 0 to 1, or 0 to 255, in frames spread over it, not
+    its first alone (a flow field can start still and then reach hundreds)."""
+    a = _picture_frames(ds)
+    return bool(a is not None and a.size and np.isfinite(a).all() and a.min() >= 0 and a.max() <= 255)
+
+
+def picture_scale(ds) -> float:
+    """255 for a float picture stored 0 to 1 (judged on frames spread over it), else 1."""
+    if ds.dtype.kind != "f":
+        return 1.0
+    a = _picture_frames(ds)
+    return 255.0 if a is not None and a.size and float(np.nanmax(a)) <= 1.0 else 1.0
 
 
 def picture(a: np.ndarray, scale: float = 1.0):
@@ -3487,9 +3593,8 @@ def h5_streams(f, group: str) -> dict:
             continue
         if k is None:
             if ds.shape and ds.shape[0] > 1 and ds.dtype.kind in "biuf":
-                out["unused"].append(f"{p} ({' x '.join(map(str, ds.shape[1:]))} values per sample over "
-                                     f"{ds.shape[0]:,} samples, more than the {SIGNAL_MAX_BYTES / 1e6:g} MB a signal "
-                                     "holds)")
+                out["unused"].append(f"{p} ({' x '.join(map(str, ds.shape[1:]))} values per sample, which no "
+                                     "reader reads)")
             continue
         n = int(ds.shape[0]) if ds.shape else 0
         if k == "signal" and not any(len(t) == n for t in clocks.values()) and ds.size <= H5_CONSTANT_MAX:
@@ -3610,9 +3715,12 @@ def not_finite(name: str, a: np.ndarray, t: np.ndarray, zero: float, out: Signal
     """a (rows of readings at times t) with every value that is not a finite number NaN, and, when any is an inf or a
     NaN beside finite values in its row, a data issue on out (signal_not_finite) giving how many and from the first to
     the last such reading in seconds after zero (the footage's first frame). One bad value had dropped a whole
-    signal; now only that value is missing. A row with no finite value is a gap, which write_signals records."""
-    a = np.asarray(a, dtype=np.float64)
+    signal; now only that value is missing. A row with no finite value is a gap, which write_signals records. A wide
+    signal stays float32 (float_rows), and a fresh array of floats is changed in place, never copied."""
+    a = float_rows(a)
     fin = np.isfinite(a)
+    if fin.all():
+        return a
     bad = ~fin & (np.isinf(a) | fin.any(axis=1, keepdims=True))
     if bad.any():
         rows = np.flatnonzero(bad.any(axis=1))
@@ -3620,10 +3728,11 @@ def not_finite(name: str, a: np.ndarray, t: np.ndarray, zero: float, out: Signal
         out.issues.append({"kind": "signal_not_finite", "signal": name,
                            "what": f"{name} has {int(bad.sum())} value{'s' if bad.sum() != 1 else ''} that "
                                    f"{'are' if bad.sum() != 1 else 'is'} not a finite number in {len(rows)} reading"
-                                   f"{'s' if len(rows) != 1 else ''}; {'they are' if bad.sum() != 1 else 'it is'} "
-                                   "kept as missing values",
+                                   f"{'s' if len(rows) != 1 else ''}; {'they were' if bad.sum() != 1 else 'it was'} "
+                                   "read as missing",
                            "t0_s": float(t[rows[0]] - zero), "t1_s": float(t[rows[-1]] - zero)})
-    return np.where(fin, a, np.nan)
+    a[~fin] = np.nan
+    return a
 
 
 def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor: int) -> Signals:
@@ -3638,13 +3747,19 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
         ds = f[s["path"]]
         if ds.dtype.kind not in "biuf":
             continue
-        a = np.asarray(ds[()], dtype=np.float64)
-        shape = list(a.shape[1:])
+        shape = list(ds.shape[1:])
+        width = int(np.prod(shape)) if shape else 1
+        summarised = None
+        if len(ds) * width * 4 > SIGNAL_EPISODE_BYTES and width > len(SUMMARY_NAMES):
+            # more than an episode's signals hold together: read a block of rows at a time into its summary
+            a, summarised, shape = summarise_rows(ds), width, [len(SUMMARY_NAMES)]
+        else:
+            a = float_rows(ds[()])
         a = a.reshape(len(a), -1) if a.ndim > 1 else a[:, None]
         if not a.shape[1]:
             continue
-        names = None
-        for key in ("names", "columns", "labels", "fields"):
+        names = list(SUMMARY_NAMES) if summarised else None
+        for key in ("names", "columns", "labels", "fields") if not summarised else ():
             if key in ds.attrs:
                 stated = [x.decode() if isinstance(x, bytes) else str(x) for x in np.asarray(ds.attrs[key]).ravel()]
                 names = value_names(stated, a.shape[1])
@@ -3673,6 +3788,9 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             out.left_out.append((s["name"], f"{len(a)} rows and no clock, while the camera has {n_anchor} frames"))
             continue
         out.add(s["name"], v, shape=shape if len(shape) > 1 else None, names=names, source=f"HDF5 dataset {s['path']}")
+        if summarised:
+            out.meta[s["name"]]["summary_of"] = summarised
+            out.issues.append(summary_issue(s["name"], summarised))
         if rate:
             out.meta[s["name"]]["rate_hz"] = round(float(rate), 2)
         if far is not None and far.any():
@@ -3729,7 +3847,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             return a, None
         rows, gap = fill_rows(q, q[ok], a[ok])
         return rows, (gap_words(gap, q[0]) if gap else None)
-    notes, read, failed = [], [], {}
+    notes, read, failed, filled_at = [], [], {}, {}
 
     def unsided(name):
         # an array's own name without its side words, so left/qpos and right/qpos in one file, like left.h5's and
@@ -3764,12 +3882,16 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         if kind == "none":
             fail(name, f"{note} The recorded state is the HDF5 array {name}." if note else None)
             continue
+        miss = np.flatnonzero(~np.isfinite(a).all(axis=1))
         a, why = filled(a)
         if a is None:
             fail(name, f"Labelled from the video: the recorded state {name} has no reading on any frame."
                          if why == "has no reading on any frame" else
                          f"Labelled from the video, because the recorded state {name} {why}.")
             continue
+        if len(miss):
+            filled_at[name] = state_filled_issue(name, len(miss), len(a), float(q[miss[0]] - q[0]),
+                                                 float(q[miss[-1]] - q[0]))
         read.append((name, a, names))
     if not read:
         return None, None, None, None, (notes[0] if notes else None)
@@ -3797,6 +3919,8 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         action = np.concatenate([filled(np.asarray(signals.pop(k), dtype=np.float64))[0] for k in acts], axis=1)
     for name, _, _ in arms:
         signals.pop(name)
+        if name in filled_at and hasattr(signals, "issues"):
+            signals.issues.append(filled_at[name])
     for k in [name for name, _, _ in arms] + [k for k in acts if k and action is not None]:
         meta.pop(k, None)
     state = np.concatenate([a for _, a, _ in arms], axis=1)
@@ -3838,7 +3962,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             t = times_of(s)
             w = FrameWriter(ep / f"{v}.mp4", "")
             # a float picture stored 0 to 1 is scaled to 0 to 255, judged on its first frame
-            scale = 255.0 if ds.dtype.kind == "f" and s["n"] and float(np.nanmax(ds[0])) <= 1.0 else 1.0
+            scale = picture_scale(ds)
             for i in range(s["n"]):
                 x = ds[i]
                 b = _h5_bytes(x) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
@@ -3859,7 +3983,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             s = by_name[nm]
             ds, t = f[s["path"]], times_of(s)
             w = FrameWriter(ep / f"unshown{i + 1}.mp4", "")
-            scale = 255.0 if ds.dtype.kind == "f" and s["n"] and float(np.nanmax(ds[0])) <= 1.0 else 1.0
+            scale = picture_scale(ds)
             for k in range(s["n"]):
                 b = _h5_bytes(ds[k]) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
                 if b is not None:
@@ -4286,6 +4410,7 @@ def merge_unnamed(groups: NameSets, rows: dict, lists: tuple, keep_all: bool = F
         h, r = home(i), rows[i]
         if h is None:
             out[keep]["dropped"] = out[keep].get("dropped", 0) + len(r["t"])
+            out[keep].setdefault("dropped_widths", set()).add(groups[i][1])
         elif h in out:
             m = out[h]
             order = np.argsort(np.concatenate([m["t"], r["t"]]), kind="stable")
@@ -4377,13 +4502,17 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
             continue                                  # mcap_signals names it as left out, with the reason
         rows, n_sets = merge_unnamed(c["groups"], dict(enumerate(c["rows"])), ("pos",))
         read = [{"t": np.asarray(r["t"]), "pos": np.asarray(r["pos"], dtype=np.float64),
-                 "names": c["groups"][i][0], "fields": r["fields"], "label": group_label(c["groups"][i])}
+                 "names": c["groups"][i][0], "fields": r["fields"], "label": group_label(c["groups"][i]),
+                 "dropped": r.get("dropped", 0), "dropped_widths": r.get("dropped_widths") or set()}
                 for i, r in sorted(rows.items())]
         groups = _join_gripper(read, q)
         apart = len(groups) == len(read) and n_sets > 1
         for g in groups:
             if len(g["t"]) > 1:
-                s = {"t": g["t"], "pos": g["pos"], "names": g["names"], "topic": topic}
+                s = {"t": g["t"], "pos": g["pos"], "names": g["names"], "topic": topic,
+                     "field": next((k for k, _ in sorted(g["fields"], key=str) if k in JOINT_KEYS), "joints")}
+                if g.get("dropped"):
+                    s["dropped"], s["dropped_widths"] = g["dropped"], sorted(g["dropped_widths"])
                 if apart:
                     s["fields"] = g["fields"]
                 out[topic + (g["label"] if apart else "")] = s
@@ -4531,13 +4660,16 @@ def place_on_frames(t: np.ndarray, v: np.ndarray, q: np.ndarray) -> tuple[np.nda
     its interval and their standard deviation, so a vibration or a slip between two frames is not lost by picking one
     sample; a frame whose interval holds no sample is NaN."""
     t, q = np.asarray(t, dtype=np.float64), np.asarray(q, dtype=np.float64)
-    v = np.asarray(v, dtype=np.float64)
+    v = float_rows(v)
+    acc = v.dtype
     dq = float(np.median(np.diff(q))) if len(q) > 1 else 1 / 30
     rate = len(t) / max(float(t[-1] - t[0]), 1e-9) if len(t) > 1 else 0.0
     if rate <= 2.0 / dq:
         idx = nearest(t, q)
-        a = v[idx].copy()
         far = np.abs(t[idx] - q) > max(2.5 * float(np.median(np.diff(t))) if len(t) > 1 else 0.0, 2.5 * dq)
+        if len(idx) == len(v) and not far.any() and np.array_equal(idx, np.arange(len(v))):
+            return v, None, 0             # a sample at every frame, in order: the samples are the frames, no copy
+        a = v[idx].copy()
         a[far] = np.nan
         return a, None, int(far.sum())
     edges = np.concatenate([[q[0] - dq / 2], (q[1:] + q[:-1]) / 2, [q[-1] + dq / 2]])
@@ -4548,9 +4680,9 @@ def place_on_frames(t: np.ndarray, v: np.ndarray, q: np.ndarray) -> tuple[np.nda
     # value never empties a frame's other readings
     fin = np.isfinite(v)
     vz = np.where(fin, v, 0.0)
-    cnt = np.zeros((len(q), v.shape[1]))
-    tot = np.zeros((len(q), v.shape[1]))
-    sq = np.zeros((len(q), v.shape[1]))
+    cnt = np.zeros((len(q), v.shape[1]), dtype=acc)
+    tot = np.zeros((len(q), v.shape[1]), dtype=acc)
+    sq = np.zeros((len(q), v.shape[1]), dtype=acc)
     np.add.at(cnt, bin_[ok], fin[ok].astype(np.float64))
     np.add.at(tot, bin_[ok], vz[ok])
     np.add.at(sq, bin_[ok], vz[ok] ** 2)
@@ -4687,10 +4819,12 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     # bookkeeping values (a counter, a device clock) leave the row; a row that names its sensor per message is split
 
     def no_counters(name, r):
-        cnt = _counters(r)
+        nm = r["names"] or [f"[{i}]" for i in range(r["d"])]
+        v_ = np.asarray(r["v"], dtype=np.float64) if r["v"] else np.zeros((0, r["d"]))
+        # a counter, or a value whose name says time and that rises like a clock (is_named_clock)
+        cnt = sorted(set(_counters(r)) | {i for i in range(r["d"]) if len(v_) and is_named_clock(nm[i], v_[:, i])})
         if not cnt:
             return r
-        nm = r["names"] or [f"[{i}]" for i in range(r["d"])]
         keep = [i for i in range(r["d"]) if i not in cnt]
         out.left_out.append((f"{name} " + ", ".join(str(nm[i]) for i in cnt),
                              "rises at every message, so a counter or a clock rather than a reading"))
@@ -4733,9 +4867,6 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             # one message is a setting or a calibration, not a reading over time: listed with its values
             vals = ", ".join(f"{x:g}" for x in r["v"][0][:8]) + (" and more" if r["d"] > 8 else "")
             sparse.append(f"{name} ({vals})")
-            continue
-        if not signal_fits(len(q), r["d"]):
-            out.left_out.append((name, too_big_words(len(q), r["d"])))
             continue
         if not overlaps(t, q):
             out.left_out.append((name, some + outside_words(t, q)))
@@ -4887,6 +5018,24 @@ def state_fields(streams: dict, state, action) -> dict:
             out[topic] = set(JOINT_KEYS) | set(GRIPPER_KEYS)
         elif t in read:
             out.setdefault(topic, set()).update(s["fields"])
+    return out
+
+
+def joint_left_out(streams: dict, state, action) -> list[tuple[str, str]]:
+    """[(name, why)] for the messages of another number of values on the arm channels read as the state (and the
+    action): the field read as the state is not a signal, so without this they would be dropped without a word."""
+    if state is None:
+        return []
+    read = set(arm_streams(streams, False).values()) | (set(arm_streams(streams, True).values()) if action is not None
+                                                        else set())
+    out = []
+    for k in sorted(read):
+        s = streams[k]
+        if s.get("dropped"):
+            widths = " or ".join(str(w) for w in s.get("dropped_widths") or [])
+            out.append((f"{_topic(streams, k)} {s.get('field', 'joints')}",
+                        f"{s['dropped']} of its messages carry {widths} values, not the {s['pos'].shape[1]} of the arm "
+                        "read as the state, so they were not read"))
     return out
 
 
@@ -5173,6 +5322,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)
     signals = mcap_signals([item["file"]] + sensor_mcaps, q, used)
+    if rig == "teleop_arms":
+        signals.left_out += joint_left_out(streams, state, action)
     if sensor_h5s:
         merge_signals(signals, h5_file_signals(sensor_h5s, q, len(q)))
     if assumed:
@@ -5378,6 +5529,16 @@ def trim_episode(ep: Path, max_s: float) -> dict:
         np.savez(ep / "state.npz", **{k: z[k][:keep] for k in z.files})
     step = float(np.median(np.diff(t))) if n > 1 else 1 / 30
     ctx["trimmed"] = {"to_s": round(float(t[keep - 1]) + step, 3), "of_s": round(float(t[-1]) + step, 3)}
+    # a data issue that starts past the new end is about footage no longer labelled; one across it ends there
+    issues = []
+    for i in ctx.get("reader_issues") or []:
+        if i.get("t0_s") is not None and i["t0_s"] >= ctx["trimmed"]["to_s"]:
+            continue
+        if i.get("t1_s") is not None and i["t1_s"] > ctx["trimmed"]["to_s"]:
+            i = {**i, "t1_s": ctx["trimmed"]["to_s"]}
+        issues.append(i)
+    if "reader_issues" in ctx:
+        ctx["reader_issues"] = issues
     for u in ctx.get("unshown_cameras") or []:
         # a camera the model is not shown keeps its frames up to the same time, at its own rate
         rate = float(u.get("fps") or ctx.get("fps") or 30.0)
@@ -5425,14 +5586,30 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
                                   f"{'hold' if len(lost) != 1 else 'holds'} no camera, and no episode's footage shares "
                                   f"{'their' if len(lost) != 1 else 'its'} folder to place the data against, so "
                                   f"{'they were' if len(lost) != 1 else 'it was'} not read.")
+    det["used"] += possible_duplicates(root, items)
     unread = unread_files(root, det, items)
     if unread:
-        det["missing"].append(f"{len(unread)} file{'s' if len(unread) != 1 else ''} of a kind no reader opens: "
+        det["missing"].append(f"{len(unread)} file{'s' if len(unread) != 1 else ''} that no reader opens: "
                               + _and_words(unread[:12]) + (f" and {len(unread) - 12} more" if len(unread) > 12 else "")
                               + ".")
     if len(parts) > 1:
         det["format"] = " and ".join(p["format"] for p in parts)
     return det, items
+
+
+def possible_duplicates(root: Path, items: list[dict]) -> list[str]:
+    """Notes on MCAP recordings with videos of the same length beside them (SAME_LENGTH_S, SAME_LENGTH_FRAC): a
+    recorder can export an MCAP's cameras as mp4 files, so they may be the same footage read twice as separate
+    episodes. Both are kept; the note says so."""
+    out = []
+    for m in (it for it in items if it.get("kind") == "mcap" and it.get("seconds")):
+        same = [it for it in items if it.get("kind") == "video" and it.get("seconds")
+                and item_folder(it) == item_folder(m) and _same_length([m["seconds"], it["seconds"]])]
+        if same:
+            vids = _and_words(sorted(Path(f).name for it in same for f in it["files"]))
+            out.append(f"{Path(m['file']).relative_to(root).as_posix()} and {vids} beside it have the same length and "
+                       "may be the same footage, an MCAP and its video exports; both were read, as separate episodes.")
+    return out
 
 
 PART_WORDS = {"lerobot": "a LeRobot dataset", "mcap": "MCAP recordings", "hdf5": "HDF5 recordings",
@@ -5447,18 +5624,44 @@ def _and_words(xs: list[str]) -> str:
     return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1] if xs else ""
 
 
+NOTE_NAMES = ("annotations.json", "annotation.json", "meta.json", "instruction.txt", "task.txt", "annotations.jsonl",
+              "notes.txt")
+
+
+def opened_notes(items: list[dict]) -> set[Path]:
+    """The notes convert_video opens beside an episode's videos: a video's own .json, .txt, .jsonl and .md, and in an
+    episode folder every .json (a recorder's metadata, depth_scale_from) and the notes named NOTE_NAMES."""
+    out = set()
+    for it in items:
+        if it.get("kind") != "video":
+            continue
+        for f in it["files"]:
+            out |= {Path(f).with_suffix(x) for x in (".json", ".txt", ".jsonl", ".md")}
+        d = it.get("dir")
+        if d is not None:
+            ep_name = it["name"].rsplit("/", 1)[-1]
+            out |= set(Path(d).glob("*.json")) | {Path(d) / n for n in NOTE_NAMES} | \
+                {Path(d) / f"{ep_name}{x}" for x in (".json", ".txt")}
+        for dp in (it.get("depth") or {}).values():
+            out |= set(Path(dp).parent.glob("*.json"))
+    return out
+
+
 def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
-    """The upload's files (relative paths) that no reader opens: not inside a LeRobot dataset, not a video, MCAP, HDF5
-    file, note, table or archive, and not a video's frame times (a .npy whose name says time beside a video)."""
+    """The upload's files (relative paths) that no reader opens. Opened are the files of a LeRobot dataset, videos,
+    MCAP and HDF5 files (a sensor file no episode takes is named apart), archives, tables (annotation_tables reads
+    every CSV, TSV and JSON Lines file), a video's frame times (a .npy whose name says time beside it) and the notes
+    convert_video reads beside an episode (opened_notes). Any other file, a notes file included, is listed."""
     root = Path(root)
     parts = det["parts"] if det.get("parts") else [det]
     rdirs = [Path(r) for p in parts for r in p.get("roots") or []]
     vid_dirs = {Path(p).parent for p in files_under(root) if p.suffix.lower() in VIDEO_EXT}
+    notes = {p.resolve() for p in opened_notes(items)}
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
-        if any(r in p.parents for r in rdirs) or x in VIDEO_EXT or x in H5_EXT or x in NOTE_EXT or x == ".mcap" \
-                or ARCHIVE_RE.search(p.name):
+        if any(r in p.parents for r in rdirs) or x in VIDEO_EXT or x in H5_EXT or x in TABLE_EXT or x == ".mcap" \
+                or ARCHIVE_RE.search(p.name) or p.resolve() in notes:
             continue
         if x == ".npy" and p.parent in vid_dirs and any(t.startswith(("time", "stamp")) for t in tokens(p.stem)):
             continue
@@ -5978,7 +6181,8 @@ def measure_signal_scales(out: Path, ids: list[str]) -> dict:
         ctx = json.loads(p.read_text())
         with np.load(d / "signals.npz") as z:
             for s in ctx.get("signals") or []:
-                if s["key"] in z.files:
+                # a wide signal is summarised in the prompt, and a rest per value of thousands is not one to show
+                if s["key"] in z.files and int(s.get("dims") or 0) <= SIGNAL_MAX_VALUES:
                     rows.setdefault(s["name"], []).append(np.asarray(z[s["key"]], dtype=np.float64))
                     where.setdefault(s["name"], []).append(d)
     scales = {}

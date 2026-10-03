@@ -900,7 +900,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
             continue
         m = meta.get(name) or {}
         lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
-                                 fps=ep_fps(ep)))
+                                 fps=ep_fps(ep), aligned_by=m.get("aligned_by")))
     if still:
         lines.append("  The same at every frame: " + "; ".join(still))
     if pl["spans"]:
