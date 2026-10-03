@@ -2709,3 +2709,31 @@ def test_a_folder_read_by_a_dataset_adapter_is_not_called_unread():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _a_folder_read_by_a_dataset_adapter_is_not_called_unread(Path(t))
+
+
+def _an_own_sensor_file_recorded_outside_the_footage_is_listed_not_placed(tmp_path):
+    """An HDF5 episode and its own glove file are both on epoch clocks, the glove recorded an hour earlier. It had been
+    placed from both starts, as if the two shared no clock; both clocks are real and the glove covers none of the
+    footage, so it is listed as recorded outside it and never placed."""
+    import h5py
+    import numpy as np
+    root = tmp_path / "a"
+    root.mkdir()
+    with h5py.File(root / "run1.h5", "w") as h:
+        h["cam"] = np.random.default_rng(1).integers(0, 255, (60, 96, 96, 3)).astype(np.uint8)
+        h["timestamps"] = 1_790_003_600.0 + np.arange(60) / 30
+    with h5py.File(root / "glove.h5", "w") as h:
+        h["time"] = 1_790_000_000.0 + np.arange(60) / 30
+        h["pressure"] = np.random.default_rng(2).random((60, 4, 4))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _episode_ctx(tmp_path / "eps", rep, "run1")
+    assert not ctx.get("signals") and not _issues(ctx, "signal_alignment_assumed"), ctx.get("signals")
+    assert ctx["source"]["sensor_files"]["glove.h5"].startswith("not placed: recorded from"), ctx["source"]
+    assert any(u.startswith("glove.h5 (recorded from") and "outside the footage" in u
+               for u in ctx["source"]["unused_signals"]), ctx["source"]
+
+
+def test_an_own_sensor_file_recorded_outside_the_footage_is_listed_not_placed():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _an_own_sensor_file_recorded_outside_the_footage_is_listed_not_placed(Path(t))

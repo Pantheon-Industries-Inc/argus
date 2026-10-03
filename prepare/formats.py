@@ -5777,7 +5777,9 @@ def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path],
     (assign_sensors): its own files (item["state"]) and those it shares with the other episodes of its folder
     (item["state_shared"]). A file is placed by its clock when the footage's frame times q are on a recorder's clock
     (clocked: capture times, an MCAP's log times, an HDF5 camera's clock) and the file's times are on one too and
-    overlap the footage. Otherwise an own file is placed from both starts, an alignment that is assumed (its signals
+    overlap the footage; when both are on a recorder's clock and the file covers none of the footage, it recorded
+    something else and is listed as recorded outside the footage. Otherwise an own file is placed from both starts, an
+    alignment that is assumed (its signals
     are marked so and never read as the arm state), while a shared file is listed on the episode with the reason: it
     could be any of the folder's episodes' recording, and placing it from both starts on each would be a guess."""
     by_clock, assumed, unplaced = [], [], []
@@ -5789,10 +5791,11 @@ def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path],
             unplaced.append((p, "no time in it to place it on the footage by"))
         elif on_clock and recorder_clock(t) and overlaps(t, np.asarray(q, dtype=np.float64)):
             by_clock.append(p)
+        elif on_clock and recorder_clock(t):
+            # both clocks are real and comparable: a file that covers none of the footage recorded something else
+            unplaced.append((p, outside_words(t, np.asarray(q, dtype=np.float64))))
         elif p in own:
             assumed.append(p)
-        elif on_clock and recorder_clock(t):
-            unplaced.append((p, "its clock records nothing during this episode's footage"))
         else:
             unplaced.append((p, "several episodes share its folder, its name gives none of their takes, and it shares "
                                 "no clock with this episode's footage to tell whether it recorded it"))
