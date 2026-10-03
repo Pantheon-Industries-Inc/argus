@@ -41,7 +41,7 @@ import numpy as np
 from label import episode as me
 from label import frames as mf
 from label import state as ms
-from label.harness import write_atomic
+from label.atomic import write_atomic
 
 SMALL_W = 64          # image change is measured on a 64-px-wide grey copy of each frame
 

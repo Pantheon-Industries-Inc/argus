@@ -53,6 +53,8 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
+
 JOINTS = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]    # the 12 arm joints of the 14 state values (6 are grippers)
 
 SPEDUP_JITTER_FRAC = 0.020
@@ -238,7 +240,6 @@ def measure_folder(eps: Path) -> int:
     joint state and leader actions, and an episode gets a neighbour lag only when at least 3 episodes of its run fall
     in the window (itself and two more), so a lone episode is measured, never flagged. Returns how many episodes
     got one; every episode also records how many neighbours it had (timebase_neighbours_in_upload)."""
-    from label.harness import write_atomic
     rows = []
     for d in sorted(Path(eps).glob("episode_*")):
         ctx = json.loads((d / "context.json").read_text())

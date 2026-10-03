@@ -860,3 +860,15 @@ def test_a_short_signal_of_whole_numbers_is_padded_with_no_reading():
     from label import signals as sg
     a = sg.pad_rows(np.arange(6, dtype=np.int64).reshape(3, 2), 5)
     assert a.dtype.kind == "f" and a.shape == (5, 2) and np.isnan(a[3:]).all() and a[2, 1] == 5
+
+
+def test_the_checks_write_context_json_without_loading_the_model_harness():
+    """The checks wrote context.json through label/harness.py, so every check step loaded the model harness to write a
+    file. The atomic write lives in label/atomic.py, which the checks, the board and the readers import alone."""
+    import subprocess
+    import sys
+    repo = Path(__file__).resolve().parent.parent
+    code = ("import sys; from label.atomic import write_atomic; import checks.capture_qc, checks.stream_pairing, "
+            "checks.sensors, checks.timebase, label.pieces; print('label.harness' in sys.modules)")
+    r = subprocess.run([sys.executable, "-c", code], cwd=repo, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and r.stdout.strip() == "False", r.stdout + r.stderr

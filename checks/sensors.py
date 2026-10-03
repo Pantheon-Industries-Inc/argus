@@ -43,7 +43,7 @@ import numpy as np
 from label import depth as dp
 from label import episode as me
 from label import signals as sg
-from label.harness import write_atomic
+from label.atomic import write_atomic
 
 NO_READING_SHARE = 0.2
 PINNED_SHARE = 0.1

@@ -28,6 +28,8 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
+
 # the longest recording the published board labels in one request is 443 s (OpenAoE); a recording longer than
 # this is labelled in parts, so an upload is never sent to the model in a longer request than the board's
 PIECE_MAX_S = {"teleop_arms": 450.0, "handheld_gripper": 450.0, "ego_head": 450.0}
@@ -263,11 +265,11 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                     else {})}
                 for x, a, b in subs if a is None or ((a if b is None else b) >= t0 and a < t1)]
         (d / "sources.json").write_text(json.dumps(new_src, indent=1))
-        (d / "context.json").write_text(json.dumps(c2, indent=1, default=str))
+        write_atomic(d / "context.json", c2, indent=1, default=str)
         (d / "instruction.txt").write_text("\n")
         out.append(d)
     ctx["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    write_atomic(ep_dir / "context.json", ctx, indent=1, default=str)
     return out
 
 

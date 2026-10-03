@@ -63,7 +63,7 @@ import numpy as np
 from checks.vendor import public_dataset_adapter_qc as up
 from label import episode as me
 from label import frames as mf
-from label.harness import write_atomic
+from label.atomic import write_atomic
 
 SOURCE = up.SOURCE
 VERSION = 2          # the format version of context["capture_qc"]
