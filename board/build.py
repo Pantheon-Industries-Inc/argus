@@ -215,15 +215,16 @@ def label_failure(result: dict | None) -> list[dict]:
     """The data issue of an episode whose model reply gave no labels (board/to_board.py label_failed): one entry of
     kind model_reply_cut_off or model_reply_unparsed, which raises the family label-failed, so the episode is on the
     board with its footage, checks and sensors and the filter finds it. A long recording stitched from the parts that
-    parsed (label/pieces.py stitch_run) has one entry of kind part_not_labelled per part that gave none, at its span.
-    Nothing for a reply that parsed whole."""
+    parsed (label/pieces.py stitch_run) has one entry of kind part_not_labelled per part that gave none, at its span,
+    with the start of that part's reply (reply_head) when it gave one. Nothing for a reply that parsed whole."""
     if not isinstance(result, dict):
         return []
     st = result.get("stitched") if isinstance(result.get("stitched"), dict) else {}
     gaps = [{"kind": "part_not_labelled", "t0_s": g.get("t0_s"), "t1_s": g.get("t1_s"),
              "what": f"Part {g.get('part')} of {st.get('parts')} of this long recording, from {float(g['t0_s']):.1f} s "
                      f"to {float(g['t1_s']):.1f} s, has no labels, as {g.get('why') or 'its reply gave none'}; the "
-                     "labels come from the other parts."}
+                     "labels come from the other parts.",
+             **({"reply_head": g["raw_head"]} if g.get("raw_head") else {})}
             for g in st.get("missing") or [] if isinstance(g, dict) and g.get("t0_s") is not None
             and g.get("t1_s") is not None] if label_failed(result) is None else []
     lf = label_failed(result)

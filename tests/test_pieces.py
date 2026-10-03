@@ -336,6 +336,8 @@ def test_a_long_recording_with_a_part_that_failed_is_stitched_from_the_rest_with
     (iss,) = d["dataset_checks"]["reader_issues"]
     assert iss["kind"] == "part_not_labelled" and iss["t0_s"] == gap["t0_s"] and iss["t1_s"] == gap["t1_s"]
     assert iss["family"] == "label-failed" and "Part 2 of 3" in iss["what"] and "did not parse" in iss["what"]
+    # the board's issue carries the start of the part's reply, which the page shows under it (tests/reader_issues.js)
+    assert iss["reply_head"] == "{oops"
 
 
 def test_a_long_recording_none_of_whose_parts_parsed_is_still_on_the_board(tmp_path, monkeypatch):

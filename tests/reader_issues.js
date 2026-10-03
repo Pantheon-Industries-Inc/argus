@@ -52,4 +52,11 @@ const [lf] = T.readerIssueRows({dataset_checks: {reader_issues: [{kind: 'model_r
 check(lf && lf.includes('di-row low minor') && lf.includes('>not counted<') && lf.includes('Model reply gave no labels'),
   'a problem that is not a fault in the recording is shown as not counted');
 check(rows[0].includes('di-row high') && rows[0].includes('>check<'), 'a fault in the recording is shown as before');
+// a part of a long recording whose reply gave no labels shows the start of that reply, escaped, as the page shows a
+// whole episode's failed reply
+const [gap] = T.readerIssueRows({dataset_checks: {reader_issues: [{kind: 'part_not_labelled', family: 'label-failed',
+  t0_s: 183, what: 'Part 2 of 2 of this long recording has no labels.', reply_head: 'I am sorry, <b>no</b>'}]}});
+check(gap && gap.includes('Start of the reply') && gap.includes('I am sorry, &lt;b&gt;no&lt;/b&gt;'),
+  'a part whose reply gave no labels shows the start of its reply');
+check(!rows.some(r => r.includes('Start of the reply')), 'an entry with no reply shows none');
 process.exit(bad ? 1 : 0);

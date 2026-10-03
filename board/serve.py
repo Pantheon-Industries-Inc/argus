@@ -2216,13 +2216,14 @@ main.src-fade.ep-fade #left-col > .video-wrap, main.src-fade.ep-fade .ep-head { 
   padding: 16px 20px; margin-bottom: 20px; }
 .cmp-fail h4 { margin: 0 0 8px; font: 700 15px/1.3 var(--sans); color: var(--fg); }
 .cmp-fail p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: var(--fg-2); }
-.cmp-fail pre { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; background: var(--bg);
+.cmp-fail pre, .di-raw { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--r-sm); font: 400 11.5px/1.5 var(--mono); color: var(--fg-2); white-space: pre-wrap;
   overflow-wrap: anywhere; }
 /* a goal frame a static build has not extracted yet: the caption stays, the broken image does not */
 .goal-frame.nofr img { display: none; }
 .cmp-fail .cf-k { font: 600 11px/1.3 var(--sans); color: var(--fg-3); margin: 12px 0 6px; }
+.di-raw { max-height: 160px; margin-top: 4px; }
 
 /* ---------- the comparison view ---------- */
 #cmp-view { display: none; height: calc(100vh - var(--top-h)); overflow-y: auto; background: var(--bg); }
@@ -2855,7 +2856,8 @@ function datasetSourceHtml(s) {
 // that gave no labels, a limit of how we read it; board/families.py COUNTED_LISTS) is marked as not counted, as the
 // filter and the counts leave it out. Each is a row of the recording checks card, in the sentence the
 // entry carries, under the family it raises (board/families.py reader_family), with its camera or signal and its time
-// when the entry has them. Nothing is drawn when the episode has none.
+// when the entry has them, and the start of the reply of a long recording's part that gave no labels. Nothing is drawn
+// when the episode has none.
 function readerIssueRows(d) {
   const ri = (d && d.dataset_checks || {}).reader_issues;
   const num = v => v != null && v !== '' && !isNaN(parseFloat(v));
@@ -2870,6 +2872,8 @@ function readerIssueRows(d) {
         <div class="di-issue">${esc(x.what)}</div>
         <div class="di-tags"><span class="di-cat">${esc(famName(fam))}</span>${t != null ? `<span class="di-t">@ `
           + `${esc(fmtT(t))}</span>` : ''}${x.signal ? `<span class="di-cat">${esc(x.signal)}</span>` : ''}</div>
+        ${x.reply_head ? `<div class="di-ev">Start of the reply</div><pre class="di-raw">${esc(x.reply_head)}</pre>`
+          : ''}
       </div></div>`;
   });
 }
