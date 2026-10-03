@@ -336,6 +336,22 @@ def test_sensor_data_the_reader_left_unread_never_shows_its_note_or_a_claim_that
     assert "qpos_raw" not in fixed + episode         # the list itself goes to the board (Task 4), not the prompt
 
 
+def test_an_episode_with_no_state_but_depth_is_told_its_colour_and_depth_images_are_all_there_is():
+    """Depth images follow the detail views of a video only episode with depth, so "the video is all there is" would be
+    false there; an episode without depth keeps its line (the NO_DATA goldens)."""
+    for note, line in ((None, "RECORDED STATE: none; this dataset records no robot or gripper state, so the cameras' "
+                              "colour and depth images are all there is."),
+                       ("Labelled from the cameras.", "RECORDED STATE: none was read from this episode, so the "
+                                                      "cameras' colour and depth images are all there is.")):
+        ep, pl = CASES["teleop_video_only"]()
+        if note:
+            ep["context"]["state_note"] = note
+        assert "so the video is all there is." in me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+        _add_depth(ep, pl)
+        episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+        assert line in episode and "the video is all there is" not in episode
+
+
 def test_the_note_of_a_teleop_file_with_motion_channels_never_puts_a_recorded_motion_into_a_video_only_prompt():
     ep, pl = CASES["teleop_video_only"]()
     ep["context"]["state_note"] = ("Labelled from the cameras. The checks on recorded motion read six joints and a "

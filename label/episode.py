@@ -1225,10 +1225,13 @@ def _no_state_text(ep: dict, pl: dict) -> str:
                    + (" under their own names" if named else "") + " among the other recorded signals below."
                    if joints else ""))
     src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
+    # depth pictures follow the detail views of an episode with depth (the depth block), so there the video is not all
+    all_there_is = (("the cameras' colour and depth images are" if _has_depth(ep, pl) else "the video is")
+                    + " all there is.")
     if (ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS):
-        return "\nRECORDED STATE: none was read from this episode, so the video is all there is."
+        return f"\nRECORDED STATE: none was read from this episode, so {all_there_is}"
     what = "no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state"
-    return f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
+    return f"\nRECORDED STATE: none; this dataset records {what}, so {all_there_is}"
 
 
 def _uploader_text(ep: dict, pl: dict) -> str:
