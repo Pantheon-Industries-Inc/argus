@@ -154,7 +154,7 @@ def source_size(ffmpeg: str, path: str) -> tuple:
 
 def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     """{camera: (offset s, skip)} on the episode's clock, from times.npz, the real capture times some recordings keep
-    per camera (ABC-130k, RealOmni, MCAP uploads). The episode's clock starts at the main camera's first frame, or at
+    per camera (ABC-130k, RealOmni, MCAP uploads). The request's clock starts at 0, or at
     context.json clock_zero_s once the main camera it was measured from was taken out of the episode (drop_cameras),
     so every run cuts the same clips whichever camera is main now. A camera whose recording started later plays its
     first frame offset s after it (RealOmni's right gripper camera starts up to 2 s after the left one); one that
@@ -911,7 +911,7 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
                 np.save(kp, depth_kmap(td, t_new))        # no reading where no depth frame is within a frame
             elif kp.exists():
                 np.save(kp, np.load(kp)[idx])            # no depth times: the depth frame of the nearest old frame
-    # the clock: its start is the times.npz value zero (clock_zero_s, else the old main camera's first frame), moved
+    # the clock: its start is clock_zero_s, or 0 as in the request, moved
     # to the earliest first frame of the cameras left unless the episode is labelled already
     zero = float(ctx.get("clock_zero_s") or 0.0)
     first = {v: float(t[v][0]) for v in src if v in t and len(t[v])}

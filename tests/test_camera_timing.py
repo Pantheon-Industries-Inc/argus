@@ -14,13 +14,16 @@ from label import episode
 from prepare import formats
 
 
-def video(path, n):
+def video(path, n, pattern=False):
     with av.open(str(path), "w") as dst:
         stream = dst.add_stream("libx264", rate=30)
         stream.width, stream.height, stream.pix_fmt = 96, 64, "yuv420p"
         stream.options = {"bf": "0", "g": "1"}
         for k in range(n):
             image = np.full((64, 96, 3), k * 2, np.uint8)
+            if pattern:
+                tiles = np.random.default_rng(k).integers(0, 256, (4, 6, 3), dtype=np.uint8)
+                image = np.repeat(np.repeat(tiles, 16, axis=0), 16, axis=1)
             for packet in stream.encode(av.VideoFrame.from_ndarray(image, format="rgb24")):
                 dst.mux(packet)
         for packet in stream.encode():
@@ -221,11 +224,11 @@ def test_composed_mixed_rate_footage_keeps_each_cameras_current_frame(tmp_path):
     inputs, original = [], []
     for name, rate in (("slow", 15), ("fast", 60)):
         path = tmp_path / (name + ".mp4")
-        video(path, 90)
+        video(path, 90, pattern=True)
         clips.retime(path, 0.019 + np.arange(90) / rate, fps=rate, main=False)
         inputs.append((path, (96, 64), rate))
         with av.open(str(path)) as src:
-            original.append([(float(f.time), f.to_ndarray(format="rgb24").mean()) for f in src.decode(video=0)])
+            original.append([(float(f.time), f.to_ndarray(format="rgb24")) for f in src.decode(video=0)])
     out = tmp_path / "mixed.mp4"
     subprocess.run(serve.footage_command(inputs, 0.4, 1.4, out, 1), check=True)
     _, _, cells = serve.footage_layout([(96, 64), (96, 64)])
@@ -236,4 +239,4 @@ def test_composed_mixed_rate_footage_keeps_each_cameras_current_frame(tmp_path):
         t, pixels = float(frame.time) + 0.4, frame.to_ndarray(format="rgb24")
         for (x, y, w, h), samples in zip(cells, original):
             expected = [v for start, v in samples if start <= t][-1]
-            assert abs(pixels[y:y + h, x:x + w].mean() - expected) < 1.5
+            assert np.abs(pixels[y:y + h, x:x + w].astype(float) - expected).mean() < 10

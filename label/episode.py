@@ -432,7 +432,7 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     """{view: {k: PIL image}} for every planned k a camera has a frame at. With widths (the cell widths a request can
     be built at), frames outside detail_ks are kept only at those widths (label/frames.py Shrunk).
 
-    An instant no camera has a frame at is dropped from pl["ks"], and when the episode's last instants are past every
+    An instant no camera has a frame at is named and replaced by a nearby readable frame at its own time. When the episode's last instants are past every
     camera's last frame (an upload whose every camera's file ends a frame before the episode does), the last frame any
     camera has takes their place, so the last detail view is the end of the footage (ep["footage_end"]). The episode
     keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,

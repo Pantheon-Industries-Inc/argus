@@ -165,7 +165,7 @@ def decode_times(block: dict) -> np.ndarray:
 
 def clip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
     """Seconds on the board clip's clock for each anchor frame: the anchor camera's real capture times (times.npz)
-    from its first frame, which the clip shows at 0 (board/clips.py), else frame / fps."""
+    minus the explicit clock origin when present, as the request and clips use, else frame / fps."""
     from label.episode import order_views
     tp = ep_dir / "times.npz"
     src_p = ep_dir / "sources.json"
