@@ -85,6 +85,18 @@ def test_hdf_native_clock_column_keeps_its_original_array_shape(tmp_path):
         np.testing.assert_array_equal(clocks["timestamps"], raw)
 
 
+@pytest.mark.parametrize("integer", [False, True])
+def test_hdf_unique_native_clock_retains_original_dtype_values_and_units(tmp_path, integer):
+    raw = (1_790_000_000_000_000_003 + np.arange(40, dtype=np.int64) * 100_000_000
+           if integer else np.arange(40, dtype=np.float32) / 10)
+    ep, ctx = convert(hdf_upload(tmp_path, raw), tmp_path)
+    assert not ctx.get("presentation_times")
+    with np.load(ep / ctx["recorded_container_times"]["file"]) as clocks:
+        assert clocks["timestamps"].dtype == raw.dtype
+        np.testing.assert_array_equal(clocks["timestamps"], raw)
+    assert ctx["recorded_container_times"]["clocks"]["timestamps"]["units"] == ("ns" if integer else None)
+
+
 @pytest.mark.parametrize("origin,dense", [(1_790_000_000_000_000_003, False), (3_000_000_000_003, True)])
 def test_hdf_distinct_native_camera_clocks_keep_exact_relative_integer_offsets(tmp_path, origin, dense):
     upload = tmp_path / "upload"
@@ -217,6 +229,20 @@ def test_loose_video_native_integer_sidecar_keeps_its_exact_dtype_and_values(tmp
     assert native["clocks"]["top_timestamp.npy"]["units"] is None
 
 
+def test_loose_unique_float_sidecar_retains_its_original_dtype_and_values(tmp_path):
+    from test_reader_tables import _clip
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    _clip(upload / "top.mp4", 40)
+    raw = np.arange(40, dtype=np.float32) / 30
+    np.save(upload / "top_timestamp.npy", raw)
+    ep, ctx = convert(upload, tmp_path)
+    assert not ctx.get("presentation_times")
+    with np.load(ep / ctx["recorded_container_times"]["file"]) as clocks:
+        assert clocks["top_timestamp.npy"].dtype == raw.dtype
+        np.testing.assert_array_equal(clocks["top_timestamp.npy"], raw)
+
+
 def test_loose_unshown_video_uses_its_supplied_tied_capture_clock(tmp_path):
     from test_reader_tables import _clip
     upload = tmp_path / "upload"
@@ -257,3 +283,18 @@ def test_parquet_image_tied_clock_does_not_restore_measured_joint_state(tmp_path
     with np.load(ep / "signals.npz") as signals:
         np.testing.assert_array_equal(signals[recorded["key"]], state)
     assert "RECORDED MOTION" not in episode.build_request(ep)["prompt"]
+
+
+def test_parquet_image_unique_native_column_retains_its_original_dtype_and_values(tmp_path):
+    test_parquet_image_tied_clock_does_not_restore_measured_joint_state(tmp_path)
+    path = tmp_path / "upload/data/chunk-000/episode_000000.parquet"
+    df = pd.read_parquet(path)
+    raw = np.arange(40, dtype=np.float32) / 10
+    df["timestamp"] = raw
+    df.to_parquet(path)
+    ep, ctx = convert(tmp_path / "upload", tmp_path / "unique")
+    assert not ctx.get("presentation_times") and ctx["state_kind"] == "joints"
+    with np.load(ep / ctx["recorded_container_times"]["file"]) as clocks:
+        assert clocks["timestamp"].dtype == raw.dtype
+        np.testing.assert_array_equal(clocks["timestamp"], raw)
+    assert ctx["recorded_container_times"]["clocks"]["timestamp"]["units"] is None

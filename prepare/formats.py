@@ -3610,9 +3610,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             unshown[index] = (name, keep_unshown_clock(ep, entry, recorded - (zero if zero is not None else recorded[0]),
                                                        pr["pts"].tolist()))
     set_unshown(extra, unshown)
-    if (any(a.dtype.kind in "iu" for _, a in native.values())
-            or any(t is not None and presentation_clock(t)[1] for t in real.values())
-            or any(e and e.get("camera_clock") for _, e in unshown)):
+    if native:
         home = Path(os.path.commonpath([str(p.parent) for p, _ in native.values()]))
         key = lambda p: p.relative_to(home).as_posix()
         clocks = {key(p): a for p, a in native.values()}
@@ -4692,7 +4690,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         elif key not in undecoded:
             unshown_not_decodable(extra, key)
     extra["source"]["images_in_parquet"] = True
-    if coarse and native is not None:
+    if native is not None:
         keep_container_clocks(ep, extra, {"timestamp": native}, {v: "timestamp" for v in files},
                               {"timestamp": {"source": "parquet timestamp column", "units": None}})
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
@@ -5672,7 +5670,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             merge_signals(signals, sensors_from_start(assumed, q_abs - q_abs[0], sensor_extra))
         instr, notes = h5_text(f, g, st["text"])
         native_meta = {}
-        if coarse:
+        if st["native_clock"]:
             for name in st["native_clock"]:
                 ds = f[f"{g}/{name}" if g else name]
                 units = ds.attrs.get("units")
@@ -5680,7 +5678,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 native_meta[name] = {"source": ds.name, "units": units}
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
-    if coarse:
+    if st["native_clock"]:
         keep_container_clocks(ep, extra, st["native_clock"],
                               {v: chosen[v]["clock"] for v in files}, native_meta)
     for nm in undecoded:
