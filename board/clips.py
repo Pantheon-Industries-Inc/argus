@@ -15,9 +15,11 @@ The board plays each camera as its own synced <video> and expects one mp4 per ep
 Some datasets keep their video packed (MolmoAct2: 12 to 50 episodes per mp4), and some cameras are HEVC or AV1,
 which browsers do not all play. This cuts each episode's own frames out of its source file (sources.json: the
 file, the episode's offset and its exact frame count) into a browser-native H.264 clip, once, sized for where the
-page shows that camera (the recipe below) and timed on the episode's clock: every frame keeps its source time, and a
-camera that started recording after the main one starts that much later. It is a viewing copy only: labelling
-decodes the source files directly and never re-encodes. Idempotent and parallel.
+page shows that camera (the recipe below) and timed on the episode's clock: a camera whose capture times the episode
+keeps (times.npz) plays each frame at its capture time, the times the frames the model is sent are chosen by (retime),
+so a labelled time shows the same instant on the board as in the request; any other camera's frames keep their source
+times. A camera that started recording after the main one starts that much later. It is a viewing copy only: labelling decodes the source files directly and never re-encodes. Idempotent and
+parallel.
 
 An episode with any camera that decodes is always kept, labelled and put on the board from the cameras that work. A
 camera whose clip comes out with fewer frames than the episode keeps its clip as cut, and the board plays it; a
@@ -179,9 +181,29 @@ def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     return out
 
 
+def clip_times(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
+    """{camera: its frames' capture times on the episode's clock} for each camera times.npz holds one per frame of
+    (sources.json n_frames): the times label/episode.py chooses the model's frames by (frame_time, and each paired
+    camera's kmap, nearest in time). The clock starts where start_offsets puts it."""
+    import numpy as np
+    tp = ep_dir / "times.npz"
+    cams = cams_of(sources)
+    if not tp.exists() or not cams:
+        return {}
+    with np.load(tp) as z:
+        t = {c: np.asarray(z[c], dtype=np.float64) for c in cams if c in z.files
+             and len(z[c]) == int(sources[c].get("n_frames") or -1)}
+    main = main_cam(sources)
+    if main not in t:
+        return {}
+    zero = _context(ep_dir).get("clock_zero_s")
+    ref = float(zero) if zero is not None else float(t[main][0])
+    return {c: tc - ref for c, tc in t.items()}
+
+
 def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
                 ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0,
-                skip: int = 0) -> dict | None:
+                skip: int = 0, times=None) -> dict | None:
     """Exactly the episode's n_frames, starting at its first frame. Packed files are on an exact frame grid,
     so seeking half a frame before the episode's offset lands on its first frame whichever way the decimal
     rounds, and -frames:v stops after the last one (never a frame of the next episode). Per-episode files
@@ -192,7 +214,9 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
 
     The clip is cut from the file's first video stream alone, and its first frame is put at 0 (then offset_s), so
     neither another stream that starts first (an audio track) nor the seek's half-frame lead shifts it off the
-    episode's clock; the frames after it keep their own spacing, so a variable-rate recording plays as recorded.
+    episode's clock; the frames after it keep their own spacing, so a variable-rate recording plays as recorded. With
+    times (the camera's capture times on the episode's clock, clip_times) the frames are placed by them instead
+    (retime).
 
     Returns None when the clip has the episode's frames. A clip with fewer (the camera's file ends before the
     episode does) is kept as cut and its counts returned, {"clip_frames", "episode_frames"}, for record_cameras; a
@@ -209,14 +233,69 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
-        frame_lengths(tmp)
         got = clip_frames(tmp)
         if not got:
             raise RuntimeError(f"{out_mp4.name}: no frame of {packed} decodes")
+        if times is not None and len(times) >= skip + got:
+            retime(tmp, times[skip:skip + got], fps)
+        else:
+            frame_lengths(tmp)
         os.replace(tmp, out_mp4)
     finally:
         tmp.unlink(missing_ok=True)       # a cut that failed part way leaves no half written clip behind
     return None if got == want else {"clip_frames": got, "episode_frames": want}
+
+
+def retime(mp4: Path, capture_s, fps: float = 30.0) -> None:
+    """Put the frames of an encoded clip, in display order, at their capture times on the episode's clock (capture_s,
+    seconds), each lasting until the next one and the last one the step before it, as frame_lengths gives them: the
+    times label/episode.py chooses the model's frames by, where the file's own timestamps can be an even rate its
+    recorder never kept (a capture that dropped frames). The clip starts at 0 when its first capture is less than half
+    a frame from the clock's start, as start_offsets places a camera. The packets are copied as encoded; decode times
+    move with the display times they sit among (the same map, carried on before the first frame), so the decoder reads
+    them in the same order. A clip whose frames sit at their capture times already is left as cut."""
+    import av
+    import numpy as np
+    want = np.asarray(capture_s, dtype=np.float64)
+    if want[0] < 0.5 / fps:
+        want = want - want[0]
+    tmp = mp4.with_name(mp4.stem + ".time.mp4")
+    try:
+        with av.open(str(mp4)) as src:
+            ist = src.streams.video[0]
+            tb = ist.time_base
+            pkts = [p for p in src.demux(ist) if p.size and p.pts is not None]
+            old = np.array(sorted(p.pts for p in pkts), dtype=np.float64)
+            if len(old) != len(want):
+                raise RuntimeError(f"{mp4.name}: {len(old)} frames for {len(want)} capture times")
+            if np.max(np.abs(old * float(tb) - want)) <= 1e-3:
+                frame_lengths(mp4)
+                return
+            new = [int(round(x / tb)) for x in want]
+            for i in range(1, len(new)):
+                new[i] = max(new[i], new[i - 1] + 1)            # two captures closer than a tick stay in order
+            ticks = np.asarray(new, dtype=np.float64)
+
+            def moved(x):
+                if len(old) > 1 and x < old[0]:                 # before the first frame: the first step's slope
+                    return ticks[0] - (old[0] - x) * (ticks[1] - ticks[0]) / max(old[1] - old[0], 1.0)
+                return float(np.interp(x, old, ticks))
+            at = {int(o): i for i, o in enumerate(old)}
+            with av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
+                ost = dst.add_stream_from_template(ist)
+                ost.time_base = tb
+                last_dts = None
+                for p in pkts:
+                    i = at[int(p.pts)]
+                    p.duration = new[i + 1] - new[i] if i + 1 < len(new) else (new[i] - new[i - 1] if i else 1)
+                    dts = int(np.floor(moved(p.dts))) if p.dts is not None else new[i]
+                    dts = min(dts if last_dts is None else max(dts, last_dts + 1), new[i])
+                    p.pts, p.dts, last_dts = new[i], dts, dts
+                    p.stream = ost
+                    dst.mux(p)
+        os.replace(tmp, mp4)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def depth_frame_map(colour_t, depth_t) -> list:
@@ -481,6 +560,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     outs = clip_paths(mp4_dir, eid, cams)
     big = main_cam(sources) if cams else None
     offsets = start_offsets(ep_dir, sources, fps)
+    times = clip_times(ep_dir, sources, fps)
     jobs = []
     for cam in cams:
         o = outs[cam]
@@ -488,7 +568,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
             s = sources[cam]
             off, skip = offsets.get(cam, (0.0, 0))
             jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, off, skip,
-                         ep_dir.name, cam))
+                         times.get(cam), ep_dir.name, cam))
     # the cameras the model is not shown, as side cameras at their own start on the episode's clock: one that started
     # before the clock drops its frames from before it, as start_offsets does
     for view, e in unshown_views(ctx):
@@ -498,7 +578,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
             start = float(e.get("start_s") or 0.0)
             skip = int(round(-start * f)) if start < 0 else 0
             jobs.append((str(e["packed"]), float(e.get("base_s") or 0.0), int(e["n_frames"]), o, f, False,
-                         max(0.0, start + skip / f), skip, ep_dir.name, view))
+                         max(0.0, start + skip / f), skip, None, ep_dir.name, view))
     return jobs
 
 
@@ -987,8 +1067,8 @@ def main() -> int:
     unshown_cut: dict[str, set] = {}            # the same for the cameras the model is not shown (unshown_views)
     unshown_broken: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip): (o, ep, cam)
-                for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in jobs}
+        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t):
+                (o, ep, cam) for (pk, b, du, o, fps, is_main, off, skip, t, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
             if cam.startswith(UNSHOWN):
@@ -1036,9 +1116,10 @@ def main() -> int:
             # every clip is timed on it (start_offsets); each camera's frames are recorded as they come out
             # the cameras the model is not shown too, at their start on the moved clock (CLOCK_TIME_KEYS)
             redo, again, u_cut, u_broken = {}, set(), set(), {}
-            for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in episode_jobs(d, args.out, True, args.name_prefix):
+            for (pk, b, du, o, fps, is_main, off, skip, t, ep, cam) in episode_jobs(d, args.out, True,
+                                                                                    args.name_prefix):
                 try:
-                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip)
+                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t)
                     if cam.startswith(UNSHOWN):
                         u_cut.add(cam)
                         continue

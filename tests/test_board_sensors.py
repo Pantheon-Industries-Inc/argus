@@ -293,8 +293,8 @@ def test_a_depth_clip_has_its_colour_clips_frames_and_timestamps(tmp_path, depth
         np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
     out = tmp_path / "clips"
     jobs = clips.episode_jobs(ep, out, False)
-    for (pk, b, du, o, fps, main, off, skip, _, _) in jobs:
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+    for (pk, b, du, o, fps, main, off, skip, t, _, _) in jobs:
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t)
     (job,) = clips.depth_jobs(ep, out, False)
     clips.extract_depth(*job[:4], 1, job[4])
     colour, dclip = out / "episode_000000.mp4", out / "depth_exo" / "episode_000000.mp4"
@@ -324,8 +324,8 @@ def test_a_depth_clip_whose_times_do_not_cover_the_colour_clip_is_kept_and_flagg
     np.savez(ep / "times.npz", exo=t[:30], exo_pts=np.arange(n) * 512)
     np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
     out = tmp_path / "clips"
-    for (pk, b, du, o, fps, main, off, skip, _, _) in clips.episode_jobs(ep, out, False):
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+    for (pk, b, du, o, fps, main, off, skip, t, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t)
     (job,) = clips.depth_jobs(ep, out, False)
     issues = clips.extract_depth(*job[:4], 1, job[4])
     dclip = out / "depth_exo" / "episode_000000.mp4"

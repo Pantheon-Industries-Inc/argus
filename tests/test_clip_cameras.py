@@ -272,6 +272,34 @@ def test_a_camera_that_ends_early_is_one_issue_whichever_step_finds_it(tmp_path)
     assert short["t0_s"] == pytest.approx(20 / 30, abs=0.01) and short["t1_s"] == 2.0, short
 
 
+def test_the_board_shows_the_frame_the_model_is_sent_at_every_instant(tmp_path):
+    """A wrist camera whose recorder dropped three frames at 1 s: its video plays at an even 30 fps, so its clip had
+    shown frame 45 at 1.5 s while its capture times put frame 42 there, the frame the model is sent. Each clip frame
+    plays at its capture time, so at every sampled instant the board's frame is the model's, on every camera."""
+    from board.hands import probe_pts
+    up = tmp_path / "up"
+    up.mkdir()
+    t_left = np.where(np.arange(57) < 30, np.arange(57), np.arange(57) + 3) / 30.0
+    for stem, n in (("top", 60), ("wrist_left", 57)):
+        _video(up / f"{stem}.mp4", n)
+    eps = tmp_path / "episodes"
+    ep = eps / "episode_a"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4")}
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": t_left})
+    out = tmp_path / "clips"
+    assert _clips(eps, out).returncode == 0
+    e = me.load(ep)
+    pl = me.plan(e)
+    for v, clip in (("exo", out / f"{ep.name}.mp4"), ("left", out / "wrist_left" / f"{ep.name}.mp4")):
+        _, _, tb, pts = probe_pts(clip)
+        shown = np.asarray(pts, dtype=np.float64) * float(tb)
+        assert np.allclose(shown, e["times"][v], atol=1e-3)
+        for k in pl["ks"]:
+            own = int(e["kmap"][v][k]) if v in e["kmap"] else k
+            assert int(np.searchsorted(shown, me.frame_time(e, k) + 1e-4, side="right") - 1) == own, (v, k)
+    assert 42 == int(e["kmap"]["left"][45])
+
+
 def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_frame(tmp_path):
     """The left wrist camera started 0.5 s before the top camera, which does not decode. The episode's clock now
     starts at the left camera's first frame, the earliest of the cameras left: frame times, clips and the length

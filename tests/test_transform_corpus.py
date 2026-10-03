@@ -470,8 +470,8 @@ def check_episode(run, case, tag, ep_dir, truth, clip_dir, out, *, clips, hands,
 
     # the board's clips, on the episode's clock
     jobs = clips.episode_jobs(ep_dir, clip_dir, True)
-    for (pk, b, du, o, fps, is_main, off, skip, _ep, cam) in jobs:
-        clips.extract_one(pk, b, du, o, FF, 1, fps, is_main, off, skip)
+    for (pk, b, du, o, fps, is_main, off, skip, t, _ep, cam) in jobs:
+        clips.extract_one(pk, b, du, o, FF, 1, fps, is_main, off, skip, t)
     main = clips.main_cam(src)
     offsets = clips.start_offsets(ep_dir, src, float(ctx.get("fps") or 30))
     clip_times = {}
