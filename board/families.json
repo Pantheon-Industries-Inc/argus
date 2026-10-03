@@ -88,15 +88,34 @@
    "name": "Camera video does not decode",
    "reader_issues": [
     "camera_not_decodable",
-    "camera_decode_failed"
+    "camera_decode_failed",
+    "frames_not_decodable"
    ]
   },
   {
    "slug": "clip-frames",
    "list": "data",
-   "name": "Camera video has fewer frames than the episode",
+   "name": "Camera video does not cover the episode",
    "reader_issues": [
-    "clip_frame_count"
+    "clip_frame_count",
+    "camera_short"
+   ]
+  },
+  {
+   "slug": "main-camera-short",
+   "list": "data",
+   "name": "Main camera covers less than the other cameras",
+   "reader_issues": [
+    "main_camera_short"
+   ]
+  },
+  {
+   "slug": "depth-missing",
+   "list": "data",
+   "name": "Depth missing or does not decode",
+   "reader_issues": [
+    "depth_not_decodable",
+    "depth_partial"
    ]
   },
   {

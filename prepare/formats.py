@@ -113,7 +113,8 @@ camera that does not decode, a sensor placed on the video by an assumed common s
 problem is recorded on the episode, never used as a reason to drop it. context.json's reader_issues is that record, a
 list of {"kind": a short snake_case tag (signal_not_finite, signal_partial_span, signal_gap, table_short,
 camera_not_decodable, ...), "what": one plain sentence a reviewer reads on the board, and when they apply "camera",
-"signal", "t0_s" and "t1_s" (seconds of the episode)}. add_issue appends one entry and never overwrites the others;
+"signal", "t0_s" and "t1_s" (raw capture seconds, with clock_zero_s subtracted by consumers)}. add_issue appends one
+entry and never overwrites the others;
 the board shows them as the episode's data issues. What could not be used at all is still listed with its reason
 (context["source"] unused_*), and an episode with nothing to label is listed in the report with why. A signal placed
 from both starts, because the reader had no clock in common to place it by, also carries "aligned_by": "assumed start"
@@ -125,7 +126,7 @@ its width.
 Every camera reaches the board. A camera the model is not shown (more extra cameras than MAX_EXTRA_CAMERAS, the second
 eye of a stereo camera, every camera but one on a head rig, an infrared, thermal or mask video) is listed in
 context.json's unshown_cameras, [{"name", "why" (the reason the model is not shown it), "packed" (its video file),
-"base_s" (the episode's offset in it), "n_frames", "start_s" (its first frame on the episode's clock), "fps"}], so the
+"base_s" (the episode's offset in it), "n_frames", "start_s" (its first frame on the raw capture clock), "fps"}], so the
 board plays it named as not shown to the model; an MCAP or HDF5 camera is written to a video of its own for it.
 """
 from __future__ import annotations
@@ -549,14 +550,38 @@ def lerobot_roots(root: Path, files: list[Path]) -> list[str]:
 DEMUXER = {".mp4": "mov", ".mov": "mov", ".m4v": "mov", ".mkv": "matroska", ".webm": "matroska", ".avi": "avi"}
 
 
+def sniff_container(path: Path) -> str | None:
+    """The demuxer of the video containers we accept (DEMUXER) that a file's first bytes name: Matroska or WebM by
+    its EBML header, MP4 or QuickTime by an atom type at byte 4, AVI by its RIFF header; None for anything else. Data
+    Review's upload page reads a video's container by the same rule (read.js sniffContainer), so the page measures and
+    sends the videos the reader opens."""
+    with open(path, "rb") as fh:
+        head = fh.read(12)
+    if head[:4] == b"\x1a\x45\xdf\xa3":
+        return "matroska"
+    if head[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot"):
+        return "mov"
+    if head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        return "avi"
+    return None
+
+
 def open_video(path: Path):
-    """A video opened only by the demuxer its extension names, so a file that is really a playlist or a
-    concat script (which could make ffmpeg read other local files) fails instead of being followed."""
+    """A video opened only by the demuxer of a container we accept, so a file that is really a playlist or a
+    concat script (which could make ffmpeg read other local files) fails instead of being followed. The extension
+    names the demuxer; when that fails, the container its first bytes name is tried (sniff_container), so a valid
+    Matroska file named .mp4 is read rather than refused."""
     import av
     fmt = DEMUXER.get(Path(path).suffix.lower())
     if fmt is None:
         raise ValueError(f"{Path(path).name}: not a video type we accept")
-    return av.open(str(path), format=fmt)
+    try:
+        return av.open(str(path), format=fmt)
+    except av.error.FFmpegError:
+        own = sniff_container(path)
+        if own is None or own == fmt:
+            raise
+        return av.open(str(path), format=own)
 
 
 def inside(root: Path, p: Path) -> Path:
@@ -614,6 +639,113 @@ def probe(path: Path) -> dict:
         w, h = h, w
     return {"pts": np.asarray(pts, dtype=np.int64), "time_base": tb, "width": w, "height": h,
             "codec": codec, "fps": float(rate) if rate else None, "rotation": rot, **extra}
+
+
+def open_cameras(files: dict, extra: dict) -> dict:
+    """{view: probe} of the cameras of one episode ({view: (camera name, path)}) that open, each probed on its own, so
+    one camera that cannot be opened never costs the episode. A camera that cannot be opened, or holds no frame, is
+    taken out of files and is a camera_not_decodable issue on extra naming it and why, and is listed among the unused
+    cameras; the camera first in row order of the rest is the episode's anchor, as board/clips.py drop_cameras makes
+    it when a main camera does not decode. Raises, naming every camera and why, only when none opens."""
+    prs = {}
+    broken = {}
+    for v, (name, path) in list(files.items()):
+        try:
+            prs[v] = probe(Path(path))
+            if not len(prs[v]["pts"]):
+                raise ValueError("it holds no frame")
+        except Exception as e:
+            broken[v] = (name, plain_error(e))
+            prs.pop(v, None)
+            del files[v]
+    note_broken_cameras(extra, dict(broken.values()), bool(files))
+    return prs
+
+
+# A stretch at the start or end of an episode that one of its streams does not cover is a recorder starting up or
+# stopping, no data issue, while it is within EDGE_SLACK_S and within EDGE_SLACK_SHARE of the episode: half a second is
+# nothing in a minute of footage, but 40 percent of a 1 s episode is a stream that missed it, so a short episode still
+# gets its issue.
+EDGE_SLACK_S = 0.5
+EDGE_SLACK_SHARE = 0.1
+
+
+def edge_slack(span_s: float) -> float:
+    """The lead or tail of an episode of span_s seconds that a stream may miss without a data issue: the smaller of
+    EDGE_SLACK_S and EDGE_SLACK_SHARE of the episode. One rule for every such fact, a camera that starts late or ends
+    early, paired by time or not (camera_span_issues, on the anchor's span), and depth that does (depth_gap_issues)."""
+    return min(EDGE_SLACK_S, EDGE_SLACK_SHARE * span_s)
+
+
+def camera_span_issues(extra: dict, times: dict, anchor: str, names: dict, ctx: dict) -> None:
+    """Each camera's span against the episode's, as issues on extra; times {view: its frame times on the episode's
+    raw clock}, names {view: camera name}, ctx the episode's profile and cameras (board/clips.py camera_label names
+    them). The episode is the anchor camera's frames, from its first to one frame past its last. A camera that starts
+    or ends more than the edge slack (edge_slack) inside it is camera_short, with the stretch it shows nothing for. The
+    anchor stays the main camera even when it is the short one, since the views name the cameras' roles (a wrist
+    camera made the anchor would be taken for the scene camera): it is then main_camera_short, with the stretch the
+    other cameras cover past it, which the board shows and the labels do not. Markers are stored on the raw clock;
+    derived prose uses the explicit consumer origin when present, otherwise the anchor start as before."""
+    from board.clips import camera_label
+    step = lambda t: float(np.median(np.diff(t))) if len(t) > 1 else 1 / 30
+    span = {v: (float(t[0]), float(t[-1]) + step(t)) for v, t in times.items() if len(t)}
+    if anchor not in span:
+        return
+    a0, a1 = span[anchor]
+    origin = float(ctx.get("clock_zero_s", a0) or 0.0)
+    found = {}
+    slack = edge_slack(a1 - a0)
+    label = lambda v: camera_label(v, ctx)
+    for v, (t0, t1) in span.items():
+        if v == anchor:
+            continue
+        if t1 < a1 - slack:
+            add_issue(found, "camera_short", f"The {label(v)} video ends at {t1 - origin:.2f} s, before the episode ends at "
+                                             f"{a1 - origin:.2f} s, so it shows nothing after that.",
+                      camera=names[v], t0_s=t1 - origin, t1_s=a1 - origin)
+        if t0 > a0 + slack:
+            add_issue(found, "camera_short", f"The {label(v)} video starts at {t0 - origin:.2f} s, after the episode "
+                                             "starts, so it shows nothing before that.",
+                      camera=names[v], t0_s=0.0, t1_s=t0 - origin)
+    later = [v for v, (_, t1) in span.items() if t1 > a1 + slack]
+    if later:
+        end = max(span[v][1] for v in later)
+        add_issue(found, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, ends at "
+                                              f"{a1 - origin:.2f} s, while the {_and_words([label(v) for v in later])} "
+                                              f"{'goes' if len(later) == 1 else 'go'} on to {end - origin:.2f} s; that "
+                                              "part is shown on the board but not labelled.",
+                  camera=names[anchor], t0_s=a1 - origin, t1_s=end - origin)
+    earlier = [v for v, (t0, _) in span.items() if t0 < a0 - slack]
+    if earlier:
+        start = min(span[v][0] for v in earlier)
+        add_issue(found, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, starts "
+                                              f"{a0 - start:.2f} s after the {_and_words([label(v) for v in earlier])}"
+                                              "; what was recorded before it is not labelled or shown.",
+                  camera=names[anchor], t0_s=start - origin, t1_s=0.0)
+
+    stored = shift_context_times(found, float(ctx.get("clock_zero_s") or 0.0))
+    for issue in stored.get("reader_issues") or []:
+        if issue not in extra.setdefault("reader_issues", []):
+            extra["reader_issues"].append(issue)
+
+
+def unshown_not_decodable(extra: dict, name: str) -> None:
+    """A camera the model is not shown none of whose frames could be read, named as a camera_not_decodable issue on
+    extra, since the board cannot show it either."""
+    add_issue(extra, "camera_not_decodable", f"No frame of the camera {name}, which the model is not shown, could be "
+                                             "decoded, so the board cannot show it.", camera=name)
+
+
+def note_broken_cameras(extra: dict, broken: dict, any_left: bool) -> None:
+    """The cameras ({camera name: why}) that could not be opened, each a camera_not_decodable issue on extra and an
+    unused camera with its reason (open_cameras); raises, naming every one, when no camera of the episode is left."""
+    if not any_left:
+        raise ValueError("no camera of the episode could be opened ("
+                         + "; ".join(f"{name}: {why}" for name, why in broken.items()) + ")")
+    for name, why in broken.items():
+        add_issue(extra, "camera_not_decodable", f"The camera {name} could not be opened ({why}), so the episode is "
+                                                 "labelled and shown without it.", camera=name)
+        extra.setdefault("source", {}).setdefault("unused_cameras", []).append(f"{name} (could not be opened: {why})")
 
 
 def seconds(pr: dict) -> np.ndarray:
@@ -899,6 +1031,20 @@ def depth_image(msg) -> tuple[np.ndarray, float | None] | None:
     if a.ndim != 2:
         return None
     return a.astype(np.uint16), (0.001 if a.dtype == np.uint16 else None)
+
+
+def depth_picture(got, topic: str, ranges: dict):
+    """A depth image (depth_image's (array, metres per unit), or None) drawn as a colour picture of near and far, as
+    the board draws depth (label/depth.py picture): metric depth on its one fixed scale, depth of unknown unit on the
+    range of the topic's first frame (kept in ranges, so a colour means the same reading in every frame). None when
+    there is no depth image."""
+    if got is None:
+        return None
+    from label import depth as dp
+    a, scale = got
+    if not scale and topic not in ranges:
+        ranges[topic] = dp.scale_range([a])
+    return dp.picture(a, {"scale_m": scale, "kind": "depth"}, ranges.get(topic))
 
 
 def depth_partner(depth_topic: str, cams: dict) -> str | None:
@@ -2004,15 +2150,7 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
                 continue
             key += "_readings"
             a = a[:, selected]
-            inf = np.isinf(a)
-        if inf.any():
-            a = np.where(inf, np.float32(np.nan), a)
-            rows = np.flatnonzero(inf.reshape(n, -1).any(axis=1))
-            add_issue(ctx, "signal_not_finite", f"{k} has {int(inf.sum())} value{'s' if inf.sum() != 1 else ''} that "
-                                                f"{'are' if inf.sum() != 1 else 'is'} not a finite number in "
-                                                f"{len(rows)} frame{'s' if len(rows) != 1 else ''}; read as missing",
-                      signal=k, t0_s=float(t[rows[0]] - t[0]), t1_s=float(t[rows[-1]] - t[0]))
-        arrays[key] = a
+            arrays[key] = a
             m.pop("shape", None)
             if names:
                 m["names"] = [names[c] for c in selected]
@@ -2087,13 +2225,50 @@ def depth_camera(depth_name: str, cameras: dict[str, str], scene: str) -> tuple[
     return scene, f"{depth_name} (its words name no one camera, so it goes with the scene camera)"
 
 
+def depth_kmap(t_depth: np.ndarray, t_anchor: np.ndarray) -> np.ndarray:
+    """For each anchor frame, the depth frame recorded nearest it, or -1 when none is within one frame of it (the
+    longer of a depth and an anchor frame's step): there the camera has no depth reading, so a depth stream that ends
+    early never gives its last frame to the instants after it."""
+    td, ta = np.asarray(t_depth, dtype=np.float64), np.asarray(t_anchor, dtype=np.float64)
+    km = nearest(td, ta)
+    if len(td) and len(ta):
+        step = lambda t: float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+        far = np.abs(td[km] - ta) > max(step(td), step(ta), 1e-3) + 1e-6
+        km = np.where(far, -1, km).astype(np.int32)
+    return km
+
+
+def depth_gap_issues(extra: dict, name: str, km: np.ndarray, t_anchor: np.ndarray) -> None:
+    """The stretches of the anchor's frames with no depth reading (depth_kmap -1) as depth_partial issues on extra,
+    one per stretch, on the episode's clock (t_anchor, the anchor's frame times on it). A stretch at the episode's
+    start or end within the edge slack (edge_slack) is a recorder starting or stopping, no issue."""
+    miss = np.flatnonzero(np.asarray(km) < 0)
+    if not len(miss):
+        return
+    ta = np.asarray(t_anchor, dtype=np.float64)
+    step = float(np.median(np.diff(ta))) if len(ta) > 1 else 1 / 30
+    slack = edge_slack(float(ta[-1] - ta[0]) + step)
+    for run in np.split(miss, np.flatnonzero(np.diff(miss) > 1) + 1):
+        t0, t1 = float(ta[run[0]]), float(ta[run[-1]])
+        if (run[0] == 0 or run[-1] == len(ta) - 1) and t1 - t0 + step <= slack:
+            continue
+        add_issue(extra, "depth_partial", f"The {name} camera's depth has no frame from {t0:.2f} s to {t1:.2f} s, so "
+                                          "there is no depth reading for that part of the episode.",
+                  camera=name, t0_s=t0, t1_s=t1)
+
+
 def depth_entry(ep: Path, view: str, path: Path, t_depth: np.ndarray, t_anchor: np.ndarray, pts: np.ndarray,
-                scale_m: float | None, source: str) -> tuple[dict, dict]:
+                scale_m: float | None, source: str, extra: dict | None = None, name: str | None = None) \
+        -> tuple[dict, dict]:
     """(depth.json entry, times) for one camera's depth stream: its file, its frame for each anchor frame (nearest in
-    time, depth_kmap_<view>.npy), its frame times and exact pts, and metres per unit when known."""
+    time within a frame, else -1, depth_kmap, in depth_kmap_<view>.npy), its frame times and exact pts, and metres per
+    unit when known. The anchor frames with no depth reading are depth_partial issues on extra, naming the camera
+    (name, else the view)."""
     ep.mkdir(parents=True, exist_ok=True)     # a LeRobot episode writes depth before finish_episode makes its folder
-    km = nearest(np.asarray(t_depth, dtype=np.float64), np.asarray(t_anchor, dtype=np.float64))
+    km = depth_kmap(t_depth, t_anchor)
     np.save(ep / f"depth_kmap_{view}.npy", km)
+    if extra is not None:
+        depth_gap_issues(extra, name or view, km, t_anchor)
     entry = {"packed": str(Path(path).resolve()), "base_s": 0.0, "n_frames": int(len(t_depth)),
              "kmap": f"depth_kmap_{view}.npy", "scale_m": scale_m, "source": source,
              # a disparity (or inverse depth) stream reads larger where nearer; label/depth.py draws it reversed
@@ -2168,11 +2343,41 @@ class DepthWriter:
         return len(self.pts)
 
 
-# The fields of context.json that hold times on the episode's clock, {field: the time keys of each entry}. A step that
+# Stored context times and capture arrays share one raw clock. Consumers subtract clock_zero_s (default zero).
+# The fields of context.json that hold times on that clock, {field: the time keys of each entry}. A step that
 # moves the clock (board/clips.py reanchor, when the camera the clock was measured from is taken out) moves every one of
 # them, so a reader that writes a new timed field registers it here, where the context is written.
 CLOCK_TIME_KEYS = {"annotation_subtasks": ("t0", "t1"), "contacts": ("start_s", "end_s", "peak_s"),
                    "reader_issues": ("t0_s", "t1_s"), "unshown_cameras": ("start_s",)}
+
+
+def clock_context(ctx: dict) -> dict:
+    """Read stored raw times on the request and display clock by subtracting clock_zero_s once. The returned context
+    retains the origin for reading capture arrays, so it must never replace the stored context. Writers keep raw
+    fields or use shift_context_times to convert newly derived consumer times back before saving them."""
+    return shift_context_times(ctx, -float(ctx.get("clock_zero_s") or 0.0))
+
+
+def shift_context_times(ctx: dict, delta_s: float) -> dict:
+    """Move registered scalar times and contact dips by delta_s without changing the input, origin or unknown fields.
+    Prose stays attributed evidence on its original clock; only typed fields are converted."""
+    if not delta_s:
+        return ctx
+    out = dict(ctx)
+    for key, fields in CLOCK_TIME_KEYS.items():
+        if key not in ctx:
+            continue
+        out[key] = []
+        for item in ctx[key] or []:
+            x = dict(item) if isinstance(item, dict) else item
+            if isinstance(x, dict):
+                for field in fields:
+                    if isinstance(x.get(field), (int, float)):
+                        x[field] += delta_s
+                if key == "contacts" and x.get("dips_s"):
+                    x["dips_s"] = [float(t) + delta_s for t in x["dips_s"]]
+            out[key].append(x)
+    return out
 
 
 def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None,
@@ -2198,7 +2403,7 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
                         prs: dict | None = None, real: dict | None = None, state=None, action=None,
                         descs: dict | None = None, signals: dict | None = None, depth: dict | None = None,
-                        state_names: list | None = None) -> dict:
+                        state_names: list | None = None, placeholders: dict | None = None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
@@ -2207,9 +2412,12 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     action are rows on the anchor's frames (joint_state). descs {view: text} describes a camera the reader knows
     more about than its slot says (the prompt's camera line). depth {view: {"path", "real" (its own capture times on
     the same recorder clock, or None), "scale_m", "source"}} is each camera's depth stream (depth_entry), timed as its
-    colour camera is. state_names gives the state's value names for state_layout."""
+    colour camera is. state_names gives the state's value names for state_layout. placeholders {view: its frames that
+    are placeholders} (FrameWriter.placeholders) are recorded on the anchor's frames (placeholder_frames)."""
     from label import episode as me
-    prs = prs or {v: probe(p) for v, (_, p) in files.items()}
+    if prs is None:
+        files = dict(files)
+        prs = open_cameras(files, extra)
     order = me.order_views(files)
     anchor = order[0]
     use_real = bool(real) and all(real.get(v) is not None for v in order)
@@ -2229,7 +2437,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         return t - (zero if shared_clock else t[0])
     ta = seconds_of(anchor)
     ep.mkdir(parents=True, exist_ok=True)
-    sources, times, cams = {}, {}, {}
+    sources, times, cams, kmaps = {}, {}, {}, {}
     for v in order:
         name, path = files[v]
         pr = prs[v]
@@ -2242,9 +2450,12 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
             if not (len(t) == len(ta) and np.array_equal(km, np.arange(len(ta)))):
                 np.save(ep / f"kmap_{v}.npy", km)
                 sources[v]["kmap"] = f"kmap_{v}.npy"
+                kmaps[v] = km
         cams[v] = camera_entry(v, name, pr, rig)
         if (descs or {}).get(v):
             cams[v]["desc"] = descs[v]
+    camera_span_issues(extra, {v: times[v] for v in order}, anchor, {v: files[v][0] for v in order},
+                       {"profile": rig, "cameras": cams})
     dep, dtimes = {}, {}
     for v, d in (depth or {}).items():
         if v not in files:
@@ -2264,7 +2475,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
             td = pd_["pts"].astype(np.float64) * float(pd_["time_base"])
             td = (td - (zero if shared_clock and zero is not None else td[0])
                   + (times[v][0] if not shared_clock else 0.0))
-        entry, tz = depth_entry(ep, v, Path(d["path"]), td, ta, pd_["pts"], d.get("scale_m"), d.get("source") or "")
+        entry, tz = depth_entry(ep, v, Path(d["path"]), td, ta, pd_["pts"], d.get("scale_m"), d.get("source") or "",
+                                extra, files[v][0])
         entry.update(width=pd_["width"], height=pd_["height"], pix_fmt=pd_["pix_fmt"])
         dep[v] = entry
         dtimes.update(tz)
@@ -2275,6 +2487,9 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     ctx = {"dataset": dataset, "profile": rig, "state_kind": "none", "episode_id": ep.name,
            "robot_type": None, "fps": round(float(fps), 3), "n_state_frames": int(len(ta)),
            "duration_s": round(float(ta[-1]) + step, 3) if len(ta) else 0.0, "cameras": cams, **extra}
+    held = placeholder_frames({v: js for v, js in (placeholders or {}).items() if v in order}, kmaps)
+    if held:
+        ctx["placeholder_frames"] = held
     if state is not None:
         ctx["state_kind"] = state_layout(state.shape[1], rig, state_names)[0]
     write_depth(ep, ctx, dep, dtimes)
@@ -2372,6 +2587,20 @@ def one_take(stems: list[str]) -> bool:
         and len({p["cam"] for p in parts}) == len(parts) and _says_cameras([p["cam"] for p in parts])
 
 
+def many_cameras(stems: list[str], lengths: list | None = None) -> bool:
+    """Whether more than MAX_CAMERAS videos (or camera folders, lengths None) in one folder are the cameras of one take:
+    one take number (or none), every name a camera's (camera_named: cam_front, wrist_left, zed_left) and each named
+    differently, and, for videos, lengths that are all known and agree (_same_length), as cameras of one take stop
+    together. A folder of many single camera episodes fails one of these (takes numbered, names that are not
+    cameras', or lengths that differ), so it stays one episode per file. read.js manyCameras, the same rule."""
+    parts = [name_parts(s) for s in stems]
+    if len(stems) <= MAX_CAMERAS or len({p["take"] for p in parts}) != 1 or len({p["cam"] for p in parts}) != len(parts):
+        return False
+    if not all(p["cam"] and camera_named(p["cam"]) for p in parts):
+        return False
+    return lengths is None or (all(x is not None for x in lengths) and _same_length(lengths))
+
+
 def _same_length(lengths: list) -> bool:
     if not lengths or any(x is None for x in lengths):
         return True                       # unknown: the lengths cannot tell takes from cameras
@@ -2384,10 +2613,13 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
     [{"name", "dir", "cams": [(camera name, path)]}] in episode order, and the folders the files cannot settle,
     [{"dir", "files", "camera"}]. read.js groupVideos, the same rules:
 
-    - Camera folders (top/ep1.mp4, wrist_left/ep1.mp4): two to six sibling folders named as cameras, sharing file
-      names, give one episode per shared name, with the folders as its cameras.
-    - A folder's own videos group by take number (top_ep1, wrist_left_ep1, top_ep2, ...); a group whose cameras are
-      all named differently and named as cameras is one episode (top, wrist_left, wrist_right; cam0, cam1).
+    - Camera folders (top/ep1.mp4, wrist_left/ep1.mp4): two to six sibling folders named as cameras, or more when
+      every folder's name is a camera's (many_cameras), sharing file names, give one episode per shared name, with
+      the folders as its cameras.
+    - A folder's own videos group by take number (top_ep1, wrist_left_ep1, top_ep2, ...); a group of two to six whose
+      cameras are all named differently and named as cameras is one episode (top, wrist_left, wrist_right; cam0,
+      cam1), and so is a larger group that many_cameras says is one take (every name a camera's, lengths that
+      agree).
     - The same camera name numbered (cam0_take1, cam0_take2; top_1, top_2) is separate takes when a take word says
       so or their lengths differ. When the numbers are bare and the lengths agree, the files cannot tell takes from
       cameras: the folder is returned as unsettled, and read as grouping[folder] says ("takes" or "cameras"), or as
@@ -2411,7 +2643,7 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
             kids.setdefault(parent(d), []).append(d)
     for p, ds in kids.items():
         names = [base(d) for d in ds]
-        if not one_take(names):
+        if not (one_take(names) or many_cameras(names)):
             continue
         by_stem: dict[str, list[tuple[str, str]]] = {}
         for d in ds:
@@ -2433,9 +2665,13 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
         takes: dict[str, list[str]] = {}
         for r in fs:
             takes.setdefault(parts[r]["take"], []).append(r)
-        good = [g for g in takes.values() if len(g) >= 2 and len(g) <= MAX_CAMERAS and _says_cameras([parts[r]["cam"] for r in g])]
+        # a take of more than MAX_CAMERAS cameras is one episode too when many_cameras says so
+        many = {k for k, g in takes.items() if len(g) > MAX_CAMERAS
+                and many_cameras([stem(r) for r in g], [length_of(r) if length_of else None for r in g])}
+        good = [g for k, g in takes.items() if k in many or (2 <= len(g) <= MAX_CAMERAS
+                                                             and _says_cameras([parts[r]["cam"] for r in g]))]
         distinct = all(len({parts[r]["cam"] for r in g}) == len(g) for g in takes.values())
-        if good and distinct and all(len(g) <= MAX_CAMERAS for g in takes.values()):
+        if good and distinct and all(len(g) <= MAX_CAMERAS or k in many for k, g in takes.items()):
             for k, g in takes.items():
                 nm = d or "episode_1"
                 eps.append({"name": f"{nm}/{k}" if len(takes) > 1 and k else nm, "dir": d,
@@ -2462,13 +2698,12 @@ DEPTH_WORDS = {"depth", "disparity"}
 
 
 def colour_videos(rels: list[str]) -> tuple[list[str], list[str]]:
-    """(kept, left out): a folder's depth, infrared and mask videos are not cameras of their own when a colour video
-    is beside them (exo_cam-images-depth.mkv beside exo_cam-images-rgb.mp4): a depth video goes with its colour camera
-    (depth_videos), and the rest are left out. read.js colourVideos, the same rule."""
-    dirs = lambda r: r.rsplit("/", 1)[0] if "/" in r else ""
+    """(kept, left out): depth, infrared and mask videos are not cameras of their own when the upload holds a colour
+    video, beside them (exo_cam-images-depth.mkv beside exo_cam-images-rgb.mp4) or in another folder: a depth video
+    goes with its colour camera (depth_videos), and the rest are left out, to the board (plan_video). Only an upload
+    with no colour video at all is labelled from them. read.js colourVideos, the same rule."""
     non = lambda r: bool(set(tokens(r.rsplit("/", 1)[-1].rsplit(".", 1)[0])) & NON_COLOUR)
-    colour_dirs = {dirs(r) for r in rels if not non(r)}
-    out = [r for r in rels if non(r) and dirs(r) in colour_dirs]
+    out = [r for r in rels if non(r)] if any(not non(r) for r in rels) else []
     return [r for r in rels if r not in out], out
 
 
@@ -2978,10 +3213,6 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
             f"{len(with_colour)} depth video{'s were' if len(with_colour) != 1 else ' was'} read with the colour "
             f"camera {'they belong' if len(with_colour) != 1 else 'it belongs'} to.")
     left_out = [r for r in left_out if r not in with_colour]
-    if left_out:
-        det.setdefault("used", []).append(
-            f"{len(left_out)} infrared, mask or unmatched depth video{'s were' if len(left_out) != 1 else ' was'} left "
-            "out, since the labeller reads the colour video of each camera.")
     durations = {}
 
     def length_of(r):
@@ -3015,13 +3246,27 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
                       "note_folder": {"dir": root / d, "name": episode_note_name(e), "episode": e["name"],
                                       "names": names[d]} if e["dir"] is not None or held[d] == 1 else None,
                       "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}, "unshown": []})
-    # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, or
-    # the one whose take its name gives), never to the model
+    # an infrared, thermal, mask or unmatched depth video goes to the board with the episodes of its folder, never to
+    # the model: the ones whose take its name gives, or every episode there when its name gives no take, as a sensor
+    # file shared by the folder does; one whose name gives a take that no episode there has goes with none and is
+    # named. A folder with no episode of its own takes the episodes of the nearest folder above it that holds any.
+    # Data Review's upload page sends it by the same rule (read.js inspectVideos)
+    shown, takeless = 0, []
     for r in left_out:
-        here = [it for it in items if item_folder(it) == (root / r).parent]
+        near = episodes_near(items, (root / r).parent, root)
         take = name_parts(Path(r).stem)["take"]
-        for it in here if len(here) == 1 else [it for it in here if take and item_take(it) == take]:
+        mine = [it for it in near if item_take(it) == take] if take else near
+        if take and not mine:
+            takeless.append(f"{r} (its name gives take {take}, which no episode of its folder has)")
+        for it in mine:
             it["unshown"].append(root / r)
+        shown += bool(mine)
+    if shown:
+        det.setdefault("used", []).append(
+            f"{shown} infrared, mask or unmatched depth video{' is' if shown == 1 else 's are'} shown on the board, "
+            "and not to the model, since the labeller reads the colour video of each camera.")
+    if takeless:
+        det.setdefault("missing", []).append("Not read: " + "; ".join(takeless) + ".")
     # Notes for selected and unshown cameras use the same proven episode assignments as the board's camera files.
     # Shared camera labels match only a whole filename; longer video stems identify their own camera and take.
     for d in set(homes):
@@ -3102,7 +3347,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         files = {v: (nm, by[nm]) for v, nm in vmap.items()}
     extra = {"task_label": [item["name"]], "source": {"format": "video files", "upload": item["name"]}}
     if item["dir"] is not None:
-        extra["source"]["unused_cameras"] = unused
+        extra["source"]["unused_cameras"] = list(unused)
     # every note file of the episode (episode_notes): one is given as sent, several each under its file name, and a
     # note whose whole text is the task is given once, as the instruction
     got = episode_notes(item)
@@ -3128,7 +3373,16 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
-    prs = {v: probe(p) for v, (_, p) in files.items()}
+    # each camera opened on its own: one that cannot be opened is left out and flagged, never the episode
+    chosen = dict(files)
+    prs = open_cameras(files, extra)
+    for v, (nm, p) in chosen.items():
+        dp = (item.get("depth") or {}).get(str(p))
+        if v not in files and dp is not None:
+            add_issue(extra, "depth_not_read", f"The depth video {Path(dp).name} is not used: its colour camera {nm} "
+                                               "could not be opened.", camera=Path(dp).stem)
+            extra["source"].setdefault("unused_depth", []).append(
+                f"{Path(dp).name} (its colour camera could not be opened)")
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
     state = action = state_names = None
     descs = {}
@@ -3511,8 +3765,25 @@ def read_root(rdir: Path, rel: str) -> dict:
     return root
 
 
+def chunk_size(info: dict) -> int | None:
+    """The episodes per chunk folder a LeRobot info.json gives (chunks_size, 1000 when it gives none), which fills its
+    path templates (data_path, video_path); None when it is not a whole number above 0."""
+    x = info.get("chunks_size", 1000)
+    try:
+        n = int(x) if not isinstance(x, bool) and float(x) == int(x) else 0
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return n if n > 0 else None
+
+
 def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path]) -> None:
     info, where = root["info"] or {}, (f" in {root['rel']}" if root["rel"] else "")
+    # a chunks_size that cannot fill the path templates leaves the episodes found by their file names, and says so
+    chunk = chunk_size(info)
+    if chunk is None and (info.get("video_path") or info.get("data_path")):
+        root["missing"].append(f"meta/info.json{where} gives chunks_size {info.get('chunks_size')!r}, which is not a "
+                               "whole number of episodes, so its path templates were not used and each episode's "
+                               "files were found by their names.")
     rows = {}
     episode_file = rdir / "meta" / "episodes.jsonl"
     for n, e in enumerate(read_jsonl(episode_file, root), 1):
@@ -3535,19 +3806,18 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         vids_e = {}
         for key in root["cams"] + root["depth_cams"]:
             p = vid_by.get(e, {}).get(key)
-            if p is None and info.get("video_path"):
+            if p is None and info.get("video_path") and chunk:
                 try:
-                    cand = rdir / info["video_path"].format(episode_chunk=e // int(info.get("chunks_size", 1000)),
-                                                            video_key=key, episode_index=e)
+                    cand = rdir / info["video_path"].format(episode_chunk=e // chunk, video_key=key, episode_index=e)
                     p = inside(rdir, cand) if cand.exists() else None
                 except (KeyError, IndexError, ValueError):
                     p = None
             if p is not None:
                 vids_e[key] = p
         data = data_by.get(e)
-        if data is None and info.get("data_path"):
+        if data is None and info.get("data_path") and chunk:
             try:
-                cand = rdir / info["data_path"].format(episode_chunk=e // int(info.get("chunks_size", 1000)), episode_index=e)
+                cand = rdir / info["data_path"].format(episode_chunk=e // chunk, episode_index=e)
                 data = inside(rdir, cand) if cand.exists() else None
             except (KeyError, IndexError, ValueError):
                 data = None
@@ -3957,10 +4227,13 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
     unshown_keys = list(unused)
     descs = colour_depth_views(r, row, vmap)
-    # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused
-    # too, and one whose packed video could not be placed on this episode says why (_episodes_v3)
+    # a camera the metadata lists whose video is not in the upload for this episode (an adapter downloads only the
+    # cameras it uses) is unused too, with that reason, and one whose packed video could not be placed on this episode
+    # says why (_episodes_v3). Data Review's upload page names the same cameras on its card (read.js inspectLeRobot,
+    # missingCams), finding each camera's video as _episodes_v2 does
     unplaced = row.get("unplaced") or {}
-    unused = unused + [f"{k} ({unplaced[k]})" if k in unplaced else k for k in r["cams"] if k not in video_cams]
+    unused = unused + [f"{k} ({unplaced.get(k) or 'no video of it for this episode is in the upload'})"
+                       for k in r["cams"] if k not in video_cams]
     for k in unplaced:
         add_issue(extra, "camera_not_aligned", f"The camera {k} is not shown: {unplaced[k]}.", camera=k)
     if r["image_cams"]:
@@ -3976,6 +4249,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             note = StateNote("Labelled from the video: no data file came with this episode.", "unreadable")
         if notes:
             note = None                  # the read failure already says why, in notes
+    from label import episode as me
     packed = all(isinstance(row["videos"][k], tuple) for k in vmap.values())
     if packed:
         if not fps:
@@ -3983,7 +4257,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             k0 = next(iter(vmap.values()))
             pr0 = probe(row["videos"][k0][0])
             fps = measured_fps(seconds(pr0)) or pr0["fps"] or 30.0
-        sources, cameras = {}, {}
+        sources, cameras, broken = {}, {}, {}
         for v, key in vmap.items():
             mp4, base, to = row["videos"][key]
             n = int(round((to - base) * fps))
@@ -3994,15 +4268,27 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             w, h = _shown_size(mp4)
             codec = vi.get("video.codec")
             if not w or not codec:
-                pr = _stream_facts(mp4)
+                try:
+                    pr = _stream_facts(mp4)
+                except Exception as e:
+                    # a packed file that cannot be opened leaves this camera out (open_cameras), never the episode
+                    sources.pop(v)
+                    broken[key] = plain_error(e)
+                    continue
                 w, h, codec = w or pr["width"], h or pr["height"], codec or pr["codec"]
             cameras[v] = describe({"key": key, "name": _short(key, v), "width": w, "height": h, "codec": codec}, v, key, rig)
             if key in descs:
                 cameras[v]["desc"] = descs[key]
-        n_frames = min(s["n_frames"] for s in sources.values())
+        note_broken_cameras(extra, broken, bool(sources))
+        vmap = {v: k for v, k in vmap.items() if v in sources}
+        # the episode is as long as its main camera's window, as in one file per camera below
+        anchor = me.order_views(sources)[0]
+        n_frames = sources[anchor]["n_frames"]
+        camera_span_issues(extra, {v: np.arange(s["n_frames"]) / fps for v, s in sources.items()}, anchor,
+                           dict(vmap), {"profile": rig, "cameras": cameras})
         state, action, kind, note, fixes = state_on_frames(df, state, action, n_frames, fps, kind, note)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
-               "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(min(s["n_frames"] for s in sources.values())),
+               "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_frames),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
         set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps))
         if note or notes:
@@ -4016,8 +4302,9 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
     # frames, so frames on the exact k/fps grid need no times; frames off it are decoded by their own pts and
     # timed by frame index, as the dataset defines them
-    prs = {v: probe(row["videos"][key]) for v, key in vmap.items()}
-    from label import episode as me
+    opened = {v: (key, row["videos"][key]) for v, key in vmap.items()}
+    prs = open_cameras(opened, extra)
+    vmap = {v: k for v, k in vmap.items() if v in opened}
     anchor = me.order_views(prs)[0]
     if not fps:
         fps = measured_fps(prs[anchor]["pts"].astype(np.float64) * float(prs[anchor]["time_base"])) or 30.0
@@ -4038,7 +4325,11 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         for v, pr in prs.items():
             times[v] = np.arange(len(pr["pts"])) / fps
             times[f"{v}_pts"] = pr["pts"]
-    n_video = min(s["n_frames"] for s in sources.values())
+    # the episode is as long as its main camera, as its frames are what the table's rows and the labels are on; a
+    # shorter camera is flagged with what it does not cover (camera_span_issues) and never shortens the episode
+    n_video = sources[anchor]["n_frames"]
+    camera_span_issues(extra, {v: np.arange(s["n_frames"]) / fps for v, s in sources.items()}, anchor,
+                       {v: k for v, k in vmap.items()}, {"profile": rig, "cameras": cameras})
     state, action, kind, note, fixes = state_on_frames(df, state, action, sources[anchor]["n_frames"], fps, kind, note)
     ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
@@ -4149,7 +4440,7 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
         info = (r["features"].get(key) or {}).get("info") or {}
         scale = next((float(x) for k, x in info.items() if DEPTH_SCALE_KEY.search(str(k).split(".")[-1])
                       and isinstance(x, (int, float)) and 0 < x < 10), None)
-        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, source)
+        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, source, ctx, (cams or vmap)[v])
         e.update(width=pr["width"], height=pr["height"], pix_fmt=pr["pix_fmt"])
         dep[v] = e
         tz.update(t)
@@ -4239,14 +4530,21 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     fi = df["frame_index"].to_numpy() if "frame_index" in df.columns else np.arange(len(df))
     t = df["timestamp"].to_numpy(dtype=np.float64) if "timestamp" in df.columns else fi / fps
     t = t - t[0]
-    files, undecoded = {}, []
-    for v, key in vmap.items():
-        w = FrameWriter(ep / f"{v}.mp4", "")
+    files, undecoded, written = {}, [], {}
+
+    def write(key, out):
+        # a frame for every row, black where its image is missing or does not decode (FrameWriter blank), so the
+        # state's rows stay one per frame
+        w = written[key] = FrameWriter(out, "", blank=True)
         for ts, cell in zip(t, df[key].to_numpy()):
             b = cell.get("bytes") if isinstance(cell, dict) else cell
             if isinstance(b, (bytes, bytearray)) and b:
                 w.add(float(ts), bytes(b))
-        if not w.close():
+            else:
+                w.missing(float(ts))
+        return w.close()
+    for v, key in vmap.items():
+        if not write(key, ep / f"{v}.mp4"):
             # one camera whose images do not decode leaves the others, never fails the episode
             undecoded.append(key)
             unused.append(f"{key} (none of its images in the data file could be decoded)")
@@ -4259,12 +4557,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     # the cameras the model is not shown are written too, for the board (unshown_cameras)
     un = []
     for i, key in enumerate(not_shown):
-        w = FrameWriter(ep / f"unshown{i + 1}.mp4", "")
-        for ts, cell in zip(t, df[key].to_numpy()):
-            b = cell.get("bytes") if isinstance(cell, dict) else cell
-            if isinstance(b, (bytes, bytearray)) and b:
-                w.add(float(ts), bytes(b))
-        n_u = w.close()
+        n_u = write(key, ep / f"unshown{i + 1}.mp4")
+        w = written[key]
         un.append((key, unshown_entry(key, ep / f"unshown{i + 1}.mp4", unshown_why(key, rig, list(vmap.values())),
                                       n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
                                       fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN))
@@ -4273,6 +4567,11 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     for key in undecoded:
         add_issue(extra, "camera_not_decodable", f"None of the {key} images in the data file could be decoded, so the "
                                                  "camera is not shown.", camera=key)
+    for key, w in written.items():
+        if w.pts:
+            bad_frames_issues(extra, key, w)
+        elif key not in undecoded:
+            unshown_not_decodable(extra, key)
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
     note = StateNote(note, "layout") if note else None
@@ -4284,7 +4583,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         add_issue(extra, **i)
     # the table's other numbers go with the frames as they do beside videos (recorded_signals)
     signals = recorded_signals(df, _used_columns(kind, state, action) | set(r["image_cams"]), 0, r["features"])
-    ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals)
+    ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals,
+                              placeholders={v: written[key].placeholders() for v, (key, _) in files.items()})
     if state is not None and kind != "none" and len(state) == ctx["n_state_frames"]:
         ctx["state_kind"] = kind
         return finish_episode(ep, ctx, json.loads((ep / "sources.json").read_text()), state, action,
@@ -5152,11 +5452,13 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         chosen = {v: by_name[nm] for v, nm in vmap.items()}
         t0 = min(float(times_of(s)[0]) for s in chosen.values())
         files, real = {}, {}
-        undecoded = []
+        undecoded, written = [], {}
         for v, s in chosen.items():
             ds = f[s["path"]]
             t = times_of(s)
-            w = FrameWriter(ep / f"{v}.mp4", "")
+            # a frame for every row, black where an encoded image does not decode, so the state's rows stay on
+            # their frames (FrameWriter blank)
+            w = written[s["name"]] = FrameWriter(ep / f"{v}.mp4", "", blank=True)
             # a float picture stored 0 to 1 is scaled to 0 to 255, judged on its first frame
             scale = picture_scale(ds)
             for i in range(s["n"]):
@@ -5178,7 +5480,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         for i, nm in enumerate(x for x in unused if x in by_name):
             s = by_name[nm]
             ds, t = f[s["path"]], times_of(s)
-            w = FrameWriter(ep / f"unshown{i + 1}.mp4", "")
+            w = written[nm] = FrameWriter(ep / f"unshown{i + 1}.mp4", "", blank=True)
             scale = picture_scale(ds)
             for k in range(s["n"]):
                 b = _h5_bytes(ds[k]) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
@@ -5230,6 +5532,12 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     for nm in undecoded:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {nm} could be decoded, so it is not shown.",
                   camera=nm)
+    zero = written[files[anchor][0]].pts[0] / TIME_BASE_DEN
+    for nm, w in written.items():
+        if w.pts:
+            bad_frames_issues(extra, nm, w, zero)
+        elif nm not in undecoded:
+            unshown_not_decodable(extra, nm)
     set_unshown(extra, unshown)
     if st["unused"]:
         extra["source"]["unused_arrays"] = st["unused"]
@@ -5251,7 +5559,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if chosen[anchor]["clock"]:
         extra["clock_origin_s"] = t0         # the recorder's time at the clips' zero
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth,
-                               state=state, action=action, state_names=state_names)
+                               state=state, action=action, state_names=state_names,
+                               placeholders={v: written[nm].placeholders() for v, (nm, _) in files.items()})
 
 
 def names_shown(files: dict) -> list[str]:
@@ -6604,25 +6913,31 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     # whose only cameras are not colour is labelled from them, as a data issue
     video_topics = [t for t in cam_topics if not DEPTH_TOPIC.search(t)]
     raw_topics = {t for t, s in chan_topics if RAW_IMAGE_SCHEMA.search(s)}
+    # a recording whose only cameras are depth is labelled from its depth drawn as a picture (depth_picture), as a
+    # data issue (camera_not_colour), as one whose only camera is a mask is
+    video_topics = video_topics or [t for t in cam_topics if DEPTH_TOPIC.search(t)]
     if not video_topics:
-        raise ValueError("the file has no colour camera channel"
+        raise ValueError("the file has no camera channel"
                          + (f" (its channels: {', '.join(item['topics'][:12])})" if item["topics"] else ""))
     all_topics = [t for t, _ in chan_topics]
     vmap, unused = pick_cameras(video_topics, rig, all_topics)
     not_colour = [t for t in vmap.values() if not_rgb(t)]
     text_topics = sorted({t for t in all_topics if TEXT_TOPIC.search(t) and t not in video_topics})
     # depth image channels, each with the camera whose topic it shares the most of (depth_partner), one per camera
-    depth_of = {}
+    depth_of, lone = {}, []
     for t, sname in sorted(chan_topics):
-        if CAMERA_SCHEMA.search(sname) and DEPTH_TOPIC.search(t) and t not in vmap.values():
+        if CAMERA_SCHEMA.search(sname) and DEPTH_TOPIC.search(t) and t not in vmap.values() and t not in unused:
             v = depth_partner(t, vmap)
             if v is not None and v not in depth_of.values():
                 depth_of[t] = v
             else:
                 unused.append(f"{t} (depth with no camera of its own)")
-    # the cameras the model is not shown are written too, for the board (unshown_cameras)
-    unshown_of = {t: f"unshown{i + 1}.mp4" for i, t in enumerate(x for x in unused if x in cam_topics
-                                                                  and not DEPTH_TOPIC.search(x))}
+                lone.append(t)
+    # the cameras the model is not shown are written too, for the board (unshown_cameras), a depth channel with no
+    # camera of its own drawn as a picture of near and far
+    unshown_of = {t: f"unshown{i + 1}.mp4" for i, t in enumerate([x for x in unused if x in cam_topics] + lone)}
+    pictured = {t for t in set(vmap.values()) | set(unshown_of) if DEPTH_TOPIC.search(t)}
+    depth_rng: dict = {}
     want = set(vmap.values()) | set(text_topics) | set(depth_of) | set(unshown_of)
     view_of_topic = {t: v for v, t in vmap.items()}
     dwriters: dict[str, DepthWriter] = {}
@@ -6665,13 +6980,15 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     if w is None:
                         out_mp4 = ep / (f"{view_of_topic[ch.topic]}.mp4" if ch.topic in view_of_topic
                                         else unshown_of[ch.topic])
-                        w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics
+                        w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics | pictured
                                                             else str(_field(dec, "format") or "").lower())
                     before = len(w.pts)
-                    if ch.topic in raw_topics:
-                        im = raw_image(dec)
-                        if im is not None:
-                            w.add_image((int(msg.log_time) - t0) / 1e9, im)
+                    if ch.topic in pictured:
+                        w.add_image((int(msg.log_time) - t0) / 1e9, depth_picture(depth_image(dec), ch.topic,
+                                                                                    depth_rng))
+                    elif ch.topic in raw_topics:
+                        # a frame raw_image cannot read is a frame not decoded (FrameWriter bad), never skipped silently
+                        w.add_image((int(msg.log_time) - t0) / 1e9, raw_image(dec))
                     else:
                         w.add((int(msg.log_time) - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
                     if len(w.pts) > before:
@@ -6713,15 +7030,24 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         w = writers.get(t)
         if counts.get(t) and w is not None:
             fps_u = measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)
-            un.append((t, unshown_entry(t, ep / name, unshown_why(t, rig, list(vmap.values())), n_frames=counts[t],
-                                        start_s=w.pts[0] / TIME_BASE_DEN, fps=fps_u)))
+            why = ("depth with no colour camera of its own, drawn as a picture of near and far" if t in pictured else
+                   unshown_why(t, rig, list(vmap.values())))
+            un.append((t, unshown_entry(t, ep / name, why, n_frames=counts[t], start_s=w.pts[0] / TIME_BASE_DEN,
+                                        fps=fps_u)))
         else:
             un.append((t, None))
     set_unshown(extra, un)
     for t in (t for t in vmap.values() if t in not_colour):
         add_issue(extra, "camera_not_colour", f"{t} is the recording's only camera and its name says it is not a "
-                                              "colour camera (infrared, thermal or a mask); the episode is labelled "
-                                              "from it.", camera=t)
+                                              "colour camera (depth, infrared, thermal or a mask); the episode is "
+                                              "labelled from it" + (", its depth drawn as a picture of near and far."
+                                                                    if t in pictured else "."), camera=t)
+    # the frames of each camera that could not be decoded, on the clock of the episode's first frame
+    from label import episode as me
+    zero = writers[files[me.order_views(files)[0]][0]].pts[0] / TIME_BASE_DEN
+    for t, w in writers.items():
+        if w.pts:
+            bad_frames_issues(extra, t, w, zero)
     instr, notes = mcap_task_texts(texts, n_text, t0)
     if instr:
         extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the MCAP.")
@@ -6851,29 +7177,75 @@ def is_keyframe(frame: bytes, codec: str) -> bool:
     return bool(types & ({19, 20, 21} if codec == "hevc" else {5}))
 
 
+def bad_frames_issues(extra: dict, name: str, w, zero_s: float = 0.0) -> None:
+    """The frames of a camera that could not be decoded (a FrameWriter's bad), as frames_not_decodable issues on extra,
+    one per run of them, with its span in seconds from zero_s (the episode's first frame)."""
+    if not w.bad:
+        return
+    t = np.asarray(w.bad, dtype=np.float64) / TIME_BASE_DEN - zero_s
+    every = np.unique(np.concatenate([t, np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN - zero_s]))
+    step = float(np.median(np.diff(every))) if len(every) > 1 else 1 / 30
+    cuts = np.flatnonzero(np.diff(t) > 1.5 * step) + 1
+    for run in np.split(t, cuts):
+        k, t0, t1 = len(run), float(run[0]), float(run[-1])
+        when = f"at {t0:.2f} s" if k == 1 else f"from {t0:.2f} s to {t1:.2f} s"
+        add_issue(extra, "frames_not_decodable",
+                  f"{k} frame{'s' if k != 1 else ''} of the camera {name} could not be decoded, {when}; "
+                  + (f"a black frame stands in for {'each' if k != 1 else 'it'}, so every other frame keeps its "
+                     "place." if w.blank else
+                     "the episode goes on without them there."), camera=name, t0_s=t0, t1_s=t1)
+
+
+def placeholder_frames(own: dict, kmaps: dict) -> dict:
+    """{view: [[first, last], ...]}: the anchor frames at which each camera shows a placeholder, a black frame written
+    where its image did not decode (FrameWriter.placeholders), as runs of frame indices (label/episode.py frame_runs).
+    own {view: its own placeholder frame indices}; kmaps {view: its frame for each anchor frame} for a camera paired to
+    the anchor by time, any other sharing the anchor's frame index. Labelling treats each as a frame that did not
+    decode, so the model is never shown a placeholder as footage (label/episode.py frames)."""
+    from label import episode as me
+    out = {}
+    for v, js in own.items():
+        js = np.asarray(sorted(js), dtype=np.int64)
+        km = kmaps.get(v)
+        ks = np.flatnonzero(np.isin(np.asarray(km), js)) if km is not None else js
+        if len(ks):
+            out[v] = me.frame_runs(ks)
+    return out
+
+
 class FrameWriter:
     """One camera's frames streamed to an mp4 at their real times as they are read, so an MCAP is never
     held in memory. Annex-B H.264/H.265 is copied without re-encoding, starting at the first keyframe
-    (earlier frames cannot be decoded); JPEG/PNG frames are encoded to H.264 at the first frame's size."""
+    (earlier frames cannot be decoded); JPEG/PNG frames are encoded to H.264 at the first frame's size.
 
-    def __init__(self, out: Path, fmt: str):
+    An image that does not decode (or a row with no image, missing) is never written as a neighbour's picture: its
+    time is kept in bad, which the reader flags with its span (bad_frames_issues). Where a camera's frames are one
+    per row of a table (a LeRobot data file, an HDF5 episode: blank=True), a black frame is written in its place, so
+    every row after it stays on its own frame and the camera keeps as many frames as its table has rows. A camera with
+    real frame times (an MCAP) skips it, and its state is placed on the frames' own times."""
+
+    def __init__(self, out: Path, fmt: str, blank: bool = False):
         self.out, self.fmt, self.pts, self.kind = out, fmt, [], None
         self.raw = self.enc = self.dst = None
         self.held = []                    # encoded packets waiting for the next frame's time (_mux)
+        self.blank, self.bad, self.waiting = blank, [], []    # waiting: blank frames before the first decoded one
+
+    def _at(self, t_s: float) -> int:
+        p = int(round(t_s * TIME_BASE_DEN))
+        last = max(self.pts[-1:] + self.waiting[-1:], default=None)
+        return last + 1 if last is not None and p <= last else p   # a repeated or backwards stamp stays in order
 
     def add(self, t_s: float, frame: bytes) -> None:
         if self.kind is None:
             head = frame[:4]
             annexb = head.startswith(b"\x00\x00\x00\x01") or head[:3] == b"\x00\x00\x01"
             self.kind = codec_of(frame, self.fmt) if (annexb or self.fmt in ("h264", "h265", "hevc")) else "image"
-        p = int(round(t_s * TIME_BASE_DEN))
-        if self.pts and p <= self.pts[-1]:
-            p = self.pts[-1] + 1          # a repeated or backwards stamp stays in order, one microsecond on
+        p = self._at(t_s)
         if self.kind == "image":
             try:
                 self._image(p, frame)
             except Exception:
-                pass                      # one undecodable image is skipped, never the whole camera
+                self._bad(p)              # one undecodable image never fails the whole camera
             return
         if self.raw is None:
             if not is_keyframe(frame, self.kind):
@@ -6883,18 +7255,46 @@ class FrameWriter:
         self.pts.append(p)
 
     def add_image(self, t_s: float, im) -> None:
-        """A picture already decoded (a raw image message), encoded to H.264 like JPEG frames."""
+        """A picture already decoded (a raw image message), encoded to H.264 like JPEG frames; None is a frame that
+        could not be decoded."""
         self.kind = "image"
-        p = int(round(t_s * TIME_BASE_DEN))
-        if self.pts and p <= self.pts[-1]:
-            p = self.pts[-1] + 1
+        p = self._at(t_s)
+        if im is None:
+            self._bad(p)
+            return
         self._image(p, im)
+
+    def placeholders(self) -> list[int]:
+        """The indices, among the frames written, of the black frames written in place of images that did not decode
+        (blank only; the others are skipped and have no frame)."""
+        if not self.blank or not self.pts:
+            return []
+        return np.searchsorted(np.asarray(self.pts), np.asarray(self.bad, dtype=np.int64)).tolist()
+
+    def missing(self, t_s: float) -> None:
+        """A row of the camera with no image at all."""
+        self.kind = self.kind or "image"
+        self._bad(self._at(t_s))
+
+    def _bad(self, p: int) -> None:
+        self.bad.append(p)
+        if not self.blank:
+            return
+        if self.enc is None:
+            self.waiting.append(p)
+        else:
+            self._encode(p, None)
 
     def _image(self, p: int, frame) -> None:
         import io
-        import av
         from PIL import Image
         im = frame.convert("RGB") if isinstance(frame, Image.Image) else Image.open(io.BytesIO(frame)).convert("RGB")
+        self._encode(p, im)
+
+    def _encode(self, p: int, im) -> None:
+        """One picture (None: a black frame) encoded at time p, the encoder opened at the first picture's size."""
+        import av
+        from PIL import Image
         if self.enc is None:
             self.dst = av.open(str(self.out), "w")
             self.enc = self.dst.add_stream("libx264", rate=30, time_base=Fraction(1, TIME_BASE_DEN))
@@ -6902,8 +7302,14 @@ class FrameWriter:
             self.enc.pix_fmt = "yuv420p"
             self.enc.codec_context.time_base = Fraction(1, TIME_BASE_DEN)
             self.enc.options = {"crf": "18", "preset": "veryfast"}
-        if im.size != (self.enc.width, self.enc.height):
-            im = im.resize((self.enc.width, self.enc.height))
+            for q in self.waiting:
+                self._encode(q, None)
+            self.waiting = []
+        size = (self.enc.width, self.enc.height)
+        if im is None:
+            im = Image.new("RGB", size)
+        elif im.size != size:
+            im = im.resize(size)
         fr = av.VideoFrame.from_image(im)
         fr.pts, fr.time_base = p, Fraction(1, TIME_BASE_DEN)
         self.pts.append(p)
@@ -7002,6 +7408,11 @@ def trim_episode(ep: Path, max_s: float) -> dict:
         issues.append(i)
     if "reader_issues" in ctx:
         ctx["reader_issues"] = issues
+    held = {v: r for v, r in ((v, me.runs_within(r, 0, keep)) for v, r in (ctx.get("placeholder_frames") or {}).items())
+            if r}
+    ctx.pop("placeholder_frames", None)
+    if held:
+        ctx["placeholder_frames"] = held
     for u in ctx.get("unshown_cameras") or []:
         # a camera the model is not shown keeps its frames up to the same time, at its own rate
         rate = float(u.get("fps") or ctx.get("fps") or 30.0)
@@ -7325,6 +7736,21 @@ def _plan_part(det: dict, root: Path, grouping: dict | None) -> list[dict]:
 def item_folder(it: dict) -> Path:
     """The folder an episode's files sit in: a video episode's first video's, an MCAP's or an HDF5 file's own."""
     return Path(it["files"][0]).parent if it.get("files") else Path(it["file"]).parent
+
+
+def episodes_near(items: list[dict], folder: Path, root: Path) -> list[dict]:
+    """The episodes of a folder (item_folder), or, when it holds none, those in and below the nearest folder above it,
+    up to the upload's root, that holds any."""
+    here = [it for it in items if item_folder(it) == folder]
+    if here:
+        return here
+    for up in folder.parents:
+        if up != root and root not in up.parents:
+            break
+        below = [it for it in items if item_folder(it) == up or up in item_folder(it).parents]
+        if below:
+            return below
+    return []
 
 
 def item_take(it: dict) -> str:

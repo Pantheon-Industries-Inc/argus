@@ -68,6 +68,7 @@ def _episode(root: Path, n: int = 300, fps: float = 30.0, depth: bool = False) -
     np.savez(ep / "signals.npz", s0=force, s1=pmap, s2=np.ones((n, 1), np.float32))
     np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
     ctx = {"dataset": "you/your-own-dataset", "profile": "teleop_arms", "fps": fps, "n_state_frames": n,
+           "clock_zero_s": 12.5,
            "signals": [{"name": "fingertip force", "key": "s0", "dims": 1, "names": ["fz"], "rate_hz": 100.0},
                        {"name": "pressure", "key": "s1", "dims": 16, "shape": [4, 4]},
                        {"name": "health", "key": "s2", "dims": 1, "names": ["ok"]}]}
@@ -249,7 +250,56 @@ def test_a_board_without_signals_builds_as_before(tmp_path):
 def test_each_colour_frame_shows_the_nearest_depth_frame():
     ct = np.arange(10) / 30
     dt = np.r_[np.arange(5) / 30, 7 / 30 + np.arange(3) / 30] + 0.004     # a gap at frames 5 and 6
-    assert clips.depth_frame_map(ct, dt) == [0, 1, 2, 3, 4, None, None, 5, 6, 7]
+    assert clips.depth_frame_map(ct, dt) == [0, 1, 2, 3, 4, 4, None, 5, 6, 7]
+
+
+def test_the_board_and_the_model_give_a_colour_frame_depth_by_one_rule():
+    """The board had shown depth only within half a depth frame of a colour frame, the model within a frame of it, so
+    depth 20 ms after its colour was black on the board and read by the model. Both follow prepare/formats.py
+    depth_kmap: the nearest depth frame within a frame, else none."""
+    from prepare.formats import depth_kmap
+    ct = np.arange(90) / 30
+    for dt in (ct, ct + 0.02, np.arange(45) / 15, np.arange(30) / 30):
+        assert clips.depth_frame_map(ct, dt) == [int(k) if k >= 0 else None for k in depth_kmap(dt, ct)]
+    assert None not in clips.depth_frame_map(ct, ct + 0.02)
+
+
+def _damaged_from(path: Path, first: int) -> None:
+    """The packets of a video from first on overwritten with bytes that do not decode."""
+    import av
+    with av.open(str(path)) as c:
+        spans = [(pk.pos, pk.size) for pk in c.demux(c.streams.video[0]) if pk.size and pk.pos is not None]
+    b = bytearray(path.read_bytes())
+    for pos, size in spans[first:]:
+        b[pos:pos + size] = bytes(size)
+    path.write_bytes(bytes(b))
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_depth_clip_keeps_every_depth_frame_that_decodes(tmp_path):
+    """A depth file whose second half is damaged had lost its whole board clip, while labelling skips only the frames
+    that do not decode. The clip keeps every depth frame that decodes, is black where one does not, and the stretch
+    is flagged as depth that does not decode."""
+    import av
+    n = 40
+    ep = _episode(tmp_path / "eps", n=n, depth=True)
+    _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+    _video(ep / "depth.mkv", n, "ffv1", "gray16le",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32), 1000, np.uint16), format="gray16le"))
+    t = 12.5 + np.arange(n) / 30
+    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
+    _damaged_from(ep / "depth.mkv", 20)
+    out = tmp_path / "clips"
+    for (pk, b, du, o, fps, main, off, skip, t_, q, km, pts, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t_, q, km, pts)
+    (job,) = clips.depth_jobs(ep, out, False)
+    (iss,) = clips.extract_depth(*job[:4], 1, job[4])
+    assert iss["kind"] == "depth_not_decodable" and iss["camera"] == "exo", iss
+    assert iss["t0_s"] == pytest.approx(20 / 30, abs=0.02) and iss["t1_s"] == pytest.approx(39 / 30, abs=0.02), iss
+    with av.open(str(out / "depth_exo" / "episode_000000.mp4")) as c:
+        frames = [fr.to_ndarray(format="rgb24") for fr in c.decode(video=0)]
+    assert len(frames) == n and frames[10].max() > 40 and frames[30].max() < 20
 
 
 def _video(path: Path, n: int, codec: str, pix: str, frame, rate: int = 30) -> None:
@@ -265,6 +315,13 @@ def _video(path: Path, n: int, codec: str, pix: str, frame, rate: int = 30) -> N
                 c.mux(pkt)
         for pkt in s.encode():
             c.mux(pkt)
+
+
+def _pts(path: Path) -> np.ndarray:
+    """A video's frames' pts in display order, as prepare records a depth stream's (depth_times.npz)."""
+    import av
+    with av.open(str(path)) as c:
+        return np.array(sorted(pk.pts for pk in c.demux(c.streams.video[0]) if pk.size and pk.pts is not None))
 
 
 @pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
@@ -287,14 +344,14 @@ def test_a_depth_clip_has_its_colour_clips_frames_and_timestamps(tmp_path, depth
     _video(ep / "depth.mkv", n, "ffv1", "gray16le", depth)
     t = 12.5 + np.arange(n) / 30
     if depth_times == "times.npz":
-        np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512, depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+        np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512, depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
     else:
         np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
-        np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+        np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
     out = tmp_path / "clips"
     jobs = clips.episode_jobs(ep, out, False)
-    for (pk, b, du, o, fps, main, off, skip, _, _) in jobs:
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+    for (pk, b, du, o, fps, main, off, skip, t, q, km, pts, _, _) in jobs:
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t, q, km, pts)
     (job,) = clips.depth_jobs(ep, out, False)
     clips.extract_depth(*job[:4], 1, job[4])
     colour, dclip = out / "episode_000000.mp4", out / "depth_exo" / "episode_000000.mp4"
@@ -322,10 +379,10 @@ def test_a_depth_clip_whose_times_do_not_cover_the_colour_clip_is_kept_and_flagg
            lambda k: av.VideoFrame.from_ndarray(np.full((24, 32), 1000, np.uint16), format="gray16le"))
     t = 12.5 + np.arange(n) / 30
     np.savez(ep / "times.npz", exo=t[:30], exo_pts=np.arange(n) * 512)
-    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
     out = tmp_path / "clips"
-    for (pk, b, du, o, fps, main, off, skip, _, _) in clips.episode_jobs(ep, out, False):
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+    for (pk, b, du, o, fps, main, off, skip, t, q, km, pts, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t, q, km, pts)
     (job,) = clips.depth_jobs(ep, out, False)
     issues = clips.extract_depth(*job[:4], 1, job[4])
     dclip = out / "depth_exo" / "episode_000000.mp4"

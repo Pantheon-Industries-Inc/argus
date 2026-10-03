@@ -619,7 +619,10 @@ def test_a_camera_that_started_late_is_shifted_onto_the_episode_clock(tmp_path):
     # a camera that started first drops its frame from more than half a frame before the main camera's first (its
     # next is 10 ms from it, under half a frame), and one camera or no real times means nothing to shift
     np.savez(tmp_path / "times.npz", left=np.array([0.04, 0.07]), right=np.array([0.0, 0.03]))
+    assert clips.start_offsets(tmp_path, sources) == {}
+    (tmp_path / "context.json").write_text(json.dumps({"clock_zero_s": 0.04}))
     assert clips.start_offsets(tmp_path, sources) == {"right": (0.0, 1)}
+    (tmp_path / "context.json").unlink()
     assert clips.start_offsets(tmp_path, {"left": {}}) == {}
     assert clips.start_offsets(tmp_path / "none", sources) == {}
 
@@ -901,6 +904,18 @@ def test_the_problems_an_episode_was_kept_with_are_drawn_as_recording_checks():
     r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "reader_issues.js"),
                         str(REPO / "board" / "serve.py")], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_kinds_of_a_camera_or_depth_that_falls_short_raise_the_family_of_their_fact():
+    """A camera that ends early is one fact whichever step finds it (camera_short, and clip_frame_count from earlier
+    runs), frames that do not decode go with a camera that does not, a main camera shorter than the others has its own
+    family, and depth that is missing for a stretch goes with depth that does not decode."""
+    fam = Families()
+    assert {k: fam.reader_family(k) for k in ("camera_short", "clip_frame_count", "frames_not_decodable",
+                                              "main_camera_short", "depth_partial", "depth_not_decodable")} == {
+        "camera_short": "clip-frames", "clip_frame_count": "clip-frames", "frames_not_decodable": "camera-undecodable",
+        "main_camera_short": "main-camera-short", "depth_partial": "depth-missing",
+        "depth_not_decodable": "depth-missing"}
 
 
 def test_each_reader_issue_raises_its_family_at_any_severity(tmp_path):

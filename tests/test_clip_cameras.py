@@ -152,6 +152,26 @@ def test_a_main_camera_taken_out_moves_the_state_and_signals_onto_the_new_main_c
     assert clips.start_offsets(ep, src) == {"left": (pytest.approx(0.5), 0)}
 
 
+def test_placeholder_frames_move_onto_the_new_main_cameras_frames(tmp_path):
+    """The placeholder frames the reader recorded are on the main camera's frames. When the main camera goes, its own
+    entry goes with it and every other camera's moves onto the new main camera's frames by capture time, so labelling
+    still leaves out exactly the frames that are placeholders."""
+    eps, ep = _recording(tmp_path)
+    up = eps.parent / "up"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4"),
+             "right": ("wrist_right", up / "wrist_right.mp4")}
+    shutil.rmtree(ep)
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": T_LEFT,
+                                                                             "right": T_RIGHT},
+                                placeholders={"exo": [3], "left": [10], "right": [20]})
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["placeholder_frames"] == {"exo": [[3, 3]], "left": [[25, 25]], "right": [[20, 20]]}
+    (eps.parent / "up" / "top.mp4").write_bytes(b"not a video at all" * 50)
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["placeholder_frames"] == {"left": [[10, 10]], "right": [[5, 5]]}, ctx["placeholder_frames"]
+
+
 def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligned(tmp_path):
     """The new main camera was paired to the old one by time (its kmap), and the capture times are gone: nothing can
     place the state on its frames, so the state and signals are not used and the episode says why. The checks that
@@ -169,8 +189,9 @@ def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligne
     ctx = json.loads((ep / "context.json").read_text())
     assert ctx["state_unaligned"]
     kinds = [x["kind"] for x in ctx["reader_issues"]]
-    assert kinds == ["camera_not_decodable", "state_unaligned"]
-    assert "main camera" in ctx["reader_issues"][1]["what"]
+    # measured again on the left camera, now main, by frame index: the right one goes on 0.5 s past it
+    assert kinds == ["main_camera_short", "camera_not_decodable", "state_unaligned"]
+    assert "main camera" in ctx["reader_issues"][2]["what"]
     e = me.load(ep)
     assert not me.plan(e)["state_usable"] and not e["signals"]
     req = me.build_request(ep)
@@ -216,6 +237,114 @@ def test_a_main_camera_taken_out_of_a_shared_frame_index_keeps_the_state(tmp_pat
     assert "state" in me.build_request(ep)["blocks"]
 
 
+def test_the_cameras_spans_are_measured_again_on_the_new_main_camera(tmp_path):
+    """A main camera whose index is whole and none of whose frames decode, beside a wrist camera half as long: the
+    reader flagged the wrist camera as ending before the main one, and that issue had stayed after board clips took
+    the main camera out, though the wrist camera is now the episode. The span issues are measured again on the cameras
+    left: alone, the wrist camera covers its whole episode."""
+    up = tmp_path / "up"
+    up.mkdir()
+    _video(up / "top.mp4", 60)
+    _video(up / "wrist_left.mp4", 30)
+    b = bytearray((up / "top.mp4").read_bytes())
+    i = b.find(b"mdat")
+    n = int.from_bytes(b[i - 4:i], "big") - 8
+    b[i + 4:i + 4 + n] = np.random.default_rng(0).bytes(n)
+    (up / "top.mp4").write_bytes(bytes(b))
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    ep = eps / rep["episodes"][0]["episode_id"]
+    assert [x["kind"] for x in json.loads((ep / "context.json").read_text())["reader_issues"]] == ["camera_short"]
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    assert [x["kind"] for x in ctx["reader_issues"]] == ["camera_not_decodable"], ctx["reader_issues"]
+
+
+def test_a_camera_that_ends_early_is_one_issue_whichever_step_finds_it(tmp_path):
+    """The reader flags a wrist camera that ends at 1 s of a 2 s episode, and board clips then finds its file holds
+    fewer frames still: both had been recorded, under two kinds, for one camera that shows nothing past a time. It is
+    one camera_short issue, at the end the clip has."""
+    rep, eps, ep = _upload(tmp_path, {"top": 60, "wrist_left": 30})
+    assert [x["kind"] for x in json.loads((ep / "context.json").read_text())["reader_issues"]] == ["camera_short"]
+    _video(Path(json.loads((ep / "sources.json").read_text())["left"]["packed"]), 20)
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    (short,) = json.loads((ep / "context.json").read_text())["reader_issues"]
+    assert short["kind"] == "camera_short" and short["camera"] == "wrist_left" and short["clip_frames"] == 20
+    assert short["t0_s"] == pytest.approx(20 / 30, abs=0.01) and short["t1_s"] == 2.0, short
+
+
+def test_the_board_shows_the_frame_the_model_is_sent_at_every_instant(tmp_path):
+    """A wrist camera whose recorder dropped three frames at 1 s: its video plays at an even 30 fps, so its clip had
+    shown frame 45 at 1.5 s while its capture times put frame 42 there, the frame the model is sent. Each clip frame
+    is timed by the capture times (shown from halfway after the capture before it), so at every sampled instant the
+    board's frame is the model's, on every camera."""
+    from board.hands import probe_pts
+    up = tmp_path / "up"
+    up.mkdir()
+    t_left = np.where(np.arange(57) < 30, np.arange(57), np.arange(57) + 3) / 30.0
+    for stem, n in (("top", 60), ("wrist_left", 57)):
+        _video(up / f"{stem}.mp4", n)
+    eps = tmp_path / "episodes"
+    ep = eps / "episode_a"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4")}
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": t_left})
+    out = tmp_path / "clips"
+    assert _clips(eps, out).returncode == 0
+    e = me.load(ep)
+    pl = me.plan(e)
+    for v, clip in (("exo", out / f"{ep.name}.mp4"), ("left", out / "wrist_left" / f"{ep.name}.mp4")):
+        _, _, tb, pts = probe_pts(clip)
+        shown = np.asarray(pts, dtype=np.float64) * float(tb)
+        t = e["times"][v]
+        assert np.allclose(shown[1:], (t[1:] + t[:-1]) / 2, atol=1e-3)
+        for k in pl["ks"]:
+            own = int(e["kmap"][v][k]) if v in e["kmap"] else k
+            assert int(np.searchsorted(shown, me.frame_time(e, k) + 1e-4, side="right") - 1) == own, (v, k)
+    assert 42 == int(e["kmap"]["left"][45])
+
+
+def test_a_camera_captured_a_fraction_of_a_frame_after_each_instant_shows_the_models_frame_there(tmp_path):
+    """A wrist camera that started 0.11 s in, each frame captured a third of a frame after the top camera's: at each
+    instant the model is sent its nearest frame, the one captured just after it. A clip that plays each frame from
+    its capture time shows the frame before that one there. Each frame is shown from halfway after the capture
+    before it, so the board shows the nearest frame at every time, the model's at every instant."""
+    from board.hands import probe_pts
+    up = tmp_path / "up"
+    up.mkdir()
+    t_left = (np.arange(57) + 3.3) / 30.0
+    for stem, n in (("top", 60), ("wrist_left", 57)):
+        _video(up / f"{stem}.mp4", n)
+    eps = tmp_path / "episodes"
+    ep = eps / "episode_a"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4")}
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": t_left})
+    out = tmp_path / "clips"
+    assert _clips(eps, out).returncode == 0
+    e = me.load(ep)
+    for v, clip in (("left", out / "wrist_left" / f"{ep.name}.mp4"), ("exo", out / f"{ep.name}.mp4")):
+        _, _, tb, pts = probe_pts(clip)
+        shown = np.asarray(pts, dtype=np.float64) * float(tb)
+        ks = [k for k in range(60) if me.recording_at(e, v, k)]
+        board = [int(np.searchsorted(shown, me.frame_time(e, k) + 1e-4, side="right") - 1) for k in ks]
+        assert board == [int(e["kmap"][v][k]) if v in e["kmap"] else k for k in ks], v
+        t = e["times"][v]
+        assert np.allclose(shown[1:], (t[1:] + t[:-1]) / 2, atol=1e-3), v
+    # a goal frame cut at a labelled time (board/serve.py extract_frame) is the frame on screen then, the model's
+    import io
+    import av
+    from PIL import Image
+    from board import serve
+    clip = out / "wrist_left" / f"{ep.name}.mp4"
+    with av.open(str(clip)) as c:
+        frames = [np.asarray(f.to_image().convert("L"), np.float32) for f in c.decode(video=0)]
+    for k in (15, 30, 45):
+        own = int(e["kmap"]["left"][k])
+        got = np.asarray(Image.open(io.BytesIO(serve.extract_frame(clip, me.frame_time(e, k), 640))).convert("L"),
+                         np.float32)
+        err = [float(np.abs(got - f).mean()) for f in frames]
+        assert int(np.argmin(err)) == own, (k, own, int(np.argmin(err)))
+
+
 def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_frame(tmp_path):
     """The left wrist camera started 0.5 s before the top camera, which does not decode. The episode's clock now
     starts at the left camera's first frame, the earliest of the cameras left: frame times, clips and the length
@@ -241,7 +370,8 @@ def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_fra
     assert me.frame_time(e, 0) == pytest.approx(0.0) and min(me.frame_time(e, k) for k in pl["ks"]) >= 0
     assert e["state"][15][0] == 0
     assert _clip_timing(out / "wrist_left" / f"{ep.name}.mp4")[1] == pytest.approx(0.0, abs=0.02)
-    assert _clip_timing(out / "wrist_right" / f"{ep.name}.mp4")[1] == pytest.approx(0.5, abs=0.02)
+    # the right camera comes on the pairing tolerance before its first frame, as early as the request shows it
+    assert _clip_timing(out / "wrist_right" / f"{ep.name}.mp4")[1] == pytest.approx(0.4, abs=0.02)
     assert clips.clip_frames(out / "wrist_left" / f"{ep.name}.mp4") == 60
 
 
@@ -279,12 +409,12 @@ def test_every_camera_a_frame_short_is_labelled_to_the_last_frame_any_camera_has
         _video(Path(s["packed"]), 29)
     req = me.build_request(ep)
     texts = [c["text"] for c in req["content"] if c.get("type") == "text"]
-    last = [t for t in texts if t.startswith("=== detail view, last frame")]
+    last = [t for t in texts if t.startswith("=== detail view, last available frame")]
     assert len(last) == 1 and "t=0.93s | cameras top, left, right" in last[0], last
     assert req["timesteps"][-1] == pytest.approx(0.933, abs=0.001)
     assert ("Every camera's video ends before the episode does, so the last instant is the last frame they have, at "
             "0.93 s.") in req["prompt"]
-    assert "plus its first frame and the last frame its cameras have." in req["prompt"]
+    assert "Unavailable instants and available replacements are named below." in req["prompt"]
 
 
 def test_two_cameras_short_are_named_together(tmp_path):
@@ -295,6 +425,76 @@ def test_two_cameras_short_are_named_together(tmp_path):
     prompt = me.build_request(ep)["prompt"]
     assert "Left's video ends before the episode does, so it has no frame at 0.97 s; right's video ends" in prompt
     assert "Their cells at those times are empty, and they are left out of a detail view there." in prompt
+
+
+def _cut_in_last_frame(path: Path, frames: int) -> None:
+    """A camera of frames frames (MPEG-4, whose decoder fills in what a frame is missing), a keyframe every 10, its
+    index at the start of the file, and the file cut in the middle of its last frame, as an upload cut off in transfer
+    is: the index still lists every frame."""
+    import av
+    with av.open(str(path), "w", options={"movflags": "+faststart"}) as c:
+        s = c.add_stream("mpeg4", rate=30)
+        s.width, s.height, s.pix_fmt = 160, 120, "yuv420p"
+        s.options = {"g": "10"}
+        rng = np.random.default_rng(1)
+        for _ in range(frames):
+            im = rng.integers(0, 255, (120, 160, 3), dtype=np.uint8)
+            for pk in s.encode(av.VideoFrame.from_ndarray(im, format="rgb24")):
+                c.mux(pk)
+        for pk in s.encode():
+            c.mux(pk)
+    with av.open(str(path)) as c:
+        last = max((pk for pk in c.demux(c.streams.video[0]) if pk.size), key=lambda pk: pk.pos)
+        cut = last.pos + last.size // 2
+    path.write_bytes(path.read_bytes()[:cut])
+
+
+def test_a_frame_cut_short_is_never_sent_as_footage(tmp_path):
+    """A camera file cut in the middle of its last frame, a keyframe: the decoder makes up the missing part of the
+    picture, from the frame before it when decoded in order and from nothing after a seek, which came out smeared and
+    was sent to the model as the camera's view. The decoder marks such a frame as damaged, and it is a frame that could
+    not be decoded: its cell is empty and the prompt says so."""
+    from label import frames as mf
+    up = tmp_path / "up"
+    up.mkdir()
+    _video(up / "top.mp4", 21)
+    _cut_in_last_frame(up / "wrist_left.mp4", 21)
+    with pytest.raises(mf.DamagedFrame):
+        mf.extract_frames(up / "wrist_left.mp4", 0.0, 21, [20])
+    assert list(mf.extract_frames(up / "wrist_left.mp4", 0.0, 21, [19])) == [19]
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    ep = me.load(eps / rep["episodes"][0]["episode_id"])
+    pl = me.plan(ep)
+    assert pl["ks"][-1] == 20
+    imgs = me.frames(ep, pl)
+    assert 20 not in imgs["left"] and ep["decode_failed"] == {"left": [20]}, ep["decode_failed"]
+    assert "left's video could not be decoded at 0.67 s" in me.build_request(ep["dir"])["prompt"].lower()
+
+
+def test_a_paired_camera_whose_last_frame_is_damaged_is_said_to_end_after_it_never_to_fail_to_decode_there(tmp_path):
+    """A camera paired by time whose file stops at 0.67 s with its last frame cut short: past its end every instant's
+    nearest frame is that damaged last one, but the camera was not recording there, so those instants are where its
+    video ended, and only the instant of the damaged frame itself could not be decoded."""
+    up = tmp_path / "up"
+    up.mkdir()
+    _video(up / "top.mp4", 61)
+    _cut_in_last_frame(up / "wrist_left.mp4", 21)
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    ep = me.load(eps / rep["episodes"][0]["episode_id"])
+    exo, left = np.arange(61) / 30, np.arange(21) / 30
+    ep["times"], ep["kmap"] = {"exo": exo, "left": left}, {"left": formats.nearest(left, exo)}
+    pl = {"ks": [0, 20, 30, 60]}
+    imgs = me.frames(ep, pl)
+    assert 20 not in imgs["left"] and ep["decode_failed"] == {"left": [20]}, ep["decode_failed"]
+    note = me._coverage_note(ep, pl)
+    assert note == (" Left has frames only from 0.00 s to 0.67 s, so its cells are empty at the instants outside "
+                    "that time, and it is left out of a detail view there. Left's video could not be decoded at "
+                    "0.67 s. Its cells at those times are empty, and it is left out of a "
+                    "detail view there."), note
+    (bad,) = me.decode_failures(ep)
+    assert bad["t0_s"] == bad["t1_s"] == 0.667, bad
 
 
 def test_a_camera_damaged_partway_leaves_only_its_own_cells_empty(tmp_path):

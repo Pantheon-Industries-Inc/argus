@@ -89,7 +89,10 @@ CONTACT_EVERY_S = 4.0
 CONTACT_MAX = 8
 CONTACT_MIN_CHANGE = 0.25    # of the channel's own range over the episode, between consecutive instants
 CONTACT_MIN_GAP_S = 2.0
-PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
+# A camera paired by time is shown at an instant up to this far outside its own first and last frame: a pairing
+# tolerance, whether its nearest frame still stands for that instant (a wrist camera whose first frame comes 0.034 s
+# after the anchor's), not the edge a stream may miss without a data issue (prepare/formats.py edge_slack)
+PAIRED_SPAN_SLACK_S = 0.1
 GRID_GUTTER = 84
 GRID_HEADER = 30
 
@@ -101,6 +104,8 @@ def is_episode_dir(ep_dir: Path) -> bool:
 def load(ep_dir: Path) -> dict:
     ep_dir = Path(ep_dir)
     ctx = json.loads((ep_dir / "context.json").read_text())
+    from prepare.formats import clock_context
+    ctx = clock_context(ctx)
     src = json.loads((ep_dir / "sources.json").read_text())
     for v, d in src.items():
         if "n_frames" not in d:
@@ -132,7 +137,8 @@ def load(ep_dir: Path) -> dict:
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
         t = np.load(ep_dir / ctx["real_times"])
-        ep["times"] = {k: t[k] for k in t.files}
+        zero = float(ctx.get("clock_zero_s") or 0.0)
+        ep["times"] = {k: t[k] if k.endswith("_pts") else t[k] - zero for k in t.files}
     for v, d in src.items():
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
@@ -207,6 +213,13 @@ def frame_time(ep: dict, k: int) -> float:
     return k / ep_fps(ep)
 
 
+def seconds(t: float) -> str:
+    """A time as the prompt says it, to the hundredth of a second. A recorder's clock can put a frame a hair before
+    the episode's zero, and that instant is said as 0.00 s, never as -0.00 s, which reads as a time before the
+    episode."""
+    return f"{round(float(t), 2) + 0.0:.2f} s"
+
+
 def describe_spans(ep: dict, spans) -> list[dict]:
     last = len(ep["state"]) - 1
     return [{"start_s": round(frame_time(ep, a), 2), "end_s": round(frame_time(ep, min(b, last)), 2)} for a, b in spans]
@@ -257,16 +270,18 @@ def plan(ep: dict) -> dict:
     T = int(len(ep["state"]))
     r, kind, fps = rig(ep), state_kind(ep), ep_fps(ep)
     windows = {v: int(ep["sources"][v]["n_frames"]) for v in views(ep)}
-    # the state follows the anchor camera's frames; a camera paired to the anchor by real time (kmap) has
-    # its own frame count and is matched through the map, so only unpaired cameras must equal the state
+    # the episode is the anchor camera's frames, which the state's rows follow. A camera paired to the anchor by real
+    # time (kmap) is matched through its map, which must cover every anchor frame; any other camera only shows its own
+    # frames, and one that ends before the anchor has no frame past its end (_decode_view), so it never decides how
+    # long the episode is or whether the state lines up
     a = anchor(ep)
-    paired = {v for v in windows if v != a and v in ep["kmap"] and len(ep["kmap"][v]) >= windows[a]}
+    short_maps = [len(km) for v, km in ep["kmap"].items() if v != a and v in windows and len(km) < windows[a]]
     # state_unaligned: the camera the state was recorded on was taken out of the episode, and nothing places the state
     # on the cameras left (board/clips.py drop_cameras), so it is never treated as aligned
     sa, sb = state_span(ep)
     checks = {"state_frames": T, "camera_frames": windows,
               "camera_windows_match_state": not ep["context"].get("state_unaligned")
-              and all(n == T for v, n in windows.items() if v not in paired)}
+              and windows[a] == T and not short_maps}
     if ep.get("action") is not None and r == "teleop_arms" and kind == "joints" and ep["state"].shape[1] == 14:
         # sped-up recording (the rig's loop ran below the rate its samples are stamped at): a report
         # field computed from the leader/follower joint lag, not a claim made to the model. It reads the 12 arm
@@ -278,11 +293,11 @@ def plan(ep: dict) -> dict:
                                                             grip_range=ms.gripper_full_range(ep["context"]))]
         n = T
     else:
-        # video only, or a dataset defect (the cameras do not cover the same frames as the state): label the
-        # video as shipped over the anchor frames every camera not paired to it by time also has, and make no
-        # state claims (the defect is reported in checks)
+        # video only, or a dataset defect (the anchor's frames are not the state's rows): label the video as shipped
+        # over the anchor's frames that every camera paired to it by time has a map for, and make no state claims (the
+        # defect is reported in checks)
         spans = []
-        n = min([windows[a]] + [w for v, w in windows.items() if v != a and v not in paired])
+        n = min([windows[a]] + short_maps)
     if ep["context"].get("stream_checks"):
         checks["streams"] = ep["context"]["stream_checks"].get("streams")
     if ep["context"].get("stream_pairing"):
@@ -303,7 +318,7 @@ def plan(ep: dict) -> dict:
     if zero is not None and ep.get("times") is not None:
         # a camera that started before the episode's clock (kept for an episode labelled already, board/clips.py
         # reanchor) is main: nothing before the clock's start is sampled, and its first frame at the start is
-        before = [k for k in range(n) if frame_time(ep, k) < float(zero) - 0.5 / fps]
+        before = [k for k in range(n) if frame_time(ep, k) < -0.5 / fps]
         if before and len(before) < n:
             ks = sorted({k for k in ks if k > before[-1]} | {before[-1] + 1})
     if kind != "none" and checks["camera_windows_match_state"] and (sa, sb) != (0, T):
@@ -396,18 +411,22 @@ def _decode_error(e: Exception) -> bool:
     return isinstance(e, (av.error.FFmpegError, mf.FrameError)) and not isinstance(e, OSError)
 
 
-def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=(), failed: set | None = None):
+def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=(), failed: set | None = None,
+                 damaged: set | None = None):
     """Frames for anchor indices ks. A camera paired to the anchor by real time (kmap) is decoded at
     its own frame nearest each anchor frame; results are keyed by the anchor index. With widths, a frame wider
     than the widest of them is kept full size only at detail_ks, and otherwise only at those widths.
 
-    A camera never fails its episode over its own data. Its file may end before the episode does (an upload's every
-    camera one frame short), and then the instants after its last frame have no frame. Its file may not decode, or be
-    damaged partway, and then each instant is decoded on its own, so only the instants it cannot decode lose its
-    frame; those go into failed, when given. A missing file still raises (_decode_error)."""
+    A camera never fails its episode over its own data. It may have fewer frames than the anchor (a camera that stopped
+    first), or its file may end before its own last frame (an upload's every camera one frame short), and then the
+    instants after its last frame have no frame. Its file may not decode, or be damaged partway, and then each instant
+    is decoded on its own, so only the instants it cannot decode lose its frame; those go into failed, when given, and
+    those whose frame the decoder marks as damaged (label/frames.py DamagedFrame) into damaged too. A missing file
+    still raises (_decode_error)."""
     s = ep["sources"][v]
     km = ep["kmap"].get(v)
     own = [int(km[k]) for k in ks] if km is not None else list(ks)
+    mine = [j for j in own if j < int(s["n_frames"])]      # the instants past the camera's last frame have none
     pts = ep["times"].get(f"{v}_pts") if ep.get("times") is not None else None
     keep = None
     if widths:
@@ -424,53 +443,149 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
         with gate:
             return go()
     try:
-        got = run(own)
+        got = run(mine)
     except Exception as e:
         if not _decode_error(e):
             raise
-        got, bad = {}, set()
-        for j in sorted(set(own)):
+        got, bad, hurt = {}, set(), set()
+        for j in sorted(set(mine)):
             try:
                 got.update(run([j]))
             except Exception as e1:
                 if not _decode_error(e1):
                     raise
                 bad.add(j)
+                if isinstance(e1, mf.DamagedFrame):
+                    hurt.add(j)
         if failed is not None:
             failed.update(k for k, j in zip(ks, own) if j in bad)
-    return {k: got[j] for k, j in zip(ks, own) if j in got}
+        if damaged is not None:
+            damaged.update(k for k, j in zip(ks, own) if j in hurt)
+    held = placeholder_instants(ep, ks).get(v, set())
+    if failed is not None:
+        failed.update(held)
+    if damaged is not None:
+        damaged.update(held)
+    return {k: got[j] for k, j in zip(ks, own) if j in got and k not in held}
+
+
+class _CaptureSearch:
+    """Nearest remaining capture by time, with earlier indices winning ties. Removed failures are skipped through
+    compressed successor and predecessor links, so each missing sample cannot walk the same failed stretch again.
+    Captures and equal-time group starts are indexed once; each unsuccessful decode removes its index once."""
+
+    def __init__(self, captures):
+        self.captures = np.asarray(captures)
+        self.order = np.argsort(self.captures, kind="stable")
+        self.times = self.captures[self.order]
+        self.starts = np.searchsorted(self.times, self.times)
+        self.positions = np.empty(len(self.order), dtype=int)
+        self.positions[self.order] = np.arange(len(self.order))
+        self.after = list(range(len(self.order) + 1))
+        self.before = list(range(len(self.order) + 1))
+
+    @staticmethod
+    def _find(links, i):
+        while links[i] != i:
+            links[i] = links[links[i]]
+            i = links[i]
+        return i
+
+    def discard(self, k):
+        i = int(self.positions[k])
+        self.after[i] = self._find(self.after, i + 1)
+        self.before[i + 1] = self._find(self.before, i)
+
+    def nearest(self, k):
+        target = self.captures[k]
+        bound = int(np.searchsorted(self.times, target))
+        right = self._find(self.after, bound)
+        left = self._find(self.before, bound) - 1
+        # A predecessor points to the last surviving index of its time group. Choose the group's first survivor,
+        # since stable sorting makes it the earliest original index, including ties across two distinct times.
+        left = self._find(self.after, int(self.starts[left])) if left >= 0 else -1
+        candidates = [i for i in (left, right) if 0 <= i < len(self.order)]
+        if not candidates:
+            return None
+        i = min(candidates, key=lambda i: (abs(self.times[i] - target), int(self.order[i])))
+        return int(self.order[i])
 
 
 def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     """{view: {k: PIL image}} for every planned k a camera has a frame at. With widths (the cell widths a request can
     be built at), frames outside detail_ks are kept only at those widths (label/frames.py Shrunk).
 
-    An instant no camera has a frame at is dropped from pl["ks"], and when the episode's last instants are past every
+    An instant no camera has a frame at is named and replaced by a nearby readable frame at its own time. When the
+    episode's last instants are past every
     camera's last frame (an upload whose every camera's file ends a frame before the episode does), the last frame any
     camera has takes their place, so the last detail view is the end of the footage (ep["footage_end"]). The episode
     keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,
     which recording_at then reports as not recording, so every grid and view leaves it out there; ep["decode_failed"],
-    the instants a camera's file could not be decoded at, before its last frame or, for a file none of whose frames
-    decodes, all of them (_coverage_note, decode_failures). Raises only when no camera has any frame."""
+    the instants inside a camera's own recording (_in_span) its file could not be decoded at, before its last frame
+    or, for a file none of whose frames decodes, all of them (_coverage_note, decode_failures). A frame the decoder
+    marks as damaged and a placeholder frame (placeholder_instants) did not decode, wherever they are in the file, so
+    the model is never shown either as footage. Raises only when no camera has any frame."""
     vs = views(ep)
-    failed = {v: set() for v in vs}
+    failed, damaged = {v: set() for v in vs}, {v: set() for v in vs}
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
-        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks, failed[v]) for v in vs}
+        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks, failed[v], damaged[v])
+                for v in vs}
         got = {v: f.result() for v, f in futs.items()}
+    for v, hit in placeholder_instants(ep, pl["ks"]).items():
+        if v in got:
+            for k in hit:
+                got[v].pop(k, None)
+            failed[v] |= hit
+            damaged[v] |= hit
     ks = sorted(set(pl["ks"]))
     # an instant some camera can show: decoded there and inside its own recording (a camera paired by time that was
     # not recording has only its nearest frame, from another time, which is never shown)
     keep = [k for k in ks if any(k in got[v] and _in_span(ep, v, k) for v in vs)]
+    unavailable = [k for k in ks if k not in keep]
+    ep["unavailable_instants"] = unavailable
+    ep["fallback_instants"] = {}
+
+    def usable(k):
+        more = {v: _decode_view(ep, v, [k], gate, widths, detail_ks, failed[v], damaged[v])
+                if _in_span(ep, v, k) else {} for v in vs}
+        for v, hit in placeholder_instants(ep, [k]).items():
+            more.get(v, {}).pop(k, None)
+            failed[v] |= hit
+            damaged[v] |= hit
+        for v in vs:
+            got[v].update(more[v])
+        return any(k in more[v] and _in_span(ep, v, k) for v in vs)
+
+    # The sampling schedule can land entirely on damaged rows. Search the episode's real frame indices before
+    # concluding that it has no footage. Keep unknown and usable captures in a nearest-time index; every known
+    # failure leaves it once, so later missing targets skip whole damaged stretches.
+    if unavailable:
+        search = _CaptureSearch(np.fromiter((frame_time(ep, k) for k in range(pl["n"])), dtype=float))
+        for k in unavailable:
+            search.discard(k)
+    kept = set(keep)
+    for missing in unavailable:
+        while (k := search.nearest(missing)) is not None:
+            if k in kept or usable(k):
+                kept.add(k)
+                ep["fallback_instants"][missing] = k
+                break
+            search.discard(k)
+        if not kept:
+            break
+    keep = sorted(kept)
     if not keep:
-        raise mf.FrameError(f"{ep.get('dir', '?')}: no camera has a frame at any instant")
+        raise mf.FrameError(f"{ep.get('dir', '?')}: no camera has a decodable frame")
     ep.pop("footage_end", None)
-    if len(keep) < len(ks):
-        past = [k for k in ks if k > keep[-1]]
+    if unavailable:
+        past = [k for k in ks if k > keep[-1] and not any(k in damaged[v] for v in vs)]
         if past:
             # the frames before the first instant past every camera's end, back to the last instant kept (decoded
             # again at full size, for the detail view): the latest any camera has takes the end's place
             for k in range(min(past) - 1, keep[-1] - 1, -1):
                 more = {v: _decode_view(ep, v, [k], gate) for v in vs}
+                for v in placeholder_instants(ep, [k]):
+                    more.get(v, {}).pop(k, None)
                 if any(k in more[v] and _in_span(ep, v, k) for v in vs):
                     for v in vs:
                         got[v].update(more[v])
@@ -480,14 +595,59 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
         pl["ks"] = keep
         if pl.get("contact"):
             pl["contact"] = [k for k in pl["contact"] if k in keep]
+        # Replacement grid cells stay small; only the new first and last detail views need their native pixels.
+        if widths:
+            for k in (keep[0], keep[-1]):
+                if k not in detail_ks:
+                    for v in vs:
+                        if k in got[v]:
+                            got[v].update(_decode_view(ep, v, [k], gate))
     ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
     # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
-    # where its file ended); a camera with no frame at all that failed to decode does not decode anywhere. It is
-    # recorded whether or not another camera shows the instant, so an instant that left the request is still flagged
-    bad = {v: sorted(k for k in failed[v] if not got[v] or k < max(got[v])) for v in vs}
+    # where its file ended), or a damaged or placeholder frame anywhere; a camera with no frame at all that failed to
+    # decode does not decode anywhere. Only an instant inside the camera's own recording counts: a camera paired by
+    # time that was not recording there has only its nearest frame, from another time, so the instant is where its
+    # video starts or ends (_coverage_note), even when that frame does not decode. It is recorded whether or not
+    # another camera shows the instant, so an instant that left the request is still flagged
+    bad = {v: sorted(k for k in failed[v] if _in_span(ep, v, k) and (not got[v] or k < max(got[v]) or k in damaged[v]))
+           for v in vs}
     ep["decode_failed"] = {v: ks_ for v, ks_ in bad.items() if ks_}
     ep["undecodable"] = {v for v in ep["decode_failed"] if not got[v]}
     return got
+
+
+def frame_runs(ks) -> list[list[int]]:
+    """Frame indices as runs [[first, last], ...] of consecutive ones, how context.json keeps a set of frames short
+    (placeholder_frames)."""
+    ks = np.unique(np.asarray(list(ks), dtype=np.int64))
+    if not len(ks):
+        return []
+    cuts = np.flatnonzero(np.diff(ks) > 1) + 1
+    return [[int(r[0]), int(r[-1])] for r in np.split(ks, cuts)]
+
+
+def runs_within(runs, a: int, b: int) -> list[list[int]]:
+    """Runs of frames (frame_runs) cut to the frames [a, b) and counted from a, for an episode cut to those frames (a
+    part of a long recording, label/pieces.py; an episode trimmed to the minutes cap, prepare/formats.py)."""
+    out = []
+    for x, y in runs:
+        x, y = max(int(x), a), min(int(y), b - 1)
+        if x <= y:
+            out.append([x - a, y - a])
+    return out
+
+
+def placeholder_instants(ep: dict, ks) -> dict:
+    """{view: the instants of ks at which the camera's frame is a placeholder}: a black frame the reader wrote where an
+    image did not decode, so a camera of images one per table row keeps the rows on their frames (context.json
+    placeholder_frames, runs of anchor frames, prepare/formats.py placeholder_frames). It is no footage, and frames
+    treats it as a frame that did not decode."""
+    out = {}
+    for v, runs in (ep["context"].get("placeholder_frames") or {}).items():
+        hit = {int(k) for k in ks if any(x <= int(k) <= y for x, y in runs)}
+        if hit:
+            out[v] = hit
+    return out
 
 
 def decode_failures(ep: dict) -> list[dict]:
@@ -498,12 +658,17 @@ def decode_failures(ep: dict) -> list[dict]:
     off = float((ep["context"].get("piece") or {}).get("t0_s") or 0.0)
     out = []
     for v, ks in (ep.get("decode_failed") or {}).items():
+        # a placeholder is flagged by the reader already, over its whole stretch (frames_not_decodable)
+        held = placeholder_instants(ep, ks).get(v, set())
+        ks = [k for k in ks if k not in held]
+        if not ks:
+            continue
         t0, t1 = round(frame_time(ep, min(ks)) + off, 3), round(frame_time(ep, max(ks)) + off, 3)
         name = camera_label(v, ep["context"])
         if v in (ep.get("undecodable") or ()):
             what = f"The {name} video could not be decoded, so the labels have no frame of it."
         else:
-            when = f"at {t0:.2f} s" if t0 == t1 else f"from {t0:.2f} s to {t1:.2f} s"
+            when = f"at {seconds(t0)}" if t0 == t1 else f"from {seconds(t0)} to {seconds(t1)}"
             what = f"The {name} video could not be decoded {when}, so the labels have no frame of it there."
         out.append({"camera": v, "t0_s": t0, "t1_s": t1, "what": what})
     return out
@@ -891,45 +1056,61 @@ def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
 
 def _coverage_note(ep: dict, pl: dict) -> str:
     """A camera that has no frame at some instants (recording_at), said so its empty cells are read as what they are:
-    when it records (_in_span), the instants after its file ends (frames), and the instants its file could not be
+    the instants before its video starts or after it ends (a camera paired by time that was not recording, _in_span,
+    or a camera whose file ends first, frames), each said the same way for both, and the instants its file could not be
     decoded at (all of them for a file none of whose frames decodes). One camera can have more than one of these, and
-    each is said. When every camera's file ends before the episode does, the last instant is the last frame they have
-    (frames, ep["footage_end"]), which is said too."""
+    each is said; the sentence after them speaks of one camera or of several by how many cameras they name. When every
+    camera's file ends before the episode does, the last instant is the last frame they have (frames,
+    ep["footage_end"]), which is said too."""
     gaps, ended, broken, never = [], [], [], []
-    at = lambda ks: ", ".join(f"{frame_time(ep, k):.2f} s" for k in sorted(ks))
+    at = lambda ks: ", ".join(seconds(frame_time(ep, k)) for k in sorted(ks))
     for v in views(ep):
         if all(recording_at(ep, v, k) for k in pl["ks"]):
             continue
         name = cam_name(ep, v)
         if not all(_in_span(ep, v, k) for k in pl["ks"]):
             t = ep["times"][v]
-            gaps.append(f"{name} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
+            gaps.append(f"{name} has frames only from {seconds(t[0])} to {seconds(t[-1])}")
+        if v in (ep.get("undecodable") or ()):
+            never.append((name, f"{name}'s video could not be decoded at any instant"))
+            continue
         # the instants of the request it could not decode (one no camera could show has left the request)
         bad = set((ep.get("decode_failed") or {}).get(v) or ()) & set(pl["ks"])
-        if v in (ep.get("undecodable") or ()):
-            never.append(f"{name}'s video could not be decoded at any instant")
-        elif bad:
-            broken.append(f"{name}'s video could not be decoded at {at(bad)}")
-        ends = {k for k in (ep.get("no_frame") or {}).get(v, ()) if k not in bad and _in_span(ep, v, k)}
-        if ends:
-            ended.append(f"{name}'s video ends before the episode does, so it has no frame at {at(ends)}")
+        out_of = [k for k in pl["ks"] if not recording_at(ep, v, k) and k not in bad]
+        t = (ep.get("times") or {}).get(v) if (ep.get("kmap") or {}).get(v) is not None else None
+        before = [k for k in out_of if t is not None and frame_time(ep, k) < float(t[0])]
+        after = [k for k in out_of if k not in before]
+        after = [k for k in after if _in_span(ep, v, k)]
+        if after:
+            ended.append((name, f"{name}'s video ends before the episode does, so it has no frame at {at(after)}"))
+        if bad:
+            broken.append((name, f"{name}'s video could not be decoded at {at(bad)}"))
     out = ""
-    span_tail = ("so {its} cells are empty at the instants outside that time, and {it} {is_} left out of a detail view "
-                 "there.")
+    if gaps:
+        one = len(gaps) == 1
+        s = "; ".join(gaps)
+        out += (" " + s[0].upper() + s[1:] + f", so {'its' if one else 'their'} cells are empty at the instants "
+                f"outside that time, and {'it is' if one else 'they are'} left out of a detail view there.")
     gone_tail = "{Its} cells at those times are empty, and {it} {is_} left out of a detail view there."
     never_tail = "{Its} cells are all empty, and {it} {is_} left out of every detail view."
-    for parts, tail in ((gaps, span_tail), (ended + broken, gone_tail), (never, never_tail)):
+    for parts, tail in ((ended + broken, gone_tail), (never, never_tail)):
         if not parts:
             continue
-        one = len(parts) == 1
+        one = len({name for name, _ in parts}) == 1
         words = {"its": "its" if one else "their", "Its": "Its" if one else "Their", "it": "it" if one else "they",
                  "is_": "is" if one else "are"}
-        s = "; ".join(parts)
-        lead = " " + s[0].upper() + s[1:]
-        out += lead + (", " if tail.startswith("so") else ". ") + tail.format(**words)
+        s = "; ".join(said for _, said in parts)
+        out += " " + s[0].upper() + s[1:] + ". " + tail.format(**words)
     if ep.get("footage_end") is not None:
         out += (" Every camera's video ends before the episode does, so the last instant is the last frame they have, "
-                f"at {frame_time(ep, ep['footage_end']):.2f} s.")
+                f"at {seconds(frame_time(ep, ep['footage_end']))}.")
+    if ep.get("unavailable_instants"):
+        out += f" No camera could be decoded at the planned instants {at(ep['unavailable_instants'])}."
+        replacements = ep.get("fallback_instants") or {}
+        if replacements:
+            out += " The available replacement frames are shown at their own times: " + "; ".join(
+                f"{seconds(frame_time(ep, k))} for the unavailable instant {seconds(frame_time(ep, missing))}"
+                for missing, k in replacements.items()) + "."
     return out
 
 
@@ -944,9 +1125,14 @@ def _depth_note(ep: dict) -> str:
     if not d:
         return ""
     names = ", ".join(cam_name(ep, v) for v in order_views(d))
+    # a depth stream that stops before its camera has no reading at the instants past it (prepare/formats.py
+    # depth_kmap -1), where no depth view follows
+    gaps = [cam_name(ep, v) for v in order_views(d) if "km" in d[v] and (np.asarray(d[v]["km"]) < 0).any()]
     return (f"\nDEPTH: {names} {'records' if len(d) == 1 else 'record'} depth as well as colour. Each detail view is "
             "followed by the depth from the same "
-            + ("camera's depth sensor" if len(d) == 1 else "cameras' depth sensors") + " at that instant.")
+            + ("camera's depth sensor" if len(d) == 1 else "cameras' depth sensors") + " at that instant."
+            + (f" {', '.join(gaps)} {'has' if len(gaps) == 1 else 'have'} no depth for part of the episode; a detail "
+               "view there is followed by no depth." if gaps else ""))
 
 
 CONTACT_VIEWS_MAX = 8             # contacts shown per episode, the strongest first, at most one per CONTACT_EVERY_S
@@ -1295,8 +1481,9 @@ def _motion_table(ep: dict, pl: dict) -> str:
         "depends on the lens, the distance to the scene and the direction of travel. Likewise never compare "
         "how open the fingers look with the gripper number: its scale is not a picture of how wide the "
         "fingers look, so only the timing of a change can be compared with the video.\n"
-        + (f"The recorded state covers only {frame_time(ep, sa):.2f} s to {frame_time(ep, sb - 1):.2f} s of the "
-           "episode, so the rows stop there and nothing is recorded outside it.\n" if (sa, sb) != (0, len(st)) else "")
+        + (f"The recorded state covers only {seconds(frame_time(ep, sa))} to {seconds(frame_time(ep, sb - 1))} of "
+           "the episode, so the rows stop there and nothing is recorded outside it.\n"
+           if (sa, sb) != (0, len(st)) else "")
         + "\n".join(rows))
 
 
@@ -1602,6 +1789,9 @@ def _intro_head(ep: dict) -> str:
         else f"a person holds {k} handheld grippers, one per hand, and does the task with them")
     kind_of = ("one clip of first-person human video from the {d} dataset, collected to train robots and world "
                "models" if r == "ego_head" else "one episode of a robot-learning demonstration from the {d} dataset{w}")
+    if ep.get("unavailable_instants"):
+        return (f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the available "
+                "sampled footage; unavailable instants and replacement frames are named below.\n")
     return (f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the episode exactly as "
             "the dataset ships it, from its first recorded frame to its last; nothing was trimmed, cleaned or "
             "edited.\n")
@@ -1609,12 +1799,13 @@ def _intro_head(ep: dict) -> str:
 
 def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
     names = ", ".join(cam_name(ep, v) for v in views(ep))
+    ends = "first and last available instant" if ep.get("unavailable_instants") else "first and last instant"
     return (
         f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
         "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
         "seconds from the episode's first frame. Read each grid left to right and the grids in order. "
         "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
-        f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's first and last instant are "
+        f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's {ends} are "
         f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
         "small detail (lettering, a display, fine alignment).")
 
@@ -1622,6 +1813,9 @@ def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
 def _instants_line(ep: dict) -> str:
     # when every camera's file ends before the episode does, the last instant is the last frame they have (frames)
     last = "frame and the last frame its cameras have" if ep.get("footage_end") is not None else "and last frame"
+    if ep.get("unavailable_instants"):
+        return (f"Which instants are planned: one every {SAMPLE_EVERY_S[rig(ep)]:g} s for the whole episode, plus its "
+                "first and last frame. Unavailable instants and available replacements are named below.")
     return (f"Which instants you get: one every {SAMPLE_EVERY_S[rig(ep)]:g} s for the whole episode, plus its first "
             f"{last}.")
 
@@ -1734,6 +1928,9 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     # the first frame, the contact views in time order, then the last frame
     views_sent = []
     for k, name in ((pl["ks"][0], "first frame"), (pl["ks"][-1], "last frame")):
+        if ep.get("unavailable_instants") and ((name == "first frame" and k != 0)
+                                               or (name == "last frame" and k != pl["n"] - 1)):
+            name = name.replace("frame", "available frame")
         here = [v for v in order_views(imgs) if recording_at(ep, v, k)]
         views_sent.append((k, f"{name} of the episode",
                            cam_labels if len(here) == len(imgs) else [cam_name(ep, v) for v in here],

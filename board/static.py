@@ -86,8 +86,8 @@ ENC_TAG = bc.ENC_TAG
 # every published video's name carries this tag, the recipe's name when the board's media were first built. A static
 # build stream-copies the board's clips, so a later recipe change that leaves their bytes alone must not rename (and
 # upload again) every published file; the tag changes only when the published bytes do
-MEDIA_TAG = "h264-crf20-veryfast-main1280-1920x1080-side1280x1080-kf2s-srcts-camclock-v3"
-FRAME_TAG = "frame-640-v1"   # serve.extract_frame at w=640
+MEDIA_TAG = "h264-crf20-veryfast-main1280-1920x1080-side1280x1080-kf2s-srcts-camclock-v4"
+FRAME_TAG = "frame-640-v2"   # serve.extract_frame at w=640, using exact display intervals
 
 
 # ---------------------------------------------------------------- what the page shows
@@ -271,19 +271,23 @@ def transcode(src: Path, dst: Path, threads: int, main: bool = True) -> dict:
     camera or a side one (main)."""
     t0 = time.time()
     sp = probe(src)
+    # A retimed clip's movie clock must keep its fine boundaries, including a camera's nonzero first display time.
+    fine_clock = ["-movie_timescale", str(bc.DISPLAY_TICKS_PER_S), "-video_track_timescale",
+                  str(bc.DISPLAY_TICKS_PER_S)] if sa._shown_from_halfway(src) else []
     dst.parent.mkdir(parents=True, exist_ok=True)
     part = dst.with_name("." + dst.name + ".part.mp4")
     if _compliant(sp):
         mode = "copy"
         cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-copyts", "-i", str(src),
-               "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-movflags", "+faststart", str(part)]
+               "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-movflags", "+faststart", *fine_clock, str(part)]
     else:
         mode = "encode"
         amap = ["-map", "0:a:0"] if sp["audio"] else []
         acodec = ["-c:a", "aac", "-b:a", "96k"] if sp["audio"] else []
         cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-copyts", "-i", str(src),
                "-map", "0:v:0", *amap, "-fps_mode", "passthrough",
-               *bc.video_args(sp["w"], sp["h"], main, threads, sp["resample"]), *acodec, str(part)]
+               *bc.video_args(sp["w"], sp["h"], main, threads, sp["resample"]), *acodec,
+               *(["-enc_time_base", "demux"] if fine_clock else []), *fine_clock, str(part)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg {mode} {src}: {r.stderr.strip()[-300:]}")

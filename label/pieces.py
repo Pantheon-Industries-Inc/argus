@@ -132,8 +132,8 @@ def choose_cuts(t: np.ndarray, m: np.ndarray, max_s: float) -> list[dict]:
         if not len(idx):
             idx = np.array([int(np.searchsorted(t, target))])
         k = int(idx[np.argmin(sm[idx])])
-        cuts.append({"frame": k, "t_s": round(float(t[k] - t[0]), 3), "still": bool(sm[k] <= still_level),
-                     "motion": round(float(sm[k]), 4), "target_s": round(target - float(t[0]), 1)})
+        cuts.append({"frame": k, "t_s": round(float(t[k]), 3), "still": bool(sm[k] <= still_level),
+                     "motion": round(float(sm[k]), 4), "target_s": round(target, 1)})
         prev_t = float(t[k])
     return cuts
 
@@ -147,14 +147,19 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     """Write one sidecar folder per part under pieces_root (named <episode>__pNN) and record the cuts in the
     episode's context (context["pieces"]). Returns the part folders."""
     from label import episode as me
+    from prepare.formats import CLOCK_TIME_KEYS, shift_context_times
     ep_dir = Path(ep_dir)
+    stored = json.loads((ep_dir / "context.json").read_text())
     ep = me.load(ep_dir)
     ctx = ep["context"]
     t, m = motion(ep)
     cuts = choose_cuts(t, m, piece_max(ctx))
     n = len(t)
     bounds = [0] + [c["frame"] for c in cuts] + [n]
-    total = duration(ctx)
+    # The parent's first capture need not be zero. Join offsets and typed metadata use its consumer clock, while
+    # each part's arrays start at its own first capture. Keep the last part through the actual final capture.
+    step = float(np.median(np.diff(t))) if len(t) > 1 else 1.0 / me.ep_fps(ep)
+    total = max(duration(ctx), float(t[-1]) + step)
     a = me.anchor(ep)
     fps = me.ep_fps(ep)
     src = ep["sources"]
@@ -186,13 +191,18 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if d.exists():
             shutil.rmtree(d)
         d.mkdir(parents=True)
-        t0, t1 = float(t[k0] - t[0]), (float(t[k1] - t[0]) if k1 < n else total)
+        t0, t1 = float(t[k0]), (float(t[k1]) if k1 < n else total)
         new_src, new_times = {}, {}
         for v, s in src.items():
             s2 = {kk: vv for kk, vv in s.items() if kk != "kmap"}
             km = ep["kmap"].get(v)
-            if v == a or km is None:
+            if v == a:
                 j0, j1 = k0, k1
+            elif km is None:
+                # a camera not paired by time shares the anchor's frame index up to its own last frame, so a part past
+                # that has none of it (label/episode.py _decode_view)
+                own = int(s["n_frames"])
+                j0, j1 = min(k0, own), min(k1, own)
             else:
                 j0, j1 = int(km[k0]), int(km[k1 - 1]) + 1
                 np.save(d / f"kmap_{v}.npy", (np.asarray(km[k0:k1]) - j0).astype(np.int32))
@@ -209,10 +219,27 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "stream_checks", "pieces",
             "instruction", "instruction_note", "real_times", "timebase_neighbour_lag_frames",
             "clock_zero_s")}  # a part's times start at its own first frame, never on the recording's clock zero
+        held = {v: r for v, r in ((v, me.runs_within(r, k0, k1))
+                                  for v, r in (ctx.get("placeholder_frames") or {}).items()) if r}
+        c2.pop("placeholder_frames", None)
+        if held:
+            c2["placeholder_frames"] = held       # on the part's own frames
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
-        note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total)} recording, from "
-                f"{fmt_clock(t0)} to {fmt_clock(t1)} of it. The labelling pipeline cut the recording into parts at "
+        c2 = shift_context_times(c2, -t0)
+        parent_notes = []
+        if t0:
+            for issue in c2.get("reader_issues") or []:
+                if (isinstance(issue, dict) and isinstance(issue.get("what"), str) and issue["what"]
+                        and any(isinstance(issue.get(key), (int, float)) and not isinstance(issue.get(key), bool)
+                                for key in CLOCK_TIME_KEYS["reader_issues"])):
+                    # The typed markers move to the part clock. Copied prose remains the recording's evidence.
+                    issue["what"] = "Full recording clock note. " + issue["what"]
+                    parent_notes.append(issue["what"])
+        interval = (f"{fmt_clock(t0)} to {fmt_clock(t1)} on the full recording clock" if float(t[0]) else
+                    f"{fmt_clock(t0)} to {fmt_clock(t1)} of it")
+        note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total - float(t[0]))} recording, from "
+                f"{interval}. The labelling pipeline cut the recording into parts at "
                 "moments of little motion to label it; activity that carries across a cut is expected, and a part "
                 "that starts or ends in the middle of an activity is how we cut it, not a truncated or cut-off "
                 "recording.")
@@ -221,6 +248,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                      f"\"{ctx['instruction'].strip()}\". This part may show only some of it.")
         if ctx.get("collection_note"):
             note += " " + ctx["collection_note"].strip()
+        if parent_notes:
+            note += " " + " ".join(parent_notes)
         c2["collection_note"] = note
         if new_times:
             np.savez(d / "times.npz", **new_times)
@@ -237,13 +266,16 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                               for c in contacts if c["end_s"] >= t0 and c["start_s"] < t1]
         if (ep_dir / "depth.json").exists():
             # each camera's depth frames for the part's anchor frames; the depth files and their times are the
-            # recording's own
+            # recording's own pts; their scalar capture times move with the part's colour capture times
             dj = json.loads((ep_dir / "depth.json").read_text())
             for v, e in dj.items():
                 np.save(d / e["kmap"], np.asarray(np.load(ep_dir / e["kmap"])[k0:k1]))
             write_atomic(d / "depth.json", dj, indent=1)
             if (ep_dir / "depth_times.npz").exists():
-                shutil.copy(ep_dir / "depth_times.npz", d / "depth_times.npz")
+                with np.load(ep_dir / "depth_times.npz") as dt:
+                    origin = float(t[k0]) + float(ctx.get("clock_zero_s") or 0.0)
+                    np.savez(d / "depth_times.npz", **{key: dt[key] if key.endswith("_pts") else dt[key] - origin
+                                                      for key in dt.files})
         if z is not None:
             arrs = {kk: z[kk][k0:k1] for kk in z.files}
             np.savez(d / "state.npz", **arrs)
@@ -268,8 +300,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         write_atomic(d / "context.json", c2, indent=1, default=str)
         (d / "instruction.txt").write_text("\n")
         out.append(d)
-    ctx["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
-    write_atomic(ep_dir / "context.json", ctx, indent=1, default=str)
+    stored["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
+    write_atomic(ep_dir / "context.json", stored, indent=1, default=str)
     return out
 
 

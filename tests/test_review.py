@@ -216,8 +216,10 @@ def test_a_camera_clip_a_frame_short_keeps_the_episode_and_is_a_data_issue(tmp_p
     assert json.loads((out / "failed.json").read_text()) == {}
     assert clips.set_aside_failed(eps, out) == [] and ep.is_dir()
     ctx = json.loads((ep / "context.json").read_text())
-    what = "The left wrist camera video has 29 frames where the episode has 30."
-    assert ctx["reader_issues"] == [{"kind": "clip_frame_count", "camera": "left", "what": what}]
+    what = ("The left wrist camera video ends at 0.97 s, before the episode ends at 1.00 s, so it shows nothing after "
+            "that; 29 of the 30 frames its file lists could be read.")
+    assert ctx["reader_issues"] == [{"kind": "camera_short", "camera": "wrist_left", "what": what, "t0_s": 0.967,
+                                     "t1_s": 1.0, "clip_frames": 29, "episode_frames": 30}]
     assert set(json.loads((ep / "sources.json").read_text())) == {"exo", "left"}
     d = _board_episode(tmp_path, eps, ep)
     # the canned label's steps run past this 1 s episode, which the board flags beside it (model_steps_outside_episode)
@@ -225,7 +227,8 @@ def test_a_camera_clip_a_frame_short_keeps_the_episode_and_is_a_data_issue(tmp_p
         {**ctx["reader_issues"][0], "family": "clip-frames"}]
     assert "clip-frames" in serve._families(d)["families"]
     clips.note_camera_problems(rep, eps)
-    assert rep["notes"] == ["episode_1: the left wrist camera video has 29 frames where the episode has 30."]
+    assert rep["notes"] == ["episode_1: the left wrist camera video ends at 0.97 s, before the episode ends at "
+                            "1.00 s, so it shows nothing after that; 29 of the 30 frames its file lists could be read."]
     assert rep["episodes"][0]["cameras"] == {"exo": "top", "left": "left"}
     # labelling decodes the files themselves: the left camera has no frame at the last instant, so its cell is empty
     req = me.build_request(ep)
