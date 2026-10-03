@@ -34,7 +34,8 @@ A signal: "name", "dims", and when the dataset gives them "shape" ([16, 16]), "n
 before the others has no reading after its last row, and a gap or a stretch before a signal starts is no reading, which
 the page draws as a gap. A signal that cannot be drawn is left out and named in the file's "errors" ([{"name",
 "error"}]), and the page names it under the lanes it drew. "no_reading": true when it has no reading at any frame, and
-"constant": true when no value ever changes (its "value" is the first row, or null when no row reads in full); the page
+"constant": true when no value ever changes (its "value" is the first complete row, or each value's finite reading
+when no row reads in full); the page
 lists both by name, each under its own words. Otherwise "rests_and_rises" and "touch"
 (label/signals.py; touch is is_touch, by the signal's name and its numbers), "direction" ("up", "down" or null), "spans"
 ([[start s, end s], ...] on the clip clock, from every frame, for a signal that rests and rises or is touch), for a
@@ -228,9 +229,9 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         doc["partial_reading_frames"] = partial
     lo, hi = _range(a)
     if bool((hi[fin.any(axis=0)] == lo[fin.any(axis=0)]).all() and fin.any(axis=0).all()):
-        first = next((r for r in a if np.isfinite(r).all()), None)
+        first = next((r for r in a if np.isfinite(r).all()), lo)
         doc["constant"] = True
-        doc["value"] = None if first is None else [float(x) for x in first[:16]]
+        doc["value"] = [float(x) for x in first[:16]]
         # constant wherever it reads; the frames with no reading say it is not so at every frame (the prompt's rule)
         return doc
     rest = np.asarray(meta["rest"], dtype=np.float64) if meta.get("rest") is not None else None

@@ -69,6 +69,16 @@ def test_partial_signal_keeps_an_empty_column_without_a_warning():
     assert "qpos [0]: 1 1" in text and "qpos [1]: - -" in text
 
 
+@pytest.mark.parametrize("gap", [np.inf, -np.inf, np.nan])
+def test_board_partial_constant_names_every_finite_value_without_a_complete_row(gap):
+    a = np.array([[1., gap], [np.nan, 2.]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        doc = bs.signal_doc({"name": "qpos"}, a, np.arange(2) / 30, 1)
+    assert doc == {"name": "qpos", "dims": 2, "frames": 2, "partial_reading_frames": 2,
+                   "constant": True, "value": [1., 2.]}
+
+
 def test_a_value_with_no_reading_is_preserved_without_a_warning():
     a = np.array([[1., np.nan], [2., np.nan], [3., np.nan]])
     ep = _episode(a)
