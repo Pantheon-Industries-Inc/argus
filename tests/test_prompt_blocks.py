@@ -540,6 +540,30 @@ def test_a_rate_is_stated_only_below_nine_tenths_of_the_frame_rate():
         assert "recorded at" not in line(rate_hz, fps)
 
 
+@pytest.mark.parametrize("source", ["pressure/force", "/left/tactile force"])
+def test_a_coarse_variation_rate_is_an_estimate_from_assumed_placement(source):
+    ep, pl = CASES["teleop_video_only"]()
+    name = source + " variation within each frame"
+    ep["signals"] = {name: np.arange(450, dtype=float)[:, None] / 100}
+    ep["signal_meta"] = {name: {"rate_hz": 20.0, "aligned_by": "coarse clock",
+                                "variation_of": source}}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    line = next(line for line in episode.splitlines() if line.startswith("  " + name + " ("))
+    assert "estimated at 20 Hz from assumed placement" in line
+    assert "recorded at" not in line
+    assert "tied readings placed within each stamp interval as an assumption" in line
+
+
+@pytest.mark.parametrize("aligned_by", [None, "row per frame", "assumed start"])
+def test_other_signal_alignment_rate_descriptions_stay_exact(aligned_by):
+    from label import signals as sg
+    suffix = {None: "", "row per frame": (
+        ", placed one row per frame as it has as many rows as the video has frames"),
+        "assumed start": ", placed from both starts as no clock is shared"}[aligned_by]
+    assert sg.describe("force", np.arange(3)[:, None], rate_hz=15, fps=30, aligned_by=aligned_by) == (
+        "  force (1 value, recorded at 15 Hz" + suffix + "): 0 to 2")
+
+
 def test_the_values_at_each_instant_keep_what_moves_most_and_name_the_rest():
     """60 signals do not fit: every row of the 25 that sweep is kept, the readout stays in its budget, and each of the
     35 that only jitter is either shown whole or named with its size and rate in one line, never dropped silently.

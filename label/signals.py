@@ -537,7 +537,7 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
     to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it has as many rows as the
     video has frames (ALIGNED_ROWS), or tied readings placed within each recorded stamp interval as an assumption
-    (COARSE_CLOCK), and the range each value takes, up to PER_VALUE_MAX
+    (COARSE_CLOCK, whose rate is estimated from that placement), and the range each value takes, up to PER_VALUE_MAX
     values (for a wider array, the range of all its values together)."""
     a = _float(a)          # as stored: its smallest and largest readings are exact in any precision
     d = a.shape[1]
@@ -546,7 +546,9 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     if names and len(names) == d and d <= PER_VALUE_MAX:
         what += " (" + ", ".join(names) + ")"
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
-        what += f", recorded at {_num(float(rate_hz))} Hz"
+        rate = _num(float(rate_hz))
+        what += (f", estimated at {rate} Hz from assumed placement" if aligned_by == COARSE_CLOCK else
+                 f", recorded at {rate} Hz")
     if aligned_by == ALIGNED_ROWS:
         what += ", placed one row per frame as it has as many rows as the video has frames"
     elif aligned_by == COARSE_CLOCK:

@@ -1519,6 +1519,9 @@ def test_hdf5_commands_with_coarse_stamps_stay_signals_beside_precise_state(tmp_
         text = "\n".join(c["text"] for c in req["content"] if c["type"] == "text")
         line = next(line for line in text.splitlines() if line.startswith("  commands/action ("))
         assert "tied readings placed within each stamp interval as an assumption" in line
+        if step == 1.0:
+            assert "estimated at 23.3 Hz from assumed placement" in line
+            assert "recorded at" not in line
     else:
         assert not any(s["name"] == "commands/action" for s in ctx.get("signals", []))
 
