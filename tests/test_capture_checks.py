@@ -337,6 +337,25 @@ def test_a_note_names_the_camera_it_was_not_run_on_after_the_board_build():
     assert capture_names(board) == board
 
 
+def test_a_notes_reason_and_the_camera_it_was_not_run_on_read_as_sentences():
+    """A note with a reason of its own (one not confirmed on the verified datasets of its setup) and a camera it was
+    not run on had the two run together, the second lowercase with no full stop. Each is a sentence."""
+    from board.build import capture_names
+    f = _two_cameras(True)
+    f["cams"]["left"]["stds"] = np.full(f["T"], 1.0)
+    f["cams"]["right"]["stds"] = None
+    a = cq.assess(f)
+    rec = cq.format_result(a)
+    for r in (rec, capture_names(rec)):
+        notes = [x for x in r["checks"] if x.get("shown_as") == "note" and "camera right" in (x.get("why") or "")]
+        assert notes, r["checks"]
+        for row in notes:
+            parts = [p for p in row["why"].split(". ") if p]
+            assert row["why"].endswith(".") and all(p[0].isupper() for p in parts), row["why"]
+            if cq.note_why(row["check"], "handheld_gripper"):
+                assert row["why"].startswith(cq.note_why(row["check"], "handheld_gripper").rstrip(".")), row["why"]
+
+
 def test_a_camera_that_crashes_keeps_the_defects_already_found_on_it():
     """The right camera's file decodes 60 of its 120 frames with an error, then its record breaks a later check: the
     decode failure and the short frame count found before the crash are still reported with the decoder's error, and

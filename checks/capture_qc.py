@@ -1315,6 +1315,12 @@ def note_why(check: str, rig: str) -> str:
             f"verified {SETUP_WORDS.get(rig, rig.replace('_', ' '))} datasets.")
 
 
+def note_row_why(check: str, rig: str, unchecked: str | None) -> str:
+    """A note row's reason: why it is a note (note_why) and the cameras it was not run on (unchecked), each a
+    sentence, so the second never runs on lowercase after the first's full stop."""
+    return " ".join(_sentence(x) for x in (note_why(check, rig), unchecked) if x)
+
+
 def _sentence(t: str) -> str:
     """A note's lead or evidence as one sentence: capitalized, its trailing colon or full stop made one full stop."""
     t = t.strip().rstrip(":.").strip()
@@ -1360,7 +1366,7 @@ def refresh_notes(cq: dict) -> dict:
                                      f"interval{'' if m[3] == '1' else 's'}", ev)
         notes.append({**n, **note_record(n["check"], ev, rig)})
     # a note row's reason is note_why followed by the cameras it was not run on (unchecked), kept apart for this
-    rows = [{**r, "why": " ".join(x for x in (note_why(r["check"], rig), r.get("unchecked")) if x)}
+    rows = [{**r, "why": note_row_why(r["check"], rig, r.get("unchecked"))}
             if isinstance(r, dict) and r.get("shown_as") == "note" and r.get("why") else r
             for r in cq.get("checks") or []]
     return {**cq, **({"notes": notes} if "notes" in cq else {}), **({"checks": rows} if "checks" in cq else {})}
@@ -1396,7 +1402,7 @@ def format_result(a: dict) -> dict:
             listing.append({**row, "status": "fired", "shown_as": "issue", "events": len(r["events"]),
                             **({"why": r["why"]} if r.get("why") else {})})
             continue
-        why = " ".join(x for x in (note_why(check, rig), r.get("why")) if x)
+        why = note_row_why(check, rig, r.get("why"))
         for e in r["events"]:
             notes.append(note_record(check, e["evidence"], rig))
         listing.append({**row, "status": "fired", "shown_as": "note", "events": len(r["events"]),

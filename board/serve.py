@@ -3168,7 +3168,7 @@ function checksSection(d) {
         : c.status === 'errored' ? 'err' : 'na',
       text: c.status === 'fired' ? [...new Set((c.shown_as === 'issue' ? flags[c.check] : notes[c.check]) || [])]
         .concat(c.shown_as === 'note' && c.why && (cq.notes || []).some(x => x.check === c.check && x.evidence)
-          ? [c.why] : c.shown_as === 'issue' && c.why ? [asSentence(c.why)] : []).join(' ')
+          ? [asSentence(c.why)] : c.shown_as === 'issue' && c.why ? [asSentence(c.why)] : []).join(' ')
         : c.status === 'errored' && c.why ? asSentence(c.why) : ''}));
     // a check that stopped with an error is shown with the ones that fired, before the full list
     const fired = all.filter(c => c.st === 'issue' || c.st === 'note' || c.st === 'err');

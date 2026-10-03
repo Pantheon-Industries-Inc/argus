@@ -24,8 +24,11 @@ const piece = (name) => {
 const stubs = 'let CHECKS_OPEN = false; const famName = s => s;'
   + 'const OUR_CHECKS = [["stream_pairing", "crossed", "streams-crossed"],'
   + '["recorded_jumps", "flagged", "recorded-jump"]];'
-  + 'const sentences = t => String(t); const asSentence = t => String(t);';
-const T = new Function(stubs + piece('esc') + piece('checksSection') + 'return {checksSection};')();
+  + 'const sentences = t => String(t);';
+// the page's own asSentence, the helper every reason is worded through
+const s0 = src.indexOf('const asSentence = '), s1 = src.indexOf('const sentences = ');
+if (s0 < 0 || s1 < s0) { console.log('no asSentence in the page'); process.exit(1); }
+const T = new Function(stubs + src.slice(s0, s1) + piece('esc') + piece('checksSection') + 'return {checksSection};')();
 
 let bad = 0;
 const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };
@@ -63,4 +66,12 @@ check(placedRow.includes('>not applicable<') && hp.includes('Contacts c1 and c2 
   && hp.includes('not recorded times'), 'contacts placed from both starts are named as not judged for timing');
 check(/0 of 3 noted/.test(hp), 'the contact checks\' line counts only the checks that ran: '
   + (hp.match(/\d+ of \d+ noted/) || [''])[0]);
+// a note's reason is worded through the same sentence helper as an issue's, so a reason that came lowercase and with no
+// full stop reads as a sentence
+const hn = T.checksSection({_rig: 'teleop_arms', dataset_checks: {capture_qc: {checks: [
+  {check: 'video_low_contrast', name: 'Low contrast', group: 'Video', status: 'fired', shown_as: 'note', events: 1,
+   why: 'it was not run on every camera, as the check stopped with an error (camera right: TypeError: x)'}],
+  flags: [], notes: [{check: 'video_low_contrast', evidence: 'Camera left is nearly uniform.'}]}}});
+check(hn.includes('Camera left is nearly uniform. It was not run on every camera, as the check stopped with an error '
+  + '(camera right: TypeError: x).'), 'a note\'s reason reads as a sentence');
 process.exit(bad ? 1 : 0);
