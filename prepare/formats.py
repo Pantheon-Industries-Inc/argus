@@ -3731,6 +3731,9 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
 SIGNAL_MIN_HZ = 1.0
 SIGNAL_SKIP_PARTS = {"header", "timestamp", "stamp"}      # a message's own time and sequence bookkeeping
 STATE_EDGE_SLACK_S = 0.5
+# a gap between two readings is a stop only when it is also longer than this many of the stream's own median steps:
+# a 30 Hz recorder that stops for 2 s is caught, and an arm logged at 1 Hz is read as it was before (fill_rows)
+STATE_STOP_STEPS = 3
 
 
 def lerp_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -3742,17 +3745,20 @@ def lerp_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 def fill_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray | None, tuple[float, float] | None]:
     """(y's rows at times q by lerp_rows, None), or (None, (start, end) of the longest gap) when two readings in a row
-    leave more than STATE_EDGE_SLACK_S of q's span without a reading, or the first or last reading is further than
-    that from q's ends. A gap is measured inside the footage, so a message latched seconds before the first frame
-    does not make the stretch before the footage a gap. A straight line across a recorder that stopped for 2 s would
-    be shown as recorded motion, and a reading held past the ends as stillness, where no still span can tell, so a
-    state is filled across no longer gap than the slack its edges are allowed. Both state readers place an arm this
-    way: an MCAP arm's channel (joint_state) and an HDF5 state's frames with a reading (h5_state)."""
+    leave more of q's span without a reading than both STATE_EDGE_SLACK_S and STATE_STOP_STEPS of the stream's median
+    step, or the first or last reading is further than STATE_EDGE_SLACK_S from q's ends. A gap is measured inside the
+    footage, so a message latched seconds before the first frame does not make the stretch before the footage a gap.
+    A straight line across a recorder that stopped for 2 s would be shown as recorded motion, and a reading held past
+    the ends as stillness, where no still span can tell, so a state is filled across no longer gap than the slack its
+    edges are allowed, unless the stream always reads that far apart (an arm logged at 1 Hz). Both state readers place
+    an arm this way: an MCAP arm's channel (joint_state) and an HDF5 state's frames with a reading (h5_state)."""
     t = np.asarray(t, dtype=np.float64)
     q = np.asarray(q, dtype=np.float64)
     if len(t) and len(q):
         lo, hi = np.maximum(t[:-1], q[0]), np.minimum(t[1:], q[-1])
-        gaps = [(float(lo[i]), float(hi[i])) for i in np.flatnonzero(hi - lo > STATE_EDGE_SLACK_S)]
+        step = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+        longest = max(STATE_EDGE_SLACK_S, STATE_STOP_STEPS * step)
+        gaps = [(float(lo[i]), float(hi[i])) for i in np.flatnonzero(hi - lo > longest)]
         gaps += [(float(q[0]), float(t[0]))] if t[0] > q[0] + STATE_EDGE_SLACK_S else []
         gaps += [(float(t[-1]), float(q[-1]))] if t[-1] < q[-1] - STATE_EDGE_SLACK_S else []
         if gaps:

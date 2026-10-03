@@ -1101,6 +1101,17 @@ def test_a_long_gap_in_an_arms_readings_is_not_drawn_as_motion():
     state, _, note = f.joint_state({"/left/joint_state": {"t": late, "pos": rows},
                                     "/right/joint_state": {"t": t, "pos": pos}}, q)
     assert note is None and state.shape == (300, 14), note
+    # a gap is a stop only when it is also longer than STATE_STOP_STEPS of the stream's own steps: an arm logged at
+    # 1.5 Hz is read as before, while a 30 Hz recorder that stops for 2 s is still not drawn as motion
+    slow = np.arange(0, 10.01, 0.66)
+    rows = np.stack([np.sin(slow + j) for j in range(7)], axis=1)
+    state, _, note = f.joint_state({"/left_arm/joint_states": {"t": slow, "pos": rows}}, q)
+    assert note is None and state.shape == (300, 7), note
+    hz30 = np.arange(-0.05, 10.05, 1 / 30)
+    hz30 = hz30[(hz30 < 4.0) | (hz30 > 6.0)]
+    rows = np.stack([np.sin(hz30 + j) for j in range(7)], axis=1)
+    state, _, note = f.joint_state({"/left_arm/joint_states": {"t": hz30, "pos": rows}}, q)
+    assert state is None and "has no reading from 4.0 s to 6.0 s" in note, note
     for first, want in ((0.3, None), (0.8, (0.0, 0.8))):
         tt = np.concatenate([[-3.0], np.arange(first, 10.0, 0.01)])
         assert f.fill_rows(q, tt, np.zeros((len(tt), 1)))[1] == want, first
