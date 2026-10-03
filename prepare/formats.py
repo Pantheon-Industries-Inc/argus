@@ -1811,6 +1811,38 @@ def frame_times(video: Path, n: int, depth: bool = False) -> np.ndarray | None:
     return a * (1e-9 if a[0] > 1e17 else 1e-6 if a[0] > 1e14 else 1e-3 if a[0] > 1e11 else 1.0)
 
 
+TABLE_CHUNK_ROWS = 200_000
+TABLE_STREAM_MAX_ROWS = 2_000_000   # a table longer than this keeps every so many rows, still finer than the frames
+
+
+def read_number_table(p: Path):
+    """(a CSV or TSV table, the stride its rows were kept at, how many rows it has). A table up to TABLE_MAX_BYTES is
+    read whole; a larger one in chunks of TABLE_CHUNK_ROWS, keeping the columns numeric in its first chunk (a cell
+    that is not a number is NaN), and once more than TABLE_STREAM_MAX_ROWS rows are kept, every other kept row is
+    dropped and the stride doubled, so memory stays bounded and the rows stay spread over the whole recording. A
+    table over 20 MB beside the videos had been ignored."""
+    import pandas as pd
+    sep = "\t" if Path(p).suffix.lower() == ".tsv" else ","
+    if Path(p).stat().st_size <= TABLE_MAX_BYTES:
+        df = pd.read_csv(p, sep=sep)
+        return df, 1, len(df)
+    parts, cols, stride, rows, kept = [], None, 1, 0, 0
+    for ch in pd.read_csv(p, sep=sep, chunksize=TABLE_CHUNK_ROWS):
+        if cols is None:
+            cols = list(ch.select_dtypes("number").columns)
+        start = (-rows) % stride
+        rows += len(ch)
+        ch = ch[cols].apply(pd.to_numeric, errors="coerce").astype(np.float32).iloc[start::stride]
+        parts.append(ch)
+        kept += len(ch)
+        while kept > TABLE_STREAM_MAX_ROWS:
+            # keep every other row of what is kept so far, counted across the parts as if they were one table
+            joined = pd.concat(parts, ignore_index=True).iloc[::2]
+            parts, kept, stride = [joined], len(joined), stride * 2
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    return df, stride, rows
+
+
 def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) -> Signals:
     """The numbers of CSV tables beside an episode's videos as signals, one per table under its own name (the file's
     name without its take: "traj"), its numeric columns as the named values. A table is placed on the anchor camera's
@@ -1824,10 +1856,14 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
     t_vid = t_vid - t_vid[0]
     for p in paths:
         try:
-            df = pd.read_csv(p, sep="\t" if p.suffix.lower() == ".tsv" else ",")
+            df, stride, rows = read_number_table(p)
         except Exception:
             out.left_out.append((p.name, "could not be read as a table"))
             continue
+        if stride > 1:
+            out.issues.append({"kind": "table_downsampled", "what": f"{p.name} has {rows:,} rows, more than the "
+                                                                    f"{TABLE_STREAM_MAX_ROWS:,} read whole, so every "
+                                                                    f"{stride}th row was read"})
         num = df.select_dtypes("number")
         if num.shape[1] == 0 or len(num) < 2:
             continue                      # text only: the uploader's notes, read by annotation_tables
@@ -1915,8 +1951,7 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
     csvs = {}
     for it in items:
         d = Path(it["files"][0]).parent
-        csvs.setdefault(d, sorted(p for p in d.glob("*") if p.suffix.lower() in (".csv", ".tsv")
-                                  and p.stat().st_size <= TABLE_MAX_BYTES))
+        csvs.setdefault(d, sorted(p for p in d.glob("*") if p.suffix.lower() in (".csv", ".tsv")))
     eps_in = {}
     for it in items:
         eps_in[Path(it["files"][0]).parent] = eps_in.get(Path(it["files"][0]).parent, 0) + 1
@@ -5346,25 +5381,57 @@ TABLE_MAX_ROWS_PER_EPISODE = 20
 
 
 def annotation_tables(root: Path) -> list[tuple[str, list[dict]]]:
-    """[(file name, rows)] of every table in the upload (CSV, TSV, JSON Lines, at most TABLE_MAX_BYTES each): a
-    dataset's per-episode metadata kept beside its data (OpenTouch's final_annotations/eat_ygf_p1_merged.csv, one row
-    per clip with its object, action, grip and description)."""
+    """[(file name, rows)] of every table in the upload (CSV, TSV, JSON Lines): a dataset's per-episode metadata kept
+    beside its data (OpenTouch's final_annotations/eat_ygf_p1_merged.csv, one row per clip with its object, action,
+    grip and description). A table over TABLE_MAX_BYTES had been ignored; its rows that hold text are read now, up to
+    TABLE_NOTE_ROWS_MAX of them."""
     import csv
     out = []
     for p in files_under(root):
-        if p.suffix.lower() not in TABLE_EXT or p.stat().st_size > TABLE_MAX_BYTES:
+        if p.suffix.lower() not in TABLE_EXT:
             continue
+        big = p.stat().st_size > TABLE_MAX_BYTES
         try:
             if p.suffix.lower() == ".jsonl":
-                rows = [r for r in read_jsonl(p) if isinstance(r, dict)]
+                rows = [r for r in read_jsonl(p) if isinstance(r, dict)] if not big else \
+                    [r for r in _jsonl_rows(p) if _has_text(r)][:TABLE_NOTE_ROWS_MAX]
             else:
                 with open(p, newline="", errors="replace") as fh:
-                    rows = list(csv.DictReader(fh, delimiter="\t" if p.suffix.lower() == ".tsv" else ","))
+                    reader = csv.DictReader(fh, delimiter="\t" if p.suffix.lower() == ".tsv" else ",")
+                    # a table over TABLE_MAX_BYTES is read row by row for the rows that hold text, the ones that can
+                    # name an episode; a large table of numbers is a recording (table_signals), not notes
+                    rows = list(reader) if not big else [r for _, r in zip(range(TABLE_NOTE_ROWS_MAX), (
+                        r for r in reader if _has_text(r)))]
         except Exception:
             continue
         if rows:
             out.append((p.relative_to(root).as_posix(), rows))
     return out
+
+
+TABLE_NOTE_ROWS_MAX = 100_000
+
+
+def _jsonl_rows(p: Path):
+    with open(p, errors="replace") as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(r, dict):
+                yield r
+
+
+def _has_text(row: dict) -> bool:
+    """Whether a table row holds a cell of text that is not a number (a name, a task, a note)."""
+    for v in row.values():
+        if isinstance(v, str) and v.strip():
+            try:
+                float(v)
+            except ValueError:
+                return True
+    return False
 
 
 def table_rows_for(tables: list, item: dict) -> list[dict]:

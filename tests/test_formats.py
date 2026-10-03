@@ -2162,3 +2162,36 @@ def test_a_lerobot_depth_stream_is_never_silently_left_out():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _a_lerobot_depth_stream_is_never_silently_left_out(Path(t))
+
+
+def _a_table_over_the_size_limit_is_read(tmp_path):
+    """A CSV table over TABLE_MAX_BYTES beside an episode's videos had been ignored, as signals and as notes. It is read
+    in chunks, and past TABLE_STREAM_MAX_ROWS rows every so many rows are kept (still finer than the frames), which is
+    a data issue; its rows that hold text are read as notes."""
+    import numpy as np
+    root = tmp_path / "upload"
+    root.mkdir()
+    _clip(root / "top.mp4", 30)
+    t = np.arange(3000) / 1000
+    lines = ["time,force_x,force_y,note"] + [f"{x:.4f},{np.sin(x):.5f},{np.cos(x):.5f},{'grasp' if k == 7 else ''}"
+                                             for k, x in enumerate(t)]
+    (root / "traj.csv").write_text("\n".join(lines) + "\n")
+    saved = f.TABLE_MAX_BYTES, f.TABLE_STREAM_MAX_ROWS
+    f.TABLE_MAX_BYTES, f.TABLE_STREAM_MAX_ROWS = 1000, 400
+    try:
+        rep = f.convert(root, "ego_head", tmp_path / "eps", "test", 900)
+        tables = dict(f.annotation_tables(root))
+    finally:
+        f.TABLE_MAX_BYTES, f.TABLE_STREAM_MAX_ROWS = saved
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "top")
+    sig = {s["name"]: s for s in ctx.get("signals") or []}
+    assert "traj" in sig and sig["traj"]["names"] == ["force_x", "force_y"], ctx.get("signals")
+    assert _issues(ctx, "table_downsampled"), ctx.get("reader_issues")
+    assert [r["note"] for r in tables.get("traj.csv") or []] == ["grasp"], tables
+
+
+def test_a_table_over_the_size_limit_is_read():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_table_over_the_size_limit_is_read(Path(t))
