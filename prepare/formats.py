@@ -1278,11 +1278,13 @@ def short_rising(values) -> bool:
     return 2 <= len(x) < COUNTER_MIN_MESSAGES and bool((np.diff(x) >= 0).all()) and x[-1] > x[0]
 
 
-def is_named_clock(name, values) -> bool:
+def is_named_clock(name, values, row_clock: bool = False) -> bool:
     """Whether a column is a clock: its name says time (is_time_name) and it rises like one (is_clock), or, with too
     few readings to judge, never falls and rises (a slow sensor's own stamp at 1.7 Hz). Repeated stamps in a
-    monotonic row clock are coarse timing (coarse_rows), still a clock rather than a numeric signal."""
-    return is_time_name(name) and (is_clock(values) or short_rising(values) or coarse_rows(values)[1] is not None)
+    monotonic placement clock are coarse timing (coarse_rows) only when row_clock says this field places rows.
+    A multiplexed device stamp stays bookkeeping within its own sensor group."""
+    return is_time_name(name) and (is_clock(values) or short_rising(values)
+                                   or (row_clock and coarse_rows(values)[1] is not None))
 
 
 COUNTER_NOTE = "counts rows one by one, so it is bookkeeping"
@@ -2363,7 +2365,7 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             out.left_out.append((p.name, f"one row ({vals}), so a setting or a report rather than a reading over time"
                                  if len(num) else "no rows"))
             continue
-        clocks = [c for c in num.columns if is_named_clock(c, num[c].to_numpy())]
+        clocks = [c for c in num.columns if is_named_clock(c, num[c].to_numpy(), row_clock=True)]
         tcol = clocks[0] if clocks else None
         skip = [c for c in num.columns if c in clocks or SIGNAL_SKIP.search(str(c))]
         counters = [c for c in num.columns if c not in skip and is_counter(num[c].to_numpy())]
@@ -3755,9 +3757,9 @@ COARSE_CLOCK = "coarse clock"   # tied rows are placed within their stamp interv
 
 
 def coarse_rows(t: np.ndarray) -> tuple[np.ndarray, float | None]:
-    """Times for a single row stream, and its coarse resolution when adjacent rows share a rising stamp. Repeated
-    MCAP channel log times are not row times and never call this rule. Tied rows keep order within the interval to
-    the next stamp, evenly spaced as an assumption; the last interval uses the median distinct step. This preserves
+    """Times for a single row stream, and its coarse resolution when adjacent rows share a rising stamp. Only one
+    channel and value group calls this rule, never times aggregated across MCAP channels. Tied rows keep order within
+    the interval to the next stamp, evenly spaced as an assumption; the last interval uses the median distinct step. This preserves
     readings without inventing precise recorded instants or treating a coarse second as a gap with no rows."""
     t = np.asarray(t, dtype=np.float64)
     d = np.diff(t)
@@ -4836,7 +4838,7 @@ def _mcap_stream(path: Path, topics: set | None = None, damaged: list | None = N
 
 
 def mcap_messages(fh, path: Path, topics, damaged: list | None = None):
-    """Messages in indexed log order with CRC validation, or bounded streaming recovery when the index or a chunk
+    """Messages in indexed log order with CRC validation, or record recovery when the index or a chunk
     fails. Recovery retains readable records before and after damage and yields no indexed message twice."""
     from collections import Counter
     import zlib
@@ -5594,7 +5596,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
     sparse = []
     for name, r in rows.items():
-        t = np.asarray(r["t"])
+        t, coarse = coarse_rows(np.asarray(r["t"]))
         if not r["set"] or not r["d"] or span <= 0:
             continue
         some = ""
@@ -5615,6 +5617,9 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
         a, var, gaps = place_on_frames(t, v, q)
         out.add(name, a, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
         out.meta[name]["rate_hz"] = round(rate, 2)
+        if coarse is not None:
+            out.meta[name]["aligned_by"] = COARSE_CLOCK
+            out.issues.append(coarse_issue(name, coarse))
         if CALIBRATION_SCHEMA.search(kinds.get(r["topic"], "")) or CALIBRATION_TOPIC.search(r["topic"]):
             out.no_gaps.add(name)
         if r.get("kind"):
@@ -5659,6 +5664,12 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
         if kind != "joints":
             return None, None, StateNote(why or ("Labelled from the cameras, because the recorded arm channels name "
                                                  "their values as a pose, not six joints and a gripper."), "layout")
+    coarse = [st[s] for s in order if coarse_rows(streams[st[s]]["t"])[1] is not None]
+    if coarse:
+        return None, None, StateNote("Labelled from the cameras, because " + ", ".join(coarse)
+                                     + " has coarse clock stamps shared by several readings; placing them within "
+                                     "each stamp interval needs an assumed alignment, never precise arm state.",
+                                     "assumed_clock")
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
 
     def covers(topic):
@@ -5685,7 +5696,8 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
                                      f"{gap_words(gap[1], float(q[0]))}.", "short")
     state = np.concatenate([r for r, _ in rows], axis=1)
     action = None
-    if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS and covers(act[s]) for s in order):
+    if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS and covers(act[s])
+           and coarse_rows(streams[act[s]]["t"])[1] is None for s in order):
         cmd = [fill(act[s])[0] for s in order]
         action = None if any(c is None for c in cmd) else np.concatenate(cmd, axis=1)
     return state, action, None
@@ -6736,9 +6748,10 @@ def state_blockers(bad: list[tuple[str, str]], arms: list[tuple[str, list[str]]]
         return StateNote(f"{first} {then}", first.why)
     prior = first or then
     if outside:
+        why = "short" if all(reason.endswith(OUTSIDE_FOOTAGE) for _, reason, _ in outside) else "layout"
         note = StateNote("Labelled from the cameras, because " + "; ".join(
             f"{name} records an arm ({', '.join(chans)}), but {why}" for name, why, chans in outside)
-            + ". A state of the other files would lack that arm, so every arm channel is given as a signal.", "short")
+            + ". A state of the other files would lack that arm, so every arm channel is given as a signal.", why)
         return StateNote(f"{prior} {note}", prior.why) if prior else note
     return prior
 

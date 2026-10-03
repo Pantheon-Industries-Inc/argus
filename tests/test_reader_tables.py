@@ -1391,3 +1391,57 @@ def test_mcap_frames_sharing_stamps_keep_raw_capture_times_separate_from_mux_pts
         assert f.nearest(z["exo"], z["exo"]).tolist() == [0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12,
                                                          14, 14, 16, 16, 18, 18]
     assert _issues(ctx, "camera_timestamp_repeated")
+
+
+def test_multiplexed_device_clocks_keep_their_sensor_names_when_left_out(tmp_path):
+    from mcap.writer import Writer
+    p = tmp_path / 'imu.mcap'
+    with p.open('wb') as fh:
+        w = Writer(fh)
+        w.start()
+        schema = w.register_schema(name='imu', encoding='jsonschema', data=b'{}')
+        ch = w.register_channel(topic='/imu', message_encoding='json', schema_id=schema)
+        for i in range(80):
+            t = int((T0 + i / 40) * 1e9)
+            w.add_message(ch, t, json.dumps({'type': i % 2 + 1, 'ts': i // 2,
+                                           'x': float(np.sin(i))}).encode(), publish_time=t)
+        w.finish()
+    out = f.mcap_signals([p], T0 + np.arange(60) / 30)
+    assert {n for n, _ in out.left_out} == {'/imu (type 1) ts', '/imu (type 2) ts'}
+    assert not _issues(out, 'signal_clock_coarse')
+
+
+@pytest.mark.parametrize('step,leader', [(0.1, False), (1.0, False), (1.0, True)])
+def test_coarse_mcap_row_times_need_assumed_alignment_without_false_gaps(tmp_path, step, leader):
+    from mcap.writer import Writer
+    def change(d):
+        p = d / ('leader_left.mcap' if leader else 'yam_left.mcap')
+        with p.open('wb') as fh:
+            w = Writer(fh)
+            w.start()
+            schema = w.register_schema(name='arm', encoding='jsonschema', data=b'{}')
+            ch = w.register_channel(topic='/leader_left/joint_state' if leader else '/yam_left/joint_state',
+                                    message_encoding='json', schema_id=schema)
+            for i in range(66):
+                t = int((T0 + np.floor(i / 30 / step + 1e-5) * step) * 1e9)
+                w.add_message(ch, t, json.dumps({'joint_pos': [float(np.sin(i))] * 6,
+                                                'gripper_pos': [0.5]}).encode(), publish_time=t)
+            w.finish()
+    ctx = _recorder(tmp_path, change)
+    if leader:
+        assert ctx['state_kind'] == 'joints'
+        assert not (ctx['_ep'] / 'action.npy').exists()
+    else:
+        assert ctx['state_kind'] == 'none' and ctx['state_why'] == 'assumed_clock'
+        assert 'coarse' in ctx['state_note']
+    assert _issues(ctx, 'signal_clock_coarse')
+    assert not _issues(ctx, 'signal_gap') and not _issues(ctx, 'signal_partial_span')
+    coarse = [s for s in ctx['signals'] if s.get('aligned_by') == 'coarse clock']
+    assert any('joint_pos' in s['name'] for s in coarse)
+
+
+def test_unplaced_arm_ownership_is_a_layout_reason_rather_than_missing_time():
+    note = f.state_blockers([], [], 'the other file',
+                            [('arm.mcap', 'several episodes share its folder and its name gives none of their takes',
+                              ['/arm/joint_state'])])
+    assert note.why == 'layout' and 'several episodes' in str(note)
