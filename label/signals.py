@@ -33,6 +33,7 @@ A signal is read by how its numbers behave, and only whether it measures touch a
 """
 from __future__ import annotations
 
+import re
 import warnings
 
 import numpy as np
@@ -45,6 +46,25 @@ SMALL = 4
 # widest a prompt showed value by value before arrays were read as wholes, so a 14-joint action or a 9-value camera
 # matrix keeps every number, while a pressure map or hand landmarks get the pooled range of all their values
 PER_VALUE_MAX = 64
+# The values at each instant follow describe for a flat vector of up to PER_VALUE_MAX values whose values the dataset
+# names, or whose own name says it holds joints or a state: one row per value under its own name. A humanoid's 26
+# joints and a base's x, y, yaw, vx, wz reached that readout as one "largest change" or "total activity" row while
+# it went value by value only up to SMALL. A map (a 2 D shape, whose strongest cell says more than its cells one by
+# one) and a long unnamed vector (audio samples) keep their summary rows.
+JOINT_LIKE = re.compile(r"joint|qpos|state", re.I)
+# A signal recorded below this share of the frame rate says its rate: a 6 Hz glove otherwise reads as if it were
+# sampled every frame.
+RATE_SLOWER = 0.9
+
+
+def per_value(name: str, d: int, shape=None, names=None) -> bool:
+    """Whether a signal of d values per frame gets one row per value at each instant (JOINT_LIKE above)."""
+    if d <= SMALL:
+        return True
+    if d > PER_VALUE_MAX or (shape and len(shape) > 1):
+        return False
+    return bool(names and len(names) == d) or bool(JOINT_LIKE.search(name))
+
 MERGE_GAP_S = 0.15
 HOLD_BAND = 0.02
 SETTING_STATES = 3        # a signal of several values with this many distinct readings or fewer is a setting
@@ -291,11 +311,11 @@ def quiet_spans(arrs: dict, need: int) -> list[tuple[int, int]]:
 
 def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None, rest=None,
                  swing=None) -> list[tuple[str, list[str]]]:
-    """[(row label, one value per sampled instant)] for one signal: its values when it has SMALL or fewer, else the
-    numbers that summarise the array (module docstring). "-" is no reading at that instant."""
+    """[(row label, one value per sampled instant)] for one signal: its values when it gets one row per value
+    (per_value), else the numbers that summarise the array (module docstring). "-" is no reading at that instant."""
     a = np.asarray(a, dtype=np.float64)
     d = a.shape[1]
-    if d <= SMALL:
+    if per_value(name, d, shape, names):
         labels = names if names and len(names) == d else ([""] if d == 1 else [f"[{i}]" for i in range(d)])
         return [(f"{name}{(' ' + lb) if lb else ''}", [_num(a[k, i]) for k in ks]) for i, lb in enumerate(labels)]
     rows = []
@@ -324,8 +344,10 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
     return rows
 
 
-def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None) -> str:
-    """One line: the signal's name, its shape or value names, and the range each value takes, up to PER_VALUE_MAX
+def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None, rate_hz=None,
+             fps=None) -> str:
+    """One line: the signal's name, its shape or value names, and its rate when it is recorded slower than the frames
+    (rate_hz below RATE_SLOWER of fps), and the range each value takes, up to PER_VALUE_MAX
     values (for a wider array, the range of all its values together)."""
     a = np.asarray(a, dtype=np.float64)
     d = a.shape[1]
@@ -333,6 +355,8 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
             f"{d} value{'s' if d > 1 else ''}")
     if names and len(names) == d and d <= PER_VALUE_MAX:
         what += " (" + ", ".join(names) + ")"
+    if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
+        what += f", recorded at {_num(float(rate_hz))} Hz"
     head = f"  {name} ({what})"
     if not np.isfinite(a).any():
         return f"{head}: no reading"

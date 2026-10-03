@@ -402,3 +402,37 @@ def test_a_signal_is_quiet_by_its_own_step_so_the_length_of_the_recording_does_n
 
 def test_a_state_shorter_than_a_still_span_gives_none_whatever_its_width():
     assert ms.still_spans(np.zeros((10, 6))) == []
+
+
+HUMANOID = ([f"{s}_arm_j{j}" for s in ("left", "right") for j in range(1, 8)]
+            + [f"{s}_hand_{f}" for s in ("left", "right") for f in ("thumb_yaw", "thumb_pitch", "index", "middle",
+                                                                     "ring", "pinky")])
+
+
+def test_a_humanoid_state_and_a_bases_odometry_are_shown_value_by_value_under_their_own_names():
+    ep, pl = CASES["teleop_video_only"]()
+    t = np.arange(450) / 30.0
+    ep["signals"] = {"observation.state": np.stack([0.3 * np.sin(0.4 * t + j) for j in range(26)], axis=1),
+                     "observation.base.odom": np.stack([0.01 * t, 0.001 * t, 0.02 * t, 0.2 + 0.1 * np.sin(t),
+                                                        0.1 * np.cos(t)], axis=1)}
+    ep["signal_meta"] = {"observation.state": {"names": HUMANOID},
+                         "observation.base.odom": {"names": ["x", "y", "yaw", "vx", "wz"]}}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    # the signal's own line already names and ranges every value since 942d399; kept here as a guard
+    assert "observation.state (26 values (left_arm_j1, left_arm_j2," in episode and "right_hand_pinky))" in episode
+    line = next(l for l in episode.splitlines() if l.startswith("  observation.state (26 values"))
+    assert "values from" not in line and line.count(" to ") == 26
+    # new: one row per value at each instant, and the state line names the joint readings
+    assert "    observation.state left_arm_j1: " in episode and "    observation.base.odom vx: " in episode
+    assert "total activity" not in episode
+    assert ("RECORDED STATE: no arm state in the layout our checks read. The joint readings it records "
+            "(observation.state) are given value by value under their own names among the other recorded signals "
+            "below.") in episode
+
+
+def test_a_signal_slower_than_the_frames_says_its_rate_and_one_at_the_frame_rate_does_not():
+    ep, pl = CASES["ego_annotated_tracks"]()
+    episode = me.build_prompt(ep, pl, cell_w=256, cell_h=144)[1]
+    assert "right_hand_landmarks (21 x 3 values, recorded at 15 Hz)" in episode
+    ep["signal_meta"]["right_hand_landmarks"]["rate_hz"] = 30.0
+    assert "recorded at" not in me.build_prompt(ep, pl, cell_w=256, cell_h=144)[1]

@@ -870,7 +870,9 @@ def _signals_table(ep: dict, pl: dict) -> str:
             still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
                                  " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else ""))
             continue
-        lines.append(sg.describe(name, a, (meta.get(name) or {}).get("shape"), (meta.get(name) or {}).get("names")))
+        m = meta.get(name) or {}
+        lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
+                                 fps=ep_fps(ep)))
     if still:
         lines.append("  The same at every frame: " + "; ".join(still))
     if pl["spans"]:
@@ -1112,7 +1114,14 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     n = _rig_nouns(r)
     ctx = ep["context"]
     if _has_signals(ep, pl):
-        return f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
+        from label import signals as sg
+        meta = ep.get("signal_meta") or {}
+        joints = [nm for nm, a in ep["signals"].items() if sg.JOINT_LIKE.search(nm)
+                  and sg.per_value(nm, np.shape(a)[1], (meta.get(nm) or {}).get("shape"),
+                                   (meta.get(nm) or {}).get("names"))]
+        return (f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
+                + (f" The joint readings it records ({', '.join(joints)}) are given value by value under their own "
+                   "names among the other recorded signals below." if joints else ""))
     src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
     if (ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS):
         return "\nRECORDED STATE: none was read from this episode, so the video is all there is."
