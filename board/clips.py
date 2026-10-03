@@ -267,14 +267,14 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
+        # A zero final packet duration hides a readable frame from the count used to slice its capture times.
+        frame_lengths(tmp)
         got = clip_frames(tmp)
         if not got:
             raise RuntimeError(f"{out_mp4.name}: no frame of {packed} decodes")
         if times is not None and len(times) >= skip + got:
             mapping = None if query_map is None else query_map - skip
             retime(tmp, times[skip:skip + got], fps, main, query_s, mapping)
-        else:
-            frame_lengths(tmp)
         os.replace(tmp, out_mp4)
     finally:
         tmp.unlink(missing_ok=True)       # a cut that failed part way leaves no half written clip behind
