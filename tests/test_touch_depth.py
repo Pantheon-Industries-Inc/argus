@@ -591,6 +591,7 @@ def test_an_hdf5_state_is_read_by_the_same_rule_as_a_lerobot_one(tmp_path):
     assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == "observations/qpos"
     z = np.load(ep / "state.npz")
     assert z["state"].shape == (n, 14) and z["action"].shape == (n, 14)
+    assert np.allclose(z["action"], q + 0.01, atol=1e-5)
     names = {s["name"] for s in ctx.get("signals") or []}
     assert "observations/qvel" in names and "observations/qpos" not in names and "action" not in names
     assert "RECORDED MOTION" in me.build_request(ep)["prompt"]
@@ -610,3 +611,80 @@ def test_an_hdf5_array_named_for_joint_positions_names_every_value_a_joint(tmp_p
     ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
     assert ctx["state_kind"] == "none" and "7 joints and no gripper" in ctx["state_note"]
     assert any(s["name"].endswith("robot_state/joint_positions") for s in ctx["signals"])
+
+
+def _aloha(n: int = 40) -> np.ndarray:
+    """Two arms of six joints and a gripper over n frames at 20 fps, each gripper closing after 1 s."""
+    t = np.arange(n) / 20.0
+    q = np.stack([0.3 * np.sin(t + j) for j in range(14)], axis=1)
+    q[:, 6] = q[:, 13] = (t > 1).astype(float)
+    return q
+
+
+def _convert(tmp_path: Path, arrays: dict) -> tuple[dict, Path]:
+    root = tmp_path / "up"
+    root.mkdir(parents=True)
+    _h5_rig(root / "episode_0.hdf5", arrays)
+    rep = formats.convert(root, "teleop_arms", tmp_path / "eps", "aloha", 900)
+    assert not rep["failed"]
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    return json.loads((ep / "context.json").read_text()), ep
+
+
+@pytest.mark.parametrize("hz, late_s", [(100, 0.0), (100, 0.06), (100, 0.3), (20, 0.2)])
+def test_an_hdf5_state_on_its_own_clock_is_placed_as_an_mcap_arm_is(tmp_path, hz, late_s):
+    """An arm logged on its own clock that starts a little after the camera leaves the first frames with no reading;
+    they hold its first reading, as joint_state places an MCAP arm's channel that starts within STATE_EDGE_SLACK_S."""
+    n, cam_ns = 40, 10**12
+    m = int(round(2.0 * hz))
+    t = np.arange(m) / hz + late_s
+    s = np.stack([0.3 * np.sin(t + j) for j in range(14)], axis=1)
+    s[:, 6] = s[:, 13] = (t > 1).astype(float)
+    ctx, ep = _convert(tmp_path, {"observations/arm/timestamps": (cam_ns + t * 1e9).astype(np.int64),
+                                  "observations/arm/qpos": s})
+    # every array sits under observations/, which h5_streams leaves off the names
+    assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == "arm/qpos"
+    z = np.load(ep / "state.npz")["state"]
+    assert z.shape == (n, 14) and np.isfinite(z).all()
+    # the first frames hold the first frame's reading (at 100 Hz, the mean of the samples in its interval)
+    assert np.allclose(z[0], s[0], atol=0.02)
+
+
+def test_an_hdf5_state_that_does_not_cover_the_footage_is_named_in_the_note(tmp_path):
+    """An arm that starts 0.7 s after the camera is past what an MCAP arm may miss: the episode is labelled from the
+    video, and the note says which array it is."""
+    hz = 100
+    t = np.arange(200) / hz + 0.7
+    s = np.stack([0.3 * np.sin(t + j) for j in range(14)], axis=1)
+    ctx, _ = _convert(tmp_path, {"observations/arm/timestamps": (10**12 + t * 1e9).astype(np.int64),
+                                 "observations/arm/qpos": s})
+    assert ctx["state_kind"] == "none" and "recorded state arm/qpos" in ctx["state_note"]
+
+
+def test_each_array_named_as_the_state_is_tried_and_the_first_one_laid_out_is_read(tmp_path):
+    """A shorter name is tried first, but seven joints (joint_pos) or 45 simulator values (states) are not the layout,
+    so ALOHA's qpos beside them is the state; alone, either is named in the note that says why it was not read."""
+    q = _aloha()
+    seven = np.stack([np.sin(np.arange(40) / 20.0 + j) for j in range(7)], axis=1)
+    sim = np.random.default_rng(1).normal(size=(40, 45))
+    for i, other in enumerate([{"joint_pos": seven}, {"states": sim}]):
+        ctx, _ = _convert(tmp_path / f"with_{i}", {"observations/qpos": q, **other})
+        assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == "observations/qpos"
+        assert set(other) <= {x["name"] for x in ctx["signals"]}
+    ctx, _ = _convert(tmp_path / "alone", {"states": sim})
+    assert ctx["state_kind"] == "none" and "45 values" in ctx["state_note"] and "array states" in ctx["state_note"]
+
+
+def test_an_array_under_an_action_group_is_never_the_state(tmp_path):
+    """DROID keeps the commanded joints in action/joint_position: a command, not the arm's state."""
+    ctx, _ = _convert(tmp_path, {"action/joint_position": _aloha()})
+    assert ctx["state_kind"] == "none" and "state_note" not in ctx
+    assert "action/joint_position" in {x["name"] for x in ctx["signals"]}
+
+
+def test_an_action_of_another_width_stays_a_signal(tmp_path):
+    """The action goes with the state only when it has the state's shape; a 7 value action beside 14 values of state
+    is something else, and stays a signal."""
+    ctx, ep = _convert(tmp_path, {"observations/qpos": _aloha(), "action": np.zeros((40, 7))})
+    assert ctx["state_kind"] == "joints" and "action" not in np.load(ep / "state.npz")
+    assert "action" in {x["name"] for x in ctx["signals"]}

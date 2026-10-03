@@ -3041,40 +3041,63 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
 # state or robot_state, or joint_positions. It is then read by the same rule as a LeRobot observation.state
 # (state_layout). An array named for joint positions names every value a joint, so DROID's seven Franka joints are not
 # taken for six joints and a gripper; robomimic's obs/robot0_joint_pos is not named as the state and stays a signal.
+# An array under a group named for the action (DROID's action/joint_position) is a command, never the state.
 H5_STATE_NAME = re.compile(r"(^|/)(qpos|state|states|robot_state|joint_positions?|joint_pos)$", re.I)
 H5_JOINT_ARRAY = re.compile(r"(^|/)joint_pos(itions?)?$", re.I)
 H5_ACTION_NAME = re.compile(r"(^|/)actions?$", re.I)
+H5_ACTION_GROUP = re.compile(r"(^|/)actions?/", re.I)
 
 
-def h5_state(signals: Signals, rig: str) -> tuple:
+def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
     """(state, action, value names, the state array's name, note) of an HDF5 episode, from its signals (h5_signals,
-    already one row per anchor frame): the array named as the state (H5_STATE_NAME, the shortest name when several
-    are), laid out by state_layout with the names the file gives its values, and the array named as the action when
-    it has the state's shape. Both leave the signals when the state is read; otherwise they stay, and note says why.
-    All None on a head camera or when no array is named as the state."""
+    already on the anchor camera's frames, at times q). The arrays named as the state (H5_STATE_NAME, outside an action
+    group) are tried shortest name first, and the first that state_layout lays out with the names the file gives its
+    values is the state; the array named as the action goes with it when it has the state's shape. A frame with no
+    reading (a clocked array that starts or ends within STATE_EDGE_SLACK_S of the footage, which h5_signals keeps) is
+    filled as joint_state fills an MCAP arm's frames (lerp_rows), so an HDF5 state is accepted wherever an MCAP one is.
+    Both leave the signals when the state is read; otherwise they stay, and note gives the first array's reason, named.
+    All None on a head camera, which has no state and no note about one, or when no array is named as the state."""
     if rig == "ego_head":
         return None, None, None, None, None
-    cands = sorted((k for k in signals if H5_STATE_NAME.search(k)), key=len)
-    if not cands:
-        return None, None, None, None, None
-    name = cands[0]
-    a = np.asarray(signals[name], dtype=np.float64)
     meta = getattr(signals, "meta", {}) or {}
-    names = (meta.get(name) or {}).get("names")
-    if names is None and H5_JOINT_ARRAY.search(name):
-        names = [f"joint {i + 1}" for i in range(a.shape[1])]
-    kind, note = state_layout(a.shape[1], rig, names)
-    if kind == "none":
-        return None, None, None, None, note
-    if not np.isfinite(a).all():
-        return None, None, None, None, f"Labelled from the video: the recorded state {name} has frames with no reading."
-    act = next((k for k in signals if H5_ACTION_NAME.search(k) and np.shape(signals[k]) == a.shape
-                and np.isfinite(np.asarray(signals[k], dtype=np.float64)).all()), None)
-    action = np.asarray(signals.pop(act), dtype=np.float64) if act else None
-    signals.pop(name)
-    for k in (name, act):
-        meta.pop(k, None)
-    return a, action, names, name, None
+    left_out = dict(getattr(signals, "left_out", []) or [])
+    named = lambda k: H5_STATE_NAME.search(k) and not H5_ACTION_GROUP.search(k)
+    cands = sorted({k for k in [*signals, *left_out] if named(k)}, key=lambda k: (len(k), k))
+
+    q = np.asarray(q, dtype=np.float64)
+
+    def filled(a):
+        # frames with no reading take the readings around them; None when no frame has a reading
+        ok = np.isfinite(a).all(axis=1)
+        if not ok.any():
+            return None
+        return a if ok.all() else lerp_rows(q, q[ok], a[ok])
+    notes = []
+    for name in cands:
+        if name not in signals:
+            notes.append(f"Labelled from the video, because the recorded state {name} could not be placed on the "
+                         f"camera's frames ({left_out[name]}).")
+            continue
+        a = np.asarray(signals[name], dtype=np.float64)
+        names = (meta.get(name) or {}).get("names")
+        if names is None and H5_JOINT_ARRAY.search(name):
+            names = [f"joint {i + 1}" for i in range(a.shape[1])]
+        kind, note = state_layout(a.shape[1], rig, names)
+        if kind == "none":
+            notes.append(f"{note} The recorded state is the HDF5 array {name}." if note else None)
+            continue
+        a = filled(a)
+        if a is None:
+            notes.append(f"Labelled from the video: the recorded state {name} has no reading on any frame.")
+            continue
+        act = next((k for k in signals if H5_ACTION_NAME.search(k) and np.shape(signals[k]) == a.shape
+                    and filled(np.asarray(signals[k], dtype=np.float64)) is not None), None)
+        action = filled(np.asarray(signals.pop(act), dtype=np.float64)) if act else None
+        signals.pop(name)
+        for k in (name, act):
+            meta.pop(k, None)
+        return a, action, names, name, None
+    return None, None, None, None, (notes[0] if notes else None)
 
 
 def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
@@ -3143,7 +3166,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if dw.close():
                 depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": source}
         signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
-        state, action, state_names, state_src, state_note = h5_state(signals, rig)
+        state, action, state_names, state_src, state_note = h5_state(signals, rig, q_abs)
         instr, notes = h5_text(f, g, st["text"])
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
@@ -3440,6 +3463,13 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
 SIGNAL_MIN_HZ = 1.0
 SIGNAL_SKIP_PARTS = {"header", "timestamp", "stamp"}      # a message's own time and sequence bookkeeping
 STATE_EDGE_SLACK_S = 0.5
+
+
+def lerp_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """y's rows, read at times t, at times q: each column linearly interpolated, and a time before the first reading or
+    after the last one holding that reading (np.interp). An arm's state is placed on the frames this way, whether its
+    readings come from an MCAP channel (joint_state) or are an HDF5 state's frames with a reading (h5_state)."""
+    return np.stack([np.interp(q, t, y[:, j]) for j in range(y.shape[1])], axis=1)
 
 
 def _msg_items(m) -> list:
@@ -3770,8 +3800,7 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
         return None, None, "Labelled from the cameras, because the recorded arm state does not cover the footage's time."
 
     def lerp(topic):
-        x, y = streams[topic]["t"], streams[topic]["pos"]
-        return np.stack([np.interp(q, x, y[:, j]) for j in range(y.shape[1])], axis=1)
+        return lerp_rows(q, streams[topic]["t"], streams[topic]["pos"])
     state = np.concatenate([lerp(st[s]) for s in order], axis=1)
     action = None
     if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS and covers(act[s]) for s in order):
