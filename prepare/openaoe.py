@@ -94,14 +94,18 @@ def recognizes(item: dict, *, original_files: set[Path] | None = None) -> bool:
     return annotation.exists() if original_files is None else annotation in original_files
 
 
-def upload_episode_name(item: dict, *, original_files: set[Path] | None = None) -> str | None:
+def upload_episode_name(item: dict, *, original_files: set[Path] | None = None,
+                        root: Path | None = None, root_name: str | None = None) -> str | None:
     """The adapter's existing clip identity, recognized from actual or trusted original annotation filenames."""
-    return Path(item["files"][0]).parent.name if recognizes(item, original_files=original_files) else None
+    if not recognizes(item, original_files=original_files):
+        return None
+    folder = Path(item["files"][0]).parent
+    return root_name if folder == root and root_name is not None else folder.name
 
 
 def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
     d = Path(item["files"][0]).parent          # the clip folder, named raw_<recording>_seg_<n>
-    extra = clip_extra(d, d.name)
+    extra = clip_extra(d, item.get("adapter_episode_name") or d.name)
     extra["source"]["upload"] = item["name"]
     if rig != "ego_head":
         extra["rig_note"] = f"the upload was marked {rig}; this dataset's clips are from a head-worn phone"

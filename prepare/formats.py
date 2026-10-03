@@ -210,7 +210,7 @@ def add_issue(ctx: dict, kind: str, what: str, camera: str | None = None, signal
 
 # ---------------------------------------------------------------- archives
 
-ARCHIVE_RE = re.compile(r"\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz)$", re.I)
+ARCHIVE_RE = re.compile(r"\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2?|tar\.xz|txz)$", re.I)
 UNPACK_MAX_BYTES = int(float(os.environ.get("UPLOAD_UNPACK_MAX_GB", 40)) * 1e9)
 UNPACK_MAX_FILES = int(os.environ.get("UPLOAD_MAX_FILES", 20000))
 
@@ -7450,7 +7450,8 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
     if ownership_context is None:
         loose = [p for part in parts if part["format"] == "video" for p in part["files"]]
         original_items = items + unassigned_video_names(items, loose)
-    assign_episode_names(items, original_items, root, ownership_context)
+    root_name = ownership_root_name(root, ownership_context)
+    assign_episode_names(items, original_items, root, ownership_context, root_name=root_name)
     if ownership_context is not None:
         selected = {id(it) for it in items}
         for kind in dict.fromkeys(it["kind"] for it in original_items):
@@ -7462,7 +7463,7 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
             det["used"] += packaging["used"]
             if len(parts) == 1 and packaging.get("packaging"):
                 det["packaging"] = packaging["packaging"]
-    attach_structured_notes(items, original_items)
+    attach_structured_notes(items, original_items, root=root, root_name=root_name)
     note_issues = {issue["text"] for it in items
                    for view in ([it] if it["kind"] == "video" else [it["side_notes"]] if it.get("side_notes") else [])
                    for issue in episode_notes(view)["issues"]}
@@ -7507,7 +7508,16 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
     return det, items
 
 
-def assign_episode_names(items: list[dict], original_items: list[dict], root: Path, context: dict | None) -> None:
+def ownership_root_name(root: Path, context: dict | None) -> str:
+    """The original root folder is a separate filename fact, absent from relative manifest paths."""
+    name = context.get("root_name", root.name) if context is not None else root.name
+    if not isinstance(name, str) or not name or name in {".", ".."} or "/" in name or "\\" in name:
+        raise ValueError("the original upload root name is not a folder name")
+    return name
+
+
+def assign_episode_names(items: list[dict], original_items: list[dict], root: Path, context: dict | None,
+                         *, root_name: str) -> None:
     """Allocate output identities from the original plan, so omitted sources never change collision suffixes.
 
     The same episode_dirs rule handles full and selected uploads. MCAP names that normalize alike must also keep
@@ -7539,8 +7549,12 @@ def assign_episode_names(items: list[dict], original_items: list[dict], root: Pa
                 if naming and original_files is not None and id(it) in selected:
                     if naming(it) != naming(it, original_files=original_files):
                         raise ValueError("a selected adapter no longer matches its original annotation filenames")
-                if naming and (adapted := naming(it, original_files=original_files)) is not None:
+                if naming and (adapted := naming(it, original_files=original_files, root=root, root_name=root_name)) is not None:
+                    if context is not None and "root_name" not in context and Path(it["files"][0]).parent == root:
+                        raise ValueError("original root adapter identity requires the original upload root name")
                     name = adapted
+                    if id(it) in selected:
+                        it["adapter_episode_name"] = adapted
                     break
         names.append(name)
     for it, path in zip(episodes, episode_dirs(Path("."), names)):
@@ -7676,7 +7690,8 @@ def unassigned_video_names(items: list[dict], files: list[Path]) -> list[dict]:
     return [{"kind": "video_alias", "file": Path(p)} for p in files if Path(p) not in owned]
 
 
-def attach_structured_notes(items: list[dict], registry_items: list[dict] | None = None) -> None:
+def attach_structured_notes(items: list[dict], registry_items: list[dict] | None = None,
+                            *, root: Path | None = None, root_name: str | None = None) -> None:
     """Outside notes use the same filename ownership and task ranks as video notes. A container name identifies
     every episode inside that container; a LeRobot episode uses its recorded index, never a camera number."""
     registry_items = items if registry_items is None else registry_items
@@ -7721,7 +7736,7 @@ def attach_structured_notes(items: list[dict], registry_items: list[dict] | None
                     for file in it["files"]:
                         names[name_words(Path(file).stem, takes)].add(it["name"])
         registry = FolderNames(frozenset(takes), {w: frozenset(v) for w, v in names.items() if w}, {},
-                               name_words(d.name, takes), frozenset({6}) if any(it["kind"] == "lerobot" for it, _, _ in entries) else frozenset())
+                               name_words(root_name if d == root and root_name is not None else d.name, takes), frozenset({6}) if any(it["kind"] == "lerobot" for it, _, _ in entries) else frozenset())
         for it in videos_here:
             if id(it) not in selected:
                 continue
