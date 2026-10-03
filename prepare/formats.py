@@ -3137,9 +3137,15 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
             continue
         a = np.asarray(signals[name], dtype=np.float64)
         names = (meta.get(name) or {}).get("names")
-        if names is None and H5_JOINT_ARRAY.search(name):
-            names = [f"joint {i + 1}" for i in range(a.shape[1])]
-        kind, note = state_layout(a.shape[1], rig, names)
+        dims = a.shape[1]
+        if names is None and H5_JOINT_ARRAY.search(name) and dims in (7, 14):
+            # the file names no value, but the array's name says every value is a joint, so there is no gripper
+            notes.append(f"Labelled from the video: the array's name says every value is a joint, so its {dims} values "
+                         f"are {dims} joints and no gripper, and our checks read "
+                         + ("six joints and a gripper per arm." if rig == "teleop_arms" else
+                            "a 6D pose and an opening per gripper.") + f" The recorded state is the HDF5 array {name}.")
+            continue
+        kind, note = state_layout(dims, rig, names)
         if kind == "none":
             notes.append(f"{note} The recorded state is the HDF5 array {name}." if note else None)
             continue

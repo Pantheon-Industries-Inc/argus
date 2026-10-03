@@ -669,6 +669,27 @@ def test_an_hdf5_array_named_for_joint_positions_names_every_value_a_joint(tmp_p
     assert any(s["name"].endswith("robot_state/joint_positions") for s in ctx["signals"])
 
 
+def test_the_note_on_an_unnamed_joint_positions_array_says_its_name_makes_every_value_a_joint(tmp_path):
+    """An unnamed joint_positions array had joint 1 to joint N made up as its value names, and the note said the
+    recorded state's value names give 14 joints although the file names no value. The note says what is true, that
+    the array's name says every value is a joint, and no made up name reaches it."""
+    n = 40
+    t = np.arange(n) / 20.0
+    for dims in (7, 14):
+        root = tmp_path / f"up{dims}"
+        root.mkdir()
+        joints = np.stack([np.sin(t + j) for j in range(dims)], axis=1)
+        _h5_rig(root / "droid.hdf5", {"observations/robot_state/joint_positions": joints})
+        rep = formats.convert(root, "teleop_arms", tmp_path / f"eps{dims}", "droid", 900)
+        ctx = json.loads((tmp_path / f"eps{dims}" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+        assert ctx["state_kind"] == "none"
+        assert ctx["state_note"] == (
+            f"Labelled from the video: the array's name says every value is a joint, so its {dims} values are {dims} "
+            "joints and no gripper, and our checks read six joints and a gripper per arm. The recorded state is the "
+            "HDF5 array robot_state/joint_positions."), ctx["state_note"]
+        assert "value names" not in ctx["state_note"] and "joint 1" not in json.dumps(ctx)
+
+
 def _aloha(n: int = 40) -> np.ndarray:
     """Two arms of six joints and a gripper over n frames at 20 fps, each gripper closing after 1 s."""
     t = np.arange(n) / 20.0
