@@ -3863,45 +3863,44 @@ ANNOT_TEXT_COLS = ("instruction", "language_instruction", "task", "annotation", 
 
 
 def annotated_instructions(meta: Path, reads: dict | None = None) -> tuple[dict, str | None]:
-    """{episode_index: text} from a per-episode annotation table the dataset ships next to its coarse tasks
-    (MolmoAct2's meta/tasks_annotated.parquet, which its card names as the per-episode instruction), and
-    the file it came from. Only tables keyed by episode index with one text column count."""
-    import pandas as pd
-    if not meta.is_dir():
-        return {}, None
-    for p in sorted(meta.glob("*annotat*")):
-        try:
-            if p.suffix == ".parquet":
-                df = pd.read_parquet(p)
-            elif p.suffix == ".jsonl":
-                df = pd.DataFrame(read_jsonl(p, reads))
-            else:
-                continue
-        except Exception as error:
+    """Admit agreeing owned instruction claims across every supplied annotation table."""
+    from prepare.annotations import episode_metadata
+    owned, unassigned = episode_metadata(meta, read_jsonl)
+    out, sources, conflicts = {}, set(), set()
+    if reads is not None:
+        reads["episode_metadata"] = owned
+        reads["unassigned_metadata"] = unassigned
+        for claim in unassigned:
+            metadata_failure(reads, Path(claim["source"]), claim["why"])
+    for owner, files in owned.items():
+        values, malformed = [], False
+        for path, rows in files.items():
             if reads is not None:
-                metadata_failure(reads, p, plain_error(error))
-            continue
-        if reads is not None:
-            reads["metadata_read"].add(p.resolve())
-        if "episode_index" in df.columns:
-            df = df.set_index("episode_index")
-        elif df.index.name != "episode_index":
-            continue
-        col = next((c for c in ANNOT_TEXT_COLS if c in df.columns), None)
-        if col is None:
-            continue
-        out = {}
-        for k, v in df[col].items():
-            v = scalar(v)
-            if isinstance(v, str) and v.strip():
-                try:
-                    out[recorded_index(k)] = v.strip()
-                except (TypeError, ValueError) as error:
-                    if reads is not None:
-                        metadata_failure(reads, p, plain_error(error))
-        if out:
-            return out, p.relative_to(meta.parent).as_posix()
-    return {}, None
+                reads["metadata_read"].add(Path(path).resolve())
+            if "annotat" not in Path(path).name:
+                continue
+            for row in rows:
+                for col in ANNOT_TEXT_COLS:
+                    if col not in row["fields"]:
+                        continue
+                    value = scalar(row["fields"][col])
+                    if isinstance(value, str) and value.strip():
+                        values.append(value.strip())
+                        sources.add(Path(path).relative_to(meta.parent).as_posix())
+                    else:
+                        malformed = True
+        if len(set(values)) == 1 and not malformed:
+            out[owner] = values[0]
+        elif values or malformed:
+            conflicts.add(owner)
+            if reads is not None:
+                for path in files:
+                    if "annotat" in Path(path).name:
+                        metadata_failure(reads, Path(path), f"episode {owner} has competing or malformed "
+                                         "instruction claims; all claims are retained without an instruction")
+    if reads is not None:
+        reads["instruction_conflicts"] = conflicts
+    return out, ", ".join(sorted(sources)) or None
 
 
 def read_root(rdir: Path, rel: str) -> dict:
@@ -3977,11 +3976,25 @@ def read_root(rdir: Path, rel: str) -> dict:
             "image_signals": image_signals, "depth_cams": depth_cams,
             "tasks_by_index": tasks_by_index, "annotated": annotated, "annot_src": annot_src,
             "used": used, "missing": missing, "episodes": [], "recordings": [],
-            "metadata_read": reads["metadata_read"], "metadata_issues": reads["metadata_issues"]}
+            "metadata_read": reads["metadata_read"], "metadata_issues": reads["metadata_issues"],
+            "episode_metadata": reads["episode_metadata"], "unassigned_metadata": reads["unassigned_metadata"],
+            "instruction_conflicts": reads["instruction_conflicts"]}
     if v3:
         _episodes_v3(root, rdir, data_v3, vids_v3)
     else:
         _episodes_v2(root, rdir, data_v2, vids_v2)
+    for episode in root["episodes"]:
+        claims = [claim["fields"]["tasks"] for path, rows in root["episode_metadata"].get(episode["eidx"], {}).items()
+                  if "annotat" not in Path(path).name for claim in rows if "tasks" in claim["fields"]]
+        if len(claims) > 1:
+            tasks = [[t.strip() for t in (x if isinstance(x, list) else [x]) if isinstance(t, str) and t.strip()]
+                     for x in claims]
+            if any(x != tasks[0] for x in tasks[1:]):
+                episode["tasks"] = []
+                root["instruction_conflicts"].add(episode["eidx"])
+                for path in root["episode_metadata"][episode["eidx"]]:
+                    metadata_failure(root, Path(path), f"episode {episode['eidx']} has competing tasks; "
+                                     "all original claims are retained without an inferred instruction")
     if annotated and root["episodes"]:
         used.append(f"Per-episode instructions{where} from {annot_src}.")
     return root
@@ -4320,7 +4333,9 @@ def _read_episode_table(path: Path, eidx: int, columns: list[str] | None, exclud
     import pyarrow.parquet as pq
     have = pq.ParquetFile(path).schema_arrow.names
     cols = [c for c in have if c not in exclude] if columns is None else [c for c in columns if c in have]
-    df = pd.read_parquet(path, columns=cols or None)
+    # Native text nulls are None, not inferred pandas string NaNs. Numeric columns retain their existing dtypes.
+    with pd.option_context("future.infer_string", False):
+        df = pd.read_parquet(path, columns=cols or None)
     if "episode_index" in df.columns:
         df = df[df["episode_index"] == eidx]
     if "frame_index" in df.columns:
@@ -4338,19 +4353,72 @@ def constant_index_task(values, labels) -> list[str]:
     return []
 
 
+def lerobot_metadata(ctx, root):
+    """Keep only matching owned rows, plus explicitly unassigned source claims and dataset calibration."""
+    from prepare.annotations import original
+    owner = ctx.get("episode_index")
+    recorded = {path: original(rows) for path, rows in root.get("episode_metadata", {}).get(owner, {}).items()}
+    if root.get("info") is not None:
+        recorded[str(Path(root["dir"]) / "meta" / "info.json")] = original(root["info"])
+    unassigned = original(root.get("unassigned_metadata", []))
+    if not recorded and not unassigned:
+        return
+    ctx["recorded_metadata"] = recorded
+    if unassigned:
+        ctx["unassigned_metadata"] = unassigned
+        for claim in unassigned:
+            add_issue(ctx, "metadata_unreadable", f"{claim['source']} retains an unassigned metadata claim: {claim['why']}.")
+    previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
+    notes = {**({"previous recorded notes": previous} if previous else {}), "recorded episode metadata": recorded}
+    if unassigned:
+        notes["unassigned dataset metadata claims"] = unassigned
+    set_uploader_notes(ctx, notes)
+    if len(json.dumps(notes, ensure_ascii=False)) > ANNOTATION_MAX_CHARS:
+        add_issue(ctx, "metadata_limit", "Recorded episode metadata exceeds the prompt note limit; complete original "
+                  "claims and source paths remain in the episode context and uploader notes.")
+
+
 def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
     """Attach recorded codes without changing state, signals or camera clocks.
 
     Image rows share the native timestamp origin used by their writer. Video rows map by their recorded
     frame_index only when each index identifies a frame of this episode. Raw times and source claims stay intact.
     """
+    lerobot_metadata(ctx, root)
     if df is None or not len(df):
         return
-    from prepare.annotations import BOOKKEEPING_COLUMNS, annotation_spans, index_tables, original, resolved_labels
+    from prepare.annotations import BOOKKEEPING_COLUMNS, annotation_spans, index_tables, language_spans, original, resolved_labels
     tables = index_tables(Path(root["dir"]) / "meta", df.columns, read_jsonl)
     failures = {path: original(table) for (column, path), table in tables.items() if column is None}
     owned = {column for column, _ in tables if column is not None}
     columns = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and (c in owned or c.endswith("_index"))]
+    text_columns = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and c not in columns
+                    and (c in ANNOT_TEXT_COLS or any(isinstance(v, str) for v in df[c]))]
+    columns += text_columns
+    language = []
+    complete_language = True
+    for column in text_columns:
+        if column not in ANNOT_TEXT_COLS:
+            continue
+        values = df[column].tolist()
+        valid = [v.strip() for v in values if isinstance(v, str) and v.strip()]
+        complete_language &= len(valid) == len(values) and len(set(valid)) == 1
+        language.extend(valid)
+    owner = ctx.get("episode_index")
+    if owner in root.get("instruction_conflicts", set()):
+        ctx.pop("instruction", None)
+        ctx.pop("instruction_note", None)
+    elif language and complete_language and len(set(language)) == 1 and not (
+            root.get("annotated", {}).get(owner) or any(
+                isinstance(task, str) and task.strip()
+                for rows in root.get("episode_metadata", {}).get(owner, {}).values() for claim in rows
+                for task in (claim["fields"].get("tasks") if isinstance(claim["fields"].get("tasks"), list)
+                             else [claim["fields"].get("tasks")]))):
+        ctx["instruction"] = language[0]
+        ctx["instruction_note"] = "This instruction is constant recorded frame language in the episode data."
+    if language and (not complete_language or len(set(language)) > 1):
+        add_issue(ctx, "metadata_unreadable", f"{data_path} has changing, incomplete or competing frame language; "
+                  "original text rows are retained as attributed annotations, without an inferred instruction.")
     if not columns and not failures:
         return
     for path, table in failures.items():
@@ -4383,7 +4451,10 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
         sources = [path for _, path in selected]
         source = sources[0] if len(sources) == 1 else str(data_path)
         labels = resolved_labels(selected, column)
-        steps, missing = annotation_spans(df[column].tolist(), times, labels, source, column, frame_indices=frames)
+        if column in text_columns:
+            steps, missing = language_spans(df[column].tolist(), times, str(data_path), column, frame_indices=frames)
+        else:
+            steps, missing = annotation_spans(df[column].tolist(), times, labels, source, column, frame_indices=frames)
         for step in steps:
             step["data_source"] = str(data_path)
             for key in ("t0", "t1"):
@@ -4434,13 +4505,15 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
     for claim in unresolved:
         missing.setdefault(claim["column"], []).append({k: v for k, v in claim.items()
             if k not in ("claims", "data_source", "source", "column")})
-    notes = {"recorded annotation data source": str(data_path), "recorded annotation tables": table_notes,
+    notes = {**({"previous recorded notes": previous} if previous else {}),
+             "recorded annotation data source": str(data_path), "recorded annotation tables": table_notes,
              "recorded annotation spans": shown, "unresolved recorded annotation rows": missing}
     if failures:
         notes["unreadable annotation table sources"] = failures
-    if previous:
-        notes["previous recorded notes"] = previous
     set_uploader_notes(ctx, notes)
+    if len(json.dumps(notes, ensure_ascii=False)) > ANNOTATION_MAX_CHARS:
+        add_issue(ctx, "metadata_limit", f"{data_path} and its recorded metadata exceed the prompt note limit; "
+                  "complete original rows and source claims remain in the episode context and uploader notes.")
 
 
 def _cells_rows(col) -> tuple[np.ndarray | None, int]:
@@ -4527,7 +4600,8 @@ def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
     notes = item["row"].get("metadata_notes")
     if notes:
         previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
-        set_uploader_notes(ctx, {"recorded notes": previous, "metadata claims": notes} if previous else notes, files=True)
+        retained = previous if isinstance(previous, dict) else ({"recorded notes": previous} if previous else {})
+        set_uploader_notes(ctx, {**retained, **notes}, files=True)
         ctx.setdefault("source", {}).setdefault("note_files", []).extend(notes)
     if mod is not None or notes:
         write_atomic(out / ctx["episode_id"] / "context.json", ctx, indent=1, default=str)
@@ -4590,7 +4664,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if annotated:
         # the coarse task stays the task label; the per-episode annotation is the goal (label/episode.py states both)
         extra["instruction"] = annotated
-    elif tasks:
+    elif tasks and eidx not in r.get("instruction_conflicts", set()):
         extra["instruction"] = "; ".join(t.strip() for t in tasks if t.strip())
         extra["instruction_note"] = "This instruction is the episode's task text in the dataset's LeRobot metadata."
 

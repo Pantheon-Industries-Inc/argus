@@ -378,3 +378,266 @@ def test_failed_annotation_table_retains_its_source_and_decoder_reason_without_c
                 assert before[key].tobytes() == after[key].tobytes()
     assert (clean_ep / 'sources.json').read_bytes() == (ep / 'sources.json').read_bytes()
     assert {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()} == originals
+
+
+def _task2_metadata(root, mode, instruction=None):
+    row = {'episode_index': 0, 'length': 4, 'tasks': [instruction] if instruction else [],
+           'operator': {'name': 'recorded operator', 'notes': ['literal note', '7']},
+           'success_claim': False, 'custom': {'value': 9007199254740993}}
+    neighbor = {'episode_index': 1, 'length': 'damaged', 'tasks': [27], 'operator': 'neighbor only'}
+    if mode == 'packed':
+        camera = 'observation.images.cam_high'
+        row.update({'data/chunk_index': 0, 'data/file_index': 0,
+                    f'videos/{camera}/chunk_index': 0, f'videos/{camera}/file_index': 0,
+                    f'videos/{camera}/from_timestamp': 0.0, f'videos/{camera}/to_timestamp': 4 / 30})
+        path = root / 'meta/episodes/chunk-000/file-000.parquet'
+        path.parent.mkdir(parents=True)
+        # Distinct native rows without dataframe integer coercion across the damaged neighbor.
+        pd.DataFrame([row]).to_parquet(path)
+        pd.DataFrame([neighbor]).to_parquet(path.with_name('file-001.parquet'))
+    else:
+        path = root / 'meta/episodes.jsonl'
+        path.write_text(json.dumps(row) + '\n' + json.dumps(neighbor) + '\n{damaged json\n')
+    info_path = root / 'meta/info.json'
+    info = json.loads(info_path.read_text())
+    calibration = {'intrinsics': [[501.25, 0, 32], [0, 502.5, 32], [0, 0, 1]],
+                   'distortion': [-0.1, 0.002, 0, 0, 0], 'other': {'serial': 'native serial'}}
+    info['features']['observation.images.cam_high']['calibration'] = calibration
+    info_path.write_text(json.dumps(info))
+    return path, row, calibration
+
+
+@pytest.mark.parametrize('mode', ['video', 'packed', 'image'])
+def test_full_selected_metadata_and_intrinsics_keep_native_ownership_and_arrays(tmp_path, mode):
+    root = tmp_path / 'upload'
+    _native_case(root, mode)
+    clean_out = tmp_path / 'clean'
+    clean = f.convert(root, 'teleop_arms', clean_out, 'test', 900)
+    assert not clean['failed'] and len(clean['episodes']) == 1
+    path, row, calibration = _task2_metadata(root, mode)
+    originals = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()}
+    output = tmp_path / 'with_metadata'
+    report = f.convert(root, 'teleop_arms', output, 'test', 900)
+    assert not report['failed'], report
+    episode = next(e for e in report['episodes'] if e['episode_id'] == clean['episodes'][0]['episode_id'])
+    ep = output / episode['episode_id']
+    ctx = json.loads((ep / 'context.json').read_text())
+    assert ctx['recorded_metadata'][str(path)][0]['fields'] == row
+    assert ctx['recorded_metadata'][str(root / 'meta/info.json')]['features']['observation.images.cam_high']['calibration'] == calibration
+    assert 'neighbor only' not in json.dumps(ctx['recorded_metadata'])
+    assert 'recorded operator' in ctx['uploader_annotation'] and '501.25' in ctx['uploader_annotation']
+    clean_ep = clean_out / clean['episodes'][0]['episode_id']
+    assert sorted(p.name for p in clean_ep.glob('*.npz')) == sorted(p.name for p in ep.glob('*.npz'))
+    for before_path in clean_ep.glob('*.npz'):
+        with np.load(before_path) as before, np.load(ep / before_path.name) as after:
+            assert before.files == after.files
+            for key in before.files:
+                assert before[key].dtype == after[key].dtype and before[key].shape == after[key].shape
+                assert before[key].tobytes() == after[key].tobytes()
+    import av
+    def packets(path):
+        with av.open(str(path)) as container:
+            return [(packet.pts, packet.dts, str(packet.time_base), hashlib.sha256(bytes(packet)).hexdigest())
+                    for packet in container.demux(video=0) if packet.size]
+    media = sorted(p.relative_to(clean_ep) for p in clean_ep.rglob('*') if p.suffix in ('.mkv', '.mp4'))
+    # Only these two owned output prefixes differ; native packed input paths remain literal.
+    assert (clean_ep / 'sources.json').read_text().replace(str(clean_ep.resolve()), '<owned episode>') == (
+        ep / 'sources.json').read_text().replace(str(ep.resolve()), '<owned episode>')
+    assert media or any('packed' in entry for entry in json.loads((ep / 'sources.json').read_text()).values())
+    assert media == sorted(p.relative_to(ep) for p in ep.rglob('*') if p.suffix in ('.mkv', '.mp4'))
+    for name in media:
+        assert packets(clean_ep / name) == packets(ep / name)
+    assert {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()} == originals
+
+
+@pytest.mark.parametrize('mode', ['video', 'packed', 'image'])
+@pytest.mark.parametrize('declared', [None, 'declared goal'])
+def test_constant_row_language_preserves_declared_instruction_priority(tmp_path, mode, declared):
+    root = tmp_path / 'upload'
+    _native_case(root, mode)
+    _task2_metadata(root, mode, declared)
+    path = root / ('data/chunk-000/file-000.parquet' if mode == 'packed' else 'data/chunk-000/episode_000000.parquet')
+    df = pd.read_parquet(path)
+    df['language_instruction'] = ['recorded language'] * 4
+    df.to_parquet(path)
+    raw = path.read_bytes()
+    output = tmp_path / 'episodes'
+    report = f.convert(root, 'teleop_arms', output, 'test', 900)
+    assert not report['failed'], report
+    ctx = json.loads((output / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert ctx['instruction'] == (declared or 'recorded language')
+    language = [s for s in ctx['annotation_subtasks'] if s['column'] == 'language_instruction']
+    assert language[0]['value'] == 'recorded language' and language[0]['source'] == str(path)
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize('mode', ['video', 'packed', 'image'])
+def test_changing_language_is_timed_claims_and_never_a_first_row_goal(tmp_path, mode):
+    root = tmp_path / 'upload'
+    _native_case(root, mode)
+    path = root / ('data/chunk-000/file-000.parquet' if mode == 'packed' else 'data/chunk-000/episode_000000.parquet')
+    df = pd.read_parquet(path)
+    df['language_instruction'] = ['pick', 'pick', 'place', 'place']
+    df.to_parquet(path)
+    output = tmp_path / 'episodes'
+    report = f.convert(root, 'teleop_arms', output, 'test', 900)
+    assert not report['failed'], report
+    ctx = json.loads((output / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert 'instruction' not in ctx
+    language = [s for s in ctx['annotation_subtasks'] if s['column'] == 'language_instruction']
+    assert [(s['label'], s['t0']) for s in language] == [('pick', 0), ('place', 2 / 30)]
+    assert language[0]['t1'] == 2 / 30 and 't1' not in language[1]
+
+
+@pytest.mark.parametrize('kind', ['duplicate', 'files', 'columns'])
+def test_competing_annotated_episode_instructions_have_no_winner(tmp_path, kind):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'meta/tasks_annotated.jsonl'
+    rows = [{'episode_index': 0, 'instruction': 'pick'}, {'episode_index': 1, 'instruction': 'neighbor only'}]
+    if kind == 'duplicate':
+        rows.append({'episode_index': 0, 'instruction': 'place', 'detail': 17})
+    elif kind == 'columns':
+        rows[0]['language_instruction'] = 'place'
+    else:
+        (root / 'meta/other_annotated.jsonl').write_text('{"episode_index":0,"instruction":"place"}\n')
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    output = tmp_path / 'episodes'
+    report = f.convert(root, 'teleop_arms', output, 'test', 900)
+    assert not report['failed'], report
+    ctx = json.loads((output / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert 'instruction' not in ctx
+    assert 'pick' in ctx['uploader_annotation'] and 'place' in ctx['uploader_annotation']
+    assert 'neighbor only' not in json.dumps(ctx['recorded_metadata'])
+    assert any(i['kind'] == 'metadata_unreadable' and 'competing' in i['what'] for i in ctx['reader_issues'])
+
+
+def test_empty_malformed_and_competing_frame_text_remains_source_attributed(tmp_path):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'data/chunk-000/episode_000000.parquet'
+    df = pd.read_parquet(path)
+    df['language_instruction'] = ['pick', '', None, 'place']
+    df['instruction'] = ['other goal'] * 4
+    df.to_parquet(path)
+    output = tmp_path / 'episodes'
+    report = f.convert(root, 'teleop_arms', output, 'test', 900)
+    assert not report['failed'], report
+    ctx = json.loads((output / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert 'instruction' not in ctx
+    missing = [x for x in ctx['annotation_unresolved'] if x['column'] == 'language_instruction']
+    assert [x['value'] for x in missing] == ['', None]
+    assert all(x['source'] == str(path) and x['why'] for x in missing)
+    assert 'other goal' in ctx['uploader_annotation'] and 'language_instruction' in ctx['uploader_annotation']
+
+
+def test_unassigned_episode_claims_never_attach_valid_neighbors(tmp_path):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'meta/episodes.jsonl'
+    path.write_text('\n'.join(json.dumps(x) for x in [
+        {'episode_index': 0, 'length': 4, 'tasks': ['declared'], 'native': {'owner': 0}},
+        {'episode_index': 9, 'length': 4, 'tasks': ['neighbor only'], 'native': {'owner': 9}},
+        {'episode_index': False, 'instruction': 'unassigned text', 'unknown': [13, False]},
+    ]) + '\n{broken row\n')
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'test', 900)
+    ctx = json.loads((tmp_path / 'episodes' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert ctx['instruction'] == 'declared'
+    assert 'neighbor only' not in json.dumps(ctx['recorded_metadata'])
+    bad = ctx['unassigned_metadata']
+    assert bad[0]['fields'] == {'episode_index': False, 'instruction': 'unassigned text', 'unknown': [13, False]}
+    assert bad[0]['source'] == str(path) and 'no episode owner' in bad[0]['why']
+    assert bad[1]['raw_text'] == '{broken row' and bad[1]['line'] == 4
+    assert 'unassigned text' in ctx['uploader_annotation']
+
+
+def test_duplicate_episode_tasks_cannot_supply_a_last_row_instruction(tmp_path):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'meta/episodes.jsonl'
+    path.write_text('\n'.join(json.dumps(x) for x in [
+        {'episode_index': 0, 'length': 4, 'tasks': ['first claim'], 'operator': 'first'},
+        {'episode_index': 0, 'length': 4, 'tasks': ['second claim'], 'operator': 'second'},
+    ]) + '\n')
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'test', 900)
+    ctx = json.loads((tmp_path / 'episodes' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert 'instruction' not in ctx
+    rows = ctx['recorded_metadata'][str(path)]
+    assert [x['fields']['tasks'] for x in rows] == [['first claim'], ['second claim']]
+    assert any('competing' in x['what'] for x in ctx['reader_issues'])
+
+
+def test_complete_frame_language_precedes_only_the_coarse_index_fallback(tmp_path):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'data/chunk-000/episode_000000.parquet'
+    df = pd.read_parquet(path)
+    df['task_index'] = [0] * 4
+    df['language_instruction'] = ['specific recorded language'] * 4
+    df.to_parquet(path)
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'test', 900)
+    ctx = json.loads((tmp_path / 'episodes' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert ctx['instruction'] == 'specific recorded language'
+    assert ctx['task_label'] == ['pick']
+
+
+def test_partial_language_never_becomes_a_whole_instruction(tmp_path):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'data/chunk-000/episode_000000.parquet'
+    df = pd.read_parquet(path)
+    df['language_instruction'] = ['pick', None, 'pick', 'pick']
+    df.to_parquet(path)
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'test', 900)
+    ctx = json.loads((tmp_path / 'episodes' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert 'instruction' not in ctx
+    assert ctx['annotation_unresolved'][0]['value'] is None
+    assert ctx['annotation_unresolved'][0]['source'] == str(path)
+
+
+@pytest.mark.parametrize('bad', [None, ''])
+def test_incomplete_annotated_owner_rows_never_supply_a_surviving_winner(tmp_path, bad):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'meta/tasks_annotated.jsonl'
+    rows = [{'episode_index': 0, 'instruction': 'first claim'}, {'episode_index': 0, 'instruction': bad}]
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'test', 900)
+    ctx = json.loads((tmp_path / 'episodes' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert 'instruction' not in ctx
+    assert [x['fields'] for x in ctx['recorded_metadata'][str(path)]] == rows
+    assert any('malformed' in x['what'] for x in ctx['reader_issues'])
+
+
+def test_invalid_episode_task_claim_does_not_block_complete_native_language(tmp_path):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    (root / 'meta/episodes.jsonl').write_text('{"episode_index":0,"length":4,"tasks":[123]}\n')
+    path = root / 'data/chunk-000/episode_000000.parquet'
+    df = pd.read_parquet(path)
+    df['language_instruction'] = ['recorded language'] * 4
+    df.to_parquet(path)
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'test', 900)
+    ctx = json.loads((tmp_path / 'episodes' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert ctx['instruction'] == 'recorded language'
+    assert ctx['recorded_metadata'][str(root / 'meta/episodes.jsonl')][0]['fields']['tasks'] == [123]
+    assert any(x['kind'] == 'metadata_unreadable' for x in ctx['reader_issues'])
+
+
+def test_full_parquet_metadata_retains_native_binary_and_timestamp_fields(tmp_path):
+    root = tmp_path / 'upload'
+    _native_case(root, 'video')
+    path = root / 'meta/tasks_annotated.parquet'
+    stamp = pd.Timestamp('2026-10-03T12:34:56.123456789')
+    pd.DataFrame([{'episode_index': 0, 'instruction': 'declared goal',
+                   'recorded_at': stamp, 'payload': b'\x00\xffliteral'}]).to_parquet(path)
+    original_bytes = path.read_bytes()
+    report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'test', 900)
+    assert not report['failed'], report
+    ctx = json.loads((tmp_path / 'episodes' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    fields = ctx['recorded_metadata'][str(path)][0]['fields']
+    assert fields['payload'] == {'recorded_type': 'bytes', 'hex': '00ff6c69746572616c'}
+    assert fields['recorded_at']['iso8601'] == stamp.isoformat()
+    assert fields['recorded_at']['recorded_type'] == 'Timestamp'
+    assert fields['recorded_at']['integer_ns'] == stamp.value
+    assert ctx['instruction'] == 'declared goal' and path.read_bytes() == original_bytes

@@ -165,3 +165,97 @@ def annotation_spans(values, times, labels, source, column, *, final_boundary=No
             start, selected = row, record
     end(len(values))
     return spans, unresolved
+
+
+def language_spans(values, times, source, column, *, frame_indices=None):
+    """Recorded strings are their own labels. Empty or nonstring cells retain rejected original claims."""
+    values = [original(x) for x in values]
+    texts = list(dict.fromkeys(x for x in values if isinstance(x, str) and x.strip()))
+    codes = {text: i for i, text in enumerate(texts)}
+    encoded = [codes.get(x) if isinstance(x, str) else None for x in values]
+    spans, unresolved = annotation_spans(encoded, times, {i: text.strip() for text, i in codes.items()},
+                                         source, column, frame_indices=frame_indices)
+    for step in spans:
+        step['value'] = values[step['row_start']]
+        step['values'] = values[step['row_start']:step['row_end'] + 1]
+    for claim in unresolved:
+        claim['value'] = values[claim['row']]
+        claim['why'] = 'recorded text is empty or is not a string'
+    return spans, unresolved
+
+
+def metadata_value(value):
+    """JSON representations of recorded metadata types, with binary and datetime types kept explicit."""
+    import datetime
+    import decimal
+    value = original(value)
+    if isinstance(value, dict):
+        return {k: metadata_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [metadata_value(v) for v in value]
+    if isinstance(value, bytes):
+        return {'recorded_type': 'bytes', 'hex': value.hex()}
+    if isinstance(value, (datetime.date, datetime.time)):
+        result = {'recorded_type': type(value).__name__, 'iso8601': value.isoformat()}
+        if type(value).__name__ == 'Timestamp':
+            try:
+                result['integer_ns'] = value.value
+            except OverflowError:
+                pass
+        return result
+    if isinstance(value, decimal.Decimal):
+        return {'recorded_type': 'Decimal', 'decimal_text': str(value)}
+    return value
+
+
+def episode_metadata(meta, read_jsonl):
+    """Full metadata claims by explicit episode owner. Unassigned malformed rows never acquire an owner."""
+    import pandas as pd
+    from prepare.formats import recorded_index
+    meta = Path(meta)
+    paths = set(meta.glob('*annotat*.jsonl')) | set(meta.glob('*annotat*.parquet'))
+    paths |= set((meta / 'episodes').rglob('*.parquet'))
+    if (meta / 'episodes.jsonl').exists():
+        paths.add(meta / 'episodes.jsonl')
+    owned, unassigned = {}, []
+    for path in sorted(paths):
+        try:
+            if path.suffix == '.jsonl':
+                read_jsonl(path)
+                rows = []
+                # Retain malformed physical lines independently of the readable object rows.
+                for number, line in enumerate(path.read_text(encoding='utf-8-sig', errors='replace').splitlines()):
+                    if not line.strip():
+                        continue
+                    try:
+                        value = json.loads(line)
+                        valid = isinstance(value, dict)
+                    except ValueError:
+                        valid = False
+                    if valid:
+                        rows.append((number, value))
+                    else:
+                        unassigned.append({'source': str(path), 'line': number + 1, 'raw_text': line,
+                                           'why': 'not a JSON object; no episode owner can be established'})
+            else:
+                with pd.option_context("future.infer_string", False):
+                    df = pd.read_parquet(path)
+                rows = []
+                for number, index in enumerate(df.index):
+                    row = {k: original(df[k].iloc[number]) for k in df.columns}
+                    if df.index.name is not None:
+                        row.setdefault(df.index.name, original(index))
+                    rows.append((number, row))
+        except Exception as error:
+            unassigned.append({'source': str(path), 'why': f'metadata table read failed ({error})'})
+            continue
+        for number, row in rows:
+            claim = {'source': str(path), 'row': number, 'fields': metadata_value(row)}
+            try:
+                owner = recorded_index(row.get('episode_index'))
+            except (TypeError, ValueError) as error:
+                unassigned.append({**claim, 'why': f'{error}; no episode owner can be established'})
+                continue
+            owned.setdefault(owner, {}).setdefault(str(path), []).append(claim)
+    unassigned.sort(key=lambda x: (x["source"], x.get("row", x.get("line", 1) - 1)))
+    return owned, unassigned

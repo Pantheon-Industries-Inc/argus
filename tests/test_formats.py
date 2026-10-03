@@ -3811,7 +3811,14 @@ def test_metadata_failures_and_limits_have_visible_issue_families():
         original = (root / 'meta/tasks_annotated.parquet').read_bytes()
         rep, episodes = _converted_notes(root, Path(t) / 'mixed_annotation')
         assert episodes[0][0]['instruction'] == 'valid task'
-        assert 'invented task' not in episodes[0][1]
+        ctx, prompt = episodes[0]
+        rejected = ctx['unassigned_metadata'][0]
+        assert rejected['fields'] == {'episode_index': 'bad', 'instruction': 'invented task'}
+        assert rejected['source'] == str(root / 'meta/tasks_annotated.parquet')
+        assert 'no episode owner' in rejected['why']
+        assert 'invented task' in prompt and ctx['task_label'] != ['invented task']
+        assert ctx['recorded_metadata'][str(root / 'meta/tasks_annotated.parquet')][0]['fields'] == {
+            'episode_index': '0', 'instruction': 'valid task'}
         assert 'tasks_annotated.parquet' in episodes[0][1]
         assert (root / 'meta/tasks_annotated.parquet').read_bytes() == original
         (root / 'meta/tasks_annotated.parquet').unlink()
@@ -3887,7 +3894,14 @@ def test_valid_episode_rows_survive_invalid_and_fractional_recorded_indices():
         original = p.read_bytes()
         rep, episodes = _converted_notes(root, Path(t) / 'out')
         assert len(episodes) == 1 and episodes[0][0]['instruction'] == 'valid task'
-        assert 'invented task' not in episodes[0][1] and 'fractional task' not in episodes[0][1]
+        ctx, prompt = episodes[0]
+        claims = ctx['unassigned_metadata']
+        assert [c['fields'] for c in claims] == rows[1:]
+        assert all(c['source'] == str(p) and 'no episode owner' in c['why'] for c in claims)
+        assert 'invented task' in prompt and 'fractional task' in prompt
+        assert ctx['task_label'] == ['valid task']
+        assert ctx['recorded_metadata'][str(p)][0]['fields'] == rows[0]
+        assert len(ctx['recorded_metadata'][str(p)]) == 1
         assert 'meta/episodes.jsonl' in episodes[0][1]
         assert 'meta/episodes.jsonl' in ' '.join(rep['missing'])
         assert p.read_bytes() == original
@@ -3942,7 +3956,13 @@ def test_v3_episode_tables_keep_valid_rows_beside_fractional_indices():
         original = p.read_bytes()
         rep, episodes = _converted_notes(root, Path(t) / 'out')
         assert len(episodes) == 1 and episodes[0][0]['instruction'] == 'valid task'
-        assert 'invented task' not in episodes[0][1]
+        ctx, prompt = episodes[0]
+        rejected = ctx['unassigned_metadata'][0]
+        assert rejected['fields'] == {**row, 'episode_index': 0.5, 'tasks': ['invented task']}
+        assert rejected['source'] == str(p) and 'no episode owner' in rejected['why']
+        assert 'invented task' in prompt and ctx['task_label'] == ['valid task']
+        assert ctx['recorded_metadata'][str(p)][0]['fields'] == row
+        assert len(ctx['recorded_metadata'][str(p)]) == 1
         assert 'meta/episodes/chunk-000/file-000.parquet' in episodes[0][1]
         assert p.read_bytes() == original
 
@@ -4185,12 +4205,13 @@ def test_invalid_episode_tasks_keep_valid_recorded_table_tasks_and_note_sources(
 
 
 def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
+    import json
     with tempfile.TemporaryDirectory() as t:
         for version in ('v2', 'v3'):
             for n, tasks in enumerate(('second recorded task', ['second recorded task'],
                                        ['second recorded task', 'additional recorded task'])):
                 root = Path(t) / version / str(n) / 'upload'
-                _episode_row_upload(root, version, {'tasks': tasks})
+                path = _episode_row_upload(root, version, {'tasks': tasks})
                 det, items = f.plan(root)
                 assert [i['row']['length'] for i in items] == [10, 10]
                 rep, episodes = _converted_notes(root, root.parent / 'out')
@@ -4198,5 +4219,16 @@ def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
                 assert ctx['instruction'] == ('second recorded task' if n < 2 else
                                               'second recorded task; additional recorded task')
                 assert ctx['stream_checks']['episode_length_meta'] == 10
-                assert not ctx.get('uploader_notes')
+                from prepare.annotations import original
+                if path.suffix == '.jsonl':
+                    expected = [json.loads(line) for line in path.read_text().splitlines()][1]
+                else:
+                    import pandas as pd
+                    table = pd.read_parquet(path)
+                    expected = {key: original(table[key].iloc[0]) for key in table.columns}
+                assert ctx['recorded_metadata'][str(path)][0]['fields'] == expected
+                assert len(ctx['recorded_metadata'][str(path)]) == 1
+                info_path = root / 'meta/info.json'
+                assert ctx['recorded_metadata'][str(info_path)] == json.loads(info_path.read_text())
+                assert ctx['uploader_notes']['recorded episode metadata'][str(path)][0]['fields'] == expected
                 assert not any(i['kind'] == 'metadata_unreadable' for i in ctx.get('reader_issues', []))
