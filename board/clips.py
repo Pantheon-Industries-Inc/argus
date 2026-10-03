@@ -983,13 +983,17 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
         own.append({"kind": CAMERA_NOT_DECODABLE, "camera": v, "what": f"The {camera_label(v, ctx)} video could not "
                                                                           "be decoded, so this episode is shown and "
                                                                           "labelled without it."})
+    fps = float(ctx.get("fps") or 30.0)
+    episode_end = float(ctx.get("duration_s") or float(ctx.get("n_state_frames") or 0) / fps)
     for v in sorted(short, key=order):
         n = short[v]
         end = clip_end_s(ep_dir, ctx, src, v, int(n["clip_frames"]))
+        before = f", before the episode ends at {episode_end:.2f} s" if episode_end > end else ""
         own.append({"kind": CAMERA_SHORT, "camera": name(v),
-                    "what": f"The {camera_label(v, ctx)} video has {n['clip_frames']} frames where the episode has "
-                            f"{n['episode_frames']}, so it shows nothing after {end:.2f} s.",
-                    "t0_s": round(end, 3), **({"t1_s": ctx["duration_s"]} if ctx.get("duration_s") else {}),
+                    "what": f"The {camera_label(v, ctx)} video ends at {end:.2f} s{before}, so it shows nothing after "
+                            f"that; {n['clip_frames']} of the {n['episode_frames']} frames its file lists could be "
+                            "read.",
+                    "t0_s": round(end, 3), **({"t1_s": round(episode_end, 3)} if episode_end > end else {}),
                     "clip_frames": n["clip_frames"], "episode_frames": n["episode_frames"]})
     main, more = None, []
     if broken:
