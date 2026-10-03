@@ -434,3 +434,23 @@ def test_an_episode_whose_capture_worker_stops_gets_a_record_with_every_check_er
     for n in ("episode_000000", "episode_000001"):
         r = json.loads((eps / n / "context.json").read_text())["capture_qc"]
         assert all(x["status"] == "errored" for x in r["checks"]) and "the worker process died" in r["checks"][0]["why"]
+
+
+def test_a_crash_reading_the_state_costs_only_the_checks_that_read_it(monkeypatch):
+    """A crash reading the recorded state (canonical_states) errored all 38 capture checks of the episode. Only the
+    checks that read the state are errored now, with the error: the structure, gripper and motion checks, and the frozen
+    picture where it needs the recorded motion to tell a frozen camera from a still scene. The camera, clock and length
+    checks still run on the footage."""
+    def boom(ep):
+        raise RuntimeError("the state block does not read")
+    monkeypatch.setattr(cq, "canonical_states", boom)
+    R = cq.assess(_two_cameras(False))["checks"]
+    need = ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal", "normalized_gripper_out_of_range",
+            "gripper_action_integral_out_of_range", "gripper_never_acts", "gripper_sensor_bug") + cq.MOTION_CHECKS + (
+        "video_frozen_run",)
+    for c in need:
+        assert R[c]["status"] == "errored" and "the state block does not read" in R[c]["why"], (c, R[c])
+    for c in ("missing_camera", "camera_state_alignment_mismatch", "video_decode_failure", "video_extreme_exposure",
+              "video_low_contrast", "video_duplicate_frames", "episode_too_short", "state_time_too_short"):
+        assert R[c]["status"] in ("fired", "clear"), (c, R[c])
+    assert not [c for c, r in R.items() if c not in need and r["status"] == "errored"]

@@ -452,6 +452,11 @@ CLOCK_CHECKS = ("state_time_too_short", "state_time_non_monotonic_or_duplicate",
                 "native_camera_timestamp_gap")
 MOTION_CHECKS = ("action_smoothness_discontinuity", "jump_return_event", "gross_umi_speed", "over_95_percent_static",
                  "largest_action_not_in_video", "visual_change_unexplained_by_action", "pixel_action_corr_mismatch")
+STRUCTURE_CHECKS = ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal")
+GRIPPER_CHECKS = ("normalized_gripper_out_of_range", "gripper_action_integral_out_of_range", "gripper_never_acts",
+                  "gripper_sensor_bug")
+# the checks that read the recorded state (canonical_states): when it cannot be read, these are errored and the rest run
+STATE_CHECKS = STRUCTURE_CHECKS + GRIPPER_CHECKS + MOTION_CHECKS
 
 
 def _ev(evidence: str, t_s: float | None = None, camera: str | None = None, actor: str | None = None) -> dict:
@@ -505,7 +510,15 @@ def assess(feats: dict) -> dict:
     real_times = ep.get("times") is not None
     unit = gripper_unit(ctx)
     normalized = "normalized_open_fraction" in unit
-    cs = canonical_states(ep)
+    # a crash reading the state errors only the checks that read it (STATE_CHECKS, set at the end), and the camera,
+    # clock and length checks run on as for a recording with no usable state
+    state_error = None
+    try:
+        cs = canonical_states(ep)
+    except Exception as e:  # noqa: BLE001 - recorded on the checks that read the state
+        state_error = e
+        cs = {"states": np.zeros((T, 14)), "valid": np.zeros((T, 14), dtype=bool), "actors": me.actors(ep),
+              "kind": kind, "nonfinite": [], "shape_ok": True}
     names = cs["actors"]
     states, valid = cs["states"], cs["valid"]
     has_state = kind != "none"
@@ -525,9 +538,9 @@ def assess(feats: dict) -> dict:
     R["action_time_non_monotonic_or_duplicate"] = _na("action times are taken from the frame times, which are checked on their own")
 
     # ---- structure (filtering.py:1461-1488)
-    with _guard(R, ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal")):
+    with _guard(R, STRUCTURE_CHECKS):
         if not has_state:
-            for c in ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal"):
+            for c in STRUCTURE_CHECKS:
                 R[c] = _na("the recording has no robot state, only video")
         else:
             shape = np.shape(ep["state"])
@@ -584,14 +597,12 @@ def assess(feats: dict) -> dict:
     unit_why = ((f"the gripper reading is in {unit}, not a verified opening from 0 to 1" if unit != "unknown"
                  else "the gripper reading's unit is not known for this dataset")
                 + ", and this check needs an opening from 0 to 1")
-    gripper_checks = ("normalized_gripper_out_of_range", "gripper_action_integral_out_of_range", "gripper_never_acts",
-                      "gripper_sensor_bug")
-    with _guard(R, gripper_checks):
+    with _guard(R, GRIPPER_CHECKS):
         if not usable_state:
-            for c in gripper_checks:
+            for c in GRIPPER_CHECKS:
                 R[c] = _na("the recording has no robot state, only video" if not has_state else unusable_why)
         elif not normalized:
-            for c in gripper_checks:
+            for c in GRIPPER_CHECKS:
                 R[c] = _na(unit_why)
         else:
             ev = []
@@ -709,8 +720,11 @@ def assess(feats: dict) -> dict:
     # of the video checks only the frozen picture needs the camera each actor is mounted on (to tell it from a still
     # scene), so failing to work it out errors that check alone (None)
     av_all = None
-    with _guard(R, ("video_frozen_run",)):
-        av_all = actor_views(ep, names) if usable_state and extra["frozen_needs_motion"] else []
+    if state_error is not None and extra["frozen_needs_motion"]:
+        R["video_frozen_run"] = _errored(state_error)     # it needs the recorded motion here, which could not be read
+    else:
+        with _guard(R, ("video_frozen_run",)):
+            av_all = actor_views(ep, names) if usable_state and extra["frozen_needs_motion"] else []
 
     def expected_motion(v: str, t0: float, t1: float) -> str:
         """Why camera v's picture must change between t0 and t1, from the recorded state, or "" when the
@@ -1057,6 +1071,8 @@ def assess(feats: dict) -> dict:
         why = f"The recorded state is not on these cameras' frames. {ctx['state_unaligned']}"
         for c in STATE_VS_VIDEO + (("video_frozen_run",) if extra["frozen_needs_motion"] else ()):
             R[c] = _na(why)
+    if state_error is not None:
+        R.update({c: _errored(state_error) for c in STATE_CHECKS})
     return {"checks": R, "cameras": cam_metrics, "actors": actor_metrics,
             "episode": {"duration_s": round(duration, 2), "rig": rig, "state_kind": kind, "gripper_unit": unit,
                         "clock": "capture times" if real_times else "frame_index / fps"}}
