@@ -36,13 +36,14 @@ on one fixed scale, depth of unknown unit scaled across the upload, no reading b
 colour frame with no depth frame within half a depth frame's interval is black. The page switches each camera
 between its colour and its depth clip. A depth clip that comes out imperfect (the camera's capture times stop before
 its clip does, or the clip's timestamps differ from the colour clip's) is kept, and one that cannot be cut is left
-out; either is recorded in the episode's reader_issues (record_depth), so the board flags it. A depth stream whose own
-file does not open or decode is recorded as depth_not_decodable, a fault in the recording, apart from a failure of
-our cut (depth_clip_failed).
+out; either is recorded in the episode's reader_issues (record_depth), so the board flags it. A depth file that opens
+and does not decode, or holds no video stream, is recorded as depth_not_decodable, a fault in the recording, apart from
+a failure of our cut (depth_clip_failed), which a missing or unopenable file is.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -243,7 +244,9 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     A clip that comes out imperfect is kept, and what is wrong with it returned as reader issues for record_depth: the
     camera's frame times stop before its colour clip does (depth_clip_partial: the frames past them are black), or
     the depth clip's timestamps differ from the colour clip's (depth_clip_timing). A clip that cannot be cut at all
-    raises, and board clips records that as depth_clip_failed (depth_failed)."""
+    raises, and board clips records it (depth_failed): DepthNotDecodable when the depth file opens and its data does
+    not decode or it holds no video stream (depth_not_decodable, a fault in the recording, depth_decoding), any other
+    error, a missing or unopenable file among them, as depth_clip_failed, a failure of our cut."""
     from fractions import Fraction
 
     import av
@@ -279,73 +282,67 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     else:
         # no capture times: the depth stream's frames are the camera's own, one for one
         want = [skip + i if skip + i < len(dpts) else None for i in range(len(pts))]
-    # a camera whose depth unit is not known is drawn on its upload-wide range (prepare writes entry["range"]); an
-    # episode prepared before that was measured falls back to its own readings, never to each frame's
-    rng = None
-    if not entry.get("scale_m") and not entry.get("range"):
-        idx = sorted(set(np.linspace(0, len(dpts) - 1, min(24, len(dpts))).astype(int).tolist()))
-        try:
-            got = dp.decode(entry, dpts, idx)
-        except Exception as e:
-            raise DepthNotDecodable(f"{type(e).__name__}: {e}") from e
-        rng = dp.scale_range(got.values())
     index_of = {int(p): i for i, p in enumerate(dpts)}
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
     black = np.zeros((h, w, 3), np.uint8)
+    with depth_decoding():
+        src = av.open(str(entry["packed"]))
     try:
-        src = None
-        try:
-            src = av.open(str(entry["packed"]))
+        with src:
+            if not src.streams.video:
+                raise DepthNotDecodable("the depth file holds no video stream")
             ist = src.streams.video[0]
-        except Exception as e:
-            if src is not None:
-                src.close()
-            raise DepthNotDecodable(f"{type(e).__name__}: {e}") from e
+            # a camera whose depth unit is not known is drawn on its upload-wide range (prepare writes
+            # entry["range"]); an episode prepared before that was measured falls back to its own readings, never to
+            # each frame's
+            rng = None
+            if not entry.get("scale_m") and not entry.get("range"):
+                idx = sorted(set(np.linspace(0, len(dpts) - 1, min(24, len(dpts))).astype(int).tolist()))
+                with depth_decoding():
+                    got = dp.decode(entry, dpts, idx)
+                rng = dp.scale_range(got.values())
+            with av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
+                ist.codec_context.thread_count = threads
+                ost = dst.add_stream("libx264", rate=Fraction(round(fps * 1000), 1000))
+                ost.width, ost.height, ost.pix_fmt = w, h, "yuv420p"
+                ost.time_base = tb
+                ost.codec_context.time_base = tb
+                ost.codec_context.thread_count = threads
+                ost.options = {"crf": str(DEPTH_CRF), "preset": PRESET, "profile": "high", "forced-idr": "1"}
+                frames = src.decode(ist)
 
-        def depth_frame():
-            # a frame of the recording's depth stream; one that does not decode is the recording's fault, not the cut's
-            try:
-                return next(frames, None)
-            except Exception as e:
-                raise DepthNotDecodable(f"{type(e).__name__}: {e}") from e
-        with src, av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
-            ist.codec_context.thread_count = threads
-            ost = dst.add_stream("libx264", rate=Fraction(round(fps * 1000), 1000))
-            ost.width, ost.height, ost.pix_fmt = w, h, "yuv420p"
-            ost.time_base = tb
-            ost.codec_context.time_base = tb
-            ost.codec_context.thread_count = threads
-            ost.options = {"crf": str(DEPTH_CRF), "preset": PRESET, "profile": "high", "forced-idr": "1"}
-            frames = src.decode(ist)
-            cur_i, cur = -1, None
-            next_key = 0.0
-            for i, p in enumerate(pts):
-                j = want[i]
-                while j is not None and cur_i < j:
-                    fr = depth_frame()
-                    if fr is None:
-                        j = None
-                        break
-                    k = index_of.get(int(fr.pts)) if fr.pts is not None else None
-                    if k is not None:
-                        cur_i, cur = k, fr
-                if j is not None and cur_i == j:
-                    im = dp.picture(dp._array(cur), entry, rng)
-                    if im.size != (w, h):
-                        im = im.resize((w, h), resample=0)
-                    rgb = np.asarray(im.convert("RGB"))
-                else:
-                    rgb = black
-                vf = av.VideoFrame.from_ndarray(rgb, format="rgb24")
-                vf.pts, vf.time_base = int(p), tb
-                if float(p * tb) >= next_key - 1e-9:
-                    vf.pict_type = av.video.frame.PictureType.I
-                    next_key += KEY_S
-                for pkt in ost.encode(vf):
+                def depth_frame():
+                    with depth_decoding():
+                        return next(frames, None)
+                cur_i, cur = -1, None
+                next_key = 0.0
+                for i, p in enumerate(pts):
+                    j = want[i]
+                    while j is not None and cur_i < j:
+                        fr = depth_frame()
+                        if fr is None:
+                            j = None
+                            break
+                        k = index_of.get(int(fr.pts)) if fr.pts is not None else None
+                        if k is not None:
+                            cur_i, cur = k, fr
+                    if j is not None and cur_i == j:
+                        im = dp.picture(dp._array(cur), entry, rng)
+                        if im.size != (w, h):
+                            im = im.resize((w, h), resample=0)
+                        rgb = np.asarray(im.convert("RGB"))
+                    else:
+                        rgb = black
+                    vf = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+                    vf.pts, vf.time_base = int(p), tb
+                    if float(p * tb) >= next_key - 1e-9:
+                        vf.pict_type = av.video.frame.PictureType.I
+                        next_key += KEY_S
+                    for pkt in ost.encode(vf):
+                        dst.mux(pkt)
+                for pkt in ost.encode():
                     dst.mux(pkt)
-            for pkt in ost.encode():
-                dst.mux(pkt)
         frame_lengths(tmp)
         got = probe_pts(tmp)[3]
         if got != list(pts):
@@ -358,20 +355,35 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     return issues
 
 
+@contextlib.contextmanager
+def depth_decoding():
+    """Reading the recording's depth file: an FFmpeg error that is not an OSError means the file opened and its data
+    does not decode, a fault in the recording (DepthNotDecodable). A file that is gone or cannot be opened raises an
+    OSError, which stays as it is, a failure of our cut, as label/depth.py decode treats it."""
+    import av
+    try:
+        yield
+    except av.error.FFmpegError as e:
+        if isinstance(e, OSError):
+            raise
+        raise DepthNotDecodable(f"{type(e).__name__}: {e}") from e
+
+
 DEPTH_CLIP_PARTIAL = "depth_clip_partial"     # a depth clip with black frames where the camera has no capture time
 DEPTH_CLIP_TIMING = "depth_clip_timing"       # a depth clip whose timestamps differ from its colour clip's
 DEPTH_CLIP_FAILED = "depth_clip_failed"       # a depth clip that could not be cut; the page offers no depth there
-DEPTH_NOT_DECODABLE = "depth_not_decodable"   # the recording's depth file does not open or decode
+DEPTH_NOT_DECODABLE = "depth_not_decodable"   # the recording's depth file opens and does not decode
 DEPTH_KINDS = (DEPTH_CLIP_PARTIAL, DEPTH_CLIP_TIMING, DEPTH_CLIP_FAILED, DEPTH_NOT_DECODABLE)
 
 
 class DepthNotDecodable(Exception):
-    """extract_depth could not open or decode the recording's depth file: a fault in the recording, not in our cut."""
+    """The recording's depth file opened and does not decode, or holds no video stream: a fault in the recording, not
+    in our cut (depth_decoding)."""
 
 
 def depth_failed(ep_dir: Path, cam: str, err: Exception) -> dict:
     """The reader issue of a camera whose depth clip could not be cut (extract_depth raised): depth_not_decodable when
-    the recording's depth file does not open or decode, else depth_clip_failed."""
+    the recording's depth file opens and does not decode (DepthNotDecodable), else depth_clip_failed."""
     label = camera_label(cam, _context(ep_dir))
     if isinstance(err, DepthNotDecodable):
         return {"kind": DEPTH_NOT_DECODABLE, "camera": cam, "what": (

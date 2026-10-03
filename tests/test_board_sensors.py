@@ -379,6 +379,52 @@ def test_a_depth_stream_that_does_not_decode_is_a_fault_in_the_recording(tmp_pat
     assert "reader_issues" not in json.loads((ep / "context.json").read_text())
 
 
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_only_a_depth_file_that_opens_and_does_not_decode_is_a_fault_in_the_recording(tmp_path):
+    """A depth file that is missing had been recorded as depth_not_decodable, a fault in the recording, though nothing
+    of the recording was read. Only a file that opens and does not decode, or holds no video stream, is the recording's
+    fault; a file that is gone or cannot be opened is a failure of our cut (depth_clip_failed), as label/depth.py
+    decode treats it."""
+    import av
+    n = 40
+
+    def kind_of(tmp, scale, make_depth):
+        ep = _episode(tmp / "eps", n=n, depth=True)
+        if not scale:
+            d = json.loads((ep / "depth.json").read_text())
+            d["exo"].pop("scale_m")
+            (ep / "depth.json").write_text(json.dumps(d))
+        _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+               lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+        make_depth(ep / "depth.mkv")
+        t = 12.5 + np.arange(n) / 30
+        np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
+        np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+        out = tmp / "clips"
+        for (pk, b, du, o, fps, main, off, skip, _, _) in clips.episode_jobs(ep, out, False):
+            clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+        (job,) = clips.depth_jobs(ep, out, False)
+        with pytest.raises(Exception) as got:
+            clips.extract_depth(*job[:4], 1, job[4])
+        return clips.depth_failed(ep, "exo", got.value)["kind"]
+
+    def audio_only(p):
+        with av.open(str(p), "w") as c:
+            s = c.add_stream("pcm_s16le", rate=8000)
+            fr = av.AudioFrame.from_ndarray(np.zeros((1, 800), np.int16), format="s16", layout="mono")
+            fr.sample_rate = 8000
+            for pkt in s.encode(fr):
+                c.mux(pkt)
+            for pkt in s.encode():
+                c.mux(pkt)
+    for scale in (True, False):
+        tag = "known" if scale else "unknown"
+        assert kind_of(tmp_path / f"gone_{tag}", scale, lambda p: None) == "depth_clip_failed"
+        assert kind_of(tmp_path / f"garbage_{tag}", scale, lambda p: p.write_bytes(b"\x00" * 4000)) \
+            == "depth_not_decodable"
+        assert kind_of(tmp_path / f"audio_{tag}", scale, audio_only) == "depth_not_decodable"
+
+
 # ---------------------------------------------------------------- the server
 
 def test_the_server_hands_out_sensors_and_depth_clips(tmp_path, monkeypatch):
