@@ -351,6 +351,34 @@ def test_a_depth_clip_that_cannot_be_cut_is_flagged_on_its_episode(tmp_path):
     assert ri[1]["camera"] == "left" and "no depth_left_pts" in ri[1]["what"] and "no depth" in ri[1]["what"]
 
 
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_depth_stream_that_does_not_decode_is_a_fault_in_the_recording(tmp_path):
+    """A depth file that does not decode had been recorded like a failure of our own cut (depth_clip_failed), which the
+    board does not count. It is recorded as depth_not_decodable, a fault in the recording; a failure of the cut itself
+    stays depth_clip_failed."""
+    import av
+    n = 40
+    ep = _episode(tmp_path / "eps", n=n, depth=True)
+    _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+    (ep / "depth.mkv").write_bytes(b"\x00" * 4000)
+    t = 12.5 + np.arange(n) / 30
+    np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
+    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+    out = tmp_path / "clips"
+    for (pk, b, du, o, fps, main, off, skip, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+    (job,) = clips.depth_jobs(ep, out, False)
+    with pytest.raises(Exception) as got:
+        clips.extract_depth(*job[:4], 1, job[4])
+    iss = clips.depth_failed(ep, "exo", got.value)
+    assert iss["kind"] == "depth_not_decodable" and iss["camera"] == "exo", iss
+    assert clips.depth_failed(ep, "exo", RuntimeError("no depth_exo_pts"))["kind"] == "depth_clip_failed"
+    clips.record_depth(ep, "exo", [iss])
+    clips.record_depth(ep, "exo", [])
+    assert "reader_issues" not in json.loads((ep / "context.json").read_text())
+
+
 # ---------------------------------------------------------------- the server
 
 def test_the_server_hands_out_sensors_and_depth_clips(tmp_path, monkeypatch):

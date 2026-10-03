@@ -118,10 +118,19 @@
    "reader_issues": [
     "table_downsampled",
     "signal_summarised",
-    "camera_not_colour",
     "depth_clip_failed",
+    "depth_clip_timing",
     "camera_offset"
    ]
+  },
+  {
+   "slug": "not-colour-camera",
+   "list": "handling",
+   "name": "Labelled from a camera that is not colour",
+   "reader_issues": [
+    "camera_not_colour"
+   ],
+   "why": "a recording whose only camera is infrared, thermal or a mask has that as a property, not a fault in it, so it is shown and never counted"
   },
   {
    "slug": "out-of-view",

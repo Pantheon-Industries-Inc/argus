@@ -36,7 +36,9 @@ on one fixed scale, depth of unknown unit scaled across the upload, no reading b
 colour frame with no depth frame within half a depth frame's interval is black. The page switches each camera
 between its colour and its depth clip. A depth clip that comes out imperfect (the camera's capture times stop before
 its clip does, or the clip's timestamps differ from the colour clip's) is kept, and one that cannot be cut is left
-out; either is recorded in the episode's reader_issues (record_depth), so the board flags it.
+out; either is recorded in the episode's reader_issues (record_depth), so the board flags it. A depth stream whose own
+file does not open or decode is recorded as depth_not_decodable, a fault in the recording, apart from a failure of
+our cut (depth_clip_failed).
 """
 from __future__ import annotations
 
@@ -282,15 +284,32 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     rng = None
     if not entry.get("scale_m") and not entry.get("range"):
         idx = sorted(set(np.linspace(0, len(dpts) - 1, min(24, len(dpts))).astype(int).tolist()))
-        rng = dp.scale_range(dp.decode(entry, dpts, idx).values())
+        try:
+            got = dp.decode(entry, dpts, idx)
+        except Exception as e:
+            raise DepthNotDecodable(f"{type(e).__name__}: {e}") from e
+        rng = dp.scale_range(got.values())
     index_of = {int(p): i for i, p in enumerate(dpts)}
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
     black = np.zeros((h, w, 3), np.uint8)
     try:
-        with av.open(str(entry["packed"])) as src, av.open(str(tmp), "w", format="mp4",
-                                                          options={"movflags": "+faststart"}) as dst:
+        src = None
+        try:
+            src = av.open(str(entry["packed"]))
             ist = src.streams.video[0]
+        except Exception as e:
+            if src is not None:
+                src.close()
+            raise DepthNotDecodable(f"{type(e).__name__}: {e}") from e
+
+        def depth_frame():
+            # a frame of the recording's depth stream; one that does not decode is the recording's fault, not the cut's
+            try:
+                return next(frames, None)
+            except Exception as e:
+                raise DepthNotDecodable(f"{type(e).__name__}: {e}") from e
+        with src, av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
             ist.codec_context.thread_count = threads
             ost = dst.add_stream("libx264", rate=Fraction(round(fps * 1000), 1000))
             ost.width, ost.height, ost.pix_fmt = w, h, "yuv420p"
@@ -304,7 +323,7 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
             for i, p in enumerate(pts):
                 j = want[i]
                 while j is not None and cur_i < j:
-                    fr = next(frames, None)
+                    fr = depth_frame()
                     if fr is None:
                         j = None
                         break
@@ -342,14 +361,23 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
 DEPTH_CLIP_PARTIAL = "depth_clip_partial"     # a depth clip with black frames where the camera has no capture time
 DEPTH_CLIP_TIMING = "depth_clip_timing"       # a depth clip whose timestamps differ from its colour clip's
 DEPTH_CLIP_FAILED = "depth_clip_failed"       # a depth clip that could not be cut; the page offers no depth there
-DEPTH_KINDS = (DEPTH_CLIP_PARTIAL, DEPTH_CLIP_TIMING, DEPTH_CLIP_FAILED)
+DEPTH_NOT_DECODABLE = "depth_not_decodable"   # the recording's depth file does not open or decode
+DEPTH_KINDS = (DEPTH_CLIP_PARTIAL, DEPTH_CLIP_TIMING, DEPTH_CLIP_FAILED, DEPTH_NOT_DECODABLE)
+
+
+class DepthNotDecodable(Exception):
+    """extract_depth could not open or decode the recording's depth file: a fault in the recording, not in our cut."""
 
 
 def depth_failed(ep_dir: Path, cam: str, err: Exception) -> dict:
-    """The reader issue of a camera whose depth clip could not be cut (extract_depth raised)."""
+    """The reader issue of a camera whose depth clip could not be cut (extract_depth raised): depth_not_decodable when
+    the recording's depth file does not open or decode, else depth_clip_failed."""
+    label = camera_label(cam, _context(ep_dir))
+    if isinstance(err, DepthNotDecodable):
+        return {"kind": DEPTH_NOT_DECODABLE, "camera": cam, "what": (
+            f"The {label}'s depth video does not decode ({str(err)[:160]}), so the page shows no depth for it.")}
     return {"kind": DEPTH_CLIP_FAILED, "camera": cam, "what": (
-        f"The {camera_label(cam, _context(ep_dir))}'s depth could not be drawn for the board ({str(err)[:160]}), so "
-        "the page shows no depth for it.")}
+        f"The {label}'s depth could not be drawn for the board ({str(err)[:160]}), so the page shows no depth for it.")}
 
 
 def record_depth(ep_dir: Path, cam: str, issues: list[dict]) -> None:
