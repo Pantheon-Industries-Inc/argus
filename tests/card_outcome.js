@@ -1,5 +1,6 @@
 // The outcome a list card shows (board/serve.py cardOutcomeHtml): a reply that gave no labels says so, a session of
-// tasks gives its share done, and a long recording with a part not labelled never reads complete.
+// tasks gives its share done, and a long recording with a part not labelled never reads complete, on its card or in
+// its tasks panel (partsGapHtml).
 //
 //   node tests/card_outcome.js [PAGE_SOURCE]     (default board/serve.py)
 //
@@ -20,7 +21,8 @@ const piece = (name) => {
   return src.slice(a, i + 1) + '\n';
 };
 const stubs = 'const ST_WORDS = {unparsed: "did not parse"}; const outcomeWords = (o) => o;';
-const T = new Function(stubs + piece('esc') + piece('cardOutcomeHtml') + 'return {cardOutcomeHtml};')();
+const T = new Function(stubs + piece('esc') + piece('cardOutcomeHtml') + piece('partsGapHtml')
+  + 'return {cardOutcomeHtml, partsGapHtml};')();
 
 let bad = 0;
 const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };
@@ -32,4 +34,8 @@ check(!gap.includes('success') && gap.includes('2/2 tasks') && gap.includes('1 o
   'a long recording with a part not labelled never reads complete');
 check(T.cardOutcomeHtml({task_completed: 'success'}).includes('>success<'), 'an outcome');
 check(T.cardOutcomeHtml({}).includes('>unrated<'), 'no outcome');
+// the tasks panel of the episode says it too, next to its success count
+check(T.partsGapHtml({}) === '' && T.partsGapHtml({_stitched: {parts: 3, missing: []}}) === '', 'no part missing');
+check(T.partsGapHtml({_stitched: {parts: 3, missing: [{part: 2}]}}).includes('1 of 3 parts not labelled'),
+  'the tasks panel names the parts not labelled');
 process.exit(bad ? 1 : 0);

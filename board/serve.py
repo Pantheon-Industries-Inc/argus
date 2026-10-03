@@ -2937,6 +2937,11 @@ function unshownNote(d) {
 // ("8/9 tasks") instead of a misleading "unrated"; a single task shows its completion verdict. A long recording with a
 // part the model gave no labels for (parts_missing, label/pieces.py stitch_run) never reads complete, and an episode
 // whose own reply gave no labels says so.
+// next to a session's success count: how many parts of a long recording have no labels (label/pieces.py stitch_run)
+function partsGapHtml(d) {
+  const st = d && d._stitched, k = st && Array.isArray(st.missing) ? st.missing.length : 0;
+  return k ? ` / <span class="ts-fail">${k} of ${st.parts} parts not labelled</span>` : '';
+}
 function cardOutcomeHtml(ep) {
   if (ep.label_failed && !ep.cmp_status) {
     // the board's own reply gave no labels: no outcome to rate, which "unrated" would hide
@@ -3159,7 +3164,8 @@ function checksSection(d) {
         : c.status === 'errored' ? 'err' : 'na',
       text: c.status === 'fired' ? [...new Set((c.shown_as === 'issue' ? flags[c.check] : notes[c.check]) || [])]
         .concat(c.shown_as === 'note' && c.why && (cq.notes || []).some(x => x.check === c.check && x.evidence)
-          ? [c.why] : []).join(' ') : c.status === 'errored' && c.why ? asSentence(c.why) : ''}));
+          ? [c.why] : c.shown_as === 'issue' && c.why ? [asSentence(c.why)] : []).join(' ')
+        : c.status === 'errored' && c.why ? asSentence(c.why) : ''}));
     // a check that stopped with an error is shown with the ones that fired, before the full list
     const fired = all.filter(c => c.st === 'issue' || c.st === 'note' || c.st === 'err');
     const n = st => all.filter(c => c.st === st).length;
@@ -5320,7 +5326,8 @@ function renderEp(d, opts) {
     <h3 class="section">What tasks did the operator do?</h3>
     <div class="tasks-summary"><b>${tasks.length}</b> self-directed tasks &nbsp;
       <span class="ts-ok">${tcount.success} success</span> /
-      <span class="ts-fail">${tcount.failure} failure${tPartly ? `, ${tPartly} of them partly done` : ''}</span>
+      <span class="ts-fail">${tcount.failure} failure${tPartly ? `, ${tPartly} of them partly done` : ''}</span>${
+        partsGapHtml(d)}
       <div class="tasks-note">The episode has no single goal. Each task is graded on its own, and a messy final scene is fine.</div>
     </div>
     ${taskGoalFrameHtml}

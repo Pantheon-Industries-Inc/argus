@@ -1026,6 +1026,16 @@ def assess(feats: dict) -> dict:
         for c in CAMERA_MOTION_CHECKS:
             if (R.get(c) or {}).get("status") in ("fired", "clear"):
                 R[c] = {**_r("errored", f"the check stopped with an error ({err})"), "error": err}
+        # a per-camera video check never reads clear for a camera nobody checked: one that did not fire is errored,
+        # and one that fired on another camera stays fired and names the camera that was not checked
+        for c in VIDEO_CHECKS:
+            r = R.get(c) or {}
+            if c == "missing_camera" or r.get("status") not in ("fired", "clear"):
+                continue
+            if r["status"] == "clear":
+                R[c] = {**_r("errored", f"the check stopped with an error ({err})"), "error": err}
+            else:
+                R[c] = {**r, "why": f"it was not run on every camera, as the check stopped with an error ({err})"}
     if ctx.get("state_unaligned"):
         # the recorded state is not on these cameras' frames (the camera it was recorded on was taken out,
         # board/clips.py drop_cameras): every check that compares it with the video is not assessed; the checks on the
@@ -1367,9 +1377,10 @@ def format_result(a: dict) -> dict:
             for e in r["events"]:
                 flags.append({"check": check, "title": d["title"], "t_s": e["t_s"], "camera": e["camera"],
                               "actor": e["actor"], "evidence": e["evidence"]})
-            listing.append({**row, "status": "fired", "shown_as": "issue", "events": len(r["events"])})
+            listing.append({**row, "status": "fired", "shown_as": "issue", "events": len(r["events"]),
+                            **({"why": r["why"]} if r.get("why") else {})})
             continue
-        why = note_why(check, rig)
+        why = " ".join(x for x in (note_why(check, rig), r.get("why")) if x)
         for e in r["events"]:
             notes.append(note_record(check, e["evidence"], rig))
         listing.append({**row, "status": "fired", "shown_as": "note", "events": len(r["events"]),

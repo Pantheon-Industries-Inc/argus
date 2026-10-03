@@ -582,7 +582,8 @@ def test_the_list_is_encoded_once_and_follows_the_files(server):
 
 
 def test_a_long_recording_with_a_part_not_labelled_never_reads_complete_on_its_card(tmp_path):
-    d = _episode("mine", "teleop_arms", tasks=[{"task": "a", "outcome": "success"}, {"task": "b", "outcome": "success"}],
+    d = _episode("mine", "teleop_arms",
+                 tasks=[{"task": "a", "outcome": "success"}, {"task": "b", "outcome": "success"}],
                  _stitched={"parts": 3, "cuts_s": [300.0, 600.0], "missing": [{"part": 2, "t0_s": 300.0,
                                                                               "t1_s": 600.0, "why": "x"}]})
     rec = serve._rail_record(tmp_path / "episode_000001.json", d)
