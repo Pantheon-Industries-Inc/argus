@@ -445,6 +445,9 @@ class _guard:
 VIDEO_CHECKS = ("missing_camera", "camera_state_alignment_mismatch", "video_decode_failure",
                 "video_decode_frame_count_mismatch", "video_extreme_exposure", "video_low_contrast",
                 "video_duplicate_frames", "video_frozen_run")
+# the motion checks that compare every camera's picture with the recorded motion
+CAMERA_MOTION_CHECKS = ("largest_action_not_in_video", "visual_change_unexplained_by_action",
+                        "pixel_action_corr_mismatch")
 CLOCK_CHECKS = ("state_time_too_short", "state_time_non_monotonic_or_duplicate", "state_timestamp_gap",
                 "native_camera_timestamp_gap")
 MOTION_CHECKS = ("action_smoothness_discontinuity", "jump_return_event", "gross_umi_speed", "over_95_percent_static",
@@ -695,6 +698,7 @@ def assess(feats: dict) -> dict:
     anchor_pair: dict[str, np.ndarray] = {}
     anchor_pc: dict[str, np.ndarray] = {}
     cam_metrics = {}
+    cam_err: dict[str, str] = {}      # camera -> the error its checks stopped with
     with _guard(R, VIDEO_CHECKS):
         R["missing_camera"] = _fired([] if cams else [_ev("the episode has no camera")])
         av_all = actor_views(ep, names) if usable_state else []
@@ -714,20 +718,25 @@ def assess(feats: dict) -> dict:
             for g in movers:
                 o = 7 * g
                 if kind == "ee_pose":
-                    path = float(np.linalg.norm(np.diff(s_raw[a:b + 1, o:o + 3], axis=0), axis=1).sum())
+                    # summed over the steps with a reading (a missing row never hides a frozen camera)
+                    path = float(np.nansum(np.linalg.norm(np.diff(s_raw[a:b + 1, o:o + 3], axis=0), axis=1)))
                     turn = float(np.linalg.norm(global_[a:b, o + 3:o + 6], axis=1).sum())
                     if path >= 0.02 or turn >= 0.1:
                         return (f"the recorded {names[g]} pose moves {path * 100:.0f} cm and turns "
                                 f"{np.degrees(turn):.0f} deg")
                 elif kind == "joints":
-                    jt = float(np.abs(np.diff(s_raw[a:b + 1, o:o + 6], axis=0)).sum())
+                    jt = float(np.nansum(np.abs(np.diff(s_raw[a:b + 1, o:o + 6], axis=0))))
                     if jt >= 0.1:
                         return f"the recorded {names[g]} arm joints move {np.degrees(jt):.0f} deg in total"
             return ""
 
         align_ev, dec_ev, cnt_ev = [], [], []
         exp_ev, low_ev, dup_ev, frz_ev = [], [], [], []
-        for v, c in cams.items():
+    lists = (align_ev, dec_ev, cnt_ev, exp_ev, low_ev, dup_ev, frz_ev)
+    for v, c in cams.items():
+        # one camera's checks: a crash costs only its own evidence, never the other cameras' (cam_err)
+        sizes = [len(x) for x in lists]
+        try:
             n = c["n"]
             km = ep["kmap"].get(v)
             if km is None and n != T and has_state:
@@ -851,6 +860,14 @@ def assess(feats: dict) -> dict:
             if ap is not None:
                 anchor_pair[v] = ap
                 anchor_pc[v] = np.concatenate([[0.0], pc])
+        except Exception as e:  # noqa: BLE001 - recorded on the camera and on the checks that need it
+            for x, k in zip(lists, sizes):
+                del x[k:]
+            for d_ in (anchor_pair, anchor_pc):
+                d_.pop(v, None)
+            cam_err[v] = f"{type(e).__name__}: {e}"[:300]
+            cam_metrics[v] = {"error": cam_err[v]}
+    with _guard(R, VIDEO_CHECKS):
         R["camera_state_alignment_mismatch"] = _fired(align_ev)
         R["video_decode_failure"] = _fired(dec_ev)
         R["video_decode_frame_count_mismatch"] = _fired(cnt_ev)
@@ -1002,6 +1019,13 @@ def assess(feats: dict) -> dict:
                                   f"under {policy.minimum_visual_action_r_squared:g}", camera=cam))
             R["pixel_action_corr_mismatch"] = _fired(ev, metrics=cm_out)
 
+    if cam_err:
+        # a camera whose checks crashed is left out of anchor_pair and anchor_pc, so a check that compares every camera
+        # with the motion would judge the others alone; it says why instead
+        err = "; ".join(f"camera {v}: {m}" for v, m in cam_err.items())
+        for c in CAMERA_MOTION_CHECKS:
+            if (R.get(c) or {}).get("status") in ("fired", "clear"):
+                R[c] = {**_r("errored", f"the check stopped with an error ({err})"), "error": err}
     if ctx.get("state_unaligned"):
         # the recorded state is not on these cameras' frames (the camera it was recorded on was taken out,
         # board/clips.py drop_cameras): every check that compares it with the video is not assessed; the checks on the

@@ -257,3 +257,45 @@ def test_an_episode_whose_checks_cannot_run_records_every_check_as_errored(monke
     rec = cq.run_episode("/nowhere/episode_000000")
     assert rec["checks"] and all(r["status"] == "errored" for r in rec["checks"]) and not rec["flags"]
     assert "the state file does not read" in rec["checks"][0]["why"]
+
+
+def _two_cameras(right_crashes: bool, nan_row: bool = False):
+    """Two handheld grippers whose left one moves 30 cm while its camera shows the same picture throughout (a frozen
+    left camera), and a right camera that changes; the right camera's record is broken (no stds) when it crashes."""
+    T = 120
+    s = np.zeros((T, 14))
+    s[:, 0] = np.linspace(0, 0.3, T)
+    s[:, 6] = 0.5
+    s[:, 13] = 0.5
+    if nan_row:
+        s[60, 1] = np.nan
+
+    def cam(level, crash=False):
+        rng = np.random.default_rng(1)
+        return {"n": T, "error": None, "decoded": T, "means": np.full(T, 120.0) + rng.normal(0, 1, T),
+                "stds": None if crash else np.full(T, 40.0), "pair": np.full(T - 1, level),
+                "pchange": np.full(T - 1, level), "fps": 30.0}
+    return {"ep": _ep(s, gripper_value=VERIFIED), "T": T,
+            "cams": {"left": cam(0.02), "right": cam(30.0, crash=right_crashes)}}
+
+
+def test_a_camera_that_crashes_costs_only_its_own_evidence():
+    """The right camera's record breaks a check: its error is recorded and it is left out, the left camera's frozen
+    picture is still reported, and the checks that compare every camera with the motion are errored with the error."""
+    a = cq.assess(_two_cameras(True))
+    R = a["checks"]
+    assert R["video_frozen_run"]["status"] == "fired" and R["video_frozen_run"]["events"][0]["camera"] == "left"
+    assert R["video_low_contrast"]["status"] == "clear"
+    assert "TypeError" in a["cameras"]["right"]["error"] and "error" not in a["cameras"]["left"]
+    for c in ("largest_action_not_in_video", "visual_change_unexplained_by_action", "pixel_action_corr_mismatch"):
+        assert R[c]["status"] == "errored" and "right" in R[c]["why"] and "TypeError" in R[c]["why"], (c, R[c])
+    clean = cq.assess(_two_cameras(False))["checks"]
+    assert clean["video_frozen_run"]["status"] == "fired"
+    assert clean["visual_change_unexplained_by_action"]["status"] in ("fired", "clear")
+
+
+def test_a_missing_state_row_never_hides_a_frozen_camera():
+    """The moving gripper's state has one row with no reading inside the frozen stretch: its motion is summed over the
+    rows that have readings, so the frozen camera is still reported."""
+    R = cq.assess(_two_cameras(False, nan_row=True))["checks"]
+    assert R["video_frozen_run"]["status"] == "fired"
