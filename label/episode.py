@@ -434,10 +434,10 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     camera has takes their place, so the last detail view is the end of the footage (ep["footage_end"]). The episode
     keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,
     which recording_at then reports as not recording, so every grid and view leaves it out there; ep["decode_failed"],
-    the instants a camera's file could not be decoded at, before its last frame or, for a file none of whose frames
-    decodes, all of them (_coverage_note, decode_failures). A frame the decoder marks as damaged and a placeholder frame
-    (placeholder_instants) did not decode, wherever they are, so the model is never shown either as footage. Raises
-    only when no camera has any frame."""
+    the instants inside a camera's own recording (_in_span) its file could not be decoded at, before its last frame
+    or, for a file none of whose frames decodes, all of them (_coverage_note, decode_failures). A frame the decoder
+    marks as damaged and a placeholder frame (placeholder_instants) did not decode, wherever they are in the file, so
+    the model is never shown either as footage. Raises only when no camera has any frame."""
     vs = views(ep)
     failed, damaged = {v: set() for v in vs}, {v: set() for v in vs}
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
@@ -478,9 +478,12 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
     # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
     # where its file ended), or a damaged or placeholder frame anywhere; a camera with no frame at all that failed to
-    # decode does not decode anywhere. It is recorded whether or not another camera shows the instant, so an instant
-    # that left the request is still flagged
-    bad = {v: sorted(k for k in failed[v] if not got[v] or k < max(got[v]) or k in damaged[v]) for v in vs}
+    # decode does not decode anywhere. Only an instant inside the camera's own recording counts: a camera paired by
+    # time that was not recording there has only its nearest frame, from another time, so the instant is where its
+    # video starts or ends (_coverage_note), even when that frame does not decode. It is recorded whether or not
+    # another camera shows the instant, so an instant that left the request is still flagged
+    bad = {v: sorted(k for k in failed[v] if _in_span(ep, v, k) and (not got[v] or k < max(got[v]) or k in damaged[v]))
+           for v in vs}
     ep["decode_failed"] = {v: ks_ for v, ks_ in bad.items() if ks_}
     ep["undecodable"] = {v for v in ep["decode_failed"] if not got[v]}
     return got
@@ -926,8 +929,9 @@ def _coverage_note(ep: dict, pl: dict) -> str:
     the instants before its video starts or after it ends (a camera paired by time that was not recording, _in_span,
     or a camera whose file ends first, frames), each said the same way for both, and the instants its file could not be
     decoded at (all of them for a file none of whose frames decodes). One camera can have more than one of these, and
-    each is said. When every camera's file ends before the episode does, the last instant is the last frame they have
-    (frames, ep["footage_end"]), which is said too."""
+    each is said; the sentence after them speaks of one camera or of several by how many cameras they name. When every
+    camera's file ends before the episode does, the last instant is the last frame they have (frames,
+    ep["footage_end"]), which is said too."""
     starts, ended, broken, never = [], [], [], []
     at = lambda ks: ", ".join(seconds(frame_time(ep, k)) for k in sorted(ks))
     for v in views(ep):
@@ -935,7 +939,7 @@ def _coverage_note(ep: dict, pl: dict) -> str:
             continue
         name = cam_name(ep, v)
         if v in (ep.get("undecodable") or ()):
-            never.append(f"{name}'s video could not be decoded at any instant")
+            never.append((name, f"{name}'s video could not be decoded at any instant"))
             continue
         # the instants of the request it could not decode (one no camera could show has left the request)
         bad = set((ep.get("decode_failed") or {}).get(v) or ()) & set(pl["ks"])
@@ -944,21 +948,21 @@ def _coverage_note(ep: dict, pl: dict) -> str:
         before = [k for k in out_of if t is not None and frame_time(ep, k) < float(t[0])]
         after = [k for k in out_of if k not in before]
         if before:
-            starts.append(f"{name}'s video starts after the episode does, so it has no frame at {at(before)}")
+            starts.append((name, f"{name}'s video starts after the episode does, so it has no frame at {at(before)}"))
         if after:
-            ended.append(f"{name}'s video ends before the episode does, so it has no frame at {at(after)}")
+            ended.append((name, f"{name}'s video ends before the episode does, so it has no frame at {at(after)}"))
         if bad:
-            broken.append(f"{name}'s video could not be decoded at {at(bad)}")
+            broken.append((name, f"{name}'s video could not be decoded at {at(bad)}"))
     out = ""
     gone_tail = "{Its} cells at those times are empty, and {it} {is_} left out of a detail view there."
     never_tail = "{Its} cells are all empty, and {it} {is_} left out of every detail view."
     for parts, tail in ((starts + ended + broken, gone_tail), (never, never_tail)):
         if not parts:
             continue
-        one = len(parts) == 1
+        one = len({name for name, _ in parts}) == 1
         words = {"its": "its" if one else "their", "Its": "Its" if one else "Their", "it": "it" if one else "they",
                  "is_": "is" if one else "are"}
-        s = "; ".join(parts)
+        s = "; ".join(said for _, said in parts)
         out += " " + s[0].upper() + s[1:] + ". " + tail.format(**words)
     if ep.get("footage_end") is not None:
         out += (" Every camera's video ends before the episode does, so the last instant is the last frame they have, "

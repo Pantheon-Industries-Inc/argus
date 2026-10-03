@@ -427,6 +427,30 @@ def test_a_frame_cut_short_is_never_sent_as_footage(tmp_path):
     assert "left's video could not be decoded at 0.67 s" in me.build_request(ep["dir"])["prompt"].lower()
 
 
+def test_a_paired_camera_whose_last_frame_is_damaged_is_said_to_end_after_it_never_to_fail_to_decode_there(tmp_path):
+    """A camera paired by time whose file stops at 0.67 s with its last frame cut short: past its end every instant's
+    nearest frame is that damaged last one, but the camera was not recording there, so those instants are where its
+    video ended, and only the instant of the damaged frame itself could not be decoded."""
+    up = tmp_path / "up"
+    up.mkdir()
+    _video(up / "top.mp4", 61)
+    _cut_in_last_frame(up / "wrist_left.mp4", 21)
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    ep = me.load(eps / rep["episodes"][0]["episode_id"])
+    exo, left = np.arange(61) / 30, np.arange(21) / 30
+    ep["times"], ep["kmap"] = {"exo": exo, "left": left}, {"left": formats.nearest(left, exo)}
+    pl = {"ks": [0, 20, 30, 60]}
+    imgs = me.frames(ep, pl)
+    assert 20 not in imgs["left"] and ep["decode_failed"] == {"left": [20]}, ep["decode_failed"]
+    note = me._coverage_note(ep, pl)
+    assert note == (" Left's video ends before the episode does, so it has no frame at 1.00 s, 2.00 s; left's video "
+                    "could not be decoded at 0.67 s. Its cells at those times are empty, and it is left out of a "
+                    "detail view there."), note
+    (bad,) = me.decode_failures(ep)
+    assert bad["t0_s"] == bad["t1_s"] == 0.667, bad
+
+
 def test_a_camera_damaged_partway_leaves_only_its_own_cells_empty(tmp_path):
     """A camera whose file does not decode for a stretch in the middle: the episode is labelled from a read only
     folder, that camera's cells are empty where it does not decode, the prompt says so, and the request returns the
