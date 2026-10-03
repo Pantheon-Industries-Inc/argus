@@ -2927,6 +2927,19 @@ def test_a_note_is_read_without_its_byte_order_mark():
         _a_note_is_read_without_its_byte_order_mark(Path(t))
 
 
+def _a_json_lines_file_with_no_row_is_named_as_not_read(tmp_path):
+    """A JSON Lines file none of whose lines parses was passed over by the table reader and named nowhere."""
+    _, rep = _upload_notes(tmp_path, ["clips/IMG_0001.mp4", "clips/IMG_0002.mp4"],
+                           {"clips/labels.jsonl": "pick the cup\npour the tea\n"})
+    assert "clips/labels.jsonl" in _unread_line(rep), rep["missing"]
+
+
+def test_a_json_lines_file_with_no_row_is_named_as_not_read():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_json_lines_file_with_no_row_is_named_as_not_read(Path(t))
+
+
 def test_notes_cut_for_the_prompt_name_the_files_left_out():
     notes = {"a.txt": "x" * (f.ANNOTATION_MAX_CHARS - 20), "b.txt": "y" * 100, "c.txt": "z"}
     txt = f.annotation_text(notes, files=True)
