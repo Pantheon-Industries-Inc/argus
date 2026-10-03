@@ -148,27 +148,51 @@ def test_an_arm_cut_short_inside_the_footage_is_named_in_the_state_note(tmp_path
     assert state is None and "/yam_left/joint_state" in note and "does not cover" in note
 
 
-def test_an_arm_file_that_cannot_be_read_is_named_in_the_state_note(tmp_path):
-    import json
+def _recorder_with(tmp_path, name: str, third_arm: bool = False, cut: bool = True) -> dict:
+    """recorder_folder's episode with the sensor MCAP name cut before its first message (written as a whole file of
+    no message when not cut), converted; its context.json, and its folder under "_ep"."""
+    from mcap.writer import Writer
     from test_formats import recorder_folder
-    d = recorder_folder(tmp_path / "upload")
-    left = d / "yam_left.mcap"
-    left.write_bytes(left.read_bytes()[:64])        # cut before its first message
+    d = recorder_folder(tmp_path / "upload", third_arm=third_arm)
+    p = d / name
+    if cut:
+        p.write_bytes((p if p.exists() else d / "yam_left.mcap").read_bytes()[:64])
+    else:
+        with open(p, "wb") as fh:
+            w = Writer(fh)
+            w.start()
+            w.finish()
     rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
-    ctx = json.loads((tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
-    assert "yam_left.mcap" in (ctx.get("state_note") or "")
+    ep = tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"]
+    return json.loads((ep / "context.json").read_text()) | {"_ep": ep}
+
+
+def test_an_arm_file_that_cannot_be_read_leaves_the_episode_with_no_arm_state(tmp_path):
+    """A follower arm's file cut before its first message had left a state of the other arm alone, so the model was
+    told one arm works on a two arm rig."""
+    from label import episode as me
+    ctx = _recorder_with(tmp_path, "yam_left.mcap")
+    assert ctx["state_kind"] == "none" and not (ctx["_ep"] / "state.npz").exists()
+    assert "yam_left.mcap is cut short before its first message" in ctx["state_note"]
+    assert "Nothing it records is in the state or the signals" in ctx["state_note"]
+    assert "RECORDED STATE: no arm state" in me.build_request(ctx["_ep"])["prompt"]
+
+
+@pytest.mark.parametrize("name", ["gelsight_pad.mcap", "yam_leader_left.mcap"])
+def test_a_sensor_file_that_cannot_be_read_is_named_and_never_called_an_arm(tmp_path, name):
+    ctx = _recorder_with(tmp_path, name)
+    assert ctx["state_kind"] == "none" and name in ctx["state_note"] and " arm" not in ctx["state_note"]
+
+
+def test_a_whole_sensor_file_with_no_message_takes_nothing_from_the_arm_state(tmp_path):
+    ctx = _recorder_with(tmp_path, "health_log.mcap", cut=False)
+    assert ctx["state_kind"] == "joints" and "health_log.mcap" not in (ctx.get("state_note") or "")
 
 
 def test_a_third_arm_file_that_cannot_be_read_puts_no_camera_on_a_third_arm(tmp_path):
-    import json
-    from test_formats import recorder_folder
-    d = recorder_folder(tmp_path / "upload", third_arm=True)
-    arm = d / "yam_camera.mcap"
-    arm.write_bytes(arm.read_bytes()[:64])
-    rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
-    ctx = json.loads((tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
-    assert "yam_camera.mcap" in ctx["state_note"] and "third arm" not in ctx["state_note"]
-    assert "third arm" not in (ctx["cameras"]["exo"].get("desc") or "")
+    ctx = _recorder_with(tmp_path, "yam_camera.mcap", third_arm=True)
+    assert ctx["state_kind"] == "none" and "yam_camera.mcap" in ctx["state_note"]
+    assert "third arm" not in ctx["state_note"] and "third arm" not in (ctx["cameras"]["exo"].get("desc") or "")
 
 
 # ---------------------------------------------------------------- a damaged archive

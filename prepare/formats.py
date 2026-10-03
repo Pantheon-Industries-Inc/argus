@@ -2458,6 +2458,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     # they share no clock with the footage, or listed (split_sensors)
     by_clock, assumed, unplaced = split_sensors(item, real[anchor], real[anchor] is not None)
     note_sensors(extra, signals, by_clock, assumed, unplaced, q=real[anchor])
+    unread = unread_sensors_note(unplaced) if rig != "ego_head" else None
     if by_clock:
         mcap_files = [p for p in by_clock if p.suffix.lower() == ".mcap"]
         h5_files = [p for p in by_clock if p.suffix.lower() in H5_EXT]
@@ -2468,33 +2469,23 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             merge_signals(signals, mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals())
         else:
             streams = mcap_joint_streams(mcap_files, real[anchor])
-            state, action, note = joint_state(streams, real[anchor])
+            state, action, note = joint_state(streams, real[anchor]) if not unread else (None, None, None)
             merge_signals(signals, mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action)))
             signals.left_out += joint_left_out(streams, state, action)
             if note:
                 extra["state_note"] = note
             elif state is not None:
                 extra["source"]["state"] = [Path(p).name for p in mcap_files]
-                notes = []
-                # a sensor file that could not be read at all may hold an arm the state therefore lacks: said
-                unread = [Path(p).name for p, _ in unplaced if Path(p).suffix.lower() == ".mcap"
-                          and sensor_times(p) is None]
-                if unread:
-                    notes.append(f"The recorded state is read from {_and_words(extra['source']['state'])}; "
-                                 f"{_and_words(unread)} could not be read, so an arm "
-                                 f"{'they record is' if len(unread) > 1 else 'it records is'} not in it.")
                 third = third_arms(streams)
                 if third:
-                    notes.append(f"The recording has a third arm ({', '.join(third)}) beside the left and right "
-                                 "arms; it is read as neither working arm.")
+                    extra["state_note"] = (f"The recording has a third arm ({', '.join(third)}) beside the left and "
+                                           "right arms; it is read as neither working arm.")
                     # a scene camera whose name says it is on an arm, beside a third arm, is carried by that arm
                     if "exo" in files and is_mount_named(files["exo"][0]):
                         descs["exo"] = third_arm_camera_desc(third)
-                if notes:
-                    extra["state_note"] = " ".join(notes)
         if h5_files:
             more = h5_file_signals(h5_files, real[anchor], len(real[anchor]))
-            if state is None and rig != "ego_head":
+            if state is None and rig != "ego_head" and not unread:
                 # an HDF5 array named as the state (a robot.h5's qpos beside the videos) is read by the rule an HDF5
                 # episode's is (h5_state), and leaves the signals when it is read
                 state, action, state_names, state_src, h5_note = h5_state(
@@ -2505,6 +2496,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 elif h5_note:
                     extra.setdefault("state_note", h5_note)
             merge_signals(signals, more)
+    if unread:
+        extra["state_note"] = unread
     if assumed:
         t_rel = (np.asarray(real[anchor], dtype=np.float64) - float(real[anchor][0])) if real[anchor] is not None \
             else seconds(prs[anchor])
@@ -5654,7 +5647,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     sensor_h5s = [p for p in by_clock if p.suffix.lower() in H5_EXT]
     if rig == "teleop_arms":
         streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q)
-        state, action, note = joint_state(streams, q)
+        unread = unread_sensors_note(unplaced)
+        state, action, note = joint_state(streams, q) if not unread else (None, None, unread)
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)
     signals = mcap_signals([item["file"]] + sensor_mcaps, q, used)
@@ -6194,7 +6188,26 @@ def no_time_why(p: Path) -> str:
                 pass
     except Exception:
         return "it could not be opened; it may be damaged or cut short"
-    return "no time in it to place it on the footage by"
+    return NO_TIME_WHY
+
+
+NO_TIME_WHY = "no time in it to place it on the footage by"     # a whole sensor file that holds no time (no_time_why)
+
+
+def unread_sensors_note(unplaced: list) -> str | None:
+    """The state note of an episode one of whose sensor MCAP files could not be read at all (no_time_why: it could not
+    be opened, or it is cut short before its first message), or None. What such a file held is unknown, so the state
+    of the other files may lack an arm it recorded, and a state of one arm on a two arm rig tells the model one arm
+    works: the episode has no arm state and is labelled from the cameras, every channel of the other files kept as a
+    signal. Each file is named with why. A whole file that holds no message (NO_TIME_WHY) holds nothing the state could
+    lack. The note does not say what the file held, since a tactile pad, a leader's commands or a log is no arm."""
+    bad = [(Path(p).name, why) for p, why in unplaced
+           if Path(p).suffix.lower() == ".mcap" and why != NO_TIME_WHY and sensor_times(p) is None]
+    if not bad:
+        return None
+    return ("Labelled from the cameras, because " + "; ".join(f"{name} {why.removeprefix('it ')}" for name, why in bad)
+            + f". Nothing {'they record' if len(bad) > 1 else 'it records'} is in the state or the signals, and the "
+              "recorded state of the other sensor files may lack what it held.")
 
 
 def sensor_cut(p: Path) -> bool:
