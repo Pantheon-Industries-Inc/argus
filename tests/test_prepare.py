@@ -188,6 +188,9 @@ def test_state_value_names_settle_six_joints_and_a_gripper_against_seven_joints_
     Franka arm), a quaternion, or a gripper out of place stay signals; names that say neither keep the width rule."""
     j = lambda side: [f"{side}_joint_{i}.pos" for i in range(6)] + [f"{side}_gripper.pos"]
     pose = ["x", "y", "z", "roll", "pitch", "yaw", "gripper"]
+    wrist = ["wrist_x", "wrist_y", "wrist_z", "wrist_roll", "wrist_pitch", "wrist_yaw", "gripper"]
+    left_right_wrist = [n for s in ("left", "right") for n in [f"{s}_wrist_{a}" for a in (
+        "pos_x", "pos_y", "pos_z", "roll", "pitch", "yaw")] + [f"{s}_gripper"]]
     cases = [
         (14, "teleop_arms", j("left") + j("right"), "joints"),                        # MolmoAct2 bi_yam
         (7, "teleop_arms", pose, "ee_pose"),                                           # lerobot_franka_finger_tactile
@@ -209,6 +212,9 @@ def test_state_value_names_settle_six_joints_and_a_gripper_against_seven_joints_
         (7, "handheld_gripper", ["ee_x", "ee_y", "ee_z", "rx", "ry", "rz", "gripper"], "ee_pose"),
         (7, "handheld_gripper", ["ee.pos.x", "ee.pos.y", "ee.pos.z", "ee.rot.x", "ee.rot.y", "ee.rot.z", "jaw"],
          "ee_pose"),
+        # a pose of the wrist frame names a position, which no joint does, so it stays a pose on either rig
+        (7, "handheld_gripper", wrist, "ee_pose"), (7, "teleop_arms", wrist, "ee_pose"),
+        (14, "handheld_gripper", left_right_wrist, "ee_pose"), (14, "teleop_arms", left_right_wrist, "ee_pose"),
         # a quaternion under any separator, and quat only as a word of its own
         (7, "handheld_gripper", ["x", "y", "z", "ee-qx", "ee-qy", "ee-qz", "ee-qw"], "none"),
         (7, "handheld_gripper", ["x", "y", "z", "q_x", "q_y", "q_z", "q_w"], "none"),
