@@ -166,3 +166,14 @@ def test_only_a_matching_state_and_camera_constrain_the_output_arm(tmp_path, sta
     assert f"mounted on the {camera_side.upper()} arm" in prompt
     rows = [line for line in prompt.splitlines() if line.startswith("  ") and "s | " in line]
     assert rows and all("| " + state_side + " " in row for row in rows)
+
+
+def test_a_camera_name_cannot_map_a_contradicted_actor():
+    from test_recorded_actor_identity import single_state
+    ep = single_state()
+    ep["sources"].pop("right")
+    ep["context"]["cameras"].pop("right")
+    ep["context"]["cameras"]["left"]["name"] = UNKNOWN
+    formats.record_state_identity(ep["context"], "observations/left/qpos", RIGHT_NAMES)
+    assert me.actors(ep) == [UNKNOWN]
+    assert me.actor_views(ep) == [None]

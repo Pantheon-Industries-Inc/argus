@@ -436,6 +436,8 @@ def actor_views(ep: dict) -> list[str | None]:
     vs = views(ep)
     if len(names) == 2:
         return [v if v in vs else None for v in MOUNTED]
+    if state_kind(ep) != "none" and (ep["context"].get("state_identity") or {}).get("status") == "conflict":
+        return [None]
     mounted = [v for v in vs if v in MOUNTED]
     name = names[0]
     if name in MOUNTED:
