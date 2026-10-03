@@ -35,7 +35,8 @@ A depth clip is cut after its camera's colour clip and timed exactly like it: it
 colour clip's timestamps, each showing the depth frame recorded nearest that colour frame (depth_times.npz
 depth_<camera> against times.npz <camera>), drawn by label/depth.py picture() (near red and far blue, metric depth
 on one fixed scale, depth of unknown unit scaled across the upload, no reading black) at the colour clip's size. A
-colour frame with no depth frame within half a depth frame's interval is black. The page switches each camera
+colour frame with no depth frame within a frame of it (depth_frame_map, the model's rule) is black, and so is one
+whose depth frame does not decode, which is flagged with its stretch while every other depth frame is kept. The page switches each camera
 between its colour and its depth clip. A depth clip that comes out imperfect (the camera's capture times stop before
 its clip does, or the clip's timestamps differ from the colour clip's) is kept, and one that cannot be cut is left
 out; either is recorded in the episode's reader_issues (record_depth), so the board flags it.
@@ -299,19 +300,25 @@ def retime(mp4: Path, capture_s, fps: float = 30.0) -> None:
 
 
 def depth_frame_map(colour_t, depth_t) -> list:
-    """For each colour frame time, the index of the depth frame recorded nearest it, or None when the nearest is more
-    than half a depth frame's interval away (no depth reading for that frame)."""
-    import numpy as np
-    ct, dt = np.asarray(colour_t, dtype=np.float64), np.asarray(depth_t, dtype=np.float64)
-    if not len(dt):
-        return [None] * len(ct)
-    half = 0.5 * (float(np.median(np.diff(dt))) if len(dt) > 1 else 1.0 / 30)
-    if len(dt) > 1:
-        j = np.clip(np.searchsorted(dt, ct), 1, len(dt) - 1)
-        j = np.where(np.abs(dt[j - 1] - ct) <= np.abs(dt[j] - ct), j - 1, j)
-    else:
-        j = np.zeros(len(ct), dtype=int)
-    return [int(k) if abs(dt[k] - c) <= half + 1e-6 else None for k, c in zip(j, ct)]
+    """For each colour frame time, the index of the depth frame recorded nearest it, or None when none is within a
+    frame of it: prepare/formats.py depth_kmap, the rule the model's depth follows, so the board and the request agree
+    on where a camera has depth."""
+    from prepare.formats import depth_kmap
+    if not len(depth_t):
+        return [None] * len(colour_t)
+    return [int(k) if k >= 0 else None for k in depth_kmap(depth_t, colour_t)]
+
+
+def decoded_frames(src, ist):
+    """Every frame of a stream that decodes, packet by packet, so a damaged stretch costs only its own frames, as
+    label/depth.py decode skips them. A file that cannot be read at all still raises (an OSError)."""
+    import av
+    for pkt in src.demux(ist):
+        try:
+            yield from pkt.decode()
+        except av.error.FFmpegError as e:
+            if isinstance(e, OSError):
+                raise
 
 
 def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threads: int = 2,
@@ -320,8 +327,9 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     depth frame drawn by label/depth.py picture(), encoded with the colour clip's recipe at its size (at DEPTH_CRF).
 
     A clip that comes out imperfect is kept, and what is wrong with it returned as reader issues for record_depth: the
-    camera's frame times stop before its colour clip does (depth_clip_partial: the frames past them are black), or
-    the depth clip's timestamps differ from the colour clip's (depth_clip_timing). A clip that cannot be cut at all
+    camera's frame times stop before its colour clip does (depth_clip_partial: the frames past them are black), the
+    depth frames of some colour frames do not decode (depth_not_decodable, one per stretch: those frames are black),
+    or the depth clip's timestamps differ from the colour clip's (depth_clip_timing). A clip that cannot be cut at all
     raises, and board clips records that as depth_clip_failed (depth_failed)."""
     from fractions import Fraction
 
@@ -379,8 +387,8 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
             ost.codec_context.time_base = tb
             ost.codec_context.thread_count = threads
             ost.options = {"crf": str(DEPTH_CRF), "preset": PRESET, "profile": "high", "forced-idr": "1"}
-            frames = src.decode(ist)
-            cur_i, cur = -1, None
+            frames = decoded_frames(src, ist)
+            cur_i, cur, lost = -1, None, []
             next_key = 0.0
             for i, p in enumerate(pts):
                 j = want[i]
@@ -399,6 +407,8 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
                     rgb = np.asarray(im.convert("RGB"))
                 else:
                     rgb = black
+                    if want[i] is not None:
+                        lost.append(i)
                 vf = av.VideoFrame.from_ndarray(rgb, format="rgb24")
                 vf.pts, vf.time_base = int(p), tb
                 if float(p * tb) >= next_key - 1e-9:
@@ -409,6 +419,12 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
             for pkt in ost.encode():
                 dst.mux(pkt)
         frame_lengths(tmp)
+        at = np.asarray(pts, dtype=np.float64) * float(tb)
+        for run in np.split(np.asarray(lost, dtype=int), np.flatnonzero(np.diff(lost) > 1) + 1) if lost else []:
+            t0, t1 = float(at[run[0]]), float(at[run[-1]])
+            issues.append({"kind": DEPTH_NOT_DECODABLE, "camera": cam, "t0_s": round(t0, 3), "t1_s": round(t1, 3),
+                           "what": f"The {camera_label(cam, ctx)}'s depth could not be decoded from {t0:.2f} s to "
+                                   f"{t1:.2f} s, so the board shows no depth there."})
         got = probe_pts(tmp)[3]
         if got != list(pts):
             issues.append({"kind": DEPTH_CLIP_TIMING, "camera": cam, "what": (
@@ -423,7 +439,8 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
 DEPTH_CLIP_PARTIAL = "depth_clip_partial"     # a depth clip with black frames where the camera has no capture time
 DEPTH_CLIP_TIMING = "depth_clip_timing"       # a depth clip whose timestamps differ from its colour clip's
 DEPTH_CLIP_FAILED = "depth_clip_failed"       # a depth clip that could not be cut; the page offers no depth there
-DEPTH_KINDS = (DEPTH_CLIP_PARTIAL, DEPTH_CLIP_TIMING, DEPTH_CLIP_FAILED)
+DEPTH_NOT_DECODABLE = "depth_not_decodable"   # the recording's depth file opens and does not decode
+DEPTH_KINDS = (DEPTH_CLIP_PARTIAL, DEPTH_CLIP_TIMING, DEPTH_CLIP_FAILED, DEPTH_NOT_DECODABLE)
 
 
 def depth_failed(ep_dir: Path, cam: str, err: Exception) -> dict:
