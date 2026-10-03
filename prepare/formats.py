@@ -123,6 +123,7 @@ from pathlib import Path
 import numpy as np
 
 from prepare.state_notes import STATE_WHY
+from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_ASSUMED, COARSE_CLOCK
 
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -2313,7 +2314,6 @@ def table_seconds(raw: np.ndarray, real_anchor, t_vid: np.ndarray) -> np.ndarray
     return t
 
 
-ALIGNED_ROWS = "row per frame"   # a signal's meta "aligned_by" when a table was placed one row per frame
 ROWS_ASSUMED = ("{} (from {}) has as many rows as the video has frames, so each row was placed on one frame; its "
                 "timing assumes one row per frame")
 SPAN_DIFFERS_MIN_S = 0.5         # a table placed one row per frame whose own times span this much more or less than
@@ -3753,7 +3753,6 @@ def _clock_facts(a: np.ndarray) -> tuple[np.ndarray, float, float]:
 
 
 
-COARSE_CLOCK = "coarse clock"   # tied rows are placed within their stamp interval, which is assumed timing
 
 
 def coarse_rows(t: np.ndarray) -> tuple[np.ndarray, float | None]:
@@ -4645,7 +4644,7 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Sign
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "state_notes", "videos"}
+NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "signal_alignment", "state_notes", "videos"}
 
 
 def upload_adapters(kind: str) -> list:
@@ -6862,7 +6861,6 @@ def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, u
 
 ASSUMED_START = ("{} (from {}) was placed on the footage from both starts, since the two share no clock, so its "
                  "alignment assumes a common start")
-ALIGNED_ASSUMED = "assumed start"     # a signal's meta "aligned_by" when it was placed from both starts
 
 
 def mark_assumed(sig: Signals, extra: dict, source: str) -> Signals:

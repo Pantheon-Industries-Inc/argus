@@ -1445,3 +1445,45 @@ def test_unplaced_arm_ownership_is_a_layout_reason_rather_than_missing_time():
                             [('arm.mcap', 'several episodes share its folder and its name gives none of their takes',
                               ['/arm/joint_state'])])
     assert note.why == 'layout' and 'several episodes' in str(note)
+
+
+@pytest.mark.parametrize('source', ['csv', 'h5', 'mcap'])
+def test_whole_coarse_signals_prompt_names_the_within_stamp_assumption(tmp_path, source):
+    from label import episode as me
+    from mcap.writer import Writer
+    def change(d):
+        t = T0 + np.floor(np.arange(66) / 30)
+        vals = np.sin(np.arange(66))
+        if source == 'csv':
+            pd.DataFrame({'timestamp': t, 'force': vals}).to_csv(d / 'pressure.csv', index=False)
+        elif source == 'h5':
+            import h5py
+            with h5py.File(d / 'pressure.h5', 'w') as h:
+                h['timestamp'] = t
+                h['force'] = vals
+        else:
+            with (d / 'pressure.mcap').open('wb') as fh:
+                w = Writer(fh)
+                w.start()
+                schema = w.register_schema(name='pressure', encoding='jsonschema', data=b'{}')
+                ch = w.register_channel(topic='/pressure', message_encoding='json', schema_id=schema)
+                for stamp, value in zip(t, vals):
+                    ns = int(stamp * 1e9)
+                    w.add_message(ch, ns, json.dumps({'force': value}).encode(), publish_time=ns)
+                w.finish()
+    ctx = _recorder(tmp_path, change)
+    req = me.build_request(ctx['_ep'])
+    text = '\n'.join(c['text'] for c in req['content'] if c['type'] == 'text')
+    names = [s['name'] for s in ctx['signals'] if s.get('aligned_by') == 'coarse clock']
+    lines = [line for line in text.splitlines() if any(line.startswith('  ' + n + ' (') for n in names)]
+    assert lines and all('tied readings placed within each stamp interval as an assumption' in line for line in lines)
+    assert all('no clock is shared' not in line for line in lines)
+
+
+def test_existing_signal_alignment_descriptions_stay_exact():
+    from label import signals as sg
+    a = np.arange(3)[:, None]
+    assert sg.describe('force', a, aligned_by='row per frame') == (
+        '  force (1 value, placed one row per frame as it has as many rows as the video has frames): 0 to 2')
+    assert sg.describe('force', a, aligned_by='assumed start') == (
+        '  force (1 value, placed from both starts as no clock is shared): 0 to 2')
