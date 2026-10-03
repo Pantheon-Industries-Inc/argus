@@ -238,6 +238,14 @@
    "reader_issues": [
     "table_number_ambiguous"
    ]
+  },
+  {
+   "slug": "camera-clock-repeated",
+   "list": "data",
+   "name": "Distinct camera frames share recorded timestamps",
+   "reader_issues": [
+    "camera_timestamp_repeated"
+   ]
   }
  ]
 }

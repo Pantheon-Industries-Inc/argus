@@ -4727,13 +4727,17 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
 def _mcap_stream(path: Path, topics: set | None = None, damaged: list | None = None, summary=None):
     """Messages in file order, validating chunk and data CRCs. A bad chunk is parsed only as far as its bounded
     records remain readable, then later chunks are still read. CRC failure stays visible even if all records parse.
-    Summary declarations recover channels whose definitions were in a broken first chunk."""
+    Summary declarations recover channels whose definitions were in a broken first chunk. Indexed recovery stays in
+    log time order, buffering only messages of overlapping chunks; equal times keep every message."""
+    import heapq
     from mcap.records import Channel, Chunk, Message, Schema
     from mcap.stream_reader import CRCValidationError, StreamReader, get_chunk_data_stream
     schemas = dict(summary.schemas) if summary is not None else {}
     chans = dict(summary.channels) if summary is not None else {}
     first = last = None
     damage, missing, suspect, counts = False, [], [], {}
+    ordered = summary is not None and bool(summary.chunk_indexes)
+    pending, serial = [], 0
 
     def records(chunk):
         nonlocal damage
@@ -4781,33 +4785,46 @@ def _mcap_stream(path: Path, topics: set | None = None, damaged: list | None = N
     def file_records(fh):
         nonlocal damage
         if summary is None or not summary.chunk_indexes:
-            yield from StreamReader(fh, emit_chunks=True, validate_crcs=True).records
+            for r in StreamReader(fh, emit_chunks=True, validate_crcs=True).records:
+                yield r, None
             return
         from io import BytesIO
-        for ci in sorted(summary.chunk_indexes, key=lambda c: c.chunk_start_offset):
+        chunks = sorted(summary.chunk_indexes, key=lambda c: (c.message_start_time, c.chunk_start_offset))
+        for i, ci in enumerate(chunks):
+            next_time = chunks[i + 1].message_start_time if i + 1 < len(chunks) else None
             fh.seek(ci.chunk_start_offset)
             try:
                 # Read only the indexed extent, so damaged inner lengths cannot reach another chunk's bytes.
                 block = BytesIO(fh.read(ci.chunk_length))
-                yield next(iter(StreamReader(block, skip_magic=True, emit_chunks=True, validate_crcs=True).records))
+                stream = StreamReader(block, skip_magic=True, emit_chunks=True, validate_crcs=True)
+                yield next(iter(stream.records)), next_time
             except Exception:
                 damage = True
                 missing.append((ci.message_start_time / 1e9, ci.message_end_time / 1e9))
 
     with open(path, "rb") as fh:
         try:
-            for r in file_records(fh):
-                if isinstance(r, Chunk):
-                    try:
-                        yield from messages(records(r))
-                    except Exception:
-                        damage = True
+            for r, next_time in file_records(fh):
+                try:
+                    for msg in messages(records(r) if isinstance(r, Chunk) else [r]):
+                        if ordered:
+                            heapq.heappush(pending, (msg[2].log_time, serial, msg))
+                            serial += 1
+                        else:
+                            yield msg
+                except Exception:
+                    damage = True
+                    if isinstance(r, Chunk):
                         missing.append((r.message_start_time / 1e9, r.message_end_time / 1e9))
-                else:
-                    yield from messages([r])
+                if ordered:
+                    # Only overlapping chunks remain buffered. Equal stamps wait for every chunk at that instant.
+                    while pending and (next_time is None or pending[0][0] < next_time):
+                        yield heapq.heappop(pending)[2]
         except Exception as exc:
             if isinstance(exc, CRCValidationError) or not sensor_cut(path):
                 damage = True
+    while pending:
+        yield heapq.heappop(pending)[2]
     if suspect:
         expected = summary.statistics.channel_message_counts if summary is not None and summary.statistics else None
         declared = {cid: n for cid, n in (expected or {}).items()
@@ -5931,6 +5948,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     n_text: dict[str, int] = {}
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
     camera_damage: list = []
+    capture_ns: dict[str, list[int]] = {}
     ep.mkdir(parents=True, exist_ok=True)
     with open(item["file"], "rb") as fh:
         try:
@@ -5966,12 +5984,15 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                                         else unshown_of[ch.topic])
                         w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics
                                                             else str(_field(dec, "format") or "").lower())
+                    before = len(w.pts)
                     if ch.topic in raw_topics:
                         im = raw_image(dec)
                         if im is not None:
                             w.add_image((int(msg.log_time) - t0) / 1e9, im)
                     else:
                         w.add((int(msg.log_time) - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
+                    if len(w.pts) > before:
+                        capture_ns.setdefault(ch.topic, []).append(int(msg.log_time))
                 else:
                     d = _field(dec, "data")
                     add_text(texts, n_text, ch.topic, int(msg.log_time),
@@ -6039,6 +6060,23 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     from label import episode as me
     pr = prs[me.order_views(files)[0]]
     q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])          # its frames were written from t0
+    repeated = [v for v, (topic, _) in files.items() if len(capture_ns.get(topic, [])) > 1
+                and (np.diff(capture_ns[topic]) == 0).any()]
+    real = None
+    if repeated:
+        paired = all(len(capture_ns.get(topic, [])) == len(prs[v]["pts"]) for v, (topic, _) in files.items())
+        if paired:
+            real = {v: np.asarray(capture_ns[topic], dtype=np.float64) / 1e9 for v, (topic, _) in files.items()}
+            q = real[me.order_views(files)[0]]
+            for d in depth.values():
+                dp = probe_depth(Path(d["path"]))
+                d["real"] = t0 / 1e9 + dp["pts"].astype(np.float64) * float(dp["time_base"])
+        for v in repeated:
+            add_issue(extra, "camera_timestamp_repeated", f"{files[v][0]} has distinct frames sharing a recorded "
+                      "timestamp; the encoded PTS are separated so every frame decodes, "
+                      + ("while the original capture times are kept. At one instant the first tied frame is selected."
+                         if paired else "but its message stamps could not be paired with every decoded frame."),
+                      camera=files[v][0])
     for p, a, b, missing in camera_damage:
         add_issue(extra, **damaged_issue(p, a, b, q, missing))
     used = {}
@@ -6097,7 +6135,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
-    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, state=state, action=action,
+    return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, real=real,
+                               state=state, action=action,
                                signals=signals, depth={v: d for v, d in depth.items() if v in files})
 
 

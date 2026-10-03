@@ -1286,3 +1286,108 @@ def test_camera_crc_damage_keeps_all_decodable_frames_and_flags_the_recording(tm
     ep = tmp_path / "out" / rep["episodes"][0]["episode_id"]
     ctx = json.loads((ep / "context.json").read_text())
     assert ctx["n_state_frames"] == 20 and _issues(ctx, "mcap_file_damaged")
+
+
+
+def test_crc_recovery_keeps_indexed_camera_messages_on_their_recorded_instants(tmp_path):
+    import struct
+    from mcap.reader import make_reader
+    from mcap.writer import Writer
+    from test_formats import _camera_mcap
+    p = tmp_path / "source.mcap"
+    _camera_mcap(p, ["/cam/image/compressed"])
+    with p.open("rb") as fh:
+        rows = list(make_reader(fh).iter_messages())
+    root = tmp_path / "up"
+    root.mkdir()
+    p = root / "rec.mcap"
+    with p.open("wb") as fh:
+        w = Writer(fh, chunk_size=2000)
+        w.start()
+        schema, channel, _ = rows[0]
+        sid = w.register_schema(name=schema.name, encoding=schema.encoding, data=schema.data)
+        cid = w.register_channel(topic=channel.topic, message_encoding=channel.message_encoding, schema_id=sid)
+        for _, _, msg in reversed(rows):
+            w.add_message(cid, log_time=msg.log_time, publish_time=msg.publish_time, data=msg.data)
+        w.finish()
+    with p.open("rb") as fh:
+        chunk = make_reader(fh).get_summary().chunk_indexes[-1]
+    b = bytearray(p.read_bytes())
+    at = chunk.chunk_start_offset + 9 + 24
+    struct.pack_into("<I", b, at, struct.unpack_from("<I", b, at)[0] ^ 1)
+    p.write_bytes(b)
+    rep = f.convert(root, "ego_head", tmp_path / "out", "t", 900)
+    ep = tmp_path / "out" / rep["episodes"][0]["episode_id"]
+    with np.load(ep / "times.npz") as z:
+        assert z["exo"] == pytest.approx(np.arange(20) / 30, abs=1e-6)
+
+
+@pytest.mark.parametrize("damaged", [False, True])
+def test_indexed_message_order_keeps_equal_stamp_messages_across_overlapping_chunks(tmp_path, damaged):
+    import struct
+    from mcap.reader import make_reader
+    from mcap.writer import CompressionType, Writer
+    p = tmp_path / "rows.mcap"
+    with p.open("wb") as fh:
+        w = Writer(fh, chunk_size=160, compression=CompressionType.NONE)
+        w.start()
+        sid = w.register_schema(name="row", encoding="jsonschema", data=b"{}")
+        cid = w.register_channel(topic="/rows", message_encoding="json", schema_id=sid)
+        for t, value in [(0.3, 0), (0.1, 1), (0.2, 2), (0.1, 3), (0., 4), (0.4, 5), (0.2, 6), (0.2, 6)]:
+            ns = int((T0 + t) * 1e9)
+            w.add_message(cid, log_time=ns, publish_time=ns, data=json.dumps({"value": value}).encode())
+        w.finish()
+    if damaged:
+        with p.open("rb") as fh:
+            chunk = make_reader(fh).get_summary().chunk_indexes[-1]
+        b = bytearray(p.read_bytes())
+        at = chunk.chunk_start_offset + 9 + 24
+        struct.pack_into("<I", b, at, struct.unpack_from("<I", b, at)[0] ^ 1)
+        p.write_bytes(b)
+    with p.open("rb") as fh:
+        damage = []
+        rows = list(f.mcap_messages(fh, p, ["/rows"], damage))
+    assert [json.loads(m.data)["value"] for _, _, m in rows] == [4, 1, 3, 2, 6, 6, 0, 5]
+    assert [m.log_time for _, _, m in rows] == sorted(m.log_time for _, _, m in rows)
+    assert bool(damage) == damaged
+
+
+@pytest.mark.parametrize("damaged", [False, True])
+def test_mcap_frames_sharing_stamps_keep_raw_capture_times_separate_from_mux_pts(tmp_path, damaged):
+    import struct
+    from mcap.reader import make_reader
+    from mcap.writer import Writer
+    from test_formats import _camera_mcap
+    source = tmp_path / "source.mcap"
+    _camera_mcap(source, ["/cam/image/compressed"])
+    with source.open("rb") as fh:
+        rows = list(make_reader(fh).iter_messages())
+    root = tmp_path / "up"
+    root.mkdir()
+    p = root / "rec.mcap"
+    with p.open("wb") as fh:
+        w = Writer(fh, chunk_size=2000)
+        w.start()
+        schema, channel, _ = rows[0]
+        sid = w.register_schema(name=schema.name, encoding=schema.encoding, data=schema.data)
+        cid = w.register_channel(topic=channel.topic, message_encoding=channel.message_encoding, schema_id=sid)
+        for k, (_, _, msg) in enumerate(rows):
+            ns = int((T0 + (k // 2) / 30) * 1e9)
+            w.add_message(cid, log_time=ns, publish_time=ns, data=msg.data)
+        w.finish()
+    if damaged:
+        with p.open("rb") as fh:
+            chunk = make_reader(fh).get_summary().chunk_indexes[-1]
+        b = bytearray(p.read_bytes())
+        at = chunk.chunk_start_offset + 9 + 24
+        struct.pack_into("<I", b, at, struct.unpack_from("<I", b, at)[0] ^ 1)
+        p.write_bytes(b)
+    rep = f.convert(root, "ego_head", tmp_path / "out", "t", 900)
+    ep = tmp_path / "out" / rep["episodes"][0]["episode_id"]
+    ctx = json.loads((ep / "context.json").read_text())
+    with np.load(ep / "times.npz") as z:
+        assert z["exo"] == pytest.approx(np.repeat(np.arange(10) / 30, 2), abs=1e-6)
+        assert len(z["exo"]) == len(z["exo_pts"]) == 20 and (np.diff(z["exo_pts"]) > 0).all()
+        assert f.nearest(z["exo"], z["exo"]).tolist() == [0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12,
+                                                         14, 14, 16, 16, 18, 18]
+    assert _issues(ctx, "camera_timestamp_repeated")
