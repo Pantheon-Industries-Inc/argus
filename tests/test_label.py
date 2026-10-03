@@ -892,7 +892,7 @@ def test_a_camera_that_starts_late_is_not_shown_before_its_first_frame():
     ks = [0, 30, 60, 90, 120]
     assert [me.recording_at(ep, "right", k) for k in ks] == [False, False, True, True, True]
     assert all(me.recording_at(ep, "left", k) for k in ks)
-    assert ("Right's video starts after the episode does, so it has no frame at 0.00 s, 1.00 s"
+    assert ("Right has frames only from 2.03 s to 6.00 s"
             in me._coverage_note(ep, {"ks": ks}))
 
 
@@ -906,7 +906,7 @@ def test_an_instant_a_hair_before_the_episode_start_is_said_as_zero_seconds_neve
           "sources": {"left": {}, "right": {}}, "times": {"left": left, "right": right},
           "kmap": {"right": formats.nearest(right, left)}, "footage_end": 0}
     note = me._coverage_note(ep, {"ks": [0, 30, 60, 90, 120]})
-    assert "no frame at 0.00 s, 1.00 s" in note
+    assert "Right has frames only from 2.03 s to 6.00 s" in note
     assert "the last frame they have, at 0.00 s." in note
     assert "-0.00" not in note
 

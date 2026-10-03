@@ -240,3 +240,25 @@ def test_composed_mixed_rate_footage_keeps_each_cameras_current_frame(tmp_path):
         for (x, y, w, h), samples in zip(cells, original):
             expected = [v for start, v in samples if start <= t][-1]
             assert np.abs(pixels[y:y + h, x:x + w].astype(float) - expected).mean() < 10
+
+
+def test_every_model_view_skips_placeholders_even_outside_the_sampling_plan(tmp_path):
+    ep = recording(tmp_path, np.arange(60) / 30)
+    context = json.loads((ep / "context.json").read_text())
+    context["placeholder_frames"] = {"exo": [[14, 14]]}
+    (ep / "context.json").write_text(json.dumps(context))
+    e = episode.load(ep)
+    got = episode._decode_view(e, "exo", [13, 14, 15])
+    assert list(got) == [13, 15]
+
+
+def test_a_static_copy_preserves_the_fine_display_clock_of_a_late_camera(tmp_path):
+    from board import static
+    src, dst = tmp_path / "late.mp4", tmp_path / "web.mp4"
+    video(src, 30)
+    clips.retime(src, 0.3 + np.arange(30) / 30, main=False)
+    static.transcode(src, dst, 1)
+    def times(path):
+        _, _, tb, pts = probe_pts(path)
+        return np.asarray(pts) * float(tb)
+    assert np.array_equal(times(src), times(dst))

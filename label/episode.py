@@ -425,7 +425,12 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
             failed.update(k for k, j in zip(ks, own) if j in bad)
         if damaged is not None:
             damaged.update(k for k, j in zip(ks, own) if j in hurt)
-    return {k: got[j] for k, j in zip(ks, own) if j in got}
+    held = placeholder_instants(ep, ks).get(v, set())
+    if failed is not None:
+        failed.update(held)
+    if damaged is not None:
+        damaged.update(held)
+    return {k: got[j] for k, j in zip(ks, own) if j in got and k not in held}
 
 
 def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:

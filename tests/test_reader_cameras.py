@@ -240,10 +240,8 @@ def test_the_edge_a_camera_may_miss_without_an_issue_is_at_most_a_tenth_of_the_e
         assert bool(_issues(_ctx(tmp_path / f"eps{secs:g}", rep), "camera_short")) is flagged, secs
 
 
-def test_a_camera_paired_by_time_that_ends_early_or_starts_late_is_named_as_an_unpaired_one_is(tmp_path):
-    """A camera paired by capture time that stopped first had been described as having frames only between two times,
-    in other words than a camera that is not paired. Both say the video ends before the episode does, or starts after
-    it, and the instants it has no frame at."""
+def test_a_paired_camera_keeps_its_span_when_it_ends_early_or_starts_late(tmp_path):
+    """A paired camera keeps its established span sentence, including both edges, so clean requests stay unchanged."""
     from label import episode as me
     up = tmp_path / "up"
     files = {"exo": ("top", _mp4(up / "top.mp4", 60)), "left": ("wrist_left", _mp4(up / "wrist_left.mp4", 30)),
@@ -253,9 +251,9 @@ def test_a_camera_paired_by_time_that_ends_early_or_starts_late_is_named_as_an_u
                           real={"exo": np.arange(60) / 30, "left": np.arange(30) / 30,
                                 "right": 1.0 + np.arange(30) / 30})
     prompt = me.build_request(ep_dir)["prompt"]
-    assert "left's video ends before the episode does, so it has no frame at 1.50 s, 1.97 s" in prompt.lower(), prompt
-    assert "right's video starts after the episode does, so it has no frame at 0.00 s" in prompt.lower(), prompt
-    assert "has frames only" not in prompt
+    assert "left has frames only from 0.00 s to 0.97 s" in prompt.lower(), prompt
+    assert "right has frames only from 1.00 s to 1.97 s" in prompt.lower(), prompt
+    assert "instants outside that time" in prompt
 
 
 def test_cameras_of_one_length_raise_no_issue(tmp_path):
