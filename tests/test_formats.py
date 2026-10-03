@@ -2737,3 +2737,45 @@ def test_an_own_sensor_file_recorded_outside_the_footage_is_listed_not_placed():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _an_own_sensor_file_recorded_outside_the_footage_is_listed_not_placed(Path(t))
+
+
+def _the_episode_budget_holds_while_signals_are_read(tmp_path):
+    """The budget on an episode's signals had been applied only after every signal was in memory. It holds as they are
+    read: an array that would take the running total past SIGNAL_EPISODE_BYTES is kept as its summary when it is
+    added, an HDF5 array that would is summarised a block of rows at a time and never read whole, and signals merged
+    from another reader count toward the same total."""
+    import h5py
+    import numpy as np
+    n = 40
+    rng = np.random.default_rng(6)
+    saved = f.SIGNAL_EPISODE_BYTES, f.float_rows
+    seen = []
+    f.SIGNAL_EPISODE_BYTES = 400_000                       # one 40 x 2000 float32 array (320 kB) fits, two do not
+    f.float_rows = lambda a: seen.append(np.shape(a)) or saved[1](a)
+    try:
+        out = f.Signals()
+        out.add("a", rng.random((n, 2000)).astype(np.float32))
+        out.add("b", rng.random((n, 2000)).astype(np.float32))
+        assert out["a"].shape == (n, 2000) and out["b"].shape == (n, 3) and out.meta["b"]["summary_of"] == 2000
+        assert [i["signal"] for i in out.issues] == ["b"]
+        more = f.Signals()
+        more.add("c", rng.random((n, 2000)).astype(np.float32))
+        f.merge_signals(out, more)
+        assert out["c"].shape == (n, 3) and out.meta["c"]["names"] == f.SUMMARY_NAMES
+        with h5py.File(tmp_path / "ep.h5", "w") as h:
+            h["timestamps"] = 1_790_000_000.0 + np.arange(n) / 30
+            h["cloud_a"] = rng.random((n, 2000)).astype(np.float32)
+            h["cloud_b"] = rng.random((n, 2000)).astype(np.float32)
+        with h5py.File(tmp_path / "ep.h5", "r") as h:
+            st = f.h5_streams(h, "")
+            got = f.h5_signals(h, st, st["clock"]["timestamps"], None, n)
+    finally:
+        f.SIGNAL_EPISODE_BYTES, f.float_rows = saved
+    assert got["cloud_a"].shape == (n, 2000) and got["cloud_b"].shape == (n, 3), {k: v.shape for k, v in got.items()}
+    assert (n, 2000) in seen and seen.count((n, 2000)) == 1 + 2, seen   # cloud_b is never read whole
+
+
+def test_the_episode_budget_holds_while_signals_are_read():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _the_episode_budget_holds_while_signals_are_read(Path(t))

@@ -1055,9 +1055,13 @@ SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
 # of 64 x 64 cells is still a signal.
 SIGNAL_MAX_VALUES = 4096
 # An array wider than SIGNAL_MAX_VALUES is still kept, as a map the prompt summarises (label/signals.py), read and
-# placed in float32 so it is never copied as float64. An episode's kept signals hold at most SIGNAL_EPISODE_BYTES as
-# float32 together: past it the widest are kept as a summary per frame (summarise_rows), a data issue, and an array
-# that alone holds more is summarised as it is read, so an episode's signals always fit in memory.
+# placed in float32 so it is never copied as float64. What is bounded is the signals a reader keeps: as they are read,
+# a signal that would take the running total of an episode's kept signals (as float32) past SIGNAL_EPISODE_BYTES is
+# kept as a summary per frame (summarise_rows), a data issue (Signals.add, merge_signals), and an HDF5 array that
+# would is summarised a block of rows at a time without being read whole (h5_signals); write_signals applies the same
+# bound once more to what it writes. Not bounded: the source a reader already holds to read it (a LeRobot table, an
+# MCAP channel's messages before they are placed), nor one signal's own size while it is placed (a few times its
+# float32 size at most).
 SIGNAL_EPISODE_BYTES = 1_000_000_000
 SUMMARY_NAMES = ["lowest", "mean", "highest"]
 SUMMARY_CHUNK_ROWS = 256
@@ -1107,9 +1111,28 @@ class Signals(dict):
         self.left_out: list[tuple[str, str]] = []
         self.clocks: dict[str, np.ndarray] = {}      # per-frame clocks the recording keeps (write_signals)
         self.issues: list[dict] = []                 # problems with what was kept, as add_issue's entries
+        self.bytes = 0                               # the kept signals' size as float32, for SIGNAL_EPISODE_BYTES
+
+    def fits(self, rows: int, values: int) -> bool:
+        """Whether a signal of rows x values keeps the running total within SIGNAL_EPISODE_BYTES."""
+        return self.bytes + int(rows) * int(values) * 4 <= SIGNAL_EPISODE_BYTES
+
+    def keep(self, name: str, a: np.ndarray, m: dict) -> None:
+        """a kept under name with its meta m, as its summary per frame (summarise_rows, a data issue) when it would take
+        the running total past SIGNAL_EPISODE_BYTES."""
+        a = np.asarray(a)
+        width = int(a.shape[1]) if a.ndim > 1 else 1
+        if not self.fits(len(a), width) and width > len(SUMMARY_NAMES):
+            a = summarise_rows(a)
+            m = {k: v for k, v in m.items() if k != "shape"}
+            m.update(names=list(SUMMARY_NAMES), summary_of=width)
+            self.issues.append(summary_issue(name, width))
+            width = len(SUMMARY_NAMES)
+        self.bytes += len(a) * width * 4
+        self[name] = a
+        self.meta[name] = m
 
     def add(self, name: str, a: np.ndarray, shape=None, names=None, source: str | None = None) -> None:
-        self[name] = a
         m = {}
         if shape is not None and tuple(int(x) for x in shape) != (a.shape[1],):
             m["shape"] = [int(x) for x in shape]
@@ -1117,14 +1140,14 @@ class Signals(dict):
             m["names"] = [str(x) for x in names]
         if source:
             m["source"] = source
-        self.meta[name] = m
+        self.keep(name, a, m)
 
 
 def merge_signals(into: Signals, more: Signals) -> Signals:
-    """more's signals, notes and clocks added to into (a plain dict of arrays is read as Signals)."""
+    """more's signals, notes and clocks added to into (a plain dict of arrays is read as Signals), each counting toward
+    into's running total (Signals.keep)."""
     for k, v in more.items():
-        into[k] = v
-        into.meta[k] = (getattr(more, "meta", {}) or {}).get(k) or {}
+        into.keep(k, v, dict((getattr(more, "meta", {}) or {}).get(k) or {}))
     into.left_out += list(getattr(more, "left_out", []) or [])
     into.clocks.update(getattr(more, "clocks", {}) or {})
     into.issues += list(getattr(more, "issues", []) or [])
@@ -3750,8 +3773,8 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
         shape = list(ds.shape[1:])
         width = int(np.prod(shape)) if shape else 1
         summarised = None
-        if len(ds) * width * 4 > SIGNAL_EPISODE_BYTES and width > len(SUMMARY_NAMES):
-            # more than an episode's signals hold together: read a block of rows at a time into its summary
+        if not out.fits(len(ds), width) and width > len(SUMMARY_NAMES):
+            # past the running total an episode's signals hold: read a block of rows at a time into its summary
             a, summarised, shape = summarise_rows(ds), width, [len(SUMMARY_NAMES)]
         else:
             a = float_rows(ds[()])
