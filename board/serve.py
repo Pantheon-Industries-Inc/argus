@@ -6029,8 +6029,9 @@ async function cmpEpisode(key, file) {
 // The line that stands in for the sections a model answers (key events, the outcome, recoveries, what changed, object
 // relationships, the inventory) on an episode whose own reply gave no labels.
 function noLabelsHtml(lf) {
-  const why = lf && lf.status === 'cut_off' ? 'was cut off at the output limit' : 'did not parse';
-  return `<p class="no-labels">The model's reply ${why}, so this episode has no labels: no key events, outcome, `
+  const why = lf && lf.status === 'cut_off' ? 'reply was cut off at the output limit'
+    : lf && lf.status === 'unreadable' ? 'output file does not read' : 'reply did not parse';
+  return `<p class="no-labels">The model's ${why}, so this episode has no labels: no key events, outcome, `
     + `recoveries or scene. Its footage, checks, sensors and the dataset's own labels are shown as recorded.</p>`;
 }
 function cmpFailHtml(c, who, usage, own) {
@@ -6046,6 +6047,9 @@ function cmpFailHtml(c, who, usage, own) {
     ${c.parse_error ? `<div class="cf-k">Parser error</div><pre>${esc(c.parse_error)}</pre>` : ''}
     <div class="cf-k">Start of the response, ${Number(c.raw_chars || 0).toLocaleString()} characters in all</div>`
       + `<pre>${esc(c.raw_head || '(empty)')}</pre></div>`;
+  if (c.status === 'unreadable') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s output file does not read</h4>
+    <p>The labelling run's output file for this episode does not read, so there are no labels to show.${rest}</p>
+    ${c.error ? `<div class="cf-k">Error</div><pre>${esc(c.error)}</pre>` : ''}</div>`;
   if (c.status === 'cut_off') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s response was cut off</h4>
     <p>The response reached the output limit${c.out_tokens ? ` after ${Number(c.out_tokens).toLocaleString()} output `
       + `tokens` : ''} before its JSON was complete, so there are no labels to show.${own ? rest

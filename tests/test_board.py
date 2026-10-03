@@ -108,9 +108,12 @@ def test_convert_run_keeps_a_reply_that_failed_and_skips_what_is_not_a_reply(tmp
         "episode_dir": "/x/episode_000004", "finish_reason": "length", "content_tail": '{"timeline": [[0.0, 1',
         "usage": {"est_cost_usd": 0.5, "completion_tokens": 64000}, "config": {"views": ["exo"]}}))
     n, skipped = to_board.convert_run(out, tmp_path / "board", "demo")
-    assert n == 3 and len(skipped) == 2
+    assert n == 4 and skipped == ["episode_000002.json: dry run"]
     assert sorted(p.name for p in (tmp_path / "board").iterdir()) == [
-        "episode_000000.json", "episode_000001.json", "episode_000004.json"]
+        "episode_000000.json", "episode_000001.json", "episode_000003.json", "episode_000004.json"]
+    # an output file that does not read is an episode with no labels, saying why
+    bad = json.loads((tmp_path / "board" / "episode_000003.json").read_text())
+    assert bad["_label_failed"]["status"] == "unreadable" and "episode_000003.json" in bad["_label_failed"]["error"]
     ok = json.loads((tmp_path / "board" / "episode_000000.json").read_text())
     assert "_label_failed" not in ok and ok["completion"]["task_completed"] == "success"
     un = json.loads((tmp_path / "board" / "episode_000001.json").read_text())
@@ -1001,3 +1004,22 @@ def test_an_output_with_no_parse_flag_is_read_as_the_labels_it_holds():
     assert to_board.label_failed({"labels": {}}) is None
     assert to_board.label_failed({"parse_ok": False, "labels": {"_raw": "{"}})["status"] == "unparsed"
     assert to_board.label_failed({"finish_reason": "length"})["status"] == "cut_off"
+
+
+def test_an_unreadable_output_is_an_episode_with_a_data_issue_and_the_build_names_what_it_skipped(tmp_path):
+    run = _run(tmp_path / "runs" / "demo", "20260101-0000_full_abc1234", "success", "aligned")
+    (run / "out" / "episode_000001.json").write_text("{not json")
+    (run / "out" / "episode_000002.json").write_text(json.dumps({"episode_dir": "/x/episode_000002",
+                                                                 "dry_run": True}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    board = tmp_path / "boards" / "demo"
+    board.mkdir(parents=True)
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    built = board_build.build(board)
+    assert built["counts"]["demo"]["episodes"] == 2
+    assert built["counts"]["demo"]["skipped"] == ["episode_000002.json: dry run"]
+    d = json.loads((board / "qa" / "episode_000001.json").read_text())
+    (iss,) = [x for x in d["dataset_checks"]["reader_issues"] if x["family"] == "label-failed"]
+    assert iss["kind"] == "label_output_unreadable" and "does not read" in iss["what"]
+    assert d["duration_s"] == 10.0

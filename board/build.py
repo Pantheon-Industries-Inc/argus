@@ -228,6 +228,9 @@ def label_failure(result: dict | None) -> list[dict]:
     if lf is None:
         return gaps
     rest = "so this episode has no labels; its footage, checks and sensors are shown as recorded"
+    if lf["status"] == "unreadable":
+        return [{"kind": "label_output_unreadable",
+                 "what": f"The labelling run's output file for this episode does not read ({lf.get('error')}), {rest}."}]
     if lf["status"] == "cut_off":
         n = lf.get("out_tokens")
         return [{"kind": "model_reply_cut_off",
@@ -594,20 +597,26 @@ def _rerun_folder(r: dict, run: Path, name: str) -> Path | None:
     return None
 
 
-def entry_labels(entry: dict, here: Path) -> tuple[Path, dict]:
+def entry_labels(entry: dict, here: Path, skipped: list | None = None) -> tuple[Path, dict]:
     """A manifest entry's run folder and {board file: (the entry's episode name, output file, output, the run it
     came from)} for every label it holds (board/to_board.py label_outputs), each rerun's label in place of the base
-    run's for the episodes it labelled (the module docstring). here is the board folder, resolved."""
+    run's for the episodes it labelled (the module docstring). here is the board folder, resolved. skipped, when
+    given, gets one line per file of the runs that is no reply (label_outputs), which BUILT.json names."""
     run = resolve_run(_path(entry["run"], here))
     pre = entry.get("file_prefix") or ""
-    outs, _ = label_outputs(run / "out")
+    outs, skip = label_outputs(run / "out")
+    if skipped is not None:
+        skipped += skip
     by_name = {name: (f, r, run) for name, (f, r) in outs.items()}
     if entry.get("reruns"):
         eps = _path(entry["episodes"], here)
         own = {p.resolve(): p.name for p in eps.iterdir() if p.name.startswith("episode_")}
         for rr in entry["reruns"]:
             rrun = resolve_run(_path(rr["run"], here))
-            for rname, (f, r) in label_outputs(rrun / "out")[0].items():
+            routs, rskip = label_outputs(rrun / "out")
+            if skipped is not None:
+                skipped += [f"{rrun.name}/{x}" for x in rskip]
+            for rname, (f, r) in routs.items():
                 folder = _rerun_folder(r, rrun, rname)
                 if folder not in own:
                     continue
@@ -647,7 +656,8 @@ def build(board: Path) -> dict:
     board_src = {}      # board file -> the run output its label came from
     episodes = {}       # board file -> its prepared episode folder
     for entry in manifest.get("datasets", []):
-        run, labels = entry_labels(entry, here)
+        skipped: list = []
+        run, labels = entry_labels(entry, here, skipped)
         infos = {}
         eps = _path(entry["episodes"], here)
         for fname, (name, src, r, from_run) in sorted(labels.items()):
@@ -684,7 +694,7 @@ def build(board: Path) -> dict:
             dest.write_text(json.dumps(d))
             board_src[fname] = src
         counts[entry["dataset"]] = {"run_id": json.loads((run / "run.json").read_text())["run_id"],
-                                    "episodes": len(labels)}
+                                    "episodes": len(labels), **({"skipped": skipped} if skipped else {})}
         # BUILT.json names the run that was used, so the board's inputs stay traceable
         built_entries.append(dict(entry, run=os.path.relpath(run, here)) if run != _path(entry["run"], here)
                              else entry)

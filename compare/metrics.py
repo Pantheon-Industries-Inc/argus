@@ -149,8 +149,13 @@ def slice_episodes(eps: Path) -> list[str]:
 
 
 def read_output(p: Path) -> dict:
-    """A run output file's response: status, raw labels when parsed, usage, and the model that gave it."""
-    r = json.loads(p.read_text())
+    """A run output file's response: status, raw labels when parsed, usage, and the model that gave it. A file that
+    does not read is a response that did not parse."""
+    try:
+        r = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        return {"status": "unparsed", "error": f"the output file does not read: {e}"[:300], "raw": "", "cost": None,
+                "latency": None, "out_tokens": None, "path": p, "model": None}
     if r.get("dry_run"):
         return {"status": "pending"}
     if p.name.startswith("failed_"):

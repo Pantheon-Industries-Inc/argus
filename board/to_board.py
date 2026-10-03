@@ -36,8 +36,11 @@ TAIL = 1500           # characters of the end of a cut-off reply kept on the boa
 def label_failed(result: dict) -> dict | None:
     """How a reply that gave no labels came back, for the page (board/serve.py cmpFailHtml): cut off at the output limit
     (the harness's failed_<episode>.json, with the tokens it ran to and the end of the reply), or not parsing (the
-    parser's error, the start of the reply and its length). None for any other output, a reply that parsed or one
-    written without parse_ok (by hand, or by an older harness), which is its labels."""
+    parser's error, the start of the reply and its length), or an output file that does not read (unreadable, with
+    the error). None for any other output, a reply that parsed or one written without parse_ok (by hand, or by an
+    older harness), which is its labels."""
+    if result.get("unreadable"):
+        return {"status": "unreadable", "error": str(result["unreadable"])[:RAW_HEAD]}
     if result.get("finish_reason") == "length" and "labels" not in result:
         return {"status": "cut_off", "out_tokens": (result.get("usage") or {}).get("completion_tokens"),
                 "tail": (result.get("content_tail") or "")[-TAIL:]}
@@ -203,14 +206,14 @@ def convert(result: dict, dataset: str | None = None) -> dict:
 def label_outputs(in_dir: Path) -> tuple[dict, list[str]]:
     """Every reply in a run's out/ folder, {episode folder name: (output file, output)}: each episode_*.json that is not
     a dry run, parsed or not, and for an episode with none, the reply cut off at the output limit that the harness kept
-    as failed_<episode>.json (read with parse_ok false). Also one line per file skipped (a dry run, a file that does
-    not read)."""
+    as failed_<episode>.json (read with parse_ok false). A file that does not read is its episode's output too, with no
+    labels and the error (unreadable, label_failed). Also one line per file skipped: a dry run, which asked nothing."""
     outs, skipped = {}, []
     for f in sorted(in_dir.glob("episode_*.json")):
         try:
             r = json.loads(f.read_text())
-        except ValueError as e:
-            skipped.append(f"{f.name}: {e}")
+        except (OSError, ValueError) as e:
+            outs[f.stem] = (f, {"parse_ok": False, "unreadable": f"{f.name}: {type(e).__name__}: {e}"})
             continue
         if r.get("dry_run"):
             skipped.append(f"{f.name}: dry run")
@@ -222,8 +225,8 @@ def label_outputs(in_dir: Path) -> tuple[dict, list[str]]:
             continue                      # the episode has an output, so this is an earlier cut-off reply
         try:
             r = json.loads(f.read_text())
-        except ValueError as e:
-            skipped.append(f"{f.name}: {e}")
+        except (OSError, ValueError) as e:
+            outs.setdefault(name, (f, {"parse_ok": False, "unreadable": f"{f.name}: {type(e).__name__}: {e}"}))
             continue
         outs.setdefault(Path(r.get("episode_dir") or name).name, (f, {**r, "parse_ok": False}))
     return outs, skipped
