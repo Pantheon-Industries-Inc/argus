@@ -100,7 +100,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from board.to_board import convert, dumps, label_failed, label_outputs, off_schema_text, typed
+from board.to_board import (and_list, convert, dumps, field_words, label_failed, label_outputs, off_schema_text,
+                            typed)
 from checks import label_consistency
 
 SEVERITIES = ["low", "medium", "high"]
@@ -274,28 +275,34 @@ SCHEMA_KEYS = ("timeline", "task_summary", "key_events", "data_issues", "operato
 
 
 def off_schema(result: dict) -> list[dict]:
-    """The data issues of a reply that parsed but broke the output format: one of kind model_reply_off_schema when it
-    has no timeline (it gave none of the steps every rig's format asks for, so the episode has no steps, and what it did
-    give is shown), and one of kind model_reply_fields_dropped naming the rows and fields left out of what is shown for
-    being of the wrong type (board/to_board.py typed), for a long recording those of every part. Nothing for a reply
-    that keeps to the format."""
+    """The data issues of a reply that parsed but broke the output format, each field in plain words: one of kind
+    model_reply_off_schema when it has no timeline, or one that is not a list (it gave none of the steps every rig's
+    format asks for, so the episode has no steps; what else it left out and what it gave are named, and what it gave
+    is shown), and one of kind model_reply_fields_dropped naming the other rows and fields left out of what is shown
+    for being of the wrong type (board/to_board.py typed), for a long recording those of every part. Nothing for a
+    reply that keeps to the format."""
     if "labels" not in result:
         return []
     out = []
-    labels, _ = typed(result)
+    raw = result["labels"] if isinstance(result["labels"], dict) else {}
+    labels, dropped = typed(result)
     if not isinstance(labels.get("timeline"), list) and not result.get("stitched"):
-        missing = [k for k in SCHEMA_KEYS if k not in labels]
-        gave = sorted(k for k in labels if not str(k).startswith("_"))
-        out.append({"kind": "model_reply_off_schema",
-                    "what": "The model's reply has no timeline, so this episode has no steps. It leaves out "
-                            + ", ".join(missing)
-                            + (f" and gives only {', '.join(gave)}" if gave else " and gives nothing")
-                            + "; what it gives is shown."})
-    left = off_schema_text(result)
+        from label.harness import json_kind
+        given = raw.get("timeline")
+        lead = ("The model's reply has no timeline" if given is None else
+                f"The model's reply gives its timeline as {json_kind(given)}, not a list")
+        missing = [field_words(k) for k in SCHEMA_KEYS if k != "timeline" and raw.get(k) is None]
+        gave = sorted(field_words(k) for k in labels if not str(k).startswith("_"))
+        said = (f"It leaves out the {and_list(missing)}, and " if missing else "It ") + (
+            f"gives only the {and_list(gave)}; what it gives is shown." if gave else "gives nothing else.")
+        out.append({"kind": "model_reply_off_schema", "what": f"{lead}, so this episode has no steps. {said}"})
+        # the timeline is named there once, never again among the fields left out
+        dropped = [x for x in dropped if x.get("field") != "timeline" or "row" in x]
+    left = off_schema_text(dropped)
     if left:
         out.append({"kind": "model_reply_fields_dropped",
-                    "what": f"The model's reply broke the output format, so {left} are left out of what is shown; the "
-                            "rest of its labels are shown."})
+                    "what": f"The model's reply broke the output format, so {left} left out of what is shown; the rest "
+                            "of its labels are shown."})
     return out
 
 

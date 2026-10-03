@@ -110,8 +110,7 @@
     "label_output_unreadable",
     "no_part_labelled",
     "model_no_reply",
-    "model_reply_not_shown",
-    "model_reply_off_schema"
+    "model_reply_not_shown"
    ]
   },
   {
@@ -119,13 +118,14 @@
    "list": "labelling",
    "name": "Model reply broke the output format",
    "reader_issues": [
+    "model_reply_off_schema",
     "model_reply_fields_dropped"
    ]
   },
   {
    "slug": "label-times",
    "list": "labelling",
-   "name": "Model times fall outside the episode",
+   "name": "Model times do not fit the episode",
    "reader_issues": [
     "model_steps_outside_episode"
    ]

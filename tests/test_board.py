@@ -1196,19 +1196,56 @@ def test_a_reply_that_breaks_the_output_format_is_flagged_and_never_stops_the_bu
         return d, {x["kind"]: x for x in (d.get("dataset_checks") or {}).get("reader_issues") or []}
     d, iss = issues("episode_000000")
     assert d["episode_prompt"] == "only a summary" and d["event_labels"] == []
-    assert iss["model_reply_off_schema"]["family"] == "label-failed"
-    assert "leaves out timeline, key_events, data_issues, operator_mistakes" in iss["model_reply_off_schema"]["what"]
+    assert iss["model_reply_off_schema"]["family"] == "label-format"
+    assert "leaves out the key events, data issues and operator mistakes" in iss["model_reply_off_schema"]["what"]
     d, iss = issues("episode_000001")
     assert [k["label"] for k in d["key_events"]] == ["ok"] and d["tasks"] == [] and len(d["event_labels"]) == 3
     assert d["_off_schema"] == {"key_events": 1, "tasks": 1}
     assert iss["model_reply_fields_dropped"]["family"] == "label-format"
-    assert "1 row of key_events and tasks (text, not a list)" in iss["model_reply_fields_dropped"]["what"]
+    assert "1 row of the key events and the tasks (text, not a list) are" in iss["model_reply_fields_dropped"]["what"]
     d, iss = issues("episode_000002")
-    assert d["event_labels"] == [] and "model_reply_off_schema" in iss and "model_reply_fields_dropped" in iss
+    assert d["event_labels"] == [] and "model_reply_off_schema" in iss and "model_reply_fields_dropped" not in iss
     d, iss = issues("episode_000003")
     assert not iss and "_off_schema" not in d
     fam = Families()
     assert fam.list_of("label-format") == "labelling"
+
+
+def test_a_reply_that_breaks_the_format_is_told_in_plain_words_once():
+    """The sentences for a reply that broke the output format used a plural verb for one field ("timeline (an object,
+    not a list) are left out"), listed what a reply left out without an "and", named fields by their code names
+    (key_events), and a timeline given as an object was reported twice, once as left out although the reply gave one.
+    Each field is named in plain words, once, with a verb that agrees, and every list reads as a sentence. A reply with
+    no timeline broke the format; it may still give labels, so it is on the format family, never "gave no labels"."""
+    from board.build import off_schema
+    good = _output("x")["labels"]
+
+    def what(labels):
+        return {x["kind"]: x["what"] for x in off_schema({"parse_ok": True, "labels": labels})}
+    assert what({"task_summary": "only a summary"}) == {"model_reply_off_schema": (
+        "The model's reply has no timeline, so this episode has no steps. It leaves out the key events, data issues "
+        "and operator mistakes, and gives only the task summary; what it gives is shown.")}
+    assert what({}) == {"model_reply_off_schema": (
+        "The model's reply has no timeline, so this episode has no steps. It leaves out the task summary, key events, "
+        "data issues and operator mistakes, and gives nothing else.")}
+    assert what({"timeline": {"a": 1}, "task_summary": "x", "key_events": [], "data_issues": [],
+                 "operator_mistakes": []}) == {"model_reply_off_schema": (
+        "The model's reply gives its timeline as an object, not a list, so this episode has no steps. It gives only "
+        "the data issues, key events, operator mistakes and task summary; what it gives is shown.")}
+    lead = "The model's reply broke the output format, so "
+    tail = " left out of what is shown; the rest of its labels are shown."
+    for labels, said in (({**good, "key_events": "goal reached"}, "the key events (text, not a list) are"),
+                         ({**good, "task_summary": ["a"]}, "the task summary (a list, not text) is"),
+                         ({**good, "key_events": ["goal reached", {"t_s": 1.0, "label": "ok"}]},
+                          "1 row of the key events is"),
+                         ({**good, "key_events": ["a", "b"], "tasks": "pour"},
+                          "2 rows of the key events and the tasks (text, not a list) are"),
+                         ({**good, "scene": {"objects": ["cup"]}}, "1 row of the scene objects is")):
+        assert what(labels) == {"model_reply_fields_dropped": lead + said + tail}, labels
+    fam = Families()
+    assert fam.reader_family("model_reply_off_schema") == "label-format"
+    assert fam.catalog()["label-failed"]["name"] == "Model reply gave no labels"
+    assert fam.catalog()["label-times"]["name"] == "Model times do not fit the episode"
 
 
 def test_an_episode_the_board_cannot_read_is_kept_with_its_reply_and_the_error(tmp_path, monkeypatch):

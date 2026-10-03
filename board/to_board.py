@@ -83,38 +83,47 @@ def label_failed(result: dict) -> dict | None:
             "raw_chars": len(raw)}
 
 
-def typed(result: dict) -> tuple[dict, dict]:
-    """(labels, off schema): a parsed reply's labels with every field of the type the output format gives it
-    (label/harness.py typed_labels, which a reply parsed before it was written never went through), and per field how
-    many of its rows, or whether the field itself, were left out for breaking the format ({field: count}). The run's own
-    output is unchanged."""
+def typed(result: dict) -> tuple[dict, list[dict]]:
+    """(labels, dropped): a parsed reply's labels with every field of the type the output format gives it
+    (label/harness.py typed_labels, which a reply parsed before it was written never went through), and what was left
+    out for breaking the format ({"field", "row"?, "why"} per field or row). The run's own output is unchanged."""
     from label.harness import typed_labels
     labels = typed_labels(copy.deepcopy(result.get("labels") if isinstance(result.get("labels"), dict) else {}))
-    off = {}
-    for x in labels.pop("_dropped", None) or []:
-        if isinstance(x, dict):
-            off[str(x.get("field"))] = off.get(str(x.get("field")), 0) + 1
-    return labels, off
+    return labels, [x for x in labels.pop("_dropped", None) or [] if isinstance(x, dict)]
 
 
-def off_schema_text(result: dict) -> str | None:
-    """What of a parsed reply the board leaves out for breaking the output format (typed), in words, or None when it
-    keeps to the format: "2 rows of key_events and task_summary (a list, not text)"."""
-    if label_failed(result) is not None:
-        return None
-    from label.harness import typed_labels
-    dropped = [x for x in typed_labels(copy.deepcopy(result.get("labels") if isinstance(result.get("labels"), dict)
-                                                     else {})).get("_dropped") or [] if isinstance(x, dict)]
-    if not dropped:
-        return None
+def field_words(field: str) -> str:
+    """A field of the output format in plain words for the page: key_events is "key events", scene.objects is
+    "scene objects"."""
+    return str(field).replace("_", " ").replace(".", " ")
+
+
+def and_list(items: list[str]) -> str:
+    """Items as a sentence lists them: "a", "a and b", "a, b and c"."""
+    return ", ".join(items[:-1]) + f" and {items[-1]}" if len(items) > 1 else items[0]
+
+
+def off_schema_text(dropped: list[dict]) -> str | None:
+    """What of a parsed reply the board leaves out for breaking the output format (typed's dropped), as the subject and
+    verb of a sentence, or None when nothing was: "2 rows of the key events and the task summary (a list, not text)
+    are". One field takes the verb its plain words take (the tasks are, the timeline is)."""
     rows, whole = {}, []
     for x in dropped:
         if "row" in x:
             rows[x["field"]] = rows.get(x["field"], 0) + 1
         else:
-            whole.append(f"{x['field']} ({x['why']})")
-    each = [f"{n} {'row' if n == 1 else 'rows'} of {k}" for k, n in rows.items()] + whole
-    return ", ".join(each[:-1]) + f" and {each[-1]}" if len(each) > 1 else each[0]
+            whole.append(x)
+    each = [f"{n} {'row' if n == 1 else 'rows'} of the {field_words(k)}" for k, n in rows.items()]
+    each += [f"the {field_words(x['field'])} ({x['why']})" for x in whole]
+    if not each:
+        return None
+    if len(each) > 1:
+        verb = "are"
+    elif rows:
+        verb = "is" if next(iter(rows.values())) == 1 else "are"
+    else:
+        verb = "are" if field_words(whole[0]["field"]).endswith("s") else "is"
+    return f"{and_list(each)} {verb}"
 
 
 def convert(result: dict, dataset: str | None = None) -> dict:
@@ -127,7 +136,10 @@ def convert(result: dict, dataset: str | None = None) -> dict:
     board and never hides that it did (board/build.py flags it). A step or key event whose time is not a number is kept
     with t_s null, and the page lists it untimed after the timed ones. The run's own output is unchanged."""
     failed = label_failed(result)
-    labels, off = ({}, {}) if failed else typed(result)
+    labels, dropped = ({}, []) if failed else typed(result)
+    off = {}
+    for x in dropped:
+        off[str(x.get("field"))] = off.get(str(x.get("field")), 0) + 1
     scene = labels.get("scene") if isinstance(labels.get("scene"), dict) else {}
     timeline = labels.get("timeline") or []
     eid = Path(result.get("episode_dir", "")).name
