@@ -839,6 +839,8 @@ STATE_NOT_POSITION_WORDS = {"vel", "velocity", "velocities", "speed", "effort", 
                             "current", "currents", "force", "forces", "acc", "accel", "acceleration"}
 STATE_FRAME_WORDS = {"cartesian", "eef", "ee", "tcp", "pose", "effector", "flange", "tool", "rot", "rotation",
                      "orientation"}
+STATE_UNAXED_NOTE = ("Labelled from the video: the recorded state's value names give a position or a pose without the "
+                     "axes our checks read ({}), not six joints and a gripper per arm.")
 
 
 def state_words(name: str) -> list[str]:
@@ -881,28 +883,29 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
         return "none", (f"Labelled from the video: the recorded state's value names ({other}) give a velocity, an "
                         "effort or another quantity that is not a position, and our checks read the positions of each "
                         + per)
+    # a pose whose axes the rule cannot read is never joints by width on an arm rig, and is the pose on a gripper rig
     framed = next((x for x in names if set(words[x]) & STATE_FRAME_WORDS and words[x][-1].isdigit()
                    and not STATE_GRIPPER_NAME.search(x)), None)
-    by_width = ("none", f"Labelled from the video: the recorded state's value names give a position or a pose without "
-                        f"the axes our checks read ({framed}), not six joints and a gripper per arm.") \
-        if framed and kind != "ee_pose" else (kind, None)
+    unaxed = framed is not None and kind != "ee_pose"
     seventh = all(STATE_GRIPPER_NAME.search(g[6]) for g in groups)
     if seventh and not any(STATE_GRIPPER_NAME.search(x) for g in groups for x in g[:6]):
         if all(words[x][-1] in STATE_AXIS_WORDS for g in groups for x in g[:6]) and \
                 all(any(words[x][-1] in STATE_POSITION_AXES for x in g[:6]) for g in groups):
             return "ee_pose", None
-        if by_width[0] == "none":
-            return by_width
+        if unaxed:
+            return "none", STATE_UNAXED_NOTE.format(framed)
         if all(STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
             return "joints", None
-        return by_width
+        return kind, None
     if any(STATE_GRIPPER_NAME.search(x) for x in names):
         return "none", ("Labelled from the video: the recorded state's value names put a gripper elsewhere than "
                         "seventh in each group of seven, and our checks read six values and then the gripper.")
+    if unaxed:
+        return "none", STATE_UNAXED_NOTE.format(framed)
     if all(STATE_JOINT_NAME.search(x) for x in names):
         return "none", (f"Labelled from the video: the recorded state's value names give {dims} joints and no gripper, "
                         "and our checks read six joints and a gripper per arm.")
-    return by_width
+    return kind, None
 
 
 def state_value_names(feats: dict, state) -> list[str] | None:
