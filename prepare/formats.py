@@ -4295,9 +4295,12 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             far[:n_gaps] = True               # only its count is kept (meta "gaps")
             rate = len(t) / max(float(t[-1] - t[0]), 1e-9)
             if var is not None and a.shape[1] <= VARIATION_MAX_VALUES and _variation_matters(s["name"], v, var):
-                out.add(f"{s['name']} variation within each frame", var, shape=shape if len(shape) > 1 else None,
-                        names=names, source=f"HDF5 dataset {s['path']}")
-                out.meta[f"{s['name']} variation within each frame"]["variation_of"] = s["name"]
+                vn = f"{s['name']} variation within each frame"
+                out.add(vn, var, shape=shape if len(shape) > 1 else None, names=names,
+                        source=f"HDF5 dataset {s['path']}")
+                out.meta[vn]["variation_of"] = s["name"]
+                if coarse is not None:
+                    out.meta[vn]["aligned_by"] = COARSE_CLOCK
         elif len(a) == n_anchor:
             v, rate, far, var = not_finite(s["name"], a, q, q[0], out), fps, None, None
         else:
@@ -5631,6 +5634,8 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             vn = f"{name} variation within each frame"
             out.add(vn, var, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
             out.meta[vn].update(rate_hz=round(rate, 2), variation_of=name)
+            if "aligned_by" in out.meta[name]:
+                out.meta[vn]["aligned_by"] = out.meta[name]["aligned_by"]
     if sparse:
         out.left_out.append((", ".join(sparse[:6]) + (f" and {len(sparse) - 6} more" if len(sparse) > 6 else ""),
                              "one message each, so settings or reports rather than a reading over time"))

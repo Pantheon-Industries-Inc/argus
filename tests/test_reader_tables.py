@@ -1521,3 +1521,40 @@ def test_hdf5_commands_with_coarse_stamps_stay_signals_beside_precise_state(tmp_
         assert "tied readings placed within each stamp interval as an assumption" in line
     else:
         assert not any(s["name"] == "commands/action" for s in ctx.get("signals", []))
+
+
+@pytest.mark.parametrize("source", ["h5", "mcap"])
+@pytest.mark.parametrize("coarse", [False, True])
+def test_variation_signals_keep_their_parents_timing_assumption(tmp_path, source, coarse):
+    from label import episode as me
+    def change(d):
+        t = T0 + (np.arange(660) // 300 if coarse else np.arange(660) / 300)
+        vals = np.where(np.arange(660) < 450, 0., np.abs(np.sin(np.arange(660) * 0.9)) *
+                        (np.arange(660) % 11 + 1))
+        if source == "h5":
+            import h5py
+            with h5py.File(d / "pressure.h5", "w") as h:
+                h["timestamp"] = t
+                h["force"] = vals
+        else:
+            from mcap.writer import Writer
+            with (d / "pressure.mcap").open("wb") as fh:
+                w = Writer(fh)
+                w.start()
+                schema = w.register_schema(name="pressure", encoding="jsonschema", data=b"{}")
+                ch = w.register_channel(topic="/left/tactile", message_encoding="json", schema_id=schema)
+                for stamp, value in zip(t, vals):
+                    ns = int(stamp * 1e9)
+                    w.add_message(ch, ns, json.dumps({"force": float(value)}).encode(), publish_time=ns)
+                w.finish()
+    ctx = _recorder(tmp_path, change)
+    companion = next(s for s in ctx["signals"] if s.get("variation_of"))
+    parent = next(s for s in ctx["signals"] if s["name"] == companion["variation_of"])
+    assert companion.get("aligned_by") == parent.get("aligned_by")
+    assert (companion.get("aligned_by") == "coarse clock") == coarse
+    with np.load(ctx["_ep"] / "signals.npz") as z:
+        assert z[companion["key"]].shape == (60, 1) and z[companion["key"]].max() > 0
+    req = me.build_request(ctx["_ep"])
+    text = "\n".join(c["text"] for c in req["content"] if c["type"] == "text")
+    line = next(line for line in text.splitlines() if line.startswith("  " + companion["name"] + " ("))
+    assert ("tied readings placed within each stamp interval as an assumption" in line) == coarse
