@@ -264,10 +264,12 @@ MODES = {"pairing": ("stream_pairing", pairing, "crossed"),
 
 
 def _safe(mode: str, d: str) -> tuple[str, dict | None, str | None]:
+    """One check's result on one episode. A check that crashes is that check's result, {"error": why, its finding's
+    field false}, which the board shows as an error, never a missing result; the other checks run on as usual."""
     try:
         return d, MODES[mode][1](Path(d)), None
-    except Exception as e:  # reported per episode, never silently skipped
-        return d, None, f"{type(e).__name__}: {e}"[:300]
+    except Exception as e:  # recorded as the check's result, never silently skipped
+        return d, {"error": f"{type(e).__name__}: {e}"[:300], MODES[mode][2]: False}, None
 
 
 def main():
@@ -299,6 +301,9 @@ def main():
                 failed += 1
                 print(f"FAILED {Path(d).name}: {err}", flush=True)
                 continue
+            if r and r.get("error"):
+                failed += 1
+                print(f"ERRORED {Path(d).name}: {r['error']}", flush=True)
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx[key] = r

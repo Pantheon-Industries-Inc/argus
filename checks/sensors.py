@@ -59,6 +59,10 @@ NAMES = {"no_reading": "Signal has no reading at many frames", "constant": "Sign
          "depth_offset": "Depth frames far in time from their colour frames"}
 
 
+SIGNAL_CHECKS = ("no_reading", "constant", "dead_values", "pinned", "slow_sensor")
+DEPTH_CHECKS = ("depth_invalid", "depth_frozen", "depth_offset")
+
+
 def _cell(i: int, shape) -> str:
     if shape and len(shape) == 2:
         r, c = divmod(int(i), int(shape[1]))
@@ -207,11 +211,20 @@ def dead_across(per_episode: dict) -> dict:
 
 
 def run_episode(ep_dir: Path) -> dict | None:
-    """context["sensor_checks"], or None when the episode has neither other signals nor depth."""
+    """context["sensor_checks"], or None when the episode has neither other signals nor depth. A group of checks that
+    crashes (the signals', the clocks' or the depth's) has its checks errored, with the error, and the rest stand."""
     ep = me.load(ep_dir)
     if not ep.get("signals") and not ep.get("depth") and not ep["context"].get("clocks"):
         return None
-    found = signal_findings(ep) + clock_findings(ep) + depth_findings(ep)
+    # each group of checks runs on its own: a crash in one records its checks as errored, with the error, and the
+    # others' findings are kept
+    found, errored = [], {}
+    for fn, names in ((signal_findings, SIGNAL_CHECKS), (clock_findings, ("clock_offset",)),
+                      (depth_findings, DEPTH_CHECKS)):
+        try:
+            found += fn(ep)
+        except Exception as e:  # noqa: BLE001 - recorded on its checks, the other checks stand
+            errored.update({c: f"{type(e).__name__}: {e}"[:300] for c in names})
     applies = set()
     if ep.get("signals"):
         applies |= {"no_reading", "constant", "dead_values", "pinned", "slow_sensor"}
@@ -221,7 +234,8 @@ def run_episode(ep_dir: Path) -> dict | None:
         applies |= {"depth_invalid", "depth_frozen", "depth_offset"}
     fired = {f["check"] for f in found}
     return {"notes": found, "flagged": False,
-            "checks": [{"check": c, "name": NAMES[c],
+            "checks": [{"check": c, "name": NAMES[c], "status": "errored", "error": errored[c]} if c in errored else
+                       {"check": c, "name": NAMES[c],
                         "status": "fired" if c in fired else "clear" if c in applies else "na"} for c in NAMES],
             "rule": ("notes only: a sensor check counts as an issue once every episode it fires on is confirmed on the "
                      "frames")}
@@ -235,10 +249,14 @@ def _constants(d: str) -> dict:
 
 
 def _safe(d: str):
+    """One episode's result; an episode whose checks cannot run at all (its folder does not read) still gets one, with
+    every check errored and the error."""
     try:
         return d, run_episode(Path(d)), None
-    except Exception as e:  # reported per episode, never silently skipped
-        return d, None, f"{type(e).__name__}: {e}"[:300]
+    except Exception as e:  # recorded on every check, never silently skipped
+        err = f"{type(e).__name__}: {e}"[:300]
+        return d, {"notes": [], "flagged": False, "error": err,
+                   "checks": [{"check": c, "name": NAMES[c], "status": "errored", "error": err} for c in NAMES]}, None
 
 
 def main():
@@ -277,6 +295,9 @@ def main():
                 failed += 1
                 print(f"FAILED {Path(d).name}: {err}", flush=True)
                 continue
+            if r and r.get("error"):
+                failed += 1
+                print(f"ERRORED {Path(d).name}: {r['error']}", flush=True)
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx["sensor_checks"] = r

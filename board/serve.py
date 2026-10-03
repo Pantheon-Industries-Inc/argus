@@ -2115,6 +2115,8 @@ h3.section { border-top: 1px solid var(--border-strong); }
 .ck-dot.issue { background: var(--danger); }
 .ck-dot.note { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-2); }
 .ck-dot.na { background: transparent; box-shadow: inset 0 0 0 1px var(--border-strong); }
+/* a check that stopped with an error: a fault of ours, never of the data, so no crimson */
+.ck-dot.err { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-3); }
 .ck-name { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
 .ck-row.clear .ck-name, .ck-row.na .ck-name { color: var(--fg-2); }
 .ck-st { font: 500 11px/1 var(--mono); color: var(--fg-3); white-space: nowrap; }
@@ -3043,6 +3045,9 @@ let CHECKS_OPEN = false;       // the full list of capture checks, kept open or 
 const OUR_CHECKS = [['stream_pairing', 'crossed', 'streams-crossed'], ['recorded_jumps', 'flagged', 'recorded-jump'],
                     ['gripper_channels', 'flagged', 'gripper-flat'], ['timebase', 'sped_up_recording', 'sped-up']];
 // a check's reason as sentences: "no pose: joint-state teleop has none" reads "No pose. Joint-state teleop has none."
+// a reason that holds an error message, as one sentence: its first letter raised and a full stop, its colons kept
+const asSentence = t => { const x = String(t).trim(); return x.charAt(0).toUpperCase() + x.slice(1)
+  + (/[.!?]$/.test(x) ? '' : '.'); };
 const sentences = (t) => String(t).split(/:\s+/).map(x => x.charAt(0).toUpperCase() + x.slice(1)).join('. ')
   .replace(/\.?$/, '.');
 // an outcome in words; a failure of the kind partial (a real part of the goal left undone) says it was partly done
@@ -3050,10 +3055,12 @@ const outcomeWords = (oc, kind) => oc === 'failure' && kind === 'partial' ? 'fai
   : String(oc).replace(/_/g, ' ');
 function checksSection(d) {
   const dc = d.dataset_checks || {}, rows = [];
-  // a check not run on this episode says why (a state not on the cameras' frames, checks/stream_pairing.py unaligned)
+  // a check not run on this episode says why (a state not on the cameras' frames, checks/stream_pairing.py unaligned),
+  // and one that stopped with an error says it, with the error (checks/stream_pairing.py _safe)
   for (const [k, field, fam] of OUR_CHECKS) if (dc[k] && typeof dc[k] === 'object') rows.push({name: famName(fam),
-    st: dc[k].not_assessed ? 'na' : dc[k][field] ? 'issue' : 'clear',
-    text: dc[k].not_assessed ? sentences(dc[k].not_assessed) : ''});
+    st: dc[k].error ? 'err' : dc[k].not_assessed ? 'na' : dc[k][field] ? 'issue' : 'clear',
+    text: dc[k].error ? `The check stopped with an error (${dc[k].error}).`
+      : dc[k].not_assessed ? sentences(dc[k].not_assessed) : ''});
   // the capture checks test a robot's recording (its state stream, grippers and camera timing); none of them applies to
   // footage from a person's head camera, so a head-camera episode lists none
   const cq = d._rig !== 'ego_head' && dc.capture_qc && Array.isArray(dc.capture_qc.checks) ? dc.capture_qc : null;
@@ -3063,7 +3070,7 @@ function checksSection(d) {
   const tc = dc.contact_checks && typeof dc.contact_checks === 'object' ? dc.contact_checks : null;
   if (!rows.length && !cq && !sc && !tc) return '';
   const dot = st => `<span class="ck-dot ${st}" aria-hidden="true"></span>`;
-  const word = {issue: 'fired', note: 'note', clear: 'clear', na: 'not applicable'};
+  const word = {issue: 'fired', note: 'note', clear: 'clear', na: 'not applicable', err: 'error'};
   const row = r => `<div class="ck-row ${r.st}">${dot(r.st)}<span class="ck-name">${esc(r.name)}</span><span `
     + `class="ck-st">${word[r.st]}</span>${r.text ? `<div class="ck-text">${esc(r.text)}</div>` : ''}</div>`;
   const ours = rows.length ? `<div class="ck-block"><div class="ck-head"><span class="ck-title">Our checks</span><span `
@@ -3077,11 +3084,13 @@ function checksSection(d) {
     const flags = {};
     for (const f of cq.flags || []) (flags[f.check] = flags[f.check] || []).push(f.evidence || f.title);
     const all = cq.checks.map(c => ({name: c.name, group: c.group, why: c.why,
-      st: c.status === 'fired' ? (c.shown_as === 'issue' ? 'issue' : 'note') : c.status === 'clear' ? 'clear' : 'na',
+      st: c.status === 'fired' ? (c.shown_as === 'issue' ? 'issue' : 'note') : c.status === 'clear' ? 'clear'
+        : c.status === 'errored' ? 'err' : 'na',
       text: c.status === 'fired' ? [...new Set((c.shown_as === 'issue' ? flags[c.check] : notes[c.check]) || [])]
         .concat(c.shown_as === 'note' && c.why && (cq.notes || []).some(x => x.check === c.check && x.evidence)
-          ? [c.why] : []).join(' ') : ''}));
-    const fired = all.filter(c => c.st === 'issue' || c.st === 'note');
+          ? [c.why] : []).join(' ') : c.status === 'errored' && c.why ? asSentence(c.why) : ''}));
+    // a check that stopped with an error is shown with the ones that fired, before the full list
+    const fired = all.filter(c => c.st === 'issue' || c.st === 'note' || c.st === 'err');
     const n = st => all.filter(c => c.st === st).length;
     const groups = [...new Set(all.map(c => c.group))];
     theirs = `<div class="ck-block ck-theirs${CHECKS_OPEN ? ' open' : ''}">
@@ -3089,12 +3098,14 @@ function checksSection(d) {
         target="_blank" rel="noopener">We Looked at the Data</a></span>
         <span class="ck-sum">${n('issue')} ${n('issue') === 1 ? 'issue'
           : 'issues'} &middot; ${n('note')} ${n('note') === 1 ? 'note' : 'notes'} &middot; ${n('clear')} clear `
-          + `&middot; ${n('na')} not applicable</span></div>
+          + `&middot; ${n('na')} not applicable${n('err') ? ` &middot; ${n('err')} ${n('err') === 1 ? 'error'
+            : 'errors'}` : ''}</span></div>
       ${fired.map(row).join('')}
       <div class="ck-all"><div class="ck-all-in">${groups.map(g => `<div class="ck-group">${esc(g)}`
         + `</div>${all.filter(c => c.group === g).map(c => `<div class="ck-row ${c.st}">${dot(c.st)}<span `
-        + `class="ck-name">${esc(c.name)}</span><span class="ck-st">${word[c.st]}</span>${c.st === 'na' && c.why
-        ? `<div class="ck-text">${esc(sentences(c.why))}</div>`
+        + `class="ck-name">${esc(c.name)}</span><span class="ck-st">${word[c.st]}</span>${(c.st === 'na'
+        || c.st === 'err') && c.why
+        ? `<div class="ck-text">${esc(c.st === 'err' ? asSentence(c.why) : sentences(c.why))}</div>`
         : ''}</div>`).join('')}`).join('')}</div></div>
       <button class="ck-more" type="button" onclick="CHECKS_OPEN = !CHECKS_OPEN; `
         + `this.closest('.ck-theirs').classList.toggle('open', CHECKS_OPEN); this.textContent = CHECKS_OPEN ? 'Hide `
@@ -3107,7 +3118,9 @@ function checksSection(d) {
     const ev = {};
     for (const n of sc.notes || []) (ev[n.check] = ev[n.check] || []).push(n.evidence);
     const all = sc.checks.filter(c => c.status !== 'na').map(c => ({name: c.name,
-      st: c.status === 'fired' ? 'note' : 'clear', text: (ev[c.check] || []).map(sentences).join(' ')}));
+      st: c.status === 'fired' ? 'note' : c.status === 'errored' ? 'err' : 'clear',
+      text: c.status === 'errored' ? `The check stopped with an error (${c.error}).`
+        : (ev[c.check] || []).map(sentences).join(' ')}));
     if (all.length) sensors = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Sensor and depth checks`
       + `</span><span class="ck-sum">${all.filter(r => r.st === 'note').length} of ${all.length} noted</span></div>`
       + `${all.map(row).join('')}</div>`;

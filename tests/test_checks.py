@@ -3,6 +3,7 @@ real decoded video, every label consistency rule, and the sped-up recording scan
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from argparse import Namespace
@@ -537,3 +538,36 @@ def test_the_sped_up_lag_is_a_time_at_the_recordings_own_rate():
     assert tb.is_sped_up(3.4, 0.03, 0.0, 3.4, fps=15) is False
     assert tb.is_sped_up(1.7, 0.03, 0.0, 1.7, fps=15) is True
     assert "1.7 frames at 15 fps" in tb.rule_text(15)
+
+
+
+def test_a_pairing_check_that_crashes_is_recorded_as_errored(tmp_path, monkeypatch):
+    """A crash in one of the three checks is that check's result, with the error, never a missing one."""
+    def boom(d):
+        raise ValueError("boom")
+    monkeypatch.setitem(stream_pairing.MODES, "jumps", ("recorded_jumps", boom, "flagged"))
+    d, r, err = stream_pairing._safe("jumps", str(tmp_path / "episode_000000"))
+    assert err is None and r == {"error": "ValueError: boom", "flagged": False}
+
+
+def test_a_sensor_check_that_crashes_is_errored_and_the_others_are_kept(tmp_path, monkeypatch):
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    ctx = json.loads((ep / "context.json").read_text())
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+
+    def boom(e):
+        raise ValueError("boom")
+    monkeypatch.setattr(sc, "clock_findings", boom)
+    r = sc.run_episode(ep)
+    st = {c["check"]: c for c in r["checks"]}
+    assert st["clock_offset"]["status"] == "errored" and "ValueError: boom" in st["clock_offset"]["error"]
+    assert st["constant"]["status"] in ("fired", "clear") and st["no_reading"]["status"] in ("fired", "clear")
+
+
+def test_the_page_shows_a_check_that_crashed_as_an_error():
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("errored_checks.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

@@ -203,3 +203,57 @@ def test_a_stored_speed_note_is_reworded_with_the_right_plural():
                   "8 rad/s in 1 interval.")
     assert "3 intervals." in cq.refresh_notes({**old, "notes": [{**old["notes"][0], "evidence": old["notes"][0][
         "evidence"].replace("1 intervals", "3 intervals")}]})["notes"][0]["evidence"]
+
+
+VERIFIED = "0 = jaws shut, 1 = fully open (checked against the wrist frames)"
+
+
+def _gripper_episode(T: int = 60):
+    """Two handheld grippers whose openings move, timed at 30 fps, with no camera decoded."""
+    s = np.zeros((T, 14))
+    s[:, 0] = np.linspace(0, 0.3, T)
+    s[:, 6] = 0.5 + 0.4 * np.sin(np.linspace(0, 6, T))
+    s[:, 7] = np.linspace(0, 0.2, T)
+    s[:, 13] = 0.5 + 0.4 * np.cos(np.linspace(0, 6, T))
+    return s
+
+
+def test_one_nan_state_row_never_turns_off_the_state_checks():
+    """A state with one row that has no reading: that row is left out of the checks and reported, and every other row
+    is checked as usual."""
+    s = _gripper_episode()
+    s[10, 2] = np.nan
+    ep = _ep(s, gripper_value=VERIFIED)
+    cs = cq.canonical_states(ep)
+    assert not cs["valid"][10, :7].any() and cs["valid"][[9, 11], :7].all() and cs["valid"][10, 7:].all()
+    assert cs["nonfinite"] == [{"actor": "left", "rows": 1, "first_row": 10}]
+    R = cq.assess({"ep": ep, "T": len(s), "cams": {}})["checks"]
+    assert R["nonfinite_signal"]["status"] == "fired"
+    for c in ("gripper_never_acts", "normalized_gripper_out_of_range", "gripper_sensor_bug", "jump_return_event",
+              "over_95_percent_static"):
+        assert R[c]["status"] in ("fired", "clear"), (c, R[c])
+
+
+def test_a_check_that_crashes_is_recorded_as_errored_and_the_rest_are_kept(monkeypatch):
+    def boom(*a, **kw):
+        raise ValueError("boom")
+    monkeypatch.setattr(cq.up, "gripper_sensor_bug_checks", boom)
+    s = _gripper_episode()
+    a = cq.assess({"ep": _ep(s, gripper_value=VERIFIED), "T": len(s), "cams": {}})
+    R = a["checks"]
+    assert R["gripper_sensor_bug"]["status"] == "errored" and "ValueError: boom" in R["gripper_sensor_bug"]["error"]
+    assert R["gripper_never_acts"]["status"] in ("fired", "clear")
+    assert R["jump_return_event"]["status"] in ("fired", "clear") and R["episode_too_short"]["status"] == "fired"
+    rec = cq.format_result(a)
+    row = next(r for r in rec["checks"] if r["check"] == "gripper_sensor_bug")
+    assert row["status"] == "errored" and "boom" in row["why"]
+    assert not [f for f in rec["flags"] if f["check"] == "gripper_sensor_bug"]
+
+
+def test_an_episode_whose_checks_cannot_run_records_every_check_as_errored(monkeypatch):
+    def boom(d):
+        raise RuntimeError("the state file does not read")
+    monkeypatch.setattr(cq, "extract", boom)
+    rec = cq.run_episode("/nowhere/episode_000000")
+    assert rec["checks"] and all(r["status"] == "errored" for r in rec["checks"]) and not rec["flags"]
+    assert "the state file does not read" in rec["checks"][0]["why"]
