@@ -571,3 +571,29 @@ def test_the_page_shows_a_check_that_crashed_as_an_error():
                         str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_nan_state_row_is_left_out_and_too_few_readings_are_not_assessed(tmp_path):
+    """One NaN state row made stream pairing's correlations NaN and the gripper range NaN, both read as clear though
+    they measured nothing. Each is measured over the frames with a reading, giving what the whole state gives less
+    those frames; an arm or gripper with readings at under half its frames is not assessed, never clear."""
+    s, vL, vR = two_grippers()
+    s[40, 0:7] = np.nan                        # one left row
+    d = write_episode(tmp_path / "episode_000000", s, {"left": levels_for(vL), "right": levels_for(vR)})
+    r = stream_pairing.pairing(d)
+    assert r["crossed"] is False and r["left_vs_left"] > 0.9 and r["right_vs_right"] > 0.9
+    g = stream_pairing.grippers(d)
+    assert g["flagged"] is False and "not_assessed" not in g
+    assert g["actors"]["left"]["frames_without_reading"] == 1 and g["actors"]["left"]["min"] == pytest.approx(0.2)
+    s2 = s.copy()
+    s2[: T * 2 // 3, 7:14] = np.nan            # the right arm reads at a third of the frames
+    d2 = write_episode(tmp_path / "episode_000001", s2, {"left": levels_for(vL), "right": levels_for(vR)})
+    r = stream_pairing.pairing(d2)
+    assert set(r) == {"not_assessed"} and "right" in r["not_assessed"] and "too few to check" in r["not_assessed"]
+    g = stream_pairing.grippers(d2)
+    assert g["flagged"] is False and "right gripper" in g["not_assessed"] and "flat" not in g["actors"]["right"]
+    # a gripper found flat still fires beside one that could not be read
+    s2[:, 6] = 0.5
+    d3 = write_episode(tmp_path / "episode_000002", s2, {"left": levels_for(vL), "right": levels_for(vR)})
+    g = stream_pairing.grippers(d3)
+    assert g["flagged"] is True and "not_assessed" not in g and "not_assessed" in g["actors"]["right"]

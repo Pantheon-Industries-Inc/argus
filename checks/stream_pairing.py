@@ -104,11 +104,27 @@ def actor_speed(ep: dict, g: int) -> np.ndarray:
 
 
 def _corr(a: np.ndarray, b: np.ndarray) -> float | None:
+    """The correlation over the steps where both have a reading (a NaN state row has no speed on either side of it)."""
     n = min(len(a), len(b))
-    a, b = a[:n], b[:n]
-    if n < 3 or a.std() < 1e-9 or b.std() < 1e-9:
+    ok = np.isfinite(a[:n]) & np.isfinite(b[:n])
+    a, b = a[:n][ok], b[:n][ok]
+    if len(a) < 3 or a.std() < 1e-9 or b.std() < 1e-9:
         return None
     return round(float(np.corrcoef(a, b)[0, 1]), 3)
+
+
+# a check of the recorded state runs on the frames that have a reading; with readings at fewer than this share of the
+# frames it measures too little to say anything, and says it was not assessed rather than clear
+MIN_READ_SHARE = 0.5
+
+
+def too_few(values: np.ndarray, what: str) -> str | None:
+    """Why a check is not assessed on these values (one per frame or frame step) when fewer than MIN_READ_SHARE of them
+    have a reading, else None."""
+    n, ok = len(values), int(np.isfinite(values).sum())
+    if n and ok >= MIN_READ_SHARE * n:
+        return None
+    return f"{what} has a reading at only {ok} of {n} frames, too few to check"
 
 
 def unaligned(ep: dict) -> dict | None:
@@ -130,8 +146,13 @@ def pairing(ep_dir: Path) -> dict | None:
     if unaligned(ep):
         return unaligned(ep)
     a, b = me.state_span(ep)
-    mL, mR = stream_motion(ep, "left"), stream_motion(ep, "right")
     vL, vR = actor_speed(ep, 0), actor_speed(ep, 1)
+    # measured over the frame steps with a reading on both sides; an arm with too few of them is not compared at all
+    why = [w for w in (too_few(vL[a:b - 1], f"The recorded state of {me.actors(ep)[0]}"),
+                       too_few(vR[a:b - 1], f"The recorded state of {me.actors(ep)[1]}")) if w]
+    if why:
+        return {"not_assessed": ". ".join(why)}
+    mL, mR = stream_motion(ep, "left"), stream_motion(ep, "right")
     n = min(len(mL), len(mR), b - 1)
     span = slice(a, n)
     r = {"left_vs_left": _corr(mL[span], vL[span]), "right_vs_right": _corr(mR[span], vR[span]),
@@ -242,18 +263,29 @@ def _camera_at(ep: dict, cam: str, i: int) -> dict:
 
 def grippers(ep_dir: Path) -> dict | None:
     """context["gripper_channels"]: each actor's gripper range and whether it is flat, and flagged when one is;
-    None on video-only rigs."""
+    None on video-only rigs. Read over the frames with a reading; a gripper with too few of them (too_few) is not
+    assessed, with why, and the check says so unless another gripper is flat."""
     ep = me.load(ep_dir)
     if me.state_kind(ep) == "none":
         return None
     a, b = me.state_span(ep)                # the frames the state covers
     s = np.asarray(ep["state"], dtype=np.float64)[a:b]
-    out = {}
+    out, unread = {}, []
     for g, name in enumerate(me.actors(ep)):
         v = s[:, 7 * g + 6]
+        why = too_few(v, f"The recorded {name} gripper")
+        if why:
+            out[name] = {"not_assessed": why}
+            unread.append(why)
+            continue
+        gaps = int((~np.isfinite(v)).sum())
+        v = v[np.isfinite(v)]
         out[name] = {"min": round(float(v.min()), 5), "max": round(float(v.max()), 5),
-                     "flat": bool(np.ptp(v) <= 1e-9 * max(1.0, float(np.abs(v).max())))}
-    return {"actors": out, "flagged": any(a["flat"] for a in out.values()),
+                     "flat": bool(np.ptp(v) <= 1e-9 * max(1.0, float(np.abs(v).max()))),
+                     **({"frames_without_reading": gaps} if gaps else {})}
+    flagged = any(x.get("flat") for x in out.values())
+    return {"actors": out, "flagged": flagged,
+            **({"not_assessed": ". ".join(unread)} if unread and not flagged else {}),
             "rule": "a gripper whose recorded value is exactly the same at every frame of the episode"}
 
 
