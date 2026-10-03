@@ -872,6 +872,8 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
         return kind, None
     names = [str(x) for x in names]
     words = {x: state_words(x) for x in names}
+    # a name with no words ("" or "_") has no last word, so it says neither an axis, a joint nor a gripper
+    last = {x: words[x][-1] if words[x] else "" for x in names}
     groups = [names[i:i + 7] for i in range(0, dims, 7)]
     if any(STATE_QUAT_NAME.search(x) for x in names):
         return "none", ("Labelled from the video: the recorded state's value names give a quaternion, and our checks "
@@ -884,13 +886,13 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
                         "effort or another quantity that is not a position, and our checks read the positions of each "
                         + per)
     # a pose whose axes the rule cannot read is never joints by width on an arm rig, and is the pose on a gripper rig
-    framed = next((x for x in names if set(words[x]) & STATE_FRAME_WORDS and words[x][-1].isdigit()
+    framed = next((x for x in names if set(words[x]) & STATE_FRAME_WORDS and last[x].isdigit()
                    and not STATE_GRIPPER_NAME.search(x)), None)
     unaxed = framed is not None and kind != "ee_pose"
     seventh = all(STATE_GRIPPER_NAME.search(g[6]) for g in groups)
     if seventh and not any(STATE_GRIPPER_NAME.search(x) for g in groups for x in g[:6]):
-        if all(words[x][-1] in STATE_AXIS_WORDS for g in groups for x in g[:6]) and \
-                all(any(words[x][-1] in STATE_POSITION_AXES for x in g[:6]) for g in groups):
+        if all(last[x] in STATE_AXIS_WORDS for g in groups for x in g[:6]) and \
+                all(any(last[x] in STATE_POSITION_AXES for x in g[:6]) for g in groups):
             return "ee_pose", None
         if unaxed:
             return "none", STATE_UNAXED_NOTE.format(framed)

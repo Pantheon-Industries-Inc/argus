@@ -712,6 +712,23 @@ def test_two_arms_in_their_own_files_or_messages():
         _two_arms_in_their_own_files_or_messages(Path(t))
 
 
+def test_a_value_name_with_no_words_says_nothing_and_never_raises():
+    """A value name that splits into no words ("" or "_") raised IndexError in state_layout when every seventh name
+    is a gripper. Such a name says neither joints, a gripper nor a pose, so the other names and the width rule
+    decide."""
+    j = [f"j{i}" for i in range(1, 6)]
+    assert f.state_words("") == [] and f.state_words("_") == []
+    for blank in ("", "_", "__", " "):
+        assert f.state_layout(7, "teleop_arms", [blank] + j + ["gripper"]) == ("joints", None)
+        assert f.state_layout(7, "teleop_arms", j + [blank, "gripper"]) == ("joints", None)
+        assert f.state_layout(7, "teleop_arms", [blank] * 7) == ("joints", None)
+        assert f.state_layout(7, "handheld_gripper", [blank] * 7) == ("ee_pose", None)
+        assert f.state_layout(14, "teleop_arms", ([blank] + j + ["gripper"]) * 2) == ("joints", None)
+        # the other names still decide: a velocity named beside it is still not a position
+        kind, note = f.state_layout(7, "teleop_arms", [blank] + j + ["gripper_vel"])
+        assert kind == "none" and "gripper_vel" in note
+
+
 def test_joint_state_reads_only_the_layout_the_checks_read():
     import numpy as np
     q = np.linspace(0.0, 1.0, 11)
