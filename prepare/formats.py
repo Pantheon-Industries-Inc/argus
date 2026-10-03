@@ -788,8 +788,11 @@ def side_of(name: str) -> str | None:
     return None
 
 
+JOINT_DIMS = 7                     # six joints and a gripper per arm, as state_layout and the checks read state
+
+
 def recorded_state_identity(source=None, names=None) -> dict:
-    """A single state's source claims, distinguishing missing identity from conflicting recorded sides."""
+    """One native arm group's claims, distinguishing missing identity from conflicting recorded sides."""
     names = [str(n) for n in names] if names is not None else []
     def sides(name):
         return {side for tk in tokens(name) for side in ("left", "right")
@@ -806,14 +809,39 @@ def recorded_state_side(source=None, names=None) -> str | None:
     return recorded_state_identity(source, names)["side"]
 
 
-def record_state_identity(ctx: dict, source=None, names=None) -> None:
-    identity = recorded_state_identity(source, names)
-    ctx.update(state_identity=identity, state_side=identity["side"])
-    if identity["status"] == "conflict":
+def record_state_groups(ctx: dict, groups: list[tuple]) -> None:
+    """Keep source claims in numeric group order before selected arrays or streams leave the signals.
+    Each seven value group has its own identity. Conflicting claims never establish a wrist mapping, and
+    repeated side labels identify separate groups without proving which one belongs to a mounted camera."""
+    identities = []
+    for source, names, dims in groups:
+        for start in range(0, dims, JOINT_DIMS):
+            identities.append(recorded_state_identity(source, names[start:start + JOINT_DIMS] if names else None))
+    ctx["state_identities"] = identities
+    if len(identities) == 1:
+        ctx.update(state_identity=identities[0], state_side=identities[0]["side"])
+    for g, identity in enumerate(identities):
+        source = identity["source"]
         claim = f"source {source!r}, value names {identity['names']!r}"
-        add_issue(ctx, "state_identity_conflict", f"The recorded state names conflicting left and right sides "
-                  f"({claim}); its one actor's side is unknown and it is assigned to no mounted camera.",
-                  signal=str(source) if source is not None else None)
+        if identity["status"] == "conflict":
+            who = "The recorded state" if len(identities) == 1 else f"Recorded state group {g + 1}"
+            actor = "its one actor" if len(identities) == 1 else "this actor"
+            add_issue(ctx, "state_identity_conflict", f"{who} names conflicting left and right sides "
+                      f"({claim}); {actor}'s side is unknown and it is assigned to no mounted camera.",
+                      signal=str(source) if source is not None else None)
+    sides = [i["side"] for i in identities]
+    repeated = [side for side in ("left", "right") if sides.count(side) > 1]
+    if repeated:
+        claims = "; ".join(f"group {g + 1}, source {i['source']!r}, value names {i['names']!r}"
+                           for g, i in enumerate(identities))
+        ctx["state_identity_note"] = (
+            f"Separate recorded state groups name the same side ({', '.join(repeated)}). Each keeps its group "
+            f"number and values; no mounted camera can be assigned uniquely from these claims ({claims}).")
+
+
+def record_state_identity(ctx: dict, source=None, names=None, dims: int = JOINT_DIMS) -> None:
+    """Record the ordered groups of one state vector through the same rule as split source streams."""
+    record_state_groups(ctx, [(source, names, dims)])
 
 
 def is_mount_named(name: str) -> bool:
@@ -2567,8 +2595,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         ctx["placeholder_frames"] = held
     if state is not None:
         ctx["state_kind"] = state_layout(state.shape[1], rig, state_names)[0]
-        if state.shape[1] == JOINT_DIMS and "state_identity" not in ctx:
-            record_state_identity(ctx, (ctx.get("source") or {}).get("state"), state_names)
+        if state.shape[1] in (JOINT_DIMS, 2 * JOINT_DIMS) and "state_identities" not in ctx:
+            record_state_identity(ctx, (ctx.get("source") or {}).get("state"), state_names, state.shape[1])
     write_depth(ep, ctx, dep, dtimes)
     return finish_episode(ep, ctx, sources, state=state, action=action, times=times, signals=signals)
 
@@ -3519,11 +3547,9 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 # an HDF5 array named as the state (a robot.h5's qpos beside the videos) is read by the rule an HDF5
                 # episode's is (h5_state), and leaves the signals when it is read
                 state, action, state_names, state_src, h5_note = h5_state(
-                    more, rig, real[anchor], [p.stem for p in h5_files] if len(h5_files) > 1 else None)
+                    more, rig, real[anchor], [p.stem for p in h5_files] if len(h5_files) > 1 else None, extra)
                 if state is not None:
                     extra["source"]["state"] = state_src
-                    if state.shape[1] == JOINT_DIMS:
-                        record_state_identity(extra, state_src, state_names)
                     drop_no_state(extra)                 # a note on the MCAP arm channels, which are not the state
                 elif h5_note and "state_note" not in extra:
                     no_state(extra, h5_note)
@@ -4330,8 +4356,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(feats, state))
-    if state is not None and state.shape[1] == JOINT_DIMS:
-        record_state_identity(extra, "observation.state", state_value_names(feats, state))
+    if state is not None and kind != "none":
+        record_state_identity(extra, "observation.state", state_value_names(feats, state), state.shape[1])
     note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
         # no observation.state, or one with no numbers, is a state not recorded; a data file that did not come is
@@ -4666,8 +4692,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             unshown_not_decodable(extra, key)
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
-    if state is not None and state.shape[1] == JOINT_DIMS:
-        record_state_identity(extra, "observation.state", state_value_names(r["features"], state))
+    if state is not None and kind != "none":
+        record_state_identity(extra, "observation.state", state_value_names(r["features"], state), state.shape[1])
     note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
         note = missing_lerobot_state(df)
@@ -5375,7 +5401,8 @@ H5_ACTION_NAME = re.compile(r"(^|/)actions?$", re.I)
 H5_ACTION_GROUP = re.compile(r"(^|/)actions?/", re.I)
 
 
-def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None = None) -> tuple:
+def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None = None,
+             identity_ctx: dict | None = None) -> tuple:
     """(state, action, value names, the state array's name, note) of an HDF5 episode, from its signals (h5_signals,
     already on the anchor camera's frames, at times q). The arrays named as the state (H5_STATE_NAME, outside an action
     group) are tried shortest name first, and the first that state_layout lays out with the names the file gives its
@@ -5386,7 +5413,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
     Both leave the signals when the state is read; otherwise they stay, and note gives the first array's reason, named.
     All None on a head camera, which has no state and no note about one, or when no array is named as the state.
     files are the names of the HDF5 files whose arrays carry them first (h5_file_signals), passed over to read each
-    array's own name."""
+    array's own name. identity_ctx retains each selected group's source claims before their metadata is removed."""
     if rig == "ego_head":
         return None, None, None, None, None
     meta = getattr(signals, "meta", {}) or {}
@@ -5486,6 +5513,8 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
                      and (meta.get(k) or {}).get("aligned_by") != COARSE_CLOCK
                      and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
     acts = [command(name, a.shape) for name, a, _ in arms]
+    if identity_ctx is not None:
+        record_state_groups(identity_ctx, [(name, nm, a.shape[1]) for name, a, nm in arms])
     action = None
     if all(acts):
         action = np.concatenate([filled(np.asarray(signals.pop(k), dtype=np.float64))[0] for k in acts], axis=1)
@@ -5598,13 +5627,15 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             merge_signals(signals, h5_file_signals(sensor_h5s, q_abs, len(q_abs)))
         if sensor_mcaps:
             merge_signals(signals, mcap_signals(sensor_mcaps, q_abs))
-        state, action, state_names, state_src, state_note = h5_state(signals, rig, q_abs)
+        identity_extra: dict = {}
+        state, action, state_names, state_src, state_note = h5_state(signals, rig, q_abs, identity_ctx=identity_extra)
         sensor_extra: dict = {}
         if assumed:
             merge_signals(signals, sensors_from_start(assumed, q_abs - q_abs[0], sensor_extra))
         instr, notes = h5_text(f, g, st["text"])
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
+    extra.update(identity_extra)
     for nm in undecoded:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {nm} could be decoded, so it is not shown.",
                   camera=nm)
@@ -5622,8 +5653,6 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     note_sensors(extra, signals, by_clock, assumed, unplaced, q=q_abs)
     if state_src:
         extra["source"]["state"] = state_src
-        if state is not None and state.shape[1] == JOINT_DIMS:
-            record_state_identity(extra, state_src, state_names)
     if state_note:
         no_state(extra, state_note)
     if not chosen[anchor]["clock"]:
@@ -6032,7 +6061,6 @@ def mcap_has_camera(path: Path) -> bool:
 JOINT_KEYS = ("joint_pos", "joint_positions", "joint_position", "positions", "position", "qpos")
 GRIPPER_KEYS = ("gripper_pos", "gripper_position", "gripper", "gripper_width", "gripper_opening")
 ACTION_TOPIC = re.compile(r"leader|action|command|cmd|target|teleop", re.I)
-JOINT_DIMS = 7                     # six joints and a gripper per arm, as state_layout and the checks read state
 
 
 def _vector(x) -> list[float] | None:
@@ -6704,14 +6732,10 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     st, act = arm_streams(streams, False), arm_streams(streams, True)
     if not st:
         return None, None, None
-    order = [s for s in ("left", "right", "only") if s in st]
+    order = joint_state_order(st)
     if "only" in order and len(order) > 1:
-        if "left" not in st or "right" not in st:
-            return None, None, StateNote("Labelled from the cameras, because the recorded arm channels do not say "
-                                         "which arm is which.", "layout")
-        # an arm that names a side and one that does not could be the same side's arm twice, but a left and a right
-        # arm are the two working arms, and an arm beside them that names no side is a third one (third_arms)
-        order = ["left", "right"]
+        return None, None, StateNote("Labelled from the cameras, because the recorded arm channels do not say "
+                                     "which arm is which.", "layout")
     dims = [streams[st[s]]["pos"].shape[1] for s in order]
     if any(d != JOINT_DIMS for d in dims):
         return None, None, StateNote(f"Labelled from the cameras, because the recorded arms have "
@@ -6806,22 +6830,17 @@ def arm_streams(streams: dict, role: bool) -> dict:
     return by_side
 
 
-def joint_state_side(streams: dict) -> str | None:
-    """The identity of the one arm joint_state selected, including its own recorded value names."""
-    arms = arm_streams(streams, False)
-    if len(arms) != 1:
-        return None
-    key = next(iter(arms.values()))
-    return recorded_state_side(_topic(streams, key), streams[key].get("names"))
+def joint_state_order(arms: dict) -> list[str]:
+    """Numeric stream order shared by joint_state and its identity evidence, excluding a third unsided arm."""
+    return [s for s in ("left", "right") if s in arms] if {"left", "right"} <= arms.keys() else [
+        s for s in ("left", "right", "only") if s in arms]
 
 
 def record_joint_state_identity(ctx: dict, streams: dict) -> None:
     arms = arm_streams(streams, False)
-    if len(arms) == 1:
-        key = next(iter(arms.values()))
-        record_state_identity(ctx, _topic(streams, key), streams[key].get("names"))
-    else:
-        ctx["state_side"] = None
+    keys = [arms[s] for s in joint_state_order(arms)]
+    record_state_groups(ctx, [(_topic(streams, k), streams[k].get("names"), streams[k]["pos"].shape[1])
+                              for k in keys])
 
 
 def third_arms(streams: dict) -> list[str]:

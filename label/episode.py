@@ -399,7 +399,8 @@ def contact_views(ep: dict, pl: dict) -> list[tuple[int, list[str]]]:
 
 
 def actors(ep: dict) -> list[str]:
-    """Names of the arms or grippers in state order (7 values each): left then right, or the one.
+    """Unique names of the native seven value groups in state order, using each group's recorded claims.
+    Only a two group layout with no identity evidence retains the legacy left then right convention.
     On a person (ego), the actors are their own two hands."""
     if rig(ep) == "ego_head":
         return ["left", "right"]
@@ -407,15 +408,25 @@ def actors(ep: dict) -> list[str]:
         # video only: the actors are the mounted cameras' own, or both when no single mounted camera names one
         mounted = [v for v in views(ep) if v in MOUNTED]
         return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
-    if ep["state"].shape[1] == 14:
-        return ["left", "right"]
     ctx = ep["context"]
+    count = ep["state"].shape[1] // 7
+    identities = ctx.get("state_identities")
+    noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
+    if isinstance(identities, list) and len(identities) == count and all(isinstance(i, dict) for i in identities):
+        if any(i.get("status") != "absent" for i in identities):
+            sides = [i.get("side") if i.get("status") == "known" else None for i in identities]
+            return [side if side and sides.count(side) == 1 else
+                    f"{side} (recorded group {g + 1})" if side else
+                    f"recorded {noun}" + (f" {g + 1}" if count > 1 else "") + " (side unknown)"
+                    for g, side in enumerate(sides)]
     if (ctx.get("state_identity") or {}).get("status") == "conflict":
-        noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
         return [f"recorded {noun} (side unknown)"]
     recorded = ep["context"].get("state_actors")
-    if isinstance(recorded, list) and len(recorded) == 1 and isinstance(recorded[0], str) and recorded[0]:
+    if isinstance(recorded, list) and len(recorded) == count \
+            and all(isinstance(name, str) and name for name in recorded) and len(set(recorded)) == count:
         return recorded
+    if count == 2:
+        return ["left", "right"]
     from prepare.formats import recorded_state_side
     source = ctx.get("source") or {}
     side = ctx.get("state_side") if "state_side" in ctx else recorded_state_side(
@@ -426,16 +437,15 @@ def actors(ep: dict) -> list[str]:
     mounted = [v for v in views(ep) if v in MOUNTED]
     if len(mounted) == 1:
         return [cam_name(ep, mounted[0])]
-    noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
     return [f"recorded {noun} (side unknown)"]
 
 
 def actor_views(ep: dict) -> list[str | None]:
-    """Mounted view for each recorded actor, without assigning an unknown single state to either wrist."""
+    """Mounted view in recorded group order, with no wrist assigned to unknown or duplicate side claims."""
     names = actors(ep)
     vs = views(ep)
     if len(names) == 2:
-        return [v if v in vs else None for v in MOUNTED]
+        return [name if name in MOUNTED and name in vs else None for name in names]
     if state_kind(ep) != "none" and (ep["context"].get("state_identity") or {}).get("status") == "conflict":
         return [None]
     mounted = [v for v in vs if v in MOUNTED]
@@ -1766,11 +1776,14 @@ def _has_metadata_issues(ep: dict, pl: dict) -> bool:
 def _state_identity_issues(ep: dict, pl: dict) -> str:
     issues = [i["what"] for i in ep["context"].get("reader_issues", [])
               if i.get("kind") == "state_identity_conflict"]
-    return "\nRECORDED ACTOR IDENTITY DISAGREES:\n" + "\n".join(issues) + "\n" if issues else ""
+    text = "\nRECORDED ACTOR IDENTITY DISAGREES:\n" + "\n".join(issues) + "\n" if issues else ""
+    note = ep["context"].get("state_identity_note")
+    return text + ("\nRECORDED ACTOR GROUP IDENTITY:\n" + note + "\n" if note else "")
 
 
 def _has_state_identity_issues(ep: dict, pl: dict) -> bool:
-    return any(i.get("kind") == "state_identity_conflict" for i in ep["context"].get("reader_issues", []))
+    return bool(ep["context"].get("state_identity_note")) or any(
+        i.get("kind") == "state_identity_conflict" for i in ep["context"].get("reader_issues", []))
 
 
 def _table_number_notes(ep: dict) -> list[str]:
