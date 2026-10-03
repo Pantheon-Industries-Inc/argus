@@ -396,3 +396,26 @@ def test_a_short_start_up_lead_is_not_a_gap_but_a_real_gap_is():
     b = np.ones((120, 1))
     b[-5:] = np.nan                                 # the last reading 0.17 s before the end
     assert f.signal_gaps("s", b, t) == []
+
+
+# ---------------------------------------------------------------- a LeRobot dataset's other files are named
+
+def test_a_readme_in_a_lerobot_root_is_named_as_not_read(tmp_path):
+    root = tmp_path / "ds"
+    info = {"codebase_version": "v2.1", "fps": 30, "chunks_size": 1000,
+            "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+            "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+            "features": {"observation.images.top": {"dtype": "video", "shape": [36, 64, 3]},
+                         "observation.state": {"dtype": "float32", "shape": [2]}}}
+    (root / "meta").mkdir(parents=True)
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    (root / "data" / "chunk-000").mkdir(parents=True)
+    pd.DataFrame({"observation.state": [np.zeros(2)] * 30, "frame_index": np.arange(30),
+                  "episode_index": np.zeros(30, int), "timestamp": np.arange(30) / 30}).to_parquet(
+        root / "data" / "chunk-000" / "episode_000000.parquet")
+    _clip(root / "videos" / "chunk-000" / "observation.images.top" / "episode_000000.mp4", 30)
+    (root / "README.md").write_text("# a dataset card\n")
+    det, items = f.plan(tmp_path)
+    words = " ".join(det["missing"])
+    assert "ds/README.md" in words
+    assert "info.json" not in words and "episode_000000" not in words

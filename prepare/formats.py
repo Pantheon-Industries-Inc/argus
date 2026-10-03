@@ -5909,6 +5909,16 @@ def opened_notes(items: list[dict]) -> set[Path]:
     return out
 
 
+LEROBOT_PARTS = ("meta", "data", "videos", "images")
+
+
+def lerobot_own(p: Path, rdirs: list[Path]) -> bool:
+    """Whether a file is one a LeRobot dataset's reader opens: under its meta, data, videos or images folder. Any other
+    file of its root (a README, a dataset card, a script) is not read by us, and is named so, as the upload page names
+    it as not sent."""
+    return any(r in p.parents and p.relative_to(r).parts[0] in LEROBOT_PARTS for r in rdirs)
+
+
 TABLE_TEXT_ROWS = 1000     # the rows of a table looked at to tell notes (a cell of text) from a table of numbers
 
 
@@ -5937,7 +5947,7 @@ def unread_tables(root: Path, det: dict, items: list[dict]) -> list[str]:
     video_dirs = {item_folder(it) for it in items if it.get("kind") == "video"}
     out = []
     for p in files_under(root):
-        if p.suffix.lower() not in (".csv", ".tsv") or p in taken or any(r in p.parents for r in rdirs):
+        if p.suffix.lower() not in (".csv", ".tsv") or p in taken or lerobot_own(p, rdirs):
             continue
         if _table_has_text(p):
             continue
@@ -5951,7 +5961,8 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     """The upload's files (relative paths) that no reader opens. Opened are the files of a LeRobot dataset, videos,
     MCAP and HDF5 files (a sensor file no episode takes is named apart), archives, tables (annotation_tables reads
     every CSV, TSV and JSON Lines file), a video's frame times (a .npy whose name says time beside it) and the notes
-    convert_video reads beside an episode (opened_notes). Any other file, a notes file included, is listed."""
+    convert_video reads beside an episode (opened_notes). Any other file, a notes file included, is listed, and so is a
+    file of a LeRobot dataset's root that its reader does not open (lerobot_own)."""
     root = Path(root)
     parts = det["parts"] if det.get("parts") else [det]
     rdirs = [Path(r) for p in parts for r in p.get("roots") or []]
@@ -5960,7 +5971,7 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
-        if any(r in p.parents for r in rdirs) or x in VIDEO_EXT or x in H5_EXT or x in TABLE_EXT or x == ".mcap" \
+        if lerobot_own(p, rdirs) or x in VIDEO_EXT or x in H5_EXT or x in TABLE_EXT or x == ".mcap" \
                 or ARCHIVE_RE.search(p.name) or p.resolve() in notes:
             continue
         if x == ".npy" and p.parent in vid_dirs and any(t.startswith(("time", "stamp")) for t in tokens(p.stem)):
