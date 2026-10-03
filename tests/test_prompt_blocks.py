@@ -215,6 +215,9 @@ BLOCK_CASES = [
     ("state_unaligned", "teleop_joints", _misalign, ("RECORDED STATE: not given",)),
     ("no_state", "teleop_joints", _drop_state, ("RECORDED STATE: none",)),
     ("signals", "teleop_joints", _add_signals, ("OTHER RECORDED SIGNALS", "base.odom")),
+    ("table_numbers", "teleop_joints", _add(reader_issues=[
+        {"kind": "table_number_ambiguous", "what": "pressure.csv force was read as decimals"}]),
+     ("TABLE NUMBER INTERPRETATION", "pressure.csv force was read as decimals")),
     ("contacts", "teleop_joints", _add_contact, ("CONTACTS:",)),
     ("uploader_notes", "teleop_joints", _add(uploader_annotation='{"operator": "A"}\n'),
      ("THE UPLOADER'S OWN NOTES",)),
@@ -649,3 +652,14 @@ def test_with_no_row_that_fits_each_signal_with_rows_is_named_as_left_out_becaus
         assert lines[0].startswith("  The values at each instant leave out sweep_00 (1 value), sweep_01 (1 value), ")
         assert lines[0].endswith(" and flag_2 (1 value), because not even one row fits.")
         assert "move least" not in lines[0] and "every signal" not in lines[0]
+
+
+def test_other_reader_notes_do_not_add_a_table_interpretation_block():
+    ep, pl = case_ego_plain()
+    before = me.build_prompt(ep, pl, cell_w=256, cell_h=144)
+    ep["context"]["reader_issues"] = [
+        {"kind": "signal_bad_cells", "what": "Other reader note"},
+        {"kind": "table_number_ambiguous", "what": " "},
+    ]
+    assert me.build_prompt(ep, pl, cell_w=256, cell_h=144) == before
+    assert "table_numbers" not in [b.name for b in me.present_blocks(ep, pl)]

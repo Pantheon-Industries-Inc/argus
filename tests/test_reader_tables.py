@@ -1579,3 +1579,20 @@ def test_late_decimal_commas_name_single_dot_groups_without_changing_values(tmp_
     assert any("force has single dot groups" in why for why in df.attrs["number_inferences"])
     out = f.table_signals([p], None, _anchor(32), {})
     assert any("force has single dot groups" in issue["what"] for issue in _issues(out, "table_number_ambiguous"))
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test_late_table_number_inference_reaches_the_whole_model_request(tmp_path, monkeypatch, chunked):
+    from label import episode as me
+    def change(d):
+        (d / "pressure.csv").write_text("timestamp;force\n" + "".join(
+            f"{T0 + i / 30};" + ("12.500" if i < 30 else "12,5") + "\n" for i in range(66)))
+    if chunked:
+        monkeypatch.setattr(f, "TABLE_MAX_BYTES", 1)
+        monkeypatch.setattr(f, "TABLE_CHUNK_ROWS", 2)
+    ctx = _recorder(tmp_path, change)
+    req = me.build_request(ctx["_ep"])
+    text = "\n".join(c["text"] for c in req["content"] if c["type"] == "text")
+    assert "pressure.csv: force has single dot groups that could be decimals or thousands" in text
+    assert "they were read as decimals because no cell proves thousands" in text
+    assert "table_numbers" in req["blocks"]
