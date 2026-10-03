@@ -42,6 +42,10 @@ Accepted uploads, in the order they are recognised:
    in a layout a dataset adapter recognizes goes through that adapter (the prepare/*.py that declare
    UPLOAD = "video": OpenAoE's clip, with its action segments and device).
 
+An upload that holds several of these (plain videos beside an HDF5 file with a camera, a LeRobot dataset beside loose
+MCAP recordings) is read in every one of them (detect), and the files no reader opens are named in the report. MCAP and
+HDF5 files with no camera go with the episodes of their folder, whatever format those are (assign_sensors).
+
 An archive (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz) is read as the folder it holds (open_archives). Data
 Review's upload page opens archives in the browser and sends their files; this is for archives on disk.
 
@@ -342,26 +346,37 @@ def open_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
 # ---------------------------------------------------------------- detection
 
 def detect(root: Path) -> dict:
-    """{"format": "lerobot" | "mcap" | "video", ...} for an upload folder, or raises with what was found."""
+    """{"format": "lerobot" | "mcap" | "hdf5" | "video", ...} for an upload folder, or {"format": "mixed", "parts":
+    [one such dict per format]} when it holds several, or raises with what was found. Every format present is read:
+    an upload of plain videos beside an HDF5 file with a camera had been read as HDF5 alone, its videos never
+    mentioned. Files inside a LeRobot dataset belong to it. MCAP and HDF5 files with no camera (arm joints, grippers, a
+    glove's pressure and hand pose) are sensor files ("state"), read with the episodes of their folder (assign_sensors),
+    never episodes of their own; an MCAP a dataset adapter recognizes is an episode whatever its channels."""
     root = Path(root)
     files = files_under(root)
     roots = lerobot_roots(root, files)
-    if roots:
-        return {"format": "lerobot", "roots": roots}
-    mcaps = [p for p in files if p.suffix.lower() == ".mcap"]
-    h5s = [p for p in files if p.suffix.lower() in H5_EXT]
-    vids = [p for p in files if p.suffix.lower() in VIDEO_EXT]
+    parts = [{"format": "lerobot", "roots": roots}] if roots else []
+    rdirs = [Path(r) for r in roots]
+    rest = [p for p in files if not any(r in p.parents for r in rdirs)]
+    mcaps = [p for p in rest if p.suffix.lower() == ".mcap"]
+    h5s = [p for p in rest if p.suffix.lower() in H5_EXT]
+    vids = [p for p in rest if p.suffix.lower() in VIDEO_EXT]
+    mcap_eps = [p for p in mcaps if mcap_has_camera(p) or mcap_layout([t for t, _ in mcap_channels(p)]) != "generic"]
     h5_cams = [p for p in h5s if h5_has_camera(p)]
-    if vids and not h5_cams and (mcaps or h5s) and not any(mcap_has_camera(p) for p in mcaps):
-        # MCAP and HDF5 files with no camera (arm joints, grippers, a glove's pressure and hand pose) beside videos are
-        # the videos' recorded state and sensor data, not episodes
-        return {"format": "video", "files": [str(p) for p in vids], "state": [str(p) for p in mcaps + h5s]}
-    if mcaps:
-        return {"format": "mcap", "files": [str(p) for p in mcaps]}
+    sensors = [str(p) for p in mcaps + h5s if p not in mcap_eps and p not in h5_cams]
+    if mcap_eps:
+        parts.append({"format": "mcap", "files": [str(p) for p in mcap_eps]})
     if h5_cams:
-        return {"format": "hdf5", "files": [str(p) for p in h5_cams]}
+        parts.append({"format": "hdf5", "files": [str(p) for p in h5_cams]})
     if vids:
-        return {"format": "video", "files": [str(p) for p in vids]}
+        parts.append({"format": "video", "files": [str(p) for p in vids]})
+    for part in parts:
+        if part["format"] != "lerobot" and sensors:
+            part["state"] = sensors
+    if len(parts) == 1:
+        return parts[0]
+    if parts:
+        return {"format": "mixed", "parts": parts, "state": sensors}
     seen = sorted({p.suffix.lower() or p.name for p in files})[:12]
     if h5s:
         raise ValueError("the HDF5 files hold no camera (no image frames or encoded images), and there are no videos "
@@ -959,6 +974,16 @@ class Signals(dict):
         if source:
             m["source"] = source
         self.meta[name] = m
+
+
+def merge_signals(into: Signals, more: Signals) -> Signals:
+    """more's signals, notes and clocks added to into (a plain dict of arrays is read as Signals)."""
+    for k, v in more.items():
+        into[k] = v
+        into.meta[k] = (getattr(more, "meta", {}) or {}).get(k) or {}
+    into.left_out += list(getattr(more, "left_out", []) or [])
+    into.clocks.update(getattr(more, "clocks", {}) or {})
+    return into
 
 
 def is_clock(x: np.ndarray) -> bool:
@@ -1745,18 +1770,6 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
         d = Path(it["files"][0]).parent
         take = name_parts(Path(it["files"][0]).stem)["take"]
         it["series"] = [p for p in csvs.get(d, []) if eps_in[d] == 1 or (take and name_parts(p.stem)["take"] == take)]
-    folder = lambda it: Path(it["files"][0]).parent
-    per_folder: dict[Path, int] = {}
-    for it in items:
-        per_folder[folder(it)] = per_folder.get(folder(it), 0) + 1
-    for it in items:
-        it["state"] = [Path(p) for p in det.get("state") or [] if Path(p).parent == folder(it) and per_folder[folder(it)] == 1]
-    if det.get("state"):
-        n = sum(1 for p in det["state"] if any(Path(p) in it["state"] for it in items))
-        det["used"].append(f"{n} MCAP file{'s' if n != 1 else ''} of recorded state and sensor data, read with the "
-                           f"videos beside {'them' if n != 1 else 'it'}." if n else
-                           "The MCAP files hold no camera, and no folder holds them with the videos of one episode, so "
-                           "their recorded data was not read.")
     return items
 
 
@@ -1869,20 +1882,14 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                     extra.setdefault("state_note", h5_note)
             if not hasattr(signals, "meta"):
                 signals = Signals(signals)
-            for k, v in more.items():
-                signals[k] = v
-                signals.meta[k] = more.meta[k]
-            signals.left_out += more.left_out
+            merge_signals(signals, more)
     if item.get("series"):
         from label import episode as me
         anchor = me.order_views(files)[0]
         more = table_signals(item["series"], real.get(anchor), prs[anchor], extra)
         if not hasattr(signals, "meta"):
             signals = Signals(signals)
-        for k, v in more.items():
-            signals[k] = v
-            signals.meta[k] = more.meta[k]
-        signals.left_out += more.left_out
+        merge_signals(signals, more)
     # each camera's depth video, when the folder has one beside its colour video (depth_videos), on the same clock. A
     # depth video stored as an ordinary 8-bit picture (yuv, rgb) holds the recorder's shading, not distances: it is
     # shown as a camera of its own and never decoded as depth
@@ -3294,12 +3301,21 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if dw.close():
                 depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": source}
         signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
+        # sensor files of the episode's folder (assign_sensors), on the file's clock
+        sensor_h5s = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() in H5_EXT]
+        sensor_mcaps = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() == ".mcap"]
+        if sensor_h5s:
+            merge_signals(signals, h5_file_signals(sensor_h5s, q_abs, len(q_abs)))
+        if sensor_mcaps:
+            merge_signals(signals, mcap_signals(sensor_mcaps, q_abs))
         state, action, state_names, state_src, state_note = h5_state(signals, rig, q_abs)
         instr, notes = h5_text(f, g, st["text"])
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
     if st["unused"]:
         extra["source"]["unused_arrays"] = st["unused"]
+    if item.get("state"):
+        extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
     if state_src:
         extra["source"]["state"] = state_src
     if state_note:
@@ -4497,12 +4513,19 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     pr = prs[me.order_views(files)[0]]
     q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])          # its frames were written from t0
     used = {}
+    # sensor files of the episode's folder (assign_sensors) are read on the same log clock as the file's own channels
+    sensor_mcaps = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() == ".mcap"]
+    sensor_h5s = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() in H5_EXT]
     if rig == "teleop_arms":
-        streams = mcap_joint_streams([item["file"]], q)
+        streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q)
         state, action, note = joint_state(streams, q)
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)
-    signals = mcap_signals([item["file"]], q, used)
+    signals = mcap_signals([item["file"]] + sensor_mcaps, q, used)
+    if sensor_h5s:
+        merge_signals(signals, h5_file_signals(sensor_h5s, q, len(q)))
+    if item.get("state"):
+        extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
     # motion the file records but this reader does not use (hand, body or camera poses in a human recording, joints
     # in a layout the checks do not read): named on the job page, so a missing check is never a silent gap
     motion = [t for t in item["topics"] if re.search(r"hand|pose|slam|body|joint|odom|/tf$", t, re.I)
@@ -4713,35 +4736,125 @@ def trim_episode(ep: Path, max_s: float) -> dict:
 # ---------------------------------------------------------------- entry point
 
 def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
+    """(what was detected, one item per episode) for every format the upload holds (detect), each planned by its own
+    reader, then the sensor files no episode took and the files no reader opened named in det["missing"], so nothing
+    in the upload goes unmentioned."""
     root = Path(root)
     det = detect(root)
     det.setdefault("used", [])
     det.setdefault("missing", [])
+    parts = det["parts"] if det["format"] == "mixed" else [det]
+    if len(parts) > 1:
+        det["used"].append("The upload holds " + _and_words([PART_WORDS[p["format"]] for p in parts])
+                           + "; each was read.")
+    items = []
+    for part in parts:
+        part.setdefault("used", [])
+        part.setdefault("missing", [])
+        items += _plan_part(part, root, grouping)
+        if part is not det:
+            det["used"] += part["used"]
+            det["missing"] += part["missing"]
+            if part.get("version"):
+                det["version"] = part["version"]
+    sensors = [Path(p) for p in det.get("state") or []]
+    if sensors:
+        taken = {Path(p) for it in items for p in (it.get("state") or []) + (it.get("state_shared") or [])}
+        n = sum(1 for p in sensors if p in taken)
+        if n:
+            det["used"].append(f"{n} sensor file{'s' if n != 1 else ''} with no camera (MCAP or HDF5), read with the "
+                               f"episodes of {'their' if n != 1 else 'its'} folder.")
+        lost = [p for p in sensors if p not in taken]
+        if lost:
+            det["missing"].append(f"{_and_words([p.relative_to(root).as_posix() for p in lost])} "
+                                  f"{'hold' if len(lost) != 1 else 'holds'} no camera, and no episode's footage shares "
+                                  f"{'their' if len(lost) != 1 else 'its'} folder to place the data against, so "
+                                  f"{'they were' if len(lost) != 1 else 'it was'} not read.")
+    unread = unread_files(root, det, items)
+    if unread:
+        det["missing"].append(f"{len(unread)} file{'s' if len(unread) != 1 else ''} of a kind no reader opens: "
+                              + _and_words(unread[:12]) + (f" and {len(unread) - 12} more" if len(unread) > 12 else "")
+                              + ".")
+    if len(parts) > 1:
+        det["format"] = " and ".join(p["format"] for p in parts)
+    return det, items
+
+
+PART_WORDS = {"lerobot": "a LeRobot dataset", "mcap": "MCAP recordings", "hdf5": "HDF5 recordings",
+              "video": "plain videos"}
+# what a reader reads beside the data files it plans: notes, metadata and tables (the uploader's annotations,
+# annotation_tables), each video's frame times (frame_times) and archives (open_archives)
+NOTE_EXT = {".json", ".jsonl", ".txt", ".md", ".yaml", ".yml", ".csv", ".tsv", ".xml", ".toml", ".ini", ".cfg"}
+
+
+def _and_words(xs: list[str]) -> str:
+    xs = [str(x) for x in xs]
+    return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1] if xs else ""
+
+
+def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
+    """The upload's files (relative paths) that no reader opens: not inside a LeRobot dataset, not a video, MCAP, HDF5
+    file, note, table or archive, and not a video's frame times (a .npy whose name says time beside a video)."""
+    root = Path(root)
+    parts = det["parts"] if det.get("parts") else [det]
+    rdirs = [Path(r) for p in parts for r in p.get("roots") or []]
+    vid_dirs = {Path(p).parent for p in files_under(root) if p.suffix.lower() in VIDEO_EXT}
+    out = []
+    for p in files_under(root):
+        x = p.suffix.lower()
+        if any(r in p.parents for r in rdirs) or x in VIDEO_EXT or x in H5_EXT or x in NOTE_EXT or x == ".mcap" \
+                or ARCHIVE_RE.search(p.name):
+            continue
+        if x == ".npy" and p.parent in vid_dirs and any(t.startswith(("time", "stamp")) for t in tokens(p.stem)):
+            continue
+        out.append(p.relative_to(root).as_posix())
+    return out
+
+
+def _plan_part(det: dict, root: Path, grouping: dict | None) -> list[dict]:
+    """The items of one format of the upload (detect), with its notes added to det."""
     if det["format"] == "lerobot":
         items, used, missing, roots = plan_lerobot(det, root)
         det["used"] += used
         det["missing"] += missing
         det["version"] = ", ".join(sorted({r["version"] for r in roots}))
-        return det, items
+        return items
     if det["format"] == "mcap":
         items = plan_mcap(det, root)
         det["used"].append(f"{len(items)} MCAP files, one episode each." if len(items) != 1 else "1 MCAP file, one episode.")
         if any(it["seconds"] is None for it in items):
             det["missing"].append("Some MCAP files end early, before their index; they were scanned message by message.")
-        _mark_packaging(det, items)
-        return det, items
-    if det["format"] == "hdf5":
+    elif det["format"] == "hdf5":
         items = plan_hdf5(det, root)
         nf = len(det["files"])
         det["used"].append(f"{nf} HDF5 file{'s' if nf != 1 else ''}, "
                            f"{len(items)} episode{'s' if len(items) != 1 else ''}.")
-        _mark_packaging(det, items)
-        return det, items
-    items = plan_video(det, root, grouping)
-    det["used"].append(f"{len(items)} video episodes." if len(items) != 1
-                       else "1 video episode.")
+    else:
+        items = plan_video(det, root, grouping)
+        det["used"].append(f"{len(items)} video episodes." if len(items) != 1
+                           else "1 video episode.")
+    assign_sensors(items, [Path(p) for p in det.get("state") or []])
     _mark_packaging(det, items)
-    return det, items
+    return items
+
+
+def item_folder(it: dict) -> Path:
+    """The folder an episode's files sit in: a video episode's first video's, an MCAP's or an HDF5 file's own."""
+    return Path(it["files"][0]).parent if it.get("files") else Path(it["file"]).parent
+
+
+def assign_sensors(items: list[dict], sensors: list[Path]) -> None:
+    """Each episode's sensor files (MCAP or HDF5 with no camera, detect) as it["state"]: the sensor files of its folder
+    when the folder holds that one episode."""
+    per_folder: dict[Path, list[dict]] = {}
+    for it in items:
+        per_folder.setdefault(item_folder(it), []).append(it)
+    for it in items:
+        it.setdefault("state", [])
+    for p in sensors:
+        eps = per_folder.get(p.parent) or []
+        if len(eps) == 1:
+            eps[0]["state"].append(p)
 
 
 TABLE_EXT = {".csv", ".tsv", ".jsonl"}

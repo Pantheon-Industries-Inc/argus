@@ -1746,3 +1746,48 @@ def test_an_mcap_layout_reader_that_returns_no_context_is_an_error():
         assert str(e) == "prepare.fakelayout returned no context"
     else:
         raise AssertionError("no error for a reader that returned no context")
+
+
+# ---------------------------------------------------------------- no drop: keep what is usable, flag what is wrong
+
+def _issues(ctx: dict, kind: str | None = None) -> list[dict]:
+    return [i for i in ctx.get("reader_issues") or [] if kind is None or i["kind"] == kind]
+
+
+def _episode_ctx(out: Path, rep: dict, name_part: str) -> dict:
+    import json
+    e = next(e for e in rep["episodes"] if name_part in e["name"])
+    return json.loads((out / e["episode_id"] / "context.json").read_text())
+
+
+def _a_mixed_upload_reads_every_format_it_holds(tmp_path):
+    """An upload of plain videos, an HDF5 file with a camera and an HDF5 glove file with none had been read as HDF5
+    alone: the videos were never mentioned. Every format is read, the glove file goes with the camera episode of its
+    folder, and a file no reader opens is named."""
+    import h5py
+    import numpy as np
+    root = tmp_path / "upload"
+    (root / "a").mkdir(parents=True)
+    _clip(root / "a" / "take1.mp4", 10)
+    _clip(root / "a" / "take2.mp4", 10)
+    with h5py.File(root / "b.h5", "w") as h:
+        h["cam"] = np.zeros((10, 96, 96, 3), np.uint8)
+    with h5py.File(root / "glove.h5", "w") as h:
+        h["pressure"] = np.random.default_rng(0).random((10, 16, 16))
+        h["time"] = np.arange(10) / 30
+    (root / "calib.bin").write_bytes(b"x")
+    det, items = f.plan(root)
+    assert sorted(it["kind"] for it in items) == ["hdf5", "video", "video"], items
+    h5 = next(it for it in items if it["kind"] == "hdf5")
+    assert [Path(p).name for p in h5["state"]] == ["glove.h5"]
+    assert any("calib.bin" in m for m in det["missing"]), det["missing"]
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 3, rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "b")
+    assert "pressure" in [s["name"] for s in ctx["signals"]], ctx.get("signals")
+
+
+def test_a_mixed_upload_reads_every_format_it_holds():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_mixed_upload_reads_every_format_it_holds(Path(t))
