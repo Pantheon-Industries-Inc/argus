@@ -1799,6 +1799,29 @@ CLOCK_TIME_KEYS = {"annotation_subtasks": ("t0", "t1"), "contacts": ("start_s", 
                    "reader_issues": ("t0_s", "t1_s"), "unshown_cameras": ("start_s",)}
 
 
+def clock_context(ctx: dict) -> dict:
+    """Timed context fields on the request and display clock. Old reanchored episodes can store a nonzero clock
+    origin beside their capture times; consumers subtract that same origin without rewriting the recording."""
+    zero = float(ctx.get("clock_zero_s") or 0.0)
+    if not zero:
+        return ctx
+    out = dict(ctx)
+    for key, fields in CLOCK_TIME_KEYS.items():
+        if key not in ctx:
+            continue
+        out[key] = []
+        for item in ctx[key] or []:
+            x = dict(item) if isinstance(item, dict) else item
+            if isinstance(x, dict):
+                for field in fields:
+                    if isinstance(x.get(field), (int, float)):
+                        x[field] -= zero
+                if key == "contacts" and x.get("dips_s"):
+                    x["dips_s"] = [float(t) - zero for t in x["dips_s"]]
+            out[key].append(x)
+    return out
+
+
 def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None,
                    signals: dict | None = None) -> dict:
     ep.mkdir(parents=True, exist_ok=True)
@@ -6696,4 +6719,3 @@ def measure_gripper_range(out: Path, ids: list[str]) -> list | None:
         c["gripper_range_note"] = f"measured across the {len(todo)} episodes of this upload"
         (d / "context.json").write_text(json.dumps(c, indent=1, default=str))
     return rng
-

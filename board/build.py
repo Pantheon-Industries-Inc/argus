@@ -300,6 +300,8 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     and spans, as HABIT does), so a claim that they disagree with the footage can be judged on the board, and the
     dataset's publisher and license, which travel with its labels into every download. result is the labelling run's
     own output, for the contacts it found when the context has none (add_contacts)."""
+    from prepare.formats import clock_context
+    ctx = clock_context(ctx)
     d["_rig"] = ctx.get("profile")
     if ctx.get("dataset") in SOURCES:
         d["dataset_source"] = SOURCES[ctx["dataset"]]

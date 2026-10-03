@@ -73,3 +73,33 @@ def test_a_paired_camera_keeps_its_existing_span_sentence():
         " Left has frames only from 0.32 s to 2.95 s, so its cells are empty at the instants outside that time, "
         "and it is left out of a detail view there.")
 
+
+def test_board_and_sensor_times_use_the_request_zero_when_the_first_capture_is_above_zero(tmp_path):
+    main = 0.0122 + np.arange(90) / 30
+    side = main - 0.008
+    ep = recording(tmp_path, main, side)
+    source = json.loads((ep / "sources.json").read_text())
+    ctx = json.loads((ep / "context.json").read_text())
+    assert np.array_equal(clips.clip_times(ep, source)["exo"], main)
+    assert np.array_equal(sensors.clip_times(ep, ctx, 90), main)
+
+
+def test_an_explicit_clock_zero_is_shared_by_request_and_board(tmp_path):
+    main = 0.5 + np.arange(10) / 30
+    ep = recording(tmp_path, main, main + 0.01)
+    with np.load(ep / "times.npz") as z:
+        ts = {k: z[k] for k in z.files}
+    ts.update(exo=main, left=main + 0.01)
+    np.savez(ep / "times.npz", **ts)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["clock_zero_s"] = 0.5
+    ctx["contacts"] = [{"id": "c1", "start_s": 0.6, "end_s": 0.7, "peak_s": 0.65, "dips_s": [0.66]}]
+    ctx["annotation_subtasks"] = [{"t0": 0.55, "t1": 0.75}]
+    (ep / "context.json").write_text(json.dumps(ctx))
+    loaded = episode.load(ep)
+    assert episode.frame_time(loaded, 0) == 0
+    assert sensors.clip_times(ep, ctx, 10)[0] == 0
+    assert loaded["context"]["contacts"][0]["start_s"] == pytest.approx(0.1)
+    assert loaded["context"]["contacts"][0]["dips_s"] == pytest.approx([0.16])
+    assert loaded["context"]["annotation_subtasks"][0]["t0"] == pytest.approx(0.05)
+    assert json.loads((ep / "context.json").read_text())["contacts"][0]["start_s"] == 0.6

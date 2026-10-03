@@ -171,7 +171,7 @@ def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     main = main_cam(sources)
     if main not in t:
         return {}
-    ref, half = (float(zero) if zero is not None else float(t[main][0])), 0.5 / fps
+    ref, half = float(zero or 0.0), 0.5 / fps
     out = {}
     for c, tc in t.items():
         if c == main and zero is None:
@@ -201,7 +201,7 @@ def clip_times(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     if main not in t:
         return {}
     zero = _context(ep_dir).get("clock_zero_s")
-    ref = float(zero) if zero is not None else float(t[main][0])
+    ref = float(zero or 0.0)
     return {c: tc - ref for c, tc in t.items()}
 
 
@@ -878,7 +878,7 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
                 np.save(kp, np.load(kp)[idx])            # no depth times: the depth frame of the nearest old frame
     # the clock: its start is the times.npz value zero (clock_zero_s, else the old main camera's first frame), moved
     # to the earliest first frame of the cameras left unless the episode is labelled already
-    zero = float(ctx.get("clock_zero_s", t_old[0]))
+    zero = float(ctx.get("clock_zero_s") or 0.0)
     first = {v: float(t[v][0]) for v in src if v in t and len(t[v])}
     issues = []
     shift = 0.0 if keep_clock else min(first.values()) - zero
@@ -982,7 +982,7 @@ def clip_end_s(ep_dir: Path, ctx: dict, src: dict, cam: str, got: int) -> float:
             t = np.asarray(z[cam], dtype=np.float64) if cam in z.files else None
             main = np.asarray(z[main_cam(src)], dtype=np.float64) if main_cam(src) in z.files else None
         if t is not None and main is not None and len(t) > skip + got:
-            zero = float(ctx.get("clock_zero_s", main[0]))
+            zero = float(ctx.get("clock_zero_s") or 0.0)
             return float(t[skip + got]) - zero
     return off + got / fps
 

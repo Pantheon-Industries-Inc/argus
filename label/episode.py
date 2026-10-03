@@ -102,6 +102,8 @@ def is_episode_dir(ep_dir: Path) -> bool:
 def load(ep_dir: Path) -> dict:
     ep_dir = Path(ep_dir)
     ctx = json.loads((ep_dir / "context.json").read_text())
+    from prepare.formats import clock_context
+    ctx = clock_context(ctx)
     src = json.loads((ep_dir / "sources.json").read_text())
     for v, d in src.items():
         if "n_frames" not in d:
@@ -131,7 +133,8 @@ def load(ep_dir: Path) -> dict:
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
         t = np.load(ep_dir / ctx["real_times"])
-        ep["times"] = {k: t[k] for k in t.files}
+        zero = float(ctx.get("clock_zero_s") or 0.0)
+        ep["times"] = {k: t[k] if k.endswith("_pts") else t[k] - zero for k in t.files}
     for v, d in src.items():
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
@@ -279,7 +282,7 @@ def plan(ep: dict) -> dict:
     if zero is not None and ep.get("times") is not None:
         # a camera that started before the episode's clock (kept for an episode labelled already, board/clips.py
         # reanchor) is main: nothing before the clock's start is sampled, and its first frame at the start is
-        before = [k for k in range(n) if frame_time(ep, k) < float(zero) - 0.5 / fps]
+        before = [k for k in range(n) if frame_time(ep, k) < -0.5 / fps]
         if before and len(before) < n:
             ks = sorted({k for k in ks if k > before[-1]} | {before[-1] + 1})
     if kind != "none" and checks["camera_windows_match_state"] and (sa, sb) != (0, T):

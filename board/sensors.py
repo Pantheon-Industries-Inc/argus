@@ -174,7 +174,7 @@ def clip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
         with np.load(tp) as z:
             if views and views[0] in z.files and len(z[views[0]]) >= n > 0:
                 t = np.asarray(z[views[0]][:n], dtype=np.float64)
-                return t - t[0]
+                return t - float(ctx.get("clock_zero_s") or 0.0)
     fps = float(ctx.get("fps") or 30.0)
     return np.arange(n, dtype=np.float64) / fps
 
