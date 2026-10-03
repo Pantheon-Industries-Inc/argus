@@ -298,28 +298,35 @@ STEP_SLACK_S = 0.5      # a step may end this far past the episode's end (a repl
 
 
 def steps_outside(d: dict) -> list[dict]:
-    """The data issue of a timeline whose steps lie past the episode's end, or end before they start: kind
-    model_steps_outside_episode, naming how many of each. The steps are kept as the model gave them; the page draws
-    the timeline to the episode's length with each such step at its edge. Nothing when the episode's length is not
-    known (or only estimated) or every step lies within it."""
+    """The data issue of a reply whose times do not fit the episode, every time the page draws at the episode's edge:
+    kind model_steps_outside_episode, naming how many steps lie past the episode's end, start before it and end before
+    they start, and how many key events lie outside it. They are kept as the model gave them; the page draws the
+    timeline to the episode's length with each at its edge. Nothing when the episode's length is not known (or only
+    estimated) or every time lies within it."""
     dur = d.get("duration_s")
     if not dur or d.get("duration_estimated"):
         return []
-    steps = [e for e in d.get("event_labels") or [] if isinstance(e, dict)]
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
-    past = [e for e in steps if any(num(e.get(k)) and e[k] > dur + STEP_SLACK_S for k in ("t_s", "end_s"))]
+    lo, hi = -STEP_SLACK_S, dur + STEP_SLACK_S
+    steps = [e for e in d.get("event_labels") or [] if isinstance(e, dict)]
+    keys = [k for k in d.get("key_events") or [] if isinstance(k, dict)]
+    past = [e for e in steps if any(num(e.get(k)) and e[k] > hi for k in ("t_s", "end_s"))]
+    early = [e for e in steps if any(num(e.get(k)) and e[k] < lo for k in ("t_s", "end_s"))]
     back = [e for e in steps if num(e.get("t_s")) and num(e.get("end_s")) and e["end_s"] < e["t_s"]]
-    if not past and not back:
-        return []
+    stray = [k for k in keys if num(k.get("t_s")) and not lo <= k["t_s"] <= hi]
     one = lambda xs, a, b: a if len(xs) == 1 else b
-    said = []
-    if past:
-        said.append(f"{len(past)} of its {len(steps)} steps {one(past, 'lies', 'lie')} past the episode's end at "
-                    f"{dur:.1f} s")
-    if back:
-        said.append(f"{len(back)} {one(back, 'ends before it starts', 'end before they start')}")
+    said = [f"{len(past)} of its {len(steps)} steps {one(past, 'lies', 'lie')} past the episode's end at {dur:.1f} s"
+            if past else "",
+            f"{len(early)} {one(early, 'starts', 'start')} before the episode does" if early else "",
+            f"{len(back)} {one(back, 'ends before it starts', 'end before they start')}" if back else "",
+            f"{len(stray)} of its {len(keys)} key events {one(stray, 'lies', 'lie')} outside the episode"
+            if stray else ""]
+    said = [x for x in said if x]
+    if not said:
+        return []
     return [{"kind": "model_steps_outside_episode",
-             "what": "The model's timeline does not fit the episode: " + " and ".join(said) + ". They are kept as "
+             "what": "The model's timeline does not fit the episode: "
+                     + (", ".join(said[:-1]) + " and " if len(said) > 1 else "") + said[-1] + ". They are kept as "
                      "given, and the timeline is drawn to the episode's length with them at its edge."}]
 
 

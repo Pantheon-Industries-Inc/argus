@@ -1241,8 +1241,9 @@ def test_an_episode_the_board_cannot_read_is_kept_with_its_reply_and_the_error(t
 
 def test_steps_past_the_episode_end_are_kept_and_flagged(tmp_path):
     """Steps past an 8 s episode's end stretched its timeline to 208 s with no flag. They are kept as given, flagged as
-    a labelling issue (not counted) naming how many lie past the end and how many end before they start, and the page
-    draws the timeline to the episode's length. A step ending within half a second of the end is a rounding."""
+    a labelling issue (not counted) naming how many lie past the end, start before it and end before they start, and
+    how many key events lie outside it, every time the page draws at the episode's edge, and the page draws the
+    timeline to the episode's length. A step ending within half a second of the end is a rounding."""
     run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
     (run / "out").mkdir(parents=True)
     (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
@@ -1250,10 +1251,13 @@ def test_steps_past_the_episode_end_are_kept_and_flagged(tmp_path):
     eps = _episodes(tmp_path / "episodes" / "demo")
     for name, extra in (("episode_000000", [{"start_s": 9.0, "end_s": 10.3, "action": "rounding"}]),
                         ("episode_000001", [{"start_s": 108.0, "end_s": 208.0, "action": "past the end"},
+                                            {"start_s": -3.0, "end_s": 1.0, "action": "early"},
                                             {"start_s": 5.0, "end_s": 2.0, "action": "backwards"}])):
         out = _output(name)
         out["episode_dir"] = str(eps / name)
         out["labels"]["timeline"] += extra
+        if extra[0]["action"] == "past the end":
+            out["labels"]["key_events"].append({"t_s": 58.0, "label": "late"})
         (run / "out" / f"{name}.json").write_text(json.dumps(out))
     board = tmp_path / "board"
     board.mkdir()
@@ -1263,9 +1267,10 @@ def test_steps_past_the_episode_end_are_kept_and_flagged(tmp_path):
     ok = json.loads((board / "qa" / "episode_000000.json").read_text())
     assert not any(x["kind"] == "model_steps_outside_episode" for x in ok["dataset_checks"].get("reader_issues") or [])
     d = json.loads((board / "qa" / "episode_000001.json").read_text())
-    assert [e["verb_class"] for e in d["event_labels"]][-2:] == ["past the end", "backwards"]
+    assert [e["verb_class"] for e in d["event_labels"]][-3:] == ["past the end", "early", "backwards"]
     (iss,) = [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "model_steps_outside_episode"]
     assert iss["family"] == "label-times" and Families().list_of("label-times") == "labelling"
-    assert "1 of its 5 steps lies past the episode's end at 10.0 s and 1 ends before it starts" in iss["what"]
+    assert ("1 of its 6 steps lies past the episode's end at 10.0 s, 1 starts before the episode does, 1 ends before "
+            "it starts and 1 of its 3 key events lies outside the episode") in iss["what"]
     page = (REPO / "board" / "serve.py").read_text()
     assert "duration = d.duration_s > 0 && !d.duration_estimated ? d.duration_s" in page

@@ -125,7 +125,7 @@
   {
    "slug": "label-times",
    "list": "labelling",
-   "name": "Model steps fall outside the episode",
+   "name": "Model times fall outside the episode",
    "reader_issues": [
     "model_steps_outside_episode"
    ]
