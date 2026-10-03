@@ -311,9 +311,13 @@ def episode_doc(ep_dir: Path) -> dict | None:
     if has_sig:
         with np.load(ep_dir / "signals.npz") as z:
             arrays = {m["key"]: np.asarray(z[m["key"]]) for m in metas if m.get("key") in z.files}
-        # every anchor frame any signal reaches: a signal shorter than the others keeps its own length and has no
-        # reading after it (pad), never cutting the others to it
-        n = max((len(v) for v in arrays.values()), default=0)
+        # The anchor camera owns the episode span. Signals never extend it or shorten one another; pad marks their
+        # missing rows and cuts only rows past the footage. A context frame count serves old sidecars without sources.
+        from label.episode import order_views
+        source_p = ep_dir / "sources.json"
+        src = json.loads(source_p.read_text()) if source_p.exists() else {}
+        anchor = order_views(src)
+        n = int(src[anchor[0]]["n_frames"] if anchor else ctx.get("n_state_frames") or 0)
         t = clip_times(ep_dir, ctx, n)
         n = min(n, len(t))
         t = t[:n]

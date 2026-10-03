@@ -1,5 +1,6 @@
 """Missing rows and missing values remain distinct on every signal surface."""
 import warnings
+import json
 
 import numpy as np
 import pytest
@@ -61,3 +62,23 @@ def test_a_value_with_no_reading_is_preserved_without_a_warning():
     back = bs.dequantize(doc["values"], 3)
     assert np.array_equal(back[:, 0], [1., 2., 3.]) and np.isnan(back[:, 1]).all()
     assert any(x["check"] == "partial_reading" for x in notes)
+
+
+@pytest.mark.parametrize("real_clock", [False, True])
+@pytest.mark.parametrize("rows", [2, 5])
+def test_board_signals_use_anchor_frames_even_when_the_only_signal_has_another_length(tmp_path, rows, real_clock):
+    (tmp_path / "context.json").write_text(json.dumps({"fps": 10, "n_state_frames": 99,
+        "signals": [{"key": "s0", "name": "health"}]}))
+    (tmp_path / "sources.json").write_text(json.dumps({"exo": {"n_frames": 3}}))
+    a = np.ones((rows, 1))
+    if rows > 3:
+        a[3:] = [8]
+    np.savez(tmp_path / "signals.npz", s0=a)
+    if real_clock:
+        np.savez(tmp_path / "times.npz", exo=np.array([12., 12.2, 12.5]))
+    doc = bs.episode_doc(tmp_path)
+    assert doc["frames"] == 3
+    assert np.allclose(bs.decode_times(doc["times"]), [0, .2, .5] if real_clock else [0, .1, .2])
+    sig = doc["signals"][0]
+    assert sig["constant"] and sig["value"] == [1.]
+    assert sig.get("no_reading_frames", 0) == (1 if rows == 2 else 0)
