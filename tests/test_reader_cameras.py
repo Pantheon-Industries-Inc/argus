@@ -379,3 +379,66 @@ def test_an_infrared_topic_is_not_shown_to_the_model_as_a_colour_camera(tmp_path
     ctx = _ctx(tmp_path / "eps", rep)
     assert [c["key"] for c in ctx["cameras"].values()] == ["/camera/color/image"]
     assert [u["name"] for u in ctx["unshown_cameras"]] == ["/camera/infra1/image_rect_raw"]
+
+
+# ---------------------------------------------------------------- a take of many cameras
+
+MANY = ["cam_front", "cam_wrist_left", "cam_wrist_right", "cam_side", "cam_back", "cam_top", "cam_low", "zed_left"]
+
+
+def test_a_take_of_more_than_six_cameras_is_one_episode(tmp_path):
+    """Eight colour cameras of one take had been split into eight episodes with no note, and the take's infrared and
+    thermal videos then went with none. It is one episode: the cameras past those the model is shown go to the
+    board as unshown cameras, and so do the infrared and thermal videos."""
+    root = tmp_path / "up"
+    for k, cam in enumerate(MANY + ["cam_infrared", "cam_thermal"]):
+        _mp4(root / "ep1" / f"{cam}.mp4", 30, 20 * k)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert len(rep["episodes"]) == 1, [e["name"] for e in rep["episodes"]]
+    ctx = _ctx(tmp_path / "eps", rep)
+    shown = [c["key"] for c in ctx["cameras"].values()]
+    unshown = [u["name"] for u in ctx["unshown_cameras"]]
+    assert sorted(shown + unshown) == sorted(MANY + ["cam_infrared", "cam_thermal"]), (shown, unshown)
+    assert not any("left out" in u for u in rep["used"]), rep["used"]
+
+
+def test_seven_cameras_of_one_take_in_a_flat_folder_are_one_episode(tmp_path):
+    root = tmp_path / "up"
+    for k, cam in enumerate(["front", "top", "side", "back", "wrist_left", "wrist_right", "head"]):
+        _mp4(root / f"take1_{cam}.mp4", 30, 20 * k)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert len(rep["episodes"]) == 1, [e["name"] for e in rep["episodes"]]
+
+
+def test_a_folder_of_many_single_camera_episodes_stays_many_episodes(tmp_path):
+    """The rule that tells a take from a folder of episodes: more than six videos are one take only when every name
+    is a camera's and their lengths agree, as cameras of one take stop together. Videos of other lengths, or named
+    for anything else, stay one episode each."""
+    root = tmp_path / "up"
+    for k, cam in enumerate(MANY):
+        _mp4(root / "a" / f"{cam}.mp4", 20 + 40 * k)
+    for k, task in enumerate(["pick", "place", "pour", "wipe", "stack", "open", "close", "push"]):
+        _mp4(root / "b" / f"{task}.mp4", 30)
+    det, items = f.plan(root)
+    assert len(items) == 16, [it["name"] for it in items]
+
+
+def test_an_infrared_video_with_no_take_goes_with_every_episode_of_its_folder(tmp_path):
+    root = tmp_path / "up"
+    for take in ("1", "2"):
+        for k, cam in enumerate(("top", "wrist_left")):
+            _mp4(root / f"{cam}_ep{take}.mp4", 30, 40 * k)
+    _mp4(root / "infrared.mp4", 30)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert len(rep["episodes"]) == 2
+    for i in range(2):
+        assert [u["name"] for u in _ctx(tmp_path / "eps", rep, i)["unshown_cameras"]] == ["infrared"]
+
+
+def test_the_report_says_infrared_and_mask_videos_are_on_the_board(tmp_path):
+    root = tmp_path / "up"
+    for k, cam in enumerate(("top", "wrist_left", "cam_mask")):
+        _mp4(root / "ep1" / f"{cam}.mp4", 30, 40 * k)
+    det, items = f.plan(root)
+    line = next(u for u in det["used"] if "mask" in u)
+    assert "left out" not in line and "board" in line, line

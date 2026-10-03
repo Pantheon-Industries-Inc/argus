@@ -1984,6 +1984,20 @@ def one_take(stems: list[str]) -> bool:
         and len({p["cam"] for p in parts}) == len(parts) and _says_cameras([p["cam"] for p in parts])
 
 
+def many_cameras(stems: list[str], lengths: list | None = None) -> bool:
+    """Whether more than MAX_CAMERAS videos (or camera folders, lengths None) in one folder are the cameras of one take:
+    one take number (or none), every name a camera's (camera_named: cam_front, wrist_left, zed_left) and each named
+    differently, and, for videos, lengths that are all known and agree (_same_length), as cameras of one take stop
+    together. A folder of many single camera episodes fails one of these (takes numbered, names that are not
+    cameras', or lengths that differ), so it stays one episode per file. read.js manyCameras, the same rule."""
+    parts = [name_parts(s) for s in stems]
+    if len(stems) <= MAX_CAMERAS or len({p["take"] for p in parts}) != 1 or len({p["cam"] for p in parts}) != len(parts):
+        return False
+    if not all(p["cam"] and camera_named(p["cam"]) for p in parts):
+        return False
+    return lengths is None or (all(x is not None for x in lengths) and _same_length(lengths))
+
+
 def _same_length(lengths: list) -> bool:
     if not lengths or any(x is None for x in lengths):
         return True                       # unknown: the lengths cannot tell takes from cameras
@@ -1996,10 +2010,13 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
     [{"name", "dir", "cams": [(camera name, path)]}] in episode order, and the folders the files cannot settle,
     [{"dir", "files", "camera"}]. read.js groupVideos, the same rules:
 
-    - Camera folders (top/ep1.mp4, wrist_left/ep1.mp4): two to six sibling folders named as cameras, sharing file
-      names, give one episode per shared name, with the folders as its cameras.
-    - A folder's own videos group by take number (top_ep1, wrist_left_ep1, top_ep2, ...); a group whose cameras are
-      all named differently and named as cameras is one episode (top, wrist_left, wrist_right; cam0, cam1).
+    - Camera folders (top/ep1.mp4, wrist_left/ep1.mp4): two to six sibling folders named as cameras, or more when
+      every folder's name is a camera's (many_cameras), sharing file names, give one episode per shared name, with
+      the folders as its cameras.
+    - A folder's own videos group by take number (top_ep1, wrist_left_ep1, top_ep2, ...); a group of two to six whose
+      cameras are all named differently and named as cameras is one episode (top, wrist_left, wrist_right; cam0,
+      cam1), and so is a larger group that many_cameras says is one take (every name a camera's, lengths that
+      agree).
     - The same camera name numbered (cam0_take1, cam0_take2; top_1, top_2) is separate takes when a take word says
       so or their lengths differ. When the numbers are bare and the lengths agree, the files cannot tell takes from
       cameras: the folder is returned as unsettled, and read as grouping[folder] says ("takes" or "cameras"), or as
@@ -2023,7 +2040,7 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
             kids.setdefault(parent(d), []).append(d)
     for p, ds in kids.items():
         names = [base(d) for d in ds]
-        if not one_take(names):
+        if not (one_take(names) or many_cameras(names)):
             continue
         by_stem: dict[str, list[tuple[str, str]]] = {}
         for d in ds:
@@ -2045,9 +2062,14 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
         takes: dict[str, list[str]] = {}
         for r in fs:
             takes.setdefault(parts[r]["take"], []).append(r)
-        good = [g for g in takes.values() if len(g) >= 2 and len(g) <= MAX_CAMERAS and _says_cameras([parts[r]["cam"] for r in g])]
+        # a take of more than MAX_CAMERAS cameras is one episode too when many_cameras says so; it had been split into
+        # one episode per camera with no word
+        many = {k for k, g in takes.items() if len(g) > MAX_CAMERAS
+                and many_cameras([stem(r) for r in g], [length_of(r) if length_of else None for r in g])}
+        good = [g for k, g in takes.items() if k in many or (2 <= len(g) <= MAX_CAMERAS
+                                                             and _says_cameras([parts[r]["cam"] for r in g]))]
         distinct = all(len({parts[r]["cam"] for r in g}) == len(g) for g in takes.values())
-        if good and distinct and all(len(g) <= MAX_CAMERAS for g in takes.values()):
+        if good and distinct and all(len(g) <= MAX_CAMERAS or k in many for k, g in takes.items()):
             for k, g in takes.items():
                 nm = d or "episode_1"
                 eps.append({"name": f"{nm}/{k}" if len(takes) > 1 and k else nm, "dir": d,
@@ -2252,9 +2274,10 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
             f"camera {'they belong' if len(with_colour) != 1 else 'it belongs'} to.")
     left_out = [r for r in left_out if r not in with_colour]
     if left_out:
+        one = len(left_out) == 1
         det.setdefault("used", []).append(
-            f"{len(left_out)} infrared, mask or unmatched depth video{'s were' if len(left_out) != 1 else ' was'} left "
-            "out, since the labeller reads the colour video of each camera.")
+            f"{len(left_out)} infrared, mask or unmatched depth video{' is' if one else 's are'} shown on the board, "
+            "and not to the model, since the labeller reads the colour video of each camera.")
     durations = {}
 
     def length_of(r):
@@ -2280,12 +2303,14 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
                       "dir": (root / e["dir"]) if e["dir"] is not None else None,
                       "cams": {c: root / r for c, r in e["cams"]},
                       "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}, "unshown": []})
-    # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, or
-    # the one whose take its name gives), never to the model
+    # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, the
+    # ones whose take its name gives, or, when its name gives none of their takes, every episode of the folder, as a
+    # sensor file shared by the folder is), never to the model; it had gone with none
     for r in left_out:
         here = [it for it in items if item_folder(it) == (root / r).parent]
         take = name_parts(Path(r).stem)["take"]
-        for it in here if len(here) == 1 else [it for it in here if take and item_take(it) == take]:
+        mine = [it for it in here if take and item_take(it) == take]
+        for it in mine or here:
             it["unshown"].append(root / r)
     for it in items:
         try:
