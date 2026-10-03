@@ -94,7 +94,8 @@ camera that does not decode, a sensor placed on the video by an assumed common s
 problem is recorded on the episode, never used as a reason to drop it. context.json's reader_issues is that record, a
 list of {"kind": a short snake_case tag (signal_not_finite, signal_partial_span, signal_gap, table_short,
 camera_not_decodable, ...), "what": one plain sentence a reviewer reads on the board, and when they apply "camera",
-"signal", "t0_s" and "t1_s" (seconds of the episode)}. add_issue appends one entry and never overwrites the others;
+"signal", "t0_s" and "t1_s" (raw capture seconds, with clock_zero_s subtracted by consumers)}. add_issue appends one
+entry and never overwrites the others;
 the board shows them as the episode's data issues. What could not be used at all is still listed with its reason
 (context["source"] unused_*), and an episode with nothing to label is listed in the report with why. A signal placed
 from both starts, because the reader had no clock in common to place it by, also carries "aligned_by": "assumed start"
@@ -105,7 +106,7 @@ with "summary_of" giving its width.
 Every camera reaches the board. A camera the model is not shown (more extra cameras than MAX_EXTRA_CAMERAS, the second
 eye of a stereo camera, every camera but one on a head rig, an infrared, thermal or mask video) is listed in
 context.json's unshown_cameras, [{"name", "why" (the reason the model is not shown it), "packed" (its video file),
-"base_s" (the episode's offset in it), "n_frames", "start_s" (its first frame on the episode's clock), "fps"}], so the
+"base_s" (the episode's offset in it), "n_frames", "start_s" (its first frame on the raw capture clock), "fps"}], so the
 board plays it named as not shown to the model; an MCAP or HDF5 camera is written to a video of its own for it.
 """
 from __future__ import annotations
@@ -613,46 +614,54 @@ def edge_slack(span_s: float) -> float:
 
 def camera_span_issues(extra: dict, times: dict, anchor: str, names: dict, ctx: dict) -> None:
     """Each camera's span against the episode's, as issues on extra; times {view: its frame times on the episode's
-    clock}, names {view: camera name}, ctx the episode's profile and cameras (board/clips.py camera_label names
+    raw clock}, names {view: camera name}, ctx the episode's profile and cameras (board/clips.py camera_label names
     them). The episode is the anchor camera's frames, from its first to one frame past its last. A camera that starts
     or ends more than the edge slack (edge_slack) inside it is camera_short, with the stretch it shows nothing for. The
     anchor stays the main camera even when it is the short one, since the views name the cameras' roles (a wrist
     camera made the anchor would be taken for the scene camera): it is then main_camera_short, with the stretch the
-    other cameras cover past it, which the board shows and the labels do not."""
+    other cameras cover past it, which the board shows and the labels do not. Markers are stored on the raw clock;
+    derived prose uses the explicit consumer origin when present, otherwise the anchor start as before."""
     from board.clips import camera_label
     step = lambda t: float(np.median(np.diff(t))) if len(t) > 1 else 1 / 30
     span = {v: (float(t[0]), float(t[-1]) + step(t)) for v, t in times.items() if len(t)}
     if anchor not in span:
         return
     a0, a1 = span[anchor]
+    origin = float(ctx.get("clock_zero_s", a0) or 0.0)
+    found = {}
     slack = edge_slack(a1 - a0)
     label = lambda v: camera_label(v, ctx)
     for v, (t0, t1) in span.items():
         if v == anchor:
             continue
         if t1 < a1 - slack:
-            add_issue(extra, "camera_short", f"The {label(v)} video ends at {t1 - a0:.2f} s, before the episode ends at "
-                                             f"{a1 - a0:.2f} s, so it shows nothing after that.",
-                      camera=names[v], t0_s=t1 - a0, t1_s=a1 - a0)
+            add_issue(found, "camera_short", f"The {label(v)} video ends at {t1 - origin:.2f} s, before the episode ends at "
+                                             f"{a1 - origin:.2f} s, so it shows nothing after that.",
+                      camera=names[v], t0_s=t1 - origin, t1_s=a1 - origin)
         if t0 > a0 + slack:
-            add_issue(extra, "camera_short", f"The {label(v)} video starts at {t0 - a0:.2f} s, after the episode "
+            add_issue(found, "camera_short", f"The {label(v)} video starts at {t0 - origin:.2f} s, after the episode "
                                              "starts, so it shows nothing before that.",
-                      camera=names[v], t0_s=0.0, t1_s=t0 - a0)
+                      camera=names[v], t0_s=0.0, t1_s=t0 - origin)
     later = [v for v, (_, t1) in span.items() if t1 > a1 + slack]
     if later:
         end = max(span[v][1] for v in later)
-        add_issue(extra, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, ends at "
-                                              f"{a1 - a0:.2f} s, while the {_and_words([label(v) for v in later])} "
-                                              f"{'goes' if len(later) == 1 else 'go'} on to {end - a0:.2f} s; that "
+        add_issue(found, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, ends at "
+                                              f"{a1 - origin:.2f} s, while the {_and_words([label(v) for v in later])} "
+                                              f"{'goes' if len(later) == 1 else 'go'} on to {end - origin:.2f} s; that "
                                               "part is shown on the board but not labelled.",
-                  camera=names[anchor], t0_s=a1 - a0, t1_s=end - a0)
+                  camera=names[anchor], t0_s=a1 - origin, t1_s=end - origin)
     earlier = [v for v, (t0, _) in span.items() if t0 < a0 - slack]
     if earlier:
         start = min(span[v][0] for v in earlier)
-        add_issue(extra, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, starts "
+        add_issue(found, "main_camera_short", f"The {label(anchor)} video, which the episode is labelled on, starts "
                                               f"{a0 - start:.2f} s after the {_and_words([label(v) for v in earlier])}"
                                               "; what was recorded before it is not labelled or shown.",
-                  camera=names[anchor], t0_s=start - a0, t1_s=0.0)
+                  camera=names[anchor], t0_s=start - origin, t1_s=0.0)
+
+    stored = shift_context_times(found, float(ctx.get("clock_zero_s") or 0.0))
+    for issue in stored.get("reader_issues") or []:
+        if issue not in extra.setdefault("reader_issues", []):
+            extra["reader_issues"].append(issue)
 
 
 def unshown_not_decodable(extra: dict, name: str) -> None:
@@ -1792,7 +1801,8 @@ class DepthWriter:
         return len(self.pts)
 
 
-# The fields of context.json that hold times on the episode's clock, {field: the time keys of each entry}. A step that
+# Stored context times and capture arrays share one raw clock. Consumers subtract clock_zero_s (default zero).
+# The fields of context.json that hold times on that clock, {field: the time keys of each entry}. A step that
 # moves the clock (board/clips.py reanchor, when the camera the clock was measured from is taken out) moves every one of
 # them, so a reader that writes a new timed field registers it here, where the context is written.
 CLOCK_TIME_KEYS = {"annotation_subtasks": ("t0", "t1"), "contacts": ("start_s", "end_s", "peak_s"),
@@ -1800,10 +1810,16 @@ CLOCK_TIME_KEYS = {"annotation_subtasks": ("t0", "t1"), "contacts": ("start_s", 
 
 
 def clock_context(ctx: dict) -> dict:
-    """Timed context fields on the request and display clock. Old reanchored episodes can store a nonzero clock
-    origin beside their capture times; consumers subtract that same origin without rewriting the recording."""
-    zero = float(ctx.get("clock_zero_s") or 0.0)
-    if not zero:
+    """Read stored raw times on the request and display clock by subtracting clock_zero_s once. The returned context
+    retains the origin for reading capture arrays, so it must never replace the stored context. Writers keep raw
+    fields or use shift_context_times to convert newly derived consumer times back before saving them."""
+    return shift_context_times(ctx, -float(ctx.get("clock_zero_s") or 0.0))
+
+
+def shift_context_times(ctx: dict, delta_s: float) -> dict:
+    """Move registered scalar times and contact dips by delta_s without changing the input, origin or unknown fields.
+    Prose stays attributed evidence on its original clock; only typed fields are converted."""
+    if not delta_s:
         return ctx
     out = dict(ctx)
     for key, fields in CLOCK_TIME_KEYS.items():
@@ -1815,9 +1831,9 @@ def clock_context(ctx: dict) -> dict:
             if isinstance(x, dict):
                 for field in fields:
                     if isinstance(x.get(field), (int, float)):
-                        x[field] -= zero
+                        x[field] += delta_s
                 if key == "contacts" and x.get("dips_s"):
-                    x["dips_s"] = [float(t) - zero for t in x["dips_s"]]
+                    x["dips_s"] = [float(t) + delta_s for t in x["dips_s"]]
             out[key].append(x)
     return out
 

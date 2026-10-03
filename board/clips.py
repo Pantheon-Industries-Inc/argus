@@ -515,8 +515,11 @@ def depth_failed(ep_dir: Path, cam: str, err: Exception) -> dict:
 def record_depth(ep_dir: Path, cam: str, issues: list[dict]) -> None:
     """A camera's depth clip issues from this run (extract_depth, depth_failed) in the episode's context.json
     reader_issues, in place of the ones an earlier run recorded for it; board/build.py copies them into the episode's
-    dataset_checks, where each raises a data issue. A clean cut takes the camera's entries away."""
+    dataset_checks, where each raises a data issue. Input markers are on the consumer clock and saved on the raw
+    capture clock; their derived prose stays on the consumer clock. A clean cut takes the camera's entries away."""
     ctx = _context(ep_dir)
+    from prepare.formats import shift_context_times
+    issues = shift_context_times({"reader_issues": issues}, float(ctx.get("clock_zero_s") or 0.0))["reader_issues"]
     old = ctx.get("reader_issues") or []
     keep = [x for x in old if not (isinstance(x, dict) and x.get("kind") in DEPTH_KINDS and x.get("camera") == cam)]
     new = keep + list(issues)
@@ -661,7 +664,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
         o = clip_path(mp4_dir, eid, view)
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
             f = float(e.get("fps") or fps)
-            start = float(e.get("start_s") or 0.0)
+            start = float(e.get("start_s") or 0.0) - float(ctx.get("clock_zero_s") or 0.0)
             skip = int(round(-start * f)) if start < 0 else 0
             jobs.append((str(e["packed"]), float(e.get("base_s") or 0.0), int(e["n_frames"]), o, f, False,
                          max(0.0, start + skip / f), skip, None, None, None, ep_dir.name, view))
@@ -1024,10 +1027,10 @@ def clip_end_s(ep_dir: Path, ctx: dict, src: dict, cam: str, got: int) -> float:
     return off + got / fps
 
 
-def is_end(x: dict) -> bool:
+def is_end(x: dict, zero_s: float = 0.0) -> bool:
     """Whether a camera_short issue is one of a camera that ends early (its stretch starts inside the episode), not
-    one that starts late (its stretch starts at 0)."""
-    return x.get("kind") == CAMERA_SHORT and float(x.get("t0_s") or 0.0) > 0.0
+    one that starts late (its stretch starts at the stored clock origin)."""
+    return x.get("kind") == CAMERA_SHORT and float(x.get("t0_s") or 0.0) > zero_s
 
 
 def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: bool = False) -> str | None:
@@ -1047,7 +1050,8 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
     camera was taken out, else None."""
     ctx = _context(ep_dir)
     src = json.loads((ep_dir / "sources.json").read_text())
-    name = lambda v: str((src.get(v) or {}).get("camera_key") or v)
+    names = {v: str(s.get("camera_key") or v) for v, s in src.items()}
+    name = lambda v: names.get(v, v)
     redo = set(cut) | set(broken)
     order = lambda v: (CAMS + (v,)).index(v)
     own = []                                   # named before a camera's entry leaves the context
@@ -1055,6 +1059,12 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
         own.append({"kind": CAMERA_NOT_DECODABLE, "camera": v, "what": f"The {camera_label(v, ctx)} video could not "
                                                                           "be decoded, so this episode is shown and "
                                                                           "labelled without it."})
+    main, more = None, []
+    if broken:
+        main, more = drop_cameras(ep_dir, broken, keep_clock)
+        ctx = _context(ep_dir)
+        src = json.loads((ep_dir / "sources.json").read_text())
+    zero = float(ctx.get("clock_zero_s") or 0.0)
     fps = float(ctx.get("fps") or 30.0)
     episode_end = float(ctx.get("duration_s") or float(ctx.get("n_state_frames") or 0) / fps)
     for v in sorted(short, key=order):
@@ -1065,18 +1075,16 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
                     "what": f"The {camera_label(v, ctx)} video ends at {end:.2f} s{before}, so it shows nothing after "
                             f"that; {n['clip_frames']} of the {n['episode_frames']} frames its file lists could be "
                             "read.",
-                    "t0_s": round(end, 3), **({"t1_s": round(episode_end, 3)} if episode_end > end else {}),
+                    "t0_s": round(end + zero, 3),
+                    **({"t1_s": round(episode_end + zero, 3)}
+                       if episode_end > end else {}),
                     "clip_frames": n["clip_frames"], "episode_frames": n["episode_frames"]})
-    main, more = None, []
-    if broken:
-        main, more = drop_cameras(ep_dir, broken, keep_clock)
-        ctx = _context(ep_dir)
     ended = {name(v) for v in short}
     issues = [x for x in ctx.get("reader_issues") or []
               if not (isinstance(x, dict) and (x.get("kind") == CLIP_FRAME_COUNT and x.get("camera") in redo
                                                or x.get("kind") == CAMERA_SHORT and "clip_frames" in x
                                                and x.get("camera") in {name(v) for v in redo}
-                                               or is_end(x) and x.get("camera") in ended
+                                               or is_end(x, zero) and x.get("camera") in ended
                                                or x.get("kind") == CAMERA_NOT_DECODABLE and x.get("camera") in broken))]
     issues += own
     have = {(x.get("kind"), x.get("camera")) for x in issues if isinstance(x, dict)}

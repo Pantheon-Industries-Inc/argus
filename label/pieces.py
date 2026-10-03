@@ -144,7 +144,9 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     """Write one sidecar folder per part under pieces_root (named <episode>__pNN) and record the cuts in the
     episode's context (context["pieces"]). Returns the part folders."""
     from label import episode as me
+    from prepare.formats import shift_context_times
     ep_dir = Path(ep_dir)
+    stored = json.loads((ep_dir / "context.json").read_text())
     ep = me.load(ep_dir)
     ctx = ep["context"]
     t, m = motion(ep)
@@ -218,6 +220,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             c2["placeholder_frames"] = held       # on the part's own frames
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
+        c2 = shift_context_times(c2, -t0)
         note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total)} recording, from "
                 f"{fmt_clock(t0)} to {fmt_clock(t1)} of it. The labelling pipeline cut the recording into parts at "
                 "moments of little motion to label it; activity that carries across a cut is expected, and a part "
@@ -244,13 +247,16 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                               for c in contacts if c["end_s"] >= t0 and c["start_s"] < t1]
         if (ep_dir / "depth.json").exists():
             # each camera's depth frames for the part's anchor frames; the depth files and their times are the
-            # recording's own
+            # recording's own pts; their scalar capture times move with the part's colour capture times
             dj = json.loads((ep_dir / "depth.json").read_text())
             for v, e in dj.items():
                 np.save(d / e["kmap"], np.asarray(np.load(ep_dir / e["kmap"])[k0:k1]))
             (d / "depth.json").write_text(json.dumps(dj, indent=1))
             if (ep_dir / "depth_times.npz").exists():
-                shutil.copy(ep_dir / "depth_times.npz", d / "depth_times.npz")
+                with np.load(ep_dir / "depth_times.npz") as dt:
+                    origin = float(t[k0]) + float(ctx.get("clock_zero_s") or 0.0)
+                    np.savez(d / "depth_times.npz", **{key: dt[key] if key.endswith("_pts") else dt[key] - origin
+                                                      for key in dt.files})
         if z is not None:
             arrs = {kk: z[kk][k0:k1] for kk in z.files}
             np.savez(d / "state.npz", **arrs)
@@ -271,8 +277,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         (d / "context.json").write_text(json.dumps(c2, indent=1, default=str))
         (d / "instruction.txt").write_text("\n")
         out.append(d)
-    ctx["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    stored["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
+    (ep_dir / "context.json").write_text(json.dumps(stored, indent=1, default=str))
     return out
 
 
