@@ -55,6 +55,7 @@ from label import frames as mf
 from label import lens
 from label import prompts
 from label import state as ms
+from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, UNREADABLE
 
 FPS = 30
 VIEW_ORDER = ("exo", "left", "right")          # harness view keys with a role: the scene camera, the two mounted ones
@@ -1426,23 +1427,14 @@ def _state_unaligned_text(ep: dict, pl: dict) -> str:
 UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 
-# Why an episode has no arm state, as the reader records it in context.json state_why beside its state_note (the
-# meanings are the reader's own, prepare/formats.py STATE_WHY), each with the reason the RECORDED STATE line gives for
-# it (_no_state_text), worded to be true for every case the reader writes the value for:
-#   layout         a state is recorded, but not in a layout our checks read: its width, its value names, which arm is
-#                  which, or rows that cannot be lined up with the frames. The layout line, with no reason
-#   not_recorded   the recording holds no state at all (an empty or absent state)
-#   unreadable     a file that holds the state, or may hold it, could not be read, or was damaged before any of its
-#                  messages; its content may be unknown, so the line says the file may hold it
-#   short          an arm's state does not cover the footage: it starts late, stops early or stops inside it
-#   assumed_clock  a contributing state channel uses a clock placed on the footage from both starts; other channels
-#                  may share the cameras' clock
+# Request wording for the reader's shared reasons (prepare.state_notes). The note names the particular channel or
+# clock limitation; a leading sentence must hold even when other recorded channels use the footage clock.
 STATE_WHY = {
-    "layout": None,
-    "not_recorded": "as the recording holds none",
-    "unreadable": "as a sensor file that may hold it could not be read",
-    "short": "as it does not cover the footage",
-    "assumed_clock": "as a contributing state channel uses a clock placed from both starts, not shared with the cameras",
+    LAYOUT: None,
+    NOT_RECORDED: "as the recording holds none",
+    UNREADABLE: "as a sensor file that may hold it could not be read",
+    SHORT: "as it does not cover the footage",
+    ASSUMED_CLOCK: "as a contributing state channel needs an assumed alignment with the cameras",
 }
 
 
@@ -1483,18 +1475,18 @@ def _no_state_text(ep: dict, pl: dict) -> str:
         why = ctx.get("state_why")
         # An absent designated state field does not prove absence in another recorded observation layout. Inspect
         # preserved values even when their readout is constant or outside the table budget; commands are not state.
-        if why == "not_recorded" and any(np.shape(a)[1] > 1 and sg.names_joints_or_state(nm)
+        if why == NOT_RECORDED and any(np.shape(a)[1] > 1 and sg.names_joints_or_state(nm)
                                           and np.isfinite(a[:pl["n"]]).any()
                                           for nm, a in ep["signals"].items()):
-            why = "layout"
-        if why == "layout" or why is None and not (short and note):
+            why = LAYOUT
+        if why == LAYOUT or why is None and not (short and note):
             head = f"no {n['actor']} state in the layout our checks read."
         else:
             reason = STATE_WHY.get(why) if why is not None else None
             # a recording that holds no state needs no note: the reader's note can only say so again (the board
             # shows it)
             head = (f"no {n['actor']} state was read{f', {reason}' if reason else ''}."
-                    + (f" The reader's note on it: {note}" if note and why != "not_recorded" else ""))
+                    + (f" The reader's note on it: {note}" if note and why != NOT_RECORDED else ""))
         return (f"\nRECORDED STATE: {head}"
                 + (f" The signal{'' if one else 's'} whose name{' says' if one else 's say'} joints or a state "
                    f"({', '.join(joints)}) {'is' if one else 'are'} given value by value"
@@ -1505,7 +1497,7 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     all_there_is = (("the cameras' colour and depth images are" if _has_depth(ep, pl) else "the video is")
                     + " all there is.")
     if ((ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS)
-            or ctx.get("state_why") not in (None, "not_recorded")):
+            or ctx.get("state_why") not in (None, NOT_RECORDED)):
         return f"\nRECORDED STATE: none was read from this episode, so {all_there_is}"
     what = "no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state"
     return f"\nRECORDED STATE: none; this dataset records {what}, so {all_there_is}"

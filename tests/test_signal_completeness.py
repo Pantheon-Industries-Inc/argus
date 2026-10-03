@@ -109,3 +109,8 @@ def test_an_assumed_contributor_clock_does_not_claim_all_state_has_that_clock():
     text = me._no_state_text(ep, {"n": 3, "ks": [0], "spans": [], "touch": frozenset()})
     assert "recorded only on a clock" not in text
     assert "a contributing state channel" in text and "left follower uses an assumed start" in text
+
+
+def test_every_shared_state_reason_has_request_wording():
+    from prepare.state_notes import STATE_WHY
+    assert set(me.STATE_WHY) == set(STATE_WHY)

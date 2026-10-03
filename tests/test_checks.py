@@ -786,7 +786,7 @@ def test_the_recorded_state_line_says_why_there_is_no_state_as_the_reader_record
     assert line("not_recorded").startswith("RECORDED STATE: no arm state in the layout our checks read.")
     said = {"unreadable": "as a sensor file that may hold it could not be read",
             "short": "as it does not cover the footage",
-            "assumed_clock": "as a contributing state channel uses a clock placed from both starts, not shared with the cameras"}
+            "assumed_clock": "as a contributing state channel needs an assumed alignment with the cameras"}
     for why, reason in said.items():
         # an unreadable sensor file whose other files cover the footage (no signal stops short) gives the note too;
         # a recording that holds no state needs no note, which can only say so again
