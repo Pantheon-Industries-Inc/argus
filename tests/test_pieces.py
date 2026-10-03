@@ -370,6 +370,36 @@ def test_a_long_recording_none_of_whose_parts_parsed_is_still_on_the_board(tmp_p
             and "part 3 never answered" in iss["what"]), iss["what"]
 
 
+def test_a_part_time_outside_its_own_part_is_kept_and_flagged(tmp_path, monkeypatch):
+    """A step the model timed before its own part began (part 2 says -0.8 s) was moved onto the recording's clock into
+    the previous part's footage with no flag, and so was a key event past its part's end. They are kept as given, the
+    stitched record counts them per part, and the board flags them with the part and its span. A time within half a
+    second of its part's edges is a rounding."""
+    from board import build as board_build
+    job, src, parts = _three_parts(tmp_path, monkeypatch)
+    out = job / "run" / "out"
+    for i, p in enumerate(parts):
+        r = _part_result(p, f"step {i + 1}")
+        if i == 1:
+            r["labels"]["timeline"].append({"start_s": -0.8, "end_s": 0.2, "action": "early"})
+            r["labels"]["key_events"] = [{"t_s": 0.5, "label": "inside"}, {"t_s": 9.0, "label": "late"}]
+        if i == 2:
+            r["labels"]["timeline"].append({"start_s": -0.3, "end_s": 0.2, "action": "rounding"})
+        (out / f"{p.name}.json").write_text(json.dumps(r))
+    pieces.stitch_run(job, src.parent, {src.name: [p.name for p in parts]}, tmp_path / "final")
+    r = json.loads((tmp_path / "final" / f"{src.name}.json").read_text())
+    pcs = [json.loads((p / "context.json").read_text())["piece"] for p in parts]
+    early = next(s for s in r["labels"]["timeline"] if s["action"] == "early")
+    assert early["start_s"] == round(pcs[1]["t0_s"] - 0.8, 3) < pcs[1]["t0_s"]
+    assert r["stitched"]["outside_part"] == [{"part": 2, "t0_s": pcs[1]["t0_s"], "t1_s": pcs[1]["t1_s"], "steps": 1,
+                                              "key_events": 1}]
+    d = {"event_labels": [], "key_events": []}
+    (iss,) = board_build.steps_outside(d, r)
+    assert iss["kind"] == "model_steps_outside_episode"
+    assert (f"1 step and 1 key event of part 2 lie outside that part's footage, from {pcs[1]['t0_s']:.1f} s to "
+            f"{pcs[1]['t1_s']:.1f} s") in iss["what"], iss["what"]
+
+
 def test_a_part_whose_output_does_not_read_is_a_gap_and_one_that_breaks_the_format_is_stitched(tmp_path, monkeypatch):
     """One part output that was not valid JSON crashed stitch_run, and one parsed part with a field of the wrong type
     (a string in scene.objects, a key event as text, a time as text) crashed the stitch, losing the whole recording.

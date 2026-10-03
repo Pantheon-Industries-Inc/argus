@@ -145,6 +145,9 @@ def ep_fps(ep: dict) -> float:
     return float(ep["context"].get("fps") or FPS)
 
 
+# a reply's time may lie this far past the edge of the footage it labels (a reply rounding its last time up) before the
+# board flags it (board/build.py steps_outside, label/pieces.py outside_part)
+STEP_SLACK_S = 0.5
 # a number written as text: plain ASCII digits with an optional sign, point and exponent. Python's float also reads
 # "1_000" and digits of other scripts, which no dataset or reply means as a time
 NUMBER_TEXT = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)

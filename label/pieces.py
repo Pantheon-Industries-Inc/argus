@@ -423,6 +423,20 @@ def _shift(x, dt: float):
     return x
 
 
+def outside_part(lab: dict, t0: float, t1: float) -> dict:
+    """{"steps": n, "key_events": k} of one part's labels, already on the recording's clock: how many timeline steps
+    start or end, and how many key events lie, more than STEP_SLACK_S outside the part's own footage (t0 to t1). The
+    stitch keeps them where the model put them, in a neighbouring part's footage, so the board flags them
+    (board/build.py steps_outside). Empty when every time lies within the part."""
+    from label.episode import STEP_SLACK_S, number
+    lo, hi = t0 - STEP_SLACK_S, t1 + STEP_SLACK_S
+    out = lambda x: x is not None and not lo <= x <= hi
+    n = sum(any(out(number(s.get(k))) for k in ("start_s", "end_s"))
+            for s in lab.get("timeline") or [] if isinstance(s, dict))
+    k = sum(out(number(e.get("t_s"))) for e in lab.get("key_events") or [] if isinstance(e, dict))
+    return {**({"steps": n} if n else {}), **({"key_events": k} if k else {})}
+
+
 def is_cut_artifact(iss: dict, part: int, count: int, t0: float, t1: float, cuts_s: list[float]) -> bool:
     """An issue of a cut-off kind (truncated start or end, task left incomplete) that sits at one of our cuts,
     or spans a part that is not the recording's last: it describes our cut."""
@@ -457,11 +471,14 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     excluded, summaries, reviews, seen_obj = [], [], [], set()
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "est_cost_usd": 0.0,
              "cached_tokens": 0, "cache_write_tokens": 0, "latency_s": 0.0}
-    timesteps, still, part_info, dropped = [], [], [], []
+    timesteps, still, part_info, dropped, outside = [], [], [], [], []
     for n, (pc, r) in enumerate(parts, start=1):
         i = int(pc["piece"].get("index") or n)      # the part's own number, with a gap where a part gave no labels
         t0, t1 = float(pc["piece"]["t0_s"]), float(pc["piece"]["t1_s"])
         lab = _shift(r.get("labels") or {}, t0)
+        off = outside_part(lab, t0, t1)
+        if off:
+            outside.append({"part": i, "t0_s": t0, "t1_s": t1, **off})
         for o in (lab.get("scene") or {}).get("objects") or []:
             key = str(o.get("name", "")).strip().lower()
             if key and key not in seen_obj:
@@ -582,7 +599,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
-            "stitched": {"parts": count, "cuts_s": cuts_s, **({"missing": missing} if missing else {})},
+            "stitched": {"parts": count, "cuts_s": cuts_s, **({"missing": missing} if missing else {}),
+                         **({"outside_part": outside} if outside else {})},
             # each part's undecodable stretches, already on the recording's clock (label/episode.py decode_failures)
             "decode_failed": [x for _, r in parts for x in r.get("decode_failed") or []],
             **({"contacts": [c for c in recorded if c.get("id") in asked], "contact_views": views}

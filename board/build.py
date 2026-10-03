@@ -306,33 +306,44 @@ def off_schema(result: dict) -> list[dict]:
     return out
 
 
-STEP_SLACK_S = 0.5      # a step may end this far past the episode's end (a reply rounding its last time up)
-
-
-def steps_outside(d: dict) -> list[dict]:
+def steps_outside(d: dict, result: dict | None = None) -> list[dict]:
     """The data issue of a reply whose times do not fit the episode, every time the page draws at the episode's edge:
     kind model_steps_outside_episode, naming how many steps lie past the episode's end, start before it and end before
-    they start, and how many key events lie outside it. They are kept as the model gave them; the page draws the
-    timeline to the episode's length with each at its edge. Nothing when the episode's length is not known (or only
-    estimated) or every time lies within it."""
+    they start, and how many key events lie outside it, and for a long recording labelled in parts (result, its
+    stitched record) how many steps and key events of each part lie outside that part's own footage, which the stitch
+    put in a neighbouring part's (label/pieces.py outside_part). They are kept as the model gave them; the page draws
+    the timeline to the episode's length with each at its edge. A time within STEP_SLACK_S of an edge is a rounding.
+    The episode's edges are judged only when its length is known (not estimated)."""
+    from label.episode import STEP_SLACK_S
     dur = d.get("duration_s")
-    if not dur or d.get("duration_estimated"):
-        return []
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
-    lo, hi = -STEP_SLACK_S, dur + STEP_SLACK_S
-    steps = [e for e in d.get("event_labels") or [] if isinstance(e, dict)]
-    keys = [k for k in d.get("key_events") or [] if isinstance(k, dict)]
-    past = [e for e in steps if any(num(e.get(k)) and e[k] > hi for k in ("t_s", "end_s"))]
-    early = [e for e in steps if any(num(e.get(k)) and e[k] < lo for k in ("t_s", "end_s"))]
-    back = [e for e in steps if num(e.get("t_s")) and num(e.get("end_s")) and e["end_s"] < e["t_s"]]
-    stray = [k for k in keys if num(k.get("t_s")) and not lo <= k["t_s"] <= hi]
     one = lambda xs, a, b: a if len(xs) == 1 else b
-    said = [f"{len(past)} of its {len(steps)} steps {one(past, 'lies', 'lie')} past the episode's end at {dur:.1f} s"
-            if past else "",
-            f"{len(early)} {one(early, 'starts', 'start')} before the episode does" if early else "",
-            f"{len(back)} {one(back, 'ends before it starts', 'end before they start')}" if back else "",
-            f"{len(stray)} of its {len(keys)} key events {one(stray, 'lies', 'lie')} outside the episode"
-            if stray else ""]
+    said = []
+    if dur and not d.get("duration_estimated"):
+        lo, hi = -STEP_SLACK_S, dur + STEP_SLACK_S
+        steps = [e for e in d.get("event_labels") or [] if isinstance(e, dict)]
+        keys = [k for k in d.get("key_events") or [] if isinstance(k, dict)]
+        past = [e for e in steps if any(num(e.get(k)) and e[k] > hi for k in ("t_s", "end_s"))]
+        early = [e for e in steps if any(num(e.get(k)) and e[k] < lo for k in ("t_s", "end_s"))]
+        back = [e for e in steps if num(e.get("t_s")) and num(e.get("end_s")) and e["end_s"] < e["t_s"]]
+        stray = [k for k in keys if num(k.get("t_s")) and not lo <= k["t_s"] <= hi]
+        said = [f"{len(past)} of its {len(steps)} steps {one(past, 'lies', 'lie')} past the episode's end at "
+                f"{dur:.1f} s" if past else "",
+                f"{len(early)} {one(early, 'starts', 'start')} before the episode does" if early else "",
+                f"{len(back)} {one(back, 'ends before it starts', 'end before they start')}" if back else "",
+                f"{len(stray)} of its {len(keys)} key events {one(stray, 'lies', 'lie')} outside the episode"
+                if stray else ""]
+    st = (result or {}).get("stitched") if isinstance((result or {}).get("stitched"), dict) else {}
+    for p in st.get("outside_part") or []:
+        if not isinstance(p, dict) or not (num(p.get("t0_s")) and num(p.get("t1_s"))):
+            continue
+        n, k = int(p.get("steps") or 0), int(p.get("key_events") or 0)
+        what = [f"{n} {'step' if n == 1 else 'steps'}" if n else "", f"{k} key {'event' if k == 1 else 'events'}"
+                if k else ""]
+        what = [x for x in what if x]
+        if what:
+            said.append(f"{' and '.join(what)} of part {p.get('part')} {'lies' if n + k == 1 else 'lie'} outside that "
+                        f"part's footage, from {p['t0_s']:.1f} s to {p['t1_s']:.1f} s")
     said = [x for x in said if x]
     if not said:
         return []
@@ -398,7 +409,7 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
             d["dataset_checks"] = d.get("dataset_checks") or {}
             d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
     add_reader_issues(d, ctx, result)
-    outside = [{**x, "family": _FAMILIES.reader_family(x["kind"])} for x in steps_outside(d)]
+    outside = [{**x, "family": _FAMILIES.reader_family(x["kind"])} for x in steps_outside(d, result)]
     if outside:
         d["dataset_checks"] = d.get("dataset_checks") or {}
         d["dataset_checks"]["reader_issues"] = (d["dataset_checks"].get("reader_issues") or []) + outside
