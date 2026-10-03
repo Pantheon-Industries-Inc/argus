@@ -3610,3 +3610,19 @@ def test_writing_bookkeeping_again_keeps_the_same_metadata():
         saved = np.load(Path(t) / 'signals.npz')
         assert np.array_equal(saved['s0'], values) and np.array_equal(saved['s0_readings'], values[:, 1:])
         saved.close()
+
+
+def test_lerobot_task_tables_are_read_while_foreign_notes_stay_listed():
+    import numpy as np
+    import pandas as pd
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10, 'task_index': [0] * 10}})
+        pd.DataFrame({'task_index': [0], 'task': ['recorded task']}).to_parquet(root / 'meta' / 'tasks.parquet')
+        (root / 'ep99_meta.json').write_text('{"task":"unowned task"}')
+        (root / 'broken_meta.json').write_text('{broken')
+        det, items = f.plan(root)
+        unread = f.unread_files(root, det, items)
+        assert 'meta/tasks.parquet' not in unread, unread
+        assert 'broken_meta.json' in unread, unread
+        assert root / 'ep99_meta.json' not in f.opened_notes(items)

@@ -6252,12 +6252,14 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     rdirs = [Path(r) for p in parts for r in p.get("roots") or []]
     vid_dirs = {Path(p).parent for p in files_under(root) if p.suffix.lower() in VIDEO_EXT}
     notes = {p.resolve() for p in opened_notes(items) | absent_take_notes(items)}
+    notes |= {(Path(it["root"]["dir"]) / it["root"]["annot_src"]).resolve() for it in items
+              if it.get("root") and it["root"].get("annot_src")}
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
         internal = any(r in p.parents and (p.relative_to(r).parts[0] in ("data", "videos")
                        or p.parent == r / "meta" and p.name.lower() in
-                       {"info.json", "stats.json", "tasks.jsonl", "episodes.jsonl", "episodes_stats.jsonl"}
+                       {"info.json", "stats.json", "tasks.jsonl", "tasks.parquet", "episodes.jsonl", "episodes_stats.jsonl"}
                        or (r / "meta" / "episodes") in p.parents) for r in rdirs)
         if internal or p.resolve() in notes:
             continue
