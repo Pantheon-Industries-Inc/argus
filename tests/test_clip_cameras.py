@@ -276,7 +276,8 @@ def test_a_camera_that_ends_early_is_one_issue_whichever_step_finds_it(tmp_path)
 def test_the_board_shows_the_frame_the_model_is_sent_at_every_instant(tmp_path):
     """A wrist camera whose recorder dropped three frames at 1 s: its video plays at an even 30 fps, so its clip had
     shown frame 45 at 1.5 s while its capture times put frame 42 there, the frame the model is sent. Each clip frame
-    plays at its capture time, so at every sampled instant the board's frame is the model's, on every camera."""
+    is timed by the capture times (shown from halfway after the capture before it), so at every sampled instant the
+    board's frame is the model's, on every camera."""
     from board.hands import probe_pts
     up = tmp_path / "up"
     up.mkdir()
@@ -294,11 +295,54 @@ def test_the_board_shows_the_frame_the_model_is_sent_at_every_instant(tmp_path):
     for v, clip in (("exo", out / f"{ep.name}.mp4"), ("left", out / "wrist_left" / f"{ep.name}.mp4")):
         _, _, tb, pts = probe_pts(clip)
         shown = np.asarray(pts, dtype=np.float64) * float(tb)
-        assert np.allclose(shown, e["times"][v], atol=1e-3)
+        t = e["times"][v]
+        assert np.allclose(shown[1:], (t[1:] + t[:-1]) / 2, atol=1e-3)
         for k in pl["ks"]:
             own = int(e["kmap"][v][k]) if v in e["kmap"] else k
             assert int(np.searchsorted(shown, me.frame_time(e, k) + 1e-4, side="right") - 1) == own, (v, k)
     assert 42 == int(e["kmap"]["left"][45])
+
+
+def test_a_camera_captured_a_fraction_of_a_frame_after_each_instant_shows_the_models_frame_there(tmp_path):
+    """A wrist camera that started 0.11 s in, each frame captured a third of a frame after the top camera's: at each
+    instant the model is sent its nearest frame, the one captured just after it. A clip that plays each frame from
+    its capture time shows the frame before that one there. Each frame is shown from halfway after the capture
+    before it, so the board shows the nearest frame at every time, the model's at every instant."""
+    from board.hands import probe_pts
+    up = tmp_path / "up"
+    up.mkdir()
+    t_left = (np.arange(57) + 3.3) / 30.0
+    for stem, n in (("top", 60), ("wrist_left", 57)):
+        _video(up / f"{stem}.mp4", n)
+    eps = tmp_path / "episodes"
+    ep = eps / "episode_a"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4")}
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": t_left})
+    out = tmp_path / "clips"
+    assert _clips(eps, out).returncode == 0
+    e = me.load(ep)
+    for v, clip in (("left", out / "wrist_left" / f"{ep.name}.mp4"), ("exo", out / f"{ep.name}.mp4")):
+        _, _, tb, pts = probe_pts(clip)
+        shown = np.asarray(pts, dtype=np.float64) * float(tb)
+        ks = [k for k in range(60) if me.recording_at(e, v, k)]
+        board = [int(np.searchsorted(shown, me.frame_time(e, k) + 1e-4, side="right") - 1) for k in ks]
+        assert board == [int(e["kmap"][v][k]) if v in e["kmap"] else k for k in ks], v
+        t = e["times"][v]
+        assert np.allclose(shown[1:], (t[1:] + t[:-1]) / 2, atol=1e-3), v
+    # a goal frame cut at a labelled time (board/serve.py extract_frame) is the frame on screen then, the model's
+    import io
+    import av
+    from PIL import Image
+    from board import serve
+    clip = out / "wrist_left" / f"{ep.name}.mp4"
+    with av.open(str(clip)) as c:
+        frames = [np.asarray(f.to_image().convert("L"), np.float32) for f in c.decode(video=0)]
+    for k in (15, 30, 45):
+        own = int(e["kmap"]["left"][k])
+        got = np.asarray(Image.open(io.BytesIO(serve.extract_frame(clip, me.frame_time(e, k), 640))).convert("L"),
+                         np.float32)
+        err = [float(np.abs(got - f).mean()) for f in frames]
+        assert int(np.argmin(err)) == own, (k, own, int(np.argmin(err)))
 
 
 def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_frame(tmp_path):
@@ -326,7 +370,8 @@ def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_fra
     assert me.frame_time(e, 0) == pytest.approx(0.0) and min(me.frame_time(e, k) for k in pl["ks"]) >= 0
     assert e["state"][15][0] == 0
     assert _clip_timing(out / "wrist_left" / f"{ep.name}.mp4")[1] == pytest.approx(0.0, abs=0.02)
-    assert _clip_timing(out / "wrist_right" / f"{ep.name}.mp4")[1] == pytest.approx(0.5, abs=0.02)
+    # the right camera comes on the pairing tolerance before its first frame, as early as the request shows it
+    assert _clip_timing(out / "wrist_right" / f"{ep.name}.mp4")[1] == pytest.approx(0.4, abs=0.02)
     assert clips.clip_frames(out / "wrist_left" / f"{ep.name}.mp4") == 60
 
 

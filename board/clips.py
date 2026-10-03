@@ -16,10 +16,12 @@ Some datasets keep their video packed (MolmoAct2: 12 to 50 episodes per mp4), an
 which browsers do not all play. This cuts each episode's own frames out of its source file (sources.json: the
 file, the episode's offset and its exact frame count) into a browser-native H.264 clip, once, sized for where the
 page shows that camera (the recipe below) and timed on the episode's clock: a camera whose capture times the episode
-keeps (times.npz) plays each frame at its capture time, the times the frames the model is sent are chosen by (retime),
-so a labelled time shows the same instant on the board as in the request; any other camera's frames keep their source
-times. A camera that started recording after the main one starts that much later. It is a viewing copy only:
-labelling decodes the source files directly and never re-encodes. Idempotent and parallel.
+keeps (times.npz) shows each frame from halfway after the capture before it to halfway to the next one (retime), so at
+every time the board shows the camera's frame captured nearest it, the frame the request picks for that time, and a
+labelled time shows the same instant on the board as in the request; any other camera's frames keep their source
+times. A camera that started recording after the main one starts that much later (one with capture times as early as
+the request shows it, retime). It is a viewing copy only: labelling decodes the source files directly and never
+re-encodes. Idempotent and parallel.
 
 An episode with any camera that decodes is always kept, labelled and put on the board from the cameras that work. A
 camera whose clip comes out with fewer frames than the episode keeps its clip as cut, and the board plays it; a
@@ -239,7 +241,7 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
         if not got:
             raise RuntimeError(f"{out_mp4.name}: no frame of {packed} decodes")
         if times is not None and len(times) >= skip + got:
-            retime(tmp, times[skip:skip + got], fps)
+            retime(tmp, times[skip:skip + got], fps, main)
         else:
             frame_lengths(tmp)
         os.replace(tmp, out_mp4)
@@ -248,19 +250,39 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     return None if got == want else {"clip_frames": got, "episode_frames": want}
 
 
-def retime(mp4: Path, capture_s, fps: float = 30.0) -> None:
-    """Put the frames of an encoded clip, in display order, at their capture times on the episode's clock (capture_s,
-    seconds), each lasting until the next one and the last one the step before it, as frame_lengths gives them: the
-    times label/episode.py chooses the model's frames by, where the file's own timestamps can be an even rate its
-    recorder never kept (a capture that dropped frames). The clip starts at 0 when its first capture is less than half
-    a frame from the clock's start, as start_offsets places a camera. The packets are copied as encoded; decode times
-    move with the display times they sit among (the same map, carried on before the first frame), so the decoder reads
-    them in the same order. A clip whose frames sit at their capture times already is left as cut."""
+# the clip's comment when retime timed its frames: each frame is on screen from halfway after the capture before it,
+# so the frame a time shows is the one on screen then (board/serve.py extract_frame), not the one starting nearest it
+HALFWAY_TAG = "each frame shown from halfway after the capture before it"
+
+
+def shown_from(capture_s, fps: float = 30.0, lead_s: float = 0.0):
+    """When each frame of a camera with capture times (capture_s, on the episode's clock) comes on screen, and when the
+    last one goes off: from halfway after the capture before it, so at every time the board shows the frame captured
+    nearest it, which is how label/episode.py picks a camera's frame for an instant (kmap, nearest in time). The
+    first frame comes on lead_s before its capture, as early as the request shows it, and never before the clip's
+    start at 0; the last stays on half its step after its capture (half a frame at fps for a camera with one frame).
+    Returns (starts, end) in seconds."""
+    import numpy as np
+    t = np.asarray(capture_s, dtype=np.float64)
+    starts = np.concatenate([[max(0.0, float(t[0]) - lead_s)], (t[1:] + t[:-1]) / 2])
+    step = float(t[-1] - t[-2]) if len(t) > 1 else 1.0 / fps
+    return starts, float(t[-1]) + step / 2
+
+
+def retime(mp4: Path, capture_s, fps: float = 30.0, main: bool = True) -> None:
+    """Put the frames of an encoded clip, in display order, on screen when shown_from says (capture_s, their capture
+    times on the episode's clock, seconds), each lasting until the next one comes on: the times label/episode.py
+    chooses the model's frames by, where the file's own timestamps can be an even rate its recorder never kept (a
+    capture that dropped frames). Any camera but the main one comes on the pairing tolerance before its first capture
+    (PAIRED_SPAN_SLACK_S), where label/episode.py _in_span first shows it; the request's instants are the main
+    camera's own captures, so it comes on at its first. The packets are copied as encoded; decode times move with the
+    display times they sit among (the same map, carried on before the first frame), so the decoder reads them in the
+    same order. The clip's comment is HALFWAY_TAG."""
     import av
     import numpy as np
-    want = np.asarray(capture_s, dtype=np.float64)
-    if want[0] < 0.5 / fps:
-        want = want - want[0]
+
+    from label.episode import PAIRED_SPAN_SLACK_S
+    starts, end = shown_from(capture_s, fps, 0.0 if main else PAIRED_SPAN_SLACK_S)
     tmp = mp4.with_name(mp4.stem + ".time.mp4")
     try:
         with av.open(str(mp4)) as src:
@@ -268,14 +290,12 @@ def retime(mp4: Path, capture_s, fps: float = 30.0) -> None:
             tb = ist.time_base
             pkts = [p for p in src.demux(ist) if p.size and p.pts is not None]
             old = np.array(sorted(p.pts for p in pkts), dtype=np.float64)
-            if len(old) != len(want):
-                raise RuntimeError(f"{mp4.name}: {len(old)} frames for {len(want)} capture times")
-            if np.max(np.abs(old * float(tb) - want)) <= 1e-3:
-                frame_lengths(mp4)
-                return
-            new = [int(round(x / tb)) for x in want]
+            if len(old) != len(starts):
+                raise RuntimeError(f"{mp4.name}: {len(old)} frames for {len(starts)} capture times")
+            new = [int(round(x / tb)) for x in starts]
             for i in range(1, len(new)):
                 new[i] = max(new[i], new[i - 1] + 1)            # two captures closer than a tick stay in order
+            stop = max(int(round(end / tb)), new[-1] + 1)
             ticks = np.asarray(new, dtype=np.float64)
 
             def moved(x):
@@ -284,12 +304,13 @@ def retime(mp4: Path, capture_s, fps: float = 30.0) -> None:
                 return float(np.interp(x, old, ticks))
             at = {int(o): i for i, o in enumerate(old)}
             with av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
+                dst.metadata["comment"] = HALFWAY_TAG
                 ost = dst.add_stream_from_template(ist)
                 ost.time_base = tb
                 last_dts = None
                 for p in pkts:
                     i = at[int(p.pts)]
-                    p.duration = new[i + 1] - new[i] if i + 1 < len(new) else (new[i] - new[i - 1] if i else 1)
+                    p.duration = (new[i + 1] if i + 1 < len(new) else stop) - new[i]
                     dts = int(np.floor(moved(p.dts))) if p.dts is not None else new[i]
                     dts = min(dts if last_dts is None else max(dts, last_dts + 1), new[i])
                     p.pts, p.dts, last_dts = new[i], dts, dts
@@ -378,8 +399,12 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
     black = np.zeros((h, w, 3), np.uint8)
     try:
+        with av.open(str(colour_mp4)) as c:
+            tag = c.metadata.get("comment")
         with av.open(str(entry["packed"])) as src, av.open(str(tmp), "w", format="mp4",
                                                           options={"movflags": "+faststart"}) as dst:
+            if tag == HALFWAY_TAG:
+                dst.metadata["comment"] = tag          # timed as its colour clip, so read the same way
             ist = src.streams.video[0]
             ist.codec_context.thread_count = threads
             ost = dst.add_stream("libx264", rate=Fraction(round(fps * 1000), 1000))
@@ -420,7 +445,11 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
             for pkt in ost.encode():
                 dst.mux(pkt)
         frame_lengths(tmp)
-        at = np.asarray(pts, dtype=np.float64) * float(tb)
+        # a stretch is named by the capture times of its colour frames where the clip shows them by those (retime),
+        # else by the clip's own times
+        cap = clip_times(ep_dir, sources, fps).get(cam) if tag == HALFWAY_TAG else None
+        at = cap[skip:skip + len(pts)] if cap is not None and len(cap) >= skip + len(pts) else \
+            np.asarray(pts, dtype=np.float64) * float(tb)
         for run in np.split(np.asarray(lost, dtype=int), np.flatnonzero(np.diff(lost) > 1) + 1) if lost else []:
             t0, t1 = float(at[run[0]]), float(at[run[-1]])
             issues.append({"kind": DEPTH_NOT_DECODABLE, "camera": cam, "t0_s": round(t0, 3), "t1_s": round(t1, 3),
@@ -482,11 +511,15 @@ def frame_lengths(mp4: Path) -> bool:
         meta = [(p.pts, p.duration) for p in src.demux(ist) if p.size and p.pts is not None]
     if not meta or all(d for _, d in meta[:-1]) and meta[-1][1]:
         return False
+    with av.open(str(mp4)) as src:
+        tag = src.metadata.get("comment")
     pts = sorted(p for p, _ in meta)
     step = {p: (pts[i + 1] - p if i + 1 < len(pts) else (p - pts[i - 1] if i else 0)) for i, p in enumerate(pts)}
     tmp = mp4.with_name(mp4.stem + ".len.mp4")
     try:
         with av.open(str(mp4)) as src, av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
+            if tag == HALFWAY_TAG:
+                dst.metadata["comment"] = tag          # how the clip is timed (retime) goes with it
             outs = {}
             for s in src.streams:
                 if s.type in ("video", "audio"):

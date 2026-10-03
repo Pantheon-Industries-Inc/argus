@@ -121,6 +121,20 @@ def _clip_times(mp4: Path) -> list:
     return rel
 
 
+def _shown_from_halfway(mp4: Path) -> bool:
+    """Whether the clip's frames come on screen halfway after the capture before each (board/clips.py retime, which
+    sets HALFWAY_TAG as the clip's comment), so the frame a time shows is the one on screen then."""
+    from board.clips import HALFWAY_TAG
+    probe = Path(FFMPEG).with_name("ffprobe") if FFMPEG else None
+    try:
+        r = subprocess.run([str(probe) if probe and probe.exists() else "ffprobe", "-v", "error", "-show_entries",
+                            "format_tags=comment", "-of", "default=nw=1:nk=1", str(mp4)],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.stdout.strip() == HALFWAY_TAG
+
+
 def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
     """One JPEG from mp4 at time t (seconds), at most max_w wide, or None when it cannot be cut."""
     if not FFMPEG or not mp4.exists():
@@ -140,15 +154,19 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
         _remember_frame(key, out)
         return out
     # Clips hold exactly the episode's own frames, their first at the clip's start. The frame shown is the clip's
-    # own frame nearest t, from its frame times (any rate, variable or not), and the seek lands half a gap before
-    # it (an input seek counts from the clip's start), so a 4-decimal seek can never round past it; a time at or
-    # past the clip's end (a goal frame on the last instant) is its last frame, and a frame that cannot be cut
-    # falls back to the one before.
+    # own frame nearest t, from its frame times (any rate, variable or not): for a clip timed by capture times, whose
+    # frames come on halfway after the capture before each, the one on screen at t; for any other, the one whose time
+    # is nearest t. The seek lands half a gap before it (an input seek counts from the clip's start), so a 4-decimal
+    # seek can never round past it; a time at or past the clip's end (a goal frame on the last instant) is its last
+    # frame, and a frame that cannot be cut falls back to the one before.
     rel = _clip_times(mp4)
     if rel:
         import bisect
-        i = bisect.bisect_left(rel, max(0.0, t))
-        i = min(range(max(0, i - 1), min(len(rel), i + 1)), key=lambda j: (abs(rel[j] - t), j))
+        if _shown_from_halfway(mp4):
+            i = max(0, bisect.bisect_right(rel, max(0.0, t) + 1e-4) - 1)
+        else:
+            i = bisect.bisect_left(rel, max(0.0, t))
+            i = min(range(max(0, i - 1), min(len(rel), i + 1)), key=lambda j: (abs(rel[j] - t), j))
 
         def half_gap(j):
             gaps = [g for g in ([rel[j] - rel[j - 1]] if j > 0 else []) + ([rel[j + 1] - rel[j]] if j + 1 < len(rel)
@@ -267,7 +285,10 @@ def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
 
 def _probe(p: Path) -> tuple:
     """(width, height, duration s, frame rate) of a clip. The duration runs to the end of its last frame (its
-    time plus its own length), which a variable-rate recording's container duration can stop short of."""
+    time plus its own length), which a variable-rate recording's container duration can stop short of. The rate is
+    one over the clip's usual step between frames: a clip timed by capture times (board/clips.py retime) starts with
+    a frame half a step long, which puts its average rate above the camera's own and the footage canvas
+    (footage_command) at a rate that samples on the frames' boundaries."""
     probe = Path(FFMPEG).with_name("ffprobe") if FFMPEG else None
     r = subprocess.run([str(probe) if probe and probe.exists() else "ffprobe", "-v", "error", "-select_streams", "v:0",
                         "-show_entries", "stream=width,height,avg_frame_rate:format=duration:packet=pts_time,duration_time",
@@ -282,6 +303,9 @@ def _probe(p: Path) -> tuple:
         dur = max(dur, last + d)
     num, _, den = str(s.get("avg_frame_rate") or "0/1").partition("/")
     rate = float(num) / float(den) if den and float(den) else 0.0
+    steps = sorted(b[0] - a[0] for a, b in zip(sorted(pk), sorted(pk)[1:]) if b[0] > a[0])
+    if steps:
+        rate = round(1.0 / steps[len(steps) // 2], 3)
     return int(s["width"]), int(s["height"]), dur, rate
 
 
