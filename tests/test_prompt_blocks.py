@@ -224,6 +224,9 @@ BLOCK_CASES = [
     ("metadata_issues", "teleop_joints", _add(reader_issues=[
         {"kind": "metadata_unreadable", "what": "meta/tasks.parquet could not be read."}]),
      ("UPLOADED METADATA COULD NOT BE FULLY READ", "meta/tasks.parquet could not be read.")),
+    ("state_identity_issues", "teleop_joints", _add(reader_issues=[
+        {"kind": "state_identity_conflict", "what": "The left source names right joints; the actor side is unknown."}]),
+     ("RECORDED ACTOR IDENTITY DISAGREES", "The left source names right joints; the actor side is unknown.")),
 ]
 # blocks whose presence switches the shared instructions to another variant
 CHANGES_FIXED = ("state", "no_state")
@@ -338,6 +341,13 @@ def test_a_video_only_episode_is_never_told_of_a_recorded_motion():
     ep3, pl3 = CASES["teleop_video_only"]()
     _add_signals(ep3, pl3)                           # recorded numbers, even without arm state, keep the wording
     assert "the recorded motion" in me.build_prompt(ep3, pl3, cell_w=448, cell_h=252)[0]
+
+
+def test_a_video_only_mounted_view_does_not_prove_only_its_arm_acts():
+    ep, pl = CASES["teleop_video_only"]()
+    _, prompt = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert '"arm" field always' not in prompt
+    assert "mounted on the LEFT arm" in prompt
 
 
 def test_a_video_only_rig_with_two_wrist_cameras_is_not_told_its_views_follow_a_recorded_motion():

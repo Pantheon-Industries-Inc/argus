@@ -240,6 +240,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
             f"Labelled from the cameras, because the recorded arm state {gap[0]} "
             f"{formats.gap_words(gap[1], float(q[0]) / 1e9)}.", "short"))
     if state is not None:
+        formats.record_state_groups(context, [(ARM[0], None, 7), (ARM[2], None, 7)])
         np.savez(ep_dir / "state.npz", **({"state": state, "action": action} if action is not None else
                                           {"state": state}))
     np.savez(ep_dir / "times.npz", **times)

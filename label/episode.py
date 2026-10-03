@@ -392,13 +392,15 @@ def contact_views(ep: dict, pl: dict) -> list[tuple[int, list[str]]]:
             rng = float(np.nanmax(v) - np.nanmin(v))
             if rng > 1e-6 and abs(float(v[k] - v[a])) / rng >= CONTACT_MIN_CHANGE:
                 who.append(g)
-        vs = [mounted[g] for g in who if g < len(mounted)] if len(mounted) > 1 else mounted
+        mapped = actor_views(ep)
+        vs = [mapped[g] for g in who if g < len(mapped) and mapped[g] is not None]
         out.append((k, (["exo"] if "exo" in views(ep) else []) + (vs or mounted)))
     return out
 
 
 def actors(ep: dict) -> list[str]:
-    """Names of the arms or grippers in state order (7 values each): left then right, or the one.
+    """Unique names of the native seven value groups in state order, using each group's recorded claims.
+    Only an old context without native group metadata retains the legacy left then right convention.
     On a person (ego), the actors are their own two hands."""
     if rig(ep) == "ego_head":
         return ["left", "right"]
@@ -406,11 +408,55 @@ def actors(ep: dict) -> list[str]:
         # video only: the actors are the mounted cameras' own, or both when no single mounted camera names one
         mounted = [v for v in views(ep) if v in MOUNTED]
         return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
-    if ep["state"].shape[1] == 14:
+    ctx = ep["context"]
+    count = ep["state"].shape[1] // 7
+    identities = ctx.get("state_identities")
+    noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
+    if isinstance(identities, list) and len(identities) == count and all(isinstance(i, dict) for i in identities):
+        if count > 1 or any(i.get("status") != "absent" for i in identities):
+            from prepare.formats import state_contract_actors
+            contract = state_contract_actors(ctx, count)
+            sides = [i.get("side") if i.get("status") == "known" else
+                     contract[g] if contract and i.get("status") == "absent" else None
+                     for g, i in enumerate(identities)]
+            return [side if side and sides.count(side) == 1 else
+                    f"{side} (recorded group {g + 1})" if side else
+                    f"recorded {noun}" + (f" {g + 1}" if count > 1 else "") + " (side unknown)"
+                    for g, side in enumerate(sides)]
+    if (ctx.get("state_identity") or {}).get("status") == "conflict":
+        return [f"recorded {noun} (side unknown)"]
+    recorded = ep["context"].get("state_actors")
+    if isinstance(recorded, list) and len(recorded) == count \
+            and all(isinstance(name, str) and name for name in recorded) and len(set(recorded)) == count:
+        return recorded
+    if count == 2:
         return ["left", "right"]
-    # the one arm or gripper is named by its own mounted camera, never by an extra camera that sorts after it
+    from prepare.formats import recorded_state_side
+    source = ctx.get("source") or {}
+    side = ctx.get("state_side") if "state_side" in ctx else recorded_state_side(
+        source.get("state") if source.get("format") == "hdf5" else None)
+    if side in MOUNTED:
+        return [side]
+    # A unique mounted view names the one actor. Two mounted views establish no side for a single state stream.
     mounted = [v for v in views(ep) if v in MOUNTED]
-    return [cam_name(ep, (mounted or views(ep)[:1])[-1])]
+    if len(mounted) == 1:
+        return [cam_name(ep, mounted[0])]
+    return [f"recorded {noun} (side unknown)"]
+
+
+def actor_views(ep: dict) -> list[str | None]:
+    """Mounted view in recorded group order, with no wrist assigned to unknown or duplicate side claims."""
+    names = actors(ep)
+    vs = views(ep)
+    if len(names) == 2:
+        return [name if name in MOUNTED and name in vs else None for name in names]
+    if state_kind(ep) != "none" and (ep["context"].get("state_identity") or {}).get("status") == "conflict":
+        return [None]
+    mounted = [v for v in vs if v in MOUNTED]
+    name = names[0]
+    if name in MOUNTED:
+        return [name if name in mounted else None]
+    return [mounted[0] if len(mounted) == 1 and name == cam_name(ep, mounted[0]) else None]
 
 
 def _decode_error(e: Exception) -> bool:
@@ -1022,7 +1068,8 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
               "as seen from their head. Which hand is which follows the person's body (the forearm it belongs to, "
               "the thumb side), not which half of the image it is in, because hands cross the midline and reach "
               "across.")
-    elif len([v for v in vs if v in MOUNTED]) == 1:
+    elif (state_kind(ep) != "none" and len(actors(ep)) == 1
+          and len([v for v in vs if v in MOUNTED]) == 1 and actor_views(ep)[0] is not None):
         s += f" In the output, the \"arm\" field always names the one {n['actor']}: \"{actors(ep)[0]}\"."
     return s
 
@@ -1733,6 +1780,19 @@ def _has_metadata_issues(ep: dict, pl: dict) -> bool:
                for i in ep["context"].get("reader_issues", []))
 
 
+def _state_identity_issues(ep: dict, pl: dict) -> str:
+    issues = [i["what"] for i in ep["context"].get("reader_issues", [])
+              if i.get("kind") == "state_identity_conflict"]
+    text = "\nRECORDED ACTOR IDENTITY DISAGREES:\n" + "\n".join(issues) + "\n" if issues else ""
+    note = ep["context"].get("state_identity_note")
+    return text + ("\nRECORDED ACTOR GROUP IDENTITY:\n" + note + "\n" if note else "")
+
+
+def _has_state_identity_issues(ep: dict, pl: dict) -> bool:
+    return bool(ep["context"].get("state_identity_note")) or any(
+        i.get("kind") == "state_identity_conflict" for i in ep["context"].get("reader_issues", []))
+
+
 def _table_number_notes(ep: dict) -> list[str]:
     """Numeric interpretation assumptions that qualify the table values shown to the model."""
     return [issue["what"].strip() for issue in ep["context"].get("reader_issues") or []
@@ -1765,6 +1825,7 @@ BLOCKS = (
           checks=("contact_checks",)),
     Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
     Block("metadata_issues", "after_task", _has_metadata_issues, _metadata_issues),
+    Block("state_identity_issues", "after_task", _has_state_identity_issues, _state_identity_issues),
 )
 
 

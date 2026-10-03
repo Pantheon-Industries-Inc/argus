@@ -146,11 +146,16 @@ def pairing(ep_dir: Path) -> dict | None:
         return None
     if unaligned(ep):
         return unaligned(ep)
+    mapped = me.actor_views(ep)
+    if set(mapped) != {"left", "right"}:
+        return {"not_assessed": "The recorded actor identities do not establish one actor for each mounted camera."}
     a, b = me.state_span(ep)
-    vL, vR = actor_speed(ep, 0), actor_speed(ep, 1)
+    left, right = mapped.index("left"), mapped.index("right")
+    names = me.actors(ep)
+    vL, vR = actor_speed(ep, left), actor_speed(ep, right)
     # measured over the frame steps with a reading on both sides; an arm with too few of them is not compared at all
-    why = [w for w in (too_few(vL[a:b - 1], f"The recorded state of {me.actors(ep)[0]}"),
-                       too_few(vR[a:b - 1], f"The recorded state of {me.actors(ep)[1]}")) if w]
+    why = [w for w in (too_few(vL[a:b - 1], f"The recorded state of {names[left]}"),
+                       too_few(vR[a:b - 1], f"The recorded state of {names[right]}")) if w]
     if why:
         return {"not_assessed": ". ".join(why)}
     mL, mR = stream_motion(ep, "left"), stream_motion(ep, "right")
@@ -205,13 +210,10 @@ def jumps(ep_dir: Path) -> dict | None:
         return unaligned(ep)
     sa, sb = me.state_span(ep)
     unit = "cm" if kind == "ee_pose" else "deg"
-    vs = set(me.views(ep))
-    # an actor is named by its camera's view key (left, right) on two-gripper rigs, but by the camera's display
-    # name on single-gripper ones ("gripper"), so map display names back to view keys or the camera is never checked
-    by_name = {me.cam_name(ep, v): v for v in vs}
+    mapped = me.actor_views(ep)
     events = []
     for g, name in enumerate(me.actors(ep)):
-        cam = name if name in vs else by_name.get(name)
+        cam = mapped[g]
         st, dts = _steps(ep, g)
         inside = np.zeros(len(st), dtype=bool)
         inside[sa:max(sa, sb - 1)] = True

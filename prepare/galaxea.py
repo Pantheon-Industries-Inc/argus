@@ -196,6 +196,12 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     from prepare import formats
     if state_note:
         formats.no_state(ctx, formats.StateNote(state_note, "layout"))
+    if kind != "none":
+        feats = info.get("features") or {}
+        formats.record_state_groups(ctx, [(f"observation.state.{side}_arm",
+            (formats.value_names(feats.get(f"observation.state.{side}_arm", {}).get("names"), 6) or []) +
+            (formats.value_names(feats.get(f"observation.state.{side}_gripper", {}).get("names"), 1) or []), 7)
+            for side in ("left", "right")])
     arm_cols = set(GALAXEA_COLUMNS[:4]) | {"action.left_arm", "action.left_gripper", "action.right_arm",
                                             "action.right_gripper"}
     formats.write_signals(ep_dir, ctx, formats.recorded_signals(

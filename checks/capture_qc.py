@@ -184,19 +184,15 @@ def camera_times(ep: dict, v: str) -> np.ndarray | None:
 
 
 def actor_views(ep: dict, names: list[str]) -> list[str | None]:
-    """The camera view mounted on each actor (state order), or None. Two actors ride on the left and
-    right views; a single handheld gripper on the episode's only mounted view (its actor name is the
-    camera's dataset name, e.g. "gripper", not the view key)."""
-    vs = me.views(ep)
-    if len(names) == 2:
-        return [v if v in vs else None for v in ("left", "right")]
-    mounted = [v for v in vs if v in me.MOUNTED]
-    return [mounted[-1] if mounted else None]
+    """The camera view mounted on each actor in native state order, or None when that mapping is unknown."""
+    return me.actor_views(ep)
 
 
 def canonical_states(ep: dict) -> dict:
-    """Upstream's [T,14] layout (x y z m, rotation vector rad, gripper per arm; left then right) with its
-    validity mask. Joint-state rigs get only the gripper column (no forward kinematics here). A frame with a missing
+    """Upstream's [T,14] layout (x y z m, rotation vector rad, gripper per group) in native state order with its
+    validity mask. Upstream calls the first and second slots left and right; those are positional keys, whose
+    recorded actor names and wrist views come from the episode rather than the slot labels.
+    Joint-state rigs get only the gripper column (no forward kinematics here). A frame with a missing
     or infinite value is listed in "nonfinite" and left invalid for its actor, and every other frame is checked. Only
     the frames the
     state covers are read (label/episode.py state_span): a state moved onto another camera's frames has no value
@@ -1055,7 +1051,8 @@ def assess(feats: dict) -> dict:
             corr, _ = up.visual_action_correlation_checks(row, policy)
             ev, cm_out = [], {}
             for slot, rec in corr.items():
-                cm_out[slot] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in rec.items()
+                actor = dict(zip(("left", "right"), names)).get(slot, slot)
+                cm_out[actor] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in rec.items()
                                 if k in ("status", "correlation", "r_squared", "pairs")}
                 if rec.get("status") == "mismatch":
                     cam = wrist.get(slot, "exo")

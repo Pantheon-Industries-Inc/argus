@@ -368,6 +368,14 @@
    ]
   },
   {
+   "slug": "state-identity-conflict",
+   "list": "data",
+   "name": "Recorded actor identity disagrees",
+   "reader_issues": [
+    "state_identity_conflict"
+   ]
+  },
+  {
    "slug": "state-filled",
    "list": "data",
    "name": "Missing state readings were filled",
