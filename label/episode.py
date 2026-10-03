@@ -433,6 +433,48 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
     return {k: got[j] for k, j in zip(ks, own) if j in got and k not in held}
 
 
+class _CaptureSearch:
+    """Nearest remaining capture by time, with earlier indices winning ties. Removed failures are skipped through
+    compressed successor and predecessor links, so each missing sample cannot walk the same failed stretch again.
+    Captures and equal-time group starts are indexed once; each unsuccessful decode removes its index once."""
+
+    def __init__(self, captures):
+        self.captures = np.asarray(captures)
+        self.order = np.argsort(self.captures, kind="stable")
+        self.times = self.captures[self.order]
+        self.starts = np.searchsorted(self.times, self.times)
+        self.positions = np.empty(len(self.order), dtype=int)
+        self.positions[self.order] = np.arange(len(self.order))
+        self.after = list(range(len(self.order) + 1))
+        self.before = list(range(len(self.order) + 1))
+
+    @staticmethod
+    def _find(links, i):
+        while links[i] != i:
+            links[i] = links[links[i]]
+            i = links[i]
+        return i
+
+    def discard(self, k):
+        i = int(self.positions[k])
+        self.after[i] = self._find(self.after, i + 1)
+        self.before[i + 1] = self._find(self.before, i)
+
+    def nearest(self, k):
+        target = self.captures[k]
+        bound = int(np.searchsorted(self.times, target))
+        right = self._find(self.after, bound)
+        left = self._find(self.before, bound) - 1
+        # A predecessor points to the last surviving index of its time group. Choose the group's first survivor,
+        # since stable sorting makes it the earliest original index, including ties across two distinct times.
+        left = self._find(self.after, int(self.starts[left])) if left >= 0 else -1
+        candidates = [i for i in (left, right) if 0 <= i < len(self.order)]
+        if not candidates:
+            return None
+        i = min(candidates, key=lambda i: (abs(self.times[i] - target), int(self.order[i])))
+        return int(self.order[i])
+
+
 def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     """{view: {k: PIL image}} for every planned k a camera has a frame at. With widths (the cell widths a request can
     be built at), frames outside detail_ks are kept only at those widths (label/frames.py Shrunk).
@@ -479,45 +521,23 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
         return any(k in more[v] and _in_span(ep, v, k) for v in vs)
 
     # The sampling schedule can land entirely on damaged rows. Search the episode's real frame indices before
-    # concluding that it has no footage. Read and sort the capture clock once, then expand out from each target.
-    # Equal distances keep the earlier frame index, including groups of equal capture times.
+    # concluding that it has no footage. Keep unknown and usable captures in a nearest-time index; every known
+    # failure leaves it once, so later missing targets skip whole damaged stretches.
     if unavailable:
-        captures = np.fromiter((frame_time(ep, k) for k in range(pl["n"])), dtype=float)
-        order = np.argsort(captures, kind="stable")
-        sorted_t = captures[order]
-
-    def nearby(missing):
-        target = captures[missing]
-        right = int(np.searchsorted(sorted_t, target))
-        left = right - 1
-        while left >= 0 or right < len(order):
-            a = int(np.searchsorted(sorted_t, sorted_t[left])) if left >= 0 else 0
-            b = int(np.searchsorted(sorted_t, sorted_t[right], side="right")) if right < len(order) else right
-            ld = abs(sorted_t[left] - target) if left >= 0 else float("inf")
-            rd = abs(sorted_t[right] - target) if right < len(order) else float("inf")
-            group = []
-            if ld <= rd:
-                group.extend(order[a:left + 1])
-                left = a - 1
-            if rd <= ld:
-                group.extend(order[right:b])
-                right = b
-            yield from sorted(int(k) for k in group)
-
-    checked = set(ks)
+        search = _CaptureSearch(np.fromiter((frame_time(ep, k) for k in range(pl["n"])), dtype=float))
+        for k in unavailable:
+            search.discard(k)
     kept = set(keep)
     for missing in unavailable:
-        for k in nearby(missing):
-            if k in checked and k not in kept:
-                continue
+        while (k := search.nearest(missing)) is not None:
             if k in kept or usable(k):
                 kept.add(k)
-                keep = sorted(kept)
                 ep["fallback_instants"][missing] = k
                 break
-            checked.add(k)
-        if not kept and len(checked) == pl["n"]:
+            search.discard(k)
+        if not kept:
             break
+    keep = sorted(kept)
     if not keep:
         raise mf.FrameError(f"{ep.get('dir', '?')}: no camera has a decodable frame")
     ep.pop("footage_end", None)
