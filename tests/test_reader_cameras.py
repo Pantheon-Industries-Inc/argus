@@ -442,3 +442,22 @@ def test_the_report_says_infrared_and_mask_videos_are_on_the_board(tmp_path):
     det, items = f.plan(root)
     line = next(u for u in det["used"] if "mask" in u)
     assert "left out" not in line and "board" in line, line
+
+
+# ---------------------------------------------------------------- a board clip that fails
+
+def test_a_failed_cut_leaves_no_temporary_file(tmp_path, monkeypatch):
+    import subprocess
+    from board import clips
+
+    def run(cmd, **kw):
+        Path(cmd[-1]).write_bytes(b"part of a clip")
+        raise subprocess.CalledProcessError(1, cmd)
+    monkeypatch.setattr(clips, "source_size", lambda ffmpeg, path: (64, 48, False))
+    monkeypatch.setattr(clips.subprocess, "run", run)
+    out = tmp_path / "clips" / "episode_1.mp4"
+    try:
+        clips.extract_one(str(tmp_path / "src.mp4"), 0.0, 30, out, "ffmpeg", 1)
+    except subprocess.CalledProcessError:
+        pass
+    assert not list(out.parent.glob("*.tmp.mp4"))
