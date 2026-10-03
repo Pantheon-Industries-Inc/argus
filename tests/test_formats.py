@@ -3072,6 +3072,34 @@ def test_a_take_word_is_learned_from_separated_or_glued_episode_names():
         _a_take_word_is_learned_from_separated_or_glued_episode_names(Path(t))
 
 
+def _one_uploaded_take_keeps_its_positive_take_alias(tmp_path):
+    """A sole take grouped by its folder had lost the common take name of its videos, so demo1 metadata was
+    treated as absent beside top_demo_1 and wrist_demo_1. The explicit common take alias still owns that metadata."""
+    for word in ("ep", "episode", "take", "run", "trial", "demo", "seq", "sequence", "clip", "part", "seg",
+                 "segment", "shot", "rec", "recording", "session", "chunk"):
+        for sep in ("_", "", "-"):
+            for cameras in (("top", "wrist"), ("top",)):
+                videos = [f"d/{c}_{word}{sep}1.mp4" for c in cameras]
+                ctx, rep = _upload_notes(tmp_path / word / (sep or "glued") / str(len(cameras)), videos,
+                                         {f"d/{word}1_meta.json": {"task": "pick the cup"}})
+                assert len(ctx) == 1 and next(iter(ctx.values()))["instruction"] == "pick the cup", ctx
+                assert not _absent_line(rep) and not _unread_line(rep), rep["missing"]
+                assert set(ctx) == ({"d"} if len(cameras) == 2 else {f"d/top_{word}{sep}1"}), ctx
+    for names in (("top_v2", "wrist_v2"), ("camera1", "camera2"), ("top_2024_01_02", "wrist_2024_01_02")):
+        ctx, _ = _upload_notes(tmp_path / names[0], [f"d/{c}.mp4" for c in names],
+                               {"d/session_meta.json": {"task": "pick the cup"}})
+        assert all(c["instruction"] == "pick the cup" for c in ctx.values()), ctx
+    ctx, _ = _upload_notes(tmp_path / "folder", ["ep2/top_demo_1.mp4", "ep2/wrist_demo_1.mp4"],
+                           {"ep2/ep2.json": {"task": "pour the tea"},
+                            "ep2/demo1_meta.json": {"task": "pick the cup"}})
+    assert set(ctx) == {"ep2"} and ctx["ep2"]["instruction"] == "pour the tea", ctx
+
+
+def test_one_uploaded_take_keeps_its_positive_take_alias():
+    with tempfile.TemporaryDirectory() as t:
+        _one_uploaded_take_keeps_its_positive_take_alias(Path(t))
+
+
 def _a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task(tmp_path):
     """ep3.json, ep3_meta.json or take3.json beside the takes ep1 and ep2, 3.json beside the takes 1 and 2, and
     ep2.json in the folder of the one episode ep1 named no episode there, so every take was given the task of a take

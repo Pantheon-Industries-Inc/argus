@@ -2411,6 +2411,12 @@ def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path
         for e in here:
             for x in [episode_note_name(e) or ""] + [Path(r).stem for _, r in e["cams"]]:
                 names[name_words(x, takes)].add(e["name"])
+            aliases = {name_words(name_parts(Path(r).stem)["take"], takes) for _, r in e["cams"]}
+            if len(aliases) == 1:
+                alias = next(iter(aliases))
+                # the videos agree on one explicit numbered take even when the episode is named by its folder
+                if len(alias) == 2 and alias[0] in takes and alias[1].isdigit():
+                    names[alias].add(e["name"])
             for c, _ in e["cams"]:
                 for x in (c, name_parts(c)["cam"]):
                     cams[name_words(x, takes)].add(e["name"])
