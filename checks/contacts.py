@@ -16,9 +16,9 @@ hand clearly takes hold of something that no contact covers. The two sources are
   contact_missing    moments the model sees a hand take hold of or press something that no recorded contact covers (a
                      sensor that missed it, or one that was off)
 
-A contact placed from both starts (its "aligned_by", label/contacts.py mark_aligned) has times that are the placement's,
-not recorded ones, so it never counts toward clock_offset or touch_not_seen; the result names such contacts in
-placed_from_both_starts.
+A contact with an alignment assumption (its "aligned_by", label/contacts.py mark_aligned) has times that are the
+placement's, not measured contact times. It never counts toward clock_offset or touch_not_seen. The result groups
+such contacts by their particular placement assumption.
 
 The result is context-free numbers and sentences, written by `python -m board build` into the episode's
 dataset_checks["contact_checks"]. Like checks/sensors.py they are notes, not counted issues, until the datasets they
@@ -27,6 +27,8 @@ fire on are checked on the frames.
 from __future__ import annotations
 
 import numpy as np
+
+from prepare.signal_alignment import PLACEMENT_FIELDS, placement_text
 
 MIN_CONTACTS = 3
 OFFSET_FRAMES = 1.0
@@ -53,9 +55,9 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
     seen = {c.get("id"): c for c in (labels.get("contacts") or []) if isinstance(c, dict)}
     by_id = {c["id"]: c for c in contacts}
     notes, offsets = [], []
-    # a contact placed from both starts (label/contacts.py mark_aligned) has the placement's times, so where the frames
+    # a contact with an alignment assumption (label/contacts.py mark_aligned) has the placement's times, so where the frames
     # show its touch says how far off the placement is, not that the sensor's clock is, nor that the sensor fired on
-    # its own: it is left out of clock_offset and touch_not_seen and named in placed_from_both_starts
+    # its own: it is left out of clock_offset and touch_not_seen and named by its placement
     placed = [cid for cid, rec in by_id.items() if rec.get("aligned_by")]
     for cid, rec in by_id.items():
         m = seen.get(cid)
@@ -71,12 +73,9 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
     shown = [cid for cid in by_id if cid in seen]
     frame_ms = 1000.0 / float(fps or 30.0)
     out = {"contacts": len(by_id), "checked": len(shown), "notes": []}
-    camera_placed = [cid for cid in placed if by_id[cid]["aligned_by"] == "assumed camera clock"]
-    start_placed = [cid for cid in placed if cid not in camera_placed]
-    if start_placed:
-        out["placed_from_both_starts"] = start_placed
-    if camera_placed:
-        out["placed_on_assumed_camera_clock"] = camera_placed
+    for cid in placed:
+        field = PLACEMENT_FIELDS.get(by_id[cid]["aligned_by"], "placed_with_unspecified_alignment")
+        out.setdefault(field, []).append(cid)
     if offsets:
         ms = np.array([o for _, _, o in offsets]) * 1000.0
         out["offset_ms"] = {"median": round(float(np.median(ms)), 1), "spread": round(float(np.std(ms)), 1),
@@ -110,6 +109,8 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
             "with no recorded contact: " + "; ".join(
                 f"{float(x.get('t_s') or 0):.1f} s, {x.get('hand') or 'a hand'}, {x.get('object') or 'an object'}"
                 for x in missing[:6])
-            + ("; the contacts placed from both starts can miss a grasp by their placement alone" if placed else ""))})
+            + ("; the contacts " + " or ".join(dict.fromkeys(
+                placement_text(by_id[cid]["aligned_by"]) for cid in placed))
+                + " can miss a grasp by their placement alone" if placed else ""))})
     out["notes"] = notes
     return out
