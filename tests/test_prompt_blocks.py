@@ -482,7 +482,8 @@ def test_the_values_at_each_instant_keep_what_moves_most_and_name_the_rest():
     left = [l for l in table.splitlines() if l.startswith("  The values at each instant leave out ")]
     assert len(left) == 1 and left[0].endswith(", because these move least and there is no more room.")
     body = readout.split(left[0])[0]
-    assert len(body) <= me.SIGNAL_TABLE_MAX_CHARS + 200
+    # the budget counts the instants' row and the value rows, without their line breaks
+    assert sum(len(l) for l in body.splitlines() if l.startswith("    ")) <= me.SIGNAL_TABLE_MAX_CHARS
     assert all(f"    sweep_{i:02d} [{j}]: " in body for i in range(25) for j in range(4))
     assert "sweep_" not in left[0] and "(4 values, 200 Hz" in left[0]
     for i in range(35):
@@ -523,3 +524,51 @@ def test_over_the_budget_the_state_line_names_the_joint_readings_only_when_every
     assert 0 < shown < 26 and f"observation.state (26 values, {26 - shown} of its 26 rows)" in left
     assert "RECORDED STATE: no arm state in the layout our checks read.\n" in episode
     assert "joint readings" not in episode
+
+
+def _sweeps_wide_and_flags():
+    """42 one value signals that sweep far, a wide one of values near 1e4 that moves less (its row is 375 characters),
+    and three 0/1 flags that move least (93 characters each), over 60 s: the sweeps leave 195 characters, room for
+    two flags but not for the wide row."""
+    ep, _ = CASES["teleop_video_only"]()
+    n = 1800
+    t = np.arange(n) / 30.0
+    ep["state"] = np.zeros((n, 0))
+    ep["signals"] = {f"sweep_{i:02d}": np.sin(0.2 * t + i)[:, None] for i in range(42)}
+    ep["signals"]["wide"] = (12345.6 + 1000 * np.sin(0.8 * t))[:, None]
+    ep["signals"].update({f"flag_{i}": ((t // (7 + i)) % 2)[:, None] for i in range(3)})
+    ep["signal_meta"] = {k: {} for k in ep["signals"]}
+    return ep, _pl(n)
+
+
+def test_the_rows_shown_at_each_instant_are_always_the_top_of_the_ranking():
+    """A row that does not fit ends the readout: shorter rows that move less are never kept past it, so the line that
+    says the rows left out move least is true."""
+    from label import signals as sg
+    ep, pl = _sweeps_wide_and_flags()
+    lines, whole = me._signal_readout(ep, pl)
+    shown = [l.split(":")[0].strip() for l in lines if l.startswith("    ") and not l.startswith("    at: ")]
+    order = list(ep["signals"])
+    ranked = sorted(order, key=lambda k: (-float(sg.movements(ep["signals"][k])[0]), order.index(k)))
+    # printed in the signals' own order, chosen from the top of the ranking down
+    assert set(shown) == set(ranked[:len(shown)]) == whole and shown == [k for k in order if k in whole]
+    assert ranked[len(shown)] == "wide"
+    # first fit would have kept two flags after skipping the wide row
+    room = me.SIGNAL_TABLE_MAX_CHARS - sum(len(l) for l in lines if l.startswith("    "))
+    flag = len("    flag_0: " + " ".join(me._num(x) for x in ep["signals"]["flag_0"][pl["ks"], 0]))
+    assert 2 * flag <= room < 375
+    assert lines[-1] == ("  The values at each instant leave out wide (1 value), flag_0 (1 value), flag_1 (1 value) "
+                         "and flag_2 (1 value), because these move least and there is no more room.")
+
+
+def test_with_no_row_that_fits_every_signal_is_named_as_left_out_because_none_fits(monkeypatch):
+    """Nothing is said to move least when nothing is shown: a budget smaller than the instants' row, or than the row
+    that moves most."""
+    ep, pl = _sweeps_wide_and_flags()
+    head = len("    at: " + " ".join(f"{me.frame_time(ep, k):.2f}" for k in pl["ks"]))
+    for budget in (head - 1, head + 100):
+        monkeypatch.setattr(me, "SIGNAL_TABLE_MAX_CHARS", budget)
+        lines, whole = me._signal_readout(ep, pl)
+        assert len(lines) == 1 and not whole
+        assert lines[0].startswith("  The values at each instant leave out every signal, sweep_00 (1 value), ")
+        assert lines[0].endswith(" and flag_2 (1 value), because they do not fit.") and "move least" not in lines[0]

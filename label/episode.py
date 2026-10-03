@@ -861,9 +861,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
     for name, a in arrs.items():
         if not len(a):
             continue
-        with np.errstate(all="ignore"):
-            flat = np.isfinite(a).any() and bool((np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all())
-        if flat:
+        if _constant(a):
             # a value repeated at every frame (a setting, a calibration, or a sensor that sent nothing new): named once
             v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
             still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
@@ -901,10 +899,11 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     them. A touch signal has no rows (its timing is given once as the episode's contacts, contacts_block, so the frames
     are read on their own first and the contacts are checked against them; touch is the rule the contacts shown follow,
     _touch_signal), nor has a signal that never changes or has no reading. The rows are ranked by how much their
-    values move over the episode (label/signals.py movements) and added in that order while they fit
-    SIGNAL_TABLE_MAX_CHARS, then printed in the signals' own order; every signal left out, whole or in part, is named
-    in one line with its size and rate. Until the 2026-10-02 audit the readout was dropped whole past the budget, so
-    a 66 s ego MCAP with IMU, hand, body and SLAM streams showed none of its 15 signals over time."""
+    values move over the episode (label/signals.py movements) and added in that order until the first that does not
+    fit SIGNAL_TABLE_MAX_CHARS, then printed in the signals' own order, so the rows shown are always the ones that move
+    most; every signal left out, whole or in part, is named in one line with its size and rate. Until the 2026-10-02
+    audit the readout was dropped whole past the budget, so a 66 s ego MCAP with IMU, hand, body and SLAM streams
+    showed none of its 15 signals over time."""
     from label import signals as sg
     sig = ep.get("signals") or {}
     meta = ep.get("signal_meta") or {}
@@ -914,11 +913,8 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     ks = pl["ks"]
     rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)
     for i, (name, a) in enumerate(arrs.items()):
-        if name in touch or not len(a) or not np.isfinite(a).any():
+        if name in touch or not len(a) or not np.isfinite(a).any() or _constant(a):
             continue
-        with np.errstate(all="ignore"):
-            if (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all():
-                continue
         m = meta.get(name) or {}
         got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"))
         mv = sg.movements(a)
@@ -932,9 +928,12 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     text = {(r[1], r[2]): f"    {r[4]}: " + " ".join(r[5]) for r in rows}
     room, chosen = SIGNAL_TABLE_MAX_CHARS - len(head), set()
     for r in sorted(rows, key=lambda r: (-r[0], r[1], r[2])):
-        if len(text[r[1], r[2]]) <= room:
-            chosen.add((r[1], r[2]))
-            room -= len(text[r[1], r[2]])
+        # the first row that does not fit ends the readout: a shorter row that moves less, kept after it, would leave
+        # the line below false in saying the rows left out move least
+        if len(text[r[1], r[2]]) > room:
+            break
+        chosen.add((r[1], r[2]))
+        room -= len(text[r[1], r[2]])
     if chosen:
         lines.append("  Each signal that changes, at every instant you receive (seconds in the first row; \"-\" is "
                      "no reading):")
@@ -944,17 +943,25 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
         if (r[1], r[2]) not in chosen:
             left.setdefault(r[3], []).append(r)
     if left:
-        lines.append("  The values at each instant leave out "
-                     + _and_list([_left_out(nm, arrs[nm], meta.get(nm) or {}, len(left[nm]),
-                                            sum(r[3] == nm for r in rows)) for nm in left])
-                     + ", because these move least and there is no more room.")
+        named = _and_list([_left_out(nm, arrs[nm], meta.get(nm) or {}, len(left[nm]), sum(r[3] == nm for r in rows))
+                           for nm in left])
+        lines.append("  The values at each instant leave out " + named
+                     + ", because these move least and there is no more room." if chosen else
+                     "  The values at each instant leave out every signal, " + named + ", because they do not fit.")
     return lines, frozenset(r[3] for r in rows if r[3] not in left)
 
 
 def _readout_of(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     """The readout episode_text made once for this prompt (pl["readout"]), or, for a block text called on its own,
-    made now."""
+    made now. Only episode_text sets pl["readout"], and only on its own copy of the plan, never on plan()'s."""
     return pl["readout"] if "readout" in pl else _signal_readout(ep, pl)
+
+
+def _constant(a: np.ndarray) -> bool:
+    """Whether a signal has a reading and each of its values never changes over the episode: named once with its
+    value, and given no rows at each instant."""
+    with np.errstate(all="ignore"):
+        return bool(np.isfinite(a).any() and (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all())
 
 
 def _left_out(name: str, a: np.ndarray, m: dict, n_left: int, n_rows: int) -> str:
