@@ -2470,6 +2470,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           rel="noreferrer">ACE-Ego-Hand</a> (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank"
           rel="noreferrer">CC BY-NC 4.0</a>), which uses <a href="https://mano.is.tue.mpg.de/license.html"
           target="_blank" rel="noreferrer">MANO</a>.</div></div>
+        <div class="kp-note off" id="hp-aligned"><div class="kp-note-in"></div></div>
       </div>
     </div>
     <div id="left-col"></div>
@@ -3780,7 +3781,16 @@ function hpDecode(doc) {
     if (!r.done()) throw new Error('bad hand pose data');
     hands[h] = {xy, spans: H.spans};
   }
-  return {n, w: doc.clip.w, h: doc.clip.h, times, edges: doc.edges, hands};
+  return {n, w: doc.clip.w, h: doc.clip.h, times, edges: doc.edges, hands, aligned: doc.aligned || null};
+}
+// The line under the episode's header when the hand keypoints were laid on the clip a frame or two off (board/hands.py
+// align_frames): how many frames each has, and which frames have no hand or were left out. Empty when they line up.
+function hpAlignedText(a) {
+  if (!a || !a.keypoint_frames || !a.clip_frames || a.keypoint_frames === a.clip_frames) return '';
+  const k = a.keypoint_frames, c = a.clip_frames, d = Math.abs(k - c);
+  return `The hand keypoints cover ${k} frames and this video ${c}, so they are drawn from its first frame`
+    + (k < c ? `, and its last ${d === 1 ? 'frame has' : `${d} frames have`} no hand.`
+      : `, and the last keypoint ${d === 1 ? 'frame is' : `${d} frames are`} left out.`);
 }
 function loadHands(file) {
   if (!_hpCache.has(file)) {
@@ -3913,6 +3923,8 @@ function setupHandPose(vid, cell, isEgo, on, file) {
       if (!alive() || file !== _activeFile) return;
       if (!d) { hpBtn.hidden = true; return; }    // no hand pose for this episode after all
       data = d;
+      const al = hpAlignedText(d.aligned), alEl = document.getElementById('hp-aligned');
+      if (alEl) { alEl.querySelector('.kp-note-in').textContent = al; alEl.classList.toggle('off', !al); }
       if (want) set(true);
     });
   }
@@ -4817,6 +4829,7 @@ function renderEp(d, opts) {
   const kp = KP_INDEX && KP_INDEX[_activeFile], kpA = document.getElementById('kp-dl');
   kpA.hidden = !kp;
   document.getElementById('kp-note').classList.toggle('off', !kp);
+  document.getElementById('hp-aligned').classList.add('off');      // until this episode's drawing says otherwise
   if (kp) {
     kpA.href = keypointsDownloadUrl(_activeFile);
     kpA.setAttribute('download', _activeFile.replace(/\.json$/, '') + '.hand_keypoints.json');

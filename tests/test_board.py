@@ -1023,3 +1023,9 @@ def test_an_unreadable_output_is_an_episode_with_a_data_issue_and_the_build_name
     (iss,) = [x for x in d["dataset_checks"]["reader_issues"] if x["family"] == "label-failed"]
     assert iss["kind"] == "label_output_unreadable" and "does not read" in iss["what"]
     assert d["duration_s"] == 10.0
+
+
+def test_the_page_says_when_hand_keypoints_were_laid_a_frame_or_two_off():
+    r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "hand_aligned.js"),
+                        str(REPO / "board" / "serve.py")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
