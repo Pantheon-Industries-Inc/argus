@@ -470,14 +470,14 @@ def _served(resp: dict) -> dict:
             "model_served": resp.get("model"), "system_fingerprint": resp.get("system_fingerprint")}
 
 
-def write_atomic(out_path: Path, result: dict, indent: int = 2) -> None:
+def write_atomic(out_path: Path, result: dict, indent: int = 2, default=None) -> None:
     """Write JSON through a temporary file in the same folder, then replace the file with it, so a kill mid-write never
     leaves a truncated file: a resume would take it for a result, and a context.json cut short would stop everything
     that reads the episode."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(f".{out_path.name}.tmp")
-    tmp.write_text(json.dumps(result, indent=indent))
+    tmp.write_text(json.dumps(result, indent=indent, default=default))
     os.replace(tmp, out_path)
 
 

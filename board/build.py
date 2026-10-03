@@ -15,8 +15,9 @@ episode whose model reply did not parse or was cut off is on the board too, with
 labels, the reply itself, and a data issue saying so (label_failure); a rerun's reply of that kind never replaces a
 label that parsed. So is every episode that got no reply at all (the spend cap reached, a request that could not be
 built), saying why, and on an entry whose run labels every episode of its folder (labels_every_episode) every
-prepared episode the run never reached; and one whose reply the board cannot read, with the reply and the error: one
-episode never stops the build.
+prepared episode the run never reached; one whose reply the board cannot read, with the reply and the error; and one
+whose context.json does not read, with its labels and an issue saying so (context_unreadable): one episode never stops
+the build.
 
 manifest.json. Paths are absolute or relative to the board folder; a run given as RUNS/<dataset>/latest is that
 dataset's newest finished run that is not a dry run (run ids start with their start time).
@@ -777,19 +778,41 @@ def not_shown(r: dict, e: Exception) -> dict:
             "board_error": f"{type(e).__name__}: {e}"[:300], "raw": raw}
 
 
-def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path) -> dict:
-    """One episode's board file: its label (board/to_board.py convert), provenance, context, rules, consistency
-    check and the parts it was stitched from."""
+def read_context(ep_dir: Path) -> tuple[dict, str | None]:
+    """(the episode's context.json, why it does not read): {} and None when it has none, {} and the error when it does
+    not parse as an object (a file cut mid write)."""
+    p = ep_dir / "context.json"
+    if not p.exists():
+        return {}, None
+    try:
+        ctx = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        return {}, f"{type(e).__name__}: {e}"[:300]
+    return (ctx, None) if isinstance(ctx, dict) else ({}, f"it holds {type(ctx).__name__}, not an object")
+
+
+def context_unreadable(why: str) -> dict:
+    """The issue of an episode whose context.json the board could not use (kind context_unreadable): it is shown with
+    its labels, and without what the context gives (its length, checks, the reader's issues and notes)."""
+    return {"kind": "context_unreadable",
+            "what": f"The file of this episode's recorded facts and checks (context.json) does not read ({why}), so "
+                    "its length, checks and the reader's notes are not shown; its labels are shown as the model gave "
+                    "them."}
+
+
+def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path, ctx: dict,
+                 unread: str | None = None) -> dict:
+    """One episode's board file: its label (board/to_board.py convert), provenance, context (ctx, its context.json, or
+    {} with why it did not read in unread), rules, consistency check and the parts it was stitched from."""
     d = convert(r, entry["dataset"])
     d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"], "slice": info.get("slice")}
-    ctx_p = eps / name / "context.json"
-    ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
     if manifest.get("labels_license"):
         d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
     if ctx:
         add_context(d, ctx, eps / name, r)
     else:
-        add_reader_issues(d, {}, r)       # a reply that gave no labels is flagged with or without a context
+        # a reply that gave no labels is flagged with or without a context, beside a context that did not read
+        add_reader_issues(d, {"reader_issues": [context_unreadable(unread)]} if unread else {}, r)
     # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
     apply_rules(d, ctx, entry.get("rules") or [])
     d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))
@@ -803,6 +826,31 @@ def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, in
         d["_meta"] = {**(d.get("_meta") or {}), "episode_id": Path(fname).stem, "run_episode": name}
     carry_pieces(d, r, ctx)
     return normalize_enums(d)
+
+
+def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path) -> dict:
+    """episode_file, which never stops the build. The context is read once (read_context). When the file cannot be
+    built, the context is tried alone, with no reply: one it fails on (a capture record that is not an object) does not
+    read either, and the episode is built with its labels and a context_unreadable issue, so a fault of the context is
+    never blamed on the reply. Otherwise the reply is what the board could not read, and the episode is built with the
+    reply as text and the error (not_shown)."""
+    ctx, unread = read_context(eps / name)
+    try:
+        return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread)
+    except Exception as e:  # noqa: BLE001 - the context or the reply: found below, the build goes on
+        err = e
+    if ctx:
+        try:
+            add_context({}, ctx, eps / name)
+        except Exception as e:  # noqa: BLE001 - the context does not read
+            print(f"board: {fname}: the context could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+            ctx, unread = {}, f"{type(e).__name__}: {e}"[:300]
+            try:
+                return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread)
+            except Exception as e2:  # noqa: BLE001 - the reply does not read either
+                err = e2
+    print(f"board: {fname}: the reply could not be read ({type(err).__name__}: {err})", file=sys.stderr)
+    return episode_file(entry, manifest, fname, name, not_shown(r, err), info, eps, ctx, unread)
 
 
 def build(board: Path) -> dict:
@@ -823,11 +871,7 @@ def build(board: Path) -> dict:
         labels.update(unlabelled(entry, eps, run, labels))
         for fname, (name, src, r, from_run) in sorted(labels.items()):
             info = infos.get(from_run) or infos.setdefault(from_run, json.loads((from_run / "run.json").read_text()))
-            try:
-                d = episode_file(entry, manifest, fname, name, r, info, eps)
-            except Exception as e:  # noqa: BLE001 - shown with its reply and the error, the build goes on
-                print(f"board: {fname}: the reply could not be read ({type(e).__name__}: {e})", file=sys.stderr)
-                d = episode_file(entry, manifest, fname, name, not_shown(r, e), info, eps)
+            d = guarded_episode_file(entry, manifest, fname, name, r, info, eps)
             if (eps / name / "context.json").exists():
                 episodes[fname] = eps / name
             dest = new / fname

@@ -936,7 +936,7 @@ READER_ISSUE_KINDS = {
                   "no_part_labelled", "model_no_reply", "model_reply_not_shown", "model_reply_off_schema",
                   "model_reply_fields_dropped"],
     "handling": ["table_downsampled", "signal_summarised", "camera_not_colour", "depth_clip_failed",
-                 "camera_offset"],
+                 "camera_offset", "context_unreadable"],
 }
 
 
@@ -1243,6 +1243,71 @@ def test_an_episode_the_board_cannot_read_is_kept_with_its_reply_and_the_error(t
     assert any(x["kind"] == "model_reply_not_shown" for x in bad["dataset_checks"]["reader_issues"])
     good = json.loads((board / "qa" / "episode_000000.json").read_text())
     assert "_label_failed" not in good and good["completion"]["task_completed"] == "success"
+
+
+def test_an_episode_whose_context_does_not_read_keeps_its_labels_and_never_stops_the_build(tmp_path):
+    """A context.json cut mid write, or one whose capture record is not an object, stopped the whole board, and the
+    fallback blamed the model's reply. The context is read once; one the board cannot use leaves its episode with its
+    labels and an issue saying the episode's details did not read and why, the reply is not blamed, and every other
+    episode is built as usual."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = tmp_path / "episodes" / "demo"
+    contexts = {"episode_000000": '{"fps": 30, "cut',
+                "episode_000001": json.dumps({"profile": "teleop_arms", "fps": 30, "n_state_frames": 300,
+                                              "capture_qc": ["not an object"]}),
+                "episode_000002": json.dumps({"profile": "teleop_arms", "fps": 30, "n_state_frames": 300})}
+    for name, text in contexts.items():
+        (eps / name).mkdir(parents=True)
+        (eps / name / "context.json").write_text(text)
+        out = _output(name)
+        out["episode_dir"] = str(eps / name)
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    for name, error in (("episode_000000", "JSONDecodeError"), ("episode_000001", "AttributeError")):
+        d = json.loads((board / "qa" / f"{name}.json").read_text())
+        assert "_label_failed" not in d and d["completion"]["task_completed"] == "success", d
+        (iss,) = d["dataset_checks"]["reader_issues"]
+        assert iss["kind"] == "context_unreadable" and error in iss["what"], iss
+        assert iss["family"] == "context-unreadable" and Families().list_of(iss["family"]) == "handling"
+    ok = json.loads((board / "qa" / "episode_000002.json").read_text())
+    assert ok["duration_s"] == 10.0 and not (ok.get("dataset_checks") or {}).get("reader_issues")
+
+
+def test_the_checks_write_a_context_whole_or_not_at_all(tmp_path, monkeypatch):
+    """The capture checks, stream pairing and the sensor checks rewrote context.json in place, so a write stopped part
+    way (the process killed) left a file cut mid write, which then stopped everything that reads the episode. Each
+    writes a temporary file beside it and replaces context.json with it, so a stopped write leaves the context as it
+    was."""
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+    from checks import capture_qc, sensors, stream_pairing
+    ep = tmp_path / "eps" / "episode_000000"
+    ep.mkdir(parents=True)
+    before = json.dumps({"fps": 30, "profile": "teleop_arms"})
+    (ep / "context.json").write_text(before)
+    real = Path.write_text
+
+    def stops(self, text, *a, **k):
+        real(self, text[: len(text) // 2], *a, **k)
+        raise KeyboardInterrupt("killed mid write")
+    for mod, argv in ((capture_qc, ["--force"]), (stream_pairing, ["--force"]), (stream_pairing, ["--jumps"]),
+                      (sensors, ["--force"])):
+        monkeypatch.setattr(mod, "ProcessPoolExecutor", ThreadPoolExecutor)
+        monkeypatch.setattr(sys, "argv", ["main", *argv, str(tmp_path / "eps")])
+        monkeypatch.setattr(Path, "write_text", stops)
+        try:
+            mod.main()
+        except KeyboardInterrupt:
+            pass
+        monkeypatch.setattr(Path, "write_text", real)
+        assert (ep / "context.json").read_text() == before, mod.__name__
 
 
 def test_steps_past_the_episode_end_are_kept_and_flagged(tmp_path):

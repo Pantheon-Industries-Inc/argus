@@ -238,6 +238,7 @@ def measure_folder(eps: Path) -> int:
     joint state and leader actions, and an episode gets a neighbour lag only when at least 3 episodes of its run fall
     in the window (itself and two more), so a lone episode is measured, never flagged. Returns how many episodes
     got one; every episode also records how many neighbours it had (timebase_neighbours_in_upload)."""
+    from label.harness import write_atomic
     rows = []
     for d in sorted(Path(eps).glob("episode_*")):
         ctx = json.loads((d / "context.json").read_text())
@@ -272,7 +273,7 @@ def measure_folder(eps: Path) -> int:
         else:
             ctx.pop("timebase_neighbour_lag_frames", None)
         ctx["timebase_neighbours_in_upload"] = len(near)
-        p.write_text(json.dumps(ctx, indent=1, default=str))
+        write_atomic(p, ctx, indent=1, default=str)
     return n
 
 

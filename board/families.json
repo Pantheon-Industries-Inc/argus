@@ -143,6 +143,14 @@
    ]
   },
   {
+   "slug": "context-unreadable",
+   "list": "handling",
+   "name": "Episode details file does not read",
+   "reader_issues": [
+    "context_unreadable"
+   ]
+  },
+  {
    "slug": "out-of-view",
    "list": "data",
    "name": "Task object leaves every camera",

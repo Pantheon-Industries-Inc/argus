@@ -41,6 +41,7 @@ import numpy as np
 from label import episode as me
 from label import frames as mf
 from label import state as ms
+from label.harness import write_atomic
 
 SMALL_W = 64          # image change is measured on a 64-px-wide grey copy of each frame
 
@@ -339,7 +340,7 @@ def main():
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx[key] = r
-            p.write_text(json.dumps(ctx, indent=1))
+            write_atomic(p, ctx, indent=1)
             if r and r.get(field):
                 found += 1
                 print(f"{key.upper()} {Path(d).name} {r}", flush=True)

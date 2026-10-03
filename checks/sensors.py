@@ -43,6 +43,7 @@ import numpy as np
 from label import depth as dp
 from label import episode as me
 from label import signals as sg
+from label.harness import write_atomic
 
 NO_READING_SHARE = 0.2
 PINNED_SHARE = 0.1
@@ -330,7 +331,7 @@ def main():
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx["sensor_checks"] = r
-            p.write_text(json.dumps(ctx, indent=1))
+            write_atomic(p, ctx, indent=1)
             if r and r["notes"]:
                 fired += 1
                 print(f"SENSORS {Path(d).name}: " + "; ".join(n["evidence"] for n in r["notes"][:4]), flush=True)
