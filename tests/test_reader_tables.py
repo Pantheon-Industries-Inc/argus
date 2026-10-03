@@ -1150,3 +1150,29 @@ def test_a_numeric_column_starting_after_the_first_chunk_is_kept(tmp_path, monke
     monkeypatch.setattr(f, "TABLE_CHUNK_ROWS", 2)
     df, text, _, _ = f.read_number_table(p)
     assert "force" in df and np.isnan(df["force"].iloc[:2]).all() and text == []
+
+
+@pytest.mark.parametrize("step", [0.1, 1.0])
+def test_coarse_row_clocks_keep_signals_without_claiming_precise_state_or_false_gaps(tmp_path, step):
+    import h5py
+    def change(d):
+        for p in d.glob("*.mcap"):
+            p.unlink()
+        t = T0 + np.arange(66) / 30
+        with h5py.File(d / "robot.h5", "w") as h:
+            h["qpos"] = np.tile(np.arange(66)[:, None], (1, 14)).astype(float)
+            h["timestamp"] = T0 + np.floor((t - T0 + 1e-5) / step) * step
+    ctx = _recorder(tmp_path, change)
+    assert ctx["state_kind"] == "none" and ctx["state_why"] == "assumed_clock"
+    assert "coarse" in ctx["state_note"] and _issues(ctx, "signal_clock_coarse")
+    assert "qpos" in _signal_names(ctx)
+    assert not _issues(ctx, "signal_gap") and not _issues(ctx, "signal_partial_span")
+    assert all(s.get("aligned_by") == "coarse clock" for s in ctx["signals"] if "qpos" in s["name"])
+
+
+def test_a_coarse_table_clock_names_its_uncertainty_without_false_gaps(tmp_path):
+    p = tmp_path / "traj.csv"
+    pd.DataFrame({"timestamp": T0 + np.floor(np.arange(66) / 30), "x": np.sin(np.arange(66))}).to_csv(p, index=False)
+    out = f.table_signals([p], T0 + np.arange(60) / 30, _anchor(60), {})
+    assert out.meta["traj"]["aligned_by"] == "coarse clock" and _issues(out, "signal_clock_coarse")
+    assert np.isfinite(out["traj"]).all()

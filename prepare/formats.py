@@ -1286,8 +1286,9 @@ def short_rising(values) -> bool:
 
 def is_named_clock(name, values) -> bool:
     """Whether a column is a clock: its name says time (is_time_name) and it rises like one (is_clock), or, with too
-    few readings to judge, never falls and rises (a slow sensor's own stamp at 1.7 Hz)."""
-    return is_time_name(name) and (is_clock(values) or short_rising(values))
+    few readings to judge, never falls and rises (a slow sensor's own stamp at 1.7 Hz). Repeated stamps in a
+    monotonic row clock are coarse timing (coarse_rows), still a clock rather than a numeric signal."""
+    return is_time_name(name) and (is_clock(values) or short_rising(values) or coarse_rows(values)[1] is not None)
 
 
 COUNTER_NOTE = "counts rows one by one, so it is bookkeeping"
@@ -2379,11 +2380,15 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
         parts = name_parts(p.stem)
         name = parts["cam"] or p.stem
         v = vals.to_numpy(dtype=np.float64)
-        t = timed = None
+        t = timed = coarse = None
         if tcol is not None:
             raw = num[tcol].to_numpy(dtype=np.float64)
             timed = np.isfinite(raw)
             t = table_seconds(raw[timed], real_anchor, t_vid) if timed.sum() > 1 else None
+            if t is not None:
+                t, coarse = coarse_rows(t)
+                if coarse is not None:
+                    out.issues.append(coarse_issue(name, coarse))
         # recorded timing only when both are on a recorder's clock, as split_sensors places a sensor file: capture times
         # and a time column that both count from 0 overlap whatever they are (a frame count read as 1 Hz)
         on_clock = (t is not None and real_anchor is not None and recorder_clock(real_anchor) and recorder_clock(t)
@@ -2441,6 +2446,8 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             names = [names[j] for j in keep]
         a = np.where(np.isfinite(a), a, np.nan)
         out.add(name, a, names=names, source=f"table {p.name}")
+        if coarse is not None:
+            out.meta[name]["aligned_by"] = COARSE_CLOCK
         if gaps:
             out.meta[name]["gaps"] = gaps
         if rate:
@@ -3723,7 +3730,8 @@ def _clock_facts(a: np.ndarray) -> tuple[np.ndarray, float, float]:
     """(finite values, median step, size) of a clock. Its size is the median of its finite values, so a 0 a recorder
     writes before its first stamp does not decide it. Its step is the median between distinct times: a file whose
     channels are written at the same instants (an arm's joints and its health, each stamped alike) repeats every
-    time, so half its steps are 0 and their median had been 0, as if it had no clock at all."""
+    time, so half its steps are 0 and their median had been 0, as if it had no clock at all. This says the unit,
+    never a row stream's timing precision; tied rows are judged separately (coarse_rows)."""
     ok = np.asarray(a, dtype=np.float64).ravel()
     ok = ok[np.isfinite(ok)]
     steps = np.diff(ok)
@@ -3732,6 +3740,34 @@ def _clock_facts(a: np.ndarray) -> tuple[np.ndarray, float, float]:
     size = abs(float(np.median(ok))) if len(ok) else 0.0
     return ok, step, size
 
+
+
+COARSE_CLOCK = "coarse clock"   # tied rows are placed within their stamp interval, which is assumed timing
+
+
+def coarse_rows(t: np.ndarray) -> tuple[np.ndarray, float | None]:
+    """Times for a single row stream, and its coarse resolution when adjacent rows share a rising stamp. Repeated
+    MCAP channel log times are not row times and never call this rule. Tied rows keep order within the interval to
+    the next stamp, evenly spaced as an assumption; the last interval uses the median distinct step. This preserves
+    readings without inventing precise recorded instants or treating a coarse second as a gap with no rows."""
+    t = np.asarray(t, dtype=np.float64)
+    d = np.diff(t)
+    if len(t) < 2 or not np.isfinite(t).all() or not (d >= 0).all() or not (d == 0).any() or not (d > 0).any():
+        return t, None
+    resolution = float(np.median(d[d > 0]))
+    starts = np.r_[0, np.flatnonzero(d > 0) + 1]
+    out = t.copy()
+    for a, b in zip(starts, np.r_[starts[1:], len(t)]):
+        width = float(t[b] - t[a]) if b < len(t) else resolution
+        out[a:b] = t[a] + np.arange(b - a) * width / (b - a)
+    return out, resolution
+
+
+def coarse_issue(name: str, resolution: float) -> dict:
+    """A row clock's recorded uncertainty, visible beside the assumed timing of its retained readings."""
+    return {"kind": "signal_clock_coarse", "signal": name,
+            "what": f"{name} has rows sharing coarse clock stamps about {resolution:g} s apart; tied rows were "
+                    "spread in order within each stamp interval, an assumed alignment, never precise arm state"}
 
 def _epoch_scale(a: np.ndarray) -> float | None:
     """The unit a clock's size settles: a clock that counts from the epoch says its unit by its size (only nanoseconds
@@ -3785,7 +3821,8 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
     - A clock or a reference that starts near zero says nothing about its unit by its start, so a sampled stream (at
       least COUNTER_MIN_MESSAGES finite values) takes the unit that puts its span within SPAN_MATCH of the
       reference's. A few event stamps are not a stream and need not span the episode, so they keep their own reading.
-    - Otherwise, and when it has fewer than two finite values, a clock keeps its own _seconds_scale.
+    - A clock stuck at one value can share the reference's unit by its size, but gives no row timing. Otherwise,
+      and when it has fewer than two finite values, a clock keeps its own _seconds_scale.
     The reference is the camera's clock (reference). Without one, the clock with the largest step is a guess, so it is
     used only when its size settles its unit (_epoch_scale), and otherwise every clock keeps its own reading. A
     reference that does not step forward (one value, or stuck at one) says nothing about units, so then too every
@@ -4233,7 +4270,9 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
                 names = value_names(stated, a.shape[1])
                 break
         if s["clock"]:
-            t = streams["clock"][s["clock"]]
+            t, coarse = coarse_rows(streams["clock"][s["clock"]])
+            if coarse is not None:
+                out.issues.append(coarse_issue(s["name"], coarse))
             if span <= 0 or len(t) < 2:
                 continue
             if not overlaps(t, q):
@@ -4256,6 +4295,8 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             out.left_out.append((s["name"], f"{len(a)} rows and no clock, while the camera has {n_anchor} frames"))
             continue
         out.add(s["name"], v, shape=shape if len(shape) > 1 else None, names=names, source=f"HDF5 dataset {s['path']}")
+        if s["clock"] and coarse is not None:
+            out.meta[s["name"]]["aligned_by"] = COARSE_CLOCK
         if summarised:
             out.meta[s["name"]]["summary_of"] = summarised
             out.issues.append(summary_issue(s["name"], summarised))
@@ -4340,6 +4381,11 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             fail(name, f"Labelled from the video, because the recorded state {name} could not be placed on the "
                          f"camera's frames ({left_out[name]}).",
                  "short" if left_out[name].endswith(OUTSIDE_FOOTAGE) else "layout")
+            continue
+        if (meta.get(name) or {}).get("aligned_by") == COARSE_CLOCK:
+            fail(name, f"Labelled from the video, because {name} has coarse clock stamps shared by several rows; "
+                       "their timing within each stamp interval is assumed, so it is given as a signal.",
+                 "assumed_clock")
             continue
         a = np.asarray(signals[name], dtype=np.float64)
         names = (meta.get(name) or {}).get("names")
