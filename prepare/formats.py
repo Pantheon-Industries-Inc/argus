@@ -1622,7 +1622,7 @@ class DepthWriter:
 # moves the clock (board/clips.py reanchor, when the camera the clock was measured from is taken out) moves every one of
 # them, so a reader that writes a new timed field registers it here, where the context is written.
 CLOCK_TIME_KEYS = {"annotation_subtasks": ("t0", "t1"), "contacts": ("start_s", "end_s", "peak_s"),
-                   "reader_issues": ("t0_s", "t1_s")}
+                   "reader_issues": ("t0_s", "t1_s"), "unshown_cameras": ("start_s",)}
 
 
 def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None,

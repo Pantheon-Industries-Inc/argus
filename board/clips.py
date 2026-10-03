@@ -948,18 +948,23 @@ def main() -> int:
             # every camera left is cut again: the camera that is main now was cut as a side camera and is cut at the
             # main camera's size, and the episode's clock may have moved to the earliest camera left (reanchor), so
             # every clip is timed on it (start_offsets); each camera's frames are recorded as they come out
-            redo, again = {}, set()
+            # the cameras the model is not shown too, at their start on the moved clock (CLOCK_TIME_KEYS)
+            redo, again, u_cut, u_broken = {}, set(), set(), {}
             for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in episode_jobs(d, args.out, True, args.name_prefix):
-                if cam.startswith(UNSHOWN):
-                    continue            # cut above, at its own start, which the main camera does not move
                 try:
                     counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip)
+                    if cam.startswith(UNSHOWN):
+                        u_cut.add(cam)
+                        continue
                     again.add(cam)
                     if counts:
                         redo[cam] = counts
                 except Exception as e:
+                    if cam.startswith(UNSHOWN):
+                        u_broken[cam] = str(e)[:400]
                     sys.stderr.write(f"clip FAIL {o} cut again after the main camera went: {str(e)[:160]}\n")
             record_cameras(d, redo, {}, again)
+            record_unshown(d, u_cut, u_broken)
     # the depth clips, after the colour clips they are timed against; one that comes out imperfect is kept, and one
     # that cannot be cut is left out (the page then offers no depth for that camera), never costing the episode; either
     # is recorded on the episode as a reader issue (record_depth), which the board shows

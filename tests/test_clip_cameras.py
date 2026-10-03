@@ -460,3 +460,22 @@ def test_a_camera_the_model_is_not_shown_reaches_the_board_named_with_why(tmp_pa
     r = subprocess.run(["node", str(REPO / "tests" / "unshown_cameras.js"), str(REPO / "board" / "serve.py")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_camera_the_model_is_not_shown_moves_with_the_clock(tmp_path):
+    """The main camera is taken out and the clock moves to the earliest camera left, 2 s later: a camera the model is
+    not shown starts 2 s earlier on the new clock, and its clip is cut at that start."""
+    d = tmp_path / "episode_000000"
+    d.mkdir()
+    t = {"exo": np.arange(0, 10, 1 / 30), "left": np.arange(2, 12, 1 / 30)}
+    np.savez(d / "times.npz", **t)
+    ctx = {"fps": 30, "state_kind": "none", "real_times": "times.npz",
+           "unshown_cameras": [{"name": "ir", "why": "infrared", "packed": str(tmp_path / "ir.mp4"), "base_s": 0.0,
+                                "n_frames": 300, "start_s": 5.0, "fps": 30}]}
+    left = {"packed": str(tmp_path / "b.mp4"), "base_s": 0, "n_frames": 300}
+    (d / "sources.json").write_text(json.dumps({"left": left}))
+    clips.reanchor(d, ctx, {"left": left}, t, "exo", "left", "top camera")
+    assert ctx["unshown_cameras"][0]["start_s"] == 3.0
+    (d / "context.json").write_text(json.dumps(ctx))
+    (job,) = [j for j in clips.episode_jobs(d, tmp_path / "clips", True) if j[-1] == "unshown1"]
+    assert job[6] == 3.0
