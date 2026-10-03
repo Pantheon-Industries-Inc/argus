@@ -453,3 +453,26 @@ def test_a_wide_float32_signal_is_drawn_without_a_whole_float64_copy(tmp_path):
     assert peak <= 3 * wide.nbytes, peak / wide.nbytes
     skin = next(s for s in doc["signals"] if s["name"] == "skin pressure")
     assert skin["constant"] is False and "activity" in skin
+
+
+def test_a_signal_with_no_reading_at_any_frame_is_named_as_such_not_as_constant(tmp_path):
+    """A signal with no reading at any frame was listed under "Constant through this episode", which is false: it
+    never read anything. Its entry says no_reading, the index counts it apart, and the page names it as having no
+    reading, as the no_reading check does; a constant signal is still listed as constant."""
+    ep = _episode(tmp_path)
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.full((300, 3), np.nan, np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"].append({"name": "glove", "key": "s3", "dims": 3})
+    (ep / "context.json").write_text(json.dumps(ctx))
+    doc = sensors.episode_doc(ep)
+    by = {s["name"]: s for s in doc["signals"]}
+    assert by["glove"]["no_reading"] is True and "constant" not in by["glove"]
+    assert by["health"]["constant"] is True and "no_reading" not in by["health"]
+    assert sensors.summary(doc) == {"signals": 2, "constant": 1, "no_reading": 1, "depth": []}
+    import subprocess
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("sensor_lanes.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

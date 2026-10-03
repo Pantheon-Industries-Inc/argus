@@ -20,7 +20,8 @@ const piece = (name) => {
   }
   return src.slice(a, i + 1) + '\n';
 };
-const T = new Function(piece('esc') + piece('snWhat') + piece('snErrorsHtml') + 'return {snWhat, snErrorsHtml};')();
+const T = new Function('const snNum = v => String(v);' + piece('esc') + piece('snWhat') + piece('snErrorsHtml')
+  + piece('snStillHtml') + 'return {snWhat, snErrorsHtml, snStillHtml};')();
 
 let bad = 0;
 const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };
@@ -32,4 +33,10 @@ check(T.snErrorsHtml([]) === '' && T.snErrorsHtml(undefined) === '', 'no error, 
 const h = T.snErrorsHtml([{name: 'pressure <map>', error: 'ValueError: boom'}, {name: 'glove', error: 'KeyError: x'}]);
 check(h.includes('pressure &lt;map&gt;') && h.includes('ValueError: boom') && h.includes('glove')
   && h.includes('could not be drawn'), 'each signal the board could not draw is named with the reason');
+// a signal that never changes is listed as constant, and one with no reading at any frame as having no reading, never
+// as constant (board/sensors.py signal_doc)
+const st = T.snStillHtml({constant: [{name: 'health', dims: 1, value: [1]}], none: [{name: 'glove <l>', dims: 3}]});
+check(st.includes('Constant through this episode: health (1).') && st.includes('No reading at any frame: glove &lt;l&gt; '
+  + '(3 values).') && !/Constant[^<]*glove/.test(st), 'a signal with no reading is named as such, not as constant');
+check(T.snStillHtml({constant: [], none: []}) === '', 'nothing still, nothing drawn');
 process.exit(bad ? 1 : 0);

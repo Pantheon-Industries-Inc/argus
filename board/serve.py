@@ -4070,7 +4070,8 @@ function snBlock(blk, rows, bits) {
   return {dims, v};
 }
 function snDecode(doc) {
-  const out = {depth: doc.depth || {}, signals: [], constant: [], t: new Float64Array(0), errors: doc.errors || []};
+  const out = {depth: doc.depth || {}, signals: [], constant: [], none: [], t: new Float64Array(0),
+    errors: doc.errors || []};
   if (!doc.signals || !doc.frames) return out;
   const n = doc.n, stride = doc.stride || 1, ft = new Float64Array(doc.frames), tr = hpReader(doc.times.d);
   let ms = doc.times.ms0;
@@ -4079,6 +4080,7 @@ function snDecode(doc) {
   out.t = new Float64Array(n);
   for (let i = 0; i < n; i++) out.t[i] = ft[Math.min(doc.frames - 1, i * stride)];
   for (const s of doc.signals) {
+    if (s.no_reading) { out.none.push(s); continue; }
     if (s.constant) { out.constant.push(s); continue; }
     const g = Object.assign({}, s);
     if (s.values) g.vals = snBlock(s.values, n, 16);
@@ -4295,6 +4297,15 @@ function snMapDraw(m, i, ink) {
   m.now.textContent = none ? 'No reading at the playhead' : active ? `Row ${Math.floor(bi / cols) + 1}, column `
     + `${bi % cols + 1} is the strongest, ${snNum(best)} ${snAway(s.direction)} rest` : 'At rest';
 }
+// the signals with no lane, by name: those whose every value is the same at every frame, and those with no reading at
+// any frame (board/sensors.py signal_doc no_reading), which never read anything and so are no constant
+function snStillHtml(D) {
+  const size = s => `${s.shape && s.shape.length > 1 ? s.shape.join(' x ') : s.dims} values`;
+  return (D.constant.length ? `<div class="sn-note">Constant through this episode: ${D.constant.map(s =>
+      `${esc(s.name)} (${s.dims > 4 || !s.value ? size(s) : s.value.map(snNum).join(', ')})`).join(', ')}.</div>` : '')
+    + (D.none.length ? `<div class="sn-note">No reading at any frame: ${D.none.map(s =>
+      `${esc(s.name)} (${size(s)})`).join(', ')}.</div>` : '');
+}
 // lay out the panel for the episode renderEp just drew, and wire it to the playhead (its listeners go with the render).
 // On an episode with contacts the Touch lane above shows what matters, so the signals start folded away.
 function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts) {
@@ -4305,10 +4316,12 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
     if (!D || !document.body.contains(slot) || file !== _activeFile) return;
     const sigs = D.signals, maps = sigs.filter(s => s.map && s.shape && s.shape.length === 2);
     const nDepth = Object.keys(D.depth || {}).length;
-    if (!sigs.length && !D.constant.length && !nDepth && !(D.errors || []).length) return;
+    const still = D.constant.length + D.none.length;
+    if (!sigs.length && !still && !nDepth && !(D.errors || []).length) return;
     const counts = [];
-    if (sigs.length || D.constant.length) counts.push(`${sigs.length} ${sigs.length === 1 ? 'signal changes'
-      : 'signals change'}${D.constant.length ? `, ${D.constant.length} constant` : ''}`);
+    if (sigs.length || still) counts.push(`${sigs.length} ${sigs.length === 1 ? 'signal changes'
+      : 'signals change'}${D.constant.length ? `, ${D.constant.length} constant` : ''}${D.none.length
+      ? `, ${D.none.length} with no reading` : ''}`);
     if (nDepth) counts.push(`depth on ${nDepth} ${nDepth === 1 ? 'camera' : 'cameras'}`);
     const lane = (s, i) => `<div class="lane sn-lane">
         <div class="lane-head"><span class="lane-title">${esc(s.name)} <span class="lane-sum">${esc(snWhat(s))}`
@@ -4317,16 +4330,13 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
       </div>`;
     const first = sigs.slice(0, SN_FIRST).map(lane).join('');
     const more = sigs.slice(SN_FIRST).map((s, j) => lane(s, j + SN_FIRST)).join('');
-    const constHtml = D.constant.length ? `<div class="sn-note">Constant through this episode: ${D.constant.map(s =>
-      `${esc(s.name)} (${s.dims > 4 || !s.value ? `${s.shape && s.shape.length > 1 ? s.shape.join(' x ')
-        : s.dims} values` : s.value.map(snNum).join(', ')})`).join(', ')}.</div>` : '';
     const signalsHtml = `${maps.length ? `<div class="sn-maps">${maps.map((s) => snMapHtml(s, sigs.indexOf(s)))
         .join('')}</div>` : ''}
         ${first}
         ${more ? `<div class="ck-all"><div class="ck-all-in">${more}</div></div><button class="ck-more sn-more" `
           + `type="button">${SN_OPEN ? 'Hide the other signals' : `Show all ${sigs.length} signals`}</button>` : ''}
-        ${constHtml}${snErrorsHtml(D.errors)}`;
-    const fold = !!hasContacts && (sigs.length > 0 || D.constant.length > 0);
+        ${snStillHtml(D)}${snErrorsHtml(D.errors)}`;
+    const fold = !!hasContacts && (sigs.length > 0 || still > 0);
     const shown = !fold || SN_SHOWN;
     const foldWord = on_ => on_ ? 'Hide the recorded signals' : `Show all recorded signals`;
     slot.innerHTML = `<h3 class="section sn-h">All recorded signals <span class="count">${counts.join(', ')}</span></h3>

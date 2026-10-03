@@ -33,8 +33,9 @@ A signal: "name", "dims", and when the dataset gives them "shape" ([16, 16]), "n
 (prepare/formats.py mark_assumed), which the page says in its lane. Each signal keeps its own length: one that ends
 before the others has no reading after its last row, and a gap or a stretch before a signal starts is no reading, which
 the page draws as a gap. A signal that cannot be drawn is left out and named in the file's "errors" ([{"name",
-"error"}]), and the page names it under the lanes it drew. "constant": true when no value ever changes (its "value" is
-the first row, or null with no reading); the page lists those by name. Otherwise "rests_and_rises" and "touch"
+"error"}]), and the page names it under the lanes it drew. "no_reading": true when it has no reading at any frame, and
+"constant": true when no value ever changes (its "value" is the first row, or null when no row reads in full); the page
+lists both by name, each under its own words. Otherwise "rests_and_rises" and "touch"
 (label/signals.py; touch is is_touch, by the signal's name and its numbers), "direction" ("up", "down" or null), "spans"
 ([[start s, end s], ...] on the clip clock, from every frame, for a signal that rests and rises or is touch), for a
 signal that times one of the episode's contacts (context.json "contacts") its "strength" ({"lo", "step", "data"}, one
@@ -224,8 +225,11 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         if meta.get(k) is not None:
             doc[k] = meta[k]
     fin = np.isfinite(a)
+    if not fin.any():
+        doc["no_reading"] = True       # it never read anything, so it is no constant (checks/sensors.py no_reading)
+        return doc
     lo, hi = _range(a)
-    if not fin.any() or bool((hi[fin.any(axis=0)] == lo[fin.any(axis=0)]).all() and fin.any(axis=0).all()):
+    if bool((hi[fin.any(axis=0)] == lo[fin.any(axis=0)]).all() and fin.any(axis=0).all()):
         first = next((r for r in a if np.isfinite(r).all()), None)
         doc["constant"] = True
         doc["value"] = None if first is None else [float(x) for x in first[:16]]
@@ -337,9 +341,12 @@ def episode_doc(ep_dir: Path) -> dict | None:
 
 
 def summary(doc: dict) -> dict:
-    """The index entry of one file: how many of its signals change, and the cameras with depth."""
-    return {"signals": sum(1 for s in doc.get("signals") or [] if not s.get("constant")),
-            "constant": sum(1 for s in doc.get("signals") or [] if s.get("constant")),
+    """The index entry of one file: how many of its signals change, are constant and have no reading at any frame
+    (counted only when there is one), and the cameras with depth."""
+    sigs = doc.get("signals") or []
+    none = sum(1 for s in sigs if s.get("no_reading"))
+    return {"signals": sum(1 for s in sigs if not s.get("constant") and not s.get("no_reading")),
+            "constant": sum(1 for s in sigs if s.get("constant")), **({"no_reading": none} if none else {}),
             "depth": sorted(doc.get("depth") or {})}
 
 
