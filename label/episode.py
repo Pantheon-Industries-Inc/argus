@@ -174,6 +174,13 @@ def frame_time(ep: dict, k: int) -> float:
     return k / ep_fps(ep)
 
 
+def seconds(t: float) -> str:
+    """A time as the prompt says it, to the hundredth of a second. A recorder's clock can put a frame a hair before
+    the episode's zero, and that instant is said as 0.00 s, never as -0.00 s, which reads as a time before the
+    episode."""
+    return f"{round(float(t), 2) + 0.0:.2f} s"
+
+
 def describe_spans(ep: dict, spans) -> list[dict]:
     last = len(ep["state"]) - 1
     return [{"start_s": round(frame_time(ep, a), 2), "end_s": round(frame_time(ep, min(b, last)), 2)} for a, b in spans]
@@ -531,7 +538,7 @@ def decode_failures(ep: dict) -> list[dict]:
         if v in (ep.get("undecodable") or ()):
             what = f"The {name} video could not be decoded, so the labels have no frame of it."
         else:
-            when = f"at {t0:.2f} s" if t0 == t1 else f"from {t0:.2f} s to {t1:.2f} s"
+            when = f"at {seconds(t0)}" if t0 == t1 else f"from {seconds(t0)} to {seconds(t1)}"
             what = f"The {name} video could not be decoded {when}, so the labels have no frame of it there."
         out.append({"camera": v, "t0_s": t0, "t1_s": t1, "what": what})
     return out
@@ -922,7 +929,7 @@ def _coverage_note(ep: dict, pl: dict) -> str:
     each is said. When every camera's file ends before the episode does, the last instant is the last frame they have
     (frames, ep["footage_end"]), which is said too."""
     starts, ended, broken, never = [], [], [], []
-    at = lambda ks: ", ".join(f"{frame_time(ep, k):.2f} s" for k in sorted(ks))
+    at = lambda ks: ", ".join(seconds(frame_time(ep, k)) for k in sorted(ks))
     for v in views(ep):
         if all(recording_at(ep, v, k) for k in pl["ks"]):
             continue
@@ -955,7 +962,7 @@ def _coverage_note(ep: dict, pl: dict) -> str:
         out += " " + s[0].upper() + s[1:] + ". " + tail.format(**words)
     if ep.get("footage_end") is not None:
         out += (" Every camera's video ends before the episode does, so the last instant is the last frame they have, "
-                f"at {frame_time(ep, ep['footage_end']):.2f} s.")
+                f"at {seconds(frame_time(ep, ep['footage_end']))}.")
     return out
 
 
@@ -1303,8 +1310,9 @@ def _motion_table(ep: dict, pl: dict) -> str:
         "depends on the lens, the distance to the scene and the direction of travel. Likewise never compare "
         "how open the fingers look with the gripper number: its scale is not a picture of how wide the "
         "fingers look, so only the timing of a change can be compared with the video.\n"
-        + (f"The recorded state covers only {frame_time(ep, sa):.2f} s to {frame_time(ep, sb - 1):.2f} s of the "
-           "episode, so the rows stop there and nothing is recorded outside it.\n" if (sa, sb) != (0, len(st)) else "")
+        + (f"The recorded state covers only {seconds(frame_time(ep, sa))} to {seconds(frame_time(ep, sb - 1))} of "
+           "the episode, so the rows stop there and nothing is recorded outside it.\n"
+           if (sa, sb) != (0, len(st)) else "")
         + "\n".join(rows))
 
 

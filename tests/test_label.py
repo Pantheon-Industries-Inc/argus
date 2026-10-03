@@ -895,6 +895,21 @@ def test_a_camera_that_starts_late_is_not_shown_before_its_first_frame():
     assert "Right's video starts after the episode does, so it has no frame at 0.00 s, 1.00 s" in me._coverage_note(ep, {"ks": ks})
 
 
+def test_an_instant_a_hair_before_the_episode_start_is_said_as_zero_seconds_never_minus_zero():
+    """A recorder's clock can put the main camera's first frame a fraction of a millisecond before the episode's zero
+    (-0.0004 s). The prompt says that instant as 0.00 s; "-0.00 s" reads as a time before the episode."""
+    left = np.arange(0, 6, 1 / 30) - 0.0004
+    right = np.arange(2.03, 6, 1 / 30)
+    from prepare import formats
+    ep = {"context": {"fps": 30, "cameras": {"left": {"name": "left"}, "right": {"name": "right"}}},
+          "sources": {"left": {}, "right": {}}, "times": {"left": left, "right": right},
+          "kmap": {"right": formats.nearest(right, left)}, "footage_end": 0}
+    note = me._coverage_note(ep, {"ks": [0, 30, 60, 90, 120]})
+    assert "no frame at 0.00 s, 1.00 s" in note
+    assert "the last frame they have, at 0.00 s." in note
+    assert "-0.00" not in note
+
+
 def test_the_prompt_gives_each_cameras_own_cell_size_when_they_differ():
     """Rexair: a portrait scene camera (480x640) above two 640x480 wrist cameras. The cells are 448x598 and 448x336."""
     from label import state as ms
