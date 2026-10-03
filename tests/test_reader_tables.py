@@ -325,6 +325,41 @@ def test_a_column_of_codes_written_as_numbers_and_words_is_not_a_signal(tmp_path
                   "force": np.arange(n) * 0.5}).to_csv(tmp_path / "traj.csv", index=False)
     out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
     assert out.meta["traj"]["names"] == ["force"] and not _issues(out, "signal_bad_cells")
+    # named, never dropped without a word
+    assert dict(out.left_out)["phase in traj.csv"].startswith("20 of its 60 filled cells are not numbers")
+
+
+@pytest.mark.parametrize("mark", ["-", "ERR"])
+def test_a_reading_with_one_repeated_mark_where_it_dropped_out_is_read_as_numbers(tmp_path, mark):
+    n = 90
+    x = np.sin(np.arange(n) / 10)
+    p = tmp_path / "ft.csv"
+    p.write_text("time,force,torque\n" + "".join(f"{i / 30:.4f},{mark if i % 7 == 0 else f'{x[i]:.4f}'},"
+                                                f"{x[i] * 2:.4f}\n" for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out.meta["ft"]["names"] == ["force", "torque"] and np.isnan(out["ft"][7, 0])
+    bad = _issues(out, "signal_bad_cells")
+    assert len(bad) == 1 and "force has 13 of 90" in bad[0]["what"]
+
+
+def test_a_semicolon_table_with_thousands_dots_reads_as_numbers(tmp_path):
+    n = 50
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force\n" + "".join(f"{i / 30:.4f}".replace(".", ",") + f";1.{200 + 3 * i:03d},5\n"
+                                         for i in range(n)))
+    assert f.table_format(p) == (";", ",", ".")
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out["traj"][10, 0] == 1230.5 and not f._table_has_text(p)
+
+
+def test_a_table_is_judged_on_its_first_lines_read_once(tmp_path, monkeypatch):
+    import builtins
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force\n" + "".join(f"{i};{i * 0.5}\n" for i in range(50)))
+    opened, real_open = [], builtins.open
+    monkeypatch.setattr(builtins, "open", lambda file, *a, **k: opened.append(file) or real_open(file, *a, **k))
+    f.table_format(p)
+    assert opened.count(p) == 1
 
 
 def test_a_table_beside_capture_times_that_count_from_zero_is_not_recorded_timing(tmp_path):

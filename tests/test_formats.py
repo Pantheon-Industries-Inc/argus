@@ -2436,7 +2436,7 @@ def test_a_streamed_table_keeps_its_epoch_times_and_rows_sit_on_their_frame_inde
         saved = f.TABLE_MAX_BYTES
         f.TABLE_MAX_BYTES = 10
         try:
-            big, _, _ = f.read_number_table(p)
+            big, _, _, _ = f.read_number_table(p)
         finally:
             f.TABLE_MAX_BYTES = saved
     assert big["timestamp"].dtype == np.float64 and big["timestamp"].nunique() == n
