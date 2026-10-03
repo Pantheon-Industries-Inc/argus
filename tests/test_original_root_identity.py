@@ -84,7 +84,7 @@ def test_a_note_named_for_original_root_stays_shared_after_subset_selection(tmp_
         assert episode.build_request(subset_dir / row["episode_id"]) == episode.build_request(full_dir / row["episode_id"])
 
 
-@pytest.mark.parametrize("name", [None, "", ".", "..", "other/root", "other\\root", 42])
+@pytest.mark.parametrize("name", [None, "", ".", "..", "other/root", "other\\root", "\x00", 42])
 def test_original_root_name_rejects_values_that_are_not_folder_names(tmp_path, name):
     with pytest.raises(ValueError, match="not a folder name"):
         formats.ownership_root_name(tmp_path, {"root_name": name})
@@ -107,3 +107,16 @@ def test_root_openaoe_does_not_guess_identity_when_context_omits_root_name(tmp_p
     shutil.copytree(original, selected)
     with pytest.raises(ValueError, match="requires the original upload root name"):
         formats.plan(selected, ownership_context=context)
+
+
+def test_root_openaoe_rejects_a_nul_in_the_bound_original_folder_name(tmp_path):
+    original = tmp_path / "original_clip"
+    original.mkdir()
+    _clip(original / "raw_video.mp4", 20)
+    annotation = original / "ego_annotation" / "ego_action_annotation.json"
+    annotation.parent.mkdir()
+    annotation.write_text("[]")
+    context = original_context(original)
+    context["root_name"] = "\x00"
+    with pytest.raises(ValueError, match="not a folder name"):
+        formats.plan(original, ownership_context=context)

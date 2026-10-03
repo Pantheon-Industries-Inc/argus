@@ -7511,7 +7511,7 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
 def ownership_root_name(root: Path, context: dict | None) -> str:
     """The original root folder is a separate filename fact, absent from relative manifest paths."""
     name = context.get("root_name", root.name) if context is not None else root.name
-    if not isinstance(name, str) or not name or name in {".", ".."} or "/" in name or "\\" in name:
+    if not isinstance(name, str) or not name or name in {".", ".."} or any(c in name for c in ("/", "\\", "\0")):
         raise ValueError("the original upload root name is not a folder name")
     return name
 
