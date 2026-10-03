@@ -822,10 +822,11 @@ def read_annotation(paths: list[Path]):
 # fr3_left_joint1..7, read as six joints and a gripper until the 2026-10-02 audit) or a quaternion are not the layout
 # the checks read. Each name is read as words (state_words), split at its separators and camelCase, lowercased, and
 # a unit after the last word dropped, so x_m, eefPosX and roll_rad end in their axis. A name with a word for a
-# quantity other than a position (joint1_vel, joint3_effort, force_x) is never a state the checks read, and a name of
-# a frame or an orientation (cartesian_position_0, robot0_eef_pos_0, rot_6d_0) whose axes the rule cannot read is a
-# pose, never joints by width. A position word alone with its index (HABIT's position_0 to position_13) says no frame,
-# so names that say none of these (position_0, motor_3) leave the width rule.
+# quantity other than a position (joint1_vel, joint3_effort, force_x) is never a state the checks read, and a name
+# whose frame or orientation word is followed by a number (cartesian_position_0, robot0_eef_pos_0, wrist_rot_0) is a
+# pose whose axes the rule cannot read, never joints by width. A frame word with no number after it names a joint as
+# often (base_rotation, tool_roll, flange, end_effector), and a position word alone with its index (HABIT's position_0
+# to position_13) says no frame, so names that say none of these (position_0, motor_3) leave the width rule.
 STATE_GRIPPER_NAME = re.compile(r"grip|finger|jaw|claw|opening", re.I)
 STATE_JOINT_NAME = re.compile(r"joint|(^|[^a-z])j\d|waist|shoulder|elbow|forearm|wrist", re.I)
 STATE_QUAT_NAME = re.compile(r"(^|[._/ -])q[._/ -]?[wxyz]$|(^|[^a-z])quat", re.I)
@@ -855,8 +856,9 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
     x_m, eefPosX; not rx). Joints are named for the axis they turn about and never for a position, so an arm's
     shoulder_yaw, elbow_pitch and wrist_roll (or a humanoid's waist_yaw), joint angles in radians, stay joints rather
     than be read as metres, while a pose of the wrist frame (wrist_x .. wrist_yaw) stays a pose. A name of a velocity,
-    an effort or a force is not a position on any rig, and a name of a frame without axes the rule reads
-    (cartesian_position_0) is a pose: never joints on an arm rig, and the pose it already is on a gripper rig."""
+    an effort or a force is not a position on any rig, and a name of a frame followed by a number, without axes the
+    rule reads (cartesian_position_0, wrist_rot_0), is a pose: never joints on an arm rig, joint words or not, and the
+    pose it already is on a gripper rig."""
     if rig == "ego_head":
         return "none", None
     per = "arm (six joints and a gripper)." if rig == "teleop_arms" else "gripper (a 6D pose and an opening)."
@@ -879,7 +881,7 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
         return "none", (f"Labelled from the video: the recorded state's value names ({other}) give a velocity, an "
                         "effort or another quantity that is not a position, and our checks read the positions of each "
                         + per)
-    framed = next((x for x in names if set(words[x]) & STATE_FRAME_WORDS and not STATE_JOINT_NAME.search(x)
+    framed = next((x for x in names if set(words[x]) & STATE_FRAME_WORDS and words[x][-1].isdigit()
                    and not STATE_GRIPPER_NAME.search(x)), None)
     by_width = ("none", f"Labelled from the video: the recorded state's value names give a position or a pose without "
                         f"the axes our checks read ({framed}), not six joints and a gripper per arm.") \
@@ -889,6 +891,8 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
         if all(words[x][-1] in STATE_AXIS_WORDS for g in groups for x in g[:6]) and \
                 all(any(words[x][-1] in STATE_POSITION_AXES for x in g[:6]) for g in groups):
             return "ee_pose", None
+        if by_width[0] == "none":
+            return by_width
         if all(STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
             return "joints", None
         return by_width

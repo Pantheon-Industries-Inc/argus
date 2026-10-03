@@ -514,6 +514,20 @@ def test_names_that_name_a_position_a_velocity_or_an_effort_never_read_as_joints
         ("handheld_gripper", [f"joint{i}_velocity" for i in range(1, 7)] + ["gripper"], "none"),
         ("teleop_arms", ["force_x", "force_y", "force_z", "torque_x", "torque_y", "torque_z", "gripper"], "none"),
         ("teleop_arms", [f"jointTorque{i}" for i in range(1, 7)] + ["gripper"], "none"),
+        # a frame word counts only before a number: joint names with rotation, rot, tool, flange or effector in them
+        # stay joints, and a joint word does not save a numbered pose (wrist_rot_0)
+        ("teleop_arms", ["base_rotation", "shoulder", "elbow", "wrist_pitch", "wrist_roll", "wrist_rotation",
+                         "gripper"], "joints"),
+        ("teleop_arms", ["rotation", "pitch", "elbow", "wrist_pitch", "wrist_roll", "wrist_yaw", "jaw"], "joints"),
+        ("teleop_arms", ["torso_rot", "shoulder", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper"], "joints"),
+        ("teleop_arms", ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "tool_roll", "gripper"],
+         "joints"),
+        ("teleop_arms", ["base", "shoulder", "elbow", "wrist1", "wrist2", "flange", "gripper"], "joints"),
+        ("teleop_arms", [f"arm_l_joint{i}" for i in range(1, 7)] + ["end_effector"], "joints"),
+        ("teleop_arms", [f"idx2{i}_arm_l_joint{i}" for i in range(1, 7)] + ["left_effector_position"], "joints"),
+        ("teleop_arms", ["wrist_pos_0", "wrist_pos_1", "wrist_pos_2", "wrist_rot_0", "wrist_rot_1", "wrist_rot_2",
+                         "gripper"], "none"),
+        ("teleop_arms", [f"actual_TCP_pose_{i}" for i in range(6)] + ["gripper_position"], "none"),
         # names that say neither keep the width rule
         ("teleop_arms", [f"position_{i}" for i in range(14)], "joints"),
         ("teleop_arms", [f"motor_{i}" for i in range(7)], "joints"),
