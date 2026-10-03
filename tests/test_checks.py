@@ -783,7 +783,8 @@ def test_the_recorded_state_line_says_why_there_is_no_state_as_the_reader_record
     assert set(me.STATE_WHY) == {"layout", "not_recorded", "unreadable", "short", "assumed_clock"}
     assert line("layout").startswith(layout + " The signal whose name says joints")
     assert line("layout", stops_short=True).startswith(layout)
-    said = {"not_recorded": "as the recording holds none", "unreadable": "as a file holding it could not be read",
+    said = {"not_recorded": "as the recording holds none",
+            "unreadable": "as a sensor file that may hold it could not be read",
             "short": "as it does not cover the footage",
             "assumed_clock": "as it is recorded only on a clock placed from both starts, not shared with the cameras"}
     for why, reason in said.items():

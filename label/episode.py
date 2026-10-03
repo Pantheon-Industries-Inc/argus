@@ -1427,17 +1427,21 @@ def _state_unaligned_text(ep: dict, pl: dict) -> str:
 UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 
-# Why an episode has no arm state, as the reader records it in context.json state_why beside its state_note, each with
-# the reason the RECORDED STATE line gives for it (_no_state_text):
-#   layout         the state is recorded, but not in a layout our checks read: the layout line, no reason
-#   not_recorded   the recording holds no state at all
-#   unreadable     a sensor file holding the state could not be read, or was damaged before any message
-#   short          an arm's state does not cover the footage (one arm's file cut short leaves no state at all)
-#   assumed_clock  the state's channels are only on a clock placed from both starts, so they never become state
+# Why an episode has no arm state, as the reader records it in context.json state_why beside its state_note (the
+# meanings are the reader's own, prepare/formats.py STATE_WHY), each with the reason the RECORDED STATE line gives for
+# it (_no_state_text), worded to be true for every case the reader writes the value for:
+#   layout         a state is recorded, but not in a layout our checks read: its width, its value names, which arm is
+#                  which, or rows that cannot be lined up with the frames. The layout line, with no reason
+#   not_recorded   the recording holds no state at all (an empty or absent state)
+#   unreadable     a file that holds the state, or may hold it, could not be read, or was damaged before any of its
+#                  messages; its content may be unknown, so the line says the file may hold it
+#   short          an arm's state does not cover the footage: it starts late, stops early or stops inside it
+#   assumed_clock  the state's channels are only on a clock placed on the footage from both starts, an alignment that
+#                  is assumed
 STATE_WHY = {
     "layout": None,
     "not_recorded": "as the recording holds none",
-    "unreadable": "as a file holding it could not be read",
+    "unreadable": "as a sensor file that may hold it could not be read",
     "short": "as it does not cover the footage",
     "assumed_clock": "as it is recorded only on a clock placed from both starts, not shared with the cameras",
 }
@@ -1453,10 +1457,9 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     state or left sensor data unread: then only that none was read, since "records no hand, head or device tracking"
     was false for an MCAP whose hand tracks the reader did not read yet (2026-10-02 audit). There the note and the lists
     of unread channels go to the board, never to the model: they name the checks and channels that did not run ("the
-    checks on recorded motion ..."), which would put
-    the words about a recorded motion back into a video only prompt; with other signals the prompt is a recording's
-    already. A state_why other than "not_recorded" counts as a note: the state is there but was not read, so only that
-    none was read; "not_recorded" and no state_why read as before."""
+    checks on recorded motion ..."), which would put the words about a recorded motion back into a video only prompt;
+    with other signals the prompt is a recording's already. A state_why other than "not_recorded" counts as a note:
+    the state is there but was not read, so only that none was read; "not_recorded" and no state_why read as before."""
     r = rig(ep)
     n = _rig_nouns(r)
     ctx = ep["context"]
