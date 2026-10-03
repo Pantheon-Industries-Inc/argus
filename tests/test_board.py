@@ -1325,6 +1325,7 @@ def test_an_episode_whose_context_does_not_read_keeps_its_labels_and_never_stops
         assert "_label_failed" not in d and d["completion"]["task_completed"] == "success", d
         (iss,) = d["dataset_checks"]["reader_issues"]
         assert iss["kind"] == "context_unreadable" and error in iss["what"], iss
+        assert iss["what"].endswith("are not shown; the model's reply is shown as it came."), iss
         assert iss["family"] == "context-unreadable" and Families().list_of(iss["family"]) == "handling"
     ok = json.loads((board / "qa" / "episode_000002.json").read_text())
     assert ok["duration_s"] == 10.0 and not (ok.get("dataset_checks") or {}).get("reader_issues")
