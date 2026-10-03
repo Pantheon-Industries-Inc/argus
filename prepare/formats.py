@@ -3287,14 +3287,21 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     fi = df["frame_index"].to_numpy() if "frame_index" in df.columns else np.arange(len(df))
     t = df["timestamp"].to_numpy(dtype=np.float64) if "timestamp" in df.columns else fi / fps
     t = t - t[0]
-    files, undecoded = {}, []
-    for v, key in vmap.items():
-        w = FrameWriter(ep / f"{v}.mp4", "")
+    files, undecoded, written = {}, [], {}
+
+    def write(key, out):
+        # a frame for every row, black where its image is missing or does not decode (FrameWriter blank), so the
+        # state's rows stay one per frame
+        w = written[key] = FrameWriter(out, "", blank=True)
         for ts, cell in zip(t, df[key].to_numpy()):
             b = cell.get("bytes") if isinstance(cell, dict) else cell
             if isinstance(b, (bytes, bytearray)) and b:
                 w.add(float(ts), bytes(b))
-        if not w.close():
+            else:
+                w.missing(float(ts))
+        return w.close()
+    for v, key in vmap.items():
+        if not write(key, ep / f"{v}.mp4"):
             # one camera whose images do not decode leaves the others, never fails the episode
             undecoded.append(key)
             unused.append(f"{key} (none of its images in the data file could be decoded)")
@@ -3307,12 +3314,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     # the cameras the model is not shown are written too, for the board (unshown_cameras)
     un = []
     for i, key in enumerate(not_shown):
-        w = FrameWriter(ep / f"unshown{i + 1}.mp4", "")
-        for ts, cell in zip(t, df[key].to_numpy()):
-            b = cell.get("bytes") if isinstance(cell, dict) else cell
-            if isinstance(b, (bytes, bytearray)) and b:
-                w.add(float(ts), bytes(b))
-        n_u = w.close()
+        n_u = write(key, ep / f"unshown{i + 1}.mp4")
+        w = written[key]
         if n_u:
             un.append(unshown_entry(key, ep / f"unshown{i + 1}.mp4", unshown_why(key, rig, list(vmap.values())),
                                     n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
@@ -3322,6 +3325,11 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     for key in undecoded:
         add_issue(extra, "camera_not_decodable", f"None of the {key} images in the data file could be decoded, so the "
                                                  "camera is not shown.", camera=key)
+    for key, w in written.items():
+        if w.pts:
+            bad_frames_issues(extra, key, w)
+        elif key not in undecoded:
+            unshown_not_decodable(extra, key)
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
     # the state's frames with no reading filled as in convert_lerobot (state_on_frames), one row per image frame
@@ -4146,11 +4154,13 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         chosen = {v: by_name[nm] for v, nm in vmap.items()}
         t0 = min(float(times_of(s)[0]) for s in chosen.values())
         files, real = {}, {}
-        undecoded = []
+        undecoded, written = [], {}
         for v, s in chosen.items():
             ds = f[s["path"]]
             t = times_of(s)
-            w = FrameWriter(ep / f"{v}.mp4", "")
+            # a frame for every row, black where an encoded image does not decode, so the state's rows stay on
+            # their frames (FrameWriter blank)
+            w = written[s["name"]] = FrameWriter(ep / f"{v}.mp4", "", blank=True)
             # a float picture stored 0 to 1 is scaled to 0 to 255, judged on its first frame
             scale = picture_scale(ds)
             for i in range(s["n"]):
@@ -4172,7 +4182,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         for i, nm in enumerate(x for x in unused if x in by_name):
             s = by_name[nm]
             ds, t = f[s["path"]], times_of(s)
-            w = FrameWriter(ep / f"unshown{i + 1}.mp4", "")
+            w = written[nm] = FrameWriter(ep / f"unshown{i + 1}.mp4", "", blank=True)
             scale = picture_scale(ds)
             for k in range(s["n"]):
                 b = _h5_bytes(ds[k]) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
@@ -4224,6 +4234,12 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     for nm in undecoded:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {nm} could be decoded, so it is not shown.",
                   camera=nm)
+    zero = written[files[anchor][0]].pts[0] / TIME_BASE_DEN
+    for nm, w in written.items():
+        if w.pts:
+            bad_frames_issues(extra, nm, w, zero)
+        elif nm not in undecoded:
+            unshown_not_decodable(extra, nm)
     if any(unshown):
         extra["unshown_cameras"] = [u for u in unshown if u]
     if st["unused"]:
@@ -5428,9 +5444,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics
                                                             else str(_field(dec, "format") or "").lower())
                     if ch.topic in raw_topics:
-                        im = raw_image(dec)
-                        if im is not None:
-                            w.add_image((int(msg.log_time) - t0) / 1e9, im)
+                        # a frame raw_image cannot read is a frame not decoded (FrameWriter bad), never skipped silently
+                        w.add_image((int(msg.log_time) - t0) / 1e9, raw_image(dec))
                     else:
                         w.add((int(msg.log_time) - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
                 else:
@@ -5472,12 +5487,20 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             fps_u = measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)
             un.append(unshown_entry(t, ep / name, unshown_why(t, rig, list(vmap.values())), n_frames=counts[t],
                                     start_s=w.pts[0] / TIME_BASE_DEN, fps=fps_u))
+        else:
+            unshown_not_decodable(extra, t)
     if any(un):
         extra["unshown_cameras"] = [u for u in un if u]
     for t in (t for t in vmap.values() if t in not_colour):
         add_issue(extra, "camera_not_colour", f"{t} is the recording's only camera and its name says it is not a "
                                               "colour camera (infrared, thermal or a mask); the episode is labelled "
                                               "from it.", camera=t)
+    # the frames of each camera that could not be decoded, on the clock of the episode's first frame
+    from label import episode as me
+    zero = writers[files[me.order_views(files)[0]][0]].pts[0] / TIME_BASE_DEN
+    for t, w in writers.items():
+        if w.pts:
+            bad_frames_issues(extra, t, w, zero)
     instr, notes = mcap_task_texts(texts, n_text, t0)
     if instr:
         extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the MCAP.")
@@ -5578,29 +5601,59 @@ def is_keyframe(frame: bytes, codec: str) -> bool:
     return bool(types & ({19, 20, 21} if codec == "hevc" else {5}))
 
 
+def bad_frames_issues(extra: dict, name: str, w, zero_s: float = 0.0) -> None:
+    """The frames of a camera that could not be decoded (a FrameWriter's bad), as frames_not_decodable issues on extra,
+    one per run of them, with its span in seconds from zero_s (the episode's first frame)."""
+    if not w.bad:
+        return
+    t = np.asarray(w.bad, dtype=np.float64) / TIME_BASE_DEN - zero_s
+    every = np.unique(np.concatenate([t, np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN - zero_s]))
+    step = float(np.median(np.diff(every))) if len(every) > 1 else 1 / 30
+    cuts = np.flatnonzero(np.diff(t) > 1.5 * step) + 1
+    for run in np.split(t, cuts):
+        k, t0, t1 = len(run), float(run[0]), float(run[-1])
+        when = f"at {t0:.2f} s" if k == 1 else f"from {t0:.2f} s to {t1:.2f} s"
+        add_issue(extra, "frames_not_decodable",
+                  f"{k} frame{'s' if k != 1 else ''} of the camera {name} could not be decoded, {when}; "
+                  + (f"a black frame stands in for {'each' if k != 1 else 'it'}, so every other frame keeps its "
+                     "place." if w.blank else
+                     "the episode goes on without them there."), camera=name, t0_s=t0, t1_s=t1)
+
+
 class FrameWriter:
     """One camera's frames streamed to an mp4 at their real times as they are read, so an MCAP is never
     held in memory. Annex-B H.264/H.265 is copied without re-encoding, starting at the first keyframe
-    (earlier frames cannot be decoded); JPEG/PNG frames are encoded to H.264 at the first frame's size."""
+    (earlier frames cannot be decoded); JPEG/PNG frames are encoded to H.264 at the first frame's size.
 
-    def __init__(self, out: Path, fmt: str):
+    An image that does not decode (or a row with no image, missing) is never written as a neighbour's picture: its
+    time is kept in bad, which the reader flags with its span (bad_frames_issues). Where a camera's frames are one
+    per row of a table (a LeRobot data file, an HDF5 episode: blank=True), a black frame is written in its place, so
+    every row after it stays on its own frame; one skipped frame had put every later state row one frame early, and
+    made the camera a frame short of its table, which dropped the whole state. A camera with real frame times (an
+    MCAP) skips it, and its state is placed on the frames' own times."""
+
+    def __init__(self, out: Path, fmt: str, blank: bool = False):
         self.out, self.fmt, self.pts, self.kind = out, fmt, [], None
         self.raw = self.enc = self.dst = None
         self.held = []                    # encoded packets waiting for the next frame's time (_mux)
+        self.blank, self.bad, self.waiting = blank, [], []    # waiting: blank frames before the first decoded one
+
+    def _at(self, t_s: float) -> int:
+        p = int(round(t_s * TIME_BASE_DEN))
+        last = max(self.pts[-1:] + self.waiting[-1:], default=None)
+        return last + 1 if last is not None and p <= last else p   # a repeated or backwards stamp stays in order
 
     def add(self, t_s: float, frame: bytes) -> None:
         if self.kind is None:
             head = frame[:4]
             annexb = head.startswith(b"\x00\x00\x00\x01") or head[:3] == b"\x00\x00\x01"
             self.kind = codec_of(frame, self.fmt) if (annexb or self.fmt in ("h264", "h265", "hevc")) else "image"
-        p = int(round(t_s * TIME_BASE_DEN))
-        if self.pts and p <= self.pts[-1]:
-            p = self.pts[-1] + 1          # a repeated or backwards stamp stays in order, one microsecond on
+        p = self._at(t_s)
         if self.kind == "image":
             try:
                 self._image(p, frame)
             except Exception:
-                pass                      # one undecodable image is skipped, never the whole camera
+                self._bad(p)              # one undecodable image never fails the whole camera
             return
         if self.raw is None:
             if not is_keyframe(frame, self.kind):
@@ -5610,18 +5663,39 @@ class FrameWriter:
         self.pts.append(p)
 
     def add_image(self, t_s: float, im) -> None:
-        """A picture already decoded (a raw image message), encoded to H.264 like JPEG frames."""
+        """A picture already decoded (a raw image message), encoded to H.264 like JPEG frames; None is a frame that
+        could not be decoded."""
         self.kind = "image"
-        p = int(round(t_s * TIME_BASE_DEN))
-        if self.pts and p <= self.pts[-1]:
-            p = self.pts[-1] + 1
+        p = self._at(t_s)
+        if im is None:
+            self._bad(p)
+            return
         self._image(p, im)
+
+    def missing(self, t_s: float) -> None:
+        """A row of the camera with no image at all."""
+        self.kind = self.kind or "image"
+        self._bad(self._at(t_s))
+
+    def _bad(self, p: int) -> None:
+        self.bad.append(p)
+        if not self.blank:
+            return
+        if self.enc is None:
+            self.waiting.append(p)
+        else:
+            self._encode(p, None)
 
     def _image(self, p: int, frame) -> None:
         import io
-        import av
         from PIL import Image
         im = frame.convert("RGB") if isinstance(frame, Image.Image) else Image.open(io.BytesIO(frame)).convert("RGB")
+        self._encode(p, im)
+
+    def _encode(self, p: int, im) -> None:
+        """One picture (None: a black frame) encoded at time p, the encoder opened at the first picture's size."""
+        import av
+        from PIL import Image
         if self.enc is None:
             self.dst = av.open(str(self.out), "w")
             self.enc = self.dst.add_stream("libx264", rate=30, time_base=Fraction(1, TIME_BASE_DEN))
@@ -5629,8 +5703,14 @@ class FrameWriter:
             self.enc.pix_fmt = "yuv420p"
             self.enc.codec_context.time_base = Fraction(1, TIME_BASE_DEN)
             self.enc.options = {"crf": "18", "preset": "veryfast"}
-        if im.size != (self.enc.width, self.enc.height):
-            im = im.resize((self.enc.width, self.enc.height))
+            for q in self.waiting:
+                self._encode(q, None)
+            self.waiting = []
+        size = (self.enc.width, self.enc.height)
+        if im is None:
+            im = Image.new("RGB", size)
+        elif im.size != size:
+            im = im.resize(size)
         fr = av.VideoFrame.from_image(im)
         fr.pts, fr.time_base = p, Fraction(1, TIME_BASE_DEN)
         self.pts.append(p)

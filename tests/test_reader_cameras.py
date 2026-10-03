@@ -3,13 +3,14 @@ undecodable frames or a short depth stream is flagged on its episode and the res
 many cameras is one episode, and every infrared, thermal or mask video is shown with its episode."""
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
 import numpy as np
 
 from prepare import formats as f
-from test_formats import _issues, _lerobot
+from test_formats import _issues, _jpeg, _lerobot, _png
 
 
 def _mp4(path: Path, n: int, shade: int = 60, w: int = 64, h: int = 48) -> Path:
@@ -191,3 +192,106 @@ def test_a_lerobot_camera_with_no_video_for_the_episode_is_listed_with_its_reaso
     ctx = _ctx(tmp_path / "eps", rep)
     (u,) = [u for u in ctx["source"]["unused_cameras"] if u.startswith("observation.images.cam_left_wrist")]
     assert "(" in u and "video" in u, u
+
+
+# ---------------------------------------------------------------- undecodable frames inside a camera
+
+def _lerobot_images(root: Path, bad: tuple = ()) -> None:
+    """A LeRobot v2.1 episode of 30 frames whose camera is PNG images in the data file, with a 14 value state."""
+    import pandas as pd
+    (root / "meta").mkdir(parents=True)
+    (root / "data" / "chunk-000").mkdir(parents=True)
+    feats = {"observation.images.cam_high": {"dtype": "image", "shape": [72, 96, 3]},
+             "observation.state": {"dtype": "float32", "shape": [14]}}
+    (root / "meta" / "info.json").write_text(json.dumps({
+        "codebase_version": "v2.1", "fps": 30, "chunks_size": 1000, "features": feats,
+        "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"}))
+    cells = [{"bytes": _png(np.full((72, 96, 3), 8 * k, np.uint8)) if k not in bad else b"\x89PNG\r\n\x1a\nbroken",
+              "path": None} for k in range(30)]
+    state = np.cumsum(np.random.default_rng(2).normal(0, 0.01, (30, 14)), axis=0)
+    pd.DataFrame({"observation.images.cam_high": cells, "observation.state": list(state),
+                  "frame_index": np.arange(30), "episode_index": np.zeros(30, int),
+                  "timestamp": np.arange(30) / 30}).to_parquet(root / "data" / "chunk-000" / "episode_000000.parquet")
+
+
+def test_one_undecodable_image_keeps_the_state_and_a_frame_for_every_row(tmp_path):
+    """One undecodable PNG had made the camera one frame short of the table, which dropped the whole arm state. Every
+    row has a frame (a blank one where the image fails), the state is kept, and the blank frames are flagged."""
+    root = tmp_path / "lr"
+    _lerobot_images(root, bad=(10, 11))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    ep = tmp_path / "eps" / ctx["episode_id"]
+    assert ctx["n_state_frames"] == 30 and ctx["state_kind"] == "joints", ctx.get("state_note")
+    assert np.load(ep / "state.npz")["state"].shape == (30, 14)
+    (bad,) = _issues(ctx, "frames_not_decodable")
+    assert bad["camera"] == "observation.images.cam_high"
+    assert abs(bad["t0_s"] - 10 / 30) < 0.01 and abs(bad["t1_s"] - 11 / 30) < 0.01, bad
+
+
+def test_an_hdf5_camera_with_an_undecodable_frame_keeps_its_rows_on_their_frames(tmp_path):
+    """An HDF5 camera of encoded JPEGs with frame 4 garbage had lost that frame, so every state row after it was one
+    frame early. The frame is written blank, the state stays one row per frame, and the frame is flagged."""
+    import h5py
+    root = tmp_path / "h5"
+    root.mkdir()
+    n = 12
+    with h5py.File(root / "episode_0.hdf5", "w") as h:
+        o = h.create_group("observations")
+        o["qpos"] = np.cumsum(np.random.default_rng(3).normal(0, 0.01, (n, 14)), axis=0)
+        enc = [_jpeg(10 * k) for k in range(n)]
+        enc[4] = b"\xff\xd8\xff" + bytes(300)
+        ds = o.create_dataset("images/cam_high", (n,), dtype=h5py.vlen_dtype(np.dtype("uint8")))
+        for i, b in enumerate(enc):
+            ds[i] = np.frombuffer(b, np.uint8)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    assert ctx["n_state_frames"] == n and ctx["state_kind"] == "joints", ctx.get("state_note")
+    (bad,) = _issues(ctx, "frames_not_decodable")
+    assert bad["camera"].endswith("cam_high") and abs(bad["t0_s"] - 4 / 30) < 0.01, bad
+
+
+def _json_mcap(path: Path, chans: dict, n: int = 30, t0: float = 1_790_000_000.0, joints: bool = False) -> None:
+    """chans {topic: (schema name, fn(k) -> message dict)} at 30 Hz as JSON messages, and an arm's joints at 100 Hz."""
+    from mcap.writer import Writer
+    msgs = [(k / 30, t, fn(k)) for t, (_, fn) in chans.items() for k in range(n)]
+    if joints:
+        msgs += [(k / 100, "/right_arm/joint_state", {"joint_pos": [0.01 * k] * 6, "gripper_pos": [0.5]})
+                 for k in range(int(n / 30 * 100))]
+    msgs.sort(key=lambda m: m[0])
+    with open(path, "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        ids = {}
+        for _, t, _m in msgs:
+            if t not in ids:
+                sid = w.register_schema(name=chans[t][0] if t in chans else "joint_state", encoding="jsonschema",
+                                        data=b"{}")
+                ids[t] = w.register_channel(topic=t, message_encoding="json", schema_id=sid)
+        for s, t, m in msgs:
+            ns = int((t0 + s) * 1e9)
+            w.add_message(ids[t], log_time=ns, publish_time=ns, data=json.dumps(m).encode())
+        w.finish()
+
+
+def _jpg_msg(k: int) -> dict:
+    return {"format": "jpeg", "data": base64.b64encode(_jpeg(8 * k % 256)).decode()}
+
+
+def _depth_msg(k: int) -> dict:
+    return {"width": 64, "height": 48, "encoding": "16UC1", "step": 128,
+            "data": base64.b64encode(np.full((48, 64), 900 + 10 * k, np.uint16).tobytes()).decode()}
+
+
+def test_undecodable_frames_inside_an_mcap_camera_are_flagged(tmp_path):
+    root = tmp_path / "m"
+    root.mkdir()
+    bad = lambda k: {"format": "jpeg", "data": base64.b64encode(b"\xff\xd8\xff" + bytes(200)).decode()} \
+        if 10 <= k < 13 else _jpg_msg(k)
+    _json_mcap(root / "run.mcap", {"/camera/front/image": ("foxglove.CompressedImage", bad)})
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    (iss,) = _issues(ctx, "frames_not_decodable")
+    assert iss["camera"] == "/camera/front/image"
+    assert abs(iss["t0_s"] - 10 / 30) < 0.01 and abs(iss["t1_s"] - 12 / 30) < 0.01, iss
+    assert "3" in iss["what"]
