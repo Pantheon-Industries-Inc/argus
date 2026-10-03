@@ -707,6 +707,21 @@ def unshown_entry(name: str, path: Path, why: str, base_s: float = 0.0, n_frames
             "fps": round(float(fps), 3) if fps else None}
 
 
+UNSHOWN_NOT_READ = "unshown_camera_not_decodable"   # board/clips.py UNSHOWN_NOT_DECODABLE, the same problem
+
+
+def set_unshown(ctx: dict, found: list[tuple[str, dict | None]]) -> None:
+    """ctx's unshown_cameras from [(camera, its unshown_entry)]. A camera whose entry is None (its file does not read
+    or holds no frame) is a reader issue naming it, so it is never only counted among the videos left out."""
+    kept = [e for _, e in found if e]
+    if kept:
+        ctx["unshown_cameras"] = kept
+    for name, e in found:
+        if not e:
+            add_issue(ctx, UNSHOWN_NOT_READ, f"The camera {name}, which the model is not shown, could not be read, so "
+                                             "the board cannot play it either.", camera=name)
+
+
 def _stereo_twin(a: str, b: str) -> bool:
     """True when two camera names differ only by a left/right word (the two eyes of one stereo camera)."""
     swap = lambda s: re.sub(r"left|right", lambda m: {"left": "right", "right": "left"}[m.group(0).lower()], s,
@@ -2372,13 +2387,13 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             t = None
         return float(t[0] - zero) if t is not None and len(t) else 0.0
     shown = [nm for nm, _ in files.values()]
-    unshown = [unshown_entry(nm, by[nm], unshown_why(nm, rig, shown), start_s=start_of(by[nm]))
+    unshown = [(nm, unshown_entry(nm, by[nm], unshown_why(nm, rig, shown), start_s=start_of(by[nm])))
                for nm in (unused if item["dir"] is not None else [])]
-    unshown += [unshown_entry(Path(q).stem, q, unshown_why(Path(q).stem, rig, shown) if not_rgb(Path(q).stem) else
-                              "an infrared, mask or unmatched depth video, not the colour picture the model reads",
-                              start_s=start_of(q)) for q in item.get("unshown") or []]
-    if any(unshown):
-        extra["unshown_cameras"] = [u for u in unshown if u]
+    unshown += [(Path(q).stem, unshown_entry(Path(q).stem, q, unshown_why(Path(q).stem, rig, shown)
+                                             if not_rgb(Path(q).stem) else "an infrared, mask or unmatched depth "
+                                             "video, not the colour picture the model reads", start_s=start_of(q)))
+                for q in item.get("unshown") or []]
+    set_unshown(extra, unshown)
     ep = unique_dir(out, episode_name(item["name"]))
     return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
                                descs=descs, signals=signals, depth=depth, state_names=state_names)
@@ -2978,9 +2993,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
                "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(min(s["n_frames"] for s in sources.values())),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
-        un = lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps)
-        if un:
-            ctx["unshown_cameras"] = un
+        set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps))
         if note or notes:
             ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
         for i in fixes:
@@ -3020,9 +3033,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
            "cameras": cameras, "stream_checks": {"frames_on_grid": grid, "episode_length_meta": row.get("length")},
            **extra}
-    un = lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps)
-    if un:
-        ctx["unshown_cameras"] = un
+    set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps))
     if note or notes:
         ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
     for i in fixes:
@@ -3061,9 +3072,10 @@ def colour_depth_views(r: dict, row: dict, vmap: dict) -> dict:
     return out
 
 
-def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str], fps: float | None) -> list[dict]:
-    """The episode's cameras the model is not shown (pick_cameras' unused), for the board (unshown_cameras): a packed
-    camera by its window of the shared file, a per episode file whole."""
+def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
+                    fps: float | None) -> list[tuple[str, dict | None]]:
+    """[(camera, its unshown_entry)] of the episode's cameras the model is not shown (pick_cameras' unused), for the
+    board (set_unshown): a packed camera by its window of the shared file, a per episode file whole."""
     out = []
     for k in keys:
         src = row["videos"].get(k)
@@ -3076,8 +3088,7 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str], fps:
                               fps=fps)
         else:
             e = unshown_entry(k, src, why)
-        if e:
-            out.append(e)
+        out.append((k, e))
     return out
 
 
@@ -3237,12 +3248,11 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             if isinstance(b, (bytes, bytearray)) and b:
                 w.add(float(ts), bytes(b))
         n_u = w.close()
-        if n_u:
-            un.append(unshown_entry(key, ep / f"unshown{i + 1}.mp4", unshown_why(key, rig, list(vmap.values())),
-                                    n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
-                                    fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)))
-    if any(un):
-        extra["unshown_cameras"] = [u for u in un if u]
+        un.append((key, unshown_entry(key, ep / f"unshown{i + 1}.mp4", unshown_why(key, rig, list(vmap.values())),
+                                      n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
+                                      fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN))
+                   if n_u else None))
+    set_unshown(extra, un)
     for key in undecoded:
         add_issue(extra, "camera_not_decodable", f"None of the {key} images in the data file could be decoded, so the "
                                                  "camera is not shown.", camera=key)
@@ -3281,9 +3291,8 @@ def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
              "unsplit": True}
     for k, why in unaligned.items():
         add_issue(extra, "camera_not_aligned", f"The camera {k} is not shown: {why}.", camera=k)
-    un = [unshown_entry(k, item["files"][k], unshown_why(k, rig, list(vmap.values()))) for k in unused]
-    if any(un):
-        extra["unshown_cameras"] = [u for u in un if u]
+    set_unshown(extra, [(k, unshown_entry(k, item["files"][k], unshown_why(k, rig, list(vmap.values()))))
+                        for k in unused])
     if rig != "ego_head":
         extra["state_note"] = ("Labelled from the video, as one recording: its episodes could not be matched to the "
                                "packed video exactly.")
@@ -4105,10 +4114,10 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 else:
                     w.add_image(float(t[k] - t0), picture(ds[k], scale))
             n_u = w.close()
-            if n_u:
-                unshown.append(unshown_entry(nm, ep / f"unshown{i + 1}.mp4", unshown_why(nm, rig, names_shown(files)),
-                                             n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
-                                             fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)))
+            unshown.append((nm, unshown_entry(nm, ep / f"unshown{i + 1}.mp4", unshown_why(nm, rig, names_shown(files)),
+                                              n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
+                                              fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN))
+                            if n_u else None))
         from label import episode as me
         anchor = me.order_views(files)[0]
         q_abs = times_of(chosen[anchor])
@@ -4148,8 +4157,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     for nm in undecoded:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {nm} could be decoded, so it is not shown.",
                   camera=nm)
-    if any(unshown):
-        extra["unshown_cameras"] = [u for u in unshown if u]
+    set_unshown(extra, unshown)
     if st["unused"]:
         extra["source"]["unused_arrays"] = st["unused"]
     for i in sensor_extra.get("reader_issues") or []:
@@ -5394,10 +5402,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         w = writers.get(t)
         if counts.get(t) and w is not None:
             fps_u = measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)
-            un.append(unshown_entry(t, ep / name, unshown_why(t, rig, list(vmap.values())), n_frames=counts[t],
-                                    start_s=w.pts[0] / TIME_BASE_DEN, fps=fps_u))
-    if any(un):
-        extra["unshown_cameras"] = [u for u in un if u]
+            un.append((t, unshown_entry(t, ep / name, unshown_why(t, rig, list(vmap.values())), n_frames=counts[t],
+                                        start_s=w.pts[0] / TIME_BASE_DEN, fps=fps_u)))
+        else:
+            un.append((t, None))
+    set_unshown(extra, un)
     for t in (t for t in vmap.values() if t in not_colour):
         add_issue(extra, "camera_not_colour", f"{t} is the recording's only camera and its name says it is not a "
                                               "colour camera (infrared, thermal or a mask); the episode is labelled "

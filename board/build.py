@@ -333,10 +333,13 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     if rn:
         d["reader_notes"] = rn
     # the cameras the model is not shown, which board clips cut like any other (board/clips.py unshown_views): the page
-    # plays each, named as not shown to the model, with why
-    from board.clips import unshown_views
+    # plays each, named as not shown to the model, with why; one board clips could not cut (record_unshown) has no
+    # clip, so it is left out of what the page plays and of its note, and its problem stays on the episode
+    from board.clips import UNSHOWN_NOT_DECODABLE, unshown_views
+    uncut = {x.get("camera") for x in ctx.get("reader_issues") or []
+             if isinstance(x, dict) and x.get("kind") == UNSHOWN_NOT_DECODABLE}
     unshown = [{"view": v, "name": str(e.get("name") or v), "why": str(e.get("why") or "")}
-               for v, e in unshown_views(ctx)]
+               for v, e in unshown_views(ctx) if v not in uncut]
     if unshown:
         d["unshown_cameras"] = unshown
     add_contacts(d, ctx, result)

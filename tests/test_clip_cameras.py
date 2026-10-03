@@ -538,3 +538,35 @@ def test_a_check_that_crashes_when_run_again_is_recorded_as_errored(tmp_path, mo
     assert ctx["sensor_checks"]["error"] == err and all(c["status"] == "errored"
                                                         for c in ctx["sensor_checks"]["checks"])
     assert "gripper_channels" not in ctx           # a check the episode never had is not added
+
+
+def test_a_camera_the_model_is_not_shown_that_does_not_read_is_flagged(tmp_path):
+    """A mask video beside an episode's cameras that does not read had been in neither the cameras the model is not
+    shown nor the episode's problems, only counted among the videos left out. It is a reader issue naming it; the
+    thermal video beside it that reads is a camera the model is not shown, as before."""
+    up = tmp_path / "up" / "ep1"
+    up.mkdir(parents=True)
+    for nm in ("top", "wrist", "top_thermal"):
+        _video(up / f"{nm}.mp4", 30)
+    (up / "top_mask.mp4").write_bytes(b"\x00" * 5000)
+    rep = formats.convert(tmp_path / "up", "teleop_arms", tmp_path / "eps", "x", 3600)
+    ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert [u["name"] for u in ctx.get("unshown_cameras") or []] == ["top_thermal"]
+    hit = [x for x in ctx.get("reader_issues") or [] if x.get("camera") == "top_mask"]
+    assert [x["kind"] for x in hit] == ["unshown_camera_not_decodable"] and "could not be read" in hit[0]["what"], ctx
+
+
+def test_a_camera_the_model_is_not_shown_that_did_not_cut_is_not_offered_to_play(tmp_path):
+    """A camera the model is not shown that board clips could not cut (record_unshown) had a cell on the page that
+    played nothing, beside a note saying it plays there. The board leaves it out of the cameras it plays and of that
+    note; its problem stays on the episode."""
+    from board import build as board_build
+    d = {}
+    board_build.add_context(d, {"profile": "teleop_arms", "fps": 30, "unshown_cameras": [
+        {"name": "cam_ir", "why": "an infrared video", "packed": "/x/ir.mp4", "n_frames": 45},
+        {"name": "cam_mask", "why": "a mask video", "packed": "/x/mask.mp4", "n_frames": 45}],
+        "reader_issues": [{"kind": "unshown_camera_not_decodable", "camera": "unshown2",
+                           "what": "The cam_mask camera, which the model is not shown, could not be decoded."}]},
+        tmp_path)
+    assert d["unshown_cameras"] == [{"view": "unshown1", "name": "cam_ir", "why": "an infrared video"}]
+    assert [x["camera"] for x in d["dataset_checks"]["reader_issues"]] == ["unshown2"]
