@@ -5293,7 +5293,8 @@ function renderEp(d, opts) {
     }
   });
 
-  rightCol.innerHTML = failed ? cmpFailHtml(cmpInfo, who, usage) : `
+  rightCol.innerHTML = failed ? cmpFailHtml(cmpInfo, who, usage) : (!cmpInfo && d._label_failed
+    ? cmpFailHtml(d._label_failed, who, usage, true) : '') + `
     <div class="prompt-banner${givenMode ? ' has-given' : ''}">
       <div class="label">${bannerLabel}</div>
       ${bannerBody}
@@ -5869,20 +5870,24 @@ async function cmpEpisode(key, file) {
   if (!_cmpGot.has(k)) _cmpGot.set(k, fetchJson(compareEpUrl(key, file)).then(d => { if (!d) _cmpGot.delete(k); return d; }));
   return _cmpGot.get(k);
 }
-function cmpFailHtml(c, who, usage) {
+// A response that gave no labels: another model's under Labels by (the comparison's wording), or with own the board's
+// own label of the episode (d._label_failed, board/to_board.py label_failed), which keeps the episode's footage,
+// checks and sensors on the page above and below this block.
+function cmpFailHtml(c, who, usage, own) {
   const cost = usage && usage.est_cost_usd != null
     ? ` The call cost $${Number(usage.est_cost_usd).toFixed(3)}${usage.latency_s != null
       ? ` and took ${fmtDur(usage.latency_s)}` : ''}.` : '';
+  const rest = ' The footage, checks and sensors of the episode are shown as recorded.';
   if (c.status === 'unparsed') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s response did not parse</h4>
-    <p>The response is not valid JSON, so there are no labels to show. The comparison counts it as a response that did `
-      + `not parse; it was not retried or repaired.${cost}</p>
+    <p>The response is not valid JSON, so there are no labels to show. ${own ? 'It was not retried or repaired.'
+      + rest : 'The comparison counts it as a response that did not parse; it was not retried or repaired.'}${cost}</p>
     ${c.parse_error ? `<div class="cf-k">Parser error</div><pre>${esc(c.parse_error)}</pre>` : ''}
     <div class="cf-k">Start of the response, ${Number(c.raw_chars || 0).toLocaleString()} characters in all</div>`
       + `<pre>${esc(c.raw_head || '(empty)')}</pre></div>`;
   if (c.status === 'cut_off') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s response was cut off</h4>
     <p>The response reached the output limit${c.out_tokens ? ` after ${Number(c.out_tokens).toLocaleString()} output `
-      + `tokens` : ''} before its JSON was complete, so there are no labels to show. The comparison counts it as a `
-      + `response that did not parse.${cost}</p>
+      + `tokens` : ''} before its JSON was complete, so there are no labels to show.${own ? rest
+      : ' The comparison counts it as a response that did not parse.'}${cost}</p>
     ${c.tail ? `<div class="cf-k">End of the response</div><pre>${esc(c.tail)}</pre>` : ''}</div>`;
   return `<div class="cmp-fail"><h4>No response from ${esc(who)}</h4>
     <p>The call for this episode failed and returned nothing, so there are no labels to show. The comparison reports `

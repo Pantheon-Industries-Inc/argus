@@ -21,7 +21,8 @@ Output per episode (out.json, or OUT/<episode>.json): the model's labels (`label
 `_parse_error` when the reply did not parse), `parse_ok`, what was sent (`config`: cameras, cell size, the
 exact instants), the deterministic checks that ran on the episode (`dataset_checks`), the still spans the model
 was told about, the instruction it was graded against, and the billed usage and cost. A reply cut off at the
-output limit is kept as failed_<episode>.json for diagnosis and counts as a failure.
+output limit is kept as failed_<episode>.json, with what was sent, and counts as a failure; the board shows the
+episode with that reply, as it shows one whose reply did not parse.
 
 Keys: OPENROUTER_API_KEYS, a comma-separated list, or when it holds none OPENAI_API_KEY, which sends every call
 straight to OpenAI and so only runs OpenAI models; keys are used round robin, and a key that runs out of
@@ -314,8 +315,10 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         # episode_*.json, so a resumed run still counts the episode as not done), then fail
         usage = dict(resp.get("usage") or {})
         usage["est_cost_usd"] = _cost(usage)
-        failed = {"episode_dir": str(ep_dir), "model": model, "reasoning_effort": reasoning, "finish_reason": finish,
-                  **_served(resp), "config": fields.get("config"), "usage": usage, "content_tail": text[-4000:],
+        # with every field of the request, so the board shows the episode's checks and undecodable stretches beside
+        # the cut-off reply (board/to_board.py label_failed)
+        failed = {"episode_dir": str(ep_dir), "model": model, "reasoning_effort": reasoning, **fields,
+                  "finish_reason": finish, **_served(resp), "usage": usage, "content_tail": text[-4000:],
                   "reasoning_tail": (msg.get("reasoning") or "")[-8000:]}
         write_atomic(Path(out_path).with_name(f"failed_{Path(out_path).name}"), failed)
         raise Truncated(f"response truncated (finish_reason=length) at max_tokens={max_tokens}", episode_cost(failed))

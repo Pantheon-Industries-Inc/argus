@@ -272,3 +272,17 @@ def test_a_part_of_a_long_head_camera_recording_gets_its_subtasks_on_its_own_clo
     first = me.load(parts[0])["context"]["annotation_subtasks"]
     assert [x["label"] for x in first] == ["pick up the cup"] + (["wipe the table"] if t0 > 1.6 else [])
     assert all(x["t0"] >= 0 for x in e["context"]["annotation_subtasks"])
+
+
+def test_stitch_run_carries_every_short_episodes_reply_whatever_came_back(tmp_path):
+    """A short episode's reply is carried to the board as it came: parsed, not parsed, or cut off at the output
+    limit (failed_<episode>.json), so the board shows the episode either way."""
+    src = tmp_path / "job" / "run" / "out"
+    src.mkdir(parents=True)
+    (src / "episode_000000.json").write_text(json.dumps({"parse_ok": True}))
+    (src / "episode_000001.json").write_text(json.dumps({"parse_ok": False}))
+    (src / "failed_episode_000002.json").write_text(json.dumps({"finish_reason": "length"}))
+    out = tmp_path / "final" / "out"
+    pieces.stitch_run(tmp_path / "job", tmp_path / "eps", {}, out)
+    assert sorted(p.name for p in out.iterdir()) == ["episode_000000.json", "episode_000001.json",
+                                                     "failed_episode_000002.json"]

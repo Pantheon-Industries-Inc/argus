@@ -290,7 +290,8 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
     src = Path(job) / "run" / "out"
     out.mkdir(parents=True, exist_ok=True)
     res = {"stitched": 0, "incomplete": []}
-    for p in src.glob("episode_*.json"):
+    # every short episode's reply as it came, a cut-off one (failed_<episode>.json) too: the board shows each
+    for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json")]:
         if "__p" not in p.stem:
             shutil.copy(p, out / p.name)
     for ep, parts in long_eps.items():

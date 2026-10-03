@@ -10,7 +10,10 @@ footage comes from and its license (`dataset_source`, from board/dataset_sources
 prepare/ reads), the manifest's rules applied, and the label consistency check (checks/label_consistency.py:
 annotations that contradict themselves are reported in label_consistency, never used to edit a label). A
 recording labelled in parts carries the parts it was stitched from and the issues set aside at our cuts
-(carry_pieces), and an outcome or severity outside its known values is shown as "unclear" (normalize_enums).
+(carry_pieces), and an outcome or severity outside its known values is shown as "unclear" (normalize_enums). An
+episode whose model reply did not parse or was cut off is on the board too, with its footage, checks and sensors, no
+labels, the reply itself, and a data issue saying so (label_failure); a rerun's reply of that kind never replaces a
+label that parsed.
 
 manifest.json. Paths are absolute or relative to the board folder; a run given as RUNS/<dataset>/latest is that
 dataset's newest finished run that is not a dry run (run ids start with their start time).
@@ -206,22 +209,48 @@ def reader_notes(ctx: dict) -> dict | None:
 _FAMILIES = None
 
 
+def label_failure(result: dict | None) -> list[dict]:
+    """The data issue of an episode whose model reply gave no labels (board/to_board.py label_failed): one entry of
+    kind model_reply_cut_off or model_reply_unparsed, which raises the family label-failed, so the episode is on the
+    board with its footage, checks and sensors and the filter finds it. Nothing for a reply that parsed."""
+    from board.to_board import label_failed
+    lf = label_failed(result) if isinstance(result, dict) else None
+    if lf is None:
+        return []
+    rest = "so this episode has no labels; its footage, checks and sensors are shown as recorded"
+    if lf["status"] == "cut_off":
+        n = lf.get("out_tokens")
+        return [{"kind": "model_reply_cut_off",
+                 "what": f"The model's reply was cut off at the output limit{f' after {n:,} tokens' if n else ''} and "
+                         f"did not parse, {rest}."}]
+    return [{"kind": "model_reply_unparsed", "what": f"The model's reply did not parse as JSON, {rest}."}]
+
+
 def reader_issues(ctx: dict, result: dict | None = None) -> list[dict]:
     """The problems an episode was kept and flagged with, each with the family it raises (board/families.py
     reader_family), so the page shows each as a data issue under that family's name: context.json reader_issues
     ({"kind", "what", and optionally "camera", "signal", "t0_s", "t1_s"}: a camera clip shorter than the episode or a
-    camera that does not decode among them, board/clips.py record_cameras), then the stretches the labelling run could
-    not decode a camera's file at, from its record (decode_failed, label/episode.py decode_failures), as kind
-    camera_decode_failed. An entry without a kind and a sentence says nothing and is left out."""
+    camera that does not decode among them, board/clips.py record_cameras), then a model reply that gave no labels
+    (label_failure), then the stretches the labelling run could not decode a camera's file at, from its record
+    (decode_failed, label/episode.py decode_failures), as kind camera_decode_failed. An entry without a kind and a
+    sentence says nothing and is left out."""
     global _FAMILIES
     if _FAMILIES is None:
         from board.families import Families
         _FAMILIES = Families()
-    found = list(ctx.get("reader_issues") or [])
+    found = list(ctx.get("reader_issues") or []) + label_failure(result)
     found += [{"kind": "camera_decode_failed", **x} for x in (result or {}).get("decode_failed") or []
               if isinstance(x, dict)]
     return [{**x, "family": _FAMILIES.reader_family(str(x["kind"]))} for x in found
             if isinstance(x, dict) and x.get("kind") and isinstance(x.get("what"), str) and x["what"].strip()]
+
+
+def add_reader_issues(d: dict, ctx: dict, result: dict | None = None) -> None:
+    """The episode's reader_issues (reader_issues) into its dataset_checks, when it has any."""
+    issues = reader_issues(ctx, result)
+    if issues:
+        d["dataset_checks"] = d.get("dataset_checks") or {}
+        d["dataset_checks"]["reader_issues"] = issues
 
 
 def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) -> None:
@@ -242,11 +271,8 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
         if ctx.get(key) is not None:
             d["dataset_checks"] = d.get("dataset_checks") or {}
             d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
-    issues = reader_issues(ctx, result)
-    if issues:
-        d["dataset_checks"] = d.get("dataset_checks") or {}
-        d["dataset_checks"]["reader_issues"] = issues
-    subs = [s for s in ctx.get("annotation_subtasks") or [] if s.get("label") and s.get("t1") is not None]
+    add_reader_issues(d, ctx, result)
+    subs =[s for s in ctx.get("annotation_subtasks") or [] if s.get("label") and s.get("t1") is not None]
     if subs:
         d["dataset_labels"] = [{"t0": float(s["t0"]), "t1": float(s["t1"]), "label": s["label"].replace(
             "(both hand)", "(both hands)")} for s in subs]   # OpenAoE labels stored before prepare/openaoe.py hand_phrase
@@ -550,7 +576,10 @@ def entry_labels(entry: dict, here: Path) -> tuple[Path, dict]:
             rrun = resolve_run(_path(rr["run"], here))
             for rname, (f, r) in label_outputs(rrun / "out")[0].items():
                 folder = _rerun_folder(r, rrun, rname)
-                if folder in own:
+                if folder not in own:
+                    continue
+                # a rerun's reply that gave no labels never replaces a label that parsed
+                if r.get("parse_ok") or not (by_name.get(own[folder]) or (None, {}))[1].get("parse_ok"):
                     by_name[own[folder]] = (f, r, rrun)
     return run, {(name.replace("episode_", f"episode_{pre}", 1) if pre else name) + ".json": (name, f, r, src)
                  for name, (f, r, src) in by_name.items()}
@@ -600,6 +629,8 @@ def build(board: Path) -> dict:
             if ctx:
                 add_context(d, ctx, eps / name, r)
                 episodes[fname] = eps / name
+            else:
+                add_reader_issues(d, {}, r)       # a reply that gave no labels is flagged with or without a context
             # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
             apply_rules(d, ctx, entry.get("rules") or [])
             d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))

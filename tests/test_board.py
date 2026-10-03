@@ -88,17 +88,37 @@ def test_convert_a_reply_that_breaks_the_schema():
     assert "_off_schema" not in to_board.convert(_output("episode_000009"), "demo")
 
 
-def test_convert_run_skips_what_is_not_a_label(tmp_path):
+def test_convert_run_keeps_a_reply_that_failed_and_skips_what_is_not_a_reply(tmp_path):
+    """A reply that did not parse and one cut off at the output limit (failed_<episode>.json, with no output beside
+    it) are each an episode on the board with no labels and the reply kept; a dry run and an unreadable file are not
+    replies. A cut-off reply beside an output of the same episode never replaces it."""
     out = tmp_path / "out"
     out.mkdir()
     (out / "episode_000000.json").write_text(json.dumps(_output("episode_000000")))
-    (out / "episode_000001.json").write_text(json.dumps({"episode_dir": "/x/episode_000001", "parse_ok": False}))
+    (out / "failed_episode_000000.json").write_text(json.dumps({"episode_dir": "/x/episode_000000",
+                                                                "finish_reason": "length"}))
+    (out / "episode_000001.json").write_text(json.dumps({
+        "episode_dir": "/x/episode_000001", "parse_ok": False, "model": "some/model",
+        "labels": {"_raw": "not json " * 1000, "_parse_error": "JSONDecodeError: Expecting value"},
+        "config": {"views": ["exo"], "timesteps_s": [0.0, 1.0]}, "usage": {"est_cost_usd": 0.2}}))
     (out / "episode_000002.json").write_text(json.dumps({"episode_dir": "/x/episode_000002", "dry_run": True}))
     (out / "episode_000003.json").write_text("{")
-    (out / "failed_episode_000004.json").write_text(json.dumps({"episode_dir": "/x/episode_000004"}))
+    (out / "failed_episode_000004.json").write_text(json.dumps({
+        "episode_dir": "/x/episode_000004", "finish_reason": "length", "content_tail": '{"timeline": [[0.0, 1',
+        "usage": {"est_cost_usd": 0.5, "completion_tokens": 64000}, "config": {"views": ["exo"]}}))
     n, skipped = to_board.convert_run(out, tmp_path / "board", "demo")
-    assert n == 1 and len(skipped) == 3
-    assert sorted(p.name for p in (tmp_path / "board").iterdir()) == ["episode_000000.json"]
+    assert n == 3 and len(skipped) == 2
+    assert sorted(p.name for p in (tmp_path / "board").iterdir()) == [
+        "episode_000000.json", "episode_000001.json", "episode_000004.json"]
+    ok = json.loads((tmp_path / "board" / "episode_000000.json").read_text())
+    assert "_label_failed" not in ok and ok["completion"]["task_completed"] == "success"
+    un = json.loads((tmp_path / "board" / "episode_000001.json").read_text())
+    assert un["_label_failed"]["status"] == "unparsed" and un["_label_failed"]["parse_error"].startswith("JSONDecode")
+    assert un["_label_failed"]["raw_head"] == ("not json " * 1000)[:3000] and un["_label_failed"]["raw_chars"] == 9000
+    assert un["event_labels"] == [] and un["camera_views"] == ["exo"] and un["_usage"]["est_cost_usd"] == 0.2
+    cut = json.loads((tmp_path / "board" / "episode_000004.json").read_text())
+    assert cut["_label_failed"] == {"status": "cut_off", "out_tokens": 64000, "tail": '{"timeline": [[0.0, 1'}
+    assert cut["_meta"]["episode_id"] == "episode_000004" and cut["_usage"]["est_cost_usd"] == 0.5
 
 
 # ---------------------------------------------------------------- rules
@@ -285,6 +305,61 @@ def test_board_builds_from_the_latest_run(tmp_path):
     assert [f["rule"] for f in d["label_consistency"]] == ["outcome_vs_alignment"]
     assert d["_usage"]["est_cost_usd"] == 0.12
     assert "dataset_source" not in d          # a dataset of your own has no entry in board/dataset_sources.json
+
+
+def test_a_run_whose_replies_all_failed_still_builds_a_board_of_its_episodes(tmp_path):
+    """Every reply of the run failed, one not parsing and one cut off: the board still holds both episodes, each with
+    its length, its checks from context.json and a data issue saying the model's reply did not parse, which raises
+    its family at any severity, and the reply itself. A rerun whose reply failed never replaces a label that parsed."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "upload",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    (run / "out" / "episode_000000.json").write_text(json.dumps({
+        "episode_dir": str(eps / "episode_000000"), "parse_ok": False, "model": "some/model",
+        "labels": {"_raw": "{oops", "_parse_error": "JSONDecodeError: x"},
+        "dataset_checks": {"timebase": {"sped_up_recording": False}},
+        "decode_failed": [{"camera": "exo", "what": "The exo camera could not be decoded at 1 s.", "t0_s": 1.0}],
+        "config": {"views": ["exo"], "timesteps_s": [0.0, 1.0]}, "usage": {"est_cost_usd": 0.2}}))
+    (run / "out" / "failed_episode_000001.json").write_text(json.dumps({
+        "episode_dir": str(eps / "episode_000001"), "finish_reason": "length", "model": "some/model",
+        "content_tail": "...", "usage": {"est_cost_usd": 0.5, "completion_tokens": 64000},
+        "config": {"views": ["exo"]}}))
+    board = tmp_path / "boards" / "demo"
+    board.mkdir(parents=True)
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps), "rules": rules.rules_for("teleop_arms")}]}))
+    built = board_build.build(board)
+    assert built["counts"]["demo"]["episodes"] == 2
+    fam = Families()
+    for name, kind, status in (("episode_000000", "model_reply_unparsed", "unparsed"),
+                               ("episode_000001", "model_reply_cut_off", "cut_off")):
+        d = json.loads((board / "qa" / f"{name}.json").read_text())
+        assert d["_label_failed"]["status"] == status and d["duration_s"] == 10.0
+        assert "stream_pairing" in d["dataset_checks"]
+        issue = next(x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == kind)
+        assert issue["family"] == "label-failed" and "did not parse" in issue["what"]
+        assert "label-failed" in fam.classify(d)["counted"]
+    d0 = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert [x["kind"] for x in d0["dataset_checks"]["reader_issues"]] == ["model_reply_unparsed",
+                                                                          "camera_decode_failed"]
+    # a later rerun whose reply failed leaves the earlier parsed label in place
+    good = _run(tmp_path / "runs" / "good", "20260101-0000_full_abc1234", "success", "aligned")
+    sl = tmp_path / "episodes" / "rr"
+    sl.mkdir()
+    (sl / "episode_000000").symlink_to(eps / "episode_000000")
+    rr = tmp_path / "runs" / "rr" / "20260102-0000_full_abc1234"
+    (rr / "out").mkdir(parents=True)
+    (rr / "run.json").write_text(json.dumps({"run_id": rr.name, "code": "abc1234", "kind": "full", "status": "done",
+                                             "slice": str(sl)}))
+    (rr / "out" / "episode_000000.json").write_text(json.dumps({
+        "episode_dir": str(sl / "episode_000000"), "parse_ok": False, "labels": {"_raw": "{", "_parse_error": "x"}}))
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(good), "episodes": str(eps), "reruns": [{"run": str(rr), "why": "again"}]}]}))
+    board_build.build(board)
+    d0 = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert "_label_failed" not in d0 and d0["_run"]["run_id"] == good.name
 
 
 def test_public_datasets_carry_their_publisher_and_license(tmp_path):
@@ -841,3 +916,9 @@ def test_each_reader_issue_raises_its_family_at_any_severity(tmp_path):
     none = {}
     board_build.add_context(none, {"profile": "teleop_arms", "fps": 30}, tmp_path)
     assert "dataset_checks" not in none
+
+
+def test_a_reply_that_gave_no_labels_is_shown_on_its_episode():
+    r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "label_failed.js"),
+                        str(REPO / "board" / "serve.py")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

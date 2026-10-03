@@ -621,6 +621,8 @@ def test_cut_off_reply_is_kept_beside_the_outputs_and_fails(tmp_path, monkeypatc
     failed = json.loads((out.parent / "failed_episode_000007.json").read_text())
     assert failed["finish_reason"] == "length" and failed["content_tail"] == '{"timeline": [[0.0, 1'
     assert failed["model_served"] == SERVED["model"] and failed["usage"]["cost"] == 0.5
+    # what the board shows of an episode with no labels: its checks and the stretches no camera decoded
+    assert "dataset_checks" in failed and "decode_failed" in failed and "given_prompt" in failed
     # the cut-off reply was billed: it counts toward the run's cost and the spend cap
     assert harness.episode_cost(failed) == 0.5 and lrun.billed_cost(tmp_path) == 0.5
     with pytest.raises(harness.Truncated) as e:

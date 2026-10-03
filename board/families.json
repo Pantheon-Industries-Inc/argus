@@ -100,6 +100,15 @@
    ]
   },
   {
+   "slug": "label-failed",
+   "list": "data",
+   "name": "Model reply did not parse",
+   "reader_issues": [
+    "model_reply_unparsed",
+    "model_reply_cut_off"
+   ]
+  },
+  {
    "slug": "out-of-view",
    "list": "data",
    "name": "Task object leaves every camera",

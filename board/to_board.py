@@ -6,9 +6,10 @@ The board plays each episode's cameras and syncs its annotation to them: the den
 becomes a marker at its start, with its end, arm, action, object, contribution and progress), key events,
 state changes, the scene graph, recovery, the outcome and goal times, the goal alignment, data issues and
 operator mistakes, plus what the harness recorded about the request (sampled instants, cameras, deterministic
-checks, still spans, usage). A dry run's outputs and replies that did not parse are skipped: neither is a label.
-board/build.py converts the labels of every run a board's manifest names (label_outputs), then adds the episode's
-context.
+checks, still spans, usage). A reply that did not parse, or was cut off at the output limit (failed_<episode>.json),
+is still the episode's file: no labels, the reply kept in _label_failed, and the episode's footage, checks and sensors
+shown as for any other. A dry run's outputs are skipped, since a dry run asked nothing. board/build.py converts the
+replies of every run a board's manifest names (label_outputs), then adds the episode's context.
 """
 from __future__ import annotations
 
@@ -28,14 +29,35 @@ def _time(x) -> float | None:
         return None
 
 
+RAW_HEAD = 3000       # characters of a reply that did not parse kept on the board (the run's output keeps it whole)
+TAIL = 1500           # characters of the end of a cut-off reply kept on the board
+
+
+def label_failed(result: dict) -> dict | None:
+    """How a reply that gave no labels came back, for the page (board/serve.py cmpFailHtml): cut off at the output limit
+    (the harness's failed_<episode>.json, with the tokens it ran to and the end of the reply), or not parsing (the
+    parser's error, the start of the reply and its length). None for a reply that parsed."""
+    if result.get("parse_ok"):
+        return None
+    if result.get("finish_reason") == "length" and "labels" not in result:
+        return {"status": "cut_off", "out_tokens": (result.get("usage") or {}).get("completion_tokens"),
+                "tail": (result.get("content_tail") or "")[-TAIL:]}
+    lab = result.get("labels") if isinstance(result.get("labels"), dict) else {}
+    raw = str(lab.get("_raw") or "")
+    return {"status": "unparsed", "parse_error": lab.get("_parse_error"), "raw_head": raw[:RAW_HEAD],
+            "raw_chars": len(raw)}
+
+
 def convert(result: dict, dataset: str | None = None) -> dict:
-    """One harness output as a board episode file.
+    """One harness output as a board episode file. A reply that gave no labels (label_failed) is an episode file with
+    empty lists and the reply under _label_failed.
 
     Every model is given the same schema, but a parsed reply can still break it (key events written as plain
     strings, a time that is not a number). Such an entry is not shown: each list keeps only its objects, and
     `_off_schema` counts per list what was left out, so a reply that breaks the schema never breaks the board and
     never hides that it did. The run's own output is unchanged."""
-    labels = dict(result.get("labels") or {})
+    failed = label_failed(result)
+    labels = {} if failed else dict(result.get("labels") or {})
     off = {}
     for key in LISTS:
         v = labels.get(key)
@@ -176,13 +198,15 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         },
         "_usage": result.get("usage"),
         **({"_off_schema": off} if off else {}),
+        **({"_label_failed": failed} if failed else {}),
     }
 
 
 def label_outputs(in_dir: Path) -> tuple[dict, list[str]]:
-    """The outputs in a run's out/ folder that are labels, {episode folder name: (output file, output)}: every
-    episode_*.json that is neither a dry run nor an unparsed reply. Also one line per output skipped. failed_*.json
-    files keep a cut-off reply and are never read."""
+    """Every reply in a run's out/ folder, {episode folder name: (output file, output)}: each episode_*.json that is not
+    a dry run, parsed or not, and for an episode with none, the reply cut off at the output limit that the harness kept
+    as failed_<episode>.json (read with parse_ok false). Also one line per file skipped (a dry run, a file that does
+    not read)."""
     outs, skipped = {}, []
     for f in sorted(in_dir.glob("episode_*.json")):
         try:
@@ -190,16 +214,26 @@ def label_outputs(in_dir: Path) -> tuple[dict, list[str]]:
         except ValueError as e:
             skipped.append(f"{f.name}: {e}")
             continue
-        if r.get("dry_run") or r.get("parse_ok") is False:
-            skipped.append(f"{f.name}: {'dry run' if r.get('dry_run') else 'unparsed model reply'}")
+        if r.get("dry_run"):
+            skipped.append(f"{f.name}: dry run")
             continue
         outs[Path(r.get("episode_dir", f.stem)).name] = (f, r)
+    for f in sorted(in_dir.glob("failed_episode_*.json")):
+        name = f.stem[len("failed_"):]
+        if (in_dir / f"{name}.json").exists():
+            continue                      # the episode has an output, so this is an earlier cut-off reply
+        try:
+            r = json.loads(f.read_text())
+        except ValueError as e:
+            skipped.append(f"{f.name}: {e}")
+            continue
+        outs.setdefault(Path(r.get("episode_dir") or name).name, (f, {**r, "parse_ok": False}))
     return outs, skipped
 
 
 def convert_run(in_dir: Path, out_dir: Path, dataset: str) -> tuple[int, list[str]]:
-    """Every label in a run's out/ folder (label_outputs) as a board file in out_dir, named after the episode
-    folder. Returns the count written and one line per output skipped."""
+    """Every reply in a run's out/ folder (label_outputs) as a board file in out_dir, named after the episode
+    folder. Returns the count written and one line per file skipped."""
     out_dir.mkdir(parents=True, exist_ok=True)
     outs, skipped = label_outputs(in_dir)
     for eid, (_, r) in outs.items():
