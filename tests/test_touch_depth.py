@@ -791,6 +791,15 @@ def test_a_long_gap_in_an_hdf5_state_is_not_drawn_as_motion(tmp_path):
     assert np.isfinite(z).all() and np.allclose(z[21], (q[19] + q[23]) / 2, atol=1e-5)
 
 
+def test_an_array_whose_own_name_has_a_space_before_state_is_not_the_state(tmp_path):
+    """The space that lets "robot qpos" (an array of robot.h5 beside videos and another HDF5 file) be the state also
+    matched inside one file's array named "gripper state", a gripper's reading, which became a state candidate and
+    put a note about it on the episode. Only a file's name before the array's own name is passed over."""
+    ctx, _ = _convert(tmp_path, {"observations/gripper state": np.linspace(0, 1, 40)[:, None]})
+    assert ctx["state_kind"] == "none" and "state_note" not in ctx, ctx.get("state_note")
+    assert "gripper state" in {s["name"] for s in ctx["signals"]}
+
+
 def test_an_action_of_another_width_stays_a_signal(tmp_path):
     """The action goes with the state only when it has the state's shape; a 7 value action beside 14 values of state
     is something else, and stays a signal."""

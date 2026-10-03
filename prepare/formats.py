@@ -1848,7 +1848,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if state is None and rig != "ego_head":
                 # an HDF5 array named as the state (a robot.h5's qpos beside the videos) is read by the rule an HDF5
                 # episode's is (h5_state), and leaves the signals when it is read
-                state, action, state_names, state_src, h5_note = h5_state(more, rig, real[anchor])
+                state, action, state_names, state_src, h5_note = h5_state(
+                    more, rig, real[anchor], [p.stem for p in h5_files] if len(h5_files) > 1 else None)
                 if state is not None:
                     extra["source"]["state"] = state_src
                     extra.pop("state_note", None)        # a note on the MCAP arm channels, which are not the state
@@ -3096,14 +3097,15 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
 # (state_layout). An array named for joint positions names every value a joint, so DROID's seven Franka joints are not
 # taken for six joints and a gripper; robomimic's obs/robot0_joint_pos is not named as the state and stays a signal.
 # An array under a group named for the action (DROID's action/joint_position) is a command, never the state. Beside
-# videos, the arrays of several HDF5 files carry their file's name first ("robot qpos", h5_file_signals).
-H5_STATE_NAME = re.compile(r"(^|[/ ])(qpos|state|states|robot_state|joint_positions?|joint_pos)$", re.I)
-H5_JOINT_ARRAY = re.compile(r"(^|[/ ])joint_pos(itions?)?$", re.I)
-H5_ACTION_NAME = re.compile(r"(^|[/ ])actions?$", re.I)
-H5_ACTION_GROUP = re.compile(r"(^|[/ ])actions?/", re.I)
+# videos, the arrays of several HDF5 files carry their file's name first ("robot qpos", h5_file_signals); h5_state
+# reads the name after that file name, so a space inside an array's own name ("gripper state") is never a separator.
+H5_STATE_NAME = re.compile(r"(^|/)(qpos|state|states|robot_state|joint_positions?|joint_pos)$", re.I)
+H5_JOINT_ARRAY = re.compile(r"(^|/)joint_pos(itions?)?$", re.I)
+H5_ACTION_NAME = re.compile(r"(^|/)actions?$", re.I)
+H5_ACTION_GROUP = re.compile(r"(^|/)actions?/", re.I)
 
 
-def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
+def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None = None) -> tuple:
     """(state, action, value names, the state array's name, note) of an HDF5 episode, from its signals (h5_signals,
     already on the anchor camera's frames, at times q). The arrays named as the state (H5_STATE_NAME, outside an action
     group) are tried shortest name first, and the first that state_layout lays out with the names the file gives its
@@ -3112,12 +3114,19 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
     filled as joint_state fills an MCAP arm's frames (fill_rows), so an HDF5 state is accepted wherever an MCAP one is,
     and a gap longer than STATE_EDGE_SLACK_S leaves it unread with the gap's time in the note.
     Both leave the signals when the state is read; otherwise they stay, and note gives the first array's reason, named.
-    All None on a head camera, which has no state and no note about one, or when no array is named as the state."""
+    All None on a head camera, which has no state and no note about one, or when no array is named as the state.
+    files are the names of the HDF5 files whose arrays carry them first (h5_file_signals), passed over to read each
+    array's own name."""
     if rig == "ego_head":
         return None, None, None, None, None
     meta = getattr(signals, "meta", {}) or {}
     left_out = dict(getattr(signals, "left_out", []) or [])
-    named = lambda k: H5_STATE_NAME.search(k) and not H5_ACTION_GROUP.search(k)
+
+    def own(k):
+        # an array's own name, after the HDF5 file's name that h5_file_signals puts first
+        stem = next((f for f in files or () if k.startswith(f"{f} ")), None)
+        return k[len(stem) + 1:] if stem else k
+    named = lambda k: H5_STATE_NAME.search(own(k)) and not H5_ACTION_GROUP.search(own(k))
     cands = sorted({k for k in [*signals, *left_out] if named(k)}, key=lambda k: (len(k), k))
 
     q = np.asarray(q, dtype=np.float64)
@@ -3145,7 +3154,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
         a = np.asarray(signals[name], dtype=np.float64)
         names = (meta.get(name) or {}).get("names")
         dims = a.shape[1]
-        if names is None and H5_JOINT_ARRAY.search(name) and dims in (7, 14):
+        if names is None and H5_JOINT_ARRAY.search(own(name)) and dims in (7, 14):
             # the file names no value, but the array's name says every value is a joint, so there is no gripper
             notes.append(f"Labelled from the video: the array's name says every value is a joint, so its {dims} values "
                          f"are {dims} joints and no gripper, and our checks read "
@@ -3162,7 +3171,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
                          if why == "has no reading on any frame" else
                          f"Labelled from the video, because the recorded state {name} {why}.")
             continue
-        act = next((k for k in signals if H5_ACTION_NAME.search(k) and np.shape(signals[k]) == a.shape
+        act = next((k for k in signals if H5_ACTION_NAME.search(own(k)) and np.shape(signals[k]) == a.shape
                     and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
         action = filled(np.asarray(signals.pop(act), dtype=np.float64))[0] if act else None
         signals.pop(name)
