@@ -202,7 +202,8 @@ def state_kind(ep: dict) -> str:
 
 
 def plan(ep: dict) -> dict:
-    """Frames to send plus the deterministic checks we report ourselves."""
+    """Frames to send plus the deterministic checks we report ourselves. With no usable arm state, the quiet spans of
+    the signals choose the extra instants (pl["quiet_spans"])."""
     T = int(len(ep["state"]))
     r, kind, fps = rig(ep), state_kind(ep), ep_fps(ep)
     windows = {v: int(ep["sources"][v]["n_frames"]) for v in views(ep)}
@@ -234,9 +235,19 @@ def plan(ep: dict) -> dict:
         # report field, never a claim made to the model)
         checks["stream_pairing"] = ep["context"]["stream_pairing"]
     every = SAMPLE_EVERY_S[r]
-    ks = ms.sample_frames(n, spans, fps=fps, moving_every_s=every, still_every_s=every)
+    sample_spans, quiet = spans, None
+    if not (kind != "none" and checks["camera_windows_match_state"]) and ep.get("signals"):
+        # no arm state to find still spans in: the instant every moving signal falls quiet, and the instant it moves
+        # again, are sent as an arm's still span would give them (label/signals.py quiet_spans), never as a claim
+        from label import signals as sg
+        quiet = sg.quiet_spans({k: np.asarray(v)[:n] for k, v in ep["signals"].items()},
+                               int(round(ms.MIN_STILL_S * fps)))
+        sample_spans = quiet
+    ks = ms.sample_frames(n, sample_spans, fps=fps, moving_every_s=every, still_every_s=every)
     pl = {"n": n, "ks": ks, "spans": spans, "checks": checks,
           "state_usable": checks["camera_windows_match_state"]}
+    if quiet is not None:
+        pl["quiet_spans"] = quiet
     pl["contact"] = contact_instants(ep, pl)
     return pl
 

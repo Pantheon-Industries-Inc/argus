@@ -345,3 +345,30 @@ def test_the_note_of_a_teleop_file_with_motion_channels_never_puts_a_recorded_mo
     assert "recorded motion" not in fixed and "recorded motion" not in episode
     assert "joint_states" not in fixed + episode
     assert "RECORDED STATE: none was read from this episode, so the video is all there is." in episode
+
+
+def _plan_ep(signals, n=900):
+    return {"dir": None, "context": {"profile": "teleop_arms", "state_kind": "none", "fps": 30},
+            "sources": {"exo": {"n_frames": n}}, "state": np.zeros((n, 0)), "action": None, "times": None,
+            "kmap": {}, "signals": signals, "signal_meta": {k: {} for k in signals}}
+
+
+def test_with_no_arm_state_the_instants_where_the_signals_fall_quiet_and_move_again_are_sent():
+    """A base drives, stops from 10 s to 20 s and drives on: the instant it stops and the one it moves again are sampled
+    as an arm's still span would give them, but no still span is claimed. A signal that only jitters chooses nothing."""
+    from label import signals as sg
+    n = 900
+    t = np.arange(n) / 30.0
+    x = np.where(t < 10, t, np.where(t < 20, 10.0, 10 + (t - 20)))
+    pl = me.plan(_plan_ep({"base.odom": x[:, None]}))
+    assert pl["spans"] == []
+    (a, b), = pl["quiet_spans"]
+    assert abs(a - 300) <= 10 and abs(b - 600) <= 10
+    assert a in pl["ks"] and b + 1 in pl["ks"]
+    jitter = np.random.default_rng(0).normal(0, 1, (n, 3))
+    assert sg.movements(jitter).max() < sg.MOVING_MIN
+    assert me.plan(_plan_ep({"imu": jitter}))["quiet_spans"] == []
+    ep, _ = CASES["teleop_joints"]()
+    ep.update(dir=None, action=None, times=None, kmap={})
+    ep["sources"] = {v: {"n_frames": 900} for v in ep["sources"]}
+    assert "quiet_spans" not in me.plan(ep)           # an arm state finds its own still spans

@@ -33,6 +33,8 @@ A signal is read by how its numbers behave, and only whether it measures touch a
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 REST_FRACTION = 0.1
@@ -220,6 +222,47 @@ def active_spans(a: np.ndarray, t: np.ndarray, rest=None, swing=None) -> list[tu
                 spans.append((float(t[i]), float(t[j])))
         i = j + 1
     return spans
+
+
+MOVING_MIN = 10.0     # a value moves when its range is at least this many times its typical step between frames
+QUIET_SHARE = 0.01    # a quiet stretch: every moving value stays within this share of its own range
+
+
+def movements(a: np.ndarray) -> np.ndarray:
+    """How much each value of a signal moves over the episode, unit free: its range over its typical (median) step
+    between consecutive frames, so a joint that sweeps its range or a flag that switches scores high and a value that
+    only jitters by its noise scores near 1. 0 for a value that never changes or has fewer than 3 readings."""
+    a = np.asarray(a, dtype=np.float64)
+    if a.ndim == 1:
+        a = a[:, None]
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        r = np.nanmax(a, axis=0) - np.nanmin(a, axis=0)
+        step = np.nanmedian(np.abs(np.diff(a, axis=0)), axis=0) if len(a) > 1 else np.full(a.shape[1], np.nan)
+        m = r / (step + 1e-3 * r)
+    ok = (np.isfinite(a).sum(axis=0) >= 3) & (r > 0) & np.isfinite(m)
+    return np.where(ok, m, 0.0)
+
+
+def quiet_spans(arrs: dict, need: int) -> list[tuple[int, int]]:
+    """[(a, b)] frame spans of at least need frames over which every moving value of every signal (movements at least
+    MOVING_MIN) stays within QUIET_SHARE of its own range: where a recording with no arm state shows nothing moving.
+    Used only to choose instants (label/episode.py plan), never told to the model as a claim. A value with a frame
+    that has no reading is left out of the test."""
+    from label import state as ms
+    cols = []
+    for a in arrs.values():
+        a = np.asarray(a, dtype=np.float64)
+        a = a[:, None] if a.ndim == 1 else a
+        mv = movements(a)
+        for j in np.flatnonzero(mv >= MOVING_MIN):
+            v = a[:, j]
+            if np.isfinite(v).all():
+                cols.append(v / float(v.max() - v.min()))
+    if not cols:
+        return []
+    s = np.stack(cols, axis=1)
+    return ms.spans_within(s, np.full(s.shape[1], QUIET_SHARE), need)
 
 
 def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None, rest=None,
