@@ -326,6 +326,15 @@ def episode_doc(ep_dir: Path) -> dict | None:
                 errors.append({"name": m["name"], "error": f"{type(err).__name__}: {err}"[:300]})
         doc.update({"frames": n, "times": encode_times(t), "stride": stride, "n": len(range(0, n, stride)),
                     "signals": docs, **({"errors": errors} if errors else {})})
+        if (ep_dir / "times.npz").exists() and (ep_dir / "sources.json").exists():
+            from board.clips import DISPLAY_TICKS_PER_S, display_ticks, main_cam, start_offsets
+            src = json.loads((ep_dir / "sources.json").read_text())
+            cam = main_cam(src)
+            _, skip = start_offsets(ep_dir, src, float(ctx.get("fps") or 30)).get(cam, (0, 0))
+            captures = t[skip:min(n, int(src.get(cam, {}).get("n_frames") or n))]
+            if len(captures):
+                ticks, _ = display_ticks(captures, float(ctx.get("fps") or 30), True, t, np.arange(n) - skip)
+                doc["playback"] = {"starts": (ticks / DISPLAY_TICKS_PER_S).tolist(), "captures": captures.tolist()}
     if depth_p.exists():
         from label import depth as dp
         entries = dp.load(ep_dir)

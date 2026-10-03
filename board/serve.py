@@ -93,10 +93,11 @@ _FRAME_DIR = Path(os.environ["BOARD_FRAME_DIR"]) if os.environ.get("BOARD_FRAME_
 
 
 _CLIP_TIMES: dict = {}
+_CLIP_HALFWAY: dict = {}
 
 
 def _clip_times(mp4: Path) -> list:
-    """The clip's frame times in seconds after its first frame (sorted presentation times), read once per clip
+    """The clip's frame times on the episode clock (sorted presentation times), read once per clip
     version; [] when they cannot be read."""
     try:
         key = (str(mp4), mp4.stat().st_size, mp4.stat().st_mtime_ns)
@@ -114,17 +115,22 @@ def _clip_times(mp4: Path) -> list:
                     if a not in ("", "N/A") and "D" not in "".join(f))
     except (OSError, subprocess.SubprocessError, ValueError):
         ts = []
-    rel = [x - ts[0] for x in ts] if ts else []
     if len(_CLIP_TIMES) > 2048:
         _CLIP_TIMES.clear()
-    _CLIP_TIMES[key] = rel
-    return rel
+    _CLIP_TIMES[key] = ts
+    return ts
 
 
 def _shown_from_halfway(mp4: Path) -> bool:
     """Whether the clip's frames come on screen halfway after the capture before each (board/clips.py retime, which
     sets HALFWAY_TAG as the clip's comment), so the frame a time shows is the one on screen then."""
     from board.clips import HALFWAY_TAG
+    try:
+        key = (str(mp4), mp4.stat().st_size, mp4.stat().st_mtime_ns)
+    except OSError:
+        return False
+    if key in _CLIP_HALFWAY:
+        return _CLIP_HALFWAY[key]
     probe = Path(FFMPEG).with_name("ffprobe") if FFMPEG else None
     try:
         r = subprocess.run([str(probe) if probe and probe.exists() else "ffprobe", "-v", "error", "-show_entries",
@@ -132,7 +138,11 @@ def _shown_from_halfway(mp4: Path) -> bool:
                            capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return False
-    return r.stdout.strip() == HALFWAY_TAG
+    hit = r.stdout.strip() == HALFWAY_TAG
+    if len(_CLIP_HALFWAY) > 2048:
+        _CLIP_HALFWAY.clear()
+    _CLIP_HALFWAY[key] = hit
+    return hit
 
 
 def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
@@ -140,7 +150,8 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
     if not FFMPEG or not mp4.exists():
         return None
     try:
-        key = (str(mp4), int(mp4.stat().st_mtime), round(max(0.0, t), 3), int(max_w))
+        st = mp4.stat()
+        key = (str(mp4), st.st_size, st.st_mtime_ns, max(0.0, float(t)), int(max_w))
     except OSError:
         return None
     with _FRAME_LOCK:
@@ -163,7 +174,7 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
     if rel:
         import bisect
         if _shown_from_halfway(mp4):
-            i = max(0, bisect.bisect_right(rel, max(0.0, t) + 1e-4) - 1)
+            i = max(0, bisect.bisect_right(rel, max(0.0, t)) - 1)
         else:
             i = bisect.bisect_left(rel, max(0.0, t))
             i = min(range(max(0, i - 1), min(len(rel), i + 1)), key=lambda j: (abs(rel[j] - t), j))
@@ -172,7 +183,7 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
             gaps = [g for g in ([rel[j] - rel[j - 1]] if j > 0 else []) + ([rel[j + 1] - rel[j]] if j + 1 < len(rel)
                                                                            else []) if g > 0]
             return 0.5 * (min(gaps) if gaps else 1 / 30.0)
-        tries = [rel[j] - half_gap(j) for j in (i, i - 1, i - 2) if j >= 0]
+        tries = [rel[j] - rel[0] - half_gap(j) for j in (i, i - 1, i - 2) if j >= 0]
     else:
         k = max(0, int(round(max(0.0, t) * 30)))
         tries = [(kk - 0.5) / 30 for kk in (k, k - 1, k - 2) if kk >= 0]
@@ -245,7 +256,7 @@ def _under(base: Path, p: Path) -> bool:
 # served from a machine that also records.
 FOOTAGE_GAP = 8
 FOOTAGE_FPS = 30
-FOOTAGE_TAG = f"footage-v2-h264-crf20-veryfast-{FOOTAGE_FPS}fps-gap{FOOTAGE_GAP}"   # a new recipe makes new files
+FOOTAGE_TAG = f"footage-v3-h264-crf20-veryfast-{FOOTAGE_FPS}fps-gap{FOOTAGE_GAP}"   # a new recipe makes new files
 _FOOTAGE_SEM = threading.Semaphore(int(os.environ.get("BOARD_FOOTAGE_CONCURRENCY", 1)))
 _FOOTAGE_THREADS = int(os.environ.get("BOARD_FOOTAGE_THREADS", 2))
 _FOOTAGE_LOCKS: dict = {}
@@ -323,13 +334,14 @@ def footage_command(inputs: list, t0: float, t1: float, out: Path, threads: int 
     for clip, _ in inputs:
         # from a few seconds early, so each camera has the frame showing at t0 (clips have a keyframe every 2 s)
         cmd += ["-ss", f"{max(0.0, t0 - 3.0):.3f}", "-i", str(clip)]
-    g = [f"color=c=black:s={W}x{H}:r={fps}:d={t1 - t0:.3f},setpts=PTS+{t0:.3f}/TB[b0]"]
+    g = [f"color=c=black:s={W}x{H}:r={fps}:d={t1 - t0:.3f},settb=AVTB,setpts=PTS+{t0:.3f}/TB[b0]"]
     # a camera keeps its last frame on to t1, as the page's video does once it has played to its end: the overlay
     # dropped a camera to black from its last frame's start (a 15 fps camera's last 1/30 s), so each is held there
     # (tpad), and the file keeps the canvas's own frames (those before t1), which the held frames would otherwise run past
     hold = f"tpad=stop_mode=clone:stop_duration={t1 - t0 + 1:.3f}"
     for i, ((_, wh), (x, y, w, h)) in enumerate(zip(inputs, cells)):
-        g.append(f"[{i}:v]{'' if (w, h) == tuple(wh) else f'scale={w}:{h}:flags=lanczos,'}setsar=1,{hold}[c{i}]")
+        g.append(f"[{i}:v]{'' if (w, h) == tuple(wh) else f'scale={w}:{h}:flags=lanczos,'}"
+                 f"setsar=1,settb=AVTB,{hold}[c{i}]")
         g.append(f"[b{i}][c{i}]overlay={x}:{y}:eof_action=pass[b{i + 1}]")
     g.append(f"[b{len(inputs)}]setpts=PTS-STARTPTS,format=yuv420p[v]")
     n = math.ceil(round((t1 - t0) * fps, 6))
@@ -4043,7 +4055,8 @@ function snBlock(blk, rows, bits) {
   return {dims, v};
 }
 function snDecode(doc) {
-  const out = {depth: doc.depth || {}, signals: [], constant: [], t: new Float64Array(0), errors: doc.errors || []};
+  const out = {depth: doc.depth || {}, signals: [], constant: [], t: new Float64Array(0), errors: doc.errors || [],
+    playback: doc.playback || null};
   if (!doc.signals || !doc.frames) return out;
   const n = doc.n, stride = doc.stride || 1, ft = new Float64Array(doc.frames), tr = hpReader(doc.times.d);
   let ms = doc.times.ms0;
@@ -4106,6 +4119,14 @@ function snIndexAt(ts, t) {
   let lo = 0, hi = ts.length - 1;
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ts[m] <= t + 1e-3) lo = m; else hi = m - 1; }
   return lo;
+}
+// Playing panels follow the presented picture's capture. Paused seeks keep their requested clock time.
+function snPlaybackTime(D, t) {
+  const clock = D && D.playback;
+  if (!clock || !clock.starts.length) return t;
+  let lo = 0, hi = clock.starts.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (clock.starts[m] <= t) lo = m; else hi = m - 1; }
+  return clock.captures[lo];
 }
 function snWhat(s) {
   const sh = s.shape && s.shape.length > 1 ? s.shape.join(' x ') : String(s.dims);
@@ -4358,8 +4379,9 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
     // playing: one update per presented frame, as the hand pose does, so the heatmap keeps up with the footage
     let rv = 0, raf = 0;
     const alive = () => document.body.contains(slot) && file === _activeFile;
-    function onVF(now, md) { rv = 0; if (!alive()) return; sync(md.mediaTime); watch(); }
-    function onRaf() { raf = 0; if (!alive() || vid.paused) return; sync(vid.currentTime); raf = requestAnimationFrame(onRaf); }
+    function onVF(now, md) { rv = 0; if (!alive()) return; sync(snPlaybackTime(D, md.mediaTime)); watch(); }
+    function onRaf() { raf = 0; if (!alive() || vid.paused) return;
+      sync(snPlaybackTime(D, vid.currentTime)); raf = requestAnimationFrame(onRaf); }
     function watch() {
       if (!vid || vid.paused) return;
       if (vid.requestVideoFrameCallback) { if (!rv) rv = vid.requestVideoFrameCallback(onVF); }
@@ -4602,8 +4624,9 @@ function setupTouch(T, file, duration, seek, on, vid) {
   // playing: one update per presented frame, so the card's heatmap keeps up with the footage
   let rv = 0, raf = 0;
   const alive = () => document.body.contains(box) && file === _activeFile;
-  function onVF(now, md) { rv = 0; if (!alive()) return; sync(md.mediaTime); watch(); }
-  function onRaf() { raf = 0; if (!alive() || vid.paused) return; sync(vid.currentTime); raf = requestAnimationFrame(onRaf); }
+  function onVF(now, md) { rv = 0; if (!alive()) return; sync(snPlaybackTime(D, md.mediaTime)); watch(); }
+  function onRaf() { raf = 0; if (!alive() || vid.paused) return;
+    sync(snPlaybackTime(D, vid.currentTime)); raf = requestAnimationFrame(onRaf); }
   function watch() {
     if (!vid || vid.paused) return;
     if (vid.requestVideoFrameCallback) { if (!rv) rv = vid.requestVideoFrameCallback(onVF); }

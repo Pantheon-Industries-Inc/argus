@@ -158,7 +158,7 @@ def test_frames_are_kept_on_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(serve, "_FRAME_DIR", tmp_path / "frames")
     monkeypatch.setattr(serve, "FFMPEG", "/no/ffmpeg/here")
     monkeypatch.setattr(serve, "_FRAME_CACHE", serve.OrderedDict())
-    key = (str(clip), int(clip.stat().st_mtime), 1.5, 640)
+    key = (str(clip), clip.stat().st_size, clip.stat().st_mtime_ns, 1.5, 640)
     (tmp_path / "frames").mkdir()
     (tmp_path / "frames" / (serve.hashlib.sha1(repr(key).encode()).hexdigest() + ".jpg")).write_bytes(b"jpeg")
     assert serve.extract_frame(clip, 1.5, 640) == b"jpeg"

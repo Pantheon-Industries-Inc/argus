@@ -103,3 +103,137 @@ def test_an_explicit_clock_zero_is_shared_by_request_and_board(tmp_path):
     assert loaded["context"]["contacts"][0]["dips_s"] == pytest.approx([0.16])
     assert loaded["context"]["annotation_subtasks"][0]["t0"] == pytest.approx(0.05)
     assert json.loads((ep / "context.json").read_text())["contacts"][0]["start_s"] == 0.6
+
+
+@pytest.mark.parametrize("offset", [0.5 / 30, 0.55 / 30, -0.008])
+def test_encoded_boundaries_preserve_the_actual_request_map_at_float_ties(tmp_path, offset):
+    main = 0.0122 + np.arange(90) / 30
+    side = main + offset
+    ep = recording(tmp_path, main, side)
+    src = json.loads((ep / "sources.json").read_text())
+    out = tmp_path / "clip.mp4"
+    capture = clips.clip_times(ep, src)
+    km = np.load(ep / src["left"]["kmap"])
+    clips.extract_one(src["left"]["packed"], 0, 90, out, clips.find_ffmpeg(), 1,
+                      main=False, times=capture["left"], query_s=capture["exo"], query_map=km)
+    _, _, tb, pts = probe_pts(out)
+    starts = np.asarray(pts) * float(tb)
+    shown = np.searchsorted(starts, main, side="right") - 1
+    assert np.array_equal(shown, km)
+    midpoint = (side[45] + side[44]) / 2
+    for t in (midpoint - 2e-6, midpoint + 2e-6):
+        assert np.searchsorted(starts, t, side="right") - 1 == formats.nearest(side, np.array([t]))[0]
+
+
+def test_composed_footage_uses_the_frame_already_on_screen_at_each_canvas_sample(tmp_path):
+    path = tmp_path / "input.mp4"
+    video(path, 90)
+    capture = 0.019 + np.arange(90) / 30
+    clips.retime(path, capture, main=False)
+    out = tmp_path / "composed.mp4"
+    subprocess.run(serve.footage_command([(path, (96, 64), 30)], 0.4, 2.0, out, 1), check=True)
+    with av.open(str(path)) as src:
+        original = [(float(f.time), f.to_ndarray(format="rgb24").mean()) for f in src.decode(video=0)]
+    with av.open(str(out)) as src:
+        for frame in src.decode(video=0):
+            t = float(frame.time) + 0.4
+            expected = [v for s, v in original if s <= t][-1]
+            assert abs(frame.to_ndarray(format="rgb24").mean() - expected) < 1.2
+
+
+def test_playback_panels_follow_the_capture_of_the_presented_frame(tmp_path):
+    helpers = serve.INDEX_HTML.split("function snIndexAt", 1)[1].split("function snWhat", 1)[0]
+    callbacks = re.findall(r"function onVF\(now, md\) \{[^\n]+\}", serve.INDEX_HTML)
+    script = "function snIndexAt" + helpers + "\n"
+    script += "const D={playback:{starts:[0,0.05,0.2],captures:[0,0.1,0.3]}};\n"
+    script += "let rv=0, observed=-1; const alive=()=>true,watch=()=>{},sync=t=>observed=t;\n"
+    for callback in callbacks[-2:]:
+        script += callback + "\nonVF(0,{mediaTime:0.05}); if(observed!==0.1)throw Error(String(observed));\n"
+        script += "onVF(0,{mediaTime:0.2}); if(observed!==0.3)throw Error(String(observed));\n"
+    script += "if(snIndexAt([0,0.1,0.3],0.05)!==0)throw Error('paused seek moved');\n"
+    path = tmp_path / "panels.js"
+    path.write_text(script)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_timing_metadata_is_probed_once_per_clip_version(tmp_path, monkeypatch):
+    path = tmp_path / "clip.mp4"
+    video(path, 3)
+    clips.retime(path, [0, 0.1, 0.3])
+    calls, original = [], serve.subprocess.run
+    def run(*args, **kw):
+        calls.append(args[0])
+        return original(*args, **kw)
+    monkeypatch.setattr(serve.subprocess, "run", run)
+    assert serve._shown_from_halfway(path)
+    assert serve._shown_from_halfway(path)
+    assert len(calls) == 1
+    path.touch()
+    assert serve._shown_from_halfway(path)
+    assert len(calls) == 2
+
+
+def test_goal_extraction_uses_absolute_clip_times_and_preserves_a_midpoint_tie(tmp_path):
+    from PIL import Image
+    import io
+    path = tmp_path / "late.mp4"
+    video(path, 30)
+    capture = 0.3 + np.arange(30) / 30
+    query = np.array([0.45])
+    clips.retime(path, capture, main=False, query_s=query, query_map=np.array([4]))
+    image = Image.open(io.BytesIO(serve.extract_frame(path, 0.45, 96)))
+    assert abs(np.asarray(image).mean() - 8) < 1.5
+    image = Image.open(io.BytesIO(serve.extract_frame(path, 0.450002, 96)))
+    assert abs(np.asarray(image).mean() - 10) < 1.5
+
+
+def test_removing_the_main_camera_moves_state_contacts_and_depth_on_one_clock(tmp_path):
+    main = 0.0122 + np.arange(10) / 30
+    side = main - 0.008
+    ep = recording(tmp_path, main, side)
+    src = json.loads((ep / "sources.json").read_text())
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["contacts"] = [{"start_s": float(side[3]), "end_s": float(side[5]), "peak_s": float(side[4]),
+                        "dips_s": [float(side[4])]}]
+    np.savez(ep / "state.npz", state=np.arange(10, dtype=float)[:, None])
+    np.savez(ep / "depth_times.npz", depth_left=side, depth_left_pts=np.arange(10))
+    np.save(ep / "depth_kmap.npy", np.arange(10))
+    (ep / "depth.json").write_text(json.dumps({"left": {"kmap": "depth_kmap.npy"}}))
+    with np.load(ep / "times.npz") as z:
+        ts = {k: z[k] for k in z.files}
+    src.pop("exo")
+    clips.reanchor(ep, ctx, src, ts, "exo", "left", "top")
+    (ep / "sources.json").write_text(json.dumps(src))
+    (ep / "context.json").write_text(json.dumps(ctx))
+    e = episode.load(ep)
+    assert episode.frame_time(e, 0) == pytest.approx(0)
+    with np.load(ep / "state.npz") as z:
+        assert np.array_equal(z["state"][:, 0], np.arange(10))
+    with np.load(ep / "depth_times.npz") as z:
+        assert np.allclose(z["depth_left"], np.arange(10) / 30)
+    assert ctx["contacts"][0]["start_s"] == pytest.approx(0.1)
+    assert ctx["contacts"][0]["dips_s"] == pytest.approx([4 / 30], abs=0.001)
+    assert np.allclose(clips.clip_times(ep, src)["left"], sensors.clip_times(ep, ctx, 10))
+
+
+def test_composed_mixed_rate_footage_keeps_each_cameras_current_frame(tmp_path):
+    inputs, original = [], []
+    for name, rate in (("slow", 15), ("fast", 60)):
+        path = tmp_path / (name + ".mp4")
+        video(path, 90)
+        clips.retime(path, 0.019 + np.arange(90) / rate, fps=rate, main=False)
+        inputs.append((path, (96, 64), rate))
+        with av.open(str(path)) as src:
+            original.append([(float(f.time), f.to_ndarray(format="rgb24").mean()) for f in src.decode(video=0)])
+    out = tmp_path / "mixed.mp4"
+    subprocess.run(serve.footage_command(inputs, 0.4, 1.4, out, 1), check=True)
+    _, _, cells = serve.footage_layout([(96, 64), (96, 64)])
+    with av.open(str(out)) as src:
+        frames = list(src.decode(video=0))
+    assert len(frames) == 60
+    for frame in frames:
+        t, pixels = float(frame.time) + 0.4, frame.to_ndarray(format="rgb24")
+        for (x, y, w, h), samples in zip(cells, original):
+            expected = [v for start, v in samples if start <= t][-1]
+            assert abs(pixels[y:y + h, x:x + w].mean() - expected) < 1.5

@@ -68,6 +68,7 @@ def _episode(root: Path, n: int = 300, fps: float = 30.0, depth: bool = False) -
     np.savez(ep / "signals.npz", s0=force, s1=pmap, s2=np.ones((n, 1), np.float32))
     np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
     ctx = {"dataset": "you/your-own-dataset", "profile": "teleop_arms", "fps": fps, "n_state_frames": n,
+           "clock_zero_s": 12.5,
            "signals": [{"name": "fingertip force", "key": "s0", "dims": 1, "names": ["fz"], "rate_hz": 100.0},
                        {"name": "pressure", "key": "s1", "dims": 16, "shape": [4, 4]},
                        {"name": "health", "key": "s2", "dims": 1, "names": ["ok"]}]}
@@ -290,8 +291,8 @@ def test_a_depth_clip_keeps_every_depth_frame_that_decodes(tmp_path):
     np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
     _damaged_from(ep / "depth.mkv", 20)
     out = tmp_path / "clips"
-    for (pk, b, du, o, fps, main, off, skip, t_, _, _) in clips.episode_jobs(ep, out, False):
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t_)
+    for (pk, b, du, o, fps, main, off, skip, t_, q, km, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t_, q, km)
     (job,) = clips.depth_jobs(ep, out, False)
     (iss,) = clips.extract_depth(*job[:4], 1, job[4])
     assert iss["kind"] == "depth_not_decodable" and iss["camera"] == "exo", iss
@@ -349,8 +350,8 @@ def test_a_depth_clip_has_its_colour_clips_frames_and_timestamps(tmp_path, depth
         np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
     out = tmp_path / "clips"
     jobs = clips.episode_jobs(ep, out, False)
-    for (pk, b, du, o, fps, main, off, skip, t, _, _) in jobs:
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t)
+    for (pk, b, du, o, fps, main, off, skip, t, q, km, _, _) in jobs:
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t, q, km)
     (job,) = clips.depth_jobs(ep, out, False)
     clips.extract_depth(*job[:4], 1, job[4])
     colour, dclip = out / "episode_000000.mp4", out / "depth_exo" / "episode_000000.mp4"
@@ -380,8 +381,8 @@ def test_a_depth_clip_whose_times_do_not_cover_the_colour_clip_is_kept_and_flagg
     np.savez(ep / "times.npz", exo=t[:30], exo_pts=np.arange(n) * 512)
     np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
     out = tmp_path / "clips"
-    for (pk, b, du, o, fps, main, off, skip, t, _, _) in clips.episode_jobs(ep, out, False):
-        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t)
+    for (pk, b, du, o, fps, main, off, skip, t, q, km, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t, q, km)
     (job,) = clips.depth_jobs(ep, out, False)
     issues = clips.extract_depth(*job[:4], 1, job[4])
     dclip = out / "depth_exo" / "episode_000000.mp4"

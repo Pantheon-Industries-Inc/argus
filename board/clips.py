@@ -207,7 +207,7 @@ def clip_times(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
 
 def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
                 ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0,
-                skip: int = 0, times=None) -> dict | None:
+                skip: int = 0, times=None, query_s=None, query_map=None) -> dict | None:
     """Exactly the episode's n_frames, starting at its first frame. Packed files are on an exact frame grid,
     so seeking half a frame before the episode's offset lands on its first frame whichever way the decimal
     rounds, and -frames:v stops after the last one (never a frame of the next episode). Per-episode files
@@ -241,7 +241,8 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
         if not got:
             raise RuntimeError(f"{out_mp4.name}: no frame of {packed} decodes")
         if times is not None and len(times) >= skip + got:
-            retime(tmp, times[skip:skip + got], fps, main)
+            mapping = None if query_map is None else query_map - skip
+            retime(tmp, times[skip:skip + got], fps, main, query_s, mapping)
         else:
             frame_lengths(tmp)
         os.replace(tmp, out_mp4)
@@ -253,6 +254,9 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
 # the clip's comment when retime timed its frames: each frame is on screen from halfway after the capture before it,
 # so the frame a time shows is the one on screen then (board/serve.py extract_frame), not the one starting nearest it
 HALFWAY_TAG = "each frame shown from halfway after the capture before it"
+# Microsecond ticks keep midpoint rounding below a video tick and agree with the composition filter's AVTB clock.
+# Existing request maps resolve float ties without changing their images.
+DISPLAY_TICKS_PER_S = 1_000_000
 
 
 def shown_from(capture_s, fps: float = 30.0, lead_s: float = 0.0):
@@ -269,7 +273,36 @@ def shown_from(capture_s, fps: float = 30.0, lead_s: float = 0.0):
     return starts, float(t[-1]) + step / 2
 
 
-def retime(mp4: Path, capture_s, fps: float = 30.0, main: bool = True) -> None:
+def display_ticks(capture_s, fps: float = 30.0, main: bool = True, query_s=None, query_map=None):
+    """Display starts in fine ticks, constrained by the request's actual frame choices. A midpoint tie can resolve
+    either way under float arithmetic, so its encoded boundary must keep that choice rather than recompute it.
+    Other instants differ from the halfway boundary by at most one tick."""
+    import numpy as np
+    from label.episode import PAIRED_SPAN_SLACK_S
+    starts, end = shown_from(capture_s, fps, 0.0 if main else PAIRED_SPAN_SLACK_S)
+    ticks = np.floor(starts * DISPLAY_TICKS_PER_S).astype(np.int64) + 1
+    ticks[0] = int(np.floor(starts[0] * DISPLAY_TICKS_PER_S))
+    if query_s is not None and query_map is not None:
+        q, km = np.asarray(query_s), np.asarray(query_map)
+        valid = (km >= 0) & (km < len(ticks)) & (q >= 0)
+        q, km = q[valid], km[valid]
+        latest, earliest = np.full(len(ticks), -np.inf), np.full(len(ticks), np.inf)
+        np.maximum.at(latest, km, q)
+        np.minimum.at(earliest, km, q)
+        latest = np.maximum.accumulate(latest)
+        earliest = np.minimum.accumulate(earliest[::-1])[::-1]
+        for i in range(1, len(ticks)):
+            lo = int(np.floor(latest[i - 1] * DISPLAY_TICKS_PER_S)) + 1 if np.isfinite(latest[i - 1]) else 0
+            hi = int(np.floor(earliest[i] * DISPLAY_TICKS_PER_S)) if np.isfinite(earliest[i]) else ticks[i]
+            if lo > hi:
+                raise ValueError("request frame choices are closer than the display clock can represent")
+            ticks[i] = min(max(ticks[i], lo), hi)
+    for i in range(1, len(ticks)):
+        ticks[i] = max(ticks[i], ticks[i - 1] + 1)
+    return ticks, max(int(np.ceil(end * DISPLAY_TICKS_PER_S)), int(ticks[-1]) + 1)
+
+
+def retime(mp4: Path, capture_s, fps: float = 30.0, main: bool = True, query_s=None, query_map=None) -> None:
     """Put the frames of an encoded clip, in display order, on screen when shown_from says (capture_s, their capture
     times on the episode's clock, seconds), each lasting until the next one comes on: the times label/episode.py
     chooses the model's frames by, where the file's own timestamps can be an even rate its recorder never kept (a
@@ -280,22 +313,18 @@ def retime(mp4: Path, capture_s, fps: float = 30.0, main: bool = True) -> None:
     same order. The clip's comment is HALFWAY_TAG."""
     import av
     import numpy as np
+    from fractions import Fraction
 
-    from label.episode import PAIRED_SPAN_SLACK_S
-    starts, end = shown_from(capture_s, fps, 0.0 if main else PAIRED_SPAN_SLACK_S)
+    new, stop = display_ticks(capture_s, fps, main, query_s, query_map)
     tmp = mp4.with_name(mp4.stem + ".time.mp4")
     try:
         with av.open(str(mp4)) as src:
             ist = src.streams.video[0]
-            tb = ist.time_base
+            tb = Fraction(1, DISPLAY_TICKS_PER_S)
             pkts = [p for p in src.demux(ist) if p.size and p.pts is not None]
             old = np.array(sorted(p.pts for p in pkts), dtype=np.float64)
-            if len(old) != len(starts):
-                raise RuntimeError(f"{mp4.name}: {len(old)} frames for {len(starts)} capture times")
-            new = [int(round(x / tb)) for x in starts]
-            for i in range(1, len(new)):
-                new[i] = max(new[i], new[i - 1] + 1)            # two captures closer than a tick stay in order
-            stop = max(int(round(end / tb)), new[-1] + 1)
+            if len(old) != len(new):
+                raise RuntimeError(f"{mp4.name}: {len(old)} frames for {len(new)} capture times")
             ticks = np.asarray(new, dtype=np.float64)
 
             def moved(x):
@@ -303,7 +332,8 @@ def retime(mp4: Path, capture_s, fps: float = 30.0, main: bool = True) -> None:
                     return ticks[0] - (old[0] - x) * (ticks[1] - ticks[0]) / max(old[1] - old[0], 1.0)
                 return float(np.interp(x, old, ticks))
             at = {int(o): i for i, o in enumerate(old)}
-            with av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart"}) as dst:
+            with av.open(str(tmp), "w", format="mp4", options={"movflags": "+faststart",
+                                                            "movie_timescale": str(DISPLAY_TICKS_PER_S)}) as dst:
                 dst.metadata["comment"] = HALFWAY_TAG
                 ost = dst.add_stream_from_template(ist)
                 ost.time_base = tb
@@ -314,6 +344,7 @@ def retime(mp4: Path, capture_s, fps: float = 30.0, main: bool = True) -> None:
                     dts = int(np.floor(moved(p.dts))) if p.dts is not None else new[i]
                     dts = min(dts if last_dts is None else max(dts, last_dts + 1), new[i])
                     p.pts, p.dts, last_dts = new[i], dts, dts
+                    p.time_base = tb
                     p.stream = ost
                     dst.mux(p)
         os.replace(tmp, mp4)
@@ -402,7 +433,8 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
         with av.open(str(colour_mp4)) as c:
             tag = c.metadata.get("comment")
         with av.open(str(entry["packed"])) as src, av.open(str(tmp), "w", format="mp4",
-                                                          options={"movflags": "+faststart"}) as dst:
+            options={"movflags": "+faststart", **({"movie_timescale": str(tb.denominator)}
+                                                   if tag == HALFWAY_TAG else {})}) as dst:
             if tag == HALFWAY_TAG:
                 dst.metadata["comment"] = tag          # timed as its colour clip, so read the same way
             ist = src.streams.video[0]
@@ -508,11 +540,10 @@ def frame_lengths(mp4: Path) -> bool:
     import av
     with av.open(str(mp4)) as src:
         ist = src.streams.video[0]
+        tag = src.metadata.get("comment")
         meta = [(p.pts, p.duration) for p in src.demux(ist) if p.size and p.pts is not None]
     if not meta or all(d for _, d in meta[:-1]) and meta[-1][1]:
         return False
-    with av.open(str(mp4)) as src:
-        tag = src.metadata.get("comment")
     pts = sorted(p for p, _ in meta)
     step = {p: (pts[i + 1] - p if i + 1 < len(pts) else (p - pts[i - 1] if i else 0)) for i, p in enumerate(pts)}
     tmp = mp4.with_name(mp4.stem + ".len.mp4")
@@ -612,14 +643,18 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     big = main_cam(sources) if cams else None
     offsets = start_offsets(ep_dir, sources, fps)
     times = clip_times(ep_dir, sources, fps)
+    import numpy as np
+    query = times.get(big)
     jobs = []
     for cam in cams:
         o = outs[cam]
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
             s = sources[cam]
             off, skip = offsets.get(cam, (0.0, 0))
+            km = (np.load(ep_dir / s["kmap"]) if s.get("kmap") else
+                  np.arange(len(query)) if query is not None else None)
             jobs.append((s["packed"], float(s["base_s"]), int(s["n_frames"]), o, fps, cam == big, off, skip,
-                         times.get(cam), ep_dir.name, cam))
+                         times.get(cam), query, km, ep_dir.name, cam))
     # the cameras the model is not shown, as side cameras at their own start on the episode's clock: one that started
     # before the clock drops its frames from before it, as start_offsets does
     for view, e in unshown_views(ctx):
@@ -629,7 +664,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
             start = float(e.get("start_s") or 0.0)
             skip = int(round(-start * f)) if start < 0 else 0
             jobs.append((str(e["packed"]), float(e.get("base_s") or 0.0), int(e["n_frames"]), o, f, False,
-                         max(0.0, start + skip / f), skip, None, ep_dir.name, view))
+                         max(0.0, start + skip / f), skip, None, None, None, ep_dir.name, view))
     return jobs
 
 
@@ -895,6 +930,8 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
                 for f in fields:
                     if isinstance(x, dict) and isinstance(x.get(f), (int, float)):
                         x[f] = round(float(x[f]) - shift, 3)
+                if key == "contacts" and isinstance(x, dict) and x.get("dips_s"):
+                    x["dips_s"] = [round(float(t) - shift, 3) for t in x["dips_s"]]
         t_new = t_new - shift
     half = step_old / 2
     for v, f0 in first.items():
@@ -1123,8 +1160,8 @@ def main() -> int:
     unshown_cut: dict[str, set] = {}            # the same for the cameras the model is not shown (unshown_views)
     unshown_broken: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t):
-                (o, ep, cam) for (pk, b, du, o, fps, is_main, off, skip, t, ep, cam) in jobs}
+        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km):
+                (o, ep, cam) for (pk, b, du, o, fps, is_main, off, skip, t, q, km, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
             if cam.startswith(UNSHOWN):
@@ -1172,10 +1209,10 @@ def main() -> int:
             # every clip is timed on it (start_offsets); each camera's frames are recorded as they come out
             # the cameras the model is not shown too, at their start on the moved clock (CLOCK_TIME_KEYS)
             redo, again, u_cut, u_broken = {}, set(), set(), {}
-            for (pk, b, du, o, fps, is_main, off, skip, t, ep, cam) in episode_jobs(d, args.out, True,
+            for (pk, b, du, o, fps, is_main, off, skip, t, q, km, ep, cam) in episode_jobs(d, args.out, True,
                                                                                     args.name_prefix):
                 try:
-                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t)
+                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km)
                     if cam.startswith(UNSHOWN):
                         u_cut.add(cam)
                         continue

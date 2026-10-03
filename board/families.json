@@ -95,7 +95,7 @@
   {
    "slug": "clip-frames",
    "list": "data",
-   "name": "Camera video has fewer frames than the episode",
+   "name": "Camera video does not cover the episode",
    "reader_issues": [
     "clip_frame_count",
     "camera_short"
