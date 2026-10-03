@@ -1429,6 +1429,12 @@ def _metadata_issues(ep: dict, pl: dict) -> str:
     return "\nUPLOADED METADATA COULD NOT BE FULLY READ:\n" + "\n".join(issues) + "\n" if issues else ""
 
 
+def _has_metadata_issues(ep: dict, pl: dict) -> bool:
+    """Only actual metadata failures or limits add their warning block."""
+    return any(i.get("kind") in ("metadata_unreadable", "metadata_limit")
+               for i in ep["context"].get("reader_issues", []))
+
+
 BLOCKS = (
     Block("collection_note", "intro", _has_collection_note, _collection_text),
     Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
@@ -1443,7 +1449,7 @@ BLOCKS = (
           schema_fields=("contacts", "contacts_missing"),
           checks=("contact_checks",)),
     Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
-    Block("metadata_issues", "after_task", lambda ep, pl: bool(_metadata_issues(ep, pl)), _metadata_issues),
+    Block("metadata_issues", "after_task", _has_metadata_issues, _metadata_issues),
 )
 
 

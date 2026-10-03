@@ -974,21 +974,41 @@ def instruction_from(obj) -> str | None:
     return None
 
 
-def read_annotation(p: Path):
-    """One note file as sent: a .json or .jsonl parsed, anything else (or one that does not parse) as text. Read as
-    UTF-8 without a byte order mark, which an editor can save at the start and which would otherwise lead the task."""
-    text = p.read_text(encoding="utf-8-sig", errors="replace")
+def read_note(p: Path) -> tuple[object, str | None]:
+    """Keep readable note claims even when their structure fails, with a separate reason that cannot become a task."""
+    try:
+        text = p.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as error:
+        return None, plain_error(error)
     try:
         if p.suffix.lower() == ".json":
-            return json.loads(text)
+            return json.loads(text), None
         if p.suffix.lower() == ".jsonl":
-            return [json.loads(l) for l in text.splitlines() if l.strip()]
-    except ValueError:
-        pass
-    return text
+            rows, bad = [], []
+            for n, line in enumerate(text.splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    bad.append({"line": n, "text": line})
+            if bad:
+                lines = _and_words([str(row["line"]) for row in bad])
+                return {"rows": rows, "unparsed_lines": bad}, f"JSON Lines {lines} did not parse; readable text was kept"
+            return rows, None
+    except ValueError as error:
+        return text, plain_error(error)
+    return text, None
+
+
+def read_annotation(p: Path):
+    """One note as sent, with valid JSON Lines rows and any unparsed lines retained separately."""
+    return read_note(p)[0]
 
 
 NOTE_OWN_EXT = (".json", ".txt", ".jsonl", ".md")
+# Shared text needs a note name; arbitrary dataset documentation does not establish an episode claim.
+RECORDER_NOTE_WORDS = frozenset({"note", "notes", "annotation", "annotations", "meta", "metadata"})
 # the plain text files named for the episode's task, and every note file read in an episode's folder by its name
 TASK_NOTE_NAMES = ("instruction.txt", "task.txt")
 NOTE_NAMES = ("annotations.json", "annotation.json", "meta.json") + TASK_NOTE_NAMES + ("annotations.jsonl", "notes.txt")
@@ -1077,8 +1097,17 @@ def episode_notes(item: dict) -> dict:
     owned |= camera_owned
     cams = (owned if len(fs) > 1 else set()) | camera_owned
     keys = [p.relative_to(nf["dir"]).as_posix() if nf and nf["dir"] in p.parents else p.name for p in files]
-    notes = [(k, read_annotation(p)) for k, p in zip(keys, files)]
-    got = {p: o for p, (_, o) in zip(files, notes)}
+    notes, got, read, issues, attributed = [], {}, [], [], []
+    for key, p in zip(keys, files):
+        obj, error = read_note(p)
+        got[p] = obj
+        if error:
+            issues.append({"kind": "metadata_unreadable", "text": f"{key} could not be fully parsed: {error}. "
+                           "It supplies no task; readable text stays an attributed note."})
+            attributed.append(key)
+        if obj is not None or not error:
+            notes.append((key, obj))
+            read.append(p)
 
     def task_of(p: Path | None) -> str | None:
         # a JSON object's task keys, or a plain text file's one line
@@ -1108,7 +1137,7 @@ def episode_notes(item: dict) -> dict:
         if all(owns) and len({task_key(t) for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
-    read, disagree, absent, attributed, issues = list(files), [], [], [], []
+    disagree, absent = [], []
     named_here, shared = [], []           # (file, task) of the folder .json files named for this episode, or for none
     weighed = {p.resolve() for p in files}
     extra_dirs = item.get("metadata_dirs") or []
@@ -1126,7 +1155,8 @@ def episode_notes(item: dict) -> dict:
         camera_names = nf.get("camera_names")
         camera_owners = named_for(p, camera_names)[0] if camera_names else frozenset()
         camera_owner = None in owners and nf["episode"] in camera_owners
-        side_owner = item.get("side_metadata") and not gone and (not owners or nf["episode"] in owners)
+        shared_note = p.suffix.lower() == ".json" or bool(set(tokens(p.stem)) & RECORDER_NOTE_WORDS)
+        side_owner = item.get("side_metadata") and not gone and (nf["episode"] in owners or not owners and shared_note)
         known_owner = gone and nf["episode"] in owners
         eligible = not owners and not gone or None not in owners and nf["episode"] in owners
         if not (camera_owner or side_owner or known_owner or eligible and p.suffix.lower() == ".json"):
@@ -1136,14 +1166,16 @@ def episode_notes(item: dict) -> dict:
             issues.append({"kind": "metadata_limit", "text": f"{key} was not read because it exceeds "
                            f"the {NOTE_JSON_MAX_BYTES} byte note limit."})
             continue
-        obj = read_annotation(p)
-        if p.suffix.lower() in (".json", ".jsonl") and isinstance(obj, str):
-            try:
-                json.loads(p.read_text(encoding="utf-8-sig"))
-            except ValueError:
-                issues.append({"kind": "metadata_unreadable", "text": f"{key} could not be parsed as "
-                               f"{p.suffix[1:].upper()}, so it supplies no task or note."})
-                continue
+        obj, error = read_note(p)
+        got[p] = obj
+        if error:
+            issues.append({"kind": "metadata_unreadable", "text": f"{key} could not be fully parsed: {error}. "
+                           "It supplies no task; readable text stays an attributed note."})
+            if obj is not None:
+                notes.append((key, obj))
+                read.append(p)
+                attributed.append(key)
+            continue
         if camera_owner:
             # filename ownership identifies this camera, without making its task the episode's instruction
             notes.append((key, obj))
@@ -1171,7 +1203,7 @@ def episode_notes(item: dict) -> dict:
             instr = found[0][1]
         elif found:
             # files that name different tasks: none is guessed to be the task, and each is a note under its name
-            notes += [(p.relative_to(nf["dir"]).as_posix(), read_annotation(p)) for p, _ in found]
+            notes += [(p.relative_to(nf["dir"]).as_posix(), got[p]) for p, _ in found]
             disagree = [p.relative_to(nf["dir"]).as_posix() for p, _ in found]
     notes = list(dict(notes).items())
     read = list(dict.fromkeys(read))
@@ -2818,7 +2850,7 @@ def lerobot_metadata_paths(root: Path) -> set[Path]:
     meta = root / "meta"
     return {(meta / name).resolve() for name in
             ("info.json", "stats.json", "tasks.jsonl", "tasks.parquet", "episodes.jsonl", "episodes_stats.jsonl")} \
-        | {p.resolve() for p in meta.glob("*annotat*") if p.is_file()} \
+        | {p.resolve() for p in meta.glob("*annotat*") if p.is_file() and p.suffix in (".parquet", ".jsonl")} \
         | {p.resolve() for p in (meta / "episodes").rglob("*.parquet")}
 
 
@@ -2826,30 +2858,38 @@ def metadata_failure(reads: dict, p: Path, reason: str) -> None:
     """A failed metadata read stays named even when other rows or files can still be used."""
     key = p.relative_to(reads["dir"]).as_posix()
     text = f"{key} could not be fully read: {reason}."
-    reads["missing"].append(text)
-    reads["metadata_issues"].append({"kind": "metadata_unreadable", "text": text})
+    if text not in reads["missing"]:
+        reads["missing"].append(text)
+        reads["metadata_issues"].append({"kind": "metadata_unreadable", "text": text})
 
 
 def read_jsonl(p: Path, reads: dict | None = None) -> list[dict]:
     out = []
     if not p.exists():
         return out
-    bad = 0
-    for line in p.read_text(errors="replace").splitlines():
+    bad = []
+    try:
+        text = p.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as error:
+        if reads is not None:
+            metadata_failure(reads, p, plain_error(error))
+        return out
+    for n, line in enumerate(text.splitlines(), 1):
         if line.strip():
             try:
                 row = json.loads(line)
                 if isinstance(row, dict):
                     out.append(row)
                 else:
-                    bad += 1
+                    bad.append(n)
             except json.JSONDecodeError:
-                bad += 1
+                bad.append(n)
                 continue            # one damaged line never loses the rest of the metadata
     if reads is not None:
         reads["metadata_read"].add(p.resolve())
         if bad:
-            metadata_failure(reads, p, f"{bad} lines were not JSON objects; valid rows were kept")
+            lines = _and_words([str(n) for n in bad])
+            metadata_failure(reads, p, f"lines {lines} were not JSON objects; valid rows were kept")
     return out
 
 
@@ -2857,11 +2897,33 @@ def scalar(v):
     return v[0] if hasattr(v, "__len__") and not isinstance(v, str) else v
 
 
-def _read_json(p: Path) -> dict | None:
+def recorded_index(v) -> int:
+    """A recorded owner index must be a nonnegative integer; truncation cannot identify an episode or task."""
+    if isinstance(v, (list, tuple, np.ndarray)):
+        if len(v) != 1:
+            raise ValueError(f"index must hold one integer, got {v!r}")
+        v = v[0]
+    if not isinstance(v, (bool, np.bool_)):
+        if isinstance(v, (int, np.integer)) and v >= 0:
+            return int(v)
+        if isinstance(v, str) and re.fullmatch(r"[0-9]+", v):
+            return int(v)
+        if isinstance(v, (float, np.floating)) and np.isfinite(v) and v >= 0 and v == int(v):
+            return int(v)
+    raise ValueError(f"index must be a nonnegative integer, got {v!r}")
+
+
+def _read_json(p: Path, reads: dict | None = None) -> dict | None:
     try:
         d = json.loads(p.read_text(encoding="utf-8-sig"))
-        return d if isinstance(d, dict) else None
-    except Exception:
+        if not isinstance(d, dict):
+            raise ValueError("metadata must be a JSON object")
+        if reads is not None:
+            reads["metadata_read"].add(p.resolve())
+        return d
+    except Exception as error:
+        if reads is not None and p.exists():
+            metadata_failure(reads, p, plain_error(error))
         return None
 
 
@@ -2901,7 +2963,7 @@ def annotated_instructions(meta: Path, reads: dict | None = None) -> tuple[dict,
             v = scalar(v)
             if isinstance(v, str) and v.strip():
                 try:
-                    out[int(k)] = v.strip()
+                    out[recorded_index(k)] = v.strip()
                 except (TypeError, ValueError) as error:
                     if reads is not None:
                         metadata_failure(reads, p, plain_error(error))
@@ -2915,14 +2977,9 @@ def read_root(rdir: Path, rel: str) -> dict:
     paths (or packed windows), its data file and its task text, plus plain-words notes on what was read and
     what was missing."""
     import pandas as pd
-    info = _read_json(rdir / "meta" / "info.json")
     used, missing = [], []
     reads = {"dir": rdir, "metadata_read": set(), "metadata_issues": [], "missing": missing}
-    info_file = rdir / "meta" / "info.json"
-    if info is not None:
-        reads["metadata_read"].add(info_file.resolve())
-    elif info_file.exists():
-        metadata_failure(reads, info_file, "not a valid JSON object")
+    info = _read_json(rdir / "meta" / "info.json", reads)
     where = f" in {rel}" if rel else ""
     data_v2 = sorted(p for p in (rdir / "data").glob("chunk-*/episode_*.parquet")) if (rdir / "data").is_dir() else []
     data_v3 = sorted(p for p in (rdir / "data").glob("chunk-*/file-*.parquet")) if (rdir / "data").is_dir() else []
@@ -2976,20 +3033,22 @@ def read_root(rdir: Path, rel: str) -> dict:
         try:
             if not isinstance(t.get("task"), str) or not t["task"].strip():
                 raise ValueError("task must be nonempty text")
-            tasks_by_index[int(t["task_index"])] = t["task"]
+            tasks_by_index[recorded_index(t["task_index"])] = t["task"]
         except (KeyError, TypeError, ValueError) as error:
             metadata_failure(reads, task_file, plain_error(error))
     if (rdir / "meta" / "tasks.parquet").exists():
         try:
             tp = pd.read_parquet(rdir / "meta" / "tasks.parquet")
             reads["metadata_read"].add((rdir / "meta" / "tasks.parquet").resolve())
-            if not {"task_index", "task"} <= set(tp.columns):
-                raise ValueError("task_index and task columns are required")
-            for _, row in tp.iterrows():
+            if "task_index" not in tp.columns and tp.index.name != "task_index":
+                raise ValueError("a recorded task_index is required")
+            for task, row in tp.iterrows():
                 try:
-                    if not isinstance(row["task"], str) or not row["task"].strip():
+                    text = row.get("task", task)
+                    if not isinstance(text, str) or not text.strip():
                         raise ValueError("task must be nonempty text")
-                    tasks_by_index[int(row["task_index"])] = row["task"]
+                    index = row.get("task_index", task)
+                    tasks_by_index[recorded_index(index)] = text
                 except (KeyError, TypeError, ValueError) as error:
                     metadata_failure(reads, rdir / "meta" / "tasks.parquet", plain_error(error))
         except Exception as error:
@@ -3012,8 +3071,13 @@ def read_root(rdir: Path, rel: str) -> dict:
 
 def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path]) -> None:
     info, where = root["info"] or {}, (f" in {root['rel']}" if root["rel"] else "")
-    rows = {int(scalar(e["episode_index"])): e for e in read_jsonl(rdir / "meta" / "episodes.jsonl", root)
-            if "episode_index" in e}
+    rows = {}
+    episode_file = rdir / "meta" / "episodes.jsonl"
+    for n, e in enumerate(read_jsonl(episode_file, root), 1):
+        try:
+            rows[recorded_index(e["episode_index"])] = e
+        except (KeyError, TypeError, ValueError) as error:
+            metadata_failure(root, episode_file, f"episode record {n}: {plain_error(error)}; other records were kept")
     data_by = {int(V2_DATA.match(p.name).group(1)): p for p in data_files}
     vid_by: dict[int, dict] = {}
     for p in vids:
@@ -3082,18 +3146,19 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
     info, where = root["info"] or {}, (f" in {root['rel']}" if root["rel"] else "")
     parts = sorted((rdir / "meta" / "episodes").glob("chunk-*/*.parquet")) if (rdir / "meta" / "episodes").is_dir() else []
     eps = []
-    if parts:
+    for p in parts:
         try:
-            tables = []
-            for p in parts:
-                try:
-                    tables.append(pd.read_parquet(p))
-                    root["metadata_read"].add(p.resolve())
-                except Exception as error:
-                    metadata_failure(root, p, plain_error(error))
-            eps = pd.concat(tables, ignore_index=True).to_dict("records") if tables else []
+            rows = pd.read_parquet(p).to_dict("records")
+            root["metadata_read"].add(p.resolve())
         except Exception as error:
-            root["missing"].append(f"meta/episodes{where} could not be combined: {plain_error(error)}.")
+            metadata_failure(root, p, plain_error(error))
+            continue
+        for n, row in enumerate(rows, 1):
+            try:
+                recorded_index(row["episode_index"])
+                eps.append(row)
+            except (KeyError, TypeError, ValueError) as error:
+                metadata_failure(root, p, f"episode row {n}: {plain_error(error)}; other rows were kept")
     if eps:
         root["used"].append(f"Episode list{where} from meta/episodes ({len(eps)} listed).")
         rel_tpl = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
@@ -3155,12 +3220,20 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         if "episode_index" not in df.columns:
             continue
         for e, g in df.groupby("episode_index"):
-            lengths[int(e)] = len(g)
-            data_of[int(e)] = dp
+            try:
+                eidx = recorded_index(e)
+            except ValueError as error:
+                metadata_failure(root, dp, f"episode_index: {plain_error(error)}; its footage stays a recording")
+                continue
+            lengths[eidx] = len(g)
+            data_of[eidx] = dp
             if "task_index" in g.columns:
-                ti = int(g["task_index"].iloc[0])
-                if ti in root["tasks_by_index"]:
-                    tasks_of[int(e)] = [root["tasks_by_index"][ti]]
+                try:
+                    ti = recorded_index(g["task_index"].iloc[0])
+                    if ti in root["tasks_by_index"]:
+                        tasks_of[eidx] = [root["tasks_by_index"][ti]]
+                except ValueError as error:
+                    metadata_failure(root, dp, f"task_index: {plain_error(error)}; no task was inferred")
             if "timestamp" in g.columns and len(g) > 2:
                 fps_ts.append(measured_fps(np.sort(g["timestamp"].to_numpy(dtype=np.float64))))
     if root["fps"] is None and fps_ts:
@@ -3400,9 +3473,12 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     action = _cells(df["action"]) if df is not None and "action" in df.columns else None
     tasks = list(row.get("tasks") or [])
     if not tasks and df is not None and "task_index" in df.columns and len(df):
-        ti = int(df["task_index"].iloc[0])
-        if ti in r["tasks_by_index"]:
-            tasks = [r["tasks_by_index"][ti]]
+        try:
+            ti = recorded_index(df["task_index"].iloc[0])
+            if ti in r["tasks_by_index"]:
+                tasks = [r["tasks_by_index"][ti]]
+        except ValueError as error:
+            metadata_failure(r, row["data"], f"task_index: {plain_error(error)}; no task was inferred")
     annotated = r["annotated"].get(eidx)
     extra = {"task_label": tasks or [item["name"]], "episode_index": eidx, "robot_type": r["robot_type"],
              "source": {"format": f"lerobot {r['version']}", "episode_index": eidx, "dataset_folder": r["rel"] or None}}
@@ -6170,6 +6246,8 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
             det["missing"] += part["missing"]
             if part.get("version"):
                 det["version"] = part["version"]
+    table_reads = {"dir": root, "missing": det["missing"], "metadata_read": set(), "metadata_issues": []}
+    det["annotation_tables"] = annotation_tables(root, table_reads)
     attach_structured_notes(items)
     note_issues = {issue["text"] for it in items
                    for view in ([it] if it["kind"] == "video" else [it["side_notes"]] if it.get("side_notes") else [])
@@ -6272,8 +6350,10 @@ def add_side_notes(ep: Path, ctx: dict, item: dict) -> dict:
     if notes:
         previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
         set_uploader_notes(ctx, {"recorded notes": previous, "outside files": notes} if previous else notes, files=True)
-    if got["disagree"] and not ctx.get("instruction"):
-        add_issue(ctx, "task_files_disagree", f"{_and_words(got['disagree'])} name different tasks, so each is given as a note")
+    if got["disagree"]:
+        priority = " The recorded instruction keeps priority." if ctx.get("instruction") else ""
+        add_issue(ctx, "task_files_disagree", f"{_and_words(got['disagree'])} name different outside tasks, "
+                                             f"so each stays an attributed note.{priority}")
     if got["read"]:
         ctx.setdefault("source", {})["note_files"] = [str(p.relative_to(item["note_folder"]["dir"])) for p in got["read"]]
     (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
@@ -6348,6 +6428,7 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     vid_dirs = {Path(p).parent for p in files_under(root) if p.suffix.lower() in VIDEO_EXT}
     notes = {p.resolve() for p in opened_notes(items) | absent_take_notes(items)}
     notes |= {p for it in items for p in (it.get("root") or {}).get("metadata_read", ())}
+    notes |= {(root / name).resolve() for name, _ in det.get("annotation_tables", [])}
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
@@ -6548,7 +6629,7 @@ TABLE_MAX_BYTES = 20_000_000
 TABLE_MAX_ROWS_PER_EPISODE = 20
 
 
-def annotation_tables(root: Path) -> list[tuple[str, list[dict]]]:
+def annotation_tables(root: Path, reads: dict | None = None) -> list[tuple[str, list[dict]]]:
     """[(file name, rows)] of every table in the upload (CSV, TSV, JSON Lines): a dataset's per-episode metadata kept
     beside its data (OpenTouch's final_annotations/eat_ygf_p1_merged.csv, one row per clip with its object, action,
     grip and description). A table over TABLE_MAX_BYTES had been ignored; its rows that hold text are read now, up to
@@ -6561,7 +6642,7 @@ def annotation_tables(root: Path) -> list[tuple[str, list[dict]]]:
         big = p.stat().st_size > TABLE_MAX_BYTES
         try:
             if p.suffix.lower() == ".jsonl":
-                rows = [r for r in read_jsonl(p) if isinstance(r, dict)] if not big else \
+                rows = [r for r in read_jsonl(p, reads) if isinstance(r, dict)] if not big else \
                     [r for r in _jsonl_rows(p) if _has_text(r)][:TABLE_NOTE_ROWS_MAX]
             else:
                 with open(p, newline="", errors="replace") as fh:
@@ -6570,7 +6651,9 @@ def annotation_tables(root: Path) -> list[tuple[str, list[dict]]]:
                     # name an episode; a large table of numbers is a recording (table_signals), not notes
                     rows = list(reader) if not big else [r for _, r in zip(range(TABLE_NOTE_ROWS_MAX), (
                         r for r in reader if _has_text(r)))]
-        except Exception:
+        except Exception as error:
+            if reads is not None:
+                metadata_failure(reads, p, plain_error(error))
             continue
         if rows:
             out.append((p.relative_to(root).as_posix(), rows))
@@ -6691,7 +6774,7 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
               "used": opened + list(det.get("used") or []), "missing": list(det.get("missing") or [])}
     if det.get("packaging"):
         report["packaging"] = det["packaging"]
-    tables = annotation_tables(root)
+    tables = det.get("annotation_tables", [])
     for i, it in enumerate(items):
         known = it["seconds"] if it["seconds"] is not None else 0.0      # unknown until converted; measured below
         first = not report["episodes"]
@@ -6717,6 +6800,13 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
             continue
         if it.get("side_notes"):
             ctx = add_side_notes(out / ctx["episode_id"], ctx, it["side_notes"])
+        metadata_issues = (it.get("root") or {}).get("metadata_issues", [])
+        if metadata_issues:
+            for issue in metadata_issues:
+                add_issue(ctx, issue["kind"], issue["text"])
+                if issue["text"] not in report["missing"]:
+                    report["missing"].append(issue["text"])
+            (out / ctx["episode_id"] / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
         if tables:
             ctx = add_table_notes(out / ctx["episode_id"], ctx, table_rows_for(tables, it))
         secs = float(ctx.get("duration_s") or ctx["n_state_frames"] / float(ctx["fps"]))

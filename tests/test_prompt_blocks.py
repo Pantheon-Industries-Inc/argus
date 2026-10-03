@@ -218,6 +218,9 @@ BLOCK_CASES = [
     ("contacts", "teleop_joints", _add_contact, ("CONTACTS:",)),
     ("uploader_notes", "teleop_joints", _add(uploader_annotation='{"operator": "A"}\n'),
      ("THE UPLOADER'S OWN NOTES",)),
+    ("metadata_issues", "teleop_joints", _add(reader_issues=[
+        {"kind": "metadata_unreadable", "what": "meta/tasks.parquet could not be read."}]),
+     ("UPLOADED METADATA COULD NOT BE FULLY READ", "meta/tasks.parquet could not be read.")),
 ]
 # blocks whose presence switches the shared instructions to another variant
 CHANGES_FIXED = ("state", "no_state")
