@@ -100,6 +100,23 @@
    ]
   },
   {
+   "slug": "sensor-file-damaged",
+   "list": "data",
+   "name": "Sensor file damaged or cut short",
+   "reader_issues": [
+    "mcap_file_damaged",
+    "sensor_file_cut"
+   ]
+  },
+  {
+   "slug": "signal-partial",
+   "list": "data",
+   "name": "Signal starts late or stops early",
+   "reader_issues": [
+    "signal_partial_span"
+   ]
+  },
+  {
    "slug": "label-failed",
    "list": "data",
    "name": "Model reply gave no labels",

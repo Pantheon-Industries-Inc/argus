@@ -224,6 +224,48 @@ def test_an_indexed_mcap_damaged_inside_is_flagged_with_the_span_read(tmp_path):
     assert f"{hit[0]['t1_s']:.1f} s of the footage" in hit[0]["what"]
 
 
+def _damage_chunk_after(p: Path, seconds: float) -> None:
+    """Bytes overwritten inside the first chunk of an MCAP file whose messages start past seconds after T0, its
+    summary at its end left whole, so every message before that chunk still reads."""
+    from mcap.reader import make_reader
+    with open(p, "rb") as fh:
+        chunks = make_reader(fh).get_summary().chunk_indexes
+    at = min(c.chunk_start_offset for c in chunks if c.message_start_time > (T0 + seconds) * 1e9)
+    b = bytearray(p.read_bytes())
+    b[at + 40:at + 240] = b"\xff" * 200
+    p.write_bytes(bytes(b))
+
+
+def test_a_damaged_mcap_whose_messages_read_cover_the_footage_raises_no_issue(tmp_path):
+    p = tmp_path / "yam_left.mcap"
+    _arm_mcap(p)
+    _damage_chunk_after(p, 3.0)                     # the footage ends at 2 s
+    q = T0 + np.arange(60) / 30.0
+    assert not _issues(f.mcap_signals([p], q), "mcap_file_damaged")
+
+
+def test_a_damaged_mcaps_span_is_given_within_the_footage(tmp_path):
+    p = tmp_path / "yam_left.mcap"
+    _arm_mcap(p, t0=T0 + 1.0)                       # the file starts 1 s into the footage
+    _damage_chunk_after(p, 3.0)
+    q = T0 + np.arange(60) / 30.0                   # 2 s of footage
+    (hit,) = _issues(f.mcap_signals([p], q), "mcap_file_damaged")
+    assert hit["t0_s"] == pytest.approx(1.0, abs=0.02) and hit["t1_s"] == pytest.approx(q[-1] - q[0])
+    assert f"cover 1.0 s to {q[-1] - q[0]:.1f} s of the footage" in hit["what"]
+
+
+def test_a_cut_sensor_files_span_is_given_within_the_footage(tmp_path):
+    p = tmp_path / "yam_left.mcap"
+    _arm_mcap(p, t0=T0 + 1.0)
+    b = p.read_bytes()
+    p.write_bytes(b[: int(len(b) * 0.9)])
+    q = T0 + np.arange(60) / 30.0
+    sig = f.Signals()
+    f.note_sensors({}, sig, [p], [], [], q=q)
+    (cut,) = _issues(sig, "sensor_file_cut")
+    assert cut["t1_s"] == pytest.approx(q[-1] - q[0])
+
+
 def test_a_gap_inside_a_stream_is_given_with_the_limit_it_broke():
     q = np.arange(120) / 30.0
     t = np.concatenate([np.arange(0, 1.0, 0.25), np.arange(3.0, 4.01, 0.25)])     # 4 Hz, a 2 s hole
@@ -776,3 +818,12 @@ def test_a_readme_in_a_lerobot_root_is_named_as_not_read(tmp_path):
     words = " ".join(det["missing"])
     assert "ds/README.md" in words
     assert "info.json" not in words and "episode_000000" not in words
+
+
+def test_sensor_file_and_signal_span_issues_are_named_data_families():
+    from board.families import Families
+    fam = Families()
+    slugs = {k: fam.reader_family(k) for k in ("mcap_file_damaged", "sensor_file_cut", "signal_partial_span")}
+    assert slugs["mcap_file_damaged"] == slugs["sensor_file_cut"] and not slugs["sensor_file_cut"].startswith("d:")
+    assert not slugs["signal_partial_span"].startswith("d:")
+    assert {fam.catalog()[s]["list"] for s in slugs.values()} == {"data"}

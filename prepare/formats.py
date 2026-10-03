@@ -1457,6 +1457,20 @@ def edge_slack(span_s: float) -> float:
     return min(EDGE_SLACK_S, EDGE_SLACK_SHARE * span_s)
 
 
+def covers_footage(t0: float, t1: float, q: np.ndarray) -> bool:
+    """Whether readings from t0 to t1 cover the footage whose frames are at times q (the same clock): they start and
+    end within the edge slack (edge_slack) of its first and last frame."""
+    span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
+    return span > 0 and t0 <= q[0] + edge_slack(span) and t1 >= q[-1] - edge_slack(span)
+
+
+def span_on_footage(t0: float, t1: float, zero: float, length: float) -> tuple[float, float]:
+    """Readings from t0 to t1 as seconds of the footage, whose first frame is at zero on their clock and which lasts
+    length seconds, held within it: a reading before the first frame starts the span at 0, one after the last frame
+    ends it at the footage's end, so a data issue never names a time the footage does not have."""
+    return min(max(t0 - zero, 0.0), length), min(max(t1 - zero, 0.0), length)
+
+
 def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
     """The data issues of a kept signal's frames with no reading (a row with no finite value), in seconds of the
     episode (t, its frames' times): before its first reading or after its last one, when longer than the edge slack
@@ -4589,14 +4603,17 @@ def mcap_messages(fh, path: Path, topics, damaged: list | None = None):
             damaged.append((Path(path), first, last))
 
 
-def damaged_issue(p: Path, t0: float | None, t1: float | None, zero: float) -> dict:
-    """The data issue of an MCAP file whose messages stop at damage inside it (mcap_messages), with the span its
-    messages read cover in seconds of the footage (zero its first frame on the file's clock; a message before the
-    footage starts it at 0)."""
+def damaged_issue(p: Path, t0: float | None, t1: float | None, q: np.ndarray) -> dict | None:
+    """The data issue of an MCAP file whose messages stop at damage inside it (mcap_messages), with the span of the
+    footage (q, its frame times on the file's clock) its messages read cover (span_on_footage). None when they cover
+    the whole footage (covers_footage): the damage is past what the footage needs, so nothing of it was lost."""
     what = f"{Path(p).name} is damaged inside, though its index is whole"
     if t0 is None:
         return {"kind": "mcap_file_damaged", "what": what + ", and none of its messages could be read"}
-    a, b = max(t0 - zero, 0.0), max(t1 - zero, 0.0)
+    q = np.asarray(q, dtype=np.float64)
+    if covers_footage(t0, t1, q):
+        return None
+    a, b = span_on_footage(t0, t1, float(q[0]) if len(q) else t0, float(q[-1] - q[0]) if len(q) else 0.0)
     return {"kind": "mcap_file_damaged", "t0_s": a, "t1_s": b,
             "what": what + f", so only the messages before the damage were read; they cover {a:.1f} s to {b:.1f} s "
                            "of the footage"}
@@ -5203,8 +5220,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                 pass                                  # a cut-off file: the messages before the cut are kept
     out = Signals()
     out.left_out += sorted(books.items())
-    for p, t0, t1 in damaged:
-        out.issues.append(damaged_issue(p, t0, t1, float(q[0]) if len(q) else 0.0))
+    out.issues += [i for i in (damaged_issue(p, t0, t1, q) for p, t0, t1 in damaged) if i]
     named, by_field = {}, {}
     for (topic, field, i), r in rows.items():
         by_field.setdefault((topic, field), {})[i] = r
@@ -6353,9 +6369,9 @@ def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, u
     """What became of an episode's sensor files: their names (source "sensors", which says sensor data was read or
     tried, label/episode.py), how each was placed or why it was not (source "sensor_files", which convert gathers into
     the report), and each file not placed listed among the signals left out with the reason. A placed MCAP file cut
-    short (sensor_cut) is read up to the cut, a data issue (sensor_file_cut) giving the span its messages cover in
-    seconds of the footage (q, the footage's frame times on the file's clock when it was placed by its clock; from its
-    own start when it was placed from both starts)."""
+    short (sensor_cut) is read up to the cut, a data issue (sensor_file_cut) giving the span of the footage its
+    messages cover (span_on_footage; q, the footage's frame times on the file's clock when it was placed by its clock,
+    and from its own start when it was placed from both starts)."""
     files = [*by_clock, *assumed, *(p for p, _ in unplaced)]
     if not files:
         return
@@ -6366,9 +6382,10 @@ def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, u
         issue = {"kind": "sensor_file_cut", "what": f"{Path(p).name} is cut short, so only the messages written "
                                                     "before the cut were read"}
         if t is not None:
-            # the span its messages cover, in seconds of the footage: a message before the first frame starts it at 0
+            # the span its messages cover, in seconds of the footage and within it (span_on_footage)
             zero = float(q[0]) if p in by_clock and q is not None and len(q) else float(t[0])
-            t0, t1 = max(float(t[0]) - zero, 0.0), max(float(t[-1]) - zero, 0.0)
+            length = float(q[-1] - q[0]) if q is not None and len(q) else float(t[-1] - t[0])
+            t0, t1 = span_on_footage(float(t[0]), float(t[-1]), zero, length)
             issue.update(t0_s=t0, t1_s=t1, what=issue["what"] + f"; its messages cover {t0:.1f} s to {t1:.1f} s of "
                                                                  "the footage")
         signals.issues.append(issue)
