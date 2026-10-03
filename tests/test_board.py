@@ -1196,7 +1196,7 @@ def test_a_reply_that_breaks_the_output_format_is_flagged_and_never_stops_the_bu
     assert [k["label"] for k in d["key_events"]] == ["ok"] and d["tasks"] == [] and len(d["event_labels"]) == 3
     assert d["_off_schema"] == {"key_events": 1, "tasks": 1}
     assert iss["model_reply_fields_dropped"]["family"] == "label-format"
-    assert "1 row of key_events and tasks (a str, not a list)" in iss["model_reply_fields_dropped"]["what"]
+    assert "1 row of key_events and tasks (text, not a list)" in iss["model_reply_fields_dropped"]["what"]
     d, iss = issues("episode_000002")
     assert d["event_labels"] == [] and "model_reply_off_schema" in iss and "model_reply_fields_dropped" in iss
     d, iss = issues("episode_000003")

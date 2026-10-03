@@ -242,10 +242,18 @@ def parse_response(text: str) -> tuple[dict, bool]:
         fenced = re.fullmatch(r"\s*```(?:json)?\s*(.*?)\s*```\s*", text, re.S)
         labels = json.loads(fenced.group(1) if fenced else text)
         if not isinstance(labels, dict):
-            raise ValueError(f"the reply is a JSON {type(labels).__name__}, not an object")
+            raise ValueError(f"the reply is {json_kind(labels)}, not an object")
         return typed_labels(normalize_timeline(labels)), True
     except Exception as e:
         return {"_raw": text, "_parse_error": f"{type(e).__name__}: {e}"[:300]}, False
+
+
+def json_kind(x) -> str:
+    """What a JSON value is, in the output format's words, for the board's reason a field was left out."""
+    if isinstance(x, bool):
+        return "true or false"
+    return ("null" if x is None else "a number" if isinstance(x, (int, float)) else "text" if isinstance(x, str)
+            else "a list" if isinstance(x, list) else "an object" if isinstance(x, dict) else type(x).__name__)
 
 
 def _drop(labels: dict, field: str, row, why: str) -> None:
@@ -326,7 +334,7 @@ def _rows(labels: dict, field: str, rows: list, kind=dict, what: str = "an objec
         return rows
     for i, r in enumerate(rows):
         if not isinstance(r, kind):
-            _drop(labels, field, i, f"a {type(r).__name__}, not {what}")
+            _drop(labels, field, i, f"{json_kind(r)}, not {what}")
     return [r for r in rows if isinstance(r, kind)]
 
 
@@ -341,7 +349,7 @@ def typed_labels(labels: dict) -> dict:
                                (DICT_FIELDS, dict, "an object"), (TEXT_FIELDS, str, "text")):
         for k in fields:
             if k in labels and labels[k] is not None and not isinstance(labels[k], kind):
-                _drop(labels, k, None, f"a {type(labels[k]).__name__}, not {what}")
+                _drop(labels, k, None, f"{json_kind(labels[k])}, not {what}")
                 labels.pop(k)
     if isinstance(labels.get("instruction_variants"), list):
         labels["instruction_variants"] = _rows(labels, "instruction_variants", labels["instruction_variants"], str,
@@ -357,7 +365,7 @@ def typed_labels(labels: dict) -> dict:
     sc = labels.get("scene")
     if isinstance(sc, dict) and sc.get("objects") is not None:
         if not isinstance(sc["objects"], list):
-            _drop(labels, "scene.objects", None, f"a {type(sc['objects']).__name__}, not a list")
+            _drop(labels, "scene.objects", None, f"{json_kind(sc['objects'])}, not a list")
             sc.pop("objects")
         else:
             sc["objects"] = _rows(labels, "scene.objects", sc["objects"])

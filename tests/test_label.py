@@ -726,6 +726,10 @@ def test_one_bad_row_or_field_never_costs_the_whole_reply():
     assert sorted((d["field"], d.get("row", -1)) for d in labels["_dropped"]) == [
         ("data_issues", -1), ("instruction_variants", 1), ("key_events", 1), ("performance_review", -1),
         ("scene.objects", 0), ("task_summary", -1), ("timeline", 2)]
+    # each reason names the value in the output format's words, never Python's ("a str", "a int")
+    why = {(d["field"], d.get("row", -1)): d["why"] for d in labels["_dropped"]}
+    assert why[("performance_review", -1)] == "a number, not text" and why[("key_events", 1)] == "text, not an object"
+    assert why[("task_summary", -1)] == "a list, not text" and why[("data_issues", -1)] == "an object, not a list"
     assert "key_events row 1: t_s 'late' is not a time, kept untimed" in labels["_schema_violations"]
     # running it again on its own output changes nothing, and a reply that keeps to the format comes back unchanged
     assert harness.typed_labels(json.loads(json.dumps(labels))) == labels
