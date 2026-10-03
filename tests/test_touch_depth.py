@@ -761,15 +761,16 @@ def test_an_array_under_an_action_group_is_never_the_state(tmp_path):
         assert name in {x["name"] for x in ctx["signals"]}
 
 
-def test_a_state_with_values_that_are_not_numbers_says_so(tmp_path):
-    """A qpos holding an infinity is left out of the signals for it, and the note says that, not that it could not be
-    placed on the frames."""
+def test_a_state_with_a_value_that_is_not_a_number_is_read_with_that_value_filled(tmp_path):
+    """A qpos holding one infinity had been left out whole. The value is missing where it is, the frame is filled from
+    the readings around it as any short gap is (h5_state), and the bad value is a data issue on the episode."""
     q = _aloha()
     q[5, 2] = np.inf
-    ctx, _ = _convert(tmp_path, {"observations/qpos": q})
-    assert ctx["state_kind"] == "none"
+    ctx, ep = _convert(tmp_path, {"observations/qpos": q})
+    assert ctx["state_kind"] == "joints" and not ctx.get("state_note")
+    assert np.isfinite(np.load(ep / "state.npz")["state"]).all()
     # every array sits under observations/, which h5_streams leaves off the names
-    assert "recorded state qpos has values that are not all finite numbers" in ctx["state_note"]
+    assert [i["signal"] for i in ctx["reader_issues"] if i["kind"] == "signal_not_finite"] == ["qpos"]
 
 
 def test_a_long_gap_in_an_hdf5_state_is_not_drawn_as_motion(tmp_path):

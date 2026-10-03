@@ -979,7 +979,6 @@ SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
 # model reads one by one; it is listed among the signals left out, never dropped without a word. A tactile pressure map
 # of 64 x 64 cells is still a signal.
 SIGNAL_MAX_VALUES = 4096
-SIGNAL_MIN_READINGS = 0.5         # the share of its rows a column must have a reading at (any finite value) to be kept
 
 
 class Signals(dict):
@@ -1090,13 +1089,13 @@ def value_names(names, dims: int) -> list[str] | None:
 def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
     """Every other numeric per-frame column of an episode's table, under the dataset's own name, as (n, values) arrays:
     the columns that are not bookkeeping (SIGNAL_SKIP), not already read (used: the state, the action, the cameras)
-    and at least n rows long. A reading missing at some frames is still a reading, NaN at those frames, while a column
-    with a reading at fewer than SIGNAL_MIN_READINGS of its rows is left out. An array per frame keeps its shape (a
+    and at least n rows long. A reading missing at some frames is still a reading, NaN at those frames, however few
+    frames have one (the 2026-10-03 audit found a column dropped for reading at fewer than half). An array per frame keeps its shape (a
     pressure map is 16 x 16, not 256 numbers in a row) and the names the dataset gives its values (features:
     meta/info.json's, with "shape" and "names"). The harness shows them to the model as they are (label/episode.py), so
     nothing a dataset records is dropped because our checks do not know what it means: a mobile robot's base and torso,
-    joint velocities, forces, a tactile glove's pressure map. A column left out (wider than SIGNAL_MAX_VALUES, with too
-    few readings, a counter) is listed in left_out with the reason."""
+    joint velocities, forces, a tactile glove's pressure map. A column left out (wider than SIGNAL_MAX_VALUES, with no
+    reading at all, a counter) is listed in left_out with the reason."""
     out = Signals()
     if df is None:
         return out
@@ -1116,10 +1115,11 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
         if a is None or not a.shape[1] or len(a) < n:
             continue
         # a row has a reading when any of its values does, as checks/sensors.py counts it: a pressure map with one dead
-        # cell still reads at every frame
+        # cell still reads at every frame. A column with few readings is kept, NaN where it has none (write_signals
+        # records the gaps); only one with no reading at all says nothing
         has_reading = np.isfinite(a).any(axis=1)
-        if has_reading.mean() < SIGNAL_MIN_READINGS:
-            out.left_out.append((str(c), "no reading at most frames"))
+        if not has_reading.any():
+            out.left_out.append((str(c), "no reading at any frame"))
             continue
         a = np.where(np.isfinite(a), a, np.nan)
         if a.shape[1] > SIGNAL_MAX_VALUES:
@@ -1176,7 +1176,41 @@ def _nested(x):
     return x
 
 
-def write_signals(ep: Path, ctx: dict, signals: dict | None) -> None:
+def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
+    """The data issues of a kept signal's frames with no reading (a row with no finite value), in seconds of the
+    episode (t, its frames' times): before its first reading or after its last one, when longer than
+    STATE_EDGE_SLACK_S, a signal_partial_span each (a sensor started late or stopped early), and every other frame
+    without a reading counted in one signal_gap with its longest run."""
+    none = ~np.isfinite(np.asarray(a, dtype=np.float64)).any(axis=1)
+    n = len(none)
+    if not none.any() or none.all() or len(t) != n:
+        return []
+    t = np.asarray(t, dtype=np.float64) - float(t[0])
+    read = np.flatnonzero(~none)
+    first, last = int(read[0]), int(read[-1])
+    out = []
+    if first and t[first] > STATE_EDGE_SLACK_S:
+        out.append({"kind": "signal_partial_span", "signal": name, "t0_s": 0.0, "t1_s": float(t[first]),
+                    "what": f"{name} has no reading before {t[first]:.1f} s, so it is missing over the start of the "
+                            "footage"})
+        none[:first] = False
+    if last < n - 1 and t[-1] - t[last] > STATE_EDGE_SLACK_S:
+        out.append({"kind": "signal_partial_span", "signal": name, "t0_s": float(t[last]), "t1_s": float(t[-1]),
+                    "what": f"{name} has no reading after {t[last]:.1f} s, so it is missing over the end of the "
+                            "footage"})
+        none[last + 1:] = False
+    if none.any():
+        edges = np.diff(np.concatenate([[0], none.astype(np.int8), [0]]))
+        runs = list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1))
+        a0, a1 = max(runs, key=lambda r: r[1] - r[0])
+        k = int(none.sum())
+        out.append({"kind": "signal_gap", "signal": name, "t0_s": float(t[a0]), "t1_s": float(t[a1]),
+                    "what": f"{name} has no reading at {k} of its {n} frames"
+                            + (f"; the longest gap runs from {t[a0]:.1f} s to {t[a1]:.1f} s" if a1 > a0 else "")})
+    return out
+
+
+def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | None = None) -> None:
     """signals.npz beside the state (keys s0, s1, ...) and ctx["signals"], [{name, key, dims, shape, names, source}],
     trimmed to the episode's n_state_frames; nothing when there are none. What a reader read but did not keep
     (Signals.left_out) is written to ctx["source"]["unused_signals"], so the report names it, and the problems with
@@ -1208,6 +1242,11 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None) -> None:
     if not keep:
         ctx.pop("signals", None)
         return
+    t = np.asarray(t, dtype=np.float64)[:n] if t is not None and len(t) >= n else \
+        np.arange(n) / float(ctx.get("fps") or 30.0)
+    for k, v in keep.items():
+        for i in signal_gaps(k, np.asarray(v[:n], dtype=np.float64).reshape(n, -1), t):
+            add_issue(ctx, **i)
     np.savez(ep / "signals.npz", **{f"s{i}": np.asarray(v[:n], dtype=np.float32) for i, v in enumerate(keep.values())})
     ctx["signals"] = [{"name": k, "key": f"s{i}", "dims": int(v.shape[1]), **(meta.get(k) or {})}
                       for i, (k, v) in enumerate(keep.items())]
@@ -1348,7 +1387,9 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
         if action is not None and np.shape(action) == np.shape(state):
             arrs["action"] = np.asarray(action, dtype=np.float32)
         np.savez(ep / "state.npz", **arrs)
-    write_signals(ep, ctx, signals)
+    from label import episode as me
+    anchor = next(iter(me.order_views(ctx.get("cameras") or sources or {})), None)
+    write_signals(ep, ctx, signals, (times or {}).get(anchor))
     if times:
         np.savez(ep / "times.npz", **times)
         ctx["real_times"] = "times.npz"
@@ -3104,10 +3145,40 @@ def plan_hdf5(det: dict, root: Path) -> list[dict]:
 NOT_FINITE = "values that are not finite numbers"    # why a signal is left out when it holds an inf (h5_state reads it)
 
 
+def overlaps(t: np.ndarray, q: np.ndarray) -> bool:
+    """Whether readings at times t fall anywhere in the footage's frame times q."""
+    return len(t) > 0 and len(q) > 0 and float(t[-1]) >= float(q[0]) and float(t[0]) <= float(q[-1])
+
+
+def outside_words(t: np.ndarray, q: np.ndarray) -> str:
+    return f"recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, outside the footage"
+
+
+def not_finite(name: str, a: np.ndarray, t: np.ndarray, zero: float, out: Signals) -> np.ndarray:
+    """a (rows of readings at times t) with every value that is not a finite number NaN, and, when any is an inf or a
+    NaN beside finite values in its row, a data issue on out (signal_not_finite) giving how many and from the first to
+    the last such reading in seconds after zero (the footage's first frame). One bad value had dropped a whole
+    signal; now only that value is missing. A row with no finite value is a gap, which write_signals records."""
+    a = np.asarray(a, dtype=np.float64)
+    fin = np.isfinite(a)
+    bad = ~fin & (np.isinf(a) | fin.any(axis=1, keepdims=True))
+    if bad.any():
+        rows = np.flatnonzero(bad.any(axis=1))
+        t = np.asarray(t, dtype=np.float64)
+        out.issues.append({"kind": "signal_not_finite", "signal": name,
+                           "what": f"{name} has {int(bad.sum())} value{'s' if bad.sum() != 1 else ''} that "
+                                   f"{'are' if bad.sum() != 1 else 'is'} not a finite number in {len(rows)} reading"
+                                   f"{'s' if len(rows) != 1 else ''}; {'they are' if bad.sum() != 1 else 'it is'} "
+                                   "kept as missing values",
+                           "t0_s": float(t[rows[0]] - zero), "t1_s": float(t[rows[-1]] - zero)})
+    return np.where(fin, a, np.nan)
+
+
 def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor: int) -> Signals:
     """Every signal of an episode on the anchor camera's frames: by its own clock, as mcap_signals places a channel
-    (nearest sample, NaN where none is near, left out when it does not cover the footage), or, with no clock, one row
-    per anchor frame when it has as many rows as the anchor has frames."""
+    (nearest sample, NaN where none is near, so a signal that starts or ends inside the footage is NaN outside its
+    readings, and left out only when it records nothing inside the footage), or, with no clock, one row per anchor
+    frame when it has as many rows as the anchor has frames. A value that is not finite is NaN (not_finite)."""
     out = Signals()
     q = np.asarray(q_abs, dtype=np.float64)
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
@@ -3130,10 +3201,12 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             t = streams["clock"][s["clock"]]
             if span <= 0 or len(t) < 2:
                 continue
-            if t[0] > q[0] + STATE_EDGE_SLACK_S or t[-1] < q[-1] - STATE_EDGE_SLACK_S:
-                out.left_out.append((s["name"], f"recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, not over "
-                                                "the whole footage"))
+            if not overlaps(t, q):
+                out.left_out.append((s["name"], outside_words(t, q)))
                 continue
+            # a signal that starts or ends inside the footage is NaN outside its readings (write_signals records the
+            # span), and a value that is not finite is NaN where it is (not_finite)
+            a = not_finite(s["name"], a, t, q[0], out)
             v, var, n_gaps = place_on_frames(t, a, q)
             far = np.zeros(len(q), dtype=bool)
             far[:n_gaps] = True               # only its count is kept (meta "gaps")
@@ -3143,12 +3216,9 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
                         names=names, source=f"HDF5 dataset {s['path']}")
                 out.meta[f"{s['name']} variation within each frame"]["variation_of"] = s["name"]
         elif len(a) == n_anchor:
-            v, rate, far, var = a, fps, None, None
+            v, rate, far, var = not_finite(s["name"], a, q, q[0], out), fps, None, None
         else:
             out.left_out.append((s["name"], f"{len(a)} rows and no clock, while the camera has {n_anchor} frames"))
-            continue
-        if not np.isfinite(v[~np.isnan(v).all(axis=1)] if np.isnan(v).any() else v).all():
-            out.left_out.append((s["name"], NOT_FINITE))
             continue
         out.add(s["name"], v, shape=shape if len(shape) > 1 else None, names=names, source=f"HDF5 dataset {s['path']}")
         if rate:
@@ -3425,6 +3495,10 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Sign
                     out[named(k)] = v
                     out.meta[named(k)] = got.meta[k]
                 out.left_out += [(named(k), why) for k, why in got.left_out]
+                for i in got.issues:
+                    k = i.get("signal")
+                    out.issues.append({**i, "signal": named(k), "what": named(k) + i["what"][len(k):]}
+                                      if k and i["what"].startswith(k) else i)
                 out.left_out += [(named(s["name"]), "no clock to place it against the videos") for s in st["signal"]
                                  if not s["clock"]]
         except Exception as e:
@@ -3821,8 +3895,8 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
 # Every other number an MCAP records (a gripper's IMU, an arm's joint velocities and torques, a base's odometry), read
 # as recorded_signals reads a LeRobot table's other columns: per channel, each numeric field under the dataset's own
 # name, placed on the anchor camera's frames. A channel with fewer messages than SIGNAL_MIN_HZ per second (a
-# calibration, a process's CPU report) is not a per-frame record, and one that does not span the footage to within
-# STATE_EDGE_SLACK_S at both ends is left out rather than held flat where nothing was recorded.
+# calibration, a process's CPU report) is not a per-frame record. One that starts or ends inside the footage is NaN
+# outside its messages, never held flat where nothing was recorded, and the span it misses is a data issue.
 SIGNAL_MIN_HZ = 1.0
 SIGNAL_SKIP_PARTS = {"header", "timestamp", "stamp"}      # a message's own time and sequence bookkeeping
 STATE_EDGE_SLACK_S = 0.5
@@ -3971,15 +4045,21 @@ def place_on_frames(t: np.ndarray, v: np.ndarray, q: np.ndarray) -> tuple[np.nda
     bin_ = np.searchsorted(edges, t, side="right") - 1
     ok = (bin_ >= 0) & (bin_ < len(q))
     n = np.bincount(bin_[ok], minlength=len(q)).astype(np.float64)
+    # a value with no finite reading in a sample (a NaN the recorder wrote) counts toward no mean, so one missing
+    # value never empties a frame's other readings
+    fin = np.isfinite(v)
+    vz = np.where(fin, v, 0.0)
+    cnt = np.zeros((len(q), v.shape[1]))
     tot = np.zeros((len(q), v.shape[1]))
     sq = np.zeros((len(q), v.shape[1]))
-    np.add.at(tot, bin_[ok], v[ok])
-    np.add.at(sq, bin_[ok], v[ok] ** 2)
+    np.add.at(cnt, bin_[ok], fin[ok].astype(np.float64))
+    np.add.at(tot, bin_[ok], vz[ok])
+    np.add.at(sq, bin_[ok], vz[ok] ** 2)
     with np.errstate(all="ignore"):
-        mean = tot / n[:, None]
-        std = np.sqrt(np.maximum(sq / n[:, None] - mean ** 2, 0.0))
-    mean[n == 0] = np.nan
-    std[n == 0] = np.nan
+        mean = tot / cnt
+        std = np.sqrt(np.maximum(sq / cnt - mean ** 2, 0.0))
+    mean[cnt == 0] = np.nan
+    std[cnt == 0] = np.nan
     return mean, std, int((n == 0).sum())
 
 
@@ -4030,8 +4110,9 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     used {topic: fields already read, or None for the whole channel} keeps out what the reader already shows as the
     state. The name is the topic, then the field path ("/robot0/sensor/imu angular_velocity"); each signal keeps its
     values' names and its shape (Signals.meta), and a field that is read but not kept is named with the reason
-    (Signals.left_out): too few messages to be a per-frame record, not covering the footage, values that are not
-    finite, or wider than SIGNAL_MAX_VALUES. A field's messages are grouped by the names they give its values
+    (Signals.left_out): too few messages to be a per-frame record, nothing inside the footage, or wider than
+    SIGNAL_MAX_VALUES. A value that is not finite is NaN where it is (not_finite), and a channel that starts or ends
+    inside the footage is NaN outside its messages. A field's messages are grouped by the names they give its values
     (name_group), each put in its group's order, and a field of several groups is one signal per group, its name
     followed by the group's label (group_label). used names a field, or a (field, its value names) pair for a field
     of that name set only (state_fields)."""
@@ -4161,14 +4242,12 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             out.left_out.append((name, f"{r['d']} values per message, more than the {SIGNAL_MAX_VALUES} a signal "
                                        "holds"))
             continue
-        if t[0] > q[0] + STATE_EDGE_SLACK_S or t[-1] < q[-1] - STATE_EDGE_SLACK_S:
-            out.left_out.append((name, f"{some}recorded from {t[0] - q[0]:.1f} s to {t[-1] - q[0]:.1f} s, not over "
-                                       "the whole footage"))
+        if not overlaps(t, q):
+            out.left_out.append((name, some + outside_words(t, q)))
             continue
-        v = np.asarray(r["v"], dtype=np.float64)
-        if not np.isfinite(v).all():
-            out.left_out.append((name, NOT_FINITE))
-            continue
+        # a channel that starts or ends inside the footage is NaN outside its messages (write_signals records the
+        # span), and a value that is not finite is NaN where it is (not_finite)
+        v = not_finite(name, r["v"], t, float(q[0]), out)
         rate = len(t) / max(float(t[-1] - t[0]), 1e-9)
         # a frame with no message near it (a hand the tracker lost, a sensor that paused) is NaN, not the last value
         # held; a sensor faster than the camera gives each frame the mean of its interval (place_on_frames)

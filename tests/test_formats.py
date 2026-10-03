@@ -666,9 +666,10 @@ def test_a_side_from_value_names_only_completes_a_pair():
 
 
 def _one_side_of_two_hdf5_arms_that_fails_reads_neither(tmp_path):
-    """A left.h5 and a right.h5 beside videos whose right qpos cannot be read (an infinity, or nine values) had the
-    left arm read alone as a one arm state with no note. As joint_state leaves both MCAP arms unread when one side's
-    channel is not the layout, neither arm is read, and the note names the side that failed and why."""
+    """A left.h5 and a right.h5 beside videos whose right qpos cannot be read (an infinity in every reading, or nine
+    values) had the left arm read alone as a one arm state with no note. As joint_state leaves both MCAP arms unread
+    when one side's channel is not the layout, neither arm is read, and the note names the side that failed and why.
+    One infinity alone no longer fails a side: that reading is missing and filled like any short gap (h5_state)."""
     import json
     import h5py
     import numpy as np
@@ -680,8 +681,8 @@ def _one_side_of_two_hdf5_arms_that_fails_reads_neither(tmp_path):
         (d / "robot.h5").unlink()
         for stem, array, n in files:
             a = np.stack([0.3 * np.sin(th - t0 + j) for j in range(n)], axis=1)
-            if case == "inf" and stem == "right":
-                a[20, 2] = np.inf
+            if case in ("inf", "one inf") and stem == "right":
+                a[20 if case == "one inf" else slice(None), 2] = np.inf
             with h5py.File(d / f"{stem}.h5", "w") as h:
                 h["timestamps"] = (th * 1e9).astype(np.int64)
                 h[array] = a
@@ -694,6 +695,9 @@ def _one_side_of_two_hdf5_arms_that_fails_reads_neither(tmp_path):
         ctx, _ = upload(case, files)
         assert ctx["state_kind"] == "none" and failed in ctx["state_note"], (case, ctx.get("state_note"))
         assert kept in {x["name"] for x in ctx.get("signals") or []}
+    ctx, ep = upload("one inf", [("left", "qpos", 7), ("right", "qpos", 7)])
+    assert ctx["state_kind"] == "joints" and np.load(ep / "state.npz")["state"].shape == (12, 14), ctx.get("state_note")
+    assert [i["signal"] for i in _issues(ctx, "signal_not_finite")] == ["right qpos"], ctx.get("reader_issues")
     # an array of the other side named as the state but not the arm's own array (a glove's state) never cancels it
     ctx, ep = upload("glove", [("right_arm", "qpos", 7), ("left_glove", "state", 5)])
     assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == "right_arm qpos", ctx.get("state_note")
@@ -1001,7 +1005,8 @@ def _a_gripper_in_its_own_joint_states_messages_is_never_lost(tmp_path):
     assert note is None and state.shape == (len(q), 7)
     sig = f.mcap_signals([path], q, f.state_fields(st, state, None))
     assert not [k for k in sig if "position" in k] and not [x for x, _ in sig.left_out if "position" in x]
-    # a gripper that stops halfway does not cover the arm: each name set is its own stream and signal
+    # a gripper that stops halfway does not cover the arm: each name set is its own stream and signal, the gripper's
+    # NaN after its last message
     path = tmp_path / "half.mcap"
     _json_mcap(path, {"/joint_states": split(1.5)}, t0)
     st = f.mcap_joint_streams([path])
@@ -1010,8 +1015,8 @@ def _a_gripper_in_its_own_joint_states_messages_is_never_lost(tmp_path):
     assert state is None and "6 values per frame" in note, note
     sig = f.mcap_signals([path], q, f.state_fields(st, state, None))
     assert sig.meta["/joint_states position (joint1, joint2 and 4 more)"]["names"] == joints
-    assert ("/joint_states position (finger_joint)", "recorded from -0.1 s to 1.5 s, not over the whole footage") \
-        in sig.left_out, sig.left_out
+    finger = sig["/joint_states position (finger_joint)"]
+    assert np.isnan(finger[q - t0 > 1.6]).all() and np.isfinite(finger[q - t0 < 1.4]).all(), sig.left_out
     # the arm with its gripper is the state; wheels on the same channel stay a signal
     path = tmp_path / "wheels.mcap"
     named = joints + ["gripper"]
@@ -1269,8 +1274,9 @@ def _frame_times_read_relative_millisecond_stamps_as_milliseconds(tmp_path):
 
 def _an_mcap_keeps_every_other_number_it_records_as_a_signal(tmp_path):
     """The recorder's arm channels also carry joint_vel, and a gripper IMU runs beside them: both reach the episode as
-    signals under their own names, while the joints and gripper already read as the state, a 0.5 Hz status report and
-    a channel that stops before the footage ends do not."""
+    signals under their own names, while the joints and gripper already read as the state and a status report sent
+    once do not. A channel that stops before the footage ends is kept, NaN after its last message, with a data issue
+    giving the span it misses."""
     import json
     import numpy as np
     from mcap.writer import Writer
@@ -1299,7 +1305,9 @@ def _an_mcap_keeps_every_other_number_it_records_as_a_signal(tmp_path):
     names = [s["name"] for s in ctx["signals"]]
     assert "/gripper/imu angular_velocity" in names and "/yam_left/joint_state joint_vel" in names, names
     assert not any("joint_pos" in n or "gripper_pos" in n for n in names if "leader" not in n), names
-    assert not any(n.startswith(("/system/cpu", "/gripper/force")) for n in names), names
+    assert not any(n.startswith("/system/cpu") for n in names) and "/gripper/force wrench" in names, names
+    part = _issues(ctx, "signal_partial_span")
+    assert [i["signal"] for i in part] == ["/gripper/force wrench"] and abs(part[0]["t0_s"] - 1.0) < 0.1, part
     z = np.load(ep / "signals.npz")
     imu = z[next(s["key"] for s in ctx["signals"] if s["name"] == "/gripper/imu angular_velocity")]
     assert imu.shape == (ctx["n_state_frames"], 3) and imu[-1, 0] > imu[0, 0]
@@ -1628,13 +1636,14 @@ def test_a_pressure_map_with_one_dead_cell_is_a_reading_at_every_frame():
     assert "pad" in out and np.isnan(out["pad"][:, 255]).all() and (out["pad"][:, :255] == 3000).all()
 
 
-def test_a_reading_missing_at_most_frames_is_left_out_with_the_reason():
+def test_a_reading_missing_at_most_frames_is_kept_and_one_never_read_is_left_out_with_the_reason():
     import numpy as np, pandas as pd
     n = 60
     force = np.linspace(0, 1, n)
     force[:40] = np.nan
-    out = f.recorded_signals(pd.DataFrame({"force": list(force)}), set(), n)
-    assert "force" not in out and ("force", "no reading at most frames") in out.left_out
+    out = f.recorded_signals(pd.DataFrame({"force": list(force), "dead": [np.nan] * n}), set(), n)
+    assert "force" in out and np.isnan(out["force"][:40]).all() and np.isfinite(out["force"][40:]).all()
+    assert "dead" not in out and ("dead", "no reading at any frame") in out.left_out
 
 
 def test_a_clock_with_a_missing_stamp_is_still_a_clock():
@@ -1843,3 +1852,61 @@ def test_sensor_files_beside_videos_are_read_without_capture_times_and_by_take()
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _sensor_files_beside_videos_are_read_without_capture_times_and_by_take(Path(t))
+
+
+def _one_bad_value_never_drops_a_signal(tmp_path):
+    """A signal had been dropped whole for one inf among its readings, for starting or ending inside the footage, or
+    for reading at fewer than half the frames. Each is kept, NaN where it has no finite reading, and each gap or bad
+    value range is a data issue on the episode."""
+    import json
+    import h5py
+    import numpy as np
+    import pandas as pd
+    root = tmp_path / "upload"
+    root.mkdir()
+    n = 60
+    with h5py.File(root / "ep.h5", "w") as h:
+        h["cam"] = np.zeros((n, 64, 64, 3), np.uint8)
+        h["time"] = 1_790_000_000.0 + np.arange(n) / 30
+        force = np.random.default_rng(2).random((n, 3))
+        force[5, 0] = np.inf
+        h["force"] = force
+        late = h.create_group("late")
+        late["time"] = 1_790_000_001.0 + np.arange(30) / 30            # from 1 s of the 2 s footage
+        late["temp"] = np.linspace(20, 21, 30)
+    rep = f.convert(root, "ego_head", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "ep")
+    names = [s["name"] for s in ctx["signals"]]
+    assert "force" in names and "late/temp" in names, (names, ctx["source"])
+    bad = _issues(ctx, "signal_not_finite")
+    assert [i["signal"] for i in bad] == ["force"] and abs(bad[0]["t0_s"] - 5 / 30) < 1e-3, ctx["reader_issues"]
+    part = _issues(ctx, "signal_partial_span")
+    assert [i["signal"] for i in part] == ["late/temp"] and part[0]["t0_s"] == 0.0, ctx["reader_issues"]
+    assert abs(part[0]["t1_s"] - 1.0) < 0.1, part
+    z = np.load(tmp_path / "eps" / ctx["episode_id"] / "signals.npz")
+    temp = z[next(s["key"] for s in ctx["signals"] if s["name"] == "late/temp")]
+    assert np.isnan(temp[:25]).all() and np.isfinite(temp[35:]).all()
+    frc = z[next(s["key"] for s in ctx["signals"] if s["name"] == "force")]
+    assert np.isnan(frc[5, 0]) and np.isfinite(frc[5, 1:]).all() and np.isfinite(np.delete(frc, 5, 0)).all()
+    # an MCAP channel with an inf, and one that stops half way, are kept the same way
+    q = 1_790_000_000.0 + np.arange(n) / 30
+    _json_mcap(tmp_path / "s.mcap", {
+        "/inf": [(k / 30, {"v": [float("inf") if k == 10 else float(np.sin(k / 5))]}) for k in range(n)],
+        "/half": [(k / 30, {"v": [float(np.sin(k / 5))]}) for k in range(n // 2)]}, 1_790_000_000.0)
+    sig = f.mcap_signals([tmp_path / "s.mcap"], q)
+    assert "/inf v" in sig and "/half v" in sig, sig.left_out
+    assert np.isnan(sig["/inf v"][10, 0]) and np.isnan(sig["/half v"][-5:]).all()
+    assert [i["signal"] for i in sig.issues if i["kind"] == "signal_not_finite"] == ["/inf v"]
+    # a table column with readings at a third of its rows is kept
+    col = [np.nan] * n
+    col[::3] = [1.0] * len(col[::3])
+    got = f.recorded_signals(pd.DataFrame({"glove": col}), set(), n)
+    assert "glove" in got and not got.left_out
+    assert json.dumps(ctx)
+
+
+def test_one_bad_value_never_drops_a_signal():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _one_bad_value_never_drops_a_signal(Path(t))
