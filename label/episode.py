@@ -1422,6 +1422,13 @@ def _uploader_text(ep: dict, pl: dict) -> str:
             + ep["context"]["uploader_annotation"].strip() + "\n")
 
 
+def _metadata_issues(ep: dict, pl: dict) -> str:
+    """Metadata failures and reader limits stay visible beside the claims that could be read."""
+    issues = [i["what"] for i in ep["context"].get("reader_issues", [])
+              if i.get("kind") in ("metadata_unreadable", "metadata_limit")]
+    return "\nUPLOADED METADATA COULD NOT BE FULLY READ:\n" + "\n".join(issues) + "\n" if issues else ""
+
+
 BLOCKS = (
     Block("collection_note", "intro", _has_collection_note, _collection_text),
     Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
@@ -1436,6 +1443,7 @@ BLOCKS = (
           schema_fields=("contacts", "contacts_missing"),
           checks=("contact_checks",)),
     Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
+    Block("metadata_issues", "after_task", lambda ep, pl: bool(_metadata_issues(ep, pl)), _metadata_issues),
 )
 
 

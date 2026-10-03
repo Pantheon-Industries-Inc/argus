@@ -3626,3 +3626,206 @@ def test_lerobot_task_tables_are_read_while_foreign_notes_stay_listed():
         assert 'meta/tasks.parquet' not in unread, unread
         assert 'broken_meta.json' in unread, unread
         assert root / 'ep99_meta.json' not in f.opened_notes(items)
+
+
+def _converted_notes(root, out):
+    import json
+    from label.episode import build_request
+    rep = f.convert(root, 'teleop_arms', out, 'test', 900)
+    assert not rep['failed'], rep
+    return rep, [(json.loads((out / e['episode_id'] / 'context.json').read_text()),
+                  build_request(out / e['episode_id'])['prompt']) for e in rep['episodes']]
+
+
+def test_camera_notes_keep_all_accepted_forms_on_proven_owners():
+    import json
+    with tempfile.TemporaryDirectory() as t:
+        for ext in f.NOTE_OWN_EXT:
+            root = Path(t) / ext[1:] / 'upload'
+            root.mkdir(parents=True)
+            for stem in ('top_ep1', 'wrist_ep1', 'top_ep2', 'wrist_ep2', 'top_ep1_ir', 'top_ep9_ir'):
+                _clip(root / (stem + '.mp4'), 10)
+            for stem in ('top', 'top_ep1_ir', 'top_ep9_ir'):
+                obj = {'note': stem + ' lens glare'}
+                (root / (stem + ext)).write_text(json.dumps(obj) if ext in ('.json', '.jsonl') else obj['note'])
+            rep, episodes = _converted_notes(root, root.parent / 'out')
+            for ctx, prompt in episodes:
+                notes = ctx['uploader_notes']
+                assert 'instruction' not in ctx
+                assert 'top' + ext in notes and 'top lens glare' in prompt
+                assert ('top_ep1_ir' + ext in notes) == ctx['episode_id'].endswith('ep1')
+                assert 'top_ep9_ir' + ext not in notes and 'top_ep9_ir lens glare' not in prompt
+                assert len(ctx['source']['note_files']) == len(set(ctx['source']['note_files']))
+            _, items = f.plan(root)
+            expected = {ctx['episode_id']: ctx for ctx, _ in episodes}
+            for item in items:
+                ctx = f.convert_video(item, 'teleop_arms', root.parent / 'selected', 'test')
+                assert ctx.get('instruction') == expected[ctx['episode_id']].get('instruction')
+                assert ctx['uploader_notes'] == expected[ctx['episode_id']]['uploader_notes']
+
+
+def test_lerobot_root_recorder_names_are_not_official_metadata_paths():
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10}})
+        for name in ('info', 'stats'):
+            (root / (name + '.json')).write_text('{"note":"' + name + ' recorder note"}')
+        _, episodes = _converted_notes(root, Path(t) / 'out')
+        for ctx, prompt in episodes:
+            for name in ('info', 'stats'):
+                assert ctx['uploader_notes'][name + '.json']['note'] == name + ' recorder note'
+                assert name + ' recorder note' in prompt
+            assert 'instruction' not in ctx
+
+
+def test_failed_and_unopened_official_metadata_stays_visible():
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10, 'task_index': [0] * 10}})
+        (root / 'meta' / 'stats.json').write_text('{malformed')
+        (root / 'meta' / 'tasks.parquet').write_bytes(b'not parquet')
+        rep, episodes = _converted_notes(root, Path(t) / 'out')
+        missing = ' '.join(rep['missing'])
+        assert 'meta/stats.json' in missing and 'no reader opens' in missing
+        assert 'meta/tasks.parquet' in missing and 'could not' in missing
+        for ctx, prompt in episodes:
+            assert 'instruction' not in ctx
+            assert 'meta/tasks.parquet' in prompt
+            assert any(i['kind'] == 'metadata_unreadable' for i in ctx['reader_issues'])
+        (root / 'meta' / 'tasks.parquet').unlink()
+        (root / 'meta' / 'tasks.jsonl').write_text('{"task_index":0,"task":"pick cup"}\n{broken\n')
+        rep, episodes = _converted_notes(root, Path(t) / 'partial')
+        assert 'tasks.jsonl' in ' '.join(rep['missing'])
+        assert episodes[0][0]['instruction'] == 'pick cup'
+        assert 'tasks.jsonl' in episodes[0][1]
+
+
+def test_structured_text_notes_keep_owned_and_shared_claims_without_tasks():
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        for kind in ('mcap', 'lerobot'):
+            root = Path(t) / kind / 'upload'
+            root.mkdir(parents=True)
+            if kind == 'mcap':
+                _camera_mcap(root / 'bag_0.mcap', ['/front/image/compressed'])
+                own = 'bag_0'
+            else:
+                _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10}})
+                own = 'episode_000000'
+            for ext in ('.txt', '.md'):
+                for stem in (own + '_operator_notes', 'operator_notes', 'ep99_operator_notes'):
+                    (root / (stem + ext)).write_text(stem + ' camera loose')
+            _, episodes = _converted_notes(root, root.parent / 'out')
+            for ctx, prompt in episodes:
+                assert 'instruction' not in ctx
+                for ext in ('.txt', '.md'):
+                    for stem in (own + '_operator_notes', 'operator_notes'):
+                        assert ctx['uploader_notes'][stem + ext] == stem + ' camera loose'
+                        assert stem + ' camera loose' in prompt
+                    assert 'ep99_operator_notes' + ext not in ctx['uploader_notes']
+
+
+def test_structured_notes_preserve_distinct_relative_paths_during_task_disagreement():
+    import json
+    import numpy as np
+    import pandas as pd
+    with tempfile.TemporaryDirectory() as t:
+        for recorded in (False, True):
+            for agree in (False, True):
+                root = Path(t) / str(recorded) / str(agree) / 'upload'
+                _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10, 'task_index': [0] * 10}})
+                if recorded:
+                    pd.DataFrame({'task_index': [0], 'task': ['recorded task']}).to_parquet(root / 'meta/tasks.parquet')
+                paths = ('Session.JSON', 'meta/Session.JSON', 'meta/a/Session.JSON', 'meta/b/Session.JSON')
+                expected = {}
+                for n, name in enumerate(paths):
+                    p = root / name
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    expected[name] = {'task': 'pick cup' if agree else 'task ' + str(n), 'note': 'note ' + str(n)}
+                    p.write_text(json.dumps(expected[name]))
+                _, episodes = _converted_notes(root, root.parent / 'out')
+                for ctx, prompt in episodes:
+                    assert ctx['uploader_notes'] == expected
+                    assert ctx['source']['note_files'] == list(expected)
+                    assert ctx.get('instruction') == ('recorded task' if recorded else 'pick cup' if agree else None)
+                    for n, name in enumerate(paths):
+                        assert name in prompt and 'note ' + str(n) in prompt
+                    if not agree and not recorded:
+                        issue = next(i for i in ctx['reader_issues'] if i['kind'] == 'task_files_disagree')
+                        assert all(name in issue['what'] for name in paths)
+
+
+def test_metadata_failures_and_limits_have_visible_issue_families():
+    import numpy as np
+    import pandas as pd
+    from board.families import Families
+    families = Families()
+    assert families.list_of(families.reader_family('metadata_unreadable')) == 'data'
+    assert families.list_of(families.reader_family('metadata_limit')) == 'handling'
+    classified = families.classify({'dataset_checks': {'reader_issues': [
+        {'kind': 'metadata_unreadable'}, {'kind': 'metadata_limit'}]}})
+    assert 'metadata-unreadable' in classified['counted']
+    assert 'read-with-a-limit' in classified['not_counted']
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10, 'task_index': [0] * 10}})
+        pd.DataFrame({'task_index': [0], 'task': [123]}).to_parquet(root / 'meta/tasks.parquet')
+        (root / 'episode_000000_large.json').write_text('{"note":"' + 'x' * f.NOTE_JSON_MAX_BYTES + '"}')
+        rep, episodes = _converted_notes(root, Path(t) / 'out')
+        for ctx, prompt in episodes:
+            assert 'instruction' not in ctx
+            assert 'meta/tasks.parquet' in prompt and 'episode_000000_large.json' in prompt
+            assert 'limit' in prompt
+            assert {'metadata_unreadable', 'metadata_limit'} <= {i['kind'] for i in ctx['reader_issues']}
+        assert 'episode_000000_large.json' in ' '.join(rep['missing'])
+        pd.DataFrame({'episode_index': ['bad'], 'instruction': ['invented task']}).to_parquet(
+            root / 'meta/tasks_annotated.parquet')
+        rep, episodes = _converted_notes(root, Path(t) / 'bad_annotation')
+        assert 'instruction' not in episodes[0][0]
+        assert 'tasks_annotated.parquet' in episodes[0][1]
+        pd.DataFrame({'episode_index': ['0', 'bad'], 'instruction': ['valid task', 'invented task']}).to_parquet(
+            root / 'meta/tasks_annotated.parquet')
+        original = (root / 'meta/tasks_annotated.parquet').read_bytes()
+        rep, episodes = _converted_notes(root, Path(t) / 'mixed_annotation')
+        assert episodes[0][0]['instruction'] == 'valid task'
+        assert 'invented task' not in episodes[0][1]
+        assert 'tasks_annotated.parquet' in episodes[0][1]
+        assert (root / 'meta/tasks_annotated.parquet').read_bytes() == original
+        (root / 'meta/tasks_annotated.parquet').unlink()
+        pd.DataFrame({'task_index': ['0', 'bad'], 'task': ['valid table task', 'invented task']}).to_parquet(
+            root / 'meta/tasks.parquet')
+        _, episodes = _converted_notes(root, Path(t) / 'mixed_task_table')
+        assert episodes[0][0]['instruction'] == 'valid table task'
+        assert 'invented task' not in episodes[0][1]
+        assert 'tasks.parquet' in episodes[0][1]
+
+
+def test_structured_text_notes_keep_mixed_present_and_absent_owners():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        root.mkdir()
+        for n in (1, 2):
+            _camera_mcap(root / ('bag_ep' + str(n) + '.mcap'), ['/front/image/compressed'])
+        (root / 'bag_ep1_ep3_notes.txt').write_text('known owner camera loose')
+        (root / 'bag_ep3_notes.txt').write_text('absent owner camera loose')
+        rep, episodes = _converted_notes(root, Path(t) / 'out')
+        for ctx, prompt in episodes:
+            assert 'instruction' not in ctx
+            assert ('known owner camera loose' in prompt) == ctx['episode_id'].endswith('bag_ep1')
+            assert 'absent owner camera loose' not in prompt
+        assert 'bag_ep1_ep3_notes.txt' in ' '.join(rep['missing'])
+
+
+def test_valid_json_text_notes_remain_notes_without_an_object_task_key():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t) / 'upload'
+        root.mkdir()
+        _camera_mcap(root / 'bag_0.mcap', ['/front/image/compressed'])
+        (root / 'operator_notes.json').write_text('"camera lens glare"')
+        _, episodes = _converted_notes(root, Path(t) / 'out')
+        assert 'instruction' not in episodes[0][0]
+        assert episodes[0][0]['uploader_notes']['operator_notes.json'] == 'camera lens glare'
+        assert 'camera lens glare' in episodes[0][1]
+        assert 'metadata_unreadable' not in [i['kind'] for i in episodes[0][0].get('reader_issues', [])]

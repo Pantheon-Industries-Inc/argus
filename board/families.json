@@ -108,6 +108,14 @@
    ]
   },
   {
+   "slug": "metadata-unreadable",
+   "list": "data",
+   "name": "Uploaded metadata could not be read",
+   "reader_issues": [
+    "metadata_unreadable"
+   ]
+  },
+  {
    "slug": "label-failed",
    "list": "labelling",
    "name": "Model reply gave no labels",
@@ -128,7 +136,8 @@
     "signal_summarised",
     "depth_clip_failed",
     "depth_clip_timing",
-    "camera_offset"
+    "camera_offset",
+    "metadata_limit"
    ]
   },
   {

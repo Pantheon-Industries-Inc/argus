@@ -64,7 +64,8 @@ identified uploaded owners; the absent take is reported separately, and a file n
 different tasks give none of them: each is given as a note and the disagreement is a data issue of the episode. One
 that names neither the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
-Camera metadata retains its file path on the episodes that own the camera, including unshown cameras.
+Camera metadata in every accepted own-note form retains its file path on the episodes that own the camera,
+including unshown cameras.
 A camera task stays a camera note unless the established episode task rule proves agreement.
 
 MCAP and HDF5 container sidecars belong to the episodes in that container. LeRobot sidecars name the recorded
@@ -1107,40 +1108,58 @@ def episode_notes(item: dict) -> dict:
         if all(owns) and len({task_key(t) for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
-    read, disagree, absent, attributed = list(files), [], [], []
+    read, disagree, absent, attributed, issues = list(files), [], [], [], []
     named_here, shared = [], []           # (file, task) of the folder .json files named for this episode, or for none
     weighed = {p.resolve() for p in files}
     extra_dirs = item.get("metadata_dirs") or []
-    candidates = [p for d in ([nf["dir"]] + extra_dirs if nf else []) for p in folder_json(d)
-                  if p.name.lower() not in item.get("metadata_reserved", ())]
+    candidates = [p for d in ([nf["dir"]] + extra_dirs if nf else [])
+                  for p in (sorted(d.rglob("*")) if d in extra_dirs else
+                            [p for ps in files_by_name(d).values() for p in ps])
+                  if p.is_file() and not hidden(p, d) and p.suffix.lower() in NOTE_OWN_EXT
+                  and p.resolve() not in item.get("metadata_reserved", ())]
     for p in candidates:
-        if p.resolve() in weighed or p.stat().st_size > NOTE_JSON_MAX_BYTES:
+        if p.resolve() in weighed:
             continue
         owners, gone = named_for(p, nf["names"])
         if gone:
             absent.append(p)              # named for a take that is not in the upload
         camera_names = nf.get("camera_names")
         camera_owners = named_for(p, camera_names)[0] if camera_names else frozenset()
-        if None in owners and nf["episode"] in camera_owners:
+        camera_owner = None in owners and nf["episode"] in camera_owners
+        side_owner = item.get("side_metadata") and not gone and (not owners or nf["episode"] in owners)
+        known_owner = gone and nf["episode"] in owners
+        eligible = not owners and not gone or None not in owners and nf["episode"] in owners
+        if not (camera_owner or side_owner or known_owner or eligible and p.suffix.lower() == ".json"):
+            continue
+        key = p.relative_to(nf["dir"]).as_posix()
+        if p.stat().st_size > NOTE_JSON_MAX_BYTES:
+            issues.append({"kind": "metadata_limit", "text": f"{key} was not read because it exceeds "
+                           f"the {NOTE_JSON_MAX_BYTES} byte note limit."})
+            continue
+        obj = read_annotation(p)
+        if p.suffix.lower() in (".json", ".jsonl") and isinstance(obj, str):
+            try:
+                json.loads(p.read_text(encoding="utf-8-sig"))
+            except ValueError:
+                issues.append({"kind": "metadata_unreadable", "text": f"{key} could not be parsed as "
+                               f"{p.suffix[1:].upper()}, so it supplies no task or note."})
+                continue
+        if camera_owner:
             # filename ownership identifies this camera, without making its task the episode's instruction
-            key = p.relative_to(nf["dir"]).as_posix()
-            notes.append((key, read_annotation(p)))
+            notes.append((key, obj))
             read.append(p)
             attributed.append(key)
             continue
-        if not instr and (x := instruction_from(_read_json(p))):
+        if not instr and p.suffix.lower() == ".json" and isinstance(obj, dict) and (x := instruction_from(obj)):
             if not owners and not gone:
                 shared.append((p, x))
             elif None not in owners and nf["episode"] in owners:
                 named_here.append((p, x))
                 if not item.get("side_metadata"):
                     continue
-        side_owner = item.get("side_metadata") and not gone and (not owners or nf["episode"] in owners)
-        if (gone and nf["episode"] in owners) or side_owner:
+        if known_owner or side_owner:
             # a known owner keeps the file as a note when it does not supply the task
-            obj = _read_json(p) if item.get("side_metadata") else read_annotation(p)
             if obj is not None:
-                key = p.relative_to(nf["dir"]).as_posix()
                 notes.append((key, obj))
                 read.append(p)
                 attributed.append(key)
@@ -1152,9 +1171,12 @@ def episode_notes(item: dict) -> dict:
             instr = found[0][1]
         elif found:
             # files that name different tasks: none is guessed to be the task, and each is a note under its name
-            notes += [(p.name, read_annotation(p)) for p, _ in found]
-            disagree = [p.name for p, _ in found]
+            notes += [(p.relative_to(nf["dir"]).as_posix(), read_annotation(p)) for p, _ in found]
+            disagree = [p.relative_to(nf["dir"]).as_posix() for p, _ in found]
+    notes = list(dict(notes).items())
+    read = list(dict.fromkeys(read))
     return {"notes": notes, "instruction": instr, "read": read, "disagree": disagree, "absent": absent,
+            "issues": issues,
             "attributed_notes": attributed,
             "repeats": [k for k, o in notes if instr and isinstance(o, str) and o.strip() == instr],
             "camera_notes": [k for k, p in zip(keys, files) if p in cams]}
@@ -2658,6 +2680,11 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     # every note file of the episode (episode_notes): one is given as sent, several each under its file name, and a
     # note whose whole text is the task is given once, as the instruction
     got = episode_notes(item)
+    for issue in got["issues"]:
+        add_issue(extra, issue["kind"], issue["text"])
+    if got["read"]:
+        home = item["note_folder"]["dir"] if item.get("note_folder") else Path(fs[0]).parent
+        extra["source"]["note_files"] = [p.relative_to(home).as_posix() for p in got["read"]]
     instr = got["instruction"]
     if instr:
         extra["instruction"] = instr
@@ -2786,16 +2813,43 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
 
 # ---------------------------------------------------------------- LeRobot: reading a dataset root
 
-def read_jsonl(p: Path) -> list[dict]:
+def lerobot_metadata_paths(root: Path) -> set[Path]:
+    """Official metadata is reserved only at its format path, leaving recorder notes elsewhere usable."""
+    meta = root / "meta"
+    return {(meta / name).resolve() for name in
+            ("info.json", "stats.json", "tasks.jsonl", "tasks.parquet", "episodes.jsonl", "episodes_stats.jsonl")} \
+        | {p.resolve() for p in meta.glob("*annotat*") if p.is_file()} \
+        | {p.resolve() for p in (meta / "episodes").rglob("*.parquet")}
+
+
+def metadata_failure(reads: dict, p: Path, reason: str) -> None:
+    """A failed metadata read stays named even when other rows or files can still be used."""
+    key = p.relative_to(reads["dir"]).as_posix()
+    text = f"{key} could not be fully read: {reason}."
+    reads["missing"].append(text)
+    reads["metadata_issues"].append({"kind": "metadata_unreadable", "text": text})
+
+
+def read_jsonl(p: Path, reads: dict | None = None) -> list[dict]:
     out = []
     if not p.exists():
         return out
+    bad = 0
     for line in p.read_text(errors="replace").splitlines():
         if line.strip():
             try:
-                out.append(json.loads(line))
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    out.append(row)
+                else:
+                    bad += 1
             except json.JSONDecodeError:
+                bad += 1
                 continue            # one damaged line never loses the rest of the metadata
+    if reads is not None:
+        reads["metadata_read"].add(p.resolve())
+        if bad:
+            metadata_failure(reads, p, f"{bad} lines were not JSON objects; valid rows were kept")
     return out
 
 
@@ -2814,7 +2868,7 @@ def _read_json(p: Path) -> dict | None:
 ANNOT_TEXT_COLS = ("instruction", "language_instruction", "task", "annotation", "prompt", "description")
 
 
-def annotated_instructions(meta: Path) -> tuple[dict, str | None]:
+def annotated_instructions(meta: Path, reads: dict | None = None) -> tuple[dict, str | None]:
     """{episode_index: text} from a per-episode annotation table the dataset ships next to its coarse tasks
     (MolmoAct2's meta/tasks_annotated.parquet, which its card names as the per-episode instruction), and
     the file it came from. Only tables keyed by episode index with one text column count."""
@@ -2826,11 +2880,15 @@ def annotated_instructions(meta: Path) -> tuple[dict, str | None]:
             if p.suffix == ".parquet":
                 df = pd.read_parquet(p)
             elif p.suffix == ".jsonl":
-                df = pd.DataFrame(read_jsonl(p))
+                df = pd.DataFrame(read_jsonl(p, reads))
             else:
                 continue
-        except Exception:
+        except Exception as error:
+            if reads is not None:
+                metadata_failure(reads, p, plain_error(error))
             continue
+        if reads is not None:
+            reads["metadata_read"].add(p.resolve())
         if "episode_index" in df.columns:
             df = df.set_index("episode_index")
         elif df.index.name != "episode_index":
@@ -2842,7 +2900,11 @@ def annotated_instructions(meta: Path) -> tuple[dict, str | None]:
         for k, v in df[col].items():
             v = scalar(v)
             if isinstance(v, str) and v.strip():
-                out[int(k)] = v.strip()
+                try:
+                    out[int(k)] = v.strip()
+                except (TypeError, ValueError) as error:
+                    if reads is not None:
+                        metadata_failure(reads, p, plain_error(error))
         if out:
             return out, p.relative_to(meta.parent).as_posix()
     return {}, None
@@ -2855,6 +2917,12 @@ def read_root(rdir: Path, rel: str) -> dict:
     import pandas as pd
     info = _read_json(rdir / "meta" / "info.json")
     used, missing = [], []
+    reads = {"dir": rdir, "metadata_read": set(), "metadata_issues": [], "missing": missing}
+    info_file = rdir / "meta" / "info.json"
+    if info is not None:
+        reads["metadata_read"].add(info_file.resolve())
+    elif info_file.exists():
+        metadata_failure(reads, info_file, "not a valid JSON object")
     where = f" in {rel}" if rel else ""
     data_v2 = sorted(p for p in (rdir / "data").glob("chunk-*/episode_*.parquet")) if (rdir / "data").is_dir() else []
     data_v3 = sorted(p for p in (rdir / "data").glob("chunk-*/file-*.parquet")) if (rdir / "data").is_dir() else []
@@ -2903,23 +2971,36 @@ def read_root(rdir: Path, rel: str) -> dict:
             cams = on_disk
     fps = float(info["fps"]) if info and info.get("fps") else None
     tasks_by_index = {}
-    for t in read_jsonl(rdir / "meta" / "tasks.jsonl"):
-        if "task_index" in t and "task" in t:
-            tasks_by_index[int(t["task_index"])] = str(t["task"])
+    task_file = rdir / "meta" / "tasks.jsonl"
+    for t in read_jsonl(task_file, reads):
+        try:
+            if not isinstance(t.get("task"), str) or not t["task"].strip():
+                raise ValueError("task must be nonempty text")
+            tasks_by_index[int(t["task_index"])] = t["task"]
+        except (KeyError, TypeError, ValueError) as error:
+            metadata_failure(reads, task_file, plain_error(error))
     if (rdir / "meta" / "tasks.parquet").exists():
         try:
             tp = pd.read_parquet(rdir / "meta" / "tasks.parquet")
-            if "task_index" in tp.columns:
-                for task, row in tp.iterrows():
-                    tasks_by_index[int(row["task_index"])] = str(row.get("task", task))
-        except Exception:
-            pass
-    annotated, annot_src = annotated_instructions(rdir / "meta")
+            reads["metadata_read"].add((rdir / "meta" / "tasks.parquet").resolve())
+            if not {"task_index", "task"} <= set(tp.columns):
+                raise ValueError("task_index and task columns are required")
+            for _, row in tp.iterrows():
+                try:
+                    if not isinstance(row["task"], str) or not row["task"].strip():
+                        raise ValueError("task must be nonempty text")
+                    tasks_by_index[int(row["task_index"])] = row["task"]
+                except (KeyError, TypeError, ValueError) as error:
+                    metadata_failure(reads, rdir / "meta" / "tasks.parquet", plain_error(error))
+        except Exception as error:
+            metadata_failure(reads, rdir / "meta" / "tasks.parquet", plain_error(error))
+    annotated, annot_src = annotated_instructions(rdir / "meta", reads)
     root = {"dir": str(rdir), "rel": rel, "info": info, "version": version, "v3": v3, "fps": fps,
             "robot_type": (info or {}).get("robot_type"), "features": feats, "cams": cams, "image_cams": image_cams,
             "image_signals": image_signals, "depth_cams": depth_cams,
             "tasks_by_index": tasks_by_index, "annotated": annotated, "annot_src": annot_src,
-            "used": used, "missing": missing, "episodes": [], "recordings": []}
+            "used": used, "missing": missing, "episodes": [], "recordings": [],
+            "metadata_read": reads["metadata_read"], "metadata_issues": reads["metadata_issues"]}
     if v3:
         _episodes_v3(root, rdir, data_v3, vids_v3)
     else:
@@ -2931,7 +3012,8 @@ def read_root(rdir: Path, rel: str) -> dict:
 
 def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path]) -> None:
     info, where = root["info"] or {}, (f" in {root['rel']}" if root["rel"] else "")
-    rows = {int(scalar(e["episode_index"])): e for e in read_jsonl(rdir / "meta" / "episodes.jsonl") if "episode_index" in e}
+    rows = {int(scalar(e["episode_index"])): e for e in read_jsonl(rdir / "meta" / "episodes.jsonl", root)
+            if "episode_index" in e}
     data_by = {int(V2_DATA.match(p.name).group(1)): p for p in data_files}
     vid_by: dict[int, dict] = {}
     for p in vids:
@@ -3002,10 +3084,16 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
     eps = []
     if parts:
         try:
-            eps = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True).to_dict("records")
-        except Exception:
-            eps = []
-            root["missing"].append(f"meta/episodes{where} could not be opened, so the episodes were found from the data files.")
+            tables = []
+            for p in parts:
+                try:
+                    tables.append(pd.read_parquet(p))
+                    root["metadata_read"].add(p.resolve())
+                except Exception as error:
+                    metadata_failure(root, p, plain_error(error))
+            eps = pd.concat(tables, ignore_index=True).to_dict("records") if tables else []
+        except Exception as error:
+            root["missing"].append(f"meta/episodes{where} could not be combined: {plain_error(error)}.")
     if eps:
         root["used"].append(f"Episode list{where} from meta/episodes ({len(eps)} listed).")
         rel_tpl = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
@@ -6083,6 +6171,10 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
             if part.get("version"):
                 det["version"] = part["version"]
     attach_structured_notes(items)
+    note_issues = {issue["text"] for it in items
+                   for view in ([it] if it["kind"] == "video" else [it["side_notes"]] if it.get("side_notes") else [])
+                   for issue in episode_notes(view)["issues"]}
+    det["missing"] += sorted(note_issues)
     sensors = [Path(p) for p in det.get("state") or []]
     # a folder's episodes are counted across every format, so one sensor file never joins two episodes as its own
     assign_sensors(items, sensors)
@@ -6160,8 +6252,9 @@ def attach_structured_notes(items: list[dict]) -> None:
             videos = (it.get("row") or {}).get("videos") or {}
             camera_files = [Path(v[0] if isinstance(v, tuple) else v) for v in videos.values()]
             it["side_notes"] = {"files": [file], "camera_files": camera_files, "side_metadata": True,
+                                "metadata_issues": (it.get("root") or {}).get("metadata_issues", []),
                                 "metadata_dirs": [d / "meta"] if it["kind"] == "lerobot" else [],
-                                "metadata_reserved": {"info.json", "stats.json"} if it["kind"] == "lerobot" else set(),
+                                "metadata_reserved": lerobot_metadata_paths(d) if it["kind"] == "lerobot" else set(),
                                 "note_folder": {"dir": d, "name": aliases[0], "aliases": aliases,
                                                 "episode": it["name"], "names": registry}}
 
@@ -6169,6 +6262,8 @@ def attach_structured_notes(items: list[dict]) -> None:
 def add_side_notes(ep: Path, ctx: dict, item: dict) -> dict:
     """Recorded task text keeps priority. Applicable outside files remain attributed claims from the uploader."""
     got = episode_notes(item)
+    for issue in got["issues"] + item.get("metadata_issues", []):
+        add_issue(ctx, issue["kind"], issue["text"])
     notes = dict(got["notes"])
     if not ctx.get("instruction") and got["instruction"]:
         ctx["instruction"] = got["instruction"]
@@ -6252,16 +6347,15 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     rdirs = [Path(r) for p in parts for r in p.get("roots") or []]
     vid_dirs = {Path(p).parent for p in files_under(root) if p.suffix.lower() in VIDEO_EXT}
     notes = {p.resolve() for p in opened_notes(items) | absent_take_notes(items)}
-    notes |= {(Path(it["root"]["dir"]) / it["root"]["annot_src"]).resolve() for it in items
-              if it.get("root") and it["root"].get("annot_src")}
+    notes |= {p for it in items for p in (it.get("root") or {}).get("metadata_read", ())}
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
-        internal = any(r in p.parents and (p.relative_to(r).parts[0] in ("data", "videos")
-                       or p.parent == r / "meta" and p.name.lower() in
-                       {"info.json", "stats.json", "tasks.jsonl", "tasks.parquet", "episodes.jsonl", "episodes_stats.jsonl"}
-                       or (r / "meta" / "episodes") in p.parents) for r in rdirs)
+        internal = any(r in p.parents and p.relative_to(r).parts[0] in ("data", "videos") for r in rdirs)
         if internal or p.resolve() in notes:
+            continue
+        if any(p.resolve() in lerobot_metadata_paths(r) for r in rdirs):
+            out.append(p.relative_to(root).as_posix())
             continue
         if x == ".jsonl" and next(_jsonl_rows(p), None) is None:
             out.append(p.relative_to(root).as_posix())

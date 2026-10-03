@@ -26,6 +26,10 @@ Writes EPISODES/episode_<name>/ with context.json, sources.json, state.npz when 
 times.npz and instruction.txt, and prints a report of what was read, used, skipped and why.
 MCAP and HDF5 container notes apply to their contained episodes. LeRobot notes use the recorded episode index.
 Outside files retain their filenames as uploader notes, and recorded instruction text keeps priority.
+Owned text notes remain notes even when their filenames do not qualify as tasks. Camera notes accept every
+own-note form on the same proven owners. LeRobot reserves official metadata at its actual meta paths;
+recorder notes at the root retain their full relative filenames. Failed metadata reads and note size limits
+are named in the report and episode issues, and successful format reads determine what was consumed.
 Process diagnostics and standard logs stay in source bookkeeping and saved arrays, outside model sensor claims.
 
 """
