@@ -824,11 +824,10 @@ def _stereo_twin(a: str, b: str) -> bool:
 
 # a camera whose name says it is not a colour picture: depth, confidence, disparity, a mask or segmentation, thermal,
 # infrared, or a visualisation. Matched by whole words (not_rgb): the pattern it replaced matched inside words, so
-# segway_cam, a conference room and visual_top were taken for masks and confidence maps. A RealSense infra1 or infra2
-# stream is its infrared camera (a numbered word, so infra1 matches infra): it goes to the board as a camera the model
-# is not shown, as every other infrared camera does, and had been shown to the model as a colour camera
+# segway_cam, a conference room and visual_top were taken for masks and confidence maps. A RealSense infra1 stream is
+# a grey picture of the scene the model has been shown as a camera, and stays one
 NOT_RGB_WORDS = ("depth", "conf", "confidence", "disparity", "mask", "seg", "segmentation", "thermal", "infrared",
-                 "infra", "ir", "vis")
+                 "ir", "vis")
 
 
 def not_rgb(name: str) -> bool:

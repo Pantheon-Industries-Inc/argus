@@ -2043,8 +2043,8 @@ def _every_camera_that_holds_a_picture_is_read(tmp_path):
     import numpy as np
     assert not f.not_rgb("/segway_cam/image") and not f.not_rgb("conference_room") and not f.not_rgb("visual_top")
     assert f.not_rgb("/camera/depth/image") and f.not_rgb("/thermal/image") and f.not_rgb("ir_cam")
-    # a RealSense infra1 stream is its infrared camera: the board shows it, and the model is not shown it as colour
-    assert f.not_rgb("/camera/infra1/image_rect_raw") and f.not_rgb("hand_mask")
+    # a RealSense infra1 stream stays a camera the model is shown, as it was before whole words
+    assert not f.not_rgb("/camera/infra1/image_rect_raw") and f.not_rgb("hand_mask")
     assert set(f.pick_cameras(["/segway_cam/image", "/top/image"], "teleop_arms")[0].values()) == {
         "/segway_cam/image", "/top/image"}
     root = tmp_path / "mcap"
@@ -2388,8 +2388,8 @@ def _a_shared_sensor_file_is_placed_by_clock_on_every_episode_of_any_format(tmp_
 def _every_mcap_camera_is_named_and_the_models_choice_is_kept(tmp_path):
     """The whole word rule for cameras that are not colour took a RealSense infra1 stream for infrared and dropped it
     before cameras were chosen, so a camera the model had been shown was nowhere; a thermal or mask channel was
-    never listed at all. infra1, the RealSense's infrared camera, and a thermal camera are not shown to the model as
-    colour: each is listed among the unused cameras and written for the board."""
+    never listed at all. infra1 is shown as before, and a thermal camera the model is not shown is listed among the
+    unused cameras and written for the board."""
     root = tmp_path / "upload"
     root.mkdir()
     _camera_mcap(root / "rs.mcap", ["/realsense/color/image_raw/compressed", "/realsense/infra1/image_rect_raw",
@@ -2398,10 +2398,10 @@ def _every_mcap_camera_is_named_and_the_models_choice_is_kept(tmp_path):
     assert not rep["failed"], rep
     ctx = _episode_ctx(tmp_path / "eps", rep, "rs")
     keys = {c["key"] for c in ctx["cameras"].values()}
-    assert keys == {"/realsense/color/image_raw/compressed"}, keys
+    assert "/realsense/infra1/image_rect_raw" in keys and "/thermal/image/compressed" not in keys, keys
     assert "/thermal/image/compressed" in ctx["source"]["unused_cameras"], ctx["source"]
-    assert [u["name"] for u in ctx.get("unshown_cameras") or []] == [
-        "/realsense/infra1/image_rect_raw", "/thermal/image/compressed"], ctx.get("unshown_cameras")
+    assert [u["name"] for u in ctx.get("unshown_cameras") or []] == ["/thermal/image/compressed"], ctx.get(
+        "unshown_cameras")
 
 
 def test_a_sensor_file_in_a_folder_of_several_episodes_of_any_format_joins_none_by_guess():

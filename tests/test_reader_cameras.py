@@ -343,7 +343,7 @@ def test_depth_as_long_as_its_camera_reads_at_every_frame(tmp_path):
     assert note.endswith("at that instant.")
 
 
-# ---------------------------------------------------------------- depth and infrared MCAP topics
+# ---------------------------------------------------------------- MCAP depth topics
 
 def test_an_mcap_whose_only_camera_is_depth_is_labelled_from_its_depth_picture(tmp_path):
     root = tmp_path / "m"
@@ -367,18 +367,6 @@ def test_an_mcap_depth_topic_with_no_camera_of_its_own_goes_to_the_board(tmp_pat
     ctx = _ctx(tmp_path / "eps", rep)
     (u,) = ctx["unshown_cameras"]
     assert u["name"] == "/lidar/depth" and u["n_frames"] == 30 and "depth" in u["why"]
-
-
-def test_an_infrared_topic_is_not_shown_to_the_model_as_a_colour_camera(tmp_path):
-    assert f.not_rgb("/camera/infra1/image_rect_raw") and f.not_rgb("realsense_infra2_rect")
-    root = tmp_path / "m"
-    root.mkdir()
-    _json_mcap(root / "run.mcap", {"/camera/color/image": ("foxglove.CompressedImage", _jpg_msg),
-                                   "/camera/infra1/image_rect_raw": ("foxglove.CompressedImage", _jpg_msg)})
-    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
-    ctx = _ctx(tmp_path / "eps", rep)
-    assert [c["key"] for c in ctx["cameras"].values()] == ["/camera/color/image"]
-    assert [u["name"] for u in ctx["unshown_cameras"]] == ["/camera/infra1/image_rect_raw"]
 
 
 # ---------------------------------------------------------------- a take of many cameras
