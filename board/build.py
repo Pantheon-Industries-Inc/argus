@@ -233,8 +233,12 @@ def label_failure(result: dict | None) -> list[dict]:
     if lf["status"] == "no_part":
         def said(why: str) -> str:
             w = str(why or "")
-            return ("was cut off at the output limit" if "cut off" in w else "never answered" if "no reply" in w
-                    else "did not parse" if "parse" in w else w or "gave no labels")
+            # a reason the harness recorded for no reply (the spend cap reached) is kept in brackets
+            detail = w[w.index("("):] if "no reply (" in w else ""
+            return ("was cut off at the output limit" if "cut off" in w else
+                    f"never answered {detail}".strip() if "no reply" in w else
+                    "has an output file that does not read" if "does not read" in w else
+                    "did not parse" if "parse" in w else w or "gave no labels")
         each = [f"part {g.get('part')} {said(g.get('why'))}" for g in lf["parts"]]
         listed = ", ".join(each[:-1]) + f" and {each[-1]}" if len(each) > 1 else each[0]
         return [{"kind": "no_part_labelled",

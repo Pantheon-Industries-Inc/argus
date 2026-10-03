@@ -1256,7 +1256,8 @@ def ego_annotation_block(ctx: dict) -> str:
         return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
     def when(x):            # a step with no end time is a moment, one with no time is listed without one
-        t0, t1 = (x.get(k) if isinstance(x.get(k), (int, float)) else None for k in ("t0", "t1"))
+        t0, t1 = (x.get(k) if isinstance(x.get(k), (int, float)) and np.isfinite(x.get(k)) else None
+                  for k in ("t0", "t1"))
         return ("no time" if t0 is None else f"{t0:.1f}s" if t1 is None or t1 == t0 else f"{t0:.1f}-{t1:.1f}s")
     lines = [f"  {when(x)}  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
              for x in subs if isinstance(x, dict)]

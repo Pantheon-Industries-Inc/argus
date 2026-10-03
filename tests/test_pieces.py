@@ -317,7 +317,7 @@ def test_a_long_recording_with_a_part_that_failed_is_stitched_from_the_rest_with
     out = job / "run" / "out"
     (out / f"{parts[0].name}.json").write_text(json.dumps(_part_result(parts[0], "reach")))
     (out / f"{parts[1].name}.json").write_text(json.dumps({"episode_dir": str(parts[1]), "parse_ok": False,
-                                                           "labels": {"_raw": "{", "_parse_error": "x"}}))
+                                                           "labels": {"_raw": "{oops", "_parse_error": "x"}}))
     (out / f"{parts[2].name}.json").write_text(json.dumps(_part_result(parts[2], "place")))
     res = pieces.stitch_run(job, src.parent, {src.name: [p.name for p in parts]}, tmp_path / "final")
     assert res["stitched"] == 1 and res["incomplete"] == [src.name]
@@ -327,7 +327,9 @@ def test_a_long_recording_with_a_part_that_failed_is_stitched_from_the_rest_with
     assert r["labels"]["timeline"][1]["start_s"] == round(0.1 + pcs[2]["t0_s"], 3)
     assert r["stitched"]["parts"] == 3 and r["stitched"]["cuts_s"] == [pcs[1]["t0_s"], pcs[2]["t0_s"]]
     (gap,) = r["stitched"]["missing"]
-    assert gap == {"part": 2, "t0_s": pcs[1]["t0_s"], "t1_s": pcs[1]["t1_s"], "why": "the model's reply did not parse"}
+    # with the start of the part's own reply, which the board shows (it never reached the board before)
+    assert gap == {"part": 2, "t0_s": pcs[1]["t0_s"], "t1_s": pcs[1]["t1_s"], "why": "the model's reply did not parse",
+                   "raw_head": "{oops"}
     assert [x["task"] for x in r["labels"]["tasks"]] == ["reach", "place"]
     d = {}
     board_build.add_reader_issues(d, {}, r)
@@ -364,3 +366,71 @@ def test_a_long_recording_none_of_whose_parts_parsed_is_still_on_the_board(tmp_p
     assert iss["kind"] == "no_part_labelled" and iss["family"] == "label-failed"
     assert ("part 1 was cut off at the output limit" in iss["what"] and "part 2 did not parse" in iss["what"]
             and "part 3 never answered" in iss["what"]), iss["what"]
+
+
+def test_a_part_whose_output_does_not_read_is_a_gap_and_one_that_breaks_the_format_is_stitched(tmp_path, monkeypatch):
+    """One part output that was not valid JSON crashed stitch_run, and one parsed part with a field of the wrong type
+    (a string in scene.objects, a key event as text, a time as text) crashed the stitch, losing the whole recording.
+    The unreadable part is a gap, named with why, as is a part the spend cap stopped; the part that breaks the format is
+    stitched with what it gives, and what it broke is carried to the board."""
+    from board import build as board_build
+    job, src, parts = _three_parts(tmp_path, monkeypatch)
+    out = job / "run" / "out"
+    bad = _part_result(parts[0], "reach")
+    bad["labels"]["scene"] = {"objects": ["cup", {"name": "plate"}]}
+    bad["labels"]["key_events"] = ["grasped", {"t_s": "0.2", "label": "lifted"}]
+    bad["labels"]["timeline"].append({"start_s": "late", "end_s": 0.9, "action": "untimed"})
+    (out / f"{parts[0].name}.json").write_text(json.dumps(bad))
+    (out / f"{parts[1].name}.json").write_text('{"episode_dir": "x", "parse_ok": tr')
+    (out / f"noreply_{parts[2].name}.json").write_text(json.dumps({"episode_dir": str(parts[2]), "parse_ok": False,
+                                                                   "no_reply": "spend cap $1.00 reached"}))
+    res = pieces.stitch_run(job, src.parent, {src.name: [p.name for p in parts]}, tmp_path / "final")
+    assert res["stitched"] == 1 and res["incomplete"] == [src.name]
+    r = json.loads((tmp_path / "final" / f"{src.name}.json").read_text())
+    assert [s["action"] for s in r["labels"]["timeline"]] == ["reach", "untimed"]
+    assert [k["label"] for k in r["labels"]["key_events"]] == ["lifted"]
+    assert r["labels"]["scene"]["objects"] == [{"name": "plate"}]
+    assert sorted((x["field"], x["part"]) for x in r["labels"]["_dropped"]) == [("key_events", 1), ("scene.objects", 1)]
+    whys = {g["part"]: g["why"] for g in r["stitched"]["missing"]}
+    assert whys[2].startswith("its output file does not read (JSONDecodeError")
+    assert whys[3] == "the model gave no reply (spend cap $1.00 reached)"
+    d = {}
+    board_build.add_reader_issues(d, {}, r)
+    kinds = [x["kind"] for x in d["dataset_checks"]["reader_issues"]]
+    assert kinds == ["part_not_labelled", "part_not_labelled", "model_reply_fields_dropped"]
+    assert "spend cap $1.00 reached" in d["dataset_checks"]["reader_issues"][1]["what"]
+    # the short episodes' records of no reply reach the board as well
+    (out / "noreply_episode_000009.json").write_text(json.dumps({"no_reply": "spend cap $1.00 reached"}))
+    pieces.stitch_run(job, src.parent, {src.name: [p.name for p in parts]}, tmp_path / "final2")
+    assert (tmp_path / "final2" / "noreply_episode_000009.json").exists()
+
+
+def test_a_dataset_label_with_a_time_that_is_no_number_never_stops_a_long_recording_being_cut(tmp_path, monkeypatch):
+    """A dataset label with a string start crashed the cutting of a long recording, one with no start became a label
+    at 0 s of the first part, and one whose time was not a number silently left every part's prompt. A time written as
+    text that reads as a number is placed as that number; a label with no time the board can read is kept, untimed and
+    named, in every part, as a short episode's prompt names it."""
+    from prepare import formats
+    from test_formats import _clip
+    (tmp_path / "v").mkdir()
+    _clip(tmp_path / "v" / "a.mp4", 90)                      # 3 s at 30 fps
+    ep = tmp_path / "eps" / "episode_a"
+    subs = [{"t0": "abc", "t1": 1.0, "label": "string start"}, {"t0": None, "label": "no start"},
+            {"t0": "2.0", "t1": "2.5", "label": "times as text"}, {"t0": float("nan"), "t1": 2.0, "label": "nan start"},
+            {"t0": 0.2, "t1": 1.0, "label": "timed"}]
+    formats.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "ego_head", "mine",
+                                {"instruction": "clean up", "annotation_subtasks": subs})
+    monkeypatch.setitem(pieces.PIECE_MAX_S, "ego_head", 1.6)
+    parts = pieces.write_pieces(ep, tmp_path / "pieces")
+    assert len(parts) == 2
+    t0 = me.load(parts[1])["context"]["piece"]["t0_s"]
+    for i, part in enumerate(parts):
+        got = me.load(part)["context"]["annotation_subtasks"]
+        untimed = [x["label"] for x in got if x["t0"] is None]
+        assert untimed == ["string start", "no start", "nan start"], (i, got)
+        block = me.build_request(part)["prompt"].split("THE DATASET'S ANNOTATION FOR THIS EPISODE")[1]
+        assert "no time  string start" in block and "no time  no start" in block and "no time  nan start" in block
+    second = {x["label"]: x for x in me.load(parts[1])["context"]["annotation_subtasks"]}
+    assert second["times as text"]["t0"] == round(2.0 - t0, 3) and second["times as text"]["t1"] == round(2.5 - t0, 3)
+    first = [x["label"] for x in me.load(parts[0])["context"]["annotation_subtasks"] if x["t0"] is not None]
+    assert first == ["timed"] + (["times as text"] if t0 > 2.0 else [])

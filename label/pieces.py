@@ -20,6 +20,7 @@ PIECE_MAX_S, so none of them is cut.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import shutil
@@ -133,6 +134,17 @@ def choose_cuts(t: np.ndarray, m: np.ndarray, max_s: float) -> list[dict]:
                      "motion": round(float(sm[k]), 4), "target_s": round(target - float(t[0]), 1)})
         prev_t = float(t[k])
     return cuts
+
+
+def _seconds(x) -> float | None:
+    """A time as the dataset gives it, in seconds: a number or text that reads as one, else None (no time)."""
+    if isinstance(x, bool):
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
 
 
 def fmt_clock(s: float) -> str:
@@ -250,13 +262,16 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             c2["signals"] = [{**s, "touch": touch[s["name"]]} if s["name"] in touch else s for s in ctx["signals"]]
         if ctx.get("annotation_subtasks"):
             # the dataset's timed subtasks are on the recording's clock; the part is shown those that overlap it, on
-            # its own clock and clipped to it
-            # (a step with no end time is a moment)
-            subs = [(x, float(x.get("t0") or 0.0), float(x["t1"] if x.get("t1") is not None else x.get("t0") or 0.0))
+            # its own clock and clipped to it (a step with no end time is a moment), and every part is shown those
+            # with no time the board can read (none, or not a number), untimed, as a short episode's prompt names them
+            subs = [(x, _seconds(x.get("t0")), _seconds(x["t1"]) if x.get("t1") is not None else _seconds(x.get("t0")))
                     for x in ctx["annotation_subtasks"] if isinstance(x, dict)]
             c2["annotation_subtasks"] = [
-                {**x, "t0": round(max(a, t0) - t0, 3), **({"t1": round(min(b, t1) - t0, 3)} if "t1" in x else {})}
-                for x, a, b in subs if b >= t0 and a < t1]
+                {**x, "t0": None, **({"t1": None} if "t1" in x else {})} if a is None else
+                {**x, "t0": round(max(a, t0) - t0, 3),
+                 **({"t1": round(min(a if b is None else b, t1) - t0, 3) if b is not None else None} if "t1" in x
+                    else {})}
+                for x, a, b in subs if a is None or ((a if b is None else b) >= t0 and a < t1)]
         (d / "sources.json").write_text(json.dumps(new_src, indent=1))
         (d / "context.json").write_text(json.dumps(c2, indent=1, default=str))
         (d / "instruction.txt").write_text("\n")
@@ -295,18 +310,46 @@ def _write_or_reuse(d: Path, proot: Path) -> list[Path]:
     return write_pieces(d, proot)
 
 
+def _read(p: Path) -> tuple[dict | None, str | None]:
+    """(the output file's JSON, None), or (None, why) when it does not read."""
+    try:
+        r = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        return None, f"its output file does not read ({type(e).__name__}: {e})"[:300]
+    return (r, None) if isinstance(r, dict) else (None, "its output file is not a JSON object")
+
+
 def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
-    """A part's reply from a run's out/ folder: (its result, None) when it parsed, else (what came back, why it gave
-    no labels): not parsing, cut off at the output limit (the harness's failed_<part>.json), or no reply at all."""
-    q, f = src / f"{name}.json", src / f"failed_{name}.json"
-    r = json.loads(q.read_text()) if q.exists() else None
+    """A part's reply from a run's out/ folder: (its result, None) when it parsed and its labels can be read (their
+    fields of the wrong type left out, label/harness.py typed_labels), else (what came back, why it gave no labels):
+    not parsing, cut off at the output limit (the harness's failed_<part>.json), an output file that does not read, or
+    no reply at all, with why when the harness recorded it (noreply_<part>.json)."""
+    from label.harness import typed_labels
+    q, f, nr = src / f"{name}.json", src / f"failed_{name}.json", src / f"noreply_{name}.json"
+    r, bad = _read(q) if q.exists() else (None, None)
+    if bad:
+        return None, bad
     if r and r.get("parse_ok"):
-        return r, None
+        if not isinstance(r.get("labels"), dict):
+            return r, "its labels are not a JSON object"
+        return {**r, "labels": typed_labels(copy.deepcopy(r["labels"]))}, None
     if r:
         return r, "the model's reply did not parse"
     if f.exists():
-        return json.loads(f.read_text()), "the model's reply was cut off at the output limit"
+        r, bad = _read(f)
+        return r, bad or "the model's reply was cut off at the output limit"
+    if nr.exists():
+        r, _ = _read(nr)
+        if r and r.get("no_reply"):
+            return None, f"the model gave no reply ({r['no_reply']})"
     return None, "the model gave no reply"
+
+
+def _raw_head(r: dict | None) -> str:
+    """The start of a part's reply that gave no labels, as the board keeps one (board/to_board.py RAW_HEAD)."""
+    lab = (r or {}).get("labels") if isinstance((r or {}).get("labels"), dict) else {}
+    raw = lab.get("_raw") if lab.get("_raw") is not None else (r or {}).get("content_tail") or ""
+    return str(raw)[:3000]
 
 
 def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
@@ -321,7 +364,7 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     res = {"stitched": 0, "incomplete": [], "unlabelled": []}
     # every short episode's reply as it came, a cut-off one (failed_<episode>.json) too: the board shows each
-    for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json")]:
+    for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json"), *src.glob("noreply_episode_*.json")]:
         if "__p" not in p.stem:
             shutil.copy(p, out / p.name)
     for ep, parts in long_eps.items():
@@ -333,7 +376,9 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
                 got.append((pc, r))
                 continue
             piece = pc["piece"]
-            missing.append({"part": piece["index"], "t0_s": piece["t0_s"], "t1_s": piece["t1_s"], "why": why})
+            # with the start of what came back, so the board can show it (board/to_board.py label_failed)
+            missing.append({"part": piece["index"], "t0_s": piece["t0_s"], "t1_s": piece["t1_s"], "why": why,
+                            **({"raw_head": _raw_head(r)} if _raw_head(r) else {})})
             failed.append((pc, r))
         if got:
             (out / f"{ep}.json").write_text(json.dumps(stitch(Path(eps) / ep, got, missing)))
@@ -422,7 +467,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     excluded, summaries, reviews, seen_obj = [], [], [], set()
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "est_cost_usd": 0.0,
              "cached_tokens": 0, "cache_write_tokens": 0, "latency_s": 0.0}
-    timesteps, still, part_info = [], [], []
+    timesteps, still, part_info, dropped = [], [], [], []
     for n, (pc, r) in enumerate(parts, start=1):
         i = int(pc["piece"].get("index") or n)      # the part's own number, with a gap where a part gave no labels
         t0, t1 = float(pc["piece"]["t0_s"]), float(pc["piece"]["t1_s"])
@@ -488,6 +533,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
                                "objects": [], "outcome": (comp.get("task_completed") or "unclear"),
                                "success_predicate": comp.get("success_predicate") or "",
                                "completed_at_s": comp.get("completed_at_s"), "note": comp.get("reason") or ""})
+        # what each part's reply broke of the output format, left out of its labels (label/harness.py typed_labels)
+        dropped += [{**x, "part": i} for x in (r.get("labels") or {}).get("_dropped") or [] if isinstance(x, dict)]
         u = r.get("usage") or {}
         for k in usage:
             usage[k] = round(usage[k] + float(u.get(k) or 0), 4)
@@ -505,7 +552,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
                                  + ("; " + "; ".join(f"part {g['part']} has no labels, as {g['why']}" for g in missing)
                                     if missing else "")}
     for k in ("timeline",):
-        L[k].sort(key=lambda s: (s.get("start_s") or 0))
+        L[k].sort(key=lambda s: (s.get("start_s") is None, s.get("start_s") or 0))      # an untimed step last
     first = parts[0][1]
     ctx = ep["context"]
     cfg = dict(first.get("config") or {})
@@ -534,6 +581,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     recorded = lc.of_episode(ep, verdicts) if asked else []
     if excluded:
         L["_excluded"] = excluded
+    if dropped:
+        L["_dropped"] = dropped
     if views["shown"]:
         L["contacts"], L["contacts_missing"] = list(contacts_model.values()), contacts_missing
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
