@@ -120,3 +120,31 @@ def test_root_openaoe_rejects_a_nul_in_the_bound_original_folder_name(tmp_path):
     context["root_name"] = "\x00"
     with pytest.raises(ValueError, match="not a folder name"):
         formats.plan(original, ownership_context=context)
+
+
+@pytest.mark.parametrize('relative', ['.', '..'])
+def test_public_folder_cli_accepts_the_current_or_parent_upload_folder(tmp_path, relative):
+    import os
+    import subprocess
+    import sys
+    from test_ownership_context import containers
+
+    original = containers(tmp_path / 'original')
+    expected_dir = tmp_path / 'expected'
+    expected = formats.convert(original, 'ego_head', expected_dir, 'identity', 900)
+    cwd = original
+    if relative == '..':
+        cwd = original / 'inside'
+        cwd.mkdir()
+    output = tmp_path / 'relative'
+    source = Path(formats.__file__).resolve().parent.parent
+    env = dict(os.environ, PYTHONPATH=str(source))
+    command = [sys.executable, '-m', 'prepare', 'folder', 'prepare', '--root', relative,
+               '--rig', 'ego_head', '--out', str(output), '--dataset', 'identity']
+    run = subprocess.run(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    report = json.loads(run.stdout)
+    assert not report['failed'] and len(report['episodes']) == len(expected['episodes']) == 4
+    for row in report['episodes']:
+        name = row['episode_id']
+        assert episode.build_request(output / name) == episode.build_request(expected_dir / name)
