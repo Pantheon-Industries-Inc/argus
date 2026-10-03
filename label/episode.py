@@ -166,9 +166,15 @@ def number(x) -> float | None:
             return None
     try:
         v = float(x)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):      # an integer too large for a float is no time either
         return None
     return v + 0.0 if math.isfinite(v) else None
+
+
+def tenths(t: float) -> str:
+    """A time as the prompt gives a dataset's label time, to the tenth of a second, never as -0.0s: a time that rounds
+    to zero is zero, not a time before the episode."""
+    return f"{round(float(t), 1) + 0.0:.1f}s"
 
 
 def order_views(keys) -> list[str]:
@@ -1301,7 +1307,8 @@ def ego_annotation_block(ctx: dict) -> str:
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
     def when(x):            # a step with no end time is a moment, one with no time is listed without one
         t0, t1 = number(x.get("t0")), number(x.get("t1"))
-        return ("no time" if t0 is None else f"{t0:.1f}s" if t1 is None or t1 == t0 else f"{t0:.1f}-{t1:.1f}s")
+        return ("no time" if t0 is None else tenths(t0) if t1 is None or t1 == t0
+                else f"{tenths(t0)[:-1]}-{tenths(t1)}")
     lines = [f"  {when(x)}  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
              for x in subs if isinstance(x, dict)]
     return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE (claims to check, see ABOUT THE DATASET'S ANNOTATION above):\n"

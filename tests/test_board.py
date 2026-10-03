@@ -1098,6 +1098,14 @@ def test_a_time_reads_as_a_number_only_when_written_as_one():
         assert number(bad) is None, bad
     for z in ("-0", "-0.0", -0.0):
         assert number(z) == 0.0 and str(number(z)) == "0.0", z
+    assert number(10 ** 400) is None and number(-(10 ** 400)) is None
+
+
+def test_a_time_that_rounds_to_zero_is_said_as_zero():
+    """A dataset label at -0.04 s was told to the model as "-0.0s", a time before the episode. A time is said to the
+    tenth with no negative zero."""
+    from label.episode import tenths
+    assert tenths(-0.04) == "0.0s" and tenths(-0.06) == "-0.1s" and tenths(12.34) == "12.3s"
 
 
 def test_a_number_that_is_not_finite_never_stops_an_episode_loading(tmp_path):
