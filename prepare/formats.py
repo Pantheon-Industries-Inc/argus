@@ -3144,9 +3144,10 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
     notes, read, failed = [], [], {}
 
     def fail(name, note):
-        # why an array named as the state is not read, kept by the side its name says for a two arm state
+        # why an array named as the state is not read, kept by the side its name says and its own name, so only the
+        # other side's own array of the arm read (qpos against qpos) cancels a two arm state
         notes.append(note)
-        failed.setdefault(side_of(name), note)
+        failed.setdefault((side_of(name), own(name)), note)
     for name in cands:
         if name not in signals and left_out[name] == NOT_FINITE:
             fail(name, f"Labelled from the video, because the recorded state {name} has values that are not all "
@@ -3187,8 +3188,8 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         if rig == "teleop_arms" and other and first[1].shape[1] == other[1].shape[1] == JOINT_DIMS else [first]
     # one side's arm whose other side's array failed is half a state, so neither is read, as joint_state reads no arm
     # when one side's channel is not the layout; the note gives the side that failed and why
-    lost = {"left": "right", "right": "left"}.get(side_of(first[0]))
-    if rig == "teleop_arms" and len(arms) == 1 and lost and failed.get(lost):
+    lost = ({"left": "right", "right": "left"}.get(side_of(first[0])), own(first[0]))
+    if rig == "teleop_arms" and len(arms) == 1 and lost[0] and failed.get(lost):
         return None, None, None, None, failed[lost]
 
     def command(name, shape):
@@ -4175,8 +4176,11 @@ def _sides(streams: dict, role: bool) -> dict:
     sides = {t: side_of(_topic(streams, t)) for t in keys}
     named = dict(sides)
     for t in keys:
-        if named[t] is None and streams[t]["pos"].shape[1] == JOINT_DIMS:
-            said = {side_of(str(n)) for n in streams[t].get("names") or []}
+        names = streams[t].get("names")
+        # only a set whose names state_layout reads as six joints and a gripper is an arm (never a hand of 7 joints)
+        if named[t] is None and streams[t]["pos"].shape[1] == JOINT_DIMS and names \
+                and state_layout(JOINT_DIMS, "teleop_arms", names)[0] == "joints":
+            said = {side_of(str(n)) for n in names}
             named[t] = said.pop() if len(said) == 1 else None
     pair = lambda by: {"left", "right"} <= {by[t] for t in keys if streams[t]["pos"].shape[1] == JOINT_DIMS}
     return named if pair(named) and not pair(sides) else sides

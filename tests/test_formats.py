@@ -633,6 +633,32 @@ def _a_side_from_value_names_only_completes_a_pair(tmp_path):
         assert (action is not None) == (label == "leader"), label
 
 
+def _a_sided_set_pairs_only_when_its_names_are_an_arm(tmp_path):
+    """A right arm and a left hand of seven joints on one /joint_states had paired as two arms, the hand read as the
+    left arm. A set's side from its value names counts only when state_layout reads its names as six joints and a
+    gripper, so the right arm is the only arm."""
+    import numpy as np
+    t0 = 1_790_000_000.0
+    tt = np.arange(0, 10.0, 0.01)
+    q = t0 + np.arange(0, 10, 1 / 30)
+    arm = [f"right_joint{i}" for i in range(1, 7)] + ["right_gripper"]
+    hand = [f"left_hand_joint{i}" for i in range(1, 8)]
+    path = tmp_path / "hand.mcap"
+    _json_mcap(path, {"/joint_states": [(s, {"name": arm, "position": [float(np.sin(s + j)) for j in range(7)]})
+                                        for s in tt]
+                      + [(s + 0.002, {"name": hand, "position": [0.1] * 7}) for s in tt]}, t0)
+    st = f.mcap_joint_streams([path], q)
+    state, _, note = f.joint_state(st, q)
+    assert note is None and state.shape == (len(q), 7), note
+    assert np.abs(state[:, 0] - np.sin(q - t0)).max() < 1e-3
+
+
+def test_a_sided_set_pairs_only_when_its_names_are_an_arm():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_sided_set_pairs_only_when_its_names_are_an_arm(Path(t))
+
+
 def test_a_side_from_value_names_only_completes_a_pair():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
@@ -648,21 +674,30 @@ def _one_side_of_two_hdf5_arms_that_fails_reads_neither(tmp_path):
     import numpy as np
     t0 = 1_790_000_000.0
     th = t0 - 0.1 + np.arange(60) / 100
-    for case, dims in (("inf", 7), ("wide", 9)):
+    def upload(case, files):
         root = tmp_path / case / "upload"
         d = _videos_with_an_hdf5_arm_state(root)
         (d / "robot.h5").unlink()
-        for side, n in (("left", 7), ("right", dims)):
+        for stem, array, n in files:
             a = np.stack([0.3 * np.sin(th - t0 + j) for j in range(n)], axis=1)
-            if side == "right" and case == "inf":
+            if case == "inf" and stem == "right":
                 a[20, 2] = np.inf
-            with h5py.File(d / f"{side}.h5", "w") as h:
+            with h5py.File(d / f"{stem}.h5", "w") as h:
                 h["timestamps"] = (th * 1e9).astype(np.int64)
-                h["qpos"] = a
+                h[array] = a
         rep = f.convert(root, "teleop_arms", tmp_path / case / "eps", "test", 900)
-        ctx = json.loads((tmp_path / case / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
-        assert ctx["state_kind"] == "none" and "right qpos" in ctx["state_note"], (case, ctx.get("state_note"))
-        assert "left qpos" in {x["name"] for x in ctx.get("signals") or []}
+        ep = tmp_path / case / "eps" / rep["episodes"][0]["episode_id"]
+        return json.loads((ep / "context.json").read_text()), ep
+    for case, files, failed, kept in (("inf", [("left", "qpos", 7), ("right", "qpos", 7)], "right qpos", "left qpos"),
+                                      ("wide", [("left", "qpos", 7), ("right", "qpos", 9)], "right qpos", "left qpos"),
+                                      ("six", [("left", "qpos", 6), ("right", "qpos", 7)], "left qpos", "right qpos")):
+        ctx, _ = upload(case, files)
+        assert ctx["state_kind"] == "none" and failed in ctx["state_note"], (case, ctx.get("state_note"))
+        assert kept in {x["name"] for x in ctx.get("signals") or []}
+    # an array of the other side named as the state but not the arm's own array (a glove's state) never cancels it
+    ctx, ep = upload("glove", [("right_arm", "qpos", 7), ("left_glove", "state", 5)])
+    assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == "right_arm qpos", ctx.get("state_note")
+    assert np.load(ep / "state.npz")["state"].shape == (12, 7)
 
 
 def test_one_side_of_two_hdf5_arms_that_fails_reads_neither():
