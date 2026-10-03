@@ -179,6 +179,53 @@ def test_a_table_is_read_whatever_its_delimiter(tmp_path, sep):
     assert out.meta["traj"]["names"] == ["x", "y"]
 
 
+def test_a_tsv_whose_header_names_hold_commas_is_split_on_its_tabs(tmp_path):
+    n = 50
+    p = tmp_path / "traj.tsv"
+    p.write_text("time\tforce (N, x)\tforce (N, y)\n"
+                 + "".join(f"{i / 30:.4f}\t{i * 0.5}\t{i * 1.5}\n" for i in range(n)))
+    assert f.table_separator(p) == "\t"
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["force (N, x)", "force (N, y)"]
+
+
+@pytest.mark.parametrize("head,row", [
+    ('time,"force [N; x; y]"', "{t},{x}"),         # separators inside a quoted name
+    ("time,a|b|c", "{t},{x}"),                     # a separator in the header alone, not in the rows
+])
+def test_a_table_is_split_on_the_separator_that_gives_every_line_the_same_fields(tmp_path, head, row):
+    p = tmp_path / "traj.csv"
+    p.write_text(head + "\n" + "".join(row.format(t=f"{i / 30:.4f}", x=i * 0.5) + "\n" for i in range(50)))
+    assert f.table_separator(p) == ","
+    assert f.table_signals([p], None, _anchor(50), {})["traj"][10, 0] == 5.0
+
+
+def test_a_semicolon_table_with_decimal_commas_reads_as_numbers(tmp_path):
+    n = 50
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force\n" + "".join(f"{i / 30:.3f}".replace(".", ",") + f";{i},5\n" for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["force"] and out["traj"][10, 0] == 10.5
+    assert not f._table_has_text(p)                 # numbers, never notes
+
+
+def test_a_separator_at_the_end_of_every_line_is_no_column(tmp_path):
+    n = 50
+    p = tmp_path / "traj.csv"
+    p.write_text("time,a,b,\n" + "".join(f"{i / 30:.4f},{i * 0.5},{i * 1.5},\n" for i in range(n)))
+    out = f.table_signals([p], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["a", "b"] and not _issues(out, "signal_bad_cells")
+    assert not [name for name, _ in out.left_out if "Unnamed" in name]
+
+
+def test_a_column_of_codes_written_as_numbers_and_words_is_not_a_signal(tmp_path):
+    n = 60
+    pd.DataFrame({"time": np.arange(n) / 30, "phase": ["1" if i % 3 else "grasp" for i in range(n)],
+                  "force": np.arange(n) * 0.5}).to_csv(tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["force"] and not _issues(out, "signal_bad_cells")
+
+
 def test_a_one_row_table_is_named_with_why(tmp_path):
     pd.DataFrame({"x": [1.5], "y": [2.0]}).to_csv(tmp_path / "calib.csv", index=False)
     out = f.table_signals([tmp_path / "calib.csv"], None, _anchor(60), {})
