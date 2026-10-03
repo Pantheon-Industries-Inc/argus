@@ -473,7 +473,7 @@ def test_a_lerobot_camera_without_its_video_is_listed_as_unused(tmp_path):
     rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
     ctx = json.loads((out / "episode_000000" / "context.json").read_text())
     assert rc == 0 and set(ctx["cameras"]) == {"exo", "left"}
-    assert ctx["source"]["unused_cameras"] == ["observation.images.cam_low"]
+    assert ctx["source"]["unused_cameras"] == ["observation.images.cam_low (no video of it for this episode is in the upload)"]
 
 
 # ---- your own data: a folder of videos ----

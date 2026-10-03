@@ -2994,7 +2994,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused
     # too, and one whose packed video could not be placed on this episode says why (_episodes_v3)
     unplaced = row.get("unplaced") or {}
-    unused = unused + [f"{k} ({unplaced[k]})" if k in unplaced else k for k in r["cams"] if k not in video_cams]
+    unused = unused + [f"{k} ({unplaced.get(k) or 'no video of it for this episode is in the upload'})"
+                       for k in r["cams"] if k not in video_cams]
     for k in unplaced:
         add_issue(extra, "camera_not_aligned", f"The camera {k} is not shown: {unplaced[k]}.", camera=k)
     if r["image_cams"]:

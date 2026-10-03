@@ -179,3 +179,15 @@ def test_cameras_of_one_length_raise_no_issue(tmp_path):
     _three_cameras(root)
     rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
     assert not _issues(_ctx(tmp_path / "eps", rep))
+
+
+# ---------------------------------------------------------------- a LeRobot camera with no video
+
+def test_a_lerobot_camera_with_no_video_for_the_episode_is_listed_with_its_reason(tmp_path):
+    root = tmp_path / "lr"
+    _lerobot(root, {0: {"observation.state": [np.zeros(14)] * 30}},
+             feats={"observation.images.cam_left_wrist": {"dtype": "video", "shape": [48, 64, 3]}})
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    (u,) = [u for u in ctx["source"]["unused_cameras"] if u.startswith("observation.images.cam_left_wrist")]
+    assert "(" in u and "video" in u, u
