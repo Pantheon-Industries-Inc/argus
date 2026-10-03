@@ -1805,10 +1805,15 @@ def _intro_head(ep: dict) -> str:
 def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
     names = ", ".join(cam_name(ep, v) for v in views(ep))
     ends = "first and last available instant" if ep.get("unavailable_instants") else "first and last instant"
+    # A retained parent zero may precede its first capture. Name that zero rather than claim the headings start
+    # at the first frame, while keeping the existing text for clocks whose first frame is zero.
+    first = frame_time(ep, 0)
+    origin = ("the episode clock's zero" if round(first, 2) != 0 else "the episode's first frame")
+    start = f"The first recorded frame is at {seconds(first)} on this clock. " if round(first, 2) != 0 else ""
     return (
         f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
         "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
-        "seconds from the episode's first frame. Read each grid left to right and the grids in order. "
+        f"seconds from {origin}. {start}Read each grid left to right and the grids in order. "
         "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
         f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's {ends} are "
         f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
