@@ -102,10 +102,11 @@
   {
    "slug": "label-failed",
    "list": "data",
-   "name": "Model reply did not parse",
+   "name": "Model reply gave no labels",
    "reader_issues": [
     "model_reply_unparsed",
-    "model_reply_cut_off"
+    "model_reply_cut_off",
+    "part_not_labelled"
    ]
   },
   {

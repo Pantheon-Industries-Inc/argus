@@ -181,7 +181,9 @@ def main() -> int:
     (job / "manifest.json").write_text(json.dumps({"board": job.name, "datasets": [entry]}, indent=1))
     build_board.build(job)
     if st["incomplete"]:
-        print(f"not on the board, a part was not labelled: {', '.join(st['incomplete'])}", flush=True)
+        print(f"on the board with a part not labelled, flagged at its span: {', '.join(st['incomplete'])}", flush=True)
+    if st["unlabelled"]:
+        print(f"on the board with no labels, no part was labelled: {', '.join(st['unlabelled'])}", flush=True)
     print(f"done: python -m board serve --board {job} --clips {job / 'clips'}", flush=True)
     return 0
 

@@ -295,30 +295,73 @@ def _write_or_reuse(d: Path, proot: Path) -> list[Path]:
     return write_pieces(d, proot)
 
 
+def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
+    """A part's reply from a run's out/ folder: (its result, None) when it parsed, else (what came back, why it gave
+    no labels): not parsing, cut off at the output limit (the harness's failed_<part>.json), or no reply at all."""
+    q, f = src / f"{name}.json", src / f"failed_{name}.json"
+    r = json.loads(q.read_text()) if q.exists() else None
+    if r and r.get("parse_ok"):
+        return r, None
+    if r:
+        return r, "the model's reply did not parse"
+    if f.exists():
+        return json.loads(f.read_text()), "the model's reply was cut off at the output limit"
+    return None, "the model gave no reply"
+
+
 def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
-    """out/: the short episodes' results from job/run/out as labelled, and one stitched result per long recording.
-    A recording with a part that is missing or did not parse is left out and listed under "incomplete"."""
+    """out/: the short episodes' replies from job/run/out as they came, and one stitched result per long recording.
+
+    A recording is stitched from the parts that parsed; a part that did not parse, was cut off or never came is a gap,
+    named in the result's stitched["missing"] with its span and why (the board flags it at that span, board/build.py
+    reader_issues), and the recording is listed under "incomplete". A recording none of whose parts parsed is still
+    written, as a reply that gave no labels, so the board shows its footage, checks and sensors and says why; it is
+    listed under "unlabelled"."""
     src = Path(job) / "run" / "out"
     out.mkdir(parents=True, exist_ok=True)
-    res = {"stitched": 0, "incomplete": []}
+    res = {"stitched": 0, "incomplete": [], "unlabelled": []}
     # every short episode's reply as it came, a cut-off one (failed_<episode>.json) too: the board shows each
     for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json")]:
         if "__p" not in p.stem:
             shutil.copy(p, out / p.name)
     for ep, parts in long_eps.items():
-        got = []
+        got, missing, failed = [], [], []
         for n in parts:
-            q = src / f"{n}.json"
-            r = json.loads(q.read_text()) if q.exists() else None
-            if not r or not r.get("parse_ok"):
-                break
-            got.append((json.loads((Path(job) / "pieces" / n / "context.json").read_text()), r))
-        if len(got) != len(parts):
-            res["incomplete"].append(ep)
+            pc = json.loads((Path(job) / "pieces" / n / "context.json").read_text())
+            r, why = _part_reply(src, n)
+            if why is None:
+                got.append((pc, r))
+                continue
+            piece = pc["piece"]
+            missing.append({"part": piece["index"], "t0_s": piece["t0_s"], "t1_s": piece["t1_s"], "why": why})
+            failed.append((pc, r))
+        if got:
+            (out / f"{ep}.json").write_text(json.dumps(stitch(Path(eps) / ep, got, missing)))
+            res["stitched"] += 1
+            if missing:
+                res["incomplete"].append(ep)
             continue
-        (out / f"{ep}.json").write_text(json.dumps(stitch(Path(eps) / ep, got)))
-        res["stitched"] += 1
+        (out / f"{ep}.json").write_text(json.dumps(unlabelled(Path(eps) / ep, failed, missing)))
+        res["unlabelled"].append(ep)
     return res
+
+
+def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: list[dict]) -> dict:
+    """The result of a long recording none of whose parts gave labels: a reply that did not parse
+    (board/to_board.py label_failed), which says why, with the first part's reply that came back, every part's
+    undecodable stretches and cost, and the parts it was cut into."""
+    first = next((r for _, r in failed if r), {}) or {}
+    raw = (first.get("labels") or {}).get("_raw") if isinstance(first.get("labels"), dict) else None
+    raw = raw if raw is not None else first.get("content_tail") or ""
+    whys = "; ".join(f"part {g['part']}: {g['why']}" for g in missing)
+    usage = {"est_cost_usd": round(sum(float(((r or {}).get("usage") or {}).get("est_cost_usd") or 0)
+                                       for _, r in failed), 4)}
+    count = len(missing)
+    return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
+            "config": first.get("config") or {}, "parse_ok": False, "usage": usage,
+            "labels": {"_raw": raw, "_parse_error": f"no part of the recording returned labels that parse ({whys})"},
+            "stitched": {"parts": count, "cuts_s": [g["t0_s"] for g in missing[1:]], "missing": missing},
+            "decode_failed": [x for _, r in failed for x in (r or {}).get("decode_failed") or []]}
 
 
 # ---------------------------------------------------------------- stitching
@@ -357,16 +400,20 @@ def is_cut_artifact(iss: dict, part: int, count: int, t0: float, t1: float, cuts
     return any(abs(float(ts) - c) <= CUT_GUARD_S for c in cuts_s)
 
 
-def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
+def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = ()) -> dict:
     """One labelling result for the whole recording from its parts' results [(part context, part result), ...]
     in order. Times are shifted onto the recording's clock; lists are joined; each part's task and outcome
-    become one entry of tasks; issues describing our cuts are set aside in _excluded with the reason."""
+    become one entry of tasks; issues describing our cuts are set aside in _excluded with the reason. missing names
+    the parts that gave no labels ({"part", "t0_s", "t1_s", "why"}, stitch_run): the recording is stitched from the
+    rest, its cuts are still every cut, and the record keeps the gaps under stitched["missing"]."""
     from label import episode as me
     ep_dir = Path(ep_dir)
     ep = me.load(ep_dir)
     pl = me.plan(ep)
-    count = len(parts)
-    cuts_s = [float(pc["piece"]["t0_s"]) for pc, _ in parts[1:]]
+    missing = sorted(missing, key=lambda g: g["part"])
+    count = len(parts) + len(missing)
+    starts = sorted([float(pc["piece"]["t0_s"]) for pc, _ in parts] + [float(g["t0_s"]) for g in missing])
+    cuts_s = starts[1:]
     L = {"scene": {"objects": [], "setting": ""}, "timeline": [], "key_events": [], "state_changes": [],
          "scene_graph": [], "recovery": [], "instruction_variants": [], "data_issues": [], "operator_mistakes": [],
          "tasks": []}
@@ -375,7 +422,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "est_cost_usd": 0.0,
              "cached_tokens": 0, "cache_write_tokens": 0, "latency_s": 0.0}
     timesteps, still, part_info = [], [], []
-    for i, (pc, r) in enumerate(parts, start=1):
+    for n, (pc, r) in enumerate(parts, start=1):
+        i = int(pc["piece"].get("index") or n)      # the part's own number, with a gap where a part gave no labels
         t0, t1 = float(pc["piece"]["t0_s"]), float(pc["piece"]["t1_s"])
         lab = _shift(r.get("labels") or {}, t0)
         for o in (lab.get("scene") or {}).get("objects") or []:
@@ -452,12 +500,15 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     L["performance_review"] = " ".join(reviews)
     L["completion"] = {"task_completed": None, "success_predicate": None, "completed_at_s": None,
                        "goal_reached_at_s": None, "undone_at_s": None, "undone_by": None,
-                       "reason": f"a long recording labelled in {count} parts; each part's outcome is under tasks"}
+                       "reason": f"a long recording labelled in {count} parts; each part's outcome is under tasks"
+                                 + ("; " + "; ".join(f"part {g['part']} has no labels, as {g['why']}" for g in missing)
+                                    if missing else "")}
     for k in ("timeline",):
         L[k].sort(key=lambda s: (s.get("start_s") or 0))
     first = parts[0][1]
     ctx = ep["context"]
     cfg = dict(first.get("config") or {})
+    part_info = sorted(part_info + [{**g, "parse_ok": False} for g in missing], key=lambda x: x["part"])
     cfg.update(timesteps_s=timesteps, n_timesteps=len(timesteps), pieces=part_info)
     # each part routed its own cell width; the recording's route records every part's, and its cost is theirs summed
     routes = [(r.get("config") or {}).get("resolution_route") or {} for _, r in parts]
@@ -491,7 +542,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
-            "stitched": {"parts": count, "cuts_s": cuts_s},
+            "stitched": {"parts": count, "cuts_s": cuts_s, **({"missing": missing} if missing else {})},
             # each part's undecodable stretches, already on the recording's clock (label/episode.py decode_failures)
             "decode_failed": [x for _, r in parts for x in r.get("decode_failed") or []],
             **({"contacts": [c for c in recorded if c.get("id") in asked], "contact_views": views}
