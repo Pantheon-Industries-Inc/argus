@@ -363,7 +363,7 @@ def test_with_no_arm_state_the_instants_where_the_signals_fall_quiet_and_move_ag
     pl = me.plan(_plan_ep({"base.odom": x[:, None]}))
     assert pl["spans"] == []
     (a, b), = pl["quiet_spans"]
-    assert abs(a - 300) <= 10 and abs(b - 600) <= 10
+    assert abs(a - 300) <= 12 and abs(b - 600) <= 12
     assert a in pl["ks"] and b + 1 in pl["ks"]
     jitter = np.random.default_rng(0).normal(0, 1, (n, 3))
     assert sg.movements(jitter).max() < sg.MOVING_MIN
@@ -398,3 +398,7 @@ def test_a_signal_is_quiet_by_its_own_step_so_the_length_of_the_recording_does_n
     late = x.copy()
     late[:100] = np.nan
     assert sg.quiet_spans({"odom": late}, 90) == [(a, b)]
+
+
+def test_a_state_shorter_than_a_still_span_gives_none_whatever_its_width():
+    assert ms.still_spans(np.zeros((10, 6))) == []

@@ -248,16 +248,19 @@ def _range_and_step(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return r, step
 
 
+def _score(r: np.ndarray, step: np.ndarray) -> np.ndarray:
+    with np.errstate(all="ignore"):
+        m = r / step
+    return np.where(np.isfinite(m) & (r > 0), m, 0.0)
+
+
 def movements(a: np.ndarray) -> np.ndarray:
     """How much each value of a signal moves over the episode, unit free: its range over the size of one move (its
     median nonzero step between consecutive readings), whatever share of the frames it moves on, so it does not depend
     on how long the recording is. A joint or an odometer that sweeps far scores in the hundreds, a value that only
     jitters by its noise, or a count or flag that changes by one, scores near 1. 0 for a value that never changes, has
     no reading, or has no rows."""
-    r, step = _range_and_step(a)
-    with np.errstate(all="ignore"):
-        m = r / step
-    return np.where(np.isfinite(m) & (r > 0), m, 0.0)
+    return _score(*_range_and_step(a))
 
 
 def quiet_spans(arrs: dict, need: int) -> list[tuple[int, int]]:
@@ -270,9 +273,8 @@ def quiet_spans(arrs: dict, need: int) -> list[tuple[int, int]]:
     cols, tols = [], []
     for a in arrs.values():
         a = _columns(a)
-        _, step = _range_and_step(a)
-        mv = movements(a)
-        for j in np.flatnonzero(mv >= MOVING_MIN):
+        r, step = _range_and_step(a)
+        for j in np.flatnonzero(_score(r, step) >= MOVING_MIN):
             cols.append(a[:, j])
             tols.append(MOVING_MIN * step[j])
     if not cols:

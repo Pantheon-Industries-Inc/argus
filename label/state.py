@@ -119,6 +119,8 @@ def still_spans(state: np.ndarray, min_s: float = MIN_STILL_S, fps: float = FPS,
     still_tolerance), found by spans_within."""
     s = np.asarray(state, dtype=np.float64)
     need = int(round(min_s * fps))
+    if len(s) < need:
+        return []
     tol = still_tolerance(kind, s.shape[1], grip_range)
     spans = spans_within(s, tol, need)
     for a, b in spans:  # invariant, so a caller can state it as fact
