@@ -1129,14 +1129,16 @@ TAKE_NUMBER_WORDS = frozenset({"ep", "episode", "take", "run", "trial"})
 
 def name_words(name: str, take_words=TAKE_NUMBER_WORDS, by_value: bool = True) -> tuple[str, ...]:
     """The words a file's name is compared by (named_for): its words as tokens gives them (lower case letters and
-    digits, any other character a separator, camelCase split), a number written after a take word split from it (ep1
-    is ep 1, while v2 stays v2), and a number read by its value (01 is 1) unless by_value is false. read.js
-    nameWords."""
+    digits, any other character a separator, camelCase split), each cut where letters follow digits (ep2meta of
+    topEp2Meta is ep2 and meta) and a number cut from the letters before it only when they are a take word (ep2 is ep
+    and 2, while v2, rs2 and robot1 stay one word), and a number read by its value (01 is 1) unless by_value is false.
+    read.js nameWords."""
     out = []
     for t in tokens(name):
-        m = re.fullmatch(r"([a-z]+)([0-9]+)", t)
-        for w in ([m[1], m[2]] if m and m[1] in take_words else [t]):
-            out.append(str(int(w)) if by_value and w.isdigit() else w)
+        for run in re.findall(r"[a-z]+[0-9]*|[0-9]+", t):
+            m = re.fullmatch(r"([a-z]+)([0-9]+)", run)
+            words = [m[1], m[2]] if m and m[1] in take_words else [run]
+            out += [str(int(w)) if by_value and w.isdigit() else w for w in words]
     return tuple(out)
 
 

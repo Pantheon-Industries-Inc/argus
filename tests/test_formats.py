@@ -2908,7 +2908,7 @@ def _a_folder_json_named_for_an_episode_by_its_words_never_gives_another_episode
     ctx, _ = _upload_notes(tmp_path / "c", takes, {"d/ep2_meta.json": {"task": "pour the tea"},
                                                    "d/ep1.json": {"operator": "A"}})
     assert "instruction" not in ctx["d/ep1"] and ctx["d/ep2"]["instruction"] == "pour the tea", ctx
-    for name in ("EP2.json", "ep_2.json", "Top_ep2.json"):
+    for name in ("EP2.json", "ep_2.json", "Top_ep2.json", "topEp2Meta.json"):
         ctx, _ = _upload_notes(tmp_path / name, takes, {f"d/{name}": {"task": "pour the tea"}})
         assert "instruction" not in ctx["d/ep1"], (name, ctx["d/ep1"])
     dashed = ["d/top_ep-1.mp4", "d/wrist_ep-1.mp4", "d/top_ep-2.mp4", "d/wrist_ep-2.mp4"]
