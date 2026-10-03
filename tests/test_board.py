@@ -903,6 +903,18 @@ def test_the_problems_an_episode_was_kept_with_are_drawn_as_recording_checks():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_the_kinds_of_a_camera_or_depth_that_falls_short_raise_the_family_of_their_fact():
+    """A camera that ends early is one fact whichever step finds it (camera_short, and clip_frame_count from earlier
+    runs), frames that do not decode go with a camera that does not, a main camera shorter than the others has its own
+    family, and depth that is missing for a stretch goes with depth that does not decode."""
+    fam = Families()
+    assert {k: fam.reader_family(k) for k in ("camera_short", "clip_frame_count", "frames_not_decodable",
+                                              "main_camera_short", "depth_partial", "depth_not_decodable")} == {
+        "camera_short": "clip-frames", "clip_frame_count": "clip-frames", "frames_not_decodable": "camera-undecodable",
+        "main_camera_short": "main-camera-short", "depth_partial": "depth-missing",
+        "depth_not_decodable": "depth-missing"}
+
+
 def test_each_reader_issue_raises_its_family_at_any_severity(tmp_path):
     """A problem an episode was kept and flagged with (context.json reader_issues) reaches the board's data issues: a
     kind families.json names raises that family, any other kind a data family named after it, and an entry with no
