@@ -1413,16 +1413,34 @@ def _state_unaligned_text(ep: dict, pl: dict) -> str:
 UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 
+# Why an episode has no arm state, as the reader records it in context.json state_why beside its state_note, each with
+# the reason the RECORDED STATE line gives for it (_no_state_text):
+#   layout         the state is recorded, but not in a layout our checks read: the layout line, no reason
+#   not_recorded   the recording holds no state at all
+#   unreadable     a sensor file holding the state could not be read, or was damaged before any message
+#   short          an arm's state does not cover the footage (one arm's file cut short leaves no state at all)
+#   assumed_clock  the state's channels are only on a clock placed from both starts, so they never become state
+STATE_WHY = {
+    "layout": None,
+    "not_recorded": "as the recording holds none",
+    "unreadable": "as a file holding it could not be read",
+    "short": "as it does not cover the footage",
+    "assumed_clock": "as it is recorded only on a clock placed from both starts, not shared with the cameras",
+}
+
+
 def _no_state_text(ep: dict, pl: dict) -> str:
-    """No arm state. With other signals, that none is in the layout our checks read, unless a signal whose name says
-    joints or a state stops short of the episode: then the layout is not why (an arm sensor file cut before the
-    footage ends), and the line gives the reader's note on the state, which says why. With no other signal, that the
+    """No arm state. With other signals the line says why, as the reader recorded it (state_why, STATE_WHY): "layout"
+    says none is in the layout our checks read, and every other reason that no state was read, why, and the reader's
+    note on it. A context written before the reader recorded state_why says the layout line, unless a signal whose
+    name says joints or a state stops short of the episode: then the layout is not why (an arm sensor file cut before
+    the footage ends), and the line gives the reader's note on the state, which says why. With no other signal, that the
     dataset records none, unless the reader wrote a note on the state or left sensor data unread: then only that none
     was read, since "records no hand, head or device tracking" was false for an MCAP whose hand tracks the reader did
     not read yet (2026-10-02 audit). There the note and the lists of unread channels go to the board, never to the
     model: they name the checks and channels that did not run ("the checks on recorded motion ..."), which would put
     the words about a recorded motion back into a video only prompt; with other signals the prompt is a recording's
-    already."""
+    already. So with no other signal state_why changes nothing: "none was read" is true for every reason."""
     r = rig(ep)
     n = _rig_nouns(r)
     ctx = ep["context"]
@@ -1444,8 +1462,13 @@ def _no_state_text(ep: dict, pl: dict) -> str:
         short = [nm for nm, a in ep["signals"].items() if sg.names_joints_or_state(nm) and len(a)
                  and np.isnan(np.asarray(a, dtype=np.float64)).all(axis=1).any()]
         note = (ctx.get("state_note") or "").strip()
-        head = (f"no {n['actor']} state was read. The reader's note on it: {note}" if short and note
-                else f"no {n['actor']} state in the layout our checks read.")
+        why = ctx.get("state_why")
+        if why == "layout" or why is None and not (short and note):
+            head = f"no {n['actor']} state in the layout our checks read."
+        else:
+            reason = STATE_WHY.get(why) if why is not None else None
+            head = (f"no {n['actor']} state was read{f', {reason}' if reason else ''}."
+                    + (f" The reader's note on it: {note}" if note else ""))
         return (f"\nRECORDED STATE: {head}"
                 + (f" The signal{'' if one else 's'} whose name{' says' if one else 's say'} joints or a state "
                    f"({', '.join(joints)}) {'is' if one else 'are'} given value by value"

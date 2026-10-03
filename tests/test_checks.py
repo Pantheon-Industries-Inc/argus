@@ -753,3 +753,44 @@ def test_a_state_that_stops_short_is_told_by_the_readers_note_not_as_a_layout(tm
     layout = ("Labelled from the video: the recorded state has 6 values per frame, and our checks expect 7 per arm "
               "(six joints and a gripper).")
     assert line(False, layout).startswith("RECORDED STATE: no arm state in the layout our checks read.")
+
+
+def test_the_recorded_state_line_says_why_there_is_no_state_as_the_reader_recorded_it(tmp_path):
+    """The RECORDED STATE line said "no arm state in the layout our checks read" for recordings that hold no state at
+    all, whose sensor file could not be read (even when the other files cover the footage), whose state stops short or
+    sits on a clock placed from both starts. The reader records why in state_why: "layout" keeps the layout line, word
+    for word; every other reason says no state was read, why, and gives the reader's note. A context written before
+    state_why reads as it did."""
+    from test_board_sensors import _episode
+    note = "Labelled from the cameras, because the reader's note says so."
+    layout = "RECORDED STATE: no arm state in the layout our checks read."
+
+    def line(state_why, stops_short=False) -> str:
+        ep = _episode(tmp_path / f"eps_{state_why}_{stops_short}")
+        z = dict(np.load(ep / "signals.npz"))
+        joints = np.tile(np.linspace(0, 1, 300, dtype=np.float32)[:, None], (1, 6))
+        if stops_short:
+            joints[150:] = np.nan
+        z["s3"] = joints
+        np.savez(ep / "signals.npz", **z)
+        ctx = json.loads((ep / "context.json").read_text())
+        ctx["signals"].append({"name": "/yam_left/joint_state joint_pos", "key": "s3", "dims": 6,
+                               "names": [f"j{i}" for i in range(6)]})
+        ctx = {**ctx, "state_kind": "none", "state_note": note, **({"state_why": state_why} if state_why else {})}
+        (ep / "context.json").write_text(json.dumps(ctx))
+        e = me.load(ep)
+        return me._no_state_text(e, me.plan(e)).strip().splitlines()[0]
+    assert set(me.STATE_WHY) == {"layout", "not_recorded", "unreadable", "short", "assumed_clock"}
+    assert line("layout").startswith(layout + " The signal whose name says joints")
+    assert line("layout", stops_short=True).startswith(layout)
+    said = {"not_recorded": "as the recording holds none", "unreadable": "as a file holding it could not be read",
+            "short": "as it does not cover the footage",
+            "assumed_clock": "as it is recorded only on a clock placed from both starts, not shared with the cameras"}
+    for why, reason in said.items():
+        # an unreadable sensor file whose other files cover the footage (no signal stops short) gives the note too
+        assert line(why).startswith(f"RECORDED STATE: no arm state was read, {reason}. The reader's note on it: "
+                                    f"{note} The signal whose name says joints"), why
+    # no state_why: as before the reader wrote it
+    assert line(None).startswith(layout)
+    assert line(None, stops_short=True).startswith("RECORDED STATE: no arm state was read. The reader's note on it: "
+                                                   + note)
