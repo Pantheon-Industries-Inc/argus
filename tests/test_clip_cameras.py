@@ -409,12 +409,12 @@ def test_every_camera_a_frame_short_is_labelled_to_the_last_frame_any_camera_has
         _video(Path(s["packed"]), 29)
     req = me.build_request(ep)
     texts = [c["text"] for c in req["content"] if c.get("type") == "text"]
-    last = [t for t in texts if t.startswith("=== detail view, last frame")]
+    last = [t for t in texts if t.startswith("=== detail view, last available frame")]
     assert len(last) == 1 and "t=0.93s | cameras top, left, right" in last[0], last
     assert req["timesteps"][-1] == pytest.approx(0.933, abs=0.001)
     assert ("Every camera's video ends before the episode does, so the last instant is the last frame they have, at "
             "0.93 s.") in req["prompt"]
-    assert "plus its first frame and the last frame its cameras have." in req["prompt"]
+    assert "Unavailable instants and available replacements are named below." in req["prompt"]
 
 
 def test_two_cameras_short_are_named_together(tmp_path):
@@ -489,8 +489,9 @@ def test_a_paired_camera_whose_last_frame_is_damaged_is_said_to_end_after_it_nev
     imgs = me.frames(ep, pl)
     assert 20 not in imgs["left"] and ep["decode_failed"] == {"left": [20]}, ep["decode_failed"]
     note = me._coverage_note(ep, pl)
-    assert note == (" Left's video ends before the episode does, so it has no frame at 1.00 s, 2.00 s; left's video "
-                    "could not be decoded at 0.67 s. Its cells at those times are empty, and it is left out of a "
+    assert note == (" Left has frames only from 0.00 s to 0.67 s, so its cells are empty at the instants outside "
+                    "that time, and it is left out of a detail view there. Left's video could not be decoded at "
+                    "0.67 s. Its cells at those times are empty, and it is left out of a "
                     "detail view there."), note
     (bad,) = me.decode_failures(ep)
     assert bad["t0_s"] == bad["t1_s"] == 0.667, bad
