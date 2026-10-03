@@ -22,7 +22,9 @@ Output per episode (out.json, or OUT/<episode>.json): the model's labels (`label
 exact instants), the deterministic checks that ran on the episode (`dataset_checks`), the still spans the model
 was told about, the instruction it was graded against, and the billed usage and cost. A reply cut off at the
 output limit is kept as failed_<episode>.json, with what was sent, and counts as a failure; the board shows the
-episode with that reply, as it shows one whose reply did not parse.
+episode with that reply, as it shows one whose reply did not parse. An episode that got no reply at all (the spend
+cap reached, every key out of credit, a request that could not be built, a call that failed) has
+noreply_<episode>.json saying why, so the board shows it too.
 
 Keys: OPENROUTER_API_KEYS, a comma-separated list, or when it holds none OPENAI_API_KEY, which sends every call
 straight to OpenAI and so only runs OpenAI models; keys are used round robin, and a key that runs out of
@@ -599,9 +601,22 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
             except Exception as e:
                 return ("fail", ep, f"{type(e).__name__}: {e}")
 
+    def no_reply(ep: Path, why: str | None) -> None:
+        """noreply_<episode>.json beside the outputs: why the episode got no reply (the spend cap reached, every key out
+        of credit, a request that could not be built or a call that failed), so the board shows the episode and says
+        why (board/to_board.py label_outputs). Removed once the episode has a reply; a dry run writes none."""
+        p = out_dir / f"noreply_{ep.name}.json"
+        if dry:
+            return
+        if why is None:
+            p.unlink(missing_ok=True)
+            return
+        write_atomic(p, {"episode_dir": str(ep), "model": label_kw.get("model"), "parse_ok": False, "no_reply": why})
+
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
         for f in as_completed([ex.submit(work, ep) for ep in todo]):
             status, ep, info = f.result()
+            no_reply(ep, None if status == "ok" else str(info))
             if status == "ok":
                 done += 1
                 total_cost += float(info or 0)

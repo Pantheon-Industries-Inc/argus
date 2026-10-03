@@ -108,7 +108,18 @@
     "model_reply_cut_off",
     "part_not_labelled",
     "label_output_unreadable",
-    "no_part_labelled"
+    "no_part_labelled",
+    "model_no_reply",
+    "model_reply_not_shown",
+    "model_reply_off_schema"
+   ]
+  },
+  {
+   "slug": "label-format",
+   "list": "labelling",
+   "name": "Model reply broke the output format",
+   "reader_issues": [
+    "model_reply_fields_dropped"
    ]
   },
   {

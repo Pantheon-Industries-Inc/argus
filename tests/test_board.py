@@ -85,7 +85,7 @@ def test_convert_a_reply_that_breaks_the_schema():
     assert [(k["t_s"], k["label"]) for k in d["key_events"]] == [(None, "no number"), (2.0, "kept")]
     assert [i["issue"] for i in d["data_issues"]] == ["kept"] and d["tasks"][0]["outcome"] == ""
     assert d["objects"] == [{"name": "plate", "color": None}]
-    assert d["_off_schema"] == {"key_events": 1, "data_issues": 1}
+    assert d["_off_schema"] == {"key_events": 1, "data_issues": 1, "scene.objects": 1}
     assert "_off_schema" not in to_board.convert(_output("episode_000009"), "demo")
 
 
@@ -933,7 +933,8 @@ READER_ISSUE_KINDS = {
              "signal_bad_cells", "signal_gap", "signal_not_finite", "signal_partial_span", "signal_alignment_assumed",
              "state_filled", "state_unaligned", "state_partial", "table_short", "table_long"],
     "labelling": ["model_reply_unparsed", "model_reply_cut_off", "part_not_labelled", "label_output_unreadable",
-                  "no_part_labelled"],
+                  "no_part_labelled", "model_no_reply", "model_reply_not_shown", "model_reply_off_schema",
+                  "model_reply_fields_dropped"],
     "handling": ["table_downsampled", "signal_summarised", "camera_not_colour", "depth_clip_failed",
                  "camera_offset"],
 }
@@ -1113,3 +1114,126 @@ def test_a_number_that_is_not_finite_never_stops_an_episode_loading(tmp_path):
     assert d["completion"]["completed_at_s"] is None
     assert d["dataset_checks"]["stream_pairing"]["left_vs_left"] is None
     assert to_board.dumps({"a": [float("nan"), 1.5, {"b": float("-inf")}]}) == '{"a": [null, 1.5, {"b": null}]}'
+
+
+def test_every_prepared_episode_is_on_the_board_and_says_why_it_has_no_labels(tmp_path):
+    """An episode with no reply was missing from the board: one the spend cap stopped, one whose request could not be
+    built, one a stopped run never reached, and a job whose replies all failed built an empty board. Every prepared
+    episode is on the board with its footage, checks and sensors; one with no reply has a label failed issue saying why,
+    which is not counted. Nothing is charged for it."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    (eps / "episode_000002").mkdir()
+    (eps / "episode_000002" / "context.json").write_text((eps / "episode_000000" / "context.json").read_text())
+    out = _output("episode_000000")
+    out["episode_dir"] = str(eps / "episode_000000")
+    (run / "out" / "episode_000000.json").write_text(json.dumps(out))
+    (run / "out" / "noreply_episode_000001.json").write_text(json.dumps({
+        "episode_dir": str(eps / "episode_000001"), "parse_ok": False, "no_reply": "spend cap $20.00 reached"}))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps), "rules": rules.rules_for("teleop_arms")}]}))
+    built = board_build.build(board)
+    assert built["counts"]["demo"]["episodes"] == 3
+    fam = Families()
+    for name, why in (("episode_000001", "spend cap $20.00 reached"),
+                      ("episode_000002", "the labelling run recorded no reply for it")):
+        d = json.loads((board / "qa" / f"{name}.json").read_text())
+        assert d["_label_failed"] == {"status": "no_reply", "why": why}
+        assert d["_meta"]["episode_id"] == name and d["duration_s"] == 10.0 and "stream_pairing" in d["dataset_checks"]
+        issue = next(x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "model_no_reply")
+        assert why in issue["what"] and issue["family"] == "label-failed"
+        assert "label-failed" in fam.classify(d)["not_counted"] and not fam.classify(d)["counted"].get("label-failed")
+        assert not (d.get("_usage") or {}).get("est_cost_usd")
+    ok = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert "_label_failed" not in ok and not any(x["kind"] == "model_no_reply"
+                                                 for x in ok["dataset_checks"].get("reader_issues") or [])
+
+
+def test_a_reply_that_breaks_the_output_format_is_flagged_and_never_stops_the_build(tmp_path):
+    """A reply missing the schema (only a task summary) read as labelled with no flag; rows written as plain strings
+    were counted only in _off_schema, which nothing showed; and one parsed reply with a field of the wrong type (a
+    timeline object, a tasks string) crashed the whole build. Each reply keeps what it gives; one with no timeline is a
+    label failed issue naming what it left out, one with rows or fields left out says which, and an episode the board
+    still cannot read is kept with its reply and the error. The build goes on for every other episode."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = tmp_path / "episodes" / "demo"
+    for i in range(4):
+        e = eps / f"episode_{i:06d}"
+        e.mkdir(parents=True)
+        (e / "context.json").write_text(json.dumps({"dataset": "x", "profile": "teleop_arms", "fps": 30,
+                                                    "n_state_frames": 300}))
+    replies = {"episode_000000": {"task_summary": "only a summary"},
+               "episode_000001": {**_output("x")["labels"], "key_events": ["goal reached", {"t_s": 1.0, "label": "ok"}],
+                                  "tasks": "pour"},
+               "episode_000002": {"timeline": {"a": 1}, "task_summary": "x"},
+               "episode_000003": _output("x")["labels"]}
+    for name, labels in replies.items():
+        out = _output(name)
+        out["episode_dir"], out["labels"] = str(eps / name), labels
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+
+    def issues(name):
+        d = json.loads((board / "qa" / f"{name}.json").read_text())
+        return d, {x["kind"]: x for x in (d.get("dataset_checks") or {}).get("reader_issues") or []}
+    d, iss = issues("episode_000000")
+    assert d["episode_prompt"] == "only a summary" and d["event_labels"] == []
+    assert iss["model_reply_off_schema"]["family"] == "label-failed"
+    assert "leaves out timeline, key_events, data_issues, operator_mistakes" in iss["model_reply_off_schema"]["what"]
+    d, iss = issues("episode_000001")
+    assert [k["label"] for k in d["key_events"]] == ["ok"] and d["tasks"] == [] and len(d["event_labels"]) == 3
+    assert d["_off_schema"] == {"key_events": 1, "tasks": 1}
+    assert iss["model_reply_fields_dropped"]["family"] == "label-format"
+    assert "1 row of key_events and tasks (a str, not a list)" in iss["model_reply_fields_dropped"]["what"]
+    d, iss = issues("episode_000002")
+    assert d["event_labels"] == [] and "model_reply_off_schema" in iss and "model_reply_fields_dropped" in iss
+    d, iss = issues("episode_000003")
+    assert not iss and "_off_schema" not in d
+    fam = Families()
+    assert fam.list_of("label-format") == "labelling"
+
+
+def test_an_episode_the_board_cannot_read_is_kept_with_its_reply_and_the_error(tmp_path, monkeypatch):
+    """Whatever still goes wrong building one episode's file keeps that episode, with its reply as text, the error and a
+    label failed issue, and every other episode is built as usual."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    for name in ("episode_000000", "episode_000001"):
+        out = _output(name)
+        out["episode_dir"] = str(eps / name)
+        if name == "episode_000001":
+            out["labels"]["performance_review"] = "boom"
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    real = board_build.label_consistency.check
+
+    def check(d, dur):
+        if d.get("performance_review") == "boom":
+            raise KeyError("a field the check did not expect")
+        return real(d, dur)
+    monkeypatch.setattr(board_build.label_consistency, "check", check)
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    bad = json.loads((board / "qa" / "episode_000001.json").read_text())
+    assert bad["_label_failed"]["status"] == "not_shown" and "KeyError" in bad["_label_failed"]["error"]
+    assert '"performance_review": "boom"' in bad["_label_failed"]["raw_head"] and bad["duration_s"] == 10.0
+    assert any(x["kind"] == "model_reply_not_shown" for x in bad["dataset_checks"]["reader_issues"])
+    good = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert "_label_failed" not in good and good["completion"]["task_completed"] == "success"

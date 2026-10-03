@@ -14,13 +14,10 @@ replies of every run a board's manifest names (label_outputs), then adds the epi
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 from pathlib import Path
-
-
-LISTS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues", "operator_mistakes",
-         "tasks")
 
 
 def _time(x) -> float | None:
@@ -57,16 +54,24 @@ def label_failed(result: dict) -> dict | None:
     """How a reply that gave no labels came back, for the page (board/serve.py cmpFailHtml): cut off at the output limit
     (the harness's failed_<episode>.json, with the tokens it ran to and the end of the reply), or not parsing (the
     parser's error, the start of the reply and its length), or an output file that does not read (unreadable, with
-    the error), or a long recording none of whose parts gave labels (no_part, each part with why). None for any other
-    output, a reply that parsed or one written without parse_ok (by hand, or by an
-    older harness), which is its labels."""
+    the error), or a long recording none of whose parts gave labels (no_part, each part with why and the start of its
+    reply), or an episode the model gave no reply for (no_reply, with why: no answer, the spend cap reached, a request
+    that could not be built; label/harness.py run_batch), or a reply the board could not read although it parsed
+    (not_shown, with the error and the start of the reply; board/build.py). None for any other output, a reply that
+    parsed or one written without parse_ok (by hand, or by an older harness), which is its labels."""
     if result.get("unreadable"):
         return {"status": "unreadable", "error": str(result["unreadable"])[:RAW_HEAD]}
+    if result.get("no_reply"):
+        return {"status": "no_reply", "why": str(result["no_reply"])[:RAW_HEAD]}
+    if result.get("board_error"):
+        raw = str(result.get("raw") or "")
+        return {"status": "not_shown", "error": str(result["board_error"])[:RAW_HEAD], "raw_head": raw[:RAW_HEAD],
+                "raw_chars": len(raw)}
     st = result.get("stitched") if isinstance(result.get("stitched"), dict) else {}
     if result.get("no_part") and st.get("missing"):
         # a long recording none of whose parts gave labels (label/pieces.py unlabelled): each part and why
-        return {"status": "no_part", "parts": [{k: g.get(k) for k in ("part", "t0_s", "t1_s", "why")}
-                                               for g in st["missing"] if isinstance(g, dict)]}
+        return {"status": "no_part", "parts": [{k: g.get(k) for k in ("part", "t0_s", "t1_s", "why", "raw_head")
+                                                if k in g} for g in st["missing"] if isinstance(g, dict)]}
     if result.get("finish_reason") == "length" and "labels" not in result:
         return {"status": "cut_off", "out_tokens": (result.get("usage") or {}).get("completion_tokens"),
                 "tail": (result.get("content_tail") or "")[-TAIL:]}
@@ -78,25 +83,51 @@ def label_failed(result: dict) -> dict | None:
             "raw_chars": len(raw)}
 
 
+def typed(result: dict) -> tuple[dict, dict]:
+    """(labels, off schema): a parsed reply's labels with every field of the type the output format gives it
+    (label/harness.py typed_labels, which a reply parsed before it was written never went through), and per field how
+    many of its rows, or whether the field itself, were left out for breaking the format ({field: count}). The run's own
+    output is unchanged."""
+    from label.harness import typed_labels
+    labels = typed_labels(copy.deepcopy(result.get("labels") if isinstance(result.get("labels"), dict) else {}))
+    off = {}
+    for x in labels.pop("_dropped", None) or []:
+        if isinstance(x, dict):
+            off[str(x.get("field"))] = off.get(str(x.get("field")), 0) + 1
+    return labels, off
+
+
+def off_schema_text(result: dict) -> str | None:
+    """What of a parsed reply the board leaves out for breaking the output format (typed), in words, or None when it
+    keeps to the format: "2 rows of key_events and task_summary (a list, not text)"."""
+    if label_failed(result) is not None:
+        return None
+    from label.harness import typed_labels
+    dropped = [x for x in typed_labels(copy.deepcopy(result.get("labels") if isinstance(result.get("labels"), dict)
+                                                     else {})).get("_dropped") or [] if isinstance(x, dict)]
+    if not dropped:
+        return None
+    rows, whole = {}, []
+    for x in dropped:
+        if "row" in x:
+            rows[x["field"]] = rows.get(x["field"], 0) + 1
+        else:
+            whole.append(f"{x['field']} ({x['why']})")
+    each = [f"{n} {'row' if n == 1 else 'rows'} of {k}" for k, n in rows.items()] + whole
+    return ", ".join(each[:-1]) + f" and {each[-1]}" if len(each) > 1 else each[0]
+
+
 def convert(result: dict, dataset: str | None = None) -> dict:
     """One harness output as a board episode file. A reply that gave no labels (label_failed) is an episode file with
     empty lists and the reply under _label_failed.
 
     Every model is given the same schema, but a parsed reply can still break it (key events written as plain
-    strings, a time that is not a number). Each list keeps only its objects, and `_off_schema` counts per list what was
-    left out, so a reply that breaks the schema never breaks the board and never hides that it did. A step or key event
-    whose time is not a number is kept with t_s null, and the page lists it untimed after the timed ones. The run's own
-    output is unchanged."""
+    strings, a list written as an object, a time that is not a number). A row or field of the wrong type is left out
+    (typed), and `_off_schema` counts per field what was left out, so a reply that breaks the schema never breaks the
+    board and never hides that it did (board/build.py flags it). A step or key event whose time is not a number is kept
+    with t_s null, and the page lists it untimed after the timed ones. The run's own output is unchanged."""
     failed = label_failed(result)
-    labels = {} if failed else dict(result.get("labels") or {})
-    off = {}
-    for key in LISTS:
-        v = labels.get(key)
-        if isinstance(v, list):
-            kept = [x for x in v if isinstance(x, dict)]
-            if len(kept) < len(v):
-                off[key] = len(v) - len(kept)
-            labels[key] = kept
+    labels, off = ({}, {}) if failed else typed(result)
     scene = labels.get("scene") if isinstance(labels.get("scene"), dict) else {}
     timeline = labels.get("timeline") or []
     eid = Path(result.get("episode_dir", "")).name
@@ -232,8 +263,9 @@ def convert(result: dict, dataset: str | None = None) -> dict:
 def label_outputs(in_dir: Path) -> tuple[dict, list[str]]:
     """Every reply in a run's out/ folder, {episode folder name: (output file, output)}: each episode_*.json that is not
     a dry run, parsed or not, and for an episode with none, the reply cut off at the output limit that the harness kept
-    as failed_<episode>.json (read with parse_ok false). A file that does not read is its episode's output too, with no
-    labels and the error (unreadable, label_failed). Also one line per file skipped: a dry run, which asked nothing."""
+    as failed_<episode>.json (read with parse_ok false), else the record of why it got no reply (noreply_<episode>.json,
+    label/harness.py run_batch). A file that does not read is its episode's output too, with no labels and the error
+    (unreadable, label_failed). Also one line per file skipped: a dry run, which asked nothing."""
     outs, skipped = {}, []
     for f in sorted(in_dir.glob("episode_*.json")):
         try:
@@ -255,6 +287,15 @@ def label_outputs(in_dir: Path) -> tuple[dict, list[str]]:
             outs.setdefault(name, (f, {"parse_ok": False, "unreadable": f"{f.name}: {type(e).__name__}: {e}"}))
             continue
         outs.setdefault(Path(r.get("episode_dir") or name).name, (f, {**r, "parse_ok": False}))
+    for f in sorted(in_dir.glob("noreply_episode_*.json")):
+        name = f.stem[len("noreply_"):]
+        if name in outs or (in_dir / f"{name}.json").exists():
+            continue                      # an earlier attempt's record; the episode has a reply now
+        try:
+            r = json.loads(f.read_text())
+        except (OSError, ValueError) as e:
+            r = {"no_reply": f"{f.name} does not read ({type(e).__name__}: {e})"}
+        outs.setdefault(name, (f, {**r, "parse_ok": False, "no_reply": r.get("no_reply") or "no reason recorded"}))
     return outs, skipped
 
 

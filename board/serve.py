@@ -6089,6 +6089,8 @@ function noLabelsHtml(lf) {
   const why = lf && lf.status === 'cut_off' ? 'reply was cut off at the output limit'
     : lf && lf.status === 'unreadable' ? 'output file does not read'
     : lf && lf.status === 'no_part' ? 'replies gave no labels for any part of this long recording'
+    : lf && lf.status === 'no_reply' ? 'request got no reply'
+    : lf && lf.status === 'not_shown' ? 'reply could not be read by the board'
     : 'reply did not parse';
   return `<p class="no-labels">The model's ${why}, so this episode has no labels: no key events, outcome, `
     + `recoveries or scene. Its footage, checks, sensors and the dataset's own labels are shown as recorded.</p>`;
@@ -6109,7 +6111,20 @@ function cmpFailHtml(c, who, usage, own) {
   if (c.status === 'no_part') return `<div class="cmp-fail"><h4>No part of the recording has labels</h4>
     <p>This long recording was labelled in parts, and no part's response gave labels.${rest}${cost}</p>
     <div class="cf-k">Each part</div><pre>${esc((c.parts || []).map(g => `part ${g.part}, ${Number(g.t0_s).toFixed(1)}`
-      + ` to ${Number(g.t1_s).toFixed(1)} s: ${g.why}`).join('\n'))}</pre></div>`;
+      + ` to ${Number(g.t1_s).toFixed(1)} s: ${g.why}`).join('\n'))}</pre>${(c.parts || []).filter(g => g.raw_head)
+      .map(g => `<div class="cf-k">Start of part ${esc(g.part)}'s response</div><pre>${esc(g.raw_head)}</pre>`)
+      .join('')}</div>`;
+  // the board's own: the request got no reply (the spend cap reached, a request that could not be built), or its reply
+  // parsed but the board could not read it
+  if (c.status === 'no_reply') return `<div class="cmp-fail"><h4>No response from ${esc(who)}</h4>
+    <p>This episode got no response, so there are no labels to show.${rest}</p>
+    ${c.why ? `<div class="cf-k">Why</div><pre>${esc(c.why)}</pre>` : ''}</div>`;
+  if (c.status === 'not_shown') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s response could not be shown</h4>
+    <p>The response parsed, but the board could not read it, so there are no labels to show. It is kept as it came.`
+      + `${rest}${cost}</p>
+    ${c.error ? `<div class="cf-k">Error</div><pre>${esc(c.error)}</pre>` : ''}
+    <div class="cf-k">Start of the response, ${Number(c.raw_chars || 0).toLocaleString()} characters in all</div>`
+      + `<pre>${esc(c.raw_head || '(empty)')}</pre></div>`;
   if (c.status === 'unreadable') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s output file does not read</h4>
     <p>The labelling run's output file for this episode does not read, so there are no labels to show.${rest}</p>
     ${c.error ? `<div class="cf-k">Error</div><pre>${esc(c.error)}</pre>` : ''}</div>`;

@@ -470,7 +470,35 @@ def test_spend_cap_stops_new_episodes(tmp_path, monkeypatch):
     monkeypatch.setattr(harness, "label_episode", fake_label)
     harness.run_batch(_dirs(tmp_path, 10), tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False,
                       max_spend=3.0)
-    assert len(list((tmp_path / "out").glob("*.json"))) == 3
+    assert len(list((tmp_path / "out").glob("episode_*.json"))) == 3
+    # every episode the cap stopped says so, for the board (board/to_board.py label_outputs)
+    left = sorted((tmp_path / "out").glob("noreply_episode_*.json"))
+    assert len(left) == 7 and json.loads(left[0].read_text())["no_reply"] == "spend cap $3.00 reached"
+
+
+def test_an_episode_that_got_no_reply_says_why_until_it_gets_one(tmp_path, monkeypatch):
+    """An episode whose request could not be built, or whose call failed, left no file, so the board never showed it.
+    Each gets noreply_<episode>.json with why; a later run that labels it removes it, and a dry run writes none."""
+    state = {"fail": True}
+
+    def fake_label(ep, out, *, api_key, **kw):
+        if state["fail"] and ep.name.endswith("1"):
+            raise ValueError("the request could not be built")
+        out.write_text(json.dumps({"parse_ok": True, "usage": {"est_cost_usd": 0.1}}))
+        return {"usage": {"est_cost_usd": 0.1}}
+
+    monkeypatch.setattr(harness, "label_episode", fake_label)
+    eps = _dirs(tmp_path, 3)
+    assert harness.run_batch(eps, tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False) == 1
+    rec = json.loads((tmp_path / "out" / "noreply_episode_000001.json").read_text())
+    assert rec["no_reply"] == "ValueError: the request could not be built" and rec["parse_ok"] is False
+    assert rec["episode_dir"] == str(eps[1])
+    state["fail"] = False
+    assert harness.run_batch(eps, tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False) == 0
+    assert not (tmp_path / "out" / "noreply_episode_000001.json").exists()
+    state["fail"] = True
+    harness.run_batch(eps, tmp_path / "dry", keys=["dry-run"], concurrency=1, force=True, dry_run=True)
+    assert not list((tmp_path / "dry").glob("noreply_*"))
 
 
 # ---------------------------------------------------------------- one episode, end to end, offline
