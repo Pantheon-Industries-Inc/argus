@@ -800,6 +800,27 @@ def test_an_array_whose_own_name_has_a_space_before_state_is_not_the_state(tmp_p
     assert "gripper state" in {s["name"] for s in ctx["signals"]}
 
 
+def test_one_arm_of_two_in_one_hdf5_file_that_fails_reads_neither(tmp_path):
+    """Inside one file, observations/left/qpos of seven values beside observations/right/qpos of six had the left arm
+    read alone with no note, while the same arms in a left.h5 and a right.h5 are left unread with a note. The arrays
+    are compared with their side words taken out, so both layouts leave the state unread and name the right qpos."""
+    # a left and a right group of the same layout are read as two episodes (h5_episodes), so h5_state is given the
+    # signals of one episode whose two arm groups differ, as h5_signals names them
+    t = np.arange(40) / 20.0
+    sig = formats.Signals()
+    sig.add("left/qpos", np.stack([0.3 * np.sin(t + j) for j in range(7)], axis=1))
+    sig.add("right/qpos", np.stack([0.3 * np.cos(t + j) for j in range(6)], axis=1))
+    state, action, names, src, note = formats.h5_state(sig, "teleop_arms", t)
+    assert state is None and src is None and "right/qpos" in note, note
+    assert set(sig) == {"left/qpos", "right/qpos"}
+    # an unrelated array of the other side named as the state (a glove's state) never cancels the arm
+    sig = formats.Signals()
+    sig.add("right_arm/qpos", np.stack([0.3 * np.sin(t + j) for j in range(7)], axis=1))
+    sig.add("left_glove/state", np.zeros((40, 5)))
+    state, _, _, src, note = formats.h5_state(sig, "teleop_arms", t)
+    assert state.shape == (40, 7) and src == "right_arm/qpos" and note is None
+
+
 def test_an_action_of_another_width_stays_a_signal(tmp_path):
     """The action goes with the state only when it has the state's shape; a 7 value action beside 14 values of state
     is something else, and stays a signal."""

@@ -3143,11 +3143,16 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         return rows, (gap_words(gap, q[0]) if gap else None)
     notes, read, failed = [], [], {}
 
+    def unsided(name):
+        # an array's own name without its side words, so left/qpos and right/qpos in one file, like left.h5's and
+        # right.h5's qpos, are the same array of each side
+        return " ".join(w for w in tokens(own(name)) if side_of(w) is None)
+
     def fail(name, note):
-        # why an array named as the state is not read, kept by the side its name says and its own name, so only the
-        # other side's own array of the arm read (qpos against qpos) cancels a two arm state
+        # why an array named as the state is not read, kept by the side its name says and its name without that side,
+        # so only the other side's same array of the arm read (qpos against qpos) cancels a two arm state
         notes.append(note)
-        failed.setdefault((side_of(name), own(name)), note)
+        failed.setdefault((side_of(name), unsided(name)), note)
     for name in cands:
         if name not in signals and left_out[name] == NOT_FINITE:
             fail(name, f"Labelled from the video, because the recorded state {name} has values that are not all "
@@ -3188,7 +3193,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         if rig == "teleop_arms" and other and first[1].shape[1] == other[1].shape[1] == JOINT_DIMS else [first]
     # one side's arm whose other side's array failed is half a state, so neither is read, as joint_state reads no arm
     # when one side's channel is not the layout; the note gives the side that failed and why
-    lost = ({"left": "right", "right": "left"}.get(side_of(first[0])), own(first[0]))
+    lost = ({"left": "right", "right": "left"}.get(side_of(first[0])), unsided(first[0]))
     if rig == "teleop_arms" and len(arms) == 1 and lost[0] and failed.get(lost):
         return None, None, None, None, failed[lost]
 
