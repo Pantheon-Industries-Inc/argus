@@ -2311,7 +2311,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["instruction_note"] = "This instruction is the task text the uploader sent with the episode."
     notes = [(k, o) for k, o in got["notes"]
              if not (k == got["task_file"] and isinstance(o, str) and o.strip() == instr)]
-    if len(notes) == 1 and len(note_files(item)) == 1:
+    # a camera's own note (top.txt beside top.mp4 and wrist.mp4) keeps its file name, which says the camera it is about
+    if len(notes) == 1 and len(got["notes"]) == 1 and notes[0][0] not in got["camera_notes"]:
         set_uploader_notes(extra, notes[0][1])
     elif notes:
         set_uploader_notes(extra, dict(notes), files=True)

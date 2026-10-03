@@ -2775,6 +2775,22 @@ def test_only_a_task_file_gives_the_task():
         _only_a_task_file_gives_the_task(Path(t))
 
 
+def _a_cameras_own_note_is_given_under_its_file_name(tmp_path):
+    """top.txt alone beside top.mp4 and wrist.mp4 had been given as bare text, so neither the model nor the board knew
+    it is about the top camera. It is given under its file name; a single note of the episode stays bare."""
+    ctx, _ = _notes_case(tmp_path / "a", {"top.txt": "operator bumped the top camera at 3 s"})
+    assert ctx["uploader_notes"] == {"top.txt": "operator bumped the top camera at 3 s"}
+    assert ctx["uploader_annotation"] == '{"top.txt": "operator bumped the top camera at 3 s"}'
+    ctx, _ = _notes_case(tmp_path / "n", {"notes.txt": "camera bumped\nat 3 s"})
+    assert ctx["uploader_notes"] == "camera bumped\nat 3 s"
+
+
+def test_a_cameras_own_note_is_given_under_its_file_name():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_cameras_own_note_is_given_under_its_file_name(Path(t))
+
+
 def test_notes_cut_for_the_prompt_name_the_files_left_out():
     notes = {"a.txt": "x" * (f.ANNOTATION_MAX_CHARS - 20), "b.txt": "y" * 100, "c.txt": "z"}
     txt = f.annotation_text(notes, files=True)
