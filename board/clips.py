@@ -764,8 +764,7 @@ def recheck(ep_dir: Path) -> None:
         try:
             return capture_qc.run_episode(d)
         except Exception as e:  # noqa: BLE001 - recorded on every check, as run_episode records a crash inside it
-            return capture_qc.format_result({"checks": {c: capture_qc._errored(e) for c in capture_qc.CHECKS},
-                                             "cameras": {}, "actors": {}, "episode": {}})
+            return capture_qc.errored_record(e)
     runs = {key: (lambda d, m=mode: stream_pairing._safe(m, str(d))[1])
             for mode, (key, _, _) in stream_pairing.MODES.items()}
     runs.update(capture_qc=capture, sensor_checks=lambda d: sensors._safe(str(d))[1])
