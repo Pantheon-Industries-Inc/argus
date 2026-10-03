@@ -751,6 +751,25 @@ def test_a_state_with_values_that_are_not_numbers_says_so(tmp_path):
     assert "recorded state qpos has values that are not all finite numbers" in ctx["state_note"]
 
 
+def test_a_long_gap_in_an_hdf5_state_is_not_drawn_as_motion(tmp_path):
+    """A qpos with no reading for 1 s (a recorder that stopped) had the gap filled by a straight line and shown as
+    recorded motion. A gap longer than STATE_EDGE_SLACK_S leaves the state unread, and the note names the array and
+    the gap's time; the array stays a signal with no reading there. A gap of three frames is filled as before."""
+    q = _aloha()
+    q[11:30] = np.nan
+    ctx, _ = _convert(tmp_path / "long", {"observations/qpos": q})
+    assert ctx["state_kind"] == "none"
+    assert ctx["state_note"] == ("Labelled from the video, because the recorded state qpos has no reading from 0.5 s "
+                                 "to 1.5 s, a gap longer than the 0.5 s the reader fills."), ctx["state_note"]
+    assert "qpos" in {s["name"] for s in ctx["signals"]}
+    q = _aloha()
+    q[20:23] = np.nan
+    ctx, ep = _convert(tmp_path / "short", {"observations/qpos": q})
+    assert ctx["state_kind"] == "joints" and not ctx.get("state_note")
+    z = np.load(ep / "state.npz")["state"]
+    assert np.isfinite(z).all() and np.allclose(z[21], (q[19] + q[23]) / 2, atol=1e-5)
+
+
 def test_an_action_of_another_width_stays_a_signal(tmp_path):
     """The action goes with the state only when it has the state's shape; a 7 value action beside 14 values of state
     is something else, and stays a signal."""

@@ -3102,7 +3102,8 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
     group) are tried shortest name first, and the first that state_layout lays out with the names the file gives its
     values is the state; the array named as the action goes with it when it has the state's shape. A frame with no
     reading (a clocked array that starts or ends within STATE_EDGE_SLACK_S of the footage, which h5_signals keeps) is
-    filled as joint_state fills an MCAP arm's frames (lerp_rows), so an HDF5 state is accepted wherever an MCAP one is.
+    filled as joint_state fills an MCAP arm's frames (fill_rows), so an HDF5 state is accepted wherever an MCAP one is,
+    and a gap longer than STATE_EDGE_SLACK_S leaves it unread with the gap's time in the note.
     Both leave the signals when the state is read; otherwise they stay, and note gives the first array's reason, named.
     All None on a head camera, which has no state and no note about one, or when no array is named as the state."""
     if rig == "ego_head":
@@ -3115,11 +3116,15 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
     q = np.asarray(q, dtype=np.float64)
 
     def filled(a):
-        # frames with no reading take the readings around them; None when no frame has a reading
+        # frames with no reading take the readings around them across no gap longer than the slack (fill_rows), else
+        # (None, why): no frame has a reading, or a gap is longer
         ok = np.isfinite(a).all(axis=1)
         if not ok.any():
-            return None
-        return a if ok.all() else lerp_rows(q, q[ok], a[ok])
+            return None, "has no reading on any frame"
+        if ok.all():
+            return a, None
+        rows, gap = fill_rows(q, q[ok], a[ok])
+        return rows, (gap_words(gap, q[0]) if gap else None)
     notes = []
     for name in cands:
         if name not in signals and left_out[name] == NOT_FINITE:
@@ -3138,13 +3143,15 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
         if kind == "none":
             notes.append(f"{note} The recorded state is the HDF5 array {name}." if note else None)
             continue
-        a = filled(a)
+        a, why = filled(a)
         if a is None:
-            notes.append(f"Labelled from the video: the recorded state {name} has no reading on any frame.")
+            notes.append(f"Labelled from the video: the recorded state {name} has no reading on any frame."
+                         if why == "has no reading on any frame" else
+                         f"Labelled from the video, because the recorded state {name} {why}.")
             continue
         act = next((k for k in signals if H5_ACTION_NAME.search(k) and np.shape(signals[k]) == a.shape
-                    and filled(np.asarray(signals[k], dtype=np.float64)) is not None), None)
-        action = filled(np.asarray(signals.pop(act), dtype=np.float64)) if act else None
+                    and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
+        action = filled(np.asarray(signals.pop(act), dtype=np.float64))[0] if act else None
         signals.pop(name)
         for k in (name, act):
             meta.pop(k, None)
@@ -3547,17 +3554,19 @@ def _join_gripper(groups: list[dict]) -> list[dict]:
     """A channel's two name sets as one arm when one names only a gripper and the other names joints and no gripper
     (an arm's driver and its gripper's driver both publishing /joint_states): the gripper's readings, placed at the
     arm's message times, follow the joints as _joint_row puts a gripper field after them. Kept apart when the gripper
-    does not cover the arm's time to within STATE_EDGE_SLACK_S, or the channel has any other name set."""
+    leaves a gap in the arm's time longer than STATE_EDGE_SLACK_S (fill_rows), or the channel has any other name
+    set."""
     grip = [g for g in groups if g["names"] and all(STATE_GRIPPER_NAME.search(x) for x in g["names"])]
     if len(groups) != 2 or len(grip) != 1:
         return groups
     grip = grip[0]
     arm = groups[1] if groups[0] is grip else groups[0]
-    if not arm["names"] or any(STATE_GRIPPER_NAME.search(x) for x in arm["names"]) or len(arm["t"]) < 2 \
-            or len(grip["t"]) < 2 or grip["t"][0] > arm["t"][0] + STATE_EDGE_SLACK_S \
-            or grip["t"][-1] < arm["t"][-1] - STATE_EDGE_SLACK_S:
+    if not arm["names"] or any(STATE_GRIPPER_NAME.search(x) for x in arm["names"]) or len(arm["t"]) < 2:
         return groups
-    pos = np.concatenate([arm["pos"], lerp_rows(arm["t"], grip["t"], grip["pos"])], axis=1)
+    at_arm, gap = fill_rows(arm["t"], grip["t"], grip["pos"])
+    if gap:
+        return groups
+    pos = np.concatenate([arm["pos"], at_arm], axis=1)
     return [{"t": arm["t"], "pos": pos, "names": arm["names"] + grip["names"],
              "fields": arm["fields"] | grip["fields"]}]
 
@@ -3627,10 +3636,34 @@ STATE_EDGE_SLACK_S = 0.5
 
 def lerp_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> np.ndarray:
     """y's rows, read at times t, at times q: each column linearly interpolated, and a time before the first reading or
-    after the last one holding that reading (np.interp). An arm's state is placed on the frames this way, whether its
-    readings come from an MCAP channel (joint_state, abc130k's arms) or are an HDF5 state's frames with a reading
-    (h5_state)."""
+    after the last one holding that reading (np.interp). abc130k's arms are placed on the frames this way, and the
+    state readers do it through fill_rows, which fills no gap longer than STATE_EDGE_SLACK_S."""
     return np.stack([np.interp(q, t, y[:, j]) for j in range(y.shape[1])], axis=1)
+
+
+def fill_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray | None, tuple[float, float] | None]:
+    """(y's rows at times q by lerp_rows, None), or (None, (start, end) of the longest gap) when two readings in a row
+    are more than STATE_EDGE_SLACK_S apart around a time in q, or the first or last reading is further than that from
+    q's ends. A straight line across a recorder that stopped for 2 s would be shown as recorded motion, and a reading
+    held past the ends as stillness, where no still span can tell, so a state is filled across no longer gap than the
+    slack its edges are allowed. Both state readers place an arm this way: an MCAP arm's channel (joint_state) and an
+    HDF5 state's frames with a reading (h5_state)."""
+    t = np.asarray(t, dtype=np.float64)
+    q = np.asarray(q, dtype=np.float64)
+    if len(t) and len(q):
+        inner = np.flatnonzero((np.diff(t) > STATE_EDGE_SLACK_S) & (t[1:] > q[0]) & (t[:-1] < q[-1]))
+        gaps = [(float(t[i]), float(t[i + 1])) for i in inner]
+        gaps += [(float(q[0]), float(t[0]))] if t[0] > q[0] + STATE_EDGE_SLACK_S else []
+        gaps += [(float(t[-1]), float(q[-1]))] if t[-1] < q[-1] - STATE_EDGE_SLACK_S else []
+        if gaps:
+            return None, max(gaps, key=lambda g: g[1] - g[0])
+    return lerp_rows(q, t, y), None
+
+
+def gap_words(gap: tuple[float, float], zero: float) -> str:
+    """A gap fill_rows will not fill, in seconds of the footage (zero its first frame), for a state note."""
+    return (f"has no reading from {gap[0] - zero:.1f} s to {gap[1] - zero:.1f} s, a gap longer than the "
+            f"{STATE_EDGE_SLACK_S:g} s the reader fills")
 
 
 def _msg_items(m) -> list:
@@ -3980,12 +4013,19 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     if not all(covers(st[s]) for s in order):
         return None, None, "Labelled from the cameras, because the recorded arm state does not cover the footage's time."
 
-    def lerp(topic):
-        return lerp_rows(q, streams[topic]["t"], streams[topic]["pos"])
-    state = np.concatenate([lerp(st[s]) for s in order], axis=1)
+    def fill(topic):
+        # the arm's readings on the frames, across no gap longer than the slack (fill_rows)
+        return fill_rows(q, streams[topic]["t"], streams[topic]["pos"])
+    rows = [fill(st[s]) for s in order]
+    gap = next(((st[s], g) for s, (_, g) in zip(order, rows) if g), None)
+    if gap:
+        return None, None, (f"Labelled from the cameras, because the recorded arm state {gap[0]} "
+                            f"{gap_words(gap[1], float(q[0]))}.")
+    state = np.concatenate([r for r, _ in rows], axis=1)
     action = None
     if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS and covers(act[s]) for s in order):
-        action = np.concatenate([lerp(act[s]) for s in order], axis=1)
+        cmd = [fill(act[s])[0] for s in order]
+        action = None if any(c is None for c in cmd) else np.concatenate(cmd, axis=1)
     return state, action, None
 
 

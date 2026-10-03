@@ -919,6 +919,31 @@ def test_state_that_covers_only_part_of_the_footage_is_not_held_flat_into_a_stil
     assert not ls.still_spans(state, fps=30.0, kind="joints", grip_range=None)
 
 
+def test_a_long_gap_in_an_arms_readings_is_not_drawn_as_motion():
+    """An arm channel whose recorder stopped for 2 s had the gap filled by a straight line, which the prompt showed as
+    recorded motion and no still span could see. A gap longer than STATE_EDGE_SLACK_S leaves the state unread with a
+    note naming the channel and the gap's time; a gap of three frames is filled as before."""
+    import numpy as np
+    q = np.arange(300) / 30.0
+    t = np.arange(-0.05, 10.05, 0.01)
+    pos = np.stack([np.sin(t + j) for j in range(7)], axis=1)
+    gap = (t < 4.0) | (t > 6.0)
+    streams = {"/left/joint_state": {"t": t, "pos": pos}, "/right/joint_state": {"t": t[gap], "pos": pos[gap]}}
+    state, action, note = f.joint_state(streams, q)
+    assert state is None and action is None
+    assert note == ("Labelled from the cameras, because the recorded arm state /right/joint_state has no reading from "
+                    "4.0 s to 6.0 s, a gap longer than the 0.5 s the reader fills."), note
+    short = (t < 4.0) | (t > 4.1)
+    state, _, note = f.joint_state({**streams, "/right/joint_state": {"t": t[short], "pos": pos[short]}}, q)
+    assert note is None and state.shape == (300, 14)
+    assert np.abs(state[:, 7:] - np.stack([np.interp(q, t, pos[:, j]) for j in range(7)], axis=1)).max() < 5e-3
+    # a command channel with a long gap is no action, while the state is read
+    lead = {"/leader_left/joint_pos": {"t": t[gap], "pos": pos[gap]}, "/leader_right/joint_pos": {"t": t, "pos": pos}}
+    state, action, note = f.joint_state({"/left/joint_state": streams["/left/joint_state"],
+                                         "/right/joint_state": {"t": t, "pos": pos}, **lead}, q)
+    assert state is not None and action is None and note is None
+
+
 def _frame_times_read_relative_millisecond_stamps_as_milliseconds(tmp_path):
     """A recorder that stamps each frame in ms from the start of the recording (0, 33.3, 66.7, ...), not since 1970:
     the unit comes from the frame step, so a 3 s clip stays 3 s."""
