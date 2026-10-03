@@ -32,7 +32,9 @@ colour clip's timestamps, each showing the depth frame recorded nearest that col
 depth_<camera> against times.npz <camera>), drawn by label/depth.py picture() (near red and far blue, metric depth
 on one fixed scale, depth of unknown unit scaled across the upload, no reading black) at the colour clip's size. A
 colour frame with no depth frame within half a depth frame's interval is black. The page switches each camera
-between its colour and its depth clip.
+between its colour and its depth clip. A depth clip that comes out imperfect (the camera's capture times stop before
+its clip does, or the clip's timestamps differ from the colour clip's) is kept, and one that cannot be cut is left
+out; either is recorded in the episode's reader_issues (record_depth), so the board flags it.
 """
 from __future__ import annotations
 
@@ -229,9 +231,15 @@ def depth_frame_map(colour_t, depth_t) -> list:
     return [int(k) if abs(dt[k] - c) <= half + 1e-6 else None for k, c in zip(j, ct)]
 
 
-def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threads: int = 2, fps: float = 30.0) -> None:
+def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threads: int = 2,
+                  fps: float = 30.0) -> list[dict]:
     """The depth clip of one camera (module docstring): the colour clip's frames and timestamps, each the nearest
-    depth frame drawn by label/depth.py picture(), encoded with the colour clip's recipe at its size (at DEPTH_CRF)."""
+    depth frame drawn by label/depth.py picture(), encoded with the colour clip's recipe at its size (at DEPTH_CRF).
+
+    A clip that comes out imperfect is kept, and what is wrong with it returned as reader issues for record_depth: the
+    camera's frame times stop before its colour clip does (depth_clip_partial: the frames past them are black), or
+    the depth clip's timestamps differ from the colour clip's (depth_clip_timing). A clip that cannot be cut at all
+    raises, and board clips records that as depth_clip_failed (depth_failed)."""
     from fractions import Fraction
 
     import av
@@ -256,11 +264,14 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     dpts = times.get(f"depth_{cam}_pts")
     if dpts is None:
         raise RuntimeError(f"{ep_dir.name}: neither depth_times.npz nor times.npz has depth_{cam}_pts")
+    issues, ctx = [], _context(ep_dir)
     if cam in times and f"depth_{cam}" in times:
         ct = times[cam][skip:skip + len(pts)]
+        want = depth_frame_map(ct, times[f"depth_{cam}"]) + [None] * (len(pts) - len(ct))
         if len(ct) < len(pts):
-            raise RuntimeError(f"{ep_dir.name}: {cam} has {len(ct)} frame times for a {len(pts)}-frame clip")
-        want = depth_frame_map(ct, times[f"depth_{cam}"])
+            issues.append({"kind": DEPTH_CLIP_PARTIAL, "camera": cam, "what": (
+                f"The {camera_label(cam, ctx)} has capture times for {len(ct)} of its {len(pts)} frames, so its depth "
+                f"on the board is black after {len(ct)} frames.")})
     else:
         # no capture times: the depth stream's frames are the camera's own, one for one
         want = [skip + i if skip + i < len(dpts) else None for i in range(len(pts))]
@@ -317,11 +328,43 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
         frame_lengths(tmp)
         got = probe_pts(tmp)[3]
         if got != list(pts):
-            raise RuntimeError(f"{out_mp4.name}: depth clip timestamps differ from the colour clip's "
-                               f"({len(got)} frames, {len(pts)} expected)")
+            issues.append({"kind": DEPTH_CLIP_TIMING, "camera": cam, "what": (
+                f"The {camera_label(cam, ctx)}'s depth clip came out with {len(got)} frames at timestamps that differ "
+                f"from its video's {len(pts)}, so its depth on the board can be a frame off.")})
         os.replace(tmp, out_mp4)
     finally:
         tmp.unlink(missing_ok=True)
+    return issues
+
+
+DEPTH_CLIP_PARTIAL = "depth_clip_partial"     # a depth clip with black frames where the camera has no capture time
+DEPTH_CLIP_TIMING = "depth_clip_timing"       # a depth clip whose timestamps differ from its colour clip's
+DEPTH_CLIP_FAILED = "depth_clip_failed"       # a depth clip that could not be cut; the page offers no depth there
+DEPTH_KINDS = (DEPTH_CLIP_PARTIAL, DEPTH_CLIP_TIMING, DEPTH_CLIP_FAILED)
+
+
+def depth_failed(ep_dir: Path, cam: str, err: Exception) -> dict:
+    """The reader issue of a camera whose depth clip could not be cut (extract_depth raised)."""
+    return {"kind": DEPTH_CLIP_FAILED, "camera": cam, "what": (
+        f"The {camera_label(cam, _context(ep_dir))}'s depth could not be drawn for the board ({str(err)[:160]}), so "
+        "the page shows no depth for it.")}
+
+
+def record_depth(ep_dir: Path, cam: str, issues: list[dict]) -> None:
+    """A camera's depth clip issues from this run (extract_depth, depth_failed) in the episode's context.json
+    reader_issues, in place of the ones an earlier run recorded for it; board/build.py copies them into the episode's
+    dataset_checks, where each raises a data issue. A clean cut takes the camera's entries away."""
+    ctx = _context(ep_dir)
+    old = ctx.get("reader_issues") or []
+    keep = [x for x in old if not (isinstance(x, dict) and x.get("kind") in DEPTH_KINDS and x.get("camera") == cam)]
+    new = keep + list(issues)
+    if new == old:
+        return
+    if new:
+        ctx["reader_issues"] = new
+    else:
+        ctx.pop("reader_issues", None)
+    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
 
 
 def frame_lengths(mp4: Path) -> bool:
@@ -845,21 +888,24 @@ def main() -> int:
                 except Exception as e:
                     sys.stderr.write(f"clip FAIL {o} cut again after the main camera went: {str(e)[:160]}\n")
             record_cameras(d, redo, {}, again)
-    # the depth clips, after the colour clips they are timed against; one that cannot be cut is reported and left
-    # out (the page then offers no depth for that camera), never costing the episode
+    # the depth clips, after the colour clips they are timed against; one that comes out imperfect is kept, and one
+    # that cannot be cut is left out (the page then offers no depth for that camera), never costing the episode; either
+    # is recorded on the episode as a reader issue (record_depth), which the board shows
     djobs = [j for d in ep_dirs if d.name not in failed for j in depth_jobs(d, args.out, args.force, args.name_prefix)]
     if djobs:
         print(f"clips: {len(djobs)} depth clips to cut")
         dok = 0
         with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-            futs = {ex.submit(extract_depth, d, cam, colour, out, args.clip_threads, fps): out
+            futs = {ex.submit(extract_depth, d, cam, colour, out, args.clip_threads, fps): (out, d, cam)
                     for (d, cam, colour, out, fps) in djobs}
             for f in as_completed(futs):
+                out, d, cam = futs[f]
                 try:
-                    f.result()
+                    record_depth(d, cam, f.result())
                     dok += 1
                 except Exception as e:
-                    sys.stderr.write(f"depth clip FAIL {futs[f]}: {str(e)[:160]}\n")
+                    sys.stderr.write(f"depth clip FAIL {out}: {str(e)[:160]}\n")
+                    record_depth(d, cam, [depth_failed(d, cam, e)])
         print(f"clips: depth ok={dok} fail={len(djobs) - dok}")
     # an episode none of whose cameras decodes costs only itself, never the rest (set_aside_failed); the step fails
     # only when no episode came out at all

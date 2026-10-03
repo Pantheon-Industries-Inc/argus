@@ -53,9 +53,10 @@ def convert(result: dict, dataset: str | None = None) -> dict:
     empty lists and the reply under _label_failed.
 
     Every model is given the same schema, but a parsed reply can still break it (key events written as plain
-    strings, a time that is not a number). Such an entry is not shown: each list keeps only its objects, and
-    `_off_schema` counts per list what was left out, so a reply that breaks the schema never breaks the board and
-    never hides that it did. The run's own output is unchanged."""
+    strings, a time that is not a number). Each list keeps only its objects, and `_off_schema` counts per list what was
+    left out, so a reply that breaks the schema never breaks the board and never hides that it did. A step or key event
+    whose time is not a number is kept with t_s null, and the page lists it untimed after the timed ones. The run's own
+    output is unchanged."""
     failed = label_failed(result)
     labels = {} if failed else dict(result.get("labels") or {})
     off = {}
@@ -84,9 +85,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
 
     event_labels = []
     for i, s in enumerate(timeline):
-        t0 = _time(s.get("start_s"))
-        if t0 is None:
-            continue
+        t0 = _time(s.get("start_s"))          # None: kept, untimed
         dest = s.get("destination") or s.get("spatial_relation")
         event_labels.append({
             "t_s": t0,
@@ -139,9 +138,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         })
     key_events = []
     for k in labels.get("key_events") or []:
-        t = _time(k.get("t_s"))
-        if t is None:
-            continue
+        t = _time(k.get("t_s"))               # None: kept, untimed
         key_events.append({"t_s": t,
                            "label": k.get("label") or "",
                            "kind": k.get("kind") or "",

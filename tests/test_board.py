@@ -44,12 +44,13 @@ def _output(ep: str, **labels) -> dict:
 def test_convert_a_harness_output():
     d = to_board.convert(_output("episode_000007"), "demo")
     assert d["dataset"] == "demo" and d["_meta"]["episode_id"] == "episode_000007"
-    assert [(e["t_s"], e["verb_class"], e["event_idx"]) for e in d["event_labels"]] == [(0.0, "reach", 0),
-                                                                                        (1.5, "place", 2)]
-    assert d["event_labels"][1]["carry_phase"] == "-> plate" and d["event_labels"][1]["end_s"] == 3.0
-    assert [k["label"] for k in d["key_events"]] == ["cup on plate"]
+    # a step or key event with no time the board can read is kept, untimed (the page lists it after the timed ones)
+    assert [(e["t_s"], e["verb_class"], e["event_idx"]) for e in d["event_labels"]] == [
+        (0.0, "reach", 0), (None, "no start time: not a marker", 1), (1.5, "place", 2)]
+    assert d["event_labels"][2]["carry_phase"] == "-> plate" and d["event_labels"][2]["end_s"] == 3.0
+    assert [(k["t_s"], k["label"]) for k in d["key_events"]] == [(2.9, "cup on plate"), (None, "no time")]
     assert d["objects"] == [{"name": "cup", "color": "Red"}, {"name": "plate", "color": None}]
-    assert d["completion"]["task_completed"] == "success" and d["_meta"]["engaged_events"] == 2
+    assert d["completion"]["task_completed"] == "success" and d["_meta"]["engaged_events"] == 3
     assert d["_meta"]["given_prompt"] == "Put the cup on the plate." and d["_meta"]["model"] == "some/model"
     assert d["timesteps_s"] == [0.0, 1.0, 2.0] and d["camera_views"] == ["exo", "left"]
     assert d["_usage"]["est_cost_usd"] == 0.12
@@ -73,15 +74,15 @@ def test_a_partial_outcome_is_a_failure_of_the_kind_partial():
 
 
 def test_convert_a_reply_that_breaks_the_schema():
-    """A parsed reply whose lists hold plain strings or whose times are not numbers is shown without them, and the
-    board file counts what was left out."""
+    """A parsed reply whose lists hold plain strings is shown without them, and the board file counts what was left
+    out; an entry whose time is not a number is kept, untimed."""
     out = _output("episode_000008", key_events=["goal reached", {"t_s": "late", "label": "no number"},
                                                 {"t_s": 2.0, "label": "kept"}],
                   data_issues=["the camera is dark", {"issue": "kept", "category": "camera_fault", "severity": "low"}],
                   tasks=[{"task": "pour", "outcome": None}], scene={"objects": ["cup", {"name": "plate",
                                                                                         "attributes": [3]}]})
     d = to_board.convert(out, "demo")
-    assert [k["label"] for k in d["key_events"]] == ["kept"]
+    assert [(k["t_s"], k["label"]) for k in d["key_events"]] == [(None, "no number"), (2.0, "kept")]
     assert [i["issue"] for i in d["data_issues"]] == ["kept"] and d["tasks"][0]["outcome"] == ""
     assert d["objects"] == [{"name": "plate", "color": None}]
     assert d["_off_schema"] == {"key_events": 1, "data_issues": 1}
@@ -298,7 +299,9 @@ def test_board_builds_from_the_latest_run(tmp_path):
     assert d["duration_s"] == 10.0 and d["_rig"] == "teleop_arms" and "duration_estimated" not in d
     assert d["dataset_checks"]["stream_pairing"] == {"crossed": True} and "gripper_channels" not in d["dataset_checks"]
     assert d["_withheld_checks"]["gripper_channels"]["reason"] == "one-armed tasks"
-    assert d["dataset_labels"] == [{"t0": 0.0, "t1": 4.5, "label": "reach for the cup"}]
+    # a dataset label with no end time is a moment
+    assert d["dataset_labels"] == [{"t0": 0.0, "t1": 4.5, "label": "reach for the cup"},
+                                   {"t0": 5.0, "t1": 5.0, "label": "open"}]
     # the rules: an instruction was given, so a missing-instruction issue stays; nothing capped without a mismatch
     assert [i["category"] for i in d["data_issues"]] == ["human_intervention", "missing_instruction"]
     assert d["operator_mistakes"][0]["severity"] == "high"
@@ -922,3 +925,67 @@ def test_a_reply_that_gave_no_labels_is_shown_on_its_episode():
     r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "label_failed.js"),
                         str(REPO / "board" / "serve.py")], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_dataset_label_with_no_time_is_kept_untimed_and_never_breaks_the_build(tmp_path):
+    ctx = {"profile": "ego_head", "fps": 30, "annotation_subtasks": [
+        {"t0": None, "t1": None, "label": "wipe the table"}, {"t0": "soon", "t1": 3, "label": "odd start"},
+        {"t0": 2, "label": "open"}, {"t0": 1, "t1": 2, "label": ""}]}
+    d = {}
+    board_build.add_context(d, ctx, tmp_path)
+    assert d["dataset_labels"] == [{"t0": None, "t1": None, "label": "wipe the table"},
+                                   {"t0": None, "t1": 3.0, "label": "odd start"},
+                                   {"t0": 2.0, "t1": 2.0, "label": "open"}]
+
+
+def test_an_untimed_step_never_breaks_the_hands_out_of_view_total():
+    d = {"_rig": "ego_head", "event_labels": [{"t_s": None, "end_s": 4.0, "hands_visible": False},
+                                              {"t_s": 1.0, "end_s": 3.0, "hands_visible": False}]}
+    assert Families().hands_hidden_seconds(d) == 2.0
+
+
+def test_the_page_lists_untimed_steps_rules_set_aside_and_withheld_checks():
+    r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "set_aside.js"),
+                        str(REPO / "board" / "serve.py")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(not shutil.which("ffprobe"), reason="no ffprobe")
+@pytest.mark.parametrize("n_kp", [21, 22, 24, 25])
+def test_hand_keypoints_a_frame_or_two_off_the_clip_are_aligned_not_dropped(tmp_path, n_kp):
+    """Keypoints that cover a frame or two more or fewer than the board clip are drawn from the clip's first frame:
+    the frames past the keypoints' end have no hand, the keypoints past the clip's end are left out, and the file says
+    how they were aligned. More than that is not the same video, and is skipped with the reason."""
+    n = 23
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    _clip(clips / "episode_x.mp4", n)
+    qa = tmp_path / "qa"
+    qa.mkdir()
+    (qa / "episode_x.json").write_text(json.dumps({"dataset": "demo", "_rig": "ego_head",
+                                                   "_meta": {"episode_id": "episode_x"}}))
+    src = tmp_path / "run"
+    _keypoint_run(src, "demo/episode_x", n_kp)
+    out = tmp_path / "hands"
+    out.mkdir()
+    res = hands.build(src, qa, clips, out, jobs=1)
+    assert res["written"] == 1 and not res["skipped"]
+    doc = json.loads((out / "episode_x.json").read_text())
+    assert doc["aligned"] == {"keypoint_frames": n_kp, "clip_frames": n}
+    assert doc["left"]["spans"] == [[0, 8], [13, min(n, n_kp)]]
+    assert hands.verify(src, qa, out)["files"] == 1
+
+
+@pytest.mark.skipif(not shutil.which("ffprobe"), reason="no ffprobe")
+def test_hand_keypoints_of_another_length_are_skipped_with_the_reason(tmp_path):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    _clip(clips / "episode_x.mp4", 23)
+    qa = tmp_path / "qa"
+    qa.mkdir()
+    (qa / "episode_x.json").write_text(json.dumps({"dataset": "demo", "_rig": "ego_head",
+                                                   "_meta": {"episode_id": "episode_x"}}))
+    _keypoint_run(tmp_path / "run", "demo/episode_x", 30)
+    (tmp_path / "hands").mkdir()
+    res = hands.build(tmp_path / "run", qa, clips, tmp_path / "hands", jobs=1)
+    assert res["written"] == 0 and "keypoints cover 30 frames" in res["skipped"][0]["skip"]

@@ -89,6 +89,17 @@ def test_public_label_leaves_out_how_the_label_was_made():
     assert not set(serve.PRIVATE_KEYS) & set(serve.episode_view(dict(d)))
 
 
+def test_the_page_is_given_the_checks_a_rule_withheld_with_the_reason():
+    """A check a manifest rule withheld (drop_check) is still on the page, named with the rule's reason; the check's
+    stored result stays in the label file."""
+    d = {"dataset": "molmo", "_withheld_checks": {"gripper_channels": {"reason": "one-armed tasks",
+                                                                       "result": {"flagged": True}}}}
+    view = serve.episode_view(d)
+    assert view["set_aside_checks"] == [{"check": "gripper_channels", "reason": "one-armed tasks", "flagged": True}]
+    assert "_withheld_checks" not in view
+    assert "set_aside_checks" not in serve.episode_view({"_withheld_checks": [3]})
+
+
 def test_render_index_fills_every_placeholder():
     page = serve.render_index("Data <Board>", {"mode": "api", "compare": False}, "trial <one>")
     assert "<title>Data &lt;Board&gt;</title>" in page and '<span class="ph-board">trial &lt;one&gt;</span>' in page

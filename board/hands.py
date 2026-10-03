@@ -27,6 +27,9 @@ One drawing per board episode, named after its label file (BOARD/hands/<label fi
                                           bytes is the clip's size, to tell a re-cut clip
    "joints": 21, "edges": [[0, 1], ...],  OpenPose hand skeleton
    "step": 4, "tol": 0.5,
+   "aligned": {"keypoint_frames", "clip_frames"},   only when the keypoints were a frame or two off the clip's count
+                                          (align_frames): laid from its first frame, frames past their end have no
+                                          hand, and keypoints past its end are left out
    "left":  {"spans": [[s, e], ...], "data": "<VLQ>"},
    "right": {"spans": [...], "data": "..."}}
 
@@ -267,6 +270,26 @@ def head_camera_files(qa: Path) -> dict:
     return out
 
 
+FRAME_SLACK = 2      # keypoints this many frames off their video's frame count are aligned from its first frame
+
+
+def align_frames(hands: dict, m: int) -> tuple[dict, dict | None]:
+    """Both hands' keypoints and confidences on a video of m frames, and how they were aligned (None when they cover
+    exactly its frames). Keypoints a frame or two off the video's count (FRAME_SLACK: a decoder that gave one frame more
+    or fewer than the clip's) are laid from its first frame: the frames past their end have no hand, and the keypoints
+    past the video's end are left out. Any other count is not the same video (ValueError)."""
+    n = len(hands["left"]["kp"])
+    if any(len(hands[h][k]) != n for h in ("left", "right") for k in ("kp", "conf")):
+        raise ValueError("the two hands' keypoints cover different frames")
+    if n == m:
+        return hands, None
+    if abs(n - m) > FRAME_SLACK:
+        raise ValueError(f"keypoints cover {n} frames, the video has {m}")
+    pad = [None] * max(0, m - n)
+    return ({h: {**hands[h], "kp": (list(hands[h]["kp"]) + pad)[:m], "conf": (list(hands[h]["conf"]) + pad)[:m]}
+             for h in ("left", "right")}, {"keypoint_frames": n, "clip_frames": m})
+
+
 def build_one(job: tuple) -> dict:
     key, src_file, label_file, clip, out_dir, source = job
     try:
@@ -275,18 +298,21 @@ def build_one(job: tuple) -> dict:
         cl = probe_clip(clip)
         d = json.loads(Path(src_file).read_text())
         v = d["video"]
-        n = len(d["hands"]["left"]["kp"])
-        if not (n == cl["frames"] == len(d["hands"]["right"]["kp"])):
-            return {"key": key, "skip": f"keypoints cover {n} frames, the board clip has {cl['frames']}"}
+        try:
+            hands_, aligned = align_frames(d["hands"], cl["frames"])
+        except ValueError as err:
+            return {"key": key, "skip": f"{err}".replace("the video has", "the board clip has")}
+        n = cl["frames"]
         sx, sy = cl["w"] / v["width"], cl["h"] / v["height"]
         if abs(sx - sy) > 0.005 * max(sx, sy):
             return {"key": key,
                     "skip": f"board clip {cl['w']}x{cl['h']} is not a uniform scale of {v['width']}x{v['height']}"}
         doc = {"format": FORMAT, "source": source,
                "clip": cl,
-               "joints": len(d["joints"]), "edges": d["edges"], "step": STEP, "tol": TOL}
+               "joints": len(d["joints"]), "edges": d["edges"], "step": STEP, "tol": TOL,
+               **({"aligned": aligned} if aligned else {})}
         for h in ("left", "right"):
-            hh = d["hands"][h]
+            hh = hands_[h]
             doc[h] = encode_hand(hh["kp"], [c is not None and c >= 0.5 for c in hh["conf"]], sx, sy)
         body = json.dumps(doc, separators=(",", ":"))
         tmp = out_dir / f".{label_file}.part"
@@ -342,14 +368,15 @@ def keypoints_doc(key: str, d: dict, video: Path, label_file: str, eid: str, ctx
                   dataset_source: dict | None) -> dict:
     """The download for one episode: the run's keypoints of every frame of the dataset's video, in its own pixels,
     with each frame's timestamp probed from that video. Refused (ValueError) unless the video has exactly the
-    keypoints' frames at the keypoints' size. dataset_source is the label file's (board/dataset_sources.json)."""
+    keypoints' frames at the keypoints' size, or a frame or two more or fewer, which are aligned from its first frame
+    (align_frames) and the download says so ("aligned"). dataset_source is the label file's
+    (board/dataset_sources.json)."""
     w, h, tb, pts = probe_pts(video)
     v = d["video"]
-    n = len(d["hands"]["left"]["kp"])
     if (w, h) != (int(v["width"]), int(v["height"])):
         raise ValueError(f"{video.name} is {w}x{h}, the keypoints are in {v['width']}x{v['height']} pixels")
-    if not (n == len(pts) == len(d["hands"]["right"]["kp"])):
-        raise ValueError(f"keypoints cover {n} frames, {video.name} has {len(pts)}")
+    hands_, aligned = align_frames(d["hands"], len(pts))
+    n = len(pts)
     ds = key.split("/", 1)[0]
     joints = d["joints"]
     s = dataset_source or {}
@@ -392,7 +419,10 @@ def keypoints_doc(key: str, d: dict, video: Path, label_file: str, eid: str, ctx
         "model": {**{k: v for k, v in (d.get("model") or {}).items() if k != "code_commit"},
                   "temporal_smoothing": (d.get("temporal") or {}).get("smoothing")},
         "frames": {"pts": pts, "t": [round(float((p - pts[0]) * tb), 6) for p in pts]},
-        "hands": {"left": hand(d["hands"]["left"]), "right": hand(d["hands"]["right"])},
+        "hands": {"left": hand(hands_["left"]), "right": hand(hands_["right"])},
+        **({"aligned": {"keypoint_frames": aligned["keypoint_frames"], "video_frames": aligned["clip_frames"],
+                        "how": "laid from the video's first frame: frames past the keypoints' end have none, and "
+                               "keypoints past the video's end are left out"}} if aligned else {}),
     }
 
 
@@ -450,7 +480,9 @@ def episode_folders(qa: Path, roots: list) -> dict:
 def build(src: Path, qa: Path, clips: Path, out_dir: Path, jobs: int = 8) -> dict:
     """Write one file per head-camera board episode the run covers into out_dir (which must exist). Episodes the
     run does not cover, and run episodes the board does not list, are simply absent; anything that does not line up
-    with its board clip (frame count or scale) is skipped with the reason, never written."""
+    with its board clip (a frame count more than FRAME_SLACK off, or another scale) is skipped with the reason, never
+    written; a count a frame or two off is aligned from the clip's first frame (align_frames), and the file says so in
+    "aligned"."""
     index = json.loads((src / "index.json").read_text())
     board = head_camera_files(qa)
     # these files are published with the board, so they name the model and its licence, and no run or storage path
@@ -485,6 +517,8 @@ def verify(src: Path, qa: Path, out_dir: Path) -> dict:
             dec = decode_hand(doc[h], doc["clip"]["frames"], doc["step"])
             hh = d["hands"][h]
             for i, (kp, c) in enumerate(zip(hh["kp"], hh["conf"])):
+                if i >= len(dec):           # past the clip's end, left out (align_frames)
+                    break
                 want = c is not None and c >= 0.5 and kp is not None
                 if want != (dec[i] is not None):
                     raise AssertionError(f"{f.name} {h} frame {i}: presence differs")
@@ -510,6 +544,7 @@ def verify_keypoints(src: Path, qa: Path, episodes: dict, out_dir: Path) -> dict
             raise AssertionError(f"{f}: names {doc['episode']['board_file']}, or its licence is not LICENCE")
         d = json.loads((src / by_file[f]["hands2d"]).read_text())
         _, _, _, pts = probe_pts(source_video(Path(episodes[f])))
+        d = {**d, "hands": align_frames(d["hands"], len(pts))[0]}
         if doc["frames"]["pts"] != pts or meta["frames"] != len(pts) or doc["video"]["frames"] != len(pts):
             raise AssertionError(f"{f}: frames differ from the video")
         for h in ("left", "right"):

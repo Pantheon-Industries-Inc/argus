@@ -478,8 +478,16 @@ def public_label(d: dict) -> dict:
 def episode_view(d: dict) -> dict:
     """The episode as the page shows it: its public fields (public_label), each flagged issue carrying the family it
     is counted under and whether it counts (Families.counts), so the episode's own list names and counts a problem
-    exactly as the filter does. The label file itself is not changed."""
+    exactly as the filter does, and the checks a manifest rule withheld on this dataset (drop_check, kept in the
+    label file's _withheld_checks) as set_aside_checks, each with the rule's reason and whether it fired, so the page
+    lists them as set aside, never hides them. The label file itself is not changed."""
+    held = d.get("_withheld_checks") if isinstance(d.get("_withheld_checks"), dict) else {}
     d = public_label(d)
+    aside = [{"check": k, "reason": v.get("reason") or "",
+              "flagged": any(bool(r.get(f)) for f in ("flagged", "crossed", "sped_up_recording"))}
+             for k, v in held.items() if isinstance(v, dict) for r in [v.get("result") or {}] if isinstance(r, dict)]
+    if aside:
+        d["set_aside_checks"] = aside
     ds = d.get("dataset")
     for key in ("data_issues", "operator_mistakes"):
         for i in d.get(key) or []:
@@ -1568,6 +1576,9 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .key-ev.goal { border-left-color: var(--success); }
 .key-ev:hover { background: rgba(28,28,26,0.054); }
 .key-ev .ke-time { color: var(--fg-3); font-family: var(--mono); font-size: 11.5px; padding-top: 1px; }
+/* a key event or step with no time the board can read: listed after the timed ones, nothing to seek to */
+.key-ev.untimed, .feed .ev.untimed { cursor: default; }
+.key-ev.untimed .ke-time, .feed .ev.untimed .t { font-size: 10.5px; white-space: nowrap; }
 .key-ev .ke-body { min-width: 0; }
 .key-ev .ke-row1 { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
 .key-ev .ke-label { color: var(--fg); font-size: 13px; line-height: 1.4; }
@@ -2811,6 +2822,67 @@ function readerIssueRows(d) {
           + `${esc(fmtT(t))}</span>` : ''}${x.signal ? `<span class="di-cat">${esc(x.signal)}</span>` : ''}</div>
       </div></div>`;
   });
+}
+// The steps and key events the model gave with no time the board can read (board/to_board.py keeps them with t_s
+// null): rows of the dense timeline and of the key events, listed after the timed ones, with "no time" where the time
+// goes and nothing to seek to; the key events are numbered on from the timed ones (first).
+function untimedRows(d, first = 1) {
+  const steps = (d.event_labels || []).filter(e => e && e.t_s == null).map(e => {
+    const cl = (e.contribution || '').toLowerCase() || '-';
+    return `<div class="ev untimed">
+        <span class="t">no time</span>
+        <span class="who"><span class="arm ${esc(e.arm || '')}">${esc(armLabel(e.arm))}</span></span>
+        <span class="phrase">${buildPhrase(e)}</span>
+        <span class="contrib ${contribClass(e.contribution)}">${esc(cl)}</span>
+      </div>`;
+  });
+  const keys = (d.key_events || []).filter(k => k && k.t_s == null).map((k, i) => {
+    const oc = (k.outcome || '').toLowerCase();
+    return `<div class="key-ev untimed ${esc(oc)}">
+      <span class="ke-num">${first + i}</span>
+      <span class="ke-time">no time</span>
+      <div class="ke-body">
+        <div class="ke-row1"><span class="ke-label">${esc(k.label || '')}</span>${oc
+          ? `<span class="outcome ${esc(oc)}">${esc(oc)}</span>` : ''}</div>
+        ${k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}
+      </div>
+    </div>`;
+  });
+  return {steps, keys};
+}
+// What this dataset's rules set aside: each issue a rule moved to _excluded (board/build.py apply_rules, and the
+// issues label/pieces.py stitch set aside at our own cuts), with its text, tag, time and the rule's reason, and each
+// check a rule withheld (set_aside_checks, board/serve.py episode_view), with whether it fired and the reason. None of
+// them counts. They are rows of the problems' own kind, in a fold that is closed until opened and says how many it
+// holds. Nothing is drawn when nothing was set aside.
+function setAsideHtml(d) {
+  const ex = (Array.isArray(d._excluded) ? d._excluded : []).filter(x => x && x.issue);
+  const ck = (Array.isArray(d.set_aside_checks) ? d.set_aside_checks : []).filter(x => x && x.check);
+  const n = ex.length + ck.length;
+  if (!n) return '';
+  const num = v => v != null && v !== '' && !isNaN(parseFloat(v));
+  const why = t => { const w = String(t || '').trim(); return w ? w[0].toUpperCase() + w.slice(1).replace(/\.?$/, '.')
+    : ''; };
+  const fam = Object.fromEntries(OUR_CHECKS.map(([k, , f]) => [k, f]));
+  const rows = ex.map(x => `<div class="di-row low minor"${num(x.t_s) ? ` data-t="${parseFloat(x.t_s)}"` : ''}>
+      <span class="di-sev">${esc(x.severity || 'flag')}</span>
+      <div class="di-body">
+        <div class="di-issue">${esc(x.issue)}</div>
+        <div class="di-tags">${x.category ? `<span class="di-cat">${esc(tagName(x.category, x.list || 'data_issues'))}`
+          + `</span>` : ''}${num(x.t_s) ? `<span class="di-t">@ ${esc(fmtT(parseFloat(x.t_s)))}</span>` : ''}</div>
+        ${x.reason ? `<div class="di-ev">${esc(why(x.reason))}</div>` : ''}
+      </div></div>`).concat(ck.map(c => `<div class="di-row low minor">
+      <span class="di-sev">check</span>
+      <div class="di-body">
+        <div class="di-issue">${esc(fam[c.check] ? famName(fam[c.check]) : tagName(c.check, 'data_issues'))}, ${c.flagged
+          ? 'fired' : 'clear'}, not counted on this dataset</div>
+        ${c.reason ? `<div class="di-ev">${esc(why(c.reason))}</div>` : ''}
+      </div></div>`));
+  const closed = `Show the ${n} set aside by this dataset's rules`;
+  const opened = `Hide the ${n} set aside by this dataset's rules`;
+  return `<div class="pub-fold sa-fold"><div class="sn-fold"><div class="sn-fold-in"><div class="info-block di-block">`
+    + rows.join('') + `</div></div></div><button class="ck-more pub-show" type="button" aria-expanded="false" `
+    + `data-closed="${closed}" data-open="${opened}">${closed}</button></div>`;
 }
 // What the model was not shown of the upload, from board/build.py reader_notes. It draws the reader's note on the
 // recorded state as text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it
@@ -4819,8 +4891,9 @@ function renderEp(d, opts) {
     </div>`;
   // the recording's contacts, one bar per hand, and the card of the contact under the playhead below the lanes
   laneHtml += touchLaneHtml(touch, lanePct, chev);
-  if (pubLabels.length) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
-    `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" title="${esc(fmtT(x.t0) + ' to '
+  // a label with no time is listed below, never drawn on the lane
+  if (pubLabels.some(x => x.t0 != null)) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
+    x.t0 == null ? '' : `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" title="${esc(fmtT(x.t0) + ' to '
       + fmtT(x.t1) + ': ' + x.label)}" style="left:${lanePct(x.t0)}%;width:max(2px, `
       + `calc(${lanePct(x.t1) - lanePct(x.t0)}% - 1px))"></div>`).join(''));
   const pubEp = d.dataset_episode_labels || null;
@@ -4831,8 +4904,9 @@ function renderEp(d, opts) {
     pubHtml = `<h3 class="section">The dataset's own labels${pubLabels.length
       ? ` <span class="count">${pubLabels.length}</span>` : ''}</h3><div class="info-block pub-list">`
       + (d.dataset_labels_note ? `<div class="pub-note">${esc(d.dataset_labels_note)}</div>` : '')
-      + pubLabels.map((x, i) => `<div class="pub-row" data-t="${x.t0}" data-i="${i}"><span class="pub-t">${fmtT(x.t0)} `
-        + `to ${fmtT(x.t1)}</span><span class="pub-l">${esc(x.label)}</span></div>`).join('')
+      + pubLabels.map((x, i) => `<div class="pub-row"${x.t0 != null ? ` data-t="${x.t0}"` : ''} data-i="${i}">`
+        + `<span class="pub-t">${x.t0 == null ? 'no time' : x.t1 == null || x.t1 === x.t0 ? fmtT(x.t0)
+          : `${fmtT(x.t0)} to ${fmtT(x.t1)}`}</span><span class="pub-l">${esc(x.label)}</span></div>`).join('')
       + (pubEp ? `<div class="pub-ep">`
         + (pubEp.task_status ? `<div><span class="pub-k">Task status</span> ${esc(String(pubEp.task_status))}</div>`
           : '')
@@ -4928,6 +5002,7 @@ function renderEp(d, opts) {
       ? '  [' + esc(oc) + ']' : ''}</div></div>`;
   }
   let keyPanelHtml = '';
+  const untimed = untimedRows(d, keyEvents.length + 1);
   keyEvents.forEach((k, i) => {
     const oc = (k.outcome || '').toLowerCase();
     const goalish = k.kind === 'goal_reached' || k.kind === 'subgoal_complete';
@@ -4941,6 +5016,7 @@ function renderEp(d, opts) {
       </div>
     </div>`;
   });
+  keyPanelHtml += untimed.keys.join('');
 
   // the review of how the task was performed, and the state changes; the scene graph is a snapshot that follows the
   // playhead (renderSceneGraph)
@@ -5020,7 +5096,8 @@ function renderEp(d, opts) {
           + `operator by only ${tb.follower_lag_frames} frames, so the recording loop ran below the 30 Hz its `
           + `timestamps claim. Rule: ${tb.rule || ''}.</div>
       </div></div></div>` : '';
-  // the entries that count first, then the minor ones, marked; excluded entries (_excluded) are never shown
+  // the entries that count first, then the minor ones, marked; excluded entries (_excluded) are listed apart, in the
+  // fold of what this dataset's rules set aside (setAsideHtml)
   const byCount = list => [...list.filter(countsIssue), ...list.filter(x => !countsIssue(x))];
   // an issue a person checked on the episode's frames, or a deterministic check confirmed, says so; one the model
   // gave in its free-text notes rather than its list of issues says that
@@ -5132,7 +5209,7 @@ function renderEp(d, opts) {
     : `<h3 class="section">Problems in this episode</h3><div class="ip-none">${cmpInfo ? `${esc(who)} reported no data `
       + `issue or operator mistake.`
         : 'No recording check fired, and the model reported no data issue or operator mistake.'}</div>`;
-  const problemsAndNotes = problemsHtml + (checksSection(d) || cqNotesHtml);
+  const problemsAndNotes = problemsHtml + setAsideHtml(d) + (checksSection(d) || cqNotesHtml);
 
   // a session has a goal frame per task: one panel follows the playhead and shows the goal frame of the task nearest
   // the current time
@@ -5230,7 +5307,7 @@ function renderEp(d, opts) {
     </div>
     ${laneHtml}${belowLanes}
     ${failed ? '' : `
-    <h3 class="section">Key events <span class="count">${keyEvents.length}</span></h3>
+    <h3 class="section">Key events <span class="count">${keyEvents.length + untimed.keys.length}</span></h3>
     <div class="info-block"><div class="key-events">${keyPanelHtml || '<span style="color:var(--fg-3)">none</span>'}`
       + `</div></div>
 
@@ -5293,6 +5370,7 @@ function renderEp(d, opts) {
     }
   });
 
+  feedHtml += untimed.steps.join('');
   rightCol.innerHTML = failed ? cmpFailHtml(cmpInfo, who, usage) : (!cmpInfo && d._label_failed
     ? cmpFailHtml(d._label_failed, who, usage, true) : '') + `
     <div class="prompt-banner${givenMode ? ' has-given' : ''}">
@@ -5789,8 +5867,9 @@ function renderEp(d, opts) {
     }
     if (!pubLabels.length) return;
     let idx = -1;
-    for (let i = 0; i < pubLabels.length; i++) { if (pubLabels[i].t0 <= t + 0.05 && t < pubLabels[i].t1) { idx = i;
-      break; } }
+    // a moment (no end time) is the label under the playhead for a second after it
+    for (let i = 0; i < pubLabels.length; i++) { const x = pubLabels[i]; if (x.t0 == null) continue;
+      if (x.t0 <= t + 0.05 && t < (x.t1 != null && x.t1 > x.t0 ? x.t1 : x.t0 + 1)) { idx = i; break; } }
     if (idx === _pubIdx) return;
     _pubIdx = idx;
     const now = document.getElementById('lane-pub-now');

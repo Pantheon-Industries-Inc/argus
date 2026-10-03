@@ -253,6 +253,50 @@ def test_a_depth_clip_has_its_colour_clips_frames_and_timestamps(tmp_path, depth
     assert none.max() < 40                                        # no reading is black
 
 
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_depth_clip_whose_times_do_not_cover_the_colour_clip_is_kept_and_flagged(tmp_path):
+    """The camera's frame times stop before its colour clip does: the depth clip is still cut, with the colour clip's
+    frames and timestamps, its frames past the times black, and the run says so; board clips records it on the
+    episode (record_depth), where the board shows it as a data issue, and a later clean cut takes the entry away."""
+    import av
+    from board.hands import probe_pts
+    n = 40
+    ep = _episode(tmp_path / "eps", n=n, depth=True)
+    _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+    _video(ep / "depth.mkv", n, "ffv1", "gray16le",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32), 1000, np.uint16), format="gray16le"))
+    t = 12.5 + np.arange(n) / 30
+    np.savez(ep / "times.npz", exo=t[:30], exo_pts=np.arange(n) * 512)
+    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+    out = tmp_path / "clips"
+    for (pk, b, du, o, fps, main, off, skip, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip)
+    (job,) = clips.depth_jobs(ep, out, False)
+    issues = clips.extract_depth(*job[:4], 1, job[4])
+    dclip = out / "depth_exo" / "episode_000000.mp4"
+    assert probe_pts(dclip)[3] == probe_pts(out / "episode_000000.mp4")[3]
+    (iss,) = issues
+    assert iss["kind"] == "depth_clip_partial" and iss["camera"] == "exo" and "30 of its 40 frames" in iss["what"]
+    clips.record_depth(ep, "exo", issues)
+    clips.record_depth(ep, "exo", issues)
+    ctx = json.loads((ep / "context.json").read_text())
+    assert [x["kind"] for x in ctx["reader_issues"]] == ["depth_clip_partial"]
+    clips.record_depth(ep, "exo", [])
+    assert "reader_issues" not in json.loads((ep / "context.json").read_text())
+
+
+def test_a_depth_clip_that_cannot_be_cut_is_flagged_on_its_episode(tmp_path):
+    ep = tmp_path / "episode_000000"
+    ep.mkdir()
+    (ep / "context.json").write_text(json.dumps({"profile": "teleop_arms", "reader_issues": [
+        {"kind": "signal_gap", "signal": "force", "what": "The force signal stops."}]}))
+    clips.record_depth(ep, "left", [clips.depth_failed(ep, "left", RuntimeError("no depth_left_pts"))])
+    ri = json.loads((ep / "context.json").read_text())["reader_issues"]
+    assert [x["kind"] for x in ri] == ["signal_gap", "depth_clip_failed"]
+    assert ri[1]["camera"] == "left" and "no depth_left_pts" in ri[1]["what"] and "no depth" in ri[1]["what"]
+
+
 # ---------------------------------------------------------------- the server
 
 def test_the_server_hands_out_sensors_and_depth_clips(tmp_path, monkeypatch):

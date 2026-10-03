@@ -972,3 +972,12 @@ def test_the_camera_line_names_the_fisheye_only_where_the_check_fired():
 def test_circular_image_with_no_frames_is_not_circular():
     from label import lens
     assert lens.circular_image({}) == {"circular": False, "frames": 0}
+
+
+def test_a_dataset_step_with_no_end_or_no_time_is_stated_as_it_is():
+    """The dataset's timed steps in the prompt: a step with no end time is a moment, one with no time is listed
+    without one, and neither stops the prompt from being built."""
+    block = me.ego_annotation_block({"annotation_subtasks": [{"t0": 1.0, "t1": 2.5, "label": "reach"},
+                                                             {"t0": 3.0, "label": "open"},
+                                                             {"t0": None, "label": "wipe"}]})
+    assert "  1.0-2.5s  reach" in block and "  3.0s  open" in block and "  no time  wipe" in block

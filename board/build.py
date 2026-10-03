@@ -264,6 +264,23 @@ def add_reader_issues(d: dict, ctx: dict, result: dict | None = None) -> None:
         d["dataset_checks"]["reader_issues"] = issues
 
 
+def _seconds(x) -> float | None:
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if v == v and abs(v) != float("inf") else None
+
+
+def dataset_label(s: dict) -> dict:
+    """One of the dataset's timed labels for the board: its start and end in seconds, a label with no end time a
+    moment (its end its start), and a time that is not a number null, which the page shows untimed."""
+    t0, t1 = _seconds(s.get("t0")), _seconds(s.get("t1"))
+    # OpenAoE labels stored before prepare/openaoe.py hand_phrase
+    return {"t0": t0, "t1": t1 if t1 is not None or s.get("t1") is not None else t0,
+            "label": str(s["label"]).replace("(both hand)", "(both hands)")}
+
+
 def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) -> None:
     """What the episode's context.json adds to its label: the rig, the real length, the deterministic checks, the
     dataset's own labels (timed segments, as OpenAoE, Galaxea and Gen-HumanEgo ship them, and episode-level status
@@ -283,10 +300,9 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
             d["dataset_checks"] = d.get("dataset_checks") or {}
             d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
     add_reader_issues(d, ctx, result)
-    subs =[s for s in ctx.get("annotation_subtasks") or [] if s.get("label") and s.get("t1") is not None]
+    subs = [s for s in ctx.get("annotation_subtasks") or [] if isinstance(s, dict) and s.get("label")]
     if subs:
-        d["dataset_labels"] = [{"t0": float(s["t0"]), "t1": float(s["t1"]), "label": s["label"].replace(
-            "(both hand)", "(both hands)")} for s in subs]   # OpenAoE labels stored before prepare/openaoe.py hand_phrase
+        d["dataset_labels"] = [dataset_label(s) for s in subs]
         if ctx.get("annotation_note"):
             d["dataset_labels_note"] = ctx["annotation_note"]
     if isinstance(ctx.get("publisher_labels"), dict):

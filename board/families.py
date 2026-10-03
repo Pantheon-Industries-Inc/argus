@@ -140,4 +140,5 @@ class Families:
         if d.get("_rig") != "ego_head":
             return None
         return union_seconds([(float(e["t_s"]), float(e["end_s"])) for e in d.get("event_labels") or []
-                              if e.get("hands_visible") is False and e.get("end_s") is not None])
+                              if e.get("hands_visible") is False and e.get("t_s") is not None
+                              and e.get("end_s") is not None])
