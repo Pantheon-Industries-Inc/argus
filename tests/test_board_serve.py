@@ -335,7 +335,8 @@ def _built_board(tmp: Path) -> Path:
         (run / "out").mkdir(parents=True)
         (run / "run.json").write_text(json.dumps({"run_id": "r1", "code": "abc1234", "kind": "full", "status": "done",
                                                   "slice": str(ep.parent)}))
-        out = _output(ep, "openai/gpt-6-astra", rig == "ego_head")
+        # the dataset of your own: its model reply did not parse, so its episode has no labels
+        out = _output(ep, "openai/gpt-6-astra", rig == "ego_head", ds != "mine")
         if ds == "molmo":
             # the model's answer for the episode's one contact, and a grasp it saw that no contact covers
             out["labels"]["contacts"] = [{"id": "c1", "touch_seen": "yes", "first_touch_frame": 3,
@@ -413,6 +414,8 @@ def _check_smoke(res: dict) -> None:
     assert res["episodes"] == 3 and res["rendered"] >= 5 and res["rendered_comparisons"] >= 2
     assert res["footage_lines"] == 2 and res["keypoint_links"] == 1 and res["compare_view"]
     assert res["sensors_panels"] == 1          # the teleop episode's signals and depth, drawn under its timeline
+    # the episode whose reply did not parse: one line in place of the label sections, and its card says no labels
+    assert res["no_label_pages"] == 1 and res["answered_on_failed"] == 0 and res["no_label_cards"] == 1
     assert res["touch_lanes"] == 1 and res["contact_cards"] == 1 and res["contact_checks"] == 1   # and its contact
     (lb,) = res["labellers"]
     assert lb["key"] == "other" and lb["episodes"] == 2 and "not Astra&rsquo;s labels" in lb["note"]

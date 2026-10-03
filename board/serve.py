@@ -561,6 +561,8 @@ def _rail_record(p: Path, d: dict) -> dict:
         **_families(d),
         # head cameras only: seconds in which the wearer's hands are out of view (None on any other rig)
         "hands_hidden_s": FAMILIES.hands_hidden_seconds(d),
+        # the board's own model reply gave no labels (board/to_board.py label_failed): unparsed or cut_off
+        **({"label_failed": d["_label_failed"].get("status")} if isinstance(d.get("_label_failed"), dict) else {}),
         # another model's labels (compare/): how its response came out (parsed, unparsed, cut_off, no_response)
         **({"cmp_status": d["_compare"].get("status")} if isinstance(d.get("_compare"), dict) else {}),
     }
@@ -818,6 +820,10 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #ep-list, .issue-filter, .coverage .cv-num, .coverage .cv-fig { transition: opacity 160ms ease; }
 body.lb-swap #ep-list, body.lb-swap .issue-filter, body.lb-swap .coverage .cv-num,
   body.lb-swap .coverage .cv-fig { opacity: 0; }
+/* the line in place of the label sections of an episode whose reply gave no labels */
+.no-labels { margin: 18px 0 6px; padding: 12px 14px; border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  font-size: 13px; line-height: 1.5; color: var(--fg-2); }
 .ep-card .outcome-tag.fail { color: var(--fg-2); background: transparent; border: 1px dashed var(--border-strong); }
 /* the header's buttons, and on head-camera episodes the keypoints' licence under them, never wider than the buttons
    (width 0, min-width 100%), so the episode's name keeps its room */
@@ -3551,7 +3557,10 @@ function renderRail(ds, keepFile, fromSearch) {
     // a session of tasks (head cameras) has no single verdict: the per-task success ratio ("8/9 tasks") instead of a
     // misleading "unrated"; a single task shows its completion verdict
     let outcomeHtml;
-    if (ep.cmp_status && ep.cmp_status !== 'parsed') {
+    if (ep.label_failed && !ep.cmp_status) {
+      // the board's own reply gave no labels: no outcome to rate, which "unrated" would hide
+      outcomeHtml = `<span class="outcome-tag fail">no labels</span>`;
+    } else if (ep.cmp_status && ep.cmp_status !== 'parsed') {
       // a model's response that did not parse, was cut off or never came: a result, listed like any other
       outcomeHtml = `<span class="outcome-tag fail">${esc(ST_WORDS[ep.cmp_status] || ep.cmp_status)}</span>`;
     } else if (ep.n_tasks) {
@@ -4757,6 +4766,9 @@ function renderEp(d, opts) {
   const cmpInfo = d._compare || null;
   const who = cmpInfo ? cmpWho(cmpInfo.key) : modelName(meta.model);
   const failed = !!cmpInfo && cmpInfo.status !== 'parsed';
+  // the board's own reply gave no labels (board/to_board.py label_failed): the footage, checks, sensors and the
+  // dataset's own labels are shown, and one line stands in for every section the model would have answered
+  const noLabels = !cmpInfo && !!d._label_failed;
   // switching source keeps the playing footage: the same video elements move into the new layout
   const keep = opts.keepVideo && document.getElementById('video') ? {
     video: document.getElementById('video'),
@@ -5363,7 +5375,12 @@ function renderEp(d, opts) {
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
     ${laneHtml}${belowLanes}
-    ${failed ? '' : `
+    ${failed ? '' : noLabels ? `${noLabelsHtml(d._label_failed)}
+
+    ${problemsAndNotes}
+
+    ${pubHtml}
+    ` : `
     <h3 class="section">Key events <span class="count">${keyEvents.length + untimed.keys.length}</span></h3>
     <div class="info-block"><div class="key-events">${keyPanelHtml || '<span style="color:var(--fg-3)">none</span>'}`
       + `</div></div>
@@ -5428,8 +5445,8 @@ function renderEp(d, opts) {
   });
 
   feedHtml += untimed.steps.join('');
-  rightCol.innerHTML = failed ? cmpFailHtml(cmpInfo, who, usage) : (!cmpInfo && d._label_failed
-    ? cmpFailHtml(d._label_failed, who, usage, true) : '') + `
+  rightCol.innerHTML = failed ? cmpFailHtml(cmpInfo, who, usage) : noLabels
+    ? cmpFailHtml(d._label_failed, who, usage, true) : `
     <div class="prompt-banner${givenMode ? ' has-given' : ''}">
       <div class="label">${bannerLabel}</div>
       ${bannerBody}
@@ -6009,7 +6026,16 @@ async function cmpEpisode(key, file) {
 // A response that gave no labels: another model's under Labels by (the comparison's wording), or with own the board's
 // own label of the episode (d._label_failed, board/to_board.py label_failed), which keeps the episode's footage,
 // checks and sensors on the page above and below this block.
+// The line that stands in for the sections a model answers (key events, the outcome, recoveries, what changed, object
+// relationships, the inventory) on an episode whose own reply gave no labels.
+function noLabelsHtml(lf) {
+  const why = lf && lf.status === 'cut_off' ? 'was cut off at the output limit' : 'did not parse';
+  return `<p class="no-labels">The model's reply ${why}, so this episode has no labels: no key events, outcome, `
+    + `recoveries or scene. Its footage, checks, sensors and the dataset's own labels are shown as recorded.</p>`;
+}
 function cmpFailHtml(c, who, usage, own) {
+  who = String(who || 'The model');
+  who = who.charAt(0).toUpperCase() + who.slice(1);
   const cost = usage && usage.est_cost_usd != null
     ? ` The call cost $${Number(usage.est_cost_usd).toFixed(3)}${usage.latency_s != null
       ? ` and took ${fmtDur(usage.latency_s)}` : ''}.` : '';
