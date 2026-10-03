@@ -484,14 +484,36 @@ def lerobot_roots(root: Path, files: list[Path]) -> list[str]:
 DEMUXER = {".mp4": "mov", ".mov": "mov", ".m4v": "mov", ".mkv": "matroska", ".webm": "matroska", ".avi": "avi"}
 
 
+def sniff_container(path: Path) -> str | None:
+    """The demuxer of the video containers we accept (DEMUXER) that a file's first bytes name: Matroska or WebM by
+    its EBML header, MP4 or QuickTime by an atom type at byte 4, AVI by its RIFF header; None for anything else."""
+    with open(path, "rb") as fh:
+        head = fh.read(12)
+    if head[:4] == b"\x1a\x45\xdf\xa3":
+        return "matroska"
+    if head[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot"):
+        return "mov"
+    if head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        return "avi"
+    return None
+
+
 def open_video(path: Path):
-    """A video opened only by the demuxer its extension names, so a file that is really a playlist or a
-    concat script (which could make ffmpeg read other local files) fails instead of being followed."""
+    """A video opened only by the demuxer of a container we accept, so a file that is really a playlist or a
+    concat script (which could make ffmpeg read other local files) fails instead of being followed. The extension
+    names the demuxer; when that fails, the container its first bytes name is tried (sniff_container), so a valid
+    Matroska file named .mp4 is read rather than refused."""
     import av
     fmt = DEMUXER.get(Path(path).suffix.lower())
     if fmt is None:
         raise ValueError(f"{Path(path).name}: not a video type we accept")
-    return av.open(str(path), format=fmt)
+    try:
+        return av.open(str(path), format=fmt)
+    except av.error.FFmpegError:
+        own = sniff_container(path)
+        if own is None or own == fmt:
+            raise
+        return av.open(str(path), format=own)
 
 
 def inside(root: Path, p: Path) -> Path:
