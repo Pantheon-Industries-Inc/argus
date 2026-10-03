@@ -2791,6 +2791,142 @@ def test_a_cameras_own_note_is_given_under_its_file_name():
         _a_cameras_own_note_is_given_under_its_file_name(Path(t))
 
 
+def _upload_notes(tmp_path, videos, files: dict):
+    """({upload name: context}, report) of an upload of these videos and note files ({path: text, bytes or JSON})."""
+    import json
+    root = tmp_path / "upload"
+    for v in videos:
+        (root / v).parent.mkdir(parents=True, exist_ok=True)
+        _clip(root / v, 10)
+    for k, v in files.items():
+        (root / k).parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(v, bytes):
+            (root / k).write_bytes(v)
+        else:
+            (root / k).write_text(v if isinstance(v, str) else json.dumps(v))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = {}
+    for e in rep["episodes"]:
+        c = json.loads((tmp_path / "eps" / e["episode_id"] / "context.json").read_text())
+        ctx[c["source"]["upload"]] = c
+    return ctx, rep
+
+
+def _unread_line(rep) -> str:
+    return next((m for m in rep["missing"] if "no reader opens" in m), "")
+
+
+def _another_episodes_note_never_gives_an_episode_its_task(tmp_path):
+    """Two takes in one folder (top_ep1, wrist_ep1, top_ep2, wrist_ep2) and a note of the second take (ep2.json, or its
+    top camera's top_ep2.json) had given the first take that task, through the search of the folder's .json files;
+    so had ep2.json at the root of camera folders (top/ep1.mp4, top/ep2.mp4). A folder's .json is searched for the task
+    only when the folder holds this one episode, and a file named for a video of the folder is never its task."""
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "a", takes, {"d/ep2.json": {"task": "pour the tea"}})
+    assert "instruction" not in ctx["d/ep1"] and ctx["d/ep2"]["instruction"] == "pour the tea"
+    ctx, _ = _upload_notes(tmp_path / "b", takes, {"d/top_ep2.json": {"task": "pour the tea"}})
+    assert "instruction" not in ctx["d/ep1"] and "instruction" not in ctx["d/ep2"]
+    assert ctx["d/ep2"]["uploader_notes"] == {"top_ep2.json": {"task": "pour the tea"}}
+    folders = ["top/ep1.mp4", "wrist/ep1.mp4", "top/ep2.mp4", "wrist/ep2.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "c", folders, {"ep2.json": {"task": "pour the tea"}})
+    assert "instruction" not in ctx["ep1"] and ctx["ep2"]["instruction"] == "pour the tea"
+    # a recorder's file in a folder of several takes may be about any of them: it is named as not read
+    ctx, rep = _upload_notes(tmp_path / "d", takes, {"d/session_meta.json": {"prompt": "pour the tea"}})
+    assert not any("instruction" in c for c in ctx.values()) and "d/session_meta.json" in _unread_line(rep)
+    # in a folder of one episode, the file of a video that is not one of its cameras (an infrared video) is not its task
+    ctx, rep = _upload_notes(tmp_path / "e", ["ep1/top.mp4", "ep1/wrist.mp4", "ep1/top_ir.mp4"],
+                             {"ep1/top_ir.json": {"task": "calibrate the infrared camera"}})
+    assert "instruction" not in ctx["ep1"] and "ep1/top_ir.json" in _unread_line(rep)
+
+
+def test_another_episodes_note_never_gives_an_episode_its_task():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _another_episodes_note_never_gives_an_episode_its_task(Path(t))
+
+
+def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
+    """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
+    ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a
+    folder's videos make one episode, that folder's notes are read as an episode folder's are; videos beside other
+    videos that are episodes of their own share no folder notes."""
+    ctx, rep = _upload_notes(tmp_path / "a", ["ep1/top.mp4", "ep2/top.mp4", "ep3/top.mp4", "ep4/top.mp4"], {
+        "ep1/instruction.txt": "pick the cup", "ep2/ep2.txt": "pour the tea",
+        "ep3/session_meta.json": {"prompt": "stack the blocks"}, "ep4/notes.txt": "camera bumped\nat 3 s"})
+    assert ctx["ep1/top"]["instruction"] == "pick the cup" and "uploader_notes" not in ctx["ep1/top"]
+    assert ctx["ep2/top"]["instruction"] == "pour the tea"
+    assert ctx["ep3/top"]["instruction"] == "stack the blocks"
+    assert "instruction" not in ctx["ep4/top"] and ctx["ep4/top"]["uploader_notes"] == "camera bumped\nat 3 s"
+    assert not _unread_line(rep), rep["missing"]
+    ctx, rep = _upload_notes(tmp_path / "b", ["clips/IMG_0001.mp4", "clips/IMG_0002.mp4"],
+                             {"clips/instruction.txt": "pick the cup"})
+    assert not any("instruction" in c for c in ctx.values()) and "clips/instruction.txt" in _unread_line(rep)
+
+
+def test_the_notes_of_a_folder_holding_one_video_are_read():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _the_notes_of_a_folder_holding_one_video_are_read(Path(t))
+
+
+def _the_task_comes_from_the_first_source_that_gives_one(tmp_path):
+    """ep1.txt of one line ("camera bumped at 3 s") had been taken for the task over instruction.txt beside it. The
+    task comes from a JSON note's task keys, then instruction.txt or task.txt, then the text file named for the
+    episode, then a video's own .txt; a lower source is a note under its file name, and one that only repeats the task
+    is not given again."""
+    ctx, _ = _notes_case(tmp_path / "a", {"ep1.txt": "camera bumped at 3 s", "instruction.txt": "pick the cup"})
+    assert ctx["instruction"] == "pick the cup" and ctx["uploader_notes"] == {"ep1.txt": "camera bumped at 3 s"}
+    ctx, _ = _notes_case(tmp_path / "b", {"annotations.json": {"task": "pick the cup"}, "task.txt": "pour the tea"})
+    assert ctx["instruction"] == "pick the cup"
+    assert ctx["uploader_notes"] == {"annotations.json": {"task": "pick the cup"}, "task.txt": "pour the tea"}
+    ctx, _ = _upload_notes(tmp_path / "c", ["ep1/top.mp4"], {"ep1/top.txt": "the lens was dirty",
+                                                             "ep1/ep1.txt": "pick the cup"})
+    assert ctx["ep1/top"]["instruction"] == "pick the cup"
+    assert ctx["ep1/top"]["uploader_notes"] == {"top.txt": "the lens was dirty"}
+    ctx, _ = _notes_case(tmp_path / "d", {"instruction.txt": "pick the cup", "task.txt": "pick the cup"})
+    assert ctx["instruction"] == "pick the cup" and "uploader_notes" not in ctx, ctx.get("uploader_notes")
+
+
+def test_the_task_comes_from_the_first_source_that_gives_one():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _the_task_comes_from_the_first_source_that_gives_one(Path(t))
+
+
+def _a_camera_folders_own_note_is_that_cameras(tmp_path):
+    """In camera folders (top/ep1.mp4, wrist/ep1.mp4) the top camera's ep1.txt or ep1.json had become the episode's task
+    while the wrist camera's said something else. A camera's own note is a note of that camera, named with its folder;
+    it is the task only when every camera's own note gives the same text."""
+    cams = ["top/ep1.mp4", "wrist/ep1.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "a", cams, {"top/ep1.txt": "the top camera was loose",
+                                                  "wrist/ep1.txt": "pick the cup"})
+    assert "instruction" not in ctx["ep1"]
+    assert ctx["ep1"]["uploader_notes"] == {"top/ep1.txt": "the top camera was loose", "wrist/ep1.txt": "pick the cup"}
+    ctx, _ = _upload_notes(tmp_path / "b", cams, {"top/ep1.json": {"task": "calibrate the top camera"}})
+    assert "instruction" not in ctx["ep1"]
+    assert ctx["ep1"]["uploader_notes"] == {"top/ep1.json": {"task": "calibrate the top camera"}}
+    ctx, _ = _upload_notes(tmp_path / "c", cams, {"top/ep1.txt": "pick the cup", "wrist/ep1.txt": "pick the cup"})
+    assert ctx["ep1"]["instruction"] == "pick the cup" and "uploader_notes" not in ctx["ep1"]
+
+
+def test_a_camera_folders_own_note_is_that_cameras():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_camera_folders_own_note_is_that_cameras(Path(t))
+
+
+def _a_note_is_read_without_its_byte_order_mark(tmp_path):
+    """instruction.txt saved with a byte order mark had given a task starting with it."""
+    ctx, _ = _notes_case(tmp_path, {"instruction.txt": "\ufeffpick the cup\r\n"})
+    assert ctx["instruction"] == "pick the cup"
+
+
+def test_a_note_is_read_without_its_byte_order_mark():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_note_is_read_without_its_byte_order_mark(Path(t))
+
+
 def test_notes_cut_for_the_prompt_name_the_files_left_out():
     notes = {"a.txt": "x" * (f.ANNOTATION_MAX_CHARS - 20), "b.txt": "y" * 100, "c.txt": "z"}
     txt = f.annotation_text(notes, files=True)

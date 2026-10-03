@@ -50,12 +50,13 @@ An archive (.zip, .tar, .tar.gz, .tar.bz2, .tar.xz) is read as the folder it hol
 Review's upload page opens archives in the browser and sends their files; this is for archives on disk.
 
 Anything else the uploader sends next to an episode (a .txt, .json, .jsonl or .md with the same name as a
-video, or instruction.txt / annotations.json inside an episode folder) is passed to the model as
-the uploader's own annotation, a claim to check against the video, never as truth; every such file is read, and
-several are given each under its file name. The instruction comes from a JSON note's task keys, or from a plain text
-note named for the task (instruction.txt, task.txt) or for the episode; any other text note stays a note. A recorder's
-metadata file in an episode folder that names the task (its prompt, instruction or task) gives the instruction; one
-that names neither the task nor a depth scale is listed as not read.
+video, or instruction.txt / annotations.json inside an episode folder or the folder of a video that is the only
+episode there) is passed to the model as the uploader's own annotation, a claim to check against the video, never as
+truth; every such file is read, and several are given each under its file name. The instruction comes from a JSON
+note's task keys, then a plain text note named for the task (instruction.txt, task.txt), then one named for the
+episode, then a video's own .txt; any other text note stays a note. A recorder's metadata file in a folder of one
+episode that names the task (its prompt, instruction or task) gives the instruction; one that names neither the task
+nor a depth scale is listed as not read.
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
 arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
@@ -113,6 +114,7 @@ board plays it named as not shown to the model; an MCAP or HDF5 camera is writte
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 import re
@@ -957,32 +959,40 @@ def instruction_from(obj) -> str | None:
 
 
 def read_annotation(p: Path):
-    """One note file as sent: a .json or .jsonl parsed, anything else (or one that does not parse) as text."""
+    """One note file as sent: a .json or .jsonl parsed, anything else (or one that does not parse) as text. Read as
+    UTF-8 without a byte order mark, which an editor can save at the start and which would otherwise lead the task."""
+    text = p.read_text(encoding="utf-8-sig", errors="replace")
     try:
         if p.suffix == ".json":
-            return json.loads(p.read_text())
+            return json.loads(text)
         if p.suffix == ".jsonl":
-            return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
-        return p.read_text(errors="replace")
-    except Exception:
-        return p.read_text(errors="replace")
+            return [json.loads(l) for l in text.splitlines() if l.strip()]
+    except ValueError:
+        pass
+    return text
 
 
 NOTE_OWN_EXT = (".json", ".txt", ".jsonl", ".md")
+# the plain text files named for the episode's task, and every note file read in an episode's folder by its name
+TASK_NOTE_NAMES = ("instruction.txt", "task.txt")
+NOTE_NAMES = ("annotations.json", "annotation.json", "meta.json") + TASK_NOTE_NAMES + ("annotations.jsonl", "notes.txt")
+# the largest .json of an episode's folder read for its task or a depth scale: a recorder's metadata is small, and Data
+# Review's page sends such a file only up to this size and names a larger one as not sent, so the reader never weighs
+# a file the page would not have sent
+NOTE_JSON_MAX_BYTES = 1_000_000
 
 
 def note_files(item: dict) -> list[Path]:
-    """The note files of a video item that exist, in the order their notes are given: in an episode folder the notes
-    named for the episode, then NOTE_NAMES, then each video's own .json, .txt, .jsonl and .md (top.txt beside
-    top.mp4, or ep1.txt beside each camera folder's ep1.mp4); a video uploaded alone has only its own."""
+    """The note files of a video item that exist, in the order their notes are given: in the episode's note folder
+    (note_folder) the notes named for the episode, then NOTE_NAMES, then each video's own .json, .txt, .jsonl and .md
+    (top.txt beside top.mp4, or ep1.txt beside each camera folder's ep1.mp4); a video with no note folder (one of
+    several episodes of its folder) has only its own."""
     fs = [Path(f) for f in item["files"]]
-    own = [f.with_suffix(x) for f in fs for x in NOTE_OWN_EXT]
-    if item["dir"] is None:
-        cands = own
-    else:
-        d = Path(item["dir"])
-        ep_name = item["name"].rsplit("/", 1)[-1]
-        cands = [d / f"{ep_name}{x}" for x in (".json", ".txt")] + [d / n for n in NOTE_NAMES] + own
+    cands = [f.with_suffix(x) for f in fs for x in NOTE_OWN_EXT]
+    nf = item.get("note_folder")
+    if nf:
+        named = [nf["dir"] / f"{nf['name']}{x}" for x in (".json", ".txt")] if nf["name"] else []
+        cands = named + [nf["dir"] / n for n in NOTE_NAMES] + cands
     out, seen = [], set()
     for p in cands:
         if p.is_file() and p.resolve() not in seen:
@@ -991,57 +1001,70 @@ def note_files(item: dict) -> list[Path]:
     return out
 
 
-TASK_NOTE_NAMES = ("instruction.txt", "task.txt")   # the plain text files named for the episode's task
-
-
 def episode_notes(item: dict) -> dict:
-    """What an episode's note files give (note_files): "notes", each file's notes as sent under its file name (its
-    folder's name too where two share a name); "instruction", the task text, and "task_file", the name of the note it
-    came from (None when a recorder's metadata gave it); "camera_notes", the names of the notes beside one of several
-    differently named cameras (top.txt beside top.mp4 and wrist.mp4), which are about that camera; and "read", every
-    file read. The task comes from the first note that names one plainly: a JSON file through its task keys
-    (instruction_from), a plain text file only when it is named for the task (TASK_NOTE_NAMES) or for the episode
-    (ep1.txt, or the own .txt of an episode whose videos share one name); any other note is never the task. Else it
-    comes from the first other .json of the episode folder (a recorder's metadata, session_meta.json) whose task keys
-    name one; a .json of the folder that names none is not read (opened_notes)."""
-    files = note_files(item)
-    names = [p.name for p in files]
-    keys = [p.name if names.count(p.name) == 1 else f"{p.parent.name}/{p.name}" for p in files]
-    notes = [(k, read_annotation(p)) for k, p in zip(keys, files)]
-    fs = [Path(f) for f in item["files"]]
-    one_name = len({f.stem for f in fs}) == 1
-    own_ep = set()
-    if item["dir"] is not None:
-        ep_name = item["name"].rsplit("/", 1)[-1]
-        own_ep = {(Path(item["dir"]) / f"{ep_name}{x}").resolve() for x in (".json", ".txt")}
-    cams = set() if item["dir"] is None or one_name else \
-        {f.with_suffix(x).resolve() for f in fs for x in NOTE_OWN_EXT} - own_ep
-    task_txt = own_ep | {f.with_suffix(".txt").resolve() for f in fs if one_name} | \
-        ({(Path(item["dir"]) / n).resolve() for n in TASK_NOTE_NAMES} if item["dir"] is not None else set())
+    """What an episode's note files give (note_files): "notes", each file's notes as sent under its file name (with its
+    folder where two share a name, and always for a camera folder's own file, whose folder names the camera);
+    "instruction", the task text; "repeats", the notes whose whole text is the task, which need not be given again;
+    "camera_notes", the notes that are about one of several cameras; and "read", every file read.
 
-    def task_of(p: Path, obj):
-        r = p.resolve()
-        if r in cams:
-            return None
+    The task comes from the first source that gives one, in this order: a JSON note's task keys (instruction_from),
+    then instruction.txt or task.txt (TASK_NOTE_NAMES), then the text file named for the episode (ep1.txt), then a
+    video's own .txt; a plain text file gives the task only as the whole of one line, and any other note is never the
+    task. A video's own note (top.txt beside top.mp4) is the episode's when the episode is that one video. Beside
+    several cameras it is about its camera: never the task beside differently named cameras (top.txt beside top.mp4
+    and wrist.mp4), and in camera folders (top/ep1.txt, wrist/ep1.txt) the task only when every camera's own note gives
+    the same one. A lower source is a note under its file name. When none gives a task and the note folder holds this
+    one episode, the folder's other .json files are searched for a recorder's metadata that names it
+    (session_meta.json), except one named for a video or a camera, which is about that video; in a folder of several
+    episodes such a file may be about any of them, so it is not read (opened_notes) and is listed."""
+    files = note_files(item)
+    fs = [Path(f) for f in item["files"]]
+    nf = item.get("note_folder")
+    one_name = len({f.stem for f in fs}) == 1
+    named = {(nf["dir"] / f"{nf['name']}{x}").resolve() for x in (".json", ".txt")} if nf and nf["name"] else set()
+    owned = {f.with_suffix(x).resolve() for f in fs for x in NOTE_OWN_EXT} - named
+    cams = owned if len(fs) > 1 else set()
+    names = [p.name for p in files]
+    keys = [f"{p.parent.name}/{p.name}" if names.count(p.name) > 1 or (one_name and p.resolve() in cams) else p.name
+            for p in files]
+    notes = [(k, read_annotation(p)) for k, p in zip(keys, files)]
+    got = {p.resolve(): o for p, (_, o) in zip(files, notes)}
+
+    def task_of(p: Path) -> str | None:
+        o = got.get(p.resolve())
         if p.suffix == ".json":
-            return instruction_from(obj) if isinstance(obj, dict) else None
-        if p.suffix == ".txt" and r in task_txt:
-            return instruction_from(obj) if isinstance(obj, str) else None
-        return None
-    instr, task_file = next(((x, k) for p, (k, o) in zip(files, notes) if (x := task_of(p, o))), (None, None))
+            return instruction_from(o) if isinstance(o, dict) else None
+        return instruction_from(o) if p.suffix == ".txt" and isinstance(o, str) else None
+
+    # (rank, position, task): JSON task keys 0, a task file 1, the episode's text file 2, a video's own .txt 3
+    sources = []
+    for i, p in enumerate(files):
+        r = p.resolve()
+        if r in owned:
+            continue                      # a video's own note, weighed below
+        rank = 0 if p.suffix == ".json" else 2 if r in named else 1 if p.name in TASK_NOTE_NAMES else None
+        if rank is not None and (x := task_of(p)):
+            sources.append((rank, i, x))
+    if one_name:
+        # a video's own note gives the episode's task when every video's own note gives the same one
+        owns = [next(((rank, t) for x, rank in ((".json", 0), (".txt", 3))
+                      if (t := task_of(f.with_suffix(x)))), None) for f in fs]
+        if all(owns) and len({t for _, t in owns}) == 1:
+            sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
+    instr = min(sources)[2] if sources else None
     read = list(files)
-    if not instr and item["dir"] is not None:
-        # the note files were weighed above, and a camera's own file (top.json beside top.mp4) is about that camera
-        skip = {p.resolve() for p in files} | {f.with_suffix(".json").resolve() for f in fs}
-        for p in sorted(Path(item["dir"]).glob("*.json")):
-            if p.resolve() in skip:
+    if not instr and nf and nf["alone"]:
+        weighed = {p.resolve() for p in files}
+        about = {p.stem for p in nf["dir"].iterdir() if p.suffix.lower() in VIDEO_EXT} | set(item.get("cams") or {})
+        for p in sorted(nf["dir"].glob("*.json")):
+            if p.resolve() in weighed or p.stem in about or p.stat().st_size > NOTE_JSON_MAX_BYTES:
                 continue
-            if p.stat().st_size <= 1_000_000 and (x := instruction_from(_read_json(p))):
+            if x := instruction_from(_read_json(p)):
                 instr = x
-                if p not in read:
-                    read.append(p)
+                read.append(p)
                 break
-    return {"notes": notes, "instruction": instr, "task_file": task_file, "read": read,
+    return {"notes": notes, "instruction": instr, "read": read,
+            "repeats": [k for k, o in notes if instr and isinstance(o, str) and o.strip() == instr],
             "camera_notes": [k for k, p in zip(keys, files) if p.resolve() in cams]}
 
 
@@ -1610,8 +1633,8 @@ DEPTH_SCALE_KEY = re.compile(r"depth[_ ]?(scale|units?)$", re.I)
 
 
 def depth_scales(folder: Path) -> dict[Path, list[float]]:
-    """{JSON file: the depth scales it gives} for every JSON file (at most 1 MB) in a folder holding a number under a
-    key named depth_scale or depth_units (a RealSense's 0.001)."""
+    """{JSON file: the depth scales it gives} for every JSON file (at most NOTE_JSON_MAX_BYTES) in a folder holding a
+    number under a key named depth_scale or depth_units (a RealSense's 0.001)."""
     out = {}
 
     def walk(x, found):
@@ -1624,7 +1647,7 @@ def depth_scales(folder: Path) -> dict[Path, list[float]]:
             for v in x[:200]:
                 walk(v, found)
     for p in sorted(Path(folder).glob("*.json")):
-        if p.stat().st_size <= 1_000_000:
+        if p.stat().st_size <= NOTE_JSON_MAX_BYTES:
             found = []
             walk(_read_json(p) or {}, found)
             if found:
@@ -2230,12 +2253,22 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
             + ("they were read as the cameras of one episode, as chosen." if choice == "cameras" else
                "they were read as separate episodes" + (", as chosen." if choice == "takes" else
                                                         ", since nothing said they are one take.")))
+    # the folder whose notes each episode reads (note_files): its episode folder, or the folder of a video that is the
+    # only episode there (ep1/top.mp4 alone), named as such an episode would be; a video beside others that are
+    # episodes of their own has none. "alone" when the folder holds no other episode, as only then can a recorder's
+    # file in it be about this episode alone (episode_notes)
+    home = lambda e: e["dir"] if e["dir"] is not None else e["cams"][0][1].rpartition("/")[0]
+    held = collections.Counter(home(e) for e in eps)
     items = []
     for e in eps:
         files = [root / r for _, r in e["cams"]]
+        d = home(e)
+        name = e["name"].rsplit("/", 1)[-1] if e["dir"] is not None else d.rsplit("/", 1)[-1] or None
         items.append({"kind": "video", "name": e["name"], "files": files,
                       "dir": (root / e["dir"]) if e["dir"] is not None else None,
                       "cams": {c: root / r for c, r in e["cams"]},
+                      "note_folder": {"dir": root / d, "name": name, "alone": held[d] == 1}
+                      if e["dir"] is not None or held[d] == 1 else None,
                       "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}, "unshown": []})
     # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, or
     # the one whose take its name gives), never to the model
@@ -2307,15 +2340,14 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     extra = {"task_label": [item["name"]], "source": {"format": "video files", "upload": item["name"]}}
     if item["dir"] is not None:
         extra["source"]["unused_cameras"] = unused
-    # every note file of the episode (episode_notes): one is given as sent, several each under its file name, and the
-    # task file whose whole text is the task is given once, as the instruction
+    # every note file of the episode (episode_notes): one is given as sent, several each under its file name, and a
+    # note whose whole text is the task is given once, as the instruction
     got = episode_notes(item)
     instr = got["instruction"]
     if instr:
         extra["instruction"] = instr
         extra["instruction_note"] = "This instruction is the task text the uploader sent with the episode."
-    notes = [(k, o) for k, o in got["notes"]
-             if not (k == got["task_file"] and isinstance(o, str) and o.strip() == instr)]
+    notes = [(k, o) for k, o in got["notes"] if k not in got["repeats"]]
     # a camera's own note (top.txt beside top.mp4 and wrist.mp4) keeps its file name, which says the camera it is about
     if len(notes) == 1 and len(got["notes"]) == 1 and notes[0][0] not in got["camera_notes"]:
         set_uploader_notes(extra, notes[0][1])
@@ -2454,7 +2486,7 @@ def scalar(v):
 
 def _read_json(p: Path) -> dict | None:
     try:
-        d = json.loads(p.read_text())
+        d = json.loads(p.read_text(encoding="utf-8-sig"))
         return d if isinstance(d, dict) else None
     except Exception:
         return None
@@ -5779,10 +5811,6 @@ NOTE_EXT = {".json", ".jsonl", ".txt", ".md", ".yaml", ".yml", ".csv", ".tsv", "
 def _and_words(xs: list[str]) -> str:
     xs = [str(x) for x in xs]
     return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1] if xs else ""
-
-
-NOTE_NAMES = ("annotations.json", "annotation.json", "meta.json", "instruction.txt", "task.txt", "annotations.jsonl",
-              "notes.txt")
 
 
 def opened_notes(items: list[dict]) -> set[Path]:
