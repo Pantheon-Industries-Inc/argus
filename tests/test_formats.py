@@ -2866,6 +2866,69 @@ def test_a_note_is_found_by_its_name_in_any_case():
         _a_note_is_found_by_its_name_in_any_case(Path(t))
 
 
+def _a_note_named_for_an_episode_in_a_subfolder_never_gives_the_folders_episode_its_task(tmp_path):
+    """ep1/top.mp4 is the one episode of ep1, and ep1/ep2/top.mp4 an episode of its own folder. ep1/ep2.json, the note
+    of the episode in the subfolder ep2, had given ep1/top its task through the search of ep1's .json files, as had
+    s/ep1/ep2_meta.json; so had ep1/ep2.json beside the cameras of the episode folder ep1 holding the episode ep1/ep2.
+    A file named for a subfolder that holds an episode is about that episode, never the folder's own."""
+    lone = ["ep1/top.mp4", "ep1/ep2/top.mp4"]
+    ctx, rep = _upload_notes(tmp_path / "a", lone, {"ep1/ep2.json": {"task": "pour the tea"}})
+    assert not any("instruction" in c for c in ctx.values()), ctx
+    assert "ep1/ep2.json" in _unread_line(rep), rep["missing"]
+    ctx, _ = _upload_notes(tmp_path / "b", ["s/ep1/top.mp4", "s/ep1/ep2/top.mp4"],
+                           {"s/ep1/ep2_meta.json": {"task": "pour the tea"}})
+    assert not any("instruction" in c for c in ctx.values()), ctx
+    nested = ["ep1/top.mp4", "ep1/wrist.mp4", "ep1/ep2/top.mp4", "ep1/ep2/wrist.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "c", nested, {"ep1/ep2.json": {"task": "pour the tea"}})
+    assert not any("instruction" in c for c in ctx.values()), ctx
+    # a recorder's file that names no episode stays the folder's
+    ctx, _ = _upload_notes(tmp_path / "d", nested, {"ep1/session_meta.json": {"prompt": "pick the cup"}})
+    assert ctx["ep1"]["instruction"] == "pick the cup" and "instruction" not in ctx["ep1/ep2"]
+
+
+def test_a_note_named_for_an_episode_in_a_subfolder_never_gives_the_folders_episode_its_task():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_note_named_for_an_episode_in_a_subfolder_never_gives_the_folders_episode_its_task(Path(t))
+
+
+def _a_folder_json_named_for_an_episode_by_its_words_never_gives_another_episode_its_task(tmp_path):
+    """A folder's .json had counted as named for an episode only when its whole name was the episode's, in the same
+    case: ep1_meta.json gave the take ep2 its task, ep1_session.json gave ep10, ep2_meta.json gave ep1 though ep1.json
+    was there, EP2.json and Top_ep2.json gave ep1, and ep-2.json gave the take spelt ep_1, each said to be the task the
+    uploader sent with that episode. A file is named for what its words (casefolded, a number apart from the letters
+    beside it) hold: a video's name, a camera's, an episode's or a subfolder's that holds an episode. It gives the task
+    only to the one episode it is named for, and a file named for nothing is shared by every episode of its folder."""
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    tens = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep10.mp4", "d/wrist_ep10.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "a", tens, {"d/ep1_session.json": {"task": "pick the cup"}})
+    assert ctx["d/ep1"]["instruction"] == "pick the cup" and "instruction" not in ctx["d/ep10"], ctx
+    ctx, _ = _upload_notes(tmp_path / "b", takes, {"d/ep1_meta.json": {"task": "pick the cup"}})
+    assert ctx["d/ep1"]["instruction"] == "pick the cup" and "instruction" not in ctx["d/ep2"], ctx
+    ctx, _ = _upload_notes(tmp_path / "c", takes, {"d/ep2_meta.json": {"task": "pour the tea"},
+                                                   "d/ep1.json": {"operator": "A"}})
+    assert "instruction" not in ctx["d/ep1"] and ctx["d/ep2"]["instruction"] == "pour the tea", ctx
+    for name in ("EP2.json", "ep_2.json", "Top_ep2.json"):
+        ctx, _ = _upload_notes(tmp_path / name, takes, {f"d/{name}": {"task": "pour the tea"}})
+        assert "instruction" not in ctx["d/ep1"], (name, ctx["d/ep1"])
+    dashed = ["d/top_ep-1.mp4", "d/wrist_ep-1.mp4", "d/top_ep-2.mp4", "d/wrist_ep-2.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "e", dashed, {"d/ep-2.json": {"task": "pour the tea"}})
+    assert "instruction" not in ctx["d/ep_1"] and ctx["d/ep_2"]["instruction"] == "pour the tea", ctx
+    # top.json in a folder of takes is about the top camera of every take: no take's task, and named as not read
+    ctx, rep = _upload_notes(tmp_path / "f", takes, {"d/top.json": {"task": "calibrate the top camera"}})
+    assert not any("instruction" in c for c in ctx.values()), ctx
+    assert "d/top.json" in _unread_line(rep), rep["missing"]
+    # a recorder's file named for nothing stays every take's
+    ctx, _ = _upload_notes(tmp_path / "g", tens, {"d/session_meta.json": {"prompt": "pour the tea"}})
+    assert [c.get("instruction") for c in ctx.values()] == ["pour the tea", "pour the tea"], ctx
+
+
+def test_a_folder_json_named_for_an_episode_by_its_words_never_gives_another_episode_its_task():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_folder_json_named_for_an_episode_by_its_words_never_gives_another_episode_its_task(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a

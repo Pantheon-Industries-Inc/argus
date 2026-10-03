@@ -55,8 +55,10 @@ episode there) is passed to the model as the uploader's own annotation, a claim 
 truth; every such file is read, and several are given each under its file name. The instruction comes from a JSON
 note's task keys, then a plain text note named for the task (instruction.txt, task.txt), then one named for the
 episode, then a video's own .txt; any other text note stays a note. A recorder's metadata file in an episode's folder
-that names the task (its prompt, instruction or task) gives the instruction to the folder's episodes, unless it is
-named for one video or episode of the folder; one that names neither the task nor a depth scale is listed as not read.
+that names the task (its prompt, instruction or task) gives the instruction to the folder's episodes when its name
+names nothing there, and to one episode alone when it names that one; a file whose name holds the words of another
+episode, video, camera or subfolder holding an episode is never an episode's task (named_for). One that names neither
+the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
 arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
@@ -1035,10 +1037,11 @@ def episode_notes(item: dict) -> dict:
     several cameras it is about its camera: never the task beside differently named cameras (top.txt beside top.mp4
     and wrist.mp4), and in camera folders (top/ep1.txt, wrist/ep1.txt) the task only when every camera's own note gives
     the same one. A lower source is a note under its file name. When none gives a task, the note folder's other .json
-    files (up to NOTE_JSON_MAX_BYTES) are searched in name order for a recorder's metadata that names it
-    (session_meta.json), which the folder's episodes share. One named for a video of the folder, a camera of the
-    episode or an episode of the folder (ep2.json, top_ep2.json beside the takes ep1 and ep2) is about that one, so it
-    is never this episode's task; one that gives none is not read (opened_notes) and is listed."""
+    files (up to NOTE_JSON_MAX_BYTES) are searched in name order for one that names it. A file named for nothing
+    (named_for: session_meta.json) is a recorder's, which the folder's episodes share; one named for this episode alone
+    (ep1_meta.json) is this episode's; one named for anything else (ep2_meta.json, an infrared video's file, top.json
+    beside takes that each have a top camera, ep2.json beside the subfolder ep2 holding an episode) is never this
+    episode's task. One that gives none is not read (opened_notes) and is listed."""
     files = note_files(item)
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
@@ -1076,11 +1079,11 @@ def episode_notes(item: dict) -> dict:
     read = list(files)
     if not instr and nf:
         weighed = {p.resolve() for p in files}
-        about = {p.stem for p in nf["dir"].iterdir() if p.suffix.lower() in VIDEO_EXT} | set(item.get("cams") or {}) \
-            | set(nf["episodes"])
         for p in folder_json(nf["dir"]):
-            if p.resolve() in weighed or p.stem in about or p.stat().st_size > NOTE_JSON_MAX_BYTES:
+            if p.resolve() in weighed or p.stat().st_size > NOTE_JSON_MAX_BYTES:
                 continue
+            if named_for(p, nf["names"]) - {nf["episode"]}:
+                continue                  # named for another episode, or a video that is no episode's
             if x := instruction_from(_read_json(p)):
                 instr = x
                 read.append(p)
@@ -1088,6 +1091,21 @@ def episode_notes(item: dict) -> dict:
     return {"notes": notes, "instruction": instr, "read": read,
             "repeats": [k for k, o in notes if instr and isinstance(o, str) and o.strip() == instr],
             "camera_notes": [k for k, p in zip(keys, files) if p in cams]}
+
+
+def name_words(name: str) -> tuple[str, ...]:
+    """The words a file's name is compared by (named_for): its words (tokens) casefolded, with a number apart from the
+    letters beside it, so EP2, ep_2, Ep-2 and ep2 are all ep 2 while ep10 stays ep 10. read.js nameWords."""
+    return tuple(w for t in tokens(name) for w in re.findall(r"[a-z]+|[0-9]+", t))
+
+
+def named_for(p: Path, names: dict) -> set:
+    """The episodes a file of an episode's folder is named for: those of every name of the folder (note_folder_names)
+    whose words appear in a row among the words of the file's name (ep1_meta.json is named for ep1 and never for ep10;
+    top.json in a folder of takes for the top camera of every take). None stands for a video that is no episode's. A
+    file named for nothing (session_meta.json) is a recorder's, which the folder's episodes share. read.js namedFor."""
+    w = name_words(p.stem)
+    return {who for i in range(len(w)) for j in range(i + 1, len(w) + 1) for who in names.get(w[i:j], ())}
 
 
 def task_rank(p: Path, named_for_episode: bool) -> int | None:
@@ -2249,6 +2267,49 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
     return out
 
 
+def episode_home(e: dict) -> str:
+    """The folder of an episode of group_videos, relative to the upload: its episode folder, or its one video's."""
+    return e["dir"] if e["dir"] is not None else e["cams"][0][1].rpartition("/")[0]
+
+
+def episode_note_name(e: dict) -> str | None:
+    """The name an episode's own note files carry (ep1.json and ep1.txt, note_files): its take or shared file name in a
+    folder of several (ep1 of top_ep1.mp4 or of top/ep1.mp4), the name of its folder when it is the folder's episode
+    (ep1 of ep1/top.mp4); none for a video at the top of the upload."""
+    if e["dir"] is not None:
+        return e["name"].rsplit("/", 1)[-1]
+    return episode_home(e).rsplit("/", 1)[-1] or None
+
+
+def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path) -> dict:
+    """{folder: {words: the episodes it belongs to}} for each folder an episode sits in (episode_home): what a file of
+    that folder can be named for (named_for), as name_words. Each episode there by its note name (episode_note_name),
+    its videos' names and its cameras' names (top_ep1 and top, or the camera folder top); any other video there by its
+    name, a depth video belonging to its colour camera's episode and an infrared or mask video to none (None); and each
+    subfolder that holds an episode's video, belonging to the episodes whose videos it holds (ep2 of ep1/ep2/top.mp4).
+    read.js noteNames, the same rule."""
+    owner = {r: e["name"] for e in eps for _, r in e["cams"]}
+    owner.update({dep: owner[col] for col, dep in pairs.items() if col in owner})
+    out: dict = {d: collections.defaultdict(set) for d in homes}
+
+    def add(d: str, name: str | None, who) -> None:
+        if d in out and (w := name_words(name or "")):
+            out[d][w].add(who)
+    for e, d in zip(eps, homes):
+        add(d, episode_note_name(e), e["name"])
+        for c, r in e["cams"]:
+            for name in (c, name_parts(c)["cam"], r.rsplit("/", 1)[-1].rsplit(".", 1)[0]):
+                add(d, name, e["name"])
+            parts = r.split("/")[:-1]
+            for i, sub in enumerate(parts):
+                add("/".join(parts[:i]), sub, e["name"])
+    for d in out:
+        for p in (root / d).iterdir():
+            if p.is_file() and p.suffix.lower() in VIDEO_EXT:
+                add(d, p.stem, owner.get(p.relative_to(root).as_posix()))
+    return {d: {w: frozenset(who) for w, who in ns.items()} for d, ns in out.items()}
+
+
 def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict]:
     """One item per episode, grouped as group_videos says. Files are never split. Fixed-length packaging (a
     recorder that cuts continuous footage into files of one length) is found here and recorded on every item it
@@ -2287,23 +2348,19 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
                "they were read as separate episodes" + (", as chosen." if choice == "takes" else
                                                         ", since nothing said they are one take.")))
     # the folder whose notes each episode reads (note_files): its episode folder, or the folder of a video that is the
-    # only episode there (ep1/top.mp4 alone), named as such an episode would be; a video beside others that are
-    # episodes of their own has none. "episodes" names every episode of that folder (its take or its video's name), so
-    # a file there named for one of them is never another one's task (episode_notes)
-    home = lambda e: e["dir"] if e["dir"] is not None else e["cams"][0][1].rpartition("/")[0]
-    held = collections.defaultdict(list)
-    for e in eps:
-        held[home(e)].append(e["name"].rsplit("/", 1)[-1])
+    # only episode there (ep1/top.mp4 alone); a video beside others that are episodes of their own has none. "names"
+    # are what a file there can be named for, so one named for another episode is never this one's task (episode_notes)
+    homes = [episode_home(e) for e in eps]
+    held = collections.Counter(homes)
+    names = note_folder_names(eps, homes, pairs, root)
     items = []
-    for e in eps:
+    for e, d in zip(eps, homes):
         files = [root / r for _, r in e["cams"]]
-        d = home(e)
-        name = e["name"].rsplit("/", 1)[-1] if e["dir"] is not None else d.rsplit("/", 1)[-1] or None
         items.append({"kind": "video", "name": e["name"], "files": files,
                       "dir": (root / e["dir"]) if e["dir"] is not None else None,
                       "cams": {c: root / r for c, r in e["cams"]},
-                      "note_folder": {"dir": root / d, "name": name, "episodes": held[d]}
-                      if e["dir"] is not None or len(held[d]) == 1 else None,
+                      "note_folder": {"dir": root / d, "name": episode_note_name(e), "episode": e["name"],
+                                      "names": names[d]} if e["dir"] is not None or held[d] == 1 else None,
                       "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}, "unshown": []})
     # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, or
     # the one whose take its name gives), never to the model
