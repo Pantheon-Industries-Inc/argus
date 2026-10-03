@@ -266,6 +266,22 @@ def test_cameras_of_one_length_raise_no_issue(tmp_path):
 
 # ---------------------------------------------------------------- a LeRobot camera with no video
 
+def test_a_lerobot_chunk_size_that_is_not_a_whole_number_never_stops_the_conversion(tmp_path):
+    """info.json chunks_size 0 had divided by zero and null had raised a type error, so the whole upload failed. The
+    episodes are found by their file names, and the report says why the path templates were not used. A camera with
+    no video under its own name is looked for through the template, which is where the error was raised."""
+    for bad in (0, None, 2.5):
+        root = tmp_path / f"lr{bad}"
+        _lerobot(root, {0: {"observation.state": [np.zeros(14)] * 30}},
+                 feats={"observation.images.cam_left_wrist": {"dtype": "video", "shape": [48, 64, 3]}})
+        info = json.loads((root / "meta" / "info.json").read_text())
+        info["chunks_size"] = bad
+        (root / "meta" / "info.json").write_text(json.dumps(info))
+        rep = f.convert(root, "teleop_arms", tmp_path / f"eps{bad}", "test", 900)
+        assert len(rep["episodes"]) == 1, (bad, rep["failed"])
+        assert any("chunks_size" in m for m in rep["missing"]), (bad, rep["missing"])
+
+
 def test_a_lerobot_camera_with_no_video_for_the_episode_is_listed_with_its_reason(tmp_path):
     root = tmp_path / "lr"
     _lerobot(root, {0: {"observation.state": [np.zeros(14)] * 30}},

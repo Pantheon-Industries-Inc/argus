@@ -2689,8 +2689,25 @@ def read_root(rdir: Path, rel: str) -> dict:
     return root
 
 
+def chunk_size(info: dict) -> int | None:
+    """The episodes per chunk folder a LeRobot info.json gives (chunks_size, 1000 when it gives none), which fills its
+    path templates (data_path, video_path); None when it is not a whole number above 0."""
+    x = info.get("chunks_size", 1000)
+    try:
+        n = int(x) if not isinstance(x, bool) and float(x) == int(x) else 0
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return n if n > 0 else None
+
+
 def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path]) -> None:
     info, where = root["info"] or {}, (f" in {root['rel']}" if root["rel"] else "")
+    # a chunks_size that cannot fill the path templates leaves the episodes found by their file names, and says so
+    chunk = chunk_size(info)
+    if chunk is None and (info.get("video_path") or info.get("data_path")):
+        root["missing"].append(f"meta/info.json{where} gives chunks_size {info.get('chunks_size')!r}, which is not a "
+                               "whole number of episodes, so its path templates were not used and each episode's "
+                               "files were found by their names.")
     rows = {int(scalar(e["episode_index"])): e for e in read_jsonl(rdir / "meta" / "episodes.jsonl") if "episode_index" in e}
     data_by = {int(V2_DATA.match(p.name).group(1)): p for p in data_files}
     vid_by: dict[int, dict] = {}
@@ -2707,19 +2724,18 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         vids_e = {}
         for key in root["cams"] + root["depth_cams"]:
             p = vid_by.get(e, {}).get(key)
-            if p is None and info.get("video_path"):
+            if p is None and info.get("video_path") and chunk:
                 try:
-                    cand = rdir / info["video_path"].format(episode_chunk=e // int(info.get("chunks_size", 1000)),
-                                                            video_key=key, episode_index=e)
+                    cand = rdir / info["video_path"].format(episode_chunk=e // chunk, video_key=key, episode_index=e)
                     p = inside(rdir, cand) if cand.exists() else None
                 except (KeyError, IndexError, ValueError):
                     p = None
             if p is not None:
                 vids_e[key] = p
         data = data_by.get(e)
-        if data is None and info.get("data_path"):
+        if data is None and info.get("data_path") and chunk:
             try:
-                cand = rdir / info["data_path"].format(episode_chunk=e // int(info.get("chunks_size", 1000)), episode_index=e)
+                cand = rdir / info["data_path"].format(episode_chunk=e // chunk, episode_index=e)
                 data = inside(rdir, cand) if cand.exists() else None
             except (KeyError, IndexError, ValueError):
                 data = None
