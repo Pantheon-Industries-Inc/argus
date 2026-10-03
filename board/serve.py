@@ -4314,7 +4314,8 @@ function snStillHtml(D) {
     .filter(Boolean).join('; ');
   return (every.length ? `<div class="sn-note">Constant through this episode: ${every.map(what).join(', ')}.</div>`
     : '')
-    + (gaps.length ? `<div class="sn-note">The same wherever it reads: ${gaps.map(s =>
+    + (gaps.length ? `<div class="sn-note">The same wherever it reads${gaps.some(s => s.partial_reading_frames)
+      ? '. ' : ': '}${gaps.map(s =>
       `${what(s)}, with ${gapsText(s)}`).join('; ')}.</div>` : '')
     + (D.none.length ? `<div class="sn-note">No reading at any frame: ${D.none.map(s =>
       `${esc(s.name)} (${size(s)})`).join(', ')}.</div>` : '');

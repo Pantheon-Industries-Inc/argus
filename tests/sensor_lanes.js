@@ -52,4 +52,9 @@ const partial = T.snStillHtml({constant: [{name: 'qpos', dims: 2, value: null, p
   frames: 3}], none: []});
 check(!partial.includes('Constant through this episode') && !partial.includes('no reading at')
   && partial.includes('partial reading at 2 of 3 frames'), 'partial values do not make a whole row unread');
+check(!partial.includes(':'), 'the partial status uses a sentence break');
+const mixed = T.snStillHtml({constant: [{name: 'qpos', dims: 2, value: [1, 2], no_reading_frames: 1,
+  partial_reading_frames: 1, frames: 3}], none: []});
+check(!mixed.includes(':') && mixed.includes('no reading at 1 of 3 frames')
+  && mixed.includes('partial reading at 1 of 3 frames'), 'mixed gaps preserve both counts without a colon');
 process.exit(bad ? 1 : 0);
