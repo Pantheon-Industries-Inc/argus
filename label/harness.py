@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import re
 import sys
@@ -232,21 +233,47 @@ TIMELINE_COLUMNS = ["start_s", "end_s", "arm", "action", "object", "destination"
 
 def parse_response(text: str) -> tuple[dict, bool]:
     """A model's reply as labels, or the raw text and the reason it could not be read. The one parser for every
-    model and for re-reading stored replies (label/reparse.py)."""
+    model and for re-reading stored replies (label/reparse.py). A reply that is a JSON object but breaks the output
+    format in places keeps the rest of its labels (normalize_timeline, typed_labels)."""
     try:
         # some models ignore json_object and wrap the JSON in a markdown fence
         fenced = re.fullmatch(r"\s*```(?:json)?\s*(.*?)\s*```\s*", text, re.S)
-        return normalize_timeline(json.loads(fenced.group(1) if fenced else text)), True
+        labels = json.loads(fenced.group(1) if fenced else text)
+        if not isinstance(labels, dict):
+            raise ValueError(f"the reply is a JSON {type(labels).__name__}, not an object")
+        return typed_labels(normalize_timeline(labels)), True
     except Exception as e:
         return {"_raw": text, "_parse_error": f"{type(e).__name__}: {e}"[:300]}, False
+
+
+def _number(x):
+    """x as a number when it is a finite one or text that reads as one (a time written "12.5" or "12.5s"), else
+    None."""
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, (int, float)):
+        return x if math.isfinite(x) else None
+    if isinstance(x, str):
+        try:
+            v = float(x.strip().removesuffix("s").strip())
+        except ValueError:
+            return None
+        return v if math.isfinite(v) else None
+    return None
+
+
+def _drop(labels: dict, field: str, row, why: str) -> None:
+    """Records a field or a row of the reply left out because it breaks the output format."""
+    labels.setdefault("_dropped", []).append({"field": field, **({"row": row} if row is not None else {}), "why": why})
 
 
 def normalize_timeline(labels: dict) -> dict:
     """The output format sends each timeline segment as one array in the column order of timeline_columns.
     Convert it back to one object per segment, validating every row, so everything downstream sees the usual
-    format. A row with the wrong number of values, a time that is not a number, or a progress that is text
-    raises: a shifted column would silently corrupt the labels. A value that is missing or outside a field's
-    allowed set (a progress or a contribution of null) is kept as the model wrote it and listed in
+    format. A time or a progress written as a number in text ("2.0") is read as that number. A row with the wrong
+    number of values, or a time or a progress that is not a number, is left out and recorded in _dropped (a shifted
+    column would silently corrupt the labels), and the other rows are kept. A value that is missing or outside a
+    field's allowed set (a progress or a contribution of null) is kept as the model wrote it and listed in
     _schema_violations, so one bad field is counted, not a reason to discard a valid answer."""
     tl = labels.get("timeline")
     if not isinstance(tl, list) or not any(isinstance(r, list) for r in tl):
@@ -260,13 +287,22 @@ def normalize_timeline(labels: dict) -> dict:
             continue
         if not isinstance(row, list) or not (len(cols) - 1 <= len(row) <= len(cols)):
             n = len(row) if isinstance(row, list) else "?"
-            raise ValueError(f"timeline row {i} has {n} values for {len(cols)} columns")
+            _drop(labels, "timeline", i, f"it has {n} values for {len(cols)} columns")
+            continue
         seg = dict(zip(cols, row))
+        bad = None
         for k in ("start_s", "end_s", "progress"):
             if k == "progress" and seg.get(k) is None:
                 labels.setdefault("_schema_violations", []).append(f"timeline row {i}: progress null")
-            elif k in seg and not isinstance(seg[k], (int, float)):
-                raise ValueError(f"timeline row {i}: {k} is not a number ({seg[k]!r})")
+            elif k in seg and (isinstance(seg[k], bool) or not isinstance(seg[k], (int, float))):
+                v = _number(seg[k])
+                if v is None:
+                    bad = f"its {k} is not a number ({seg[k]!r})"
+                    break
+                seg[k] = v
+        if bad:
+            _drop(labels, "timeline", i, bad)
+            continue
         if seg.get("contribution") not in ("advancing", "wasteful", "idle"):
             labels.setdefault("_schema_violations", []).append(
                 f"timeline row {i}: contribution {seg.get('contribution')!r}")
@@ -274,6 +310,71 @@ def normalize_timeline(labels: dict) -> dict:
             seg.pop("notes", None)
         out.append(seg)
     labels["timeline"] = out
+    return labels
+
+
+# the reply's fields by the type the output format gives them (label/prompts.py)
+LIST_FIELDS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues", "operator_mistakes",
+               "tasks", "contacts", "contacts_missing")
+DICT_FIELDS = ("scene", "completion", "goal_alignment")
+TEXT_FIELDS = ("task_summary", "performance_review", "viewpoint")
+TIME_FIELDS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
+               "recovered_at_s")
+
+
+def _times(x: dict, where: str, labels: dict) -> None:
+    """The time fields of one row or object as numbers: a number in text ("12.5", "12.5s") is that number, and a time
+    that is no number ("late", NaN) is null, listed in _schema_violations, so the row is kept and shown untimed."""
+    for k in TIME_FIELDS:
+        v = x.get(k)
+        if v is None or (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)):
+            continue
+        x[k] = _number(v)
+        if x[k] is None:
+            labels.setdefault("_schema_violations", []).append(f"{where}: {k} {v!r} is not a time, kept untimed")
+
+
+def _rows(labels: dict, field: str, rows: list, kind=dict, what: str = "an object") -> list:
+    """The rows of a list field of this kind; each other row is recorded in _dropped."""
+    if all(isinstance(r, kind) for r in rows):
+        return rows
+    for i, r in enumerate(rows):
+        if not isinstance(r, kind):
+            _drop(labels, field, i, f"a {type(r).__name__}, not {what}")
+    return [r for r in rows if isinstance(r, kind)]
+
+
+def typed_labels(labels: dict) -> dict:
+    """The reply with every field of the type the output format gives it. A list field that is not a list, an object
+    field that is not an object or a text field that is not text is left out, and so is a row of a list that is not
+    an object (a key event written as a plain string), an instruction variant that is not text and an entry of
+    scene.objects that is not an object; each is recorded in _dropped ({"field", "row", "why"}), which the board counts
+    and shows, and the rest of the reply is kept. Times are read as numbers (_times). A reply that keeps to the format
+    comes back unchanged, and running this again on its output changes nothing."""
+    for fields, kind, what in ((LIST_FIELDS + ("instruction_variants",), list, "a list"),
+                               (DICT_FIELDS, dict, "an object"), (TEXT_FIELDS, str, "text")):
+        for k in fields:
+            if k in labels and labels[k] is not None and not isinstance(labels[k], kind):
+                _drop(labels, k, None, f"a {type(labels[k]).__name__}, not {what}")
+                labels.pop(k)
+    if isinstance(labels.get("instruction_variants"), list):
+        labels["instruction_variants"] = _rows(labels, "instruction_variants", labels["instruction_variants"], str,
+                                               "text")
+    for k in LIST_FIELDS:
+        if isinstance(labels.get(k), list):
+            labels[k] = _rows(labels, k, labels[k])
+            for i, r in enumerate(labels[k]):
+                _times(r, f"{k} row {i}", labels)
+    for k in ("completion", "goal_alignment"):
+        if isinstance(labels.get(k), dict):
+            _times(labels[k], k, labels)
+    sc = labels.get("scene")
+    if isinstance(sc, dict) and sc.get("objects") is not None:
+        if not isinstance(sc["objects"], list):
+            _drop(labels, "scene.objects", None, f"a {type(sc['objects']).__name__}, not a list")
+            sc.pop("objects")
+        else:
+            sc["objects"] = _rows(labels, "scene.objects", sc["objects"])
     return labels
 
 
