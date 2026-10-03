@@ -39,7 +39,7 @@ import warnings
 
 import numpy as np
 
-from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_CAMERA, COARSE_CLOCK
+from prepare.signal_alignment import ALIGNED_ASSUMED, ALIGNED_ROWS, ALIGNED_CAMERA, COARSE_CLOCK, placement_text
 
 REST_FRACTION = 0.1
 MIN_REST = 0.2
@@ -615,8 +615,10 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
         what += ", tied readings placed within each stamp interval as an assumption"
     elif aligned_by == ALIGNED_CAMERA:
         what += ", placed on footage through its assumed camera presentation clock"
-    elif aligned_by:
+    elif aligned_by == ALIGNED_ASSUMED:
         what += ", placed from both starts as no clock is shared"
+    elif aligned_by:
+        what += ", " + placement_text(aligned_by)
     if camera_aligned_by == ALIGNED_CAMERA and aligned_by != ALIGNED_CAMERA:
         what += ", shown on footage through its assumed camera presentation clock"
     head = f"  {name} ({what})"
