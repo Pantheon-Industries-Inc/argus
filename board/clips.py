@@ -832,23 +832,53 @@ def recheck(ep_dir: Path) -> None:
 
 
 # the kinds of reader issue (context.json reader_issues) board clips records
-CLIP_FRAME_COUNT = "clip_frame_count"            # a camera's clip has fewer frames than the episode
+CAMERA_SHORT = "camera_short"                    # a camera's clip has fewer frames than its video lists, the reader's
+                                                 # kind for a camera that ends before the episode (SPAN_KINDS)
+CLIP_FRAME_COUNT = "clip_frame_count"            # the kind earlier runs gave that fact, taken out when cut again
 CAMERA_NOT_DECODABLE = "camera_not_decodable"    # a camera's video does not decode; the episode goes on without it
+
+
+def clip_end_s(ep_dir: Path, ctx: dict, src: dict, cam: str, got: int) -> float:
+    """Where on the episode's clock a camera whose clip came out with got frames stops showing anything: the time of
+    its first frame left out, from its capture times (times.npz) or its frame index over the rate, after the frames it
+    skips from before the clock's start (start_offsets)."""
+    import numpy as np
+    fps = float(ctx.get("fps") or 30.0)
+    off, skip = start_offsets(ep_dir, src, fps).get(cam, (0.0, 0))
+    tp = ep_dir / (ctx.get("real_times") or "times.npz")
+    if tp.exists():
+        with np.load(tp) as z:
+            t = np.asarray(z[cam], dtype=np.float64) if cam in z.files else None
+            main = np.asarray(z[main_cam(src)], dtype=np.float64) if main_cam(src) in z.files else None
+        if t is not None and main is not None and len(t) > skip + got:
+            zero = float(ctx.get("clock_zero_s", main[0]))
+            return float(t[skip + got]) - zero
+    return off + got / fps
+
+
+def is_end(x: dict) -> bool:
+    """Whether a camera_short issue is one of a camera that ends early (its stretch starts inside the episode), not
+    one that starts late (its stretch starts at 0)."""
+    return x.get("kind") == CAMERA_SHORT and float(x.get("t0_s") or 0.0) > 0.0
 
 
 def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: bool = False) -> str | None:
     """Record what board clips found wrong with an episode's cameras in its context.json, in reader_issues, the list
     of problems an episode was kept and flagged with ({"kind", "what", "camera"}: a short tag, one plain sentence a
-    reviewer reads on the board, the camera's view). short is {camera: extract_one's counts} for the clips that came
-    out with fewer frames than the episode (kind clip_frame_count), broken {camera: why} for the cameras whose video
-    does not decode (kind camera_not_decodable), which are taken out of the episode (drop_cameras, whose own issues
-    are added), and cut the cameras cut on this run. Other entries are never touched; a camera cut again on a later
-    run is recorded as it came out then, and one not cut again keeps its entry. board/build.py copies the list into
+    reviewer reads on the board, the camera's name as the reader gives it, or its view). short is {camera:
+    extract_one's counts} for the clips that came out with fewer frames than the camera's video lists, which end
+    before the episode does (kind camera_short, with its counts, clip_frames and episode_frames: one issue per camera,
+    in place of the reader's of the camera ending early, as both say it shows nothing past a time), broken {camera:
+    why} for the cameras whose video does not decode (kind camera_not_decodable), which are taken out of the episode
+    (drop_cameras, whose own issues are added), and cut the cameras cut on this run. Other entries are never touched;
+    a camera cut again on a later run is recorded as it came out then, and one not cut again keeps its entry. board/build.py copies the list into
     the episode's dataset_checks, where each entry raises a data issue (board/families.py), so every board build shows
     it. The cameras are taken out first, which can move the episode's clock and every time in the context with it,
     and the context's reader issues are read again after that. keep_clock: the episode is labelled already
     (drop_cameras). Returns the new main camera when the main camera was taken out, else None."""
     ctx = _context(ep_dir)
+    src = json.loads((ep_dir / "sources.json").read_text())
+    name = lambda v: str((src.get(v) or {}).get("camera_key") or v)
     redo = set(cut) | set(broken)
     order = lambda v: (CAMS + (v,)).index(v)
     own = []                                   # named before a camera's entry leaves the context
@@ -858,15 +888,22 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
                                                                           "labelled without it."})
     for v in sorted(short, key=order):
         n = short[v]
-        own.append({"kind": CLIP_FRAME_COUNT, "camera": v, "what": f"The {camera_label(v, ctx)} video has "
-                                                                      f"{n['clip_frames']} frames where the episode "
-                                                                      f"has {n['episode_frames']}."})
+        end = clip_end_s(ep_dir, ctx, src, v, int(n["clip_frames"]))
+        own.append({"kind": CAMERA_SHORT, "camera": name(v),
+                    "what": f"The {camera_label(v, ctx)} video has {n['clip_frames']} frames where the episode has "
+                            f"{n['episode_frames']}, so it shows nothing after {end:.2f} s.",
+                    "t0_s": round(end, 3), **({"t1_s": ctx["duration_s"]} if ctx.get("duration_s") else {}),
+                    "clip_frames": n["clip_frames"], "episode_frames": n["episode_frames"]})
     main, more = None, []
     if broken:
         main, more = drop_cameras(ep_dir, broken, keep_clock)
         ctx = _context(ep_dir)
+    ended = {name(v) for v in short}
     issues = [x for x in ctx.get("reader_issues") or []
               if not (isinstance(x, dict) and (x.get("kind") == CLIP_FRAME_COUNT and x.get("camera") in redo
+                                               or x.get("kind") == CAMERA_SHORT and "clip_frames" in x
+                                               and x.get("camera") in {name(v) for v in redo}
+                                               or is_end(x) and x.get("camera") in ended
                                                or x.get("kind") == CAMERA_NOT_DECODABLE and x.get("camera") in broken))]
     issues += own
     have = {(x.get("kind"), x.get("camera")) for x in issues if isinstance(x, dict)}

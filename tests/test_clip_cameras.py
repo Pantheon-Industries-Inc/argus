@@ -259,6 +259,19 @@ def test_the_cameras_spans_are_measured_again_on_the_new_main_camera(tmp_path):
     assert [x["kind"] for x in ctx["reader_issues"]] == ["camera_not_decodable"], ctx["reader_issues"]
 
 
+def test_a_camera_that_ends_early_is_one_issue_whichever_step_finds_it(tmp_path):
+    """The reader flags a wrist camera that ends at 1 s of a 2 s episode, and board clips then finds its file holds
+    fewer frames still: both had been recorded, under two kinds, for one camera that shows nothing past a time. It is
+    one camera_short issue, at the end the clip has."""
+    rep, eps, ep = _upload(tmp_path, {"top": 60, "wrist_left": 30})
+    assert [x["kind"] for x in json.loads((ep / "context.json").read_text())["reader_issues"]] == ["camera_short"]
+    _video(Path(json.loads((ep / "sources.json").read_text())["left"]["packed"]), 20)
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    (short,) = json.loads((ep / "context.json").read_text())["reader_issues"]
+    assert short["kind"] == "camera_short" and short["camera"] == "wrist_left" and short["clip_frames"] == 20
+    assert short["t0_s"] == pytest.approx(20 / 30, abs=0.01) and short["t1_s"] == 2.0, short
+
+
 def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_frame(tmp_path):
     """The left wrist camera started 0.5 s before the top camera, which does not decode. The episode's clock now
     starts at the left camera's first frame, the earliest of the cameras left: frame times, clips and the length
