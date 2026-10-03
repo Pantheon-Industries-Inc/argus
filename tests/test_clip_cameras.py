@@ -152,6 +152,25 @@ def test_a_main_camera_taken_out_moves_the_state_and_signals_onto_the_new_main_c
     assert clips.start_offsets(ep, src) == {"left": (pytest.approx(0.5), 0)}
 
 
+def test_placeholder_frames_move_onto_the_new_main_cameras_frames(tmp_path):
+    """The placeholder frames the reader recorded are on the main camera's frames. When the main camera goes, its own
+    entry goes with it and every other camera's moves onto the new main camera's frames by capture time, so labelling
+    still leaves out exactly the frames that are placeholders."""
+    eps, ep = _recording(tmp_path)
+    files = {"exo": ("top", eps.parent / "up" / "top.mp4"), "left": ("wrist_left", eps.parent / "up" / "wrist_left.mp4"),
+             "right": ("wrist_right", eps.parent / "up" / "wrist_right.mp4")}
+    shutil.rmtree(ep)
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": T_LEFT,
+                                                                             "right": T_RIGHT},
+                                placeholders={"exo": [3], "left": [10], "right": [20]})
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["placeholder_frames"] == {"exo": [[3, 3]], "left": [[25, 25]], "right": [[20, 20]]}
+    (eps.parent / "up" / "top.mp4").write_bytes(b"not a video at all" * 50)
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["placeholder_frames"] == {"left": [[10, 10]], "right": [[5, 5]]}, ctx["placeholder_frames"]
+
+
 def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligned(tmp_path):
     """The new main camera was paired to the old one by time (its kmap), and the capture times are gone: nothing can
     place the state on its frames, so the state and signals are not used and the episode says why. The checks that

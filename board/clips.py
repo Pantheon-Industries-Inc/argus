@@ -606,6 +606,7 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
     for v in views:
         src.pop(v, None)
         (ctx.get("cameras") or {}).pop(v, None)
+        (ctx.get("placeholder_frames") or {}).pop(v, None)
     dj = ep_dir / "depth.json"
     if dj.exists():
         depth = json.loads(dj.read_text())
@@ -658,7 +659,7 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
     is cut from the clock's start, and a reader issue says how much of it is not shown."""
     import numpy as np
 
-    from prepare.formats import CLOCK_TIME_KEYS, depth_kmap, nearest
+    from prepare.formats import CLOCK_TIME_KEYS, depth_kmap, nearest, placeholder_frames
     t_old, t_new = t[old], t[new]
     step_old = float(np.median(np.diff(t_old))) if len(t_old) > 1 else 1.0 / float(ctx.get("fps") or 30.0)
     idx = nearest(t_old, t_new)
@@ -677,6 +678,14 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
             with np.load(p) as z:
                 arrs = {k: move(z[k]) for k in z.files}
             np.savez(p, **arrs)
+    # each camera's placeholder frames (prepare/formats.py placeholder_frames) are on the old main camera's frames: back
+    # to the camera's own frames through its old pairing, then onto the new main camera's through its new one
+    own = {}
+    for v, runs in (ctx.get("placeholder_frames") or {}).items():
+        ks = [k for x, y in runs for k in range(int(x), int(y) + 1)]
+        km = np.load(ep_dir / src[v]["kmap"]) if v in src and src[v].get("kmap") else None
+        own[v] = sorted({int(km[k]) for k in ks if k < len(km)}) if km is not None else ks
+    kmaps = {}
     for v, s in src.items():
         s.pop("kmap", None)
         if v == new or v not in t:
@@ -685,6 +694,11 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
         if not (len(t[v]) == len(t_new) and np.array_equal(km, np.arange(len(km)))):
             np.save(ep_dir / f"kmap_{v}.npy", km)
             s["kmap"] = f"kmap_{v}.npy"
+            kmaps[v] = km
+    held = placeholder_frames({v: js for v, js in own.items() if v in src}, kmaps)
+    ctx.pop("placeholder_frames", None)
+    if held:
+        ctx["placeholder_frames"] = held
     dj = ep_dir / "depth.json"
     dt = {}
     if (ep_dir / "depth_times.npz").exists():

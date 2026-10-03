@@ -1804,7 +1804,7 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
                         prs: dict | None = None, real: dict | None = None, state=None, action=None,
                         descs: dict | None = None, signals: dict | None = None, depth: dict | None = None,
-                        state_names: list | None = None) -> dict:
+                        state_names: list | None = None, placeholders: dict | None = None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
@@ -1813,7 +1813,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     action are rows on the anchor's frames (joint_state). descs {view: text} describes a camera the reader knows
     more about than its slot says (the prompt's camera line). depth {view: {"path", "real" (its own capture times on
     the same recorder clock, or None), "scale_m", "source"}} is each camera's depth stream (depth_entry), timed as its
-    colour camera is. state_names gives the state's value names for state_layout."""
+    colour camera is. state_names gives the state's value names for state_layout. placeholders {view: its frames that
+    are placeholders} (FrameWriter.placeholders) are recorded on the anchor's frames (placeholder_frames)."""
     from label import episode as me
     if prs is None:
         files = dict(files)
@@ -1837,7 +1838,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         return t - (zero if shared_clock else t[0])
     ta = seconds_of(anchor)
     ep.mkdir(parents=True, exist_ok=True)
-    sources, times, cams = {}, {}, {}
+    sources, times, cams, kmaps = {}, {}, {}, {}
     for v in order:
         name, path = files[v]
         pr = prs[v]
@@ -1850,6 +1851,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
             if not (len(t) == len(ta) and np.array_equal(km, np.arange(len(ta)))):
                 np.save(ep / f"kmap_{v}.npy", km)
                 sources[v]["kmap"] = f"kmap_{v}.npy"
+                kmaps[v] = km
         cams[v] = camera_entry(v, name, pr, rig)
         if (descs or {}).get(v):
             cams[v]["desc"] = descs[v]
@@ -1886,6 +1888,9 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     ctx = {"dataset": dataset, "profile": rig, "state_kind": "none", "episode_id": ep.name,
            "robot_type": None, "fps": round(float(fps), 3), "n_state_frames": int(len(ta)),
            "duration_s": round(float(ta[-1]) + step, 3) if len(ta) else 0.0, "cameras": cams, **extra}
+    held = placeholder_frames({v: js for v, js in (placeholders or {}).items() if v in order}, kmaps)
+    if held:
+        ctx["placeholder_frames"] = held
     if state is not None:
         ctx["state_kind"] = state_layout(state.shape[1], rig, state_names)[0]
     write_depth(ep, ctx, dep, dtimes)
@@ -3414,7 +3419,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         add_issue(extra, **i)
     # the table's other numbers go with the frames as they do beside videos (recorded_signals)
     signals = recorded_signals(df, _used_columns(kind, state, action) | set(r["image_cams"]), 0, r["features"])
-    ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals)
+    ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals,
+                              placeholders={v: written[key].placeholders() for v, (key, _) in files.items()})
     if state is not None and kind != "none" and len(state) == ctx["n_state_frames"]:
         ctx["state_kind"] = kind
         return finish_episode(ep, ctx, json.loads((ep / "sources.json").read_text()), state, action,
@@ -4338,7 +4344,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if chosen[anchor]["clock"]:
         extra["clock_origin_s"] = t0         # the recorder's time at the clips' zero
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth,
-                               state=state, action=action, state_names=state_names)
+                               state=state, action=action, state_names=state_names,
+                               placeholders={v: written[nm].placeholders() for v, (nm, _) in files.items()})
 
 
 def names_shown(files: dict) -> list[str]:
@@ -5708,6 +5715,23 @@ def bad_frames_issues(extra: dict, name: str, w, zero_s: float = 0.0) -> None:
                      "the episode goes on without them there."), camera=name, t0_s=t0, t1_s=t1)
 
 
+def placeholder_frames(own: dict, kmaps: dict) -> dict:
+    """{view: [[first, last], ...]}: the anchor frames at which each camera shows a placeholder, a black frame written
+    where its image did not decode (FrameWriter.placeholders), as runs of frame indices (label/episode.py frame_runs).
+    own {view: its own placeholder frame indices}; kmaps {view: its frame for each anchor frame} for a camera paired to
+    the anchor by time, any other sharing the anchor's frame index. Labelling treats each as a frame that did not
+    decode, so the model is never shown a placeholder as footage (label/episode.py frames)."""
+    from label import episode as me
+    out = {}
+    for v, js in own.items():
+        js = np.asarray(sorted(js), dtype=np.int64)
+        km = kmaps.get(v)
+        ks = np.flatnonzero(np.isin(np.asarray(km), js)) if km is not None else js
+        if len(ks):
+            out[v] = me.frame_runs(ks)
+    return out
+
+
 class FrameWriter:
     """One camera's frames streamed to an mp4 at their real times as they are read, so an MCAP is never
     held in memory. Annex-B H.264/H.265 is copied without re-encoding, starting at the first keyframe
@@ -5759,6 +5783,13 @@ class FrameWriter:
             self._bad(p)
             return
         self._image(p, im)
+
+    def placeholders(self) -> list[int]:
+        """The indices, among the frames written, of the black frames written in place of images that did not decode
+        (blank only; the others are skipped and have no frame)."""
+        if not self.blank or not self.pts:
+            return []
+        return np.searchsorted(np.asarray(self.pts), np.asarray(self.bad, dtype=np.int64)).tolist()
 
     def missing(self, t_s: float) -> None:
         """A row of the camera with no image at all."""
@@ -5897,6 +5928,11 @@ def trim_episode(ep: Path, max_s: float) -> dict:
         issues.append(i)
     if "reader_issues" in ctx:
         ctx["reader_issues"] = issues
+    held = {v: r for v, r in ((v, me.runs_within(r, 0, keep)) for v, r in (ctx.get("placeholder_frames") or {}).items())
+            if r}
+    ctx.pop("placeholder_frames", None)
+    if held:
+        ctx["placeholder_frames"] = held
     for u in ctx.get("unshown_cameras") or []:
         # a camera the model is not shown keeps its frames up to the same time, at its own rate
         rate = float(u.get("fps") or ctx.get("fps") or 30.0)

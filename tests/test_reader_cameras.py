@@ -249,22 +249,25 @@ def test_a_lerobot_camera_with_no_video_for_the_episode_is_listed_with_its_reaso
 
 # ---------------------------------------------------------------- undecodable frames inside a camera
 
-def _lerobot_images(root: Path, bad: tuple = ()) -> None:
-    """A LeRobot v2.1 episode of 30 frames whose camera is PNG images in the data file, with a 14 value state."""
+def _lerobot_images(root: Path, bad: tuple = (), n: int = 30, wrist: bool = False) -> None:
+    """A LeRobot v2.1 episode of n frames whose scene camera (and, with wrist, a left wrist camera) is PNG images in
+    the data file, with a 14 value state; the scene camera's images at the rows in bad do not decode."""
     import pandas as pd
     (root / "meta").mkdir(parents=True)
     (root / "data" / "chunk-000").mkdir(parents=True)
-    feats = {"observation.images.cam_high": {"dtype": "image", "shape": [72, 96, 3]},
+    keys = ["observation.images.cam_high"] + (["observation.images.cam_left_wrist"] if wrist else [])
+    feats = {**{k: {"dtype": "image", "shape": [72, 96, 3]} for k in keys},
              "observation.state": {"dtype": "float32", "shape": [14]}}
     (root / "meta" / "info.json").write_text(json.dumps({
         "codebase_version": "v2.1", "fps": 30, "chunks_size": 1000, "features": feats,
         "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"}))
-    cells = [{"bytes": _png(np.full((72, 96, 3), 8 * k, np.uint8)) if k not in bad else b"\x89PNG\r\n\x1a\nbroken",
-              "path": None} for k in range(30)]
-    state = np.cumsum(np.random.default_rng(2).normal(0, 0.01, (30, 14)), axis=0)
-    pd.DataFrame({"observation.images.cam_high": cells, "observation.state": list(state),
-                  "frame_index": np.arange(30), "episode_index": np.zeros(30, int),
-                  "timestamp": np.arange(30) / 30}).to_parquet(root / "data" / "chunk-000" / "episode_000000.parquet")
+    cells = {k: [{"bytes": _png(np.full((72, 96, 3), (8 * r + 40 * i) % 256, np.uint8))
+                  if i or r not in bad else b"\x89PNG\r\n\x1a\nbroken", "path": None} for r in range(n)]
+             for i, k in enumerate(keys)}
+    state = np.cumsum(np.random.default_rng(2).normal(0, 0.01, (n, 14)), axis=0)
+    pd.DataFrame({**cells, "observation.state": list(state), "frame_index": np.arange(n),
+                  "episode_index": np.zeros(n, int),
+                  "timestamp": np.arange(n) / 30}).to_parquet(root / "data" / "chunk-000" / "episode_000000.parquet")
 
 
 def test_one_undecodable_image_keeps_the_state_and_a_frame_for_every_row(tmp_path):
@@ -302,6 +305,37 @@ def test_an_hdf5_camera_with_an_undecodable_frame_keeps_its_rows_on_their_frames
     assert ctx["n_state_frames"] == n and ctx["state_kind"] == "joints", ctx.get("state_note")
     (bad,) = _issues(ctx, "frames_not_decodable")
     assert bad["camera"].endswith("cam_high") and abs(bad["t0_s"] - 4 / 30) < 0.01, bad
+    assert ctx["placeholder_frames"] == {"exo": [[4, 4]]}, ctx.get("placeholder_frames")
+
+
+def test_a_placeholder_frame_is_never_shown_to_the_model_as_footage(tmp_path):
+    """A black frame written where an image did not decode had been sent to the model as the camera's footage, with
+    no word. The reader records it on the main camera's frames, and labelling treats it as a frame that did not
+    decode: its grid cell is empty, the camera is left out of the detail view there, and the prompt names the instant,
+    at a sampled instant and at the first frame alike."""
+    from label import episode as me
+    root = tmp_path / "lr"
+    _lerobot_images(root, bad=(0, 45), n=90, wrist=True)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    assert ctx["placeholder_frames"] == {"exo": [[0, 0], [45, 45]]}, ctx.get("placeholder_frames")
+    ep_dir = tmp_path / "eps" / ctx["episode_id"]
+    ep = me.load(ep_dir)
+    pl = me.plan(ep)
+    assert {0, 45} <= set(pl["ks"])
+    imgs = me.frames(ep, pl)
+    assert 0 not in imgs["exo"] and 45 not in imgs["exo"] and 0 in imgs["left"] and 45 in imgs["left"]
+    assert not me.recording_at(ep, "exo", 0) and not me.recording_at(ep, "exo", 45)
+    assert ep["decode_failed"] == {"exo": [0, 45]}, ep["decode_failed"]
+    assert me.decode_failures(ep) == []        # flagged once, by the reader, over its stretch
+    assert "Cam_high's video could not be decoded at 0.00 s, 1.50 s" in me.build_request(ep_dir)["prompt"]
+    assert f.trim_episode(ep_dir, 1.0)["placeholder_frames"] == {"exo": [[0, 0]]}     # cut with the episode
+
+
+def test_placeholder_frames_are_placed_on_the_main_cameras_frames_through_its_time_pairing():
+    own = {"exo": [0], "left": [2]}
+    kmaps = {"left": np.array([0, 1, 1, 2, 2, 3])}
+    assert f.placeholder_frames(own, kmaps) == {"exo": [[0, 0]], "left": [[3, 4]]}
 
 
 def _json_mcap(path: Path, chans: dict, n: int = 30, t0: float = 1_790_000_000.0, joints: bool = False) -> None:

@@ -419,12 +419,19 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,
     which recording_at then reports as not recording, so every grid and view leaves it out there; ep["decode_failed"],
     the instants a camera's file could not be decoded at, before its last frame or, for a file none of whose frames
-    decodes, all of them (_coverage_note, decode_failures). Raises only when no camera has any frame."""
+    decodes, all of them (_coverage_note, decode_failures). A placeholder frame (placeholder_instants) is one that did
+    not decode, wherever it is, so the model is never shown it as footage. Raises only when no camera has any frame."""
     vs = views(ep)
     failed = {v: set() for v in vs}
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
         futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks, failed[v]) for v in vs}
         got = {v: f.result() for v, f in futs.items()}
+    held = placeholder_instants(ep, pl["ks"])
+    for v, hit in held.items():
+        if v in got:
+            for k in hit:
+                got[v].pop(k, None)
+            failed[v] |= hit
     ks = sorted(set(pl["ks"]))
     # an instant some camera can show: decoded there and inside its own recording (a camera paired by time that was
     # not recording has only its nearest frame, from another time, which is never shown)
@@ -439,6 +446,8 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
             # again at full size, for the detail view): the latest any camera has takes the end's place
             for k in range(min(past) - 1, keep[-1] - 1, -1):
                 more = {v: _decode_view(ep, v, [k], gate) for v in vs}
+                for v in placeholder_instants(ep, [k]):
+                    more.get(v, {}).pop(k, None)
                 if any(k in more[v] and _in_span(ep, v, k) for v in vs):
                     for v in vs:
                         got[v].update(more[v])
@@ -450,12 +459,47 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
             pl["contact"] = [k for k in pl["contact"] if k in keep]
     ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
     # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
-    # where its file ended); a camera with no frame at all that failed to decode does not decode anywhere. It is
-    # recorded whether or not another camera shows the instant, so an instant that left the request is still flagged
-    bad = {v: sorted(k for k in failed[v] if not got[v] or k < max(got[v])) for v in vs}
+    # where its file ended), or a placeholder anywhere; a camera with no frame at all that failed to decode does not
+    # decode anywhere. It is recorded whether or not another camera shows the instant, so an instant that left the
+    # request is still flagged
+    bad = {v: sorted(k for k in failed[v] if not got[v] or k < max(got[v]) or k in held.get(v, ())) for v in vs}
     ep["decode_failed"] = {v: ks_ for v, ks_ in bad.items() if ks_}
     ep["undecodable"] = {v for v in ep["decode_failed"] if not got[v]}
     return got
+
+
+def frame_runs(ks) -> list[list[int]]:
+    """Frame indices as runs [[first, last], ...] of consecutive ones, how context.json keeps a set of frames short
+    (placeholder_frames)."""
+    ks = np.unique(np.asarray(list(ks), dtype=np.int64))
+    if not len(ks):
+        return []
+    cuts = np.flatnonzero(np.diff(ks) > 1) + 1
+    return [[int(r[0]), int(r[-1])] for r in np.split(ks, cuts)]
+
+
+def runs_within(runs, a: int, b: int) -> list[list[int]]:
+    """Runs of frames (frame_runs) cut to the frames [a, b) and counted from a, for an episode cut to those frames (a
+    part of a long recording, label/pieces.py; an episode trimmed to the minutes cap, prepare/formats.py)."""
+    out = []
+    for x, y in runs:
+        x, y = max(int(x), a), min(int(y), b - 1)
+        if x <= y:
+            out.append([x - a, y - a])
+    return out
+
+
+def placeholder_instants(ep: dict, ks) -> dict:
+    """{view: the instants of ks at which the camera's frame is a placeholder}: a black frame the reader wrote where an
+    image did not decode, so a camera of images one per table row keeps the rows on their frames (context.json
+    placeholder_frames, runs of anchor frames, prepare/formats.py placeholder_frames). It is no footage, and frames
+    treats it as a frame that did not decode."""
+    out = {}
+    for v, runs in (ep["context"].get("placeholder_frames") or {}).items():
+        hit = {int(k) for k in ks if any(x <= int(k) <= y for x, y in runs)}
+        if hit:
+            out[v] = hit
+    return out
 
 
 def decode_failures(ep: dict) -> list[dict]:
@@ -466,6 +510,11 @@ def decode_failures(ep: dict) -> list[dict]:
     off = float((ep["context"].get("piece") or {}).get("t0_s") or 0.0)
     out = []
     for v, ks in (ep.get("decode_failed") or {}).items():
+        # a placeholder is flagged by the reader already, over its whole stretch (frames_not_decodable)
+        held = placeholder_instants(ep, ks).get(v, set())
+        ks = [k for k in ks if k not in held]
+        if not ks:
+            continue
         t0, t1 = round(frame_time(ep, min(ks)) + off, 3), round(frame_time(ep, max(ks)) + off, 3)
         name = camera_label(v, ep["context"])
         if v in (ep.get("undecodable") or ()):
