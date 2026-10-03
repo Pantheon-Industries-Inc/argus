@@ -158,11 +158,11 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                  for s in ctx["signals"] if s["key"] in zs.files}
     # the recording's contacts, found once on the whole recording when its context has none (prepared before contacts
     # were measured, or measuring them failed), so no part's labelling finds contacts on its own slice; the recording's
-    # context.json is not given them
+    # context.json is not given them. They are found with the verdicts just made, so no signal is judged twice
     contacts = None
     if "contacts" in ctx or ctx.get("signals"):
         from label import contacts as lc
-        contacts = lc.of_episode(ep)
+        contacts = lc.of_episode(ep, frozenset(nm for nm, v in touch.items() if v))
     out = []
     count = len(bounds) - 1
     for i in range(count):
@@ -460,9 +460,13 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     # contacts, shown or left out by the cap, so one timed by a signal that is not touch (touch_contacts) is left out
     asked = {c.get("id") for _, r in parts for c in r.get("contacts") or [] if isinstance(c, dict)}
     # the recording's contacts as write_pieces gave them to the parts: stored, or found once on the whole recording
-    # when its context has none, so the ids match
+    # when its context has none, with the touch verdicts write_pieces wrote into every part's signal entries, so the
+    # ids match and no signal is judged again (the plan's verdicts for parts written without them)
     from label import contacts as lc
-    recorded = lc.of_episode(ep) if asked else []
+    entries = parts[0][0].get("signals") or []
+    verdicts = (frozenset(s["name"] for s in entries if s["touch"]) if entries and all("touch" in s for s in entries)
+                else pl["touch"])
+    recorded = lc.of_episode(ep, verdicts) if asked else []
     if excluded:
         L["_excluded"] = excluded
     if views["shown"]:

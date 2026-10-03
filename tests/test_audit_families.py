@@ -36,9 +36,11 @@ def landed(tmp_path_factory):
         assert not rep["failed"], (name, rep["failed"])
         ep = root / "eps" / name / rep["episodes"][0]["episode_id"]
         ctx = json.loads((ep / "context.json").read_text())
-        prompt = me.build_request(ep)["prompt"].split("THE EPISODE TO LABEL.", 1)[1]
+        req = me.build_request(ep)
+        prompt = req["prompt"].split("THE EPISODE TO LABEL.", 1)[1]
         board = {}
-        add_context(board, ctx, ep)
+        # the request stands in for the labelling result: it holds the contacts it found when the context has none
+        add_context(board, ctx, ep, req)
         out[name] = (ctx, prompt, board)
     return out
 

@@ -49,9 +49,11 @@ def _strength(a: np.ndarray, m: dict) -> np.ndarray:
     return np.nan_to_num(act / swing) if swing > 0 else np.zeros(len(a))
 
 
-def find(signals: dict, meta: dict, t: np.ndarray) -> list[dict]:
+def find(signals: dict, meta: dict, t: np.ndarray, verdicts=None) -> list[dict]:
     """The contacts of one episode from its signals ({name: (n, values) array}), their meta (shape, rest, swing) and
-    the anchor frames' times t."""
+    the anchor frames' times t. verdicts, the names of the signals that measure touch when the caller has judged them
+    (label/episode.py plan()["touch"], label/pieces.py write_pieces), are used instead of judging each signal again:
+    one judgement of a 16 x 16 glove takes about a second."""
     n = len(t)
     touch = {}
     for name, a in signals.items():
@@ -59,7 +61,8 @@ def find(signals: dict, meta: dict, t: np.ndarray) -> list[dict]:
         m = meta.get(name) or {}
         if m.get("variation_of") or name.endswith(VARIATION_SUFFIX):
             continue
-        if len(a) == n and sg.is_touch(name, a, m.get("rest"), m.get("swing")):
+        if len(a) == n and (name in verdicts if verdicts is not None
+                            else sg.is_touch(name, a, m.get("rest"), m.get("swing"))):
             touch[name] = (a, m)
     if not touch:
         return []
@@ -139,9 +142,9 @@ def _regions(touch: dict, names: set, k: int) -> dict:
     return out
 
 
-def of_episode(ep: dict) -> list[dict]:
+def of_episode(ep: dict, verdicts=None) -> list[dict]:
     """The episode's contacts: the ones prepare wrote (context["contacts"], found with the upload's scales), else found
-    now from its signals."""
+    now from its signals, with the caller's touch verdicts when it has them (find)."""
     if "contacts" in ep["context"]:
         return ep["context"]["contacts"] or []
     from label import episode as me
@@ -149,4 +152,4 @@ def of_episode(ep: dict) -> list[dict]:
     if not sig:
         return []
     n = len(next(iter(sig.values())))
-    return find(sig, ep.get("signal_meta") or {}, np.array([me.frame_time(ep, k) for k in range(n)]))
+    return find(sig, ep.get("signal_meta") or {}, np.array([me.frame_time(ep, k) for k in range(n)]), verdicts)

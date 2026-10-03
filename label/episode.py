@@ -1391,7 +1391,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     ep = load(ep_dir)
     pl = plan(ep)
     from label import contacts as lc
-    ep["contacts"] = touch_contacts(ep, pl, lc.of_episode(ep))
+    ep["contacts"] = touch_contacts(ep, pl, lc.of_episode(ep, _touch(ep, pl)))
     ep["contacts_shown"] = chosen_contacts(ep, ep["contacts"])
     if ep["contacts_shown"]:
         pl["contact"] = []   # the touch signals' own contacts replace the views chosen from the gripper's value

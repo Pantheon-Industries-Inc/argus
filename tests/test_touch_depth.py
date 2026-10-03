@@ -308,8 +308,17 @@ def test_one_request_judges_each_signal_touch_at_most_once(tmp_path, monkeypatch
         calls[name] = calls.get(name, 0) + 1
         return judge(name, *a, **k)
     monkeypatch.setattr(sg, "is_touch", counted)
-    r = me.build_request(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    r = me.build_request(ep)
     assert r["contact_views"]["shown"] == ["c1"]
+    assert calls and max(calls.values()) == 1, calls
+    # a context prepared before contacts were measured: they are found with the plan's verdicts, not judged again
+    ctx = json.loads((ep / "context.json").read_text())
+    del ctx["contacts"]
+    (ep / "context.json").write_text(json.dumps(ctx))
+    calls.clear()
+    r = me.build_request(ep)
+    assert r["contact_views"]["shown"] == ["c1"] and [c["id"] for c in r["contacts"]] == ["c1"]
     assert calls and max(calls.values()) == 1, calls
 
 
