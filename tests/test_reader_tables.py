@@ -1558,3 +1558,24 @@ def test_variation_signals_keep_their_parents_timing_assumption(tmp_path, source
     text = "\n".join(c["text"] for c in req["content"] if c["type"] == "text")
     line = next(line for line in text.splitlines() if line.startswith("  " + companion["name"] + " ("))
     assert ("tied readings placed within each stamp interval as an assumption" in line) == coarse
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize("comma_column", ["force", "other"])
+def test_late_decimal_commas_name_single_dot_groups_without_changing_values(tmp_path, monkeypatch,
+                                                                          chunked, comma_column):
+    p = tmp_path / "pressure.csv"
+    rows = [f"{i};12.500;1.5\n" for i in range(30)]
+    rows += (["30;12,5;1.5\n", "31;13,5;1.5\n"] if comma_column == "force" else
+             ["30;12.500;1,5\n", "31;12.500;2,5\n"])
+    p.write_text("time;force;other\n" + "".join(rows))
+    if chunked:
+        monkeypatch.setattr(f, "TABLE_MAX_BYTES", 1)
+        monkeypatch.setattr(f, "TABLE_CHUNK_ROWS", 2)
+    df, text, stride, count = f.read_number_table(p)
+    assert text == [] and stride == 1 and count == 32
+    assert df["force"].dtype == np.float64
+    assert df["force"].tolist() == [12.5] * 30 + ([12.5, 13.5] if comma_column == "force" else [12.5, 12.5])
+    assert any("force has single dot groups" in why for why in df.attrs["number_inferences"])
+    out = f.table_signals([p], None, _anchor(32), {})
+    assert any("force has single dot groups" in issue["what"] for issue in _issues(out, "table_number_ambiguous"))

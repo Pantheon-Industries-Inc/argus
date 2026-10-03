@@ -2164,19 +2164,21 @@ CODE_VALUES_MAX = 8
 UNNAMED_COLUMN = re.compile(r"^Unnamed: \d+$")      # pandas' name for a column whose header cell is blank
 
 
-def number_syntax(col) -> tuple[bool, bool, bool]:
-    """Proof of thousands, contradicting dot decimals, and ambiguous single dot groups in a column. A decimal
-    such as 1.5 or 0.896 prevents a grouped cell from reinterpreting all its neighbours as thousands."""
+def number_syntax(col) -> tuple[bool, bool, bool, bool]:
+    """Proof of thousands, contradicting dot decimals, ambiguous dot groups, and decimal commas in a column.
+    A decimal such as 1.5 or 0.896 prevents a grouped cell from reinterpreting its neighbours as thousands.
+    Comma syntax across the whole file names single dot groups as inferred, even when it occurs late."""
     cells = col.astype(str).str.strip()
     grouped = cells.str.match(GROUPED_NUMBER)
     proof = cells.str.match(THOUSANDS_PROOF)
     dotted = cells.str.match(r"^[-+]?(\d+\.\d*|\d*\.\d+)([eE][-+]?\d+)?$")
-    return bool(proof.any()), bool((dotted & ~grouped).any()), bool((grouped & ~proof).any())
+    comma = cells.str.match(DECIMAL_COMMA) | (grouped & cells.str.contains(",", regex=False))
+    return bool(proof.any()), bool((dotted & ~grouped).any()), bool((grouped & ~proof).any()), bool(comma.any())
 
 
 def proves_thousands(col) -> bool:
     """Whether the whole column proves thousands without contradictory dot decimals (number_syntax)."""
-    proof, decimal, _ = number_syntax(col)
+    proof, decimal, _, _ = number_syntax(col)
     return proof and not decimal
 
 
@@ -2197,13 +2199,14 @@ def column_numbers(col, decimal: str = ".", thousands: bool | None = None):
     return x.where(~fix, pd.to_numeric(plain, errors="coerce"))
 
 
-def number_inferences(syntax: dict, decimal: str) -> list[str]:
+def number_inferences(syntax: dict) -> list[str]:
     """Columns with ambiguous dot groups read as decimals, and why. Explicit proof cells still read as grouped."""
+    comma = any(flags[3] for flags in syntax.values())
     return [f"{c} has single dot groups that could be decimals or thousands; they were read as decimals"
             + (" because other cells use dot decimals, though grouped cells also occur" if proof and conflict else
                " because no cell proves thousands")
-            for c, (proof, conflict, ambiguous) in syntax.items()
-            if ambiguous and ((proof and conflict) or (decimal == "," and not proof))]
+            for c, (proof, conflict, ambiguous, _) in syntax.items()
+            if ambiguous and ((proof and conflict) or (comma and not proof))]
 
 
 def number_columns(df, decimal: str = ".") -> tuple:
@@ -2250,13 +2253,13 @@ def read_number_table(p: Path):
     if not big:
         raw = pd.read_csv(p, **kwargs)
         df, text = number_columns(raw, decimal)
-        df.attrs["number_inferences"] = number_inferences({c: number_syntax(raw[c]) for c in raw}, decimal)
+        df.attrs["number_inferences"] = number_inferences({c: number_syntax(raw[c]) for c in raw})
         return df, text, 1, len(df)
     syntax = {}
     for ch in pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs):
         for c in ch:
             flags = number_syntax(ch[c])
-            syntax[c] = tuple(a or b for a, b in zip(syntax.get(c, (False,) * 3), flags))
+            syntax[c] = tuple(a or b for a, b in zip(syntax.get(c, (False,) * len(flags)), flags))
     parts, totals, stride, rows, kept = [], {}, 1, 0, 0
     for ch in pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs):
         nums = {}
@@ -2291,7 +2294,7 @@ def read_number_table(p: Path):
         else:
             text.append((str(c), bad, n))
     df = pd.concat(parts, ignore_index=True)[cols] if parts else pd.DataFrame()
-    df.attrs["number_inferences"] = number_inferences(syntax, decimal)
+    df.attrs["number_inferences"] = number_inferences(syntax)
     return df, text, stride, rows
 
 
