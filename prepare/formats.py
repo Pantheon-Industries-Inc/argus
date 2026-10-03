@@ -88,6 +88,15 @@ the camera is), task_label, and the task text when there is one, instruction or 
 they came (the model is shown them as claims to check); real_times names times.npz when frames carry real capture
 times. sources.json gives per view the video file (packed), the episode's offset in it in seconds (base_s), its
 exact frame count (n_frames) and, for a camera paired to the anchor camera by time, its kmap file.
+
+No drop. When part of an upload is imperfect (a signal with a bad value or a gap, a table shorter than the video, a
+camera that does not decode, a sensor placed on the video by an assumed common start), the usable rest is kept and the
+problem is recorded on the episode, never used as a reason to drop it. context.json's reader_issues is that record, a
+list of {"kind": a short snake_case tag (signal_not_finite, signal_partial_span, signal_gap, table_short,
+camera_not_decodable, ...), "what": one plain sentence a reviewer reads on the board, and when they apply "camera",
+"signal", "t0_s" and "t1_s" (seconds of the episode)}. add_issue appends one entry and never overwrites the others;
+the board shows them as the episode's data issues. What could not be used at all is still listed with its reason
+(context["source"] unused_*), and an episode with nothing to label is listed in the report with why.
 """
 from __future__ import annotations
 
@@ -133,6 +142,27 @@ def hidden(p: Path, root: Path) -> bool:
 
 def files_under(root: Path) -> list[Path]:
     return sorted(p for p in Path(root).rglob("*") if p.is_file() and not hidden(p, Path(root)))
+
+
+# ---------------------------------------------------------------- data issues
+
+def add_issue(ctx: dict, kind: str, what: str, camera: str | None = None, signal: str | None = None,
+              t0_s: float | None = None, t1_s: float | None = None) -> dict:
+    """One entry appended to ctx["reader_issues"] (the module docstring's No drop): kind, a short snake_case tag; what,
+    one plain sentence for the board; the camera or signal it is about and its time span in seconds of the episode
+    when known. An entry already there is not added twice, so a reader that writes an episode's context twice
+    (finish_episode after video_views_episode) records each problem once."""
+    entry = {"kind": str(kind), "what": str(what)}
+    for k, v in (("camera", camera), ("signal", signal)):
+        if v is not None:
+            entry[k] = str(v)
+    for k, v in (("t0_s", t0_s), ("t1_s", t1_s)):
+        if v is not None and np.isfinite(v):
+            entry[k] = round(float(v), 3)
+    issues = ctx.setdefault("reader_issues", [])
+    if entry not in issues:
+        issues.append(entry)
+    return entry
 
 
 # ---------------------------------------------------------------- archives
@@ -963,6 +993,7 @@ class Signals(dict):
         self.meta: dict[str, dict] = {}
         self.left_out: list[tuple[str, str]] = []
         self.clocks: dict[str, np.ndarray] = {}      # per-frame clocks the recording keeps (write_signals)
+        self.issues: list[dict] = []                 # problems with what was kept, as add_issue's entries
 
     def add(self, name: str, a: np.ndarray, shape=None, names=None, source: str | None = None) -> None:
         self[name] = a
@@ -983,6 +1014,7 @@ def merge_signals(into: Signals, more: Signals) -> Signals:
         into.meta[k] = (getattr(more, "meta", {}) or {}).get(k) or {}
     into.left_out += list(getattr(more, "left_out", []) or [])
     into.clocks.update(getattr(more, "clocks", {}) or {})
+    into.issues += list(getattr(more, "issues", []) or [])
     return into
 
 
@@ -1147,7 +1179,8 @@ def _nested(x):
 def write_signals(ep: Path, ctx: dict, signals: dict | None) -> None:
     """signals.npz beside the state (keys s0, s1, ...) and ctx["signals"], [{name, key, dims, shape, names, source}],
     trimmed to the episode's n_state_frames; nothing when there are none. What a reader read but did not keep
-    (Signals.left_out) is written to ctx["source"]["unused_signals"], so the report names it."""
+    (Signals.left_out) is written to ctx["source"]["unused_signals"], so the report names it, and the problems with
+    what it kept (Signals.issues) to ctx["reader_issues"] (add_issue)."""
     n = int(ctx.get("n_state_frames") or 0)
     meta = getattr(signals, "meta", {}) or {}
     left = list(getattr(signals, "left_out", []) or [])
@@ -1159,6 +1192,8 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None) -> None:
             left.append((k, f"{len(v)} samples, fewer than the episode's {n} frames"))
     if left:
         ctx.setdefault("source", {})["unused_signals"] = [f"{k} ({why})" for k, why in left]
+    for i in getattr(signals, "issues", []) or []:
+        add_issue(ctx, **i)
     clocks = getattr(signals, "clocks", None) or {}
     if len(clocks) >= 2 and n:
         # each clock's offset from the first, its median and spread in milliseconds (checks/sensors.py reads them)
@@ -1839,24 +1874,38 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
     state = action = state_names = None
     descs, signals = {}, {}
-    if item.get("state"):
-        from label import episode as me
-        anchor = me.order_views(files)[0]
-        mcap_files = [p for p in item["state"] if Path(p).suffix.lower() == ".mcap"]
-        h5_files = [Path(p) for p in item["state"] if Path(p).suffix.lower() in H5_EXT]
+    from label import episode as me
+    anchor = me.order_views(files)[0]
+    shared = [Path(p) for p in item.get("state_shared") or []]
+    if shared and real[anchor] is None:
+        # a sensor file of a folder of several episodes whose name gives no take: only capture times could place it
+        signals = Signals()
+        signals.left_out += [(p.name, "several episodes share its folder, its name gives none of their takes, and the "
+                                      "videos carry no capture times to tell which it recorded") for p in shared]
+        shared = []
+    sensor_files = [Path(p) for p in item.get("state") or []] + shared
+    if sensor_files:
+        mcap_files = [p for p in sensor_files if p.suffix.lower() == ".mcap"]
+        h5_files = [p for p in sensor_files if p.suffix.lower() in H5_EXT]
+        extra["source"]["sensors"] = [p.name for p in sensor_files]
         if real[anchor] is None:
-            extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place the "
-                                   "recorded " + ("arm state" if rig == "teleop_arms" else "sensor data") + " against.")
+            if rig == "teleop_arms" and (mcap_files or h5_files):
+                extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place "
+                                       "the recorded arm state against; its channels are kept as signals.")
+            if not hasattr(signals, "meta"):
+                signals = Signals(signals)
+            merge_signals(signals, sensors_from_start(sensor_files, seconds(prs[anchor]), extra))
         elif rig != "teleop_arms" or not mcap_files:
             # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP
             # files record, on the videos' clock (mcap_signals); an MCAP arm channel is read as the state on an arm rig
             # only, and an HDF5 array named as the state below (h5_state)
-            signals = mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals()
-            extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
+            signals = merge_signals(signals if hasattr(signals, "meta") else Signals(signals),
+                                    mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals())
         else:
             streams = mcap_joint_streams(mcap_files, real[anchor])
             state, action, note = joint_state(streams, real[anchor])
-            signals = mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action))
+            signals = merge_signals(signals if hasattr(signals, "meta") else Signals(signals),
+                                    mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action)))
             if note:
                 extra["state_note"] = note
             elif state is not None:
@@ -1884,8 +1933,6 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 signals = Signals(signals)
             merge_signals(signals, more)
     if item.get("series"):
-        from label import episode as me
-        anchor = me.order_views(files)[0]
         more = table_signals(item["series"], real.get(anchor), prs[anchor], extra)
         if not hasattr(signals, "meta"):
             signals = Signals(signals)
@@ -4843,18 +4890,80 @@ def item_folder(it: dict) -> Path:
     return Path(it["files"][0]).parent if it.get("files") else Path(it["file"]).parent
 
 
+def item_take(it: dict) -> str:
+    """The take an episode's file name gives (name_parts): cam_high_ep3 gives ep3, run2 gives run2."""
+    return name_parts(Path(it["files"][0] if it.get("files") else it["file"]).stem)["take"]
+
+
 def assign_sensors(items: list[dict], sensors: list[Path]) -> None:
-    """Each episode's sensor files (MCAP or HDF5 with no camera, detect) as it["state"]: the sensor files of its folder
-    when the folder holds that one episode."""
+    """Each episode's sensor files (MCAP or HDF5 with no camera, detect), as table_signals pairs a table: it["state"]
+    holds the sensor files of its folder when the folder holds that one episode, and in a folder of several episodes
+    the files whose name gives its take (glove_run2.h5 goes with run2.mp4). A file of such a folder whose name gives
+    no episode's take is it["state_shared"] of every episode there: its own clock places it on the one it recorded,
+    and without capture times on the videos it cannot be placed and is listed with the reason (convert_video)."""
     per_folder: dict[Path, list[dict]] = {}
     for it in items:
         per_folder.setdefault(item_folder(it), []).append(it)
     for it in items:
         it.setdefault("state", [])
+        it.setdefault("state_shared", [])
     for p in sensors:
         eps = per_folder.get(p.parent) or []
         if len(eps) == 1:
             eps[0]["state"].append(p)
+            continue
+        take = name_parts(p.stem)["take"]
+        mine = [it for it in eps if take and item_take(it) == take]
+        for it in mine:
+            it["state"].append(p)
+        if not mine:
+            for it in eps:
+                it["state_shared"].append(p)
+
+
+def sensor_start(p: Path) -> float | None:
+    """The first time a sensor file records, in seconds on its own clock: an MCAP's first message's log time, an HDF5
+    file's earliest clock reading (h5_streams); None when it has none."""
+    try:
+        if Path(p).suffix.lower() == ".mcap":
+            from mcap.reader import make_reader
+            with open(p, "rb") as fh:
+                s = make_reader(fh).get_summary()
+            if s is not None and s.statistics and s.statistics.message_count:
+                return s.statistics.message_start_time / 1e9
+            first = next((m.log_time for _, _, m in _mcap_stream(Path(p))), None)
+            return first / 1e9 if first is not None else None
+        import h5py
+        with h5py.File(p, "r") as f:
+            clocks = [t for t in h5_streams(f, "")["clock"].values() if len(t)]
+        return min(float(np.nanmin(t)) for t in clocks) if clocks else None
+    except Exception:
+        return None
+
+
+ASSUMED_START = ("{} was placed on the video from both starts, since the videos carry no capture times on its "
+                 "clock, so its alignment assumes a common start")
+
+
+def sensors_from_start(paths: list[Path], t_video: np.ndarray, extra: dict) -> Signals:
+    """The signals of sensor files beside videos that carry no capture times (frame_times), each file placed from
+    both starts as table_signals places a table: its own first reading at the video's first frame (t_video, the
+    anchor camera's seconds from its first frame). Each file so placed is a data issue (signal_alignment_assumed), and
+    its arm channels stay signals, never the recorded state: a state is read only on capture times."""
+    out = Signals()
+    t_video = np.asarray(t_video, dtype=np.float64)
+    for p in paths:
+        p = Path(p)
+        start = sensor_start(p)
+        if start is None:
+            out.left_out.append((p.name, "no time in it to place it on the video by"))
+            continue
+        q = start + t_video
+        got = mcap_signals([p], q) if p.suffix.lower() == ".mcap" else h5_file_signals([p], q, len(q))
+        merge_signals(out, got)
+        if got:
+            add_issue(extra, "signal_alignment_assumed", ASSUMED_START.format(p.name))
+    return out
 
 
 TABLE_EXT = {".csv", ".tsv", ".jsonl"}

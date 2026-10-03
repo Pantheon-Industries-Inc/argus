@@ -1791,3 +1791,55 @@ def test_a_mixed_upload_reads_every_format_it_holds():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _a_mixed_upload_reads_every_format_it_holds(Path(t))
+
+
+def _glove_h5(path: Path, n: int, t0: float = 0.0) -> None:
+    import h5py
+    import numpy as np
+    with h5py.File(path, "w") as h:
+        h["pressure"] = np.random.default_rng(1).random((n, 4, 4))
+        h["time"] = t0 + np.arange(n) / 30
+
+
+def _sensor_files_beside_videos_are_read_without_capture_times_and_by_take(tmp_path):
+    """Sensor files beside videos had been read only when the folder held one episode and the videos carried capture
+    times. Without capture times they are placed from both starts, as a table is, with a data issue saying the
+    alignment assumes a common start (the arm state is never read that way, its channels stay signals); in a folder of
+    several episodes a sensor file goes with the episode its name gives the take of, and one whose name gives none
+    is listed with the reason."""
+    import numpy as np
+    root = tmp_path / "upload"
+    one = root / "one"
+    one.mkdir(parents=True)
+    _clip(one / "top.mp4", 30)
+    _glove_h5(one / "glove.h5", 30, t0=1_790_000_000.0)
+    _json_mcap(one / "imu.mcap", {"/imu": [(k / 60, {"accel": [0.1 * k, 0.0, 9.8]}) for k in range(60)]},
+               1_790_000_000.0)
+    two = root / "two"
+    two.mkdir()
+    _clip(two / "run1.mp4", 30)
+    _clip(two / "run2.mp4", 30)
+    _glove_h5(two / "glove_run2.h5", 30)
+    _glove_h5(two / "mat.h5", 30)
+    det, items = f.plan(root)
+    by = {it["name"]: it for it in items}
+    assert [p.name for p in by["two/run2"]["state"]] == ["glove_run2.h5"] and not by["two/run1"]["state"]
+    assert [p.name for p in by["two/run1"]["state_shared"]] == ["mat.h5"]
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "one/top")
+    names = [s["name"] for s in ctx.get("signals") or []]
+    assert any("pressure" in nm for nm in names) and any("/imu" in nm for nm in names), names
+    issues = _issues(ctx, "signal_alignment_assumed")
+    assert len(issues) == 2 and all("common start" in i["what"] for i in issues), ctx.get("reader_issues")
+    run2 = _episode_ctx(tmp_path / "eps", rep, "two/run2")
+    assert any("pressure" in s["name"] for s in run2["signals"]), run2.get("signals")
+    run1 = _episode_ctx(tmp_path / "eps", rep, "two/run1")
+    assert any(u.startswith("mat.h5") for u in run1["source"]["unused_signals"]), run1["source"]
+    assert np.load(tmp_path / "eps" / run2["episode_id"] / "signals.npz")["s0"].shape[0] == 30
+
+
+def test_sensor_files_beside_videos_are_read_without_capture_times_and_by_take():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _sensor_files_beside_videos_are_read_without_capture_times_and_by_take(Path(t))
