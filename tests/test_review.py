@@ -265,7 +265,8 @@ def test_a_camera_that_does_not_decode_is_taken_out_and_the_episode_kept(tmp_pat
     fams = serve._families(d)["families"]
     assert "camera-undecodable" in fams and "d:Already" in fams        # a kind no family names is a data issue too
     clips.note_camera_problems(rep, eps)
-    assert rep["notes"] == ["episode_1: the main camera video could not be decoded, so this episode is shown and "
+    assert rep["notes"] == ["episode_1: an entry another step wrote is kept",
+                            "episode_1: the main camera video could not be decoded, so this episode is shown and "
                             "labelled without it."]
     assert rep["episodes"][0]["cameras"] == {"left": "left"}
     req = me.build_request(ep)

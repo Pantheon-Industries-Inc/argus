@@ -1,0 +1,230 @@
+"""An episode keeps every camera that works: what board clips and labelling do when a camera is short, damaged or
+does not decode at all, and what an episode whose main camera is taken out is timed on afterwards."""
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from board import clips
+from label import episode as me
+from prepare import formats
+
+REPO = Path(__file__).resolve().parent.parent
+pytestmark = pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+
+
+def _video(path: Path, frames: int, size: str = "160x120") -> None:
+    subprocess.run([clips.find_ffmpeg(), "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    f"testsrc=size={size}:rate=30", "-frames:v", str(frames), "-pix_fmt", "yuv420p", str(path)],
+                   check=True)
+
+
+def _damaged(path: Path, frames: int, damage: range) -> None:
+    """A camera whose packets in damage have an impossible first NAL length: its index reads whole, and the frames
+    there (to the next keyframe) do not decode."""
+    import av
+    with av.open(str(path), "w") as c:
+        s = c.add_stream("libx264", rate=30)
+        s.width, s.height, s.pix_fmt = 160, 120, "yuv420p"
+        s.options = {"g": "10", "bf": "0"}
+        rng = np.random.default_rng(0)
+        for _ in range(frames):
+            im = rng.integers(0, 255, (120, 160, 3), dtype=np.uint8)
+            for pk in s.encode(av.VideoFrame.from_ndarray(im, format="rgb24")):
+                c.mux(pk)
+        for pk in s.encode():
+            c.mux(pk)
+    with av.open(str(path)) as c:
+        pos = [pk.pos for pk in c.demux(c.streams.video[0]) if pk.pos is not None and pk.size]
+    b = bytearray(path.read_bytes())
+    for i in damage:
+        b[pos[i]:pos[i] + 4] = b"\x7f\xff\xff\xff"
+    path.write_bytes(bytes(b))
+
+
+def _clips(eps: Path, out: Path, *extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-m", "board", "clips", "--episodes", str(eps), "--out", str(out), *extra],
+                          cwd=REPO, capture_output=True, text=True)
+
+
+def _upload(tmp_path: Path, cams: dict) -> tuple[dict, Path, Path]:
+    """A video upload of one episode, {file stem: frames}, read as an upload is."""
+    up = tmp_path / "up"
+    up.mkdir()
+    for stem, n in cams.items():
+        _video(up / f"{stem}.mp4", n)
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    return rep, eps, eps / rep["episodes"][0]["episode_id"]
+
+
+T_EXO = np.arange(60) / 30.0
+T_LEFT = 0.5 + np.arange(60) / 30.0
+T_RIGHT = np.arange(75) / 30.0
+
+
+def _recording(tmp_path: Path, size: str = "160x120") -> tuple[Path, Path]:
+    """One recording on one recorder clock: a top camera, a left wrist camera that starts 0.5 s after it with as many
+    frames, and a right wrist camera with more; two arms' joints (14 values) recorded on the top camera's frames, row k
+    holding k, and a force signal on the same frames."""
+    up = tmp_path / "up"
+    up.mkdir()
+    for stem, t in (("top", T_EXO), ("wrist_left", T_LEFT), ("wrist_right", T_RIGHT)):
+        _video(up / f"{stem}.mp4", len(t), size)
+    state = np.tile(np.arange(60, dtype=np.float32)[:, None], (1, 14))
+    eps = tmp_path / "episodes"
+    eps.mkdir()
+    ep = eps / "episode_a"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4"),
+             "right": ("wrist_right", up / "wrist_right.mp4")}
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": T_LEFT,
+                                                                             "right": T_RIGHT},
+                                state=state, action=state.copy(), signals={"force": np.arange(60.0)[:, None]})
+    return eps, ep
+
+
+def _clip_timing(p: Path) -> tuple[int, float]:
+    import av
+    with av.open(str(p)) as c:
+        s = c.streams.video[0]
+        first = min(pk.pts for pk in c.demux(s) if pk.pts is not None and pk.size)
+        return s.codec_context.width, float(first * s.time_base)
+
+
+def test_a_main_camera_taken_out_moves_the_state_and_signals_onto_the_new_main_camera(tmp_path):
+    """The top camera does not decode. The left wrist camera, 0.5 s later on the same clock, is the main camera now,
+    so every array on the top camera's frames (state, action, signals) is moved onto its frames by capture time: row
+    k is the top camera's frame nearest the left camera's frame k, and no row where no top frame is within half a
+    frame. The right camera is paired to the new main camera, the context's length and rate are the new main
+    camera's, and the episode stays on its own clock, so a rerun with --force cuts the same clips."""
+    from checks import capture_qc
+    eps, ep = _recording(tmp_path, size="1600x900")
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["capture_qc"] = capture_qc.run_episode(ep)
+    (ep / "context.json").write_text(json.dumps(ctx))
+    assert "exo" in ctx["capture_qc"]["metrics"]["cameras"]
+    (eps.parent / "up" / "top.mp4").write_bytes(b"not a video at all" * 50)
+    out = tmp_path / "clips"
+    p = _clips(eps, out)
+    assert p.returncode == 0, p.stdout + p.stderr
+    src = json.loads((ep / "sources.json").read_text())
+    ctx = json.loads((ep / "context.json").read_text())
+    assert list(src) == ["left", "right"] and "kmap" not in src["left"]
+    assert np.array_equal(np.load(ep / src["right"]["kmap"]), formats.nearest(T_RIGHT, T_LEFT))
+    st = np.load(ep / "state.npz")
+    assert st["state"].shape == (60, 14) and st["action"].shape == (60, 14)
+    assert np.array_equal(st["state"][:45, 0], np.arange(15, 60)) and np.isnan(st["state"][45:]).all()
+    assert np.array_equal(st["action"][:45, 3], np.arange(15, 60))
+    sig = np.load(ep / "signals.npz")["s0"]
+    assert np.array_equal(sig[:45, 0], np.arange(15, 60)) and np.isnan(sig[45:]).all()
+    assert ctx["n_state_frames"] == 60 and ctx["fps"] == 30.0 and ctx["duration_s"] == 2.5
+    assert "exo" not in ctx["capture_qc"]["metrics"]["cameras"]          # the checks were run again without it
+    e = me.load(ep)
+    pl = me.plan(e)
+    assert me.anchor(e) == "left" and pl["state_usable"]
+    assert me.frame_time(e, 0) == pytest.approx(0.5) and e["state"][0][0] == 15
+    req = me.build_request(ep)
+    assert req["views"] == ["left", "right"]
+    # the left clip, cut as a side camera on the first run, is cut again as the main camera, still 0.5 s in
+    left = out / "wrist_left" / f"{ep.name}.mp4"
+    assert _clip_timing(left) == (1600, pytest.approx(0.5, abs=0.02))
+    right = _clip_timing(out / "wrist_right" / f"{ep.name}.mp4")
+    assert _clips(eps, out, "--force").returncode == 0
+    assert _clip_timing(left) == (1600, pytest.approx(0.5, abs=0.02))
+    assert _clip_timing(out / "wrist_right" / f"{ep.name}.mp4") == right
+    assert clips.start_offsets(ep, src) == {"left": (pytest.approx(0.5), 0)}
+
+
+def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligned(tmp_path):
+    """With no capture times to move the state onto the new main camera, the state and signals are not used and the
+    episode says why."""
+    eps, ep = _recording(tmp_path)
+    src = json.loads((ep / "sources.json").read_text())
+    for s in src.values():
+        s.pop("kmap", None)
+    (ep / "sources.json").write_text(json.dumps(src))
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx.pop("real_times", None)
+    (ep / "context.json").write_text(json.dumps(ctx))
+    (ep / "times.npz").unlink()
+    (eps.parent / "up" / "top.mp4").write_bytes(b"not a video at all" * 50)
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["state_unaligned"]
+    kinds = [x["kind"] for x in ctx["reader_issues"]]
+    assert kinds == ["camera_not_decodable", "state_unaligned"]
+    assert "main camera" in ctx["reader_issues"][1]["what"]
+    e = me.load(ep)
+    assert not me.plan(e)["state_usable"] and not e["signals"]
+    req = me.build_request(ep)
+    assert "state" not in req["blocks"] and "signals" not in req["blocks"]
+
+
+def test_every_camera_a_frame_short_is_labelled_to_the_last_frame_any_camera_has(tmp_path):
+    """The real upload: every camera's file ends a frame before the episode does. The episode is labelled, and its
+    last instant is the last frame the cameras have."""
+    rep, eps, ep = _upload(tmp_path, {"top": 30, "wrist_left": 30, "wrist_right": 30})
+    for s in json.loads((ep / "sources.json").read_text()).values():
+        _video(Path(s["packed"]), 29)
+    req = me.build_request(ep)
+    texts = [c["text"] for c in req["content"] if c.get("type") == "text"]
+    last = [t for t in texts if t.startswith("=== detail view, last frame")]
+    assert len(last) == 1 and "t=0.93s | cameras top, left, right" in last[0], last
+    assert req["timesteps"][-1] == pytest.approx(0.933, abs=0.001)
+
+
+def test_two_cameras_short_are_named_together(tmp_path):
+    rep, eps, ep = _upload(tmp_path, {"top": 30, "wrist_left": 30, "wrist_right": 30})
+    src = json.loads((ep / "sources.json").read_text())
+    for v in ("left", "right"):
+        _video(Path(src[v]["packed"]), 29)
+    prompt = me.build_request(ep)["prompt"]
+    assert "Left's video ends before the episode does, so it has no frame at 0.97 s; right's video ends" in prompt
+    assert "Their cells there are empty, and they are left out of a detail view there." in prompt
+
+
+def test_a_camera_damaged_partway_leaves_only_its_own_cells_empty(tmp_path):
+    """A camera whose file does not decode for a stretch in the middle: the episode is labelled, that camera's cells
+    are empty where it does not decode, the prompt says so, and the stretch is recorded as a reader issue."""
+    up = tmp_path / "up"
+    up.mkdir()
+    _damaged(up / "top.mp4", 300, range(0))
+    _damaged(up / "wrist_left.mp4", 300, range(130, 150))
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    ep = eps / rep["episodes"][0]["episode_id"]
+    req = me.build_request(ep)
+    assert req["views"] == ["exo", "left"]
+    assert "left's video could not be decoded at" in req["prompt"].lower()
+    issues = [x for x in json.loads((ep / "context.json").read_text()).get("reader_issues") or []
+              if x["kind"] == "camera_decode_failed"]
+    assert len(issues) == 1 and issues[0]["camera"] == "left"
+    assert 4.0 <= issues[0]["t0_s"] <= issues[0]["t1_s"] <= 5.5
+    me.build_request(ep)                                   # built again, the issue is not recorded twice
+    assert len([x for x in json.loads((ep / "context.json").read_text())["reader_issues"]
+                if x["kind"] == "camera_decode_failed"]) == 1
+
+
+def test_the_job_notes_list_every_reader_issue_once(tmp_path):
+    ep = tmp_path / "episode_1"
+    ep.mkdir()
+    (ep / "context.json").write_text(json.dumps({"reader_issues": [
+        {"kind": "signal_gap", "signal": "force", "what": "The force signal stops for 2 s."},
+        {"kind": "camera_not_decodable", "camera": "right", "what": "The right wrist camera video could not be "
+                                                                     "decoded, so this episode is shown and labelled "
+                                                                     "without it."},
+        {"kind": "no_sentence", "what": ""}]}))
+    rep = {"episodes": [{"name": "take 1", "episode_id": "episode_1", "cameras": {"exo": "top", "right": "r"}}],
+           "notes": []}
+    clips.note_camera_problems(rep, tmp_path)
+    clips.note_camera_problems(rep, tmp_path)
+    assert rep["notes"] == ["take 1: the force signal stops for 2 s.",
+                            "take 1: the right wrist camera video could not be decoded, so this episode is shown and "
+                            "labelled without it."]
+    assert rep["episodes"][0]["cameras"] == {"exo": "top"}

@@ -19,7 +19,9 @@ decodes the source files directly and never re-encodes. Idempotent and parallel.
 
 An episode with any camera that decodes is always kept, labelled and put on the board from the cameras that work. A
 camera whose clip comes out with fewer frames than the episode keeps its clip as cut, and the board plays it; a
-camera whose video does not decode is taken out of the episode (drop_cameras). Either is recorded in the episode's
+camera whose video does not decode is taken out of the episode (drop_cameras; when it was the main camera, the
+episode's state, signals and depth are moved onto the camera that is main now, reanchor, and the checks that read
+its cameras run again, recheck). Either is recorded in the episode's
 context.json, as an entry of reader_issues (record_cameras), which board/build.py copies into the episode's
 dataset_checks, where it raises a data issue (board/families.py), and which note_camera_problems puts into an
 upload's report notes. Only an episode none of whose cameras can be cut is listed in CLIPS/failed.json and left out
@@ -142,13 +144,16 @@ def source_size(ffmpeg: str, path: str) -> tuple:
 
 def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     """{camera: (offset s, skip)} on the episode's clock, from times.npz, the real capture times some recordings keep
-    per camera (ABC-130k, RealOmni, MCAP uploads). The main camera's first frame is 0. A camera whose recording
-    started later plays its first frame offset s after it (RealOmni's right gripper camera starts up to 2 s after the
-    left one); one that started earlier drops its skip frames from before the main camera's first frame (more than
-    half a frame before it), so it never plays early, and its next frame is at most half a frame from 0."""
+    per camera (ABC-130k, RealOmni, MCAP uploads). The episode's clock starts at the main camera's first frame, or at
+    context.json clock_zero_s once the main camera it was measured from was taken out of the episode (drop_cameras),
+    so every run cuts the same clips whichever camera is main now. A camera whose recording started later plays its
+    first frame offset s after it (RealOmni's right gripper camera starts up to 2 s after the left one); one that
+    started earlier drops its skip frames from before the clock's start (more than half a frame before it), so it
+    never plays early, and its next frame is at most half a frame from 0."""
     tp = ep_dir / "times.npz"
     cams = cams_of(sources)
-    if not tp.exists() or len(cams) < 2:
+    zero = _context(ep_dir).get("clock_zero_s")
+    if not tp.exists() or not cams or (len(cams) < 2 and zero is None):
         return {}
     import numpy as np
     with np.load(tp) as z:
@@ -156,10 +161,10 @@ def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
     main = main_cam(sources)
     if main not in t:
         return {}
-    ref, half = float(t[main][0]), 0.5 / fps
+    ref, half = (float(zero) if zero is not None else float(t[main][0])), 0.5 / fps
     out = {}
     for c, tc in t.items():
-        if c == main:
+        if c == main and zero is None:
             continue
         skip = int(np.searchsorted(tc, ref - half, side="left"))
         if skip >= len(tc):
@@ -477,18 +482,22 @@ def failed_reason(cams: dict, ep_dir: Path) -> str:
     return f"the {camera_label(view, _context(ep_dir))} video could not be decoded, so this episode was left out"
 
 
-def drop_cameras(ep_dir: Path, views) -> None:
+def drop_cameras(ep_dir: Path, views) -> tuple[str | None, list[dict]]:
     """Take cameras out of a prepared episode, out of sources.json, context.json's cameras and depth.json, so labelling
-    and the board never decode them. When the main camera goes, the camera first in row order is the main one, and
-    every camera the reader paired to the old one by capture time (its kmap) is paired to the new one, from times.npz,
-    as the reader pairs them (prepare/formats.py nearest)."""
-    import numpy as np
+    and the board never decode them. Returns (the new main camera when the main camera went, else None; the reader
+    issues the drop leaves).
 
-    from prepare.formats import nearest
+    The main camera is the one the episode's arrays are recorded on: the state and action rows (state.npz), the
+    signals (signals.npz) and the depth frame for each frame (its depth kmap) are one per main camera frame. When it
+    goes, the camera first in row order is the main one, and everything is moved onto its frames (reanchor) when
+    times.npz has both cameras' capture times. Without them nothing can place the arrays on the new main camera's
+    frames, so the state and signals are marked unaligned (context.json state_unaligned, which label/episode.py never
+    treats as aligned) and a reader issue says why."""
     views = set(views)
     src = json.loads((ep_dir / "sources.json").read_text())
     ctx = _context(ep_dir)
     old_main = cams_of(src)[0] if src else None
+    old_name = camera_label(old_main, ctx) if old_main else ""
     for v in views:
         src.pop(v, None)
         (ctx.get("cameras") or {}).pop(v, None)
@@ -497,40 +506,134 @@ def drop_cameras(ep_dir: Path, views) -> None:
         depth = json.loads(dj.read_text())
         if views & set(depth):
             dj.write_text(json.dumps({v: e for v, e in depth.items() if v not in views}, indent=1))
-    if src and old_main in views and any(s.get("kmap") for s in src.values()):
+    main, issues = None, []
+    if src and old_main in views:
         main = cams_of(src)[0]
+        import numpy as np
         tp = ep_dir / (ctx.get("real_times") or "times.npz")
         t = {}
         if tp.exists():
             with np.load(tp) as z:
-                t = {v: np.asarray(z[v], dtype=np.float64) for v in src if v in z.files}
-        for v, s in src.items():
-            s.pop("kmap", None)
-            if v == main or v not in t or main not in t:
-                continue
-            km = nearest(t[v], t[main])
-            if not (len(t[v]) == len(t[main]) and np.array_equal(km, np.arange(len(km)))):
-                np.save(ep_dir / f"kmap_{v}.npy", km)
-                s["kmap"] = f"kmap_{v}.npy"
+                t = {k: np.asarray(z[k], dtype=np.float64) for k in z.files}
+        if old_main in t and main in t and len(t[old_main]) and len(t[main]):
+            reanchor(ep_dir, ctx, src, t, old_main, main)
+        else:
+            for s in src.values():
+                s.pop("kmap", None)
+            if ctx.get("state_kind") not in (None, "none") or ctx.get("signals"):
+                ctx["state_unaligned"] = (f"recorded on the frames of the {old_name}, which could not be decoded, with "
+                                          "no capture times to place it on the other cameras' frames")
+                issues.append({"kind": "state_unaligned", "what": f"The recorded state and signals are on the frames "
+                               f"of the {old_name}, which could not be decoded, and the episode has no capture times "
+                               f"to place them on the {camera_label(main, ctx)}'s frames, so they are not used."})
     (ep_dir / "sources.json").write_text(json.dumps(src, indent=1))
+    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+    return main, issues
+
+
+def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str) -> None:
+    """Move an episode from the frames of its main camera old onto those of new, by capture time (t, times.npz): each
+    array with one row per old frame (state.npz, signals.npz) gets one row per new frame, the old frame nearest it in
+    time, and no value (NaN) where no old frame is within half a frame; every other camera and each depth stream is
+    paired to new by nearest time, as the reader pairs them (prepare/formats.py nearest); and context.json's frame
+    count, rate and length are new's. The episode keeps its clock: clock_zero_s is the old main camera's first frame,
+    which start_offsets times every clip from."""
+    import numpy as np
+
+    from prepare.formats import nearest
+    t_old, t_new = t[old], t[new]
+    step_old = float(np.median(np.diff(t_old))) if len(t_old) > 1 else 1.0 / float(ctx.get("fps") or 30.0)
+    idx = nearest(t_old, t_new)
+    near = np.abs(t_old[idx] - t_new) <= step_old / 2 + 1e-6
+
+    def move(a):
+        a = np.asarray(a)
+        if a.ndim == 0 or len(a) != len(t_old):
+            return a
+        out = a[idx].astype(a.dtype if np.issubdtype(a.dtype, np.floating) else np.float64)
+        out[~near] = np.nan
+        return out
+    for name in ("state.npz", "signals.npz"):
+        p = ep_dir / name
+        if p.exists():
+            with np.load(p) as z:
+                arrs = {k: move(z[k]) for k in z.files}
+            np.savez(p, **arrs)
+    for v, s in src.items():
+        s.pop("kmap", None)
+        if v == new or v not in t:
+            continue
+        km = nearest(t[v], t_new)
+        if not (len(t[v]) == len(t_new) and np.array_equal(km, np.arange(len(km)))):
+            np.save(ep_dir / f"kmap_{v}.npy", km)
+            s["kmap"] = f"kmap_{v}.npy"
+    dj = ep_dir / "depth.json"
+    if dj.exists():
+        dt = {}
+        if (ep_dir / "depth_times.npz").exists():
+            with np.load(ep_dir / "depth_times.npz") as z:
+                dt = {k: np.asarray(z[k], dtype=np.float64) for k in z.files}
+        for v, e in json.loads(dj.read_text()).items():
+            td = dt.get(f"depth_{v}", t.get(f"depth_{v}"))
+            kp = ep_dir / e["kmap"]
+            if td is not None and len(td):
+                np.save(kp, nearest(td, t_new))
+            elif kp.exists():
+                np.save(kp, np.load(kp)[idx])            # no depth times: the depth frame of the nearest old frame
+    ctx.setdefault("clock_zero_s", float(t_old[0]))
+    step = float(np.median(np.diff(t_new))) if len(t_new) > 1 else step_old
+    ctx.update(n_state_frames=int(len(t_new)), fps=round(1.0 / step, 3),
+               duration_s=round(float(t_new[-1]) - float(ctx["clock_zero_s"]) + step, 3))
+
+
+def recheck(ep_dir: Path) -> None:
+    """Run again, for an episode a camera was taken out of, the deterministic checks whose results in its context.json
+    read its cameras or the frames its state is on (checks/stream_pairing.py, checks/capture_qc.py, checks/sensors.py),
+    so no result names a camera the episode no longer has. A check that cannot run now is taken out of the context,
+    never left describing the episode as it was."""
+    from checks import capture_qc
+    from checks import sensors
+    from checks import stream_pairing
+    ctx = _context(ep_dir)
+    runs = {key: fn for key, fn, _ in stream_pairing.MODES.values()}
+    runs.update(capture_qc=capture_qc.run_episode, sensor_checks=sensors.run_episode)
+    for key, fn in runs.items():
+        if key not in ctx:
+            continue
+        old = ctx[key]
+        try:
+            new = fn(ep_dir)
+        except Exception as e:
+            sys.stderr.write(f"recheck {ep_dir.name} {key}: {type(e).__name__}: {str(e)[:160]}\n")
+            ctx.pop(key, None)
+            continue
+        if key == "sensor_checks" and isinstance(new, dict) and isinstance(old, dict):
+            # dead values are judged across a whole folder (checks/sensors.py main), not by run_episode: kept as found
+            dead = [n for n in old.get("notes") or [] if isinstance(n, dict) and n.get("check") == "dead_values"]
+            if dead:
+                new["notes"] = (new.get("notes") or []) + dead
+                for c in new.get("checks") or []:
+                    if c.get("check") == "dead_values":
+                        c["status"] = "fired"
+        ctx[key] = new
     (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
 
 
 # the kinds of reader issue (context.json reader_issues) board clips records
 CLIP_FRAME_COUNT = "clip_frame_count"            # a camera's clip has fewer frames than the episode
 CAMERA_NOT_DECODABLE = "camera_not_decodable"    # a camera's video does not decode; the episode goes on without it
-CLIP_KINDS = (CLIP_FRAME_COUNT, CAMERA_NOT_DECODABLE)
 
 
-def record_cameras(ep_dir: Path, short: dict, broken: dict, cut) -> None:
+def record_cameras(ep_dir: Path, short: dict, broken: dict, cut) -> str | None:
     """Record what board clips found wrong with an episode's cameras in its context.json, in reader_issues, the list
     of problems an episode was kept and flagged with ({"kind", "what", "camera"}: a short tag, one plain sentence a
     reviewer reads on the board, the camera's view). short is {camera: extract_one's counts} for the clips that came
     out with fewer frames than the episode (kind clip_frame_count), broken {camera: why} for the cameras whose video
-    does not decode (kind camera_not_decodable), which are taken out of the episode (drop_cameras), and cut the
-    cameras cut on this run. Other entries are never touched; a camera cut again on a later run is recorded as it came
-    out then, and one not cut again keeps its entry. board/build.py copies the list into the episode's dataset_checks,
-    where each entry raises a data issue (board/families.py), so every board build shows it."""
+    does not decode (kind camera_not_decodable), which are taken out of the episode (drop_cameras, whose own issues
+    are added), and cut the cameras cut on this run. Other entries are never touched; a camera cut again on a later
+    run is recorded as it came out then, and one not cut again keeps its entry. board/build.py copies the list into
+    the episode's dataset_checks, where each entry raises a data issue (board/families.py), so every board build shows
+    it. Returns the new main camera when the main camera was taken out, else None."""
     ctx = _context(ep_dir)
     redo = set(cut) | set(broken)
     issues = [x for x in ctx.get("reader_issues") or []
@@ -546,16 +649,21 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut) -> None:
         issues.append({"kind": CLIP_FRAME_COUNT, "camera": v, "what": f"The {camera_label(v, ctx)} video has "
                                                                       f"{n['clip_frames']} frames where the episode "
                                                                       f"has {n['episode_frames']}."})
+    main = None
     if broken:
-        drop_cameras(ep_dir, broken)
+        main, more = drop_cameras(ep_dir, broken)
+        kinds = {x.get("kind") for x in issues if isinstance(x, dict)}
+        issues += [x for x in more if x["kind"] not in kinds]
         ctx = _context(ep_dir)
-    if issues == (ctx.get("reader_issues") or []):
-        return
-    if issues:
-        ctx["reader_issues"] = issues
-    else:
-        ctx.pop("reader_issues", None)
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+    if issues != (ctx.get("reader_issues") or []):
+        if issues:
+            ctx["reader_issues"] = issues
+        else:
+            ctx.pop("reader_issues", None)
+        (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+    if broken:
+        recheck(ep_dir)
+    return main
 
 
 def drop_from_report(rep: dict, left_out: list[dict]) -> None:
@@ -569,14 +677,15 @@ def drop_from_report(rep: dict, left_out: list[dict]) -> None:
 
 
 def note_camera_problems(rep: dict, eps: Path) -> None:
-    """Put each kept episode's camera problems (record_cameras) into the reader's report: one note per problem in its
-    notes, "<episode>: the <camera> video ...", which the job page lists, and a camera taken out of the episode out of
-    the episode's cameras. Only the clip step's own kinds, since the reader reports its own."""
+    """Put each kept episode's problems into the reader's report: one note per entry of its context.json reader_issues
+    (whichever step recorded it, the reader or board clips; context.json is the one store), "<episode>: <its
+    sentence>", which the job page lists, each once, and a camera taken out of the episode out of the episode's
+    cameras."""
     for e in rep["episodes"]:
         for x in _context(eps / e["episode_id"]).get("reader_issues") or []:
-            if not (isinstance(x, dict) and x.get("kind") in CLIP_KINDS and x.get("what")):
+            if not (isinstance(x, dict) and isinstance(x.get("what"), str) and x["what"].strip()):
                 continue
-            t = str(x["what"])
+            t = x["what"].strip()
             note = f"{e['name']}: {t[:1].lower()}{t[1:]}"
             if note not in rep["notes"]:
                 rep["notes"].append(note)
@@ -639,7 +748,18 @@ def main() -> int:
         if cams and cams <= set(broken.get(d.name, {})):
             failed[d.name] = broken[d.name]
             continue
-        record_cameras(d, short.get(d.name, {}), broken.get(d.name, {}), cut.get(d.name, set()))
+        main = record_cameras(d, short.get(d.name, {}), broken.get(d.name, {}), cut.get(d.name, set()))
+        if main:
+            # the camera that is main now was cut as a side camera: cut again at the main camera's size, on the
+            # episode's own clock (start_offsets), and its frames recorded as they come out
+            for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in episode_jobs(d, args.out, True, args.name_prefix):
+                if cam != main:
+                    continue
+                try:
+                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, True, off, skip)
+                    record_cameras(d, {cam: counts} if counts else {}, {}, {cam})
+                except Exception as e:
+                    sys.stderr.write(f"clip FAIL {o} as the main camera: {str(e)[:160]}\n")
     # the depth clips, after the colour clips they are timed against; one that cannot be cut is reported and left
     # out (the page then offers no depth for that camera), never costing the episode
     djobs = [j for d in ep_dirs if d.name not in failed for j in depth_jobs(d, args.out, args.force, args.name_prefix)]
