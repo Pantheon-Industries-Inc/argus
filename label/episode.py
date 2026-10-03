@@ -55,7 +55,7 @@ from label import frames as mf
 from label import lens
 from label import prompts
 from label import state as ms
-from prepare.signal_alignment import ALIGNED_CAMERA
+from prepare.signal_alignment import ALIGNED_CAMERA, ALIGNED_ASSUMED, placement_text
 from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, STATE_WHY, UNREADABLE
 
 FPS = 30
@@ -1229,7 +1229,16 @@ CONTACT_ASSUMED = (" (these times are placed from both starts, as the touch sign
 
 def contact_placement(c: dict) -> str:
     """Name the particular assumption a contact inherits, preserving existing common start wording."""
-    return "placed on the assumed camera clock" if c.get("aligned_by") == ALIGNED_CAMERA else "placed from both starts"
+    return placement_text(c.get("aligned_by"))
+
+
+def _contact_timing(c: dict) -> str:
+    by = c.get("aligned_by")
+    if by == ALIGNED_ASSUMED:
+        return CONTACT_ASSUMED
+    if by == ALIGNED_CAMERA:
+        return " (these times use the assumed camera presentation clock, not measured capture times)"
+    return f" (these times are {placement_text(by)}, not measured contact times)" if by else ""
 
 
 def _contact_line(c: dict) -> str:
@@ -1237,8 +1246,7 @@ def _contact_line(c: dict) -> str:
     when = (f"{c['start_s']:.2f} s" + (" (already touching at the first frame)" if c.get("from_start") else "")
             + f" to {c['end_s']:.2f} s" + (" (still touching at the last frame)" if c.get("to_end") else "")
             + f", strongest at {c['peak_s']:.2f} s"
-            + (" (these times use the assumed camera presentation clock, not measured capture times)"
-               if c.get("aligned_by") == ALIGNED_CAMERA else CONTACT_ASSUMED if c.get("aligned_by") else ""))
+            + _contact_timing(c))
     where = []
     for nm, r in (c.get("regions") or {}).items():
         if nm == "active_signals":

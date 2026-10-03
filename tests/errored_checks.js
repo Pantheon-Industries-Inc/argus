@@ -28,7 +28,7 @@ const stubs = 'let CHECKS_OPEN = false; const famName = s => s;'
 // the page's own asSentence, the helper every reason is worded through
 const s0 = src.indexOf('const asSentence = '), s1 = src.indexOf('const sentences = ');
 if (s0 < 0 || s1 < s0) { console.log('no asSentence in the page'); process.exit(1); }
-const T = new Function(stubs + src.slice(s0, s1) + piece('esc') + piece('checksSection') + 'return {checksSection};')();
+const T = new Function(stubs + src.slice(s0, s1) + piece('esc') + piece('placementText') + piece('checksSection') + 'return {checksSection};')();
 
 let bad = 0;
 const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };
@@ -86,4 +86,12 @@ check(hs.slice(hs.indexOf('Signal never changes')).includes('>not applicable<')
   && hs.includes('no signal could be checked'), 'a sensor check run on no signal says why, as not applicable');
 check(!hs.includes('Depth pictures mostly'), 'a sensor check with nothing to run on is left out');
 check(/0 of 1 noted/.test(hs), 'the sensor checks\' line counts only the checks that ran');
+for (const [field, words] of [['placed_within_stamp_intervals', 'stamp interval'],
+  ['placed_row_per_frame', 'row per frame'], ['placed_with_unspecified_alignment', 'unspecified alignment assumption']]) {
+  const html = T.checksSection({_rig: 'teleop_arms', dataset_checks: {contact_checks: {
+    contacts: 1, checked: 1, notes: [], [field]: ['qualified']}}});
+  check(html.includes(words) && html.includes('qualified') && html.includes('not applicable'),
+    field + ' retains its qualification in the checks card');
+  check(!html.includes('both starts'), field + ' does not invent a common start');
+}
 process.exit(bad ? 1 : 0);

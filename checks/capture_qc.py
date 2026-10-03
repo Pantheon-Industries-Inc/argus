@@ -64,6 +64,7 @@ from checks.vendor import public_dataset_adapter_qc as up
 from label import episode as me
 from label import frames as mf
 from label.atomic import write_atomic
+from prepare.state_notes import STATE_WHY, NOT_RECORDED, LAYOUT
 
 SOURCE = up.SOURCE
 VERSION = 2          # the format version of context["capture_qc"]
@@ -505,6 +506,24 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return out
 
 
+def _no_state_reason(ep: dict) -> str:
+    """Canonical state can be withheld while its recorded channels remain qualified signals."""
+    from label.signals import names_joints_or_state, names_scalar_observed_state
+
+    ctx = ep["context"]
+    why = ctx.get("state_why")
+    note = (ctx.get("state_note") or "").strip()
+    recorded = any((names_joints_or_state(name) if np.ndim(a) > 1 and np.shape(a)[1] > 1
+                    else names_scalar_observed_state(name)) for name, a in (ep.get("signals") or {}).items())
+    if recorded and why in (None, NOT_RECORDED):
+        why = LAYOUT
+    if why == NOT_RECORDED or not (why or note or recorded):
+        return "the recording has no robot state, only video"
+    reason = STATE_WHY.get(why)
+    return ("no usable robot state was read for this check" + (f": {reason}" if reason else "")
+            + (f". The reader's note on it: {note}" if note else ""))
+
+
 def assess(feats: dict) -> dict:
     """Run every upstream check on one episode (feats from extract()). Returns {"checks": {check: {status, why,
     events, metrics}}, "cameras", "actors", "episode"}, status one of fired, clear, not_assessed. Each block names
@@ -532,8 +551,9 @@ def assess(feats: dict) -> dict:
     states, valid = cs["states"], cs["valid"]
     has_state = kind != "none"
     has_pose = kind == "ee_pose"
+    no_state_why = _no_state_reason(ep)
     no_pose_why = ("the recording has joint angles but no gripper pose, which this check needs"
-                   if kind == "joints" else "the recording has no robot state, only video")
+                   if kind == "joints" else no_state_why)
 
     # constant exclusions: these upstream reasons test upstream's own processing or a layer we do not build
     R["invalid_action_shape"] = _na("we compute the actions from the recorded state, so their shape is always valid")
@@ -550,7 +570,7 @@ def assess(feats: dict) -> dict:
     with _guard(R, STRUCTURE_CHECKS):
         if not has_state:
             for c in STRUCTURE_CHECKS:
-                R[c] = _na("the recording has no robot state, only video")
+                R[c] = _na(no_state_why)
         else:
             shape = np.shape(ep["state"])
             width = shape[-1] if len(shape) == 2 else list(shape)
@@ -611,7 +631,7 @@ def assess(feats: dict) -> dict:
     with _guard(R, GRIPPER_CHECKS):
         if not usable_state:
             for c in GRIPPER_CHECKS:
-                R[c] = _na("the recording has no robot state, only video" if not has_state else unusable_why)
+                R[c] = _na(no_state_why if not has_state else unusable_why)
         elif not normalized:
             for c in GRIPPER_CHECKS:
                 R[c] = _na(unit_why)
@@ -677,8 +697,11 @@ def assess(feats: dict) -> dict:
             bad = np.flatnonzero(dts <= 0)
             dup_ev.append(_ev(f"{len(bad)} frame times on the {camera or 'state'} clock repeat or go backwards",
                               round(float(values_s[bad[0] + 1]), 2), camera))
-        gm = up._gap_metrics(dts)
-        idx = [i for i in gm["gap_interval_indices"] if dts[i] >= gap_min]
+        # Repeated stamps describe clock resolution, not zero-length capture intervals. Keep their events above
+        # and compare positive intervals using the same upstream gap rule, retaining the original frame indices.
+        positive = np.flatnonzero(dts > 0)
+        gm = up._gap_metrics(dts[positive])
+        idx = [int(positive[i]) for i in gm["gap_interval_indices"] if dts[positive[i]] >= gap_min]
         for i in idx[:5]:
             floor = f" and at least {gap_min * 1000:.0f} ms" if gap_min > 0 else ""
             gap_ev.append(_ev(f"{dts[i] * 1000:.0f} ms between frames where the clock's median is "
@@ -708,8 +731,10 @@ def assess(feats: dict) -> dict:
                 if ct is None:
                     continue
                 d2, g2, m2 = clock(ct[:cams[v]["n"]], f"native_camera_{v}", v)
-                nev.extend(d2 + g2)
+                dup.extend(d2)
+                nev.extend(g2)
                 nm[v] = m2
+            R["state_time_non_monotonic_or_duplicate"] = _fired(dup, metrics=m)
             R["native_camera_timestamp_gap"] = (_fired(nev, metrics=nm) if nm
                                                 else _na("no camera has a clock of its own besides the main one"))
         else:

@@ -20,7 +20,7 @@ const piece = (name) => {
   }
   return src.slice(a, i + 1) + '\n';
 };
-const T = new Function('const snNum = v => String(v);' + piece('esc') + piece('snWhat') + piece('snErrorsHtml')
+const T = new Function('const snNum = v => String(v);' + piece('esc') + piece('placementText') + piece('snWhat') + piece('snErrorsHtml')
   + piece('snStillHtml') + 'return {snWhat, snErrorsHtml, snStillHtml};')();
 
 let bad = 0;

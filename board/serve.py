@@ -3313,6 +3313,13 @@ function checksSection(d) {
     if (cameraPlaced.length) all.push({name: 'Contacts on an assumed camera clock', st: 'na', text:
       `Contacts ${cameraPlaced.join(', ')} use assumed camera presentation times. They are not used to judge `
       + "the touch sensor's clock or whether the frames show touch."});
+    for (const [field, by] of [['placed_within_stamp_intervals', 'coarse clock'],
+      ['placed_row_per_frame', 'row per frame'], ['placed_with_unspecified_alignment', 'unknown']]) {
+      const ids = Array.isArray(tc[field]) ? tc[field] : [];
+      if (ids.length) all.push({name: 'Contacts ' + placementText(by), st: 'na', text:
+        `Contacts ${ids.join(', ')} are ${placementText(by)}. Their times are not used to judge `
+        + "the touch sensor's clock or whether the frames show touch."});
+    }
     if (all.length) touch = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Contact checks</span>`
       + `<span class="ck-sum">${tc.checked || 0} of ${tc.contacts || 0} contacts checked, ${all.filter(r => r.st
         === 'note').length} of ${all.filter(r => r.st !== 'na').length} noted</span></div>${all.map(row).join('')}</div>`;
@@ -4200,13 +4207,22 @@ function snWhat(s) {
   // (prepare/formats.py mark_assumed), or one row per frame, because a table has as many rows as the video has
   // frames (prepare/formats.py ALIGNED_ROWS), as the prompt says it
   if (s.aligned_by === 'row per frame') w += ', placed one row per frame, as it has as many rows as the video has frames';
-  else if (s.aligned_by === 'coarse clock' && s.camera_aligned_by === 'assumed camera clock')
+  else if (s.aligned_by === 'coarse clock')
     w += ', tied readings placed within each stamp interval as an assumption';
   else if (s.aligned_by === 'assumed camera clock') w += ', shown on an assumed camera presentation clock';
-  else if (s.aligned_by) w += ', placed from both starts, as no clock is shared';
+  else if (s.aligned_by === 'assumed start') w += ', placed from both starts, as no clock is shared';
+  else if (s.aligned_by) w += ', ' + placementText(s.aligned_by);
   if (s.camera_aligned_by === 'assumed camera clock' && s.aligned_by !== 'assumed camera clock')
     w += ', shown on an assumed camera presentation clock';
   return w;
+}
+// Mirror prepare.signal_alignment. Unknown placements remain qualified without claiming separate clocks.
+function placementText(by) {
+  const text = {'row per frame': 'placed one row per frame as an assumption',
+    'assumed start': 'placed from both starts',
+    'coarse clock': 'placed within each stamp interval as an assumption',
+    'assumed camera clock': 'placed on the assumed camera clock'};
+  return by ? (Object.hasOwn(text, by) ? text[by] : 'placed using an unspecified alignment assumption') : '';
 }
 // the signals the board could not draw (board/sensors.py "errors"), each named with the reason, under the lanes it drew
 function snErrorsHtml(errors) {
@@ -4536,7 +4552,7 @@ function touchLaneHtml(T, lanePct, chev) {
   const seg = (c, i) => {
     const a = lanePct(c.start_s), b = lanePct(c.end_s), cls = tcCls(st[i]);
     const tip = `${c.id ? c.id + ', ' : ''}${fmtT(c.start_s)} to ${fmtT(c.end_s)}${c.aligned_by === 'assumed camera clock'
-      ? ' on an assumed camera presentation clock' : c.aligned_by ? ' placed from both starts'
+      ? ' on an assumed camera presentation clock' : c.aligned_by ? ' ' + placementText(c.aligned_by)
       : ''}: ${TC_WORD[st[i]].toLowerCase()}${c.seen && c.seen.object ? ', ' + String(c.seen.object) : ''}`;
     return `<div class="tc-seg ${cls}" data-c="${i}" title="${esc(tip)}" style="left:${a}%;width:max(3px, ${b - a}%)">`
       + `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=""></path></svg></div>`
@@ -4613,7 +4629,8 @@ function tcCardHtml(c, i, st) {
     : !c.seen ? `<div class="tc-plain">The model was shown this contact and gave no answer for it.</div>` : '';
   // a contact timed by a signal placed from both starts (label/contacts.py mark_aligned) has the placement's times
   const placed = c.aligned_by ? `<div class="tc-plain">${c.aligned_by === 'assumed camera clock'
-    ? TC_CAMERA_PLACED : TC_PLACED}</div>` : '';
+    ? TC_CAMERA_PLACED : c.aligned_by === 'assumed start' ? TC_PLACED
+    : esc('Its times are ' + placementText(c.aligned_by) + '. They are not measured contact times.')}</div>` : '';
   return `<div class="tc-card info-block" data-c="${i}">
       <div class="tc-card-head"><span class="tc-card-title">${tcHandKey(c.hand) ? tcHandName(tcHandKey(c.hand)) + ', '
         + 'contact' : 'Contact'} ${esc(c.id || String(i + 1))}</span><span class="tc-pill ${tcCls(st)}">${TC_WORD[st]}</span></div>

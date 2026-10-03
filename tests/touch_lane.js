@@ -15,7 +15,8 @@ if (a < 0 || b < a) { console.log('no touch block in the page'); process.exit(1)
 // esc and fmtT, the page's own (each a line or two, up to the end of fmtT's line)
 const e0 = src.indexOf('\nfunction esc('), e1 = src.indexOf('\n', src.indexOf('\nfunction fmtT(') + 1);
 if (e0 < 0 || e1 < e0) { console.log('no esc or fmtT in the page'); process.exit(1); }
-const T = new Function(src.slice(e0, e1) + src.slice(a, b) + 'return {tcState, tcData, touchLaneHtml, '
+const p0 = src.indexOf('\nfunction placementText('), p1 = src.indexOf('\n}\n', p0) + 3;
+const T = new Function(src.slice(e0, e1) + src.slice(p0, p1) + src.slice(a, b) + 'return {tcState, tcData, touchLaneHtml, '
   + 'tcCardsHtml, tcCardHtml, tcRegions, tcCurve};')();
 
 let bad = 0;
@@ -103,4 +104,12 @@ const path_ = T.tcCurve(contact('c1', 'right', 1, 3), Dsn, 4);
 check(path_ === 'M0.0 100L0.0 75.0L50.0 50.0L100.0 75.0L100.0 100Z', 'the curve: ' + path_);
 check(T.tcCurve({...contact('c1', 'right', 1, 3), signals: ['missing']}, Dsn, 4) === '', 'no curve without its signals');
 
+for (const [by, words] of [['coarse clock', 'stamp interval'], ['row per frame', 'row per frame'],
+  ['future alignment', 'unspecified alignment assumption'], ['toString', 'unspecified alignment assumption']]) {
+  const c = contact('qualified', 'right', 1, 2, {aligned_by: by});
+  const card = T.tcCardHtml(c, 0, 'unanswered');
+  const lane = T.touchLaneHtml(T.tcData({contacts: [c]}), lanePct, chev);
+  check(card.includes(words) && lane.includes(words), by + ' names its placement in card and lane');
+  check(!card.includes('both starts') && !lane.includes('both starts'), by + ' does not invent a common start');
+}
 process.exit(bad ? 1 : 0);
