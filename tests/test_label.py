@@ -513,13 +513,13 @@ def _packed_episode(tmp_path):
     ep = tmp_path / "episode_000007"
     ep.mkdir()
     T = 120
-    json.dump({v: {"packed": str(packs[v]), "base_s": 50 / 30, "n_frames": T} for v in packs},
-              open(ep / "sources.json", "w"))
+    (ep / "sources.json").write_text(json.dumps({v: {"packed": str(packs[v]), "base_s": 50 / 30, "n_frames": T}
+                                                for v in packs}))
     np.savez(ep / "state.npz", state=_state(T), action=_state(T))
-    json.dump({"dataset": "allenai/MolmoAct2-BimanualYAM-Dataset", "robot_type": "bi_yam_follower", "fps": 30,
-               "task_label": ["Spell out Ai2"], "instruction": "Spell AI2.", "n_state_frames": T,
-               "profile": "teleop_arms", "state_kind": "joints", "cameras": {"exo": {"width": 64, "height": 36}}},
-              open(ep / "context.json", "w"))
+    (ep / "context.json").write_text(json.dumps({
+        "dataset": "allenai/MolmoAct2-BimanualYAM-Dataset", "robot_type": "bi_yam_follower", "fps": 30,
+        "task_label": ["Spell out Ai2"], "instruction": "Spell AI2.", "n_state_frames": T, "profile": "teleop_arms",
+        "state_kind": "joints", "cameras": {"exo": {"width": 64, "height": 36}}}))
     return ep, T
 
 
