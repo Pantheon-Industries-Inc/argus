@@ -2976,6 +2976,22 @@ def test_a_folder_json_is_named_for_the_longest_name_it_holds_and_a_date_names_n
         _a_folder_json_is_named_for_the_longest_name_it_holds_and_a_date_names_no_take(Path(t))
 
 
+def _a_hidden_file_names_nothing(tmp_path):
+    """A hidden file the upload carries (._session.mp4, a resource fork a Mac writes beside a file) added its name to
+    the folder's, so session_meta.json read as named for it and gave no task. Hidden files are never read for names,
+    as the upload page never sees them."""
+    ctx, _ = _upload_notes(tmp_path, ["ep1/top.mp4", "ep1/wrist.mp4"],
+                           {"ep1/._session.mp4": b"\x00\x05\x16\x07",
+                            "ep1/session_meta.json": {"prompt": "pick the cup"}})
+    assert ctx["ep1"]["instruction"] == "pick the cup", ctx
+
+
+def test_a_hidden_file_names_nothing():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_hidden_file_names_nothing(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a

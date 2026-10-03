@@ -986,14 +986,15 @@ NOTE_JSON_MAX_BYTES = 1_000_000
 
 
 def files_by_name(d: Path) -> dict[str, list[Path]]:
-    """The files of folder d by their casefolded names. A note is looked up by its name in any case (Instruction.TXT is
-    instruction.txt), one rule whether the filesystem tells case apart or not; on one that does not, a lookup by the
-    lower case name had found the file while the listing of what was read held the other spelling."""
+    """The files of folder d by their lower case names, hidden files left out (hidden_part) as every reader leaves
+    them. A note is looked up by its name in any case (Instruction.TXT is instruction.txt), one rule whether the
+    filesystem tells case apart or not; on one that does not, a lookup by the lower case name had found the file while
+    the listing of what was read held the other spelling. Lower case, not casefold, as read.js can only lowercase."""
     out: dict[str, list[Path]] = {}
     if Path(d).is_dir():
         for p in sorted(Path(d).iterdir()):
-            if p.is_file():
-                out.setdefault(p.name.casefold(), []).append(p)
+            if p.is_file() and not hidden_part(p.name):
+                out.setdefault(p.name.lower(), []).append(p)
     return out
 
 
@@ -1006,7 +1007,7 @@ def note_files(item: dict) -> list[Path]:
     """The note files of a video item that exist, in the order their notes are given: in the episode's note folder
     (note_folder) the notes named for the episode, then NOTE_NAMES, then each video's own .json, .txt, .jsonl and .md
     (top.txt beside top.mp4, or ep1.txt beside each camera folder's ep1.mp4); a video with no note folder (one of
-    several episodes of its folder) has only its own. Names are compared casefolded (files_by_name)."""
+    several episodes of its folder) has only its own. Names are compared in lower case (files_by_name)."""
     fs = [Path(f) for f in item["files"]]
     cands = [(f.parent, f.stem + x) for f in fs for x in NOTE_OWN_EXT]
     nf = item.get("note_folder")
@@ -1018,7 +1019,7 @@ def note_files(item: dict) -> list[Path]:
     for d, n in cands:
         if d not in listing:
             listing[d] = files_by_name(d)
-        for p in listing[d].get(n.casefold(), []):
+        for p in listing[d].get(n.lower(), []):
             if p.resolve() not in seen:
                 seen.add(p.resolve())
                 out.append(p)
@@ -1050,9 +1051,9 @@ def episode_notes(item: dict) -> dict:
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
     one_name = len({f.stem for f in fs}) == 1
-    own_names = {f"{nf['name']}{x}".casefold() for x in (".json", ".txt")} if nf and nf["name"] else set()
-    named = {p for p in files if p.parent == nf["dir"] and p.name.casefold() in own_names} if nf else set()
-    owned = {p for p in files for f in fs if p.parent == f.parent and p.stem.casefold() == f.stem.casefold()} - named
+    own_names = {f"{nf['name']}{x}".lower() for x in (".json", ".txt")} if nf and nf["name"] else set()
+    named = {p for p in files if p.parent == nf["dir"] and p.name.lower() in own_names} if nf else set()
+    owned = {p for p in files for f in fs if p.parent == f.parent and p.stem.lower() == f.stem.lower()} - named
     cams = owned if len(fs) > 1 else set()
     keys = [p.relative_to(nf["dir"]).as_posix() if nf and nf["dir"] in p.parents else p.name for p in files]
     notes = [(k, read_annotation(p)) for k, p in zip(keys, files)]
@@ -1064,7 +1065,7 @@ def episode_notes(item: dict) -> dict:
             else None
 
     def own_note(f: Path, ext: str) -> Path | None:
-        return next((p for p in files if p.parent == f.parent and p.name.casefold() == (f.stem + ext).casefold()), None)
+        return next((p for p in files if p.parent == f.parent and p.name.lower() == (f.stem + ext).lower()), None)
 
     sources = []                          # (rank, position, task), the ranks of task_rank
     for i, p in enumerate(files):
@@ -1104,7 +1105,7 @@ def episode_notes(item: dict) -> dict:
 
 
 def name_words(name: str) -> tuple[str, ...]:
-    """The words a file's name is compared by (named_for): its words (tokens) casefolded, with a number apart from the
+    """The words a file's name is compared by (named_for): its lower case words (tokens), with a number apart from the
     letters beside it, so EP2, ep_2, Ep-2 and ep2 are all ep 2 while ep10 stays ep 10. read.js nameWords."""
     return tuple(w for t in tokens(name) for w in re.findall(r"[a-z]+|[0-9]+", t))
 
@@ -1136,7 +1137,7 @@ def task_rank(p: Path, named_for_episode: bool) -> int | None:
         return 0
     if named_for_episode:
         return 2
-    return 1 if p.name.casefold() in TASK_NOTE_NAMES else None
+    return 1 if p.name.lower() in TASK_NOTE_NAMES else None
 
 
 # A state's value names settle what the 7 values of one actor are, when the dataset gives them. A seventh value named
@@ -2325,7 +2326,7 @@ def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path
                 add("/".join(parts[:i]), sub, e["name"])
     for d in out:
         for p in (root / d).iterdir():
-            if p.is_file() and p.suffix.lower() in VIDEO_EXT:
+            if p.is_file() and not hidden_part(p.name) and p.suffix.lower() in VIDEO_EXT:
                 add(d, p.stem, owner.get(p.relative_to(root).as_posix()))
     return {d: {w: frozenset(who) for w, who in ns.items()} for d, ns in out.items()}
 
