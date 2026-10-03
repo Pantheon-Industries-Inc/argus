@@ -824,10 +824,11 @@ def _stereo_twin(a: str, b: str) -> bool:
 
 # a camera whose name says it is not a colour picture: depth, confidence, disparity, a mask or segmentation, thermal,
 # infrared, or a visualisation. Matched by whole words (not_rgb): the pattern it replaced matched inside words, so
-# segway_cam, a conference room and visual_top were taken for masks and confidence maps. A RealSense infra1 stream is
-# a grey picture of the scene the model has been shown as a camera, and stays one
+# segway_cam, a conference room and visual_top were taken for masks and confidence maps. A RealSense infra1 or infra2
+# stream is its infrared camera (a numbered word, so infra1 matches infra): it goes to the board as a camera the model
+# is not shown, as every other infrared camera does, and had been shown to the model as a colour camera
 NOT_RGB_WORDS = ("depth", "conf", "confidence", "disparity", "mask", "seg", "segmentation", "thermal", "infrared",
-                 "ir", "vis")
+                 "infra", "ir", "vis")
 
 
 def not_rgb(name: str) -> bool:
@@ -929,6 +930,20 @@ def depth_image(msg) -> tuple[np.ndarray, float | None] | None:
     if a.ndim != 2:
         return None
     return a.astype(np.uint16), (0.001 if a.dtype == np.uint16 else None)
+
+
+def depth_picture(got, topic: str, ranges: dict):
+    """A depth image (depth_image's (array, metres per unit), or None) drawn as a colour picture of near and far, as
+    the board draws depth (label/depth.py picture): metric depth on its one fixed scale, depth of unknown unit on the
+    range of the topic's first frame (kept in ranges, so a colour means the same reading in every frame). None when
+    there is no depth image."""
+    if got is None:
+        return None
+    from label import depth as dp
+    a, scale = got
+    if not scale and topic not in ranges:
+        ranges[topic] = dp.scale_range([a])
+    return dp.picture(a, {"scale_m": scale, "kind": "depth"}, ranges.get(topic))
 
 
 def depth_partner(depth_topic: str, cams: dict) -> str | None:
@@ -5414,25 +5429,31 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     # whose only cameras are not colour is labelled from them, as a data issue
     video_topics = [t for t in cam_topics if not DEPTH_TOPIC.search(t)]
     raw_topics = {t for t, s in chan_topics if RAW_IMAGE_SCHEMA.search(s)}
+    # a recording whose only cameras are depth is labelled from its depth drawn as a picture (depth_picture), as a
+    # data issue (camera_not_colour), as one whose only camera is a mask is; it had failed whole
+    video_topics = video_topics or [t for t in cam_topics if DEPTH_TOPIC.search(t)]
     if not video_topics:
-        raise ValueError("the file has no colour camera channel"
+        raise ValueError("the file has no camera channel"
                          + (f" (its channels: {', '.join(item['topics'][:12])})" if item["topics"] else ""))
     all_topics = [t for t, _ in chan_topics]
     vmap, unused = pick_cameras(video_topics, rig, all_topics)
     not_colour = [t for t in vmap.values() if not_rgb(t)]
     text_topics = sorted({t for t in all_topics if TEXT_TOPIC.search(t) and t not in video_topics})
     # depth image channels, each with the camera whose topic it shares the most of (depth_partner), one per camera
-    depth_of = {}
+    depth_of, lone = {}, []
     for t, sname in sorted(chan_topics):
-        if CAMERA_SCHEMA.search(sname) and DEPTH_TOPIC.search(t) and t not in vmap.values():
+        if CAMERA_SCHEMA.search(sname) and DEPTH_TOPIC.search(t) and t not in vmap.values() and t not in unused:
             v = depth_partner(t, vmap)
             if v is not None and v not in depth_of.values():
                 depth_of[t] = v
             else:
                 unused.append(f"{t} (depth with no camera of its own)")
-    # the cameras the model is not shown are written too, for the board (unshown_cameras)
-    unshown_of = {t: f"unshown{i + 1}.mp4" for i, t in enumerate(x for x in unused if x in cam_topics
-                                                                  and not DEPTH_TOPIC.search(x))}
+                lone.append(t)
+    # the cameras the model is not shown are written too, for the board (unshown_cameras), a depth channel with no
+    # camera of its own drawn as a picture of near and far; it had been listed and never shown
+    unshown_of = {t: f"unshown{i + 1}.mp4" for i, t in enumerate([x for x in unused if x in cam_topics] + lone)}
+    pictured = {t for t in set(vmap.values()) | set(unshown_of) if DEPTH_TOPIC.search(t)}
+    depth_rng: dict = {}
     want = set(vmap.values()) | set(text_topics) | set(depth_of) | set(unshown_of)
     view_of_topic = {t: v for v, t in vmap.items()}
     dwriters: dict[str, DepthWriter] = {}
@@ -5474,9 +5495,12 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     if w is None:
                         out_mp4 = ep / (f"{view_of_topic[ch.topic]}.mp4" if ch.topic in view_of_topic
                                         else unshown_of[ch.topic])
-                        w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics
+                        w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics | pictured
                                                             else str(_field(dec, "format") or "").lower())
-                    if ch.topic in raw_topics:
+                    if ch.topic in pictured:
+                        w.add_image((int(msg.log_time) - t0) / 1e9, depth_picture(depth_image(dec), ch.topic,
+                                                                                    depth_rng))
+                    elif ch.topic in raw_topics:
                         # a frame raw_image cannot read is a frame not decoded (FrameWriter bad), never skipped silently
                         w.add_image((int(msg.log_time) - t0) / 1e9, raw_image(dec))
                     else:
@@ -5518,16 +5542,19 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         w = writers.get(t)
         if counts.get(t) and w is not None:
             fps_u = measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)
-            un.append(unshown_entry(t, ep / name, unshown_why(t, rig, list(vmap.values())), n_frames=counts[t],
-                                    start_s=w.pts[0] / TIME_BASE_DEN, fps=fps_u))
+            why = ("depth with no colour camera of its own, drawn as a picture of near and far" if t in pictured else
+                   unshown_why(t, rig, list(vmap.values())))
+            un.append(unshown_entry(t, ep / name, why, n_frames=counts[t], start_s=w.pts[0] / TIME_BASE_DEN,
+                                    fps=fps_u))
         else:
             unshown_not_decodable(extra, t)
     if any(un):
         extra["unshown_cameras"] = [u for u in un if u]
     for t in (t for t in vmap.values() if t in not_colour):
         add_issue(extra, "camera_not_colour", f"{t} is the recording's only camera and its name says it is not a "
-                                              "colour camera (infrared, thermal or a mask); the episode is labelled "
-                                              "from it.", camera=t)
+                                              "colour camera (depth, infrared, thermal or a mask); the episode is "
+                                              "labelled from it" + (", its depth drawn as a picture of near and far."
+                                                                    if t in pictured else "."), camera=t)
     # the frames of each camera that could not be decoded, on the clock of the episode's first frame
     from label import episode as me
     zero = writers[files[me.order_views(files)[0]][0]].pts[0] / TIME_BASE_DEN
