@@ -136,16 +136,21 @@ def goal_times(d: dict) -> list:
     for t in out:
         try:
             value = float(t)
-            # Keep saved labels, but do not clamp negative times or request keys the browser cannot name exactly.
-            if math.isfinite(value) and value >= 0 and ms_key(value) <= MAX_EXACT_FRAME_MS:
-                res.append(value)
+            # Keep saved labels and existing keys. Admit only keys the browser computes identically.
+            if math.isfinite(value) and value >= 0:
+                scaled = value * 1000
+                key = ms_key(value)
+                whole = math.floor(scaled)
+                browser_key = whole + int(scaled - whole >= 0.5)
+                if key <= MAX_EXACT_FRAME_MS and key == browser_key:
+                    res.append(value)
         except (TypeError, ValueError, OverflowError):
             pass
     return res
 
 
 def ms_key(t: float) -> int:
-    return math.floor(t * 1000 + 0.5)   # JavaScript's Math.round(t * 1000)
+    return math.floor(t * 1000 + 0.5)   # Preserve existing keys; goal_times checks browser agreement.
 
 
 def src_sig(p: Path) -> str:
