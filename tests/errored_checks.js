@@ -1,7 +1,7 @@
 // The episode page's checks section (board/serve.py checksSection) for a check that stopped with an error: our own
 // checks (an "error" in the stored result), the capture checks (status "errored") and the sensor checks (status
 // "errored") each show the check as an error with the reason, among the checks shown before the full list, never as
-// clear and never as not applicable.
+// clear and never as not applicable. Contacts placed from both starts are named as not judged for timing.
 //
 //   node tests/errored_checks.js [PAGE_SOURCE]     (default board/serve.py)
 //
@@ -54,4 +54,13 @@ check(theirs.includes('Gripper sensor bug') && theirs.includes('>error<') && the
 check(/1 error/.test(theirs), 'the capture checks\' summary counts the errors');
 check(rowOf('Sensor clocks apart').includes('ck-row err') && h.includes('KeyError: offset_ms'),
   'a sensor check that crashed is an error with its reason');
+
+// contacts placed from both starts are named as not judged for timing, never as a check that ran clear or fired
+const hp = T.checksSection({_rig: 'teleop_arms', dataset_checks: {contact_checks: {contacts: 2, checked: 2, notes: [],
+  placed_from_both_starts: ['c1', 'c2']}}});
+const placedRow = hp.slice(hp.indexOf('Contacts placed from both starts'));
+check(placedRow.includes('>not applicable<') && hp.includes('Contacts c1 and c2 are placed from both starts')
+  && hp.includes('not recorded times'), 'contacts placed from both starts are named as not judged for timing');
+check(/0 of 3 noted/.test(hp), 'the contact checks\' line counts only the checks that ran: '
+  + (hp.match(/\d+ of \d+ noted/) || [''])[0]);
 process.exit(bad ? 1 : 0);

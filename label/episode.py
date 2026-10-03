@@ -621,11 +621,14 @@ def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
     t_end = frame_time(ep, len(ep["state"]) - 1)
     strips = []
     begin, end = contact_strips(c)
+    # a contact placed from both starts says so on its picture: its begin and end are the placement's, not recorded
+    by = ", placed from both starts" if c.get("aligned_by") else ""
     if begin:
-        strips.append(("touch begins by the recording",
+        strips.append((f"touch begins by the recording{by}",
                        [min(max(c["start_s"] + o, 0.0), t_end) for o in STRIP_OFFSETS_S]))
     if end:
-        strips.append(("touch ends by the recording", [min(max(c["end_s"] + o, 0.0), t_end) for o in END_OFFSETS_S]))
+        strips.append((f"touch ends by the recording{by}",
+                       [min(max(c["end_s"] + o, 0.0), t_end) for o in END_OFFSETS_S]))
     kp = _frame_at(ep, c["peak_s"])
     ks = sorted({_frame_at(ep, t) for _, ts in strips for t in ts} | {kp})
     try:
@@ -937,11 +940,17 @@ def chosen_contacts(ep: dict, contacts: list[dict]) -> list[dict]:
     return sorted(best, key=lambda c: c["start_s"])
 
 
+# a contact timed by a signal placed from both starts (label/contacts.py mark_aligned): its times are the placement's
+CONTACT_ASSUMED = (" (these times are placed from both starts, as the touch signal shares no clock with the cameras, "
+                   "so they are not recorded times)")
+
+
 def _contact_line(c: dict) -> str:
     hand = f"{c['hand']} hand" if c.get("hand") else "hand not named by the recording"
     when = (f"{c['start_s']:.2f} s" + (" (already touching at the first frame)" if c.get("from_start") else "")
             + f" to {c['end_s']:.2f} s" + (" (still touching at the last frame)" if c.get("to_end") else "")
-            + f", strongest at {c['peak_s']:.2f} s")
+            + f", strongest at {c['peak_s']:.2f} s"
+            + (CONTACT_ASSUMED if c.get("aligned_by") else ""))
     where = []
     for nm, r in (c.get("regions") or {}).items():
         if nm == "active_signals":
@@ -1011,7 +1020,9 @@ def contacts_block(ep: dict, pl: dict) -> str:
     return ("\nCONTACTS: the recording's touch signals say a hand is touching something in these spans. They are the "
             "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
             + (("  The signals record more contacts that are not shown: "
-                + "; ".join(f"{c['id']} {c['start_s']:.2f}-{c['end_s']:.2f} s" for c in rest) + ".\n") if rest else "")
+                + "; ".join(f"{c['id']} {c['start_s']:.2f}-{c['end_s']:.2f} s"
+                            + (" placed from both starts" if c.get("aligned_by") else "") for c in rest)
+                + ".\n") if rest else "")
             + "After the detail views, each contact above has one picture: " + "".join(p + ", " for p in picture)
             + ("and " if picture else "") + "the moment it is strongest"
             + (" with that camera's depth" if depth else "")

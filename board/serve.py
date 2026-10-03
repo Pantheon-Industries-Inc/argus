@@ -3219,9 +3219,16 @@ function checksSection(d) {
       .concat(Object.keys(ev).filter(k => !['clock_offset', 'touch_not_seen', 'hand_mismatch', 'contact_missing']
         .includes(k)).map(k => ({name: k.replace(/_/g, ' '), st: 'note', text: ev[k].map(asWritten).join(' ')})))
       .filter(r => r.st !== 'na');
+    // contacts placed from both starts are not judged for timing (checks/contacts.py placed_from_both_starts)
+    const placed = Array.isArray(tc.placed_from_both_starts) ? tc.placed_from_both_starts : [];
+    if (placed.length) all.push({name: 'Contacts placed from both starts', st: 'na', text: `${placed.length === 1
+      ? 'Contact ' + placed[0] + ' is' : 'Contacts ' + placed.slice(0, -1).join(', ') + ' and ' + placed[placed.length - 1]
+      + ' are'} placed from both starts, as the touch signal shares no clock with the cameras, so ${placed.length === 1
+      ? 'its times are' : 'their times are'} not recorded times and are not used to judge the touch sensor's clock or `
+      + 'whether the frames show touch.'});
     if (all.length) touch = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Contact checks</span>`
       + `<span class="ck-sum">${tc.checked || 0} of ${tc.contacts || 0} contacts checked, ${all.filter(r => r.st
-        === 'note').length} of ${all.length} noted</span></div>${all.map(row).join('')}</div>`;
+        === 'note').length} of ${all.filter(r => r.st !== 'na').length} noted</span></div>${all.map(row).join('')}</div>`;
   }
   if (!ours && !sensors && !touch && !theirs) return '';
   return `<h3 class="section">Checks <span class="count">every check run on this episode</span></h3><div `
@@ -4362,6 +4369,8 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
 // model's answer when it was shown frames around it; d.contacts_missing the moments the model saw a hand take hold of
 // something that no contact covers. The Touch lane draws them on the timeline's scale, one bar per hand, and the
 // contact card under it says what is known about the contact under the playhead.
+const TC_PLACED = 'Its times are placed from both starts, as the touch signal shares no clock with the cameras, so '
+  + 'they are not recorded times.';
 const TC_WORD = {yes: 'The frames show touch', no: 'The frames show no touch', unclear: 'Unclear in the frames',
                  unshown: 'Not shown to the model', unanswered: 'Shown, with no answer'};
 // what the model found at a contact: yes, no and unclear as it answered, unshown when it was not shown the contact,
@@ -4401,8 +4410,8 @@ function touchLaneHtml(T, lanePct, chev) {
     .concat(missing.length ? [`${missing.length} ${missing.length === 1 ? 'grasp' : 'grasps'} with no contact`] : []);
   const seg = (c, i) => {
     const a = lanePct(c.start_s), b = lanePct(c.end_s), cls = tcCls(st[i]);
-    const tip = `${c.id ? c.id + ', ' : ''}${fmtT(c.start_s)} to ${fmtT(c.end_s)}: ${TC_WORD[st[i]].toLowerCase()}${c.seen && c.seen.object
-      ? ', ' + String(c.seen.object) : ''}`;
+    const tip = `${c.id ? c.id + ', ' : ''}${fmtT(c.start_s)} to ${fmtT(c.end_s)}${c.aligned_by ? ' placed from both starts'
+      : ''}: ${TC_WORD[st[i]].toLowerCase()}${c.seen && c.seen.object ? ', ' + String(c.seen.object) : ''}`;
     return `<div class="tc-seg ${cls}" data-c="${i}" title="${esc(tip)}" style="left:${a}%;width:max(3px, ${b - a}%)">`
       + `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=""></path></svg></div>`
       + (isFinite(c.peak_s) ? `<div class="tc-peak ${cls}" style="left:${lanePct(c.peak_s)}%"></div>` : '');
@@ -4476,11 +4485,13 @@ function tcCardHtml(c, i, st) {
   const plain = !c.shown ? `<div class="tc-plain">The model was not shown this contact, so nothing here says what the `
       + `frames show at it.</div>`
     : !c.seen ? `<div class="tc-plain">The model was shown this contact and gave no answer for it.</div>` : '';
+  // a contact timed by a signal placed from both starts (label/contacts.py mark_aligned) has the placement's times
+  const placed = c.aligned_by ? `<div class="tc-plain">${TC_PLACED}</div>` : '';
   return `<div class="tc-card info-block" data-c="${i}">
       <div class="tc-card-head"><span class="tc-card-title">${tcHandKey(c.hand) ? tcHandName(tcHandKey(c.hand)) + ', '
         + 'contact' : 'Contact'} ${esc(c.id || String(i + 1))}</span><span class="tc-pill ${tcCls(st)}">${TC_WORD[st]}</span></div>
       <div class="tc-times">${times}</div>
-      ${plain}
+      ${placed}${plain}
       <div class="kv-block tc-kv">${rows.join('')}</div>
       <div class="tc-maps"></div>
     </div>`;

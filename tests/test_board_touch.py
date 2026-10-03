@@ -121,6 +121,26 @@ def test_the_board_keeps_the_contacts_labelling_found_when_the_context_has_none(
     assert "contacts_model" not in d and "contact_views" not in d
 
 
+def test_the_board_says_a_contact_placed_from_both_starts_is_not_on_a_recorded_time(tmp_path):
+    """A glove placed from both starts (its signal's aligned_by) times contacts the board marks as placed, also when
+    the context was prepared before contacts carried it, and the contact checks never read the model seeing no touch
+    at one as the sensor's fault."""
+    ep = _episode(tmp_path / "eps")
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"][0]["aligned_by"] = "assumed start"
+    (ep / "context.json").write_text(json.dumps(ctx))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "b", "datasets": [
+        {"dataset": "mine", "run": str(_run(tmp_path / "runs", ep, ctx["contacts"])), "episodes": str(ep.parent)}]}))
+    board_build.build(board)
+    d = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert all(c["aligned_by"] == "assumed start" for c in d["contacts"]), d["contacts"]
+    cc = d["dataset_checks"]["contact_checks"]
+    assert cc["placed_from_both_starts"] == [c["id"] for c in ctx["contacts"]]
+    assert {n["check"] for n in cc["notes"]} == {"contact_missing"}, cc["notes"]
+
+
 @pytest.mark.skipif(not shutil.which("node"), reason="no node")
 def test_the_touch_lane_and_contact_card_say_what_they_must():
     """tests/touch_lane.js on the page's touch block: a bar per hand, each contact styled by what the model found, the

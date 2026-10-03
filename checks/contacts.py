@@ -16,6 +16,10 @@ hand clearly takes hold of something that no contact covers. The two sources are
   contact_missing    moments the model sees a hand take hold of or press something that no recorded contact covers (a
                      sensor that missed it, or one that was off)
 
+A contact placed from both starts (its "aligned_by", label/contacts.py mark_aligned) has times that are the placement's,
+not recorded ones, so it never counts toward clock_offset or touch_not_seen; the result names such contacts in
+placed_from_both_starts.
+
 The result is context-free numbers and sentences, written by `python -m board build` into the episode's
 dataset_checks["contact_checks"]. Like checks/sensors.py they are notes, not counted issues, until the datasets they
 fire on are checked on the frames.
@@ -49,9 +53,13 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
     seen = {c.get("id"): c for c in (labels.get("contacts") or []) if isinstance(c, dict)}
     by_id = {c["id"]: c for c in contacts}
     notes, offsets = [], []
+    # a contact placed from both starts (label/contacts.py mark_aligned) has the placement's times, so where the frames
+    # show its touch says how far off the placement is, not that the sensor's clock is, nor that the sensor fired on
+    # its own: it is left out of clock_offset and touch_not_seen and named in placed_from_both_starts
+    placed = [cid for cid, rec in by_id.items() if rec.get("aligned_by")]
     for cid, rec in by_id.items():
         m = seen.get(cid)
-        if not m:
+        if not m or cid in placed:
             continue
         st = strips.get(cid) or {}
         b = _between(st.get("begin") or [], m.get("first_touch_frame"), True)
@@ -63,6 +71,8 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
     shown = [cid for cid in by_id if cid in seen]
     frame_ms = 1000.0 / float(fps or 30.0)
     out = {"contacts": len(by_id), "checked": len(shown), "notes": []}
+    if placed:
+        out["placed_from_both_starts"] = placed
     if offsets:
         ms = np.array([o for _, _, o in offsets]) * 1000.0
         out["offset_ms"] = {"median": round(float(np.median(ms)), 1), "spread": round(float(np.std(ms)), 1),
@@ -73,10 +83,11 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
                 f"the frames show touch begin and end about {abs(float(np.median(ms))):.0f} ms {lead} the touch "
                 f"signal says (median of {len(ms)} measurements over {len({c for _, c, _ in offsets})} contacts, "
                 f"spread {float(np.std(ms)):.0f} ms), more than a camera frame of {frame_ms:.0f} ms")})
-    not_seen = [cid for cid in shown if str(seen[cid].get("touch_seen")).lower() == "no"]
+    timed = [cid for cid in shown if cid not in placed]
+    not_seen = [cid for cid in timed if str(seen[cid].get("touch_seen")).lower() == "no"]
     if not_seen:
         notes.append({"check": "touch_not_seen", "evidence": (
-            f"{len(not_seen)} of the {len(shown)} contacts checked show no touch in the frames "
+            f"{len(not_seen)} of the {len(timed)} contacts checked show no touch in the frames "
             f"({', '.join(not_seen)})")})
     pairs = [(cid, by_id[cid].get("hand"), str(seen[cid].get("hand") or "").lower()) for cid in shown]
     known = [(cid, h, m) for cid, h, m in pairs if h in ("left", "right") and m in ("left", "right")]
@@ -94,6 +105,7 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float) -> dict 
             f"{len(missing)} moment{'s' if len(missing) != 1 else ''} where a hand takes hold of or presses something "
             "with no recorded contact: " + "; ".join(
                 f"{float(x.get('t_s') or 0):.1f} s, {x.get('hand') or 'a hand'}, {x.get('object') or 'an object'}"
-                for x in missing[:6]))})
+                for x in missing[:6])
+            + ("; the contacts placed from both starts can miss a grasp by their placement alone" if placed else ""))})
     out["notes"] = notes
     return out

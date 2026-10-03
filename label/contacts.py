@@ -23,6 +23,10 @@ companion signal) is part of its signal, never a contact of its own. For each co
                 many there are; for a hand of several named signals, which of them are active
   dips_s        the times its strength fell below half of its peak and came back during the contact (a regrasp or a
                 slip shows this way; the frames say which)
+  aligned_by    "assumed start" when a signal it is timed by was placed on the footage from both starts, as it shares
+                no clock with the cameras (prepare/formats.py mark_assumed): its times are then the placement's, not
+                recorded times, and the prompt, the checks and the board say so. Absent for a contact of signals on a
+                recorded clock (mark_aligned)
 
 Strength is summed over the contact's signals as each signal's activity over its swing (the upload's, when prepare
 measured it), so signals in different units add up.
@@ -119,7 +123,20 @@ def find(signals: dict, meta: dict, t: np.ndarray, verdicts=None) -> list[dict]:
     contacts.sort(key=lambda c: (c["start_s"], str(c["hand"])))
     for i, c in enumerate(contacts):
         c["id"] = f"c{i + 1}"
-    return [{"id": c.pop("id"), **c} for c in contacts]
+    return mark_aligned([{"id": c.pop("id"), **c} for c in contacts], meta)
+
+
+def mark_aligned(contacts: list[dict], meta: dict) -> list[dict]:
+    """contacts, each timed by a signal placed from both starts (its meta's "aligned_by", prepare/formats.py
+    mark_assumed) carrying that aligned_by, so its times are never read as recorded ones. A contact found before
+    contacts carried it (a context.json prepared earlier) gets it here from its signals' meta; a contact of signals on
+    a recorded clock is returned as it was."""
+    out = []
+    for c in contacts:
+        by = next((m["aligned_by"] for nm in c.get("signals") or [] if (m := meta.get(nm) or {}).get("aligned_by")),
+                  None)
+        out.append({**c, "aligned_by": by} if by and not c.get("aligned_by") else c)
+    return out
 
 
 def _regions(touch: dict, names: set, k: int) -> dict:
@@ -146,7 +163,7 @@ def of_episode(ep: dict, verdicts=None) -> list[dict]:
     """The episode's contacts: the ones prepare wrote (context["contacts"], found with the upload's scales), else found
     now from its signals, with the caller's touch verdicts when it has them (find)."""
     if "contacts" in ep["context"]:
-        return ep["context"]["contacts"] or []
+        return mark_aligned(ep["context"]["contacts"] or [], ep.get("signal_meta") or {})
     from label import episode as me
     sig = ep.get("signals") or {}
     if not sig:

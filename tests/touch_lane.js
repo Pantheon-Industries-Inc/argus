@@ -85,7 +85,16 @@ check(c3.includes('The model was not shown this contact') && c3.includes('still 
 check(T.tcRegions({regions: {p: {cells: 5, rows: [2, 2], columns: [0, 3], of: [16, 16]}, active_signals: ['p', 'q']}})
   .join('|') === 'p: 5 of its 256 cells, row 3 and columns 1 to 4 of 16 x 16|Active at its strongest: p and q',
   'where a contact bears, rows and columns counted from 1');
-check(!/[\u2013\u2014]/.test(lane + cards + c0 + c3), 'no long dashes');
+// a contact placed from both starts says on its card and its bar that its times are not recorded times; one on a
+// recorded clock says nothing of it
+const cp = T.tcCardHtml(contact('c5', 'right', 1, 2, {aligned_by: 'assumed start'}), 4, 'unanswered');
+check(cp.includes('placed from both starts') && cp.includes('not recorded times'), 'a placed contact\'s card says so');
+check(!c0.includes('placed from both starts'), 'a recorded contact\'s card says nothing of placing');
+const pl = T.touchLaneHtml(T.tcData({contacts: [contact('c5', 'right', 1, 2, {aligned_by: 'assumed start'})]}), lanePct,
+  chev);
+check(pl.includes('2.0s placed from both starts:'), 'a placed contact\'s bar says so');
+check(!lane.includes('placed from both starts'), 'a recorded contact\'s bar says nothing of placing');
+check(!/[\u2013\u2014]/.test(lane + cards + c0 + c3 + cp + pl), 'no long dashes');
 
 // the strength curve: the contact's signals summed per sample, on one scale for the episode
 const Dsn = {t: Float64Array.from([0, 1, 2, 3, 4]), signals: [{name: 'right_pressure', str: Float32Array.from([0, 1, 2, 1, 0])},

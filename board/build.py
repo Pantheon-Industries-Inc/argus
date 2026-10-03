@@ -415,6 +415,10 @@ def add_contacts(d: dict, ctx: dict, result: dict | None = None) -> None:
             d.pop(k, None)
         return
     from checks import contacts as cc
+    from label import contacts as lc
+    # a contact timed by a signal placed from both starts says so, also one found before contacts carried it
+    recorded = lc.mark_aligned(recorded, {s["name"]: s for s in ctx.get("signals") or []
+                                          if isinstance(s, dict) and s.get("name")})
     seen = {c.get("id"): c for c in d.pop("contacts_model", None) or []}
     views = d.pop("contact_views", None) or {}
     shown = set(views.get("shown") or [])

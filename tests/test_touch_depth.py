@@ -430,6 +430,74 @@ def test_contacts_are_checked_against_the_frames():
     assert res["offset_ms"]["median"] > 100                 # touch shows about 0.22 s after the signal says it begins
 
 
+def test_contacts_placed_from_both_starts_are_never_judged_for_timing():
+    """Contacts timed by a signal placed from both starts have the placement's times: where the frames show touch
+    says how far off the placement is, not that the sensor's clock is or that it fired on its own. They are named, and
+    left out of clock_offset and touch_not_seen; the hand is still compared."""
+    contacts = [{"id": f"c{i}", "hand": "right", "start_s": 1.0 + i, "end_s": 1.5 + i, "aligned_by": "assumed start"}
+                for i in range(3)]
+    strips = {f"c{i}": {"begin": [0.7 + i, 0.85 + i, 1.0 + i, 1.15 + i, 1.3 + i], "end": [1.35 + i, 1.5 + i, 1.65 + i]}
+              for i in range(3)}
+    seen = [{"id": f"c{i}", "touch_seen": "no" if i == 0 else "yes", "first_touch_frame": 5, "last_touch_frame": 3,
+             "hand": "left"} for i in range(3)]
+    res = cc.check({"contacts": seen, "contacts_missing": []}, contacts, strips, 30)
+    kinds = {n["check"] for n in res["notes"]}
+    assert "clock_offset" not in kinds and "touch_not_seen" not in kinds and "offset_ms" not in res, res
+    assert "hand_mismatch" in kinds
+    assert res["placed_from_both_starts"] == ["c0", "c1", "c2"]
+
+
+def _glove_beside_a_video(root: Path, n: int = 300) -> Path:
+    """A video with no frame times beside a glove file on an epoch clock: the glove is placed from both starts."""
+    one = root / "up" / "one"
+    one.mkdir(parents=True)
+    c = av.open(str(one / "top.mp4"), "w")
+    s = c.add_stream("mpeg4", rate=30)
+    s.width, s.height, s.pix_fmt = 64, 36, "yuv420p"
+    for k in range(n):
+        fr = av.VideoFrame.from_ndarray(np.full((36, 64, 3), k * 9 % 256, np.uint8), format="rgb24")
+        fr.pts = k
+        for p in s.encode(fr):
+            c.mux(p)
+    for p in s.encode():
+        c.mux(p)
+    c.close()
+    p = np.random.default_rng(0).random((n, 4, 4)) * 2
+    for a, b in ((40, 80), (150, 200)):
+        p[a:b, 1:3, 1:3] += 400
+    with h5py.File(one / "glove.h5", "w") as h:
+        h["right_hand_pressure"] = p
+        h["time"] = 1_790_000_000.0 + np.arange(n) / 30
+    return root / "up"
+
+
+def test_a_contact_placed_from_both_starts_says_its_times_are_not_recorded(tmp_path):
+    """A glove placed on the footage from both starts (no clock shared) times contacts whose times are the
+    placement's. Each carries aligned_by, its line in the prompt says the times are not recorded times, and a context
+    prepared before contacts carried it gets it from its signal's meta."""
+    rep = formats.convert(_glove_beside_a_video(tmp_path), "teleop_arms", tmp_path / "eps", "x", 900)
+    ep_dir = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    ctx = json.loads((ep_dir / "context.json").read_text())
+    assert ctx["contacts"] and all(c["aligned_by"] == "assumed start" for c in ctx["contacts"]), ctx["contacts"]
+    r = me.build_request(ep_dir)
+    lines = [ln for ln in r["prompt"].splitlines() if ln.startswith("  c1:")]
+    assert lines and ("these times are placed from both starts, as the touch signal shares no clock with the "
+                      "cameras, so they are not recorded times") in lines[0], lines
+    for c in ctx["contacts"]:
+        del c["aligned_by"]
+    (ep_dir / "context.json").write_text(json.dumps(ctx))
+    assert all(c["aligned_by"] == "assumed start" for c in lc.of_episode(me.load(ep_dir)))
+
+
+def test_a_contact_on_a_recorded_clock_reads_as_before():
+    c = {"id": "c1", "hand": "right", "signals": ["right_pressure"], "start_s": 1.0, "peak_s": 1.25, "end_s": 1.5,
+         "from_start": False, "to_end": False, "peak_strength": 2.0, "dips_s": [],
+         "regions": {"right_pressure": {"cells": 4, "rows": [1, 2], "columns": [1, 2], "of": [4, 4]}}}
+    assert me._contact_line(c) == ("  c1: right hand, from right_pressure, 1.00 s to 1.50 s, strongest at 1.25 s; at "
+                                   "its strongest right_pressure: 4 cells, rows 1-2 and columns 1-2 of 4 x 4")
+    assert lc.mark_aligned([c], {"right_pressure": {"shape": [4, 4]}}) == [c]
+
+
 def test_a_signal_that_swings_both_ways_or_a_switching_setting_is_not_touch():
     n = 200
     vel = np.sin(np.linspace(0, 20, n))[:, None] * (np.linspace(0, 20, n) % 4 < 1)[:, None]
