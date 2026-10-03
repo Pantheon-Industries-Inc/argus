@@ -5630,10 +5630,16 @@ NOTE_NAMES = ("annotations.json", "annotation.json", "meta.json", "instruction.t
 
 def opened_notes(items: list[dict]) -> set[Path]:
     """The notes convert_video opens beside an episode's videos: a video's own .json, .txt, .jsonl and .md, and in an
-    episode folder every .json (a recorder's metadata, depth_scale_from) and the notes named NOTE_NAMES."""
+    episode folder every .json (a recorder's metadata, depth_scale_from) and the notes named NOTE_NAMES. Every file of
+    a folder a dataset adapter reads (upload_adapters, OpenAoE's clip) is its adapter's."""
     out = set()
+    adapters = upload_adapters("video")
     for it in items:
         if it.get("kind") != "video":
+            continue
+        if any(m.recognizes(it) for m in adapters):
+            # a folder in a dataset's own layout is read by its adapter (OpenAoE's annotation and video_info.json)
+            out |= {p for p in item_folder(it).rglob("*") if p.is_file()}
             continue
         for f in it["files"]:
             out |= {Path(f).with_suffix(x) for x in (".json", ".txt", ".jsonl", ".md")}

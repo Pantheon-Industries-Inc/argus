@@ -2689,3 +2689,23 @@ def test_an_mcap_beside_videos_of_the_same_length_is_noted_as_a_possible_duplica
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _an_mcap_beside_videos_of_the_same_length_is_noted_as_a_possible_duplicate(Path(t))
+
+
+def _a_folder_read_by_a_dataset_adapter_is_not_called_unread(tmp_path):
+    """OpenAoE's clip folder holds its annotation and a video_info.json, which its adapter reads; they are not files
+    no reader opened."""
+    clip = tmp_path / "upload" / "raw_x_seg_1"
+    (clip / "ego_annotation").mkdir(parents=True)
+    _clip(clip / "raw_video.mp4", 10)
+    action = '{"verb": "align", "object": "fabric", "hand": "both"}'
+    (clip / "ego_annotation" / "ego_action_annotation.json").write_text(
+        '[{"start_ts": "0.00", "end_ts": "0.30", "atomic_action": [' + action + ']}]')
+    (clip / "video_info.json").write_text("{}")
+    det, _ = f.plan(tmp_path / "upload")
+    assert not any("no reader opens" in m for m in det["missing"]), det["missing"]
+
+
+def test_a_folder_read_by_a_dataset_adapter_is_not_called_unread():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_folder_read_by_a_dataset_adapter_is_not_called_unread(Path(t))
