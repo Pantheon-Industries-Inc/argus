@@ -119,8 +119,9 @@ def quantize(a: np.ndarray, bits: int = 16, per_value: bool = True) -> dict:
     fin = np.isfinite(a)
     with np.errstate(all="ignore"):
         if per_value:
-            lo = np.where(fin.any(axis=0), np.nanmin(np.where(fin, a, np.nan), axis=0), 0.0)
-            hi = np.where(fin.any(axis=0), np.nanmax(np.where(fin, a, np.nan), axis=0), 0.0)
+            from label import signals as S
+            lo, hi = S.finite_range(a)
+            lo, hi = np.nan_to_num(lo), np.nan_to_num(hi)
         else:
             lo = np.full(a.shape[1], np.nanmin(a[fin]) if fin.any() else 0.0)
             hi = np.full(a.shape[1], np.nanmax(a[fin]) if fin.any() else 0.0)
@@ -184,18 +185,8 @@ def clip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
 def _range(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Each value's smallest and largest finite reading (NaN for a value with none), a few thousand rows at a time, so
     a wide signal is never copied whole."""
-    import warnings
-    step = max(1, (1 << 19) // max(1, a.shape[1]))
-    lo = np.full(a.shape[1], np.nan)
-    hi = np.full(a.shape[1], np.nan)
-    with np.errstate(all="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)      # a value with no reading in a stretch: NaN, as wanted
-        for i in range(0, len(a), step):
-            c = np.asarray(a[i:i + step], dtype=np.float64)
-            c = np.where(np.isfinite(c), c, np.nan)
-            lo = np.fmin(lo, np.nanmin(c, axis=0))
-            hi = np.fmax(hi, np.nanmax(c, axis=0))
-    return lo, hi
+    from label import signals as S
+    return S.finite_range(a)
 
 
 def pad(a: np.ndarray, n: int) -> np.ndarray:
@@ -228,15 +219,19 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
     if not fin.any():
         doc["no_reading"] = True       # it never read anything, so it is no constant (checks/sensors.py no_reading)
         return doc
+    gaps, partial = S.reading_gaps(a)
+    if gaps or partial:
+        doc["frames"] = int(len(a))
+    if gaps:
+        doc["no_reading_frames"] = gaps
+    if partial:
+        doc["partial_reading_frames"] = partial
     lo, hi = _range(a)
     if bool((hi[fin.any(axis=0)] == lo[fin.any(axis=0)]).all() and fin.any(axis=0).all()):
         first = next((r for r in a if np.isfinite(r).all()), None)
         doc["constant"] = True
         doc["value"] = None if first is None else [float(x) for x in first[:16]]
         # constant wherever it reads; the frames with no reading say it is not so at every frame (the prompt's rule)
-        gaps = int((~fin).all(axis=1).sum())
-        if gaps:
-            doc.update(no_reading_frames=gaps, frames=int(len(a)))
         return doc
     rest = np.asarray(meta["rest"], dtype=np.float64) if meta.get("rest") is not None else None
     swing = float(meta["swing"]) if meta.get("swing") else None

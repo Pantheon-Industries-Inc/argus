@@ -120,6 +120,38 @@ def _any_finite(a: np.ndarray) -> bool:
     return any(bool(np.isfinite(a[i:j]).any()) for i, j in _row_chunks(a))
 
 
+def reading_gaps(a: np.ndarray) -> tuple[int, int]:
+    """Counts of wholly missing and partially read frames. A finite value is a reading, so a frame with some
+    finite values remains distinct from one with none on the prompt, board and checks."""
+    missing = partial = 0
+    for i, j in _row_chunks(a):
+        fin = np.isfinite(a[i:j])
+        any_read = fin.any(axis=1)
+        missing += int((~any_read).sum())
+        partial += int((any_read & ~fin.all(axis=1)).sum())
+    return missing, partial
+
+
+def gap_words(a: np.ndarray) -> str:
+    """The recording gaps, with partial values named separately from frames with no reading."""
+    missing, partial = reading_gaps(a)
+    return "; ".join(f"{words} at {count} of {len(a)} frames" for count, words in
+                     ((missing, "no reading"), (partial, "partial reading")) if count)
+
+
+def finite_range(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each value's finite range, NaN for a value with no reading. Empty columns never enter a NaN reduction, and
+    row chunks bound memory when a signal has many values."""
+    lo, hi = np.full(a.shape[1], np.inf), np.full(a.shape[1], -np.inf)
+    for _, c in _rows64(a):
+        fin = np.isfinite(c)
+        lo = np.minimum(lo, np.min(c, axis=0, where=fin, initial=np.inf))
+        hi = np.maximum(hi, np.max(c, axis=0, where=fin, initial=-np.inf))
+    lo[~np.isfinite(lo)] = np.nan
+    hi[~np.isfinite(hi)] = np.nan
+    return lo, hi
+
+
 def per_value(name: str, d: int, shape=None, names=None) -> bool:
     """Whether a signal of d values per frame gets one row per value at each instant (JOINT_LIKE above)."""
     if d <= SMALL:
@@ -562,10 +594,9 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     head = f"  {name} ({what})"
     if not np.isfinite(a).any():
         return f"{head}: no reading"
-    gaps = int(np.isnan(a).all(axis=1).sum())
-    tail = f"; no reading at {gaps} of {len(a)} frames" if gaps else ""
-    with np.errstate(all="ignore"):
-        lo, hi = np.nanmin(a, axis=0), np.nanmax(a, axis=0)
+    gaps = gap_words(a)
+    tail = f"; {gaps}" if gaps else ""
+    lo, hi = finite_range(a)
     if d > PER_VALUE_MAX:
         if (hi == lo).all():
             return f"{head}: every value constant throughout{tail}"

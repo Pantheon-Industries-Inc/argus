@@ -1105,9 +1105,9 @@ def _signals_table(ep: dict, pl: dict) -> str:
                 v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
                 said = name + (f" {_num(v[0])}" if len(v) == 1 else
                                " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else "")
-                gaps = int((~np.isfinite(a)).all(axis=1).sum())
+                gaps = sg.gap_words(a)
                 if gaps:
-                    wherever.append(f"{said} (no reading at {gaps} of {len(a)} frames)")
+                    wherever.append(f"{said} ({gaps})")
                 else:
                     still.append(said)
                 continue
@@ -1127,10 +1127,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
             ch = []
             for name, a in arrs.items():
                 seg = a[a0:b0 + 1]
-                with np.errstate(all="ignore"):
-                    c = (float(np.nanmax(np.nanmax(seg, axis=0).astype(np.float64)
-                                         - np.nanmin(seg, axis=0).astype(np.float64)))
-                         if np.isfinite(seg).any() else 0.0)
+                lo, hi = sg.finite_range(seg)
+                c = float(np.nanmax(hi - lo)) if np.isfinite(seg).any() else 0.0
                 if c > 0:
                     ch.append(f"{name} {_num(c)}")
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
@@ -1212,8 +1210,9 @@ def _readout_of(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
 def _constant(a: np.ndarray) -> bool:
     """Whether a signal has a reading and each of its values never changes over the episode wherever it reads: named
     once with its value, and given no rows at each instant (_signals_table says where it has no reading)."""
-    with np.errstate(all="ignore"):
-        return bool(np.isfinite(a).any() and (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all())
+    from label import signals as sg
+    lo, hi = sg.finite_range(a)
+    return bool(np.isfinite(a).any() and (hi == lo).all())
 
 
 def _left_out(name: str, a: np.ndarray, m: dict, n_left: int, n_rows: int) -> str:

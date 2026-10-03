@@ -52,7 +52,8 @@ DEPTH_OFFSET_FRAMES = 2.0
 DEPTH_SAMPLES = 24
 CLOCK_OFFSET_FRAMES = 1.0
 
-NAMES = {"no_reading": "Signal has no reading at many frames", "constant": "Signal never changes",
+NAMES = {"no_reading": "Signal has no reading at many frames", "partial_reading": "Signal has partial readings",
+         "constant": "Signal never changes",
          "dead_values": "Values of an array never change", "pinned": "Values pinned at the end of their range",
          "slow_sensor": "Sensor slower than the camera", "clock_offset": "Sensor clocks apart",
          "depth_invalid": "Depth pictures mostly without readings",
@@ -60,7 +61,7 @@ NAMES = {"no_reading": "Signal has no reading at many frames", "constant": "Sign
          "depth_offset": "Depth frames far in time from their colour frames"}
 
 
-SIGNAL_CHECKS = ("no_reading", "constant", "dead_values", "pinned", "slow_sensor")
+SIGNAL_CHECKS = ("no_reading", "partial_reading", "constant", "dead_values", "pinned", "slow_sensor")
 DEPTH_CHECKS = ("depth_invalid", "depth_frozen", "depth_offset")
 
 
@@ -97,20 +98,25 @@ def _signal_findings(ep: dict, name: str, a, skipped: dict) -> list[dict]:
     n = len(ep["state"])
     a = np.asarray(a, dtype=np.float64)[:n]
     m = meta.get(name) or {}
-    gone = np.isnan(a).all(axis=1)
-    unread = int(gone.sum()) + n - len(a)
+    gone = ~np.isfinite(a).any(axis=1)
+    missing, partial = sg.reading_gaps(a)
+    unread = missing + n - len(a)
     if n and unread / n > NO_READING_SHARE:
         out.append({"check": "no_reading", "signal": name,
                     "evidence": f"{name} has no reading at {unread} of {n} frames"})
+    if partial:
+        out.append({"check": "partial_reading", "signal": name,
+                    "evidence": f"{name} has partial reading at {partial} of {n} frames"})
     ok = a[~gone]
     if not len(ok):
         skipped[name] = "it has no reading at any frame"
         return out
-    with np.errstate(all="ignore"):
-        span = np.nanmax(ok, axis=0) - np.nanmin(ok, axis=0)
+    lo, hi = sg.finite_range(ok)
+    span = hi - lo
     if (span == 0).all() and len(ok) > 1:
         out.append({"check": "constant", "signal": name,
-                    "evidence": f"every value of {name} is the same at all {len(ok)} frames"})
+                    "evidence": (f"every value of {name} is the same wherever it reads" if unread or partial else
+                                 f"every value of {name} is the same at all {len(ok)} frames")})
         return out
     if a.shape[1] > sg.SMALL and (span > 0).any():
         if sg.has_rest(ok):
@@ -200,8 +206,8 @@ def constant_values(ep_dir: Path) -> dict:
         a = np.asarray(a, dtype=np.float64)
         if a.shape[1] <= sg.SMALL or not np.isfinite(a).any():
             continue
-        with np.errstate(all="ignore"):
-            span = np.nanmax(a, axis=0) - np.nanmin(a, axis=0)
+        lo, hi = sg.finite_range(a)
+        span = hi - lo
         out[name] = {"never": [int(i) for i in np.flatnonzero(span == 0)], "n": int(a.shape[1]),
                      "shape": (ep.get("signal_meta") or {}).get(name, {}).get("shape")}
     return out
@@ -246,7 +252,7 @@ def run_episode(ep_dir: Path) -> dict | None:
             errored.update({c: f"{type(e).__name__}: {e}"[:300] for c in names})
     applies = set()
     if ep.get("signals"):
-        applies |= {"no_reading", "constant", "dead_values", "pinned", "slow_sensor"}
+        applies |= set(SIGNAL_CHECKS)
     if len(ep["context"].get("clocks") or []) >= 2:
         applies.add("clock_offset")
     if ep.get("depth"):

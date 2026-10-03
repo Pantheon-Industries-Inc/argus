@@ -48,4 +48,8 @@ const gap = T.snStillHtml({constant: [{name: 'force', dims: 2, value: [1, 2], no
   none: []});
 check(!gap.includes('Constant through this episode') && gap.includes('The same wherever it reads: force (1, 2), with '
   + 'no reading at 150 of 300 frames.'), 'a constant with gaps says where it has no reading');
+const partial = T.snStillHtml({constant: [{name: 'qpos', dims: 2, value: null, partial_reading_frames: 2,
+  frames: 3}], none: []});
+check(!partial.includes('Constant through this episode') && !partial.includes('no reading at')
+  && partial.includes('partial reading at 2 of 3 frames'), 'partial values do not make a whole row unread');
 process.exit(bad ? 1 : 0);

@@ -4307,11 +4307,15 @@ function snStillHtml(D) {
   const size = s => s.shape && s.shape.length > 1 ? `${s.shape.join(' x ')} values`
     : `${s.dims} value${s.dims === 1 ? '' : 's'}`;
   const what = s => `${esc(s.name)} (${s.dims > 4 || !s.value ? size(s) : s.value.map(snNum).join(', ')})`;
-  const every = D.constant.filter(s => !s.no_reading_frames), gaps = D.constant.filter(s => s.no_reading_frames);
+  const hasGaps = s => s.no_reading_frames || s.partial_reading_frames;
+  const every = D.constant.filter(s => !hasGaps(s)), gaps = D.constant.filter(hasGaps);
+  const gapsText = s => [s.no_reading_frames ? `no reading at ${s.no_reading_frames} of ${s.frames} frames` : '',
+    s.partial_reading_frames ? `partial reading at ${s.partial_reading_frames} of ${s.frames} frames` : '']
+    .filter(Boolean).join('; ');
   return (every.length ? `<div class="sn-note">Constant through this episode: ${every.map(what).join(', ')}.</div>`
     : '')
-    + (gaps.length ? `<div class="sn-note">The same wherever it reads: ${gaps.map(s => `${what(s)}, with no reading at `
-      + `${s.no_reading_frames} of ${s.frames} frames`).join('; ')}.</div>` : '')
+    + (gaps.length ? `<div class="sn-note">The same wherever it reads: ${gaps.map(s =>
+      `${what(s)}, with ${gapsText(s)}`).join('; ')}.</div>` : '')
     + (D.none.length ? `<div class="sn-note">No reading at any frame: ${D.none.map(s =>
       `${esc(s.name)} (${size(s)})`).join(', ')}.</div>` : '');
 }
