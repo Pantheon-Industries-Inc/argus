@@ -957,9 +957,10 @@ def test_only_a_fault_in_the_recording_counts_as_a_data_issue():
             else:
                 assert not c["counted"] and slug in c["not_counted"], kind
     assert fam.catalog()["label-failed"]["list"] == "labelling"
-    # a camera that is not colour is a property of the recording, named apart from a limit of ours, and says so
-    nc = next(x for x in fam.defs if x["slug"] == fam.reader_family("camera_not_colour"))
-    assert nc["slug"] != fam.reader_family("table_downsampled") and "property" in nc.get("why", ""), nc
+    # a camera that is not colour is a property of the recording: shown, never counted, in a family apart from a limit
+    # of ours
+    nc = fam.reader_family("camera_not_colour")
+    assert fam.list_of(nc) == "handling" and nc != fam.reader_family("table_downsampled"), nc
 
 
 def test_a_reply_that_gave_no_labels_is_shown_on_its_episode():

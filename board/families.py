@@ -7,11 +7,12 @@ checks or by the episode's outcome, and then counts at any severity. So does eac
 flagged with (context.json reader_issues, copied into dataset_checks by board/build.py): the listed family whose
 "reader_issues" names its kind, else a data family named after the kind ("d:<words of the kind>"). Only a family of a
 list in COUNTED_LISTS (a fault in the recording, an operator mistake) counts; a reader issue of a model reply that
-gave no labels (list "labelling") or of a limit of how we read or showed the recording (list "handling": a table read
-every so many rows, a signal kept as its lowest, mean and highest value) is shown on the episode and returned under
-not_counted, never in the counts or the filter. A family limited
-to some datasets ("datasets") is only matched on those. A family with "among" matches its text only on issues whose
-tag reads as one of those plain names, which is how one tag the model uses for several distinct problems
+gave no labels (list "labelling") or of how we read or showed the recording (list "handling": a limit of ours, such as
+a table read every so many rows or a signal kept as its lowest, mean and highest value, or a property of the recording
+that is not a fault in it, such as a camera that is not colour) is shown on the episode and returned under
+not_counted, never in the counts or the filter. A family limited to some datasets ("datasets") is only matched on
+those. A family with "among" matches its text only on issues whose tag reads as one of those plain names, which is how
+one tag the model uses for several distinct problems
 (camera_fault: a camera turned away, a frozen image, glare) is split by what the issue says.
 
 What counts (Families.counts, the one statement of the rule):
