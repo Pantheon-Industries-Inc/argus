@@ -327,6 +327,22 @@ def test_a_column_of_codes_written_as_numbers_and_words_is_not_a_signal(tmp_path
     assert out.meta["traj"]["names"] == ["force"] and not _issues(out, "signal_bad_cells")
 
 
+def test_a_table_beside_capture_times_that_count_from_zero_is_not_recorded_timing(tmp_path):
+    """Capture times from the recording's start and a time column that counts frames both start at 0, so their ranges
+    overlap whatever they are: the table had been read as 1 Hz recorded timing."""
+    n = 240
+    rel = np.arange(n) / 30.0
+    x = np.sin(np.arange(n) / 20)
+    pd.DataFrame({"time": np.arange(n), "force": x}).to_csv(tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], rel, _anchor(n), {})
+    assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS and "rate_hz" not in out.meta["traj"]
+    assert out["traj"][120, 0] == pytest.approx(x[120], abs=1e-6)
+    pd.DataFrame({"timestamp": np.arange(400) * 20, "force": np.sin(np.arange(400) / 30)}).to_csv(
+        tmp_path / "fast.csv", index=False)
+    assert f.table_signals([tmp_path / "fast.csv"], rel, _anchor(n), {}).meta["fast"]["aligned_by"] \
+        == f.ALIGNED_ASSUMED
+
+
 def test_a_one_row_table_is_named_with_why(tmp_path):
     pd.DataFrame({"x": [1.5], "y": [2.0]}).to_csv(tmp_path / "calib.csv", index=False)
     out = f.table_signals([tmp_path / "calib.csv"], None, _anchor(60), {})

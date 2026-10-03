@@ -2190,7 +2190,8 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
     """The numbers of CSV tables beside an episode's videos as signals, one per table under its own name (the file's
     name without its take: "traj"), its number columns (number_columns) as the named values. A table is placed:
     - by its time column (a rising column named for time, read in seconds by table_seconds) on the recorder's clock,
-      when the videos carry capture times its readings overlap: recorded timing;
+      when the videos carry capture times on a recorder's clock (recorder_clock) and its own times are on one too and
+      overlap them: recorded timing;
     - otherwise, when it has as many rows as the video has frames, one row per frame, whatever its time column says:
       a recorder that writes a row as it writes each frame stamps the row on its own clock, which may run at another
       rate than the video's nominal one (rows that span 10.3 s beside 8 s of video at 30 fps), and placed by those
@@ -2241,7 +2242,10 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             raw = num[tcol].to_numpy(dtype=np.float64)
             timed = np.isfinite(raw)
             t = table_seconds(raw[timed], real_anchor, t_vid) if timed.sum() > 1 else None
-        on_clock = t is not None and real_anchor is not None and t[0] < real_anchor[-1] and t[-1] > real_anchor[0]
+        # recorded timing only when both are on a recorder's clock, as split_sensors places a sensor file: capture times
+        # and a time column that both count from 0 overlap whatever they are (a frame count read as 1 Hz)
+        on_clock = (t is not None and real_anchor is not None and recorder_clock(real_anchor) and recorder_clock(t)
+                    and t[0] < real_anchor[-1] and t[-1] > real_anchor[0])
         assumed, aligned, rate, span_note = False, None, None, None
         if not on_clock and len(v) == n:
             a, gaps, row_t, aligned = v, 0, t_vid, ALIGNED_ROWS
