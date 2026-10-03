@@ -436,3 +436,26 @@ def test_a_signal_slower_than_the_frames_says_its_rate_and_one_at_the_frame_rate
     assert "right_hand_landmarks (21 x 3 values, recorded at 15 Hz)" in episode
     ep["signal_meta"]["right_hand_landmarks"]["rate_hz"] = 30.0
     assert "recorded at" not in me.build_prompt(ep, pl, cell_w=256, cell_h=144)[1]
+
+
+def test_per_value_gives_rows_to_named_and_joint_named_flat_vectors_only():
+    from label import signals as sg
+    assert not sg.per_value("observation.hand_joints", 63, shape=[21, 3])
+    assert not sg.per_value("audio", 400)
+    assert sg.per_value("observation.pose", 64, names=[f"v{i}" for i in range(64)])
+    assert not sg.per_value("observation.pose", 65, names=[f"v{i}" for i in range(65)])
+    assert sg.per_value("observation.state", 26)
+    assert sg.per_value("hand_joints", sg.JOINT_NAME_MAX)
+    assert not sg.per_value("hand_joints", 63)
+
+
+def test_a_rate_is_stated_only_below_nine_tenths_of_the_frame_rate():
+    from label import signals as sg
+    a = np.random.default_rng(0).random((10, 3))
+
+    def line(rate_hz, fps):
+        return sg.describe("glove", a, rate_hz=rate_hz, fps=fps)
+    assert "recorded at 26.9 Hz" in line(26.9, 30.0)
+    assert "recorded at" not in line(27.0, 30.0)
+    for rate_hz, fps in ((None, 30.0), (0, 30.0), (15.0, None)):
+        assert "recorded at" not in line(rate_hz, fps)

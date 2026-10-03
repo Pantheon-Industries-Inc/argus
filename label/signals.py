@@ -55,6 +55,14 @@ JOINT_LIKE = re.compile(r"joint|qpos|state", re.I)
 # A signal recorded below this share of the frame rate says its rate: a 6 Hz glove otherwise reads as if it were
 # sampled every frame.
 RATE_SLOWER = 0.9
+# A flat vector whose values are unnamed and that only its own name calls joints or a state gets one row per value up
+# to this many values: a humanoid's 26 joints do, an unnamed 21 x 3 hand array named hand_joints (63 values, rows
+# labelled only by index) does not. A vector whose values the dataset names keeps the PER_VALUE_MAX limit.
+JOINT_NAME_MAX = 32
+MERGE_GAP_S = 0.15
+HOLD_BAND = 0.02
+SETTING_STATES = 3        # a signal of several values with this many distinct readings or fewer is a setting
+HOLD_SHARE = 0.3
 
 
 def per_value(name: str, d: int, shape=None, names=None) -> bool:
@@ -63,12 +71,9 @@ def per_value(name: str, d: int, shape=None, names=None) -> bool:
         return True
     if d > PER_VALUE_MAX or (shape and len(shape) > 1):
         return False
-    return bool(names and len(names) == d) or bool(JOINT_LIKE.search(name))
-
-MERGE_GAP_S = 0.15
-HOLD_BAND = 0.02
-SETTING_STATES = 3        # a signal of several values with this many distinct readings or fewer is a setting
-HOLD_SHARE = 0.3
+    if names and len(names) == d:
+        return True
+    return d <= JOINT_NAME_MAX and bool(JOINT_LIKE.search(name))
 
 
 def _num(x: float) -> str:
@@ -346,9 +351,9 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
 
 def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None, rate_hz=None,
              fps=None) -> str:
-    """One line: the signal's name, its shape or value names, and its rate when it is recorded slower than the frames
-    (rate_hz below RATE_SLOWER of fps), and the range each value takes, up to PER_VALUE_MAX
-    values (for a wider array, the range of all its values together)."""
+    """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
+    (rate_hz below RATE_SLOWER of fps), and the range each value takes, up to PER_VALUE_MAX values (for a wider
+    array, the range of all its values together)."""
     a = np.asarray(a, dtype=np.float64)
     d = a.shape[1]
     what = (f"{' x '.join(str(int(x)) for x in shape)} values" if shape and len(shape) > 1 else
