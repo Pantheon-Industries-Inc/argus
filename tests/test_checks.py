@@ -787,10 +787,76 @@ def test_the_recorded_state_line_says_why_there_is_no_state_as_the_reader_record
             "short": "as it does not cover the footage",
             "assumed_clock": "as it is recorded only on a clock placed from both starts, not shared with the cameras"}
     for why, reason in said.items():
-        # an unreadable sensor file whose other files cover the footage (no signal stops short) gives the note too
-        assert line(why).startswith(f"RECORDED STATE: no arm state was read, {reason}. The reader's note on it: "
-                                    f"{note} The signal whose name says joints"), why
+        # an unreadable sensor file whose other files cover the footage (no signal stops short) gives the note too;
+        # a recording that holds no state needs no note, which can only say so again
+        tail = " The signal whose name says joints" if why == "not_recorded" else (
+            f" The reader's note on it: {note} The signal whose name says joints")
+        assert line(why).startswith(f"RECORDED STATE: no arm state was read, {reason}.{tail}"), why
     # no state_why: as before the reader wrote it
     assert line(None).startswith(layout)
     assert line(None, stops_short=True).startswith("RECORDED STATE: no arm state was read. The reader's note on it: "
                                                    + note)
+
+
+def test_a_signal_the_same_wherever_it_reads_is_never_told_as_the_same_at_every_frame(tmp_path):
+    """A signal that read one value for half the episode and nothing after was told to the model as "The same at every
+    frame". It is the same wherever it reads, and the line says at how many frames it has no reading; a signal that
+    reads the same at every frame keeps its line."""
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.concatenate([np.full((150, 2), 0.5), np.full((150, 2), np.nan)]).astype(np.float32)
+    z["s4"] = np.full((300, 1), 2.0, np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe half", "key": "s3", "dims": 2}, {"name": "probe full", "key": "s4", "dims": 1}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    e = me.load(ep)
+    lines = me._signals_table(e, me.plan(e)).splitlines()
+    every = next(x for x in lines if x.strip().startswith("The same at every frame"))
+    assert "probe full 2" in every and "probe half" not in every, every
+    assert "  The same wherever it reads: probe half [0.5, 0.5] (no reading at 150 of 300 frames)" in lines, lines
+
+
+def test_with_no_signal_a_state_the_reader_could_not_read_is_never_told_as_not_recorded():
+    """With no other signal, no note and no unread list, the line said "this dataset records no robot or gripper
+    state" whatever the reader said: false when the state is in another layout, unreadable, short or on an assumed
+    clock. Those say none was read from this episode; a recording with no state, and a context with no state_why, read
+    as before."""
+    ep = {"context": {"dataset": "you/rig", "fps": 30, "profile": "teleop_arms", "state_kind": "none",
+                      "cameras": {"exo": {"width": 640, "height": 480}}},
+          "state": np.zeros((300, 0)), "sources": {"exo": {}}, "signals": {}}
+    pl = {"n": 300, "ks": [0, 150], "spans": [], "state_usable": False, "contact": []}
+
+    def line(why):
+        e = {**ep, "context": {**ep["context"], **({"state_why": why} if why else {})}}
+        return me._no_state_text(e, pl).strip()
+    records = "RECORDED STATE: none; this dataset records no robot or gripper state, so the video is all there is."
+    assert line(None) == records and line("not_recorded") == records
+    for why in ("layout", "unreadable", "short", "assumed_clock"):
+        assert line(why) == "RECORDED STATE: none was read from this episode, so the video is all there is.", why
+
+
+def test_a_joints_signal_longer_than_the_episode_is_judged_short_over_the_episode_alone(tmp_path):
+    """Rows past the episode's last frame with no reading made a joints signal read as stopping short, so a context
+    with no state_why gave the reader's note instead of the layout line. Only the episode's frames are judged."""
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    joints = np.tile(np.linspace(0, 1, 300, dtype=np.float32)[:, None], (1, 6))
+    z["s3"] = np.concatenate([joints, np.full((100, 6), np.nan, np.float32)])
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"].append({"name": "/arm/joint_state joint_pos", "key": "s3", "dims": 6,
+                           "names": [f"j{i}" for i in range(6)]})
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none", "state_note": "a layout note"}))
+    e = me.load(ep)
+    assert me._no_state_text(e, me.plan(e)).strip().startswith(
+        "RECORDED STATE: no arm state in the layout our checks read.")
+
+
+def test_a_short_signal_of_whole_numbers_is_padded_with_no_reading():
+    """pad_rows kept the input's type, so a signal stored as whole numbers could not hold "no reading" past its rows."""
+    from label import signals as sg
+    a = sg.pad_rows(np.arange(6, dtype=np.int64).reshape(3, 2), 5)
+    assert a.dtype.kind == "f" and a.shape == (5, 2) and np.isnan(a[3:]).all() and a[2, 1] == 5

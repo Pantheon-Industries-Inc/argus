@@ -440,7 +440,7 @@ def pad_rows(a: np.ndarray, n: int) -> np.ndarray:
     breaks on it. A signal with no rows (named as having none) or with at least n rows is kept as it is."""
     if not 0 < len(a) < n:
         return a
-    out = np.full((n, a.shape[1]), np.nan, dtype=a.dtype)
+    out = np.full((n, a.shape[1]), np.nan, dtype=a.dtype if np.issubdtype(a.dtype, np.floating) else np.float64)
     out[:len(a)] = a
     return out
 

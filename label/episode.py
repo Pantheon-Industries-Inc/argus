@@ -1087,18 +1087,23 @@ def _signals_table(ep: dict, pl: dict) -> str:
     # as stored: every number below is the one a float64 copy would give (largest and smallest readings are exact in
     # any precision, and their differences are taken in float64), with no whole copy of a large signal
     arrs = {k: a[:n] for k, a in sig.items()}
-    lines, still = [], []
+    lines, still, wherever = [], [], []
     for name, a in arrs.items():
         try:
             if not len(a):
                 lines.append(f"  {name}: no rows, so no reading at any frame")
                 continue
             if _constant(a):
-                # a value repeated at every frame (a setting, a calibration, or a sensor that sent nothing new): named
-                # once
+                # a value repeated wherever it reads (a setting, a calibration, or a sensor that sent nothing new):
+                # named once, as the same at every frame only when it reads at every frame
                 v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
-                still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
-                                     " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else ""))
+                said = name + (f" {_num(v[0])}" if len(v) == 1 else
+                               " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else "")
+                gaps = int((~np.isfinite(a)).all(axis=1).sum())
+                if gaps:
+                    wherever.append(f"{said} (no reading at {gaps} of {len(a)} frames)")
+                else:
+                    still.append(said)
                 continue
             m = meta.get(name) or {}
             lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
@@ -1107,6 +1112,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
             lines.append(f"  {name}: could not be read ({type(e).__name__})")
     if still:
         lines.append("  The same at every frame: " + "; ".join(still))
+    if wherever:
+        lines.append("  The same wherever it reads: " + "; ".join(wherever))
     if pl["spans"]:
         lines.append("  Over each recorded still span, the largest change of any one value of each signal (a signal "
                      "that did not change is left out):")
@@ -1197,8 +1204,8 @@ def _readout_of(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
 
 
 def _constant(a: np.ndarray) -> bool:
-    """Whether a signal has a reading and each of its values never changes over the episode: named once with its
-    value, and given no rows at each instant."""
+    """Whether a signal has a reading and each of its values never changes over the episode wherever it reads: named
+    once with its value, and given no rows at each instant (_signals_table says where it has no reading)."""
     with np.errstate(all="ignore"):
         return bool(np.isfinite(a).any() and (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all())
 
@@ -1432,15 +1439,17 @@ STATE_WHY = {
 def _no_state_text(ep: dict, pl: dict) -> str:
     """No arm state. With other signals the line says why, as the reader recorded it (state_why, STATE_WHY): "layout"
     says none is in the layout our checks read, and every other reason that no state was read, why, and the reader's
-    note on it. A context written before the reader recorded state_why says the layout line, unless a signal whose
-    name says joints or a state stops short of the episode: then the layout is not why (an arm sensor file cut before
-    the footage ends), and the line gives the reader's note on the state, which says why. With no other signal, that the
-    dataset records none, unless the reader wrote a note on the state or left sensor data unread: then only that none
-    was read, since "records no hand, head or device tracking" was false for an MCAP whose hand tracks the reader did
-    not read yet (2026-10-02 audit). There the note and the lists of unread channels go to the board, never to the
-    model: they name the checks and channels that did not run ("the checks on recorded motion ..."), which would put
+    note on it (not for "not_recorded", whose note only says the same). A context written before the reader recorded
+    state_why says the layout line, unless a signal whose name says joints or a state stops short of the episode: then
+    the layout is not why (an arm sensor file cut before the footage ends), and the line gives the reader's note on the
+    state, which says why. With no other signal, that the dataset records none, unless the reader wrote a note on the
+    state or left sensor data unread: then only that none was read, since "records no hand, head or device tracking"
+    was false for an MCAP whose hand tracks the reader did not read yet (2026-10-02 audit). There the note and the lists
+    of unread channels go to the board, never to the model: they name the checks and channels that did not run ("the
+    checks on recorded motion ..."), which would put
     the words about a recorded motion back into a video only prompt; with other signals the prompt is a recording's
-    already. So with no other signal state_why changes nothing: "none was read" is true for every reason."""
+    already. A state_why other than "not_recorded" counts as a note: the state is there but was not read, so only that
+    none was read; "not_recorded" and no state_why read as before."""
     r = rig(ep)
     n = _rig_nouns(r)
     ctx = ep["context"]
@@ -1459,16 +1468,18 @@ def _no_state_text(ep: dict, pl: dict) -> str:
         named = all(len((meta.get(nm) or {}).get("names") or []) == np.shape(ep["signals"][nm])[1] for nm in joints)
         # a joints or state signal with no reading over part of the episode says the state's data stops short (a sensor
         # file cut before the footage ends), so the layout is not why none was read: the reader's own note says why
-        short = [nm for nm, a in ep["signals"].items() if sg.names_joints_or_state(nm) and len(a)
-                 and np.isnan(np.asarray(a, dtype=np.float64)).all(axis=1).any()]
+        short = [nm for nm, a in ep["signals"].items() if sg.names_joints_or_state(nm) and len(a[:pl["n"]])
+                 and np.isnan(np.asarray(a[:pl["n"]], dtype=np.float64)).all(axis=1).any()]
         note = (ctx.get("state_note") or "").strip()
         why = ctx.get("state_why")
         if why == "layout" or why is None and not (short and note):
             head = f"no {n['actor']} state in the layout our checks read."
         else:
             reason = STATE_WHY.get(why) if why is not None else None
+            # a recording that holds no state needs no note: the reader's note can only say so again (the board
+            # shows it)
             head = (f"no {n['actor']} state was read{f', {reason}' if reason else ''}."
-                    + (f" The reader's note on it: {note}" if note else ""))
+                    + (f" The reader's note on it: {note}" if note and why != "not_recorded" else ""))
         return (f"\nRECORDED STATE: {head}"
                 + (f" The signal{'' if one else 's'} whose name{' says' if one else 's say'} joints or a state "
                    f"({', '.join(joints)}) {'is' if one else 'are'} given value by value"
@@ -1478,7 +1489,8 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     # depth pictures follow the detail views of an episode with depth (the depth block), so there the video is not all
     all_there_is = (("the cameras' colour and depth images are" if _has_depth(ep, pl) else "the video is")
                     + " all there is.")
-    if (ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS):
+    if ((ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS)
+            or ctx.get("state_why") not in (None, "not_recorded")):
         return f"\nRECORDED STATE: none was read from this episode, so {all_there_is}"
     what = "no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state"
     return f"\nRECORDED STATE: none; this dataset records {what}, so {all_there_is}"

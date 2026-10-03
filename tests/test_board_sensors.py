@@ -476,3 +476,15 @@ def test_a_signal_with_no_reading_at_any_frame_is_named_as_such_not_as_constant(
                         str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_signal_the_same_wherever_it_reads_says_where_it_has_no_reading():
+    """The board listed a signal that read one value for half the episode, and nothing after, as constant through the
+    episode. It is constant where it reads, and its entry says at how many of the frames it has no reading."""
+    from board import sensors as bs
+    a = np.concatenate([np.full((150, 2), 0.5), np.full((150, 2), np.nan)])
+    t = np.arange(300) / 30.0
+    doc = bs.signal_doc({"name": "force"}, a, t, 1)
+    assert doc["constant"] and doc["value"] == [0.5, 0.5] and doc["no_reading_frames"] == 150 and doc["frames"] == 300
+    full = bs.signal_doc({"name": "force"}, np.full((300, 2), 0.5), t, 1)
+    assert full["constant"] and "no_reading_frames" not in full

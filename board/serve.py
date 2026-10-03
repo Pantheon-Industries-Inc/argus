@@ -4298,12 +4298,18 @@ function snMapDraw(m, i, ink) {
   m.now.textContent = none ? 'No reading at the playhead' : active ? `Row ${Math.floor(bi / cols) + 1}, column `
     + `${bi % cols + 1} is the strongest, ${snNum(best)} ${snAway(s.direction)} rest` : 'At rest';
 }
-// the signals with no lane, by name: those whose every value is the same at every frame, and those with no reading at
-// any frame (board/sensors.py signal_doc no_reading), which never read anything and so are no constant
+// the signals with no lane, by name: those whose every value is the same at every frame, those the same wherever they
+// read but with no reading at some frames (board/sensors.py signal_doc no_reading_frames), and those with no reading at
+// any frame (signal_doc no_reading), which never read anything and so are no constant
 function snStillHtml(D) {
-  const size = s => `${s.shape && s.shape.length > 1 ? s.shape.join(' x ') : s.dims} values`;
-  return (D.constant.length ? `<div class="sn-note">Constant through this episode: ${D.constant.map(s =>
-      `${esc(s.name)} (${s.dims > 4 || !s.value ? size(s) : s.value.map(snNum).join(', ')})`).join(', ')}.</div>` : '')
+  const size = s => s.shape && s.shape.length > 1 ? `${s.shape.join(' x ')} values`
+    : `${s.dims} value${s.dims === 1 ? '' : 's'}`;
+  const what = s => `${esc(s.name)} (${s.dims > 4 || !s.value ? size(s) : s.value.map(snNum).join(', ')})`;
+  const every = D.constant.filter(s => !s.no_reading_frames), gaps = D.constant.filter(s => s.no_reading_frames);
+  return (every.length ? `<div class="sn-note">Constant through this episode: ${every.map(what).join(', ')}.</div>`
+    : '')
+    + (gaps.length ? `<div class="sn-note">The same wherever it reads: ${gaps.map(s => `${what(s)}, with no reading at `
+      + `${s.no_reading_frames} of ${s.frames} frames`).join('; ')}.</div>` : '')
     + (D.none.length ? `<div class="sn-note">No reading at any frame: ${D.none.map(s =>
       `${esc(s.name)} (${size(s)})`).join(', ')}.</div>` : '');
 }

@@ -36,7 +36,16 @@ check(h.includes('pressure &lt;map&gt;') && h.includes('ValueError: boom') && h.
 // a signal that never changes is listed as constant, and one with no reading at any frame as having no reading, never
 // as constant (board/sensors.py signal_doc)
 const st = T.snStillHtml({constant: [{name: 'health', dims: 1, value: [1]}], none: [{name: 'glove <l>', dims: 3}]});
-check(st.includes('Constant through this episode: health (1).') && st.includes('No reading at any frame: glove &lt;l&gt; '
+check(st.includes('Constant through this episode: health (1).')
+  && st.includes('No reading at any frame: glove &lt;l&gt; '
   + '(3 values).') && !/Constant[^<]*glove/.test(st), 'a signal with no reading is named as such, not as constant');
 check(T.snStillHtml({constant: [], none: []}) === '', 'nothing still, nothing drawn');
+// one value is "1 value"; a signal the same wherever it reads but with no reading at some frames is never constant
+// through the episode, and says at how many frames it has no reading
+const one = T.snStillHtml({constant: [], none: [{name: 'grip', dims: 1}]});
+check(one.includes('grip (1 value)') && !one.includes('1 values'), 'one value is said in the singular');
+const gap = T.snStillHtml({constant: [{name: 'force', dims: 2, value: [1, 2], no_reading_frames: 150, frames: 300}],
+  none: []});
+check(!gap.includes('Constant through this episode') && gap.includes('The same wherever it reads: force (1, 2), with '
+  + 'no reading at 150 of 300 frames.'), 'a constant with gaps says where it has no reading');
 process.exit(bad ? 1 : 0);

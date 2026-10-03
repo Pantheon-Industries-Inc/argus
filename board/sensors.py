@@ -233,6 +233,10 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         first = next((r for r in a if np.isfinite(r).all()), None)
         doc["constant"] = True
         doc["value"] = None if first is None else [float(x) for x in first[:16]]
+        # constant wherever it reads; the frames with no reading say it is not so at every frame (the prompt's rule)
+        gaps = int((~fin).all(axis=1).sum())
+        if gaps:
+            doc.update(no_reading_frames=gaps, frames=int(len(a)))
         return doc
     rest = np.asarray(meta["rest"], dtype=np.float64) if meta.get("rest") is not None else None
     swing = float(meta["swing"]) if meta.get("swing") else None
