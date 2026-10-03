@@ -111,18 +111,31 @@ def _corr(a: np.ndarray, b: np.ndarray) -> float | None:
     return round(float(np.corrcoef(a, b)[0, 1]), 3)
 
 
+def unaligned(ep: dict) -> dict | None:
+    """{"not_assessed": why} for an episode whose recorded state is not on its cameras' frames (context.json
+    state_unaligned: the camera it was recorded on was taken out, board/clips.py drop_cameras), so a check that compares
+    the state with the video is not run on it; None otherwise."""
+    why = ep["context"].get("state_unaligned")
+    return {"not_assessed": f"the recorded state is not on these cameras' frames: {why}"} if why else None
+
+
 def pairing(ep_dir: Path) -> dict | None:
     """context["stream_pairing"]: the four stream-vs-actor correlations and crossed (None when a correlation is
-    undefined), or None for an episode without left and right mounted streams and two recorded actors."""
+    undefined), or None for an episode without left and right mounted streams and two recorded actors. Measured over
+    the frames the state covers (label/episode.py state_span), and not assessed when the state is not on the cameras'
+    frames (unaligned)."""
     ep = me.load(ep_dir)
     if not {"left", "right"} <= set(me.views(ep)) or ep["state"].shape[1] < 14:
         return None
-    T = len(ep["state"])
+    if unaligned(ep):
+        return unaligned(ep)
+    a, b = me.state_span(ep)
     mL, mR = stream_motion(ep, "left"), stream_motion(ep, "right")
     vL, vR = actor_speed(ep, 0), actor_speed(ep, 1)
-    n = min(len(mL), len(mR), T - 1)
-    r = {"left_vs_left": _corr(mL[:n], vL[:n]), "right_vs_right": _corr(mR[:n], vR[:n]),
-         "left_vs_right": _corr(mL[:n], vR[:n]), "right_vs_left": _corr(mR[:n], vL[:n])}
+    n = min(len(mL), len(mR), b - 1)
+    span = slice(a, n)
+    r = {"left_vs_left": _corr(mL[span], vL[span]), "right_vs_right": _corr(mR[span], vR[span]),
+         "left_vs_right": _corr(mL[span], vR[span]), "right_vs_left": _corr(mR[span], vL[span])}
     if any(x is None for x in r.values()):
         r["crossed"] = None
     else:
@@ -159,11 +172,16 @@ def _steps(ep: dict, g: int) -> tuple[np.ndarray, np.ndarray]:
 
 def jumps(ep_dir: Path) -> dict | None:
     """context["recorded_jumps"]: up to 3 candidate leaps per actor, each with its camera's image change when the
-    actor has a mounted camera, and flagged when a leap has no matching image change; None on video-only rigs."""
+    actor has a mounted camera, and flagged when a leap has no matching image change; None on video-only rigs. Only
+    the steps inside the frames the state covers count (label/episode.py state_span), and it is not assessed when the
+    state is not on the cameras' frames (unaligned)."""
     ep = me.load(ep_dir)
     kind = me.state_kind(ep)
     if kind == "none":
         return None                         # nothing recorded to jump
+    if unaligned(ep):
+        return unaligned(ep)
+    sa, sb = me.state_span(ep)
     unit = "cm" if kind == "ee_pose" else "deg"
     vs = set(me.views(ep))
     # an actor is named by its camera's view key (left, right) on two-gripper rigs, but by the camera's display
@@ -173,9 +191,12 @@ def jumps(ep_dir: Path) -> dict | None:
     for g, name in enumerate(me.actors(ep)):
         cam = name if name in vs else by_name.get(name)
         st, dts = _steps(ep, g)
-        if len(st) < 10:
+        inside = np.zeros(len(st), dtype=bool)
+        inside[sa:max(sa, sb - 1)] = True
+        st = np.where(inside & np.isfinite(st), st, 0.0)
+        if inside.sum() < 10:
             continue
-        p95 = float(np.percentile(st, 95))
+        p95 = float(np.percentile(st[inside], 95))
         thr = max(JUMP_FLOOR[kind], JUMP_FACTOR * p95)
 
         def isolated(i: int) -> bool:
@@ -225,7 +246,8 @@ def grippers(ep_dir: Path) -> dict | None:
     ep = me.load(ep_dir)
     if me.state_kind(ep) == "none":
         return None
-    s = np.asarray(ep["state"], dtype=np.float64)
+    a, b = me.state_span(ep)                # the frames the state covers
+    s = np.asarray(ep["state"], dtype=np.float64)[a:b]
     out = {}
     for g, name in enumerate(me.actors(ep)):
         v = s[:, 7 * g + 6]

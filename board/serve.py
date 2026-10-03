@@ -2978,8 +2978,10 @@ const outcomeWords = (oc, kind) => oc === 'failure' && kind === 'partial' ? 'fai
   : String(oc).replace(/_/g, ' ');
 function checksSection(d) {
   const dc = d.dataset_checks || {}, rows = [];
+  // a check not run on this episode says why (a state not on the cameras' frames, checks/stream_pairing.py unaligned)
   for (const [k, field, fam] of OUR_CHECKS) if (dc[k] && typeof dc[k] === 'object') rows.push({name: famName(fam),
-    st: dc[k][field] ? 'issue' : 'clear'});
+    st: dc[k].not_assessed ? 'na' : dc[k][field] ? 'issue' : 'clear',
+    text: dc[k].not_assessed ? sentences(dc[k].not_assessed) : ''});
   // the capture checks test a robot's recording (its state stream, grippers and camera timing); none of them applies to
   // footage from a person's head camera, so a head-camera episode lists none
   const cq = d._rig !== 'ego_head' && dc.capture_qc && Array.isArray(dc.capture_qc.checks) ? dc.capture_qc : null;
@@ -2993,7 +2995,7 @@ function checksSection(d) {
   const row = r => `<div class="ck-row ${r.st}">${dot(r.st)}<span class="ck-name">${esc(r.name)}</span><span `
     + `class="ck-st">${word[r.st]}</span>${r.text ? `<div class="ck-text">${esc(r.text)}</div>` : ''}</div>`;
   const ours = rows.length ? `<div class="ck-block"><div class="ck-head"><span class="ck-title">Our checks</span><span `
-    + `class="ck-sum">${rows.filter(r => r.st !== 'clear').length} of ${rows.length} fired</span>`
+    + `class="ck-sum">${rows.filter(r => r.st === 'issue').length} of ${rows.length} fired</span>`
     + `</div>${rows.map(row).join('')}</div>` : '';
   let theirs = '';
   if (cq) {

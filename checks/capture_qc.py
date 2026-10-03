@@ -109,6 +109,12 @@ EXTRA: dict[str, dict] = {
 }
 
 
+# the checks that compare the recorded state with the video (video_frozen_run too where a frozen picture is claimed only
+# while the state says the view must change, frozen_needs_motion)
+STATE_VS_VIDEO = ("camera_state_alignment_mismatch", "largest_action_not_in_video",
+                  "visual_change_unexplained_by_action", "pixel_action_corr_mismatch")
+
+
 def policy_for(rig: str) -> tuple[up.FilterPolicy, dict]:
     """Upstream's FilterPolicy and our per-rig rules for this rig."""
     policy = up.FilterPolicy()
@@ -187,7 +193,9 @@ def actor_views(ep: dict, names: list[str]) -> list[str | None]:
 
 def canonical_states(ep: dict) -> dict:
     """Upstream's [T,14] layout (x y z m, rotation vector rad, gripper per arm; left then right) with its
-    validity mask. Joint-state rigs get only the gripper column (no forward kinematics here)."""
+    validity mask. Joint-state rigs get only the gripper column (no forward kinematics here). Only the frames the
+    state covers are read (label/episode.py state_span): a state moved onto another camera's frames has no value
+    outside them (board/clips.py reanchor), which is not a missing value of the recording, so they are left invalid."""
     from scipy.spatial.transform import Rotation
     s = np.asarray(ep["state"], dtype=np.float64)
     T = len(s)
@@ -202,20 +210,21 @@ def canonical_states(ep: dict) -> dict:
         out["shape_ok"] = False
         return out
     n_act = s.shape[1] // 7
+    a, b = me.state_span(ep)
     for g in range(n_act):
-        block = s[:, 7 * g:7 * g + 7]
+        block = s[a:b, 7 * g:7 * g + 7]
         finite = np.isfinite(block)
         if not finite.all():
             out["nonfinite"].append({"actor": names[g], "rows": int((~finite.all(axis=1)).sum()),
-                                     "first_row": int(np.flatnonzero(~finite.all(axis=1))[0])})
+                                     "first_row": a + int(np.flatnonzero(~finite.all(axis=1))[0])})
             continue
         o = 7 * g
         if kind == "ee_pose":
-            states[:, o:o + 3] = block[:, 0:3]
-            states[:, o + 3:o + 6] = Rotation.from_euler("xyz", block[:, 3:6]).as_rotvec()
-            valid[:, o:o + 6] = True
-        states[:, o + 6] = block[:, 6]
-        valid[:, o + 6] = True
+            states[a:b, o:o + 3] = block[:, 0:3]
+            states[a:b, o + 3:o + 6] = Rotation.from_euler("xyz", block[:, 3:6]).as_rotvec()
+            valid[a:b, o:o + 6] = True
+        states[a:b, o + 6] = block[:, 6]
+        valid[a:b, o + 6] = True
     return out
 
 
@@ -937,6 +946,13 @@ def assess(feats: dict) -> dict:
                               f"under {policy.minimum_visual_action_r_squared:g}", camera=cam))
         R["pixel_action_corr_mismatch"] = _fired(ev, metrics=cm_out)
 
+    if ctx.get("state_unaligned"):
+        # the recorded state is not on these cameras' frames (the camera it was recorded on was taken out,
+        # board/clips.py drop_cameras): every check that compares it with the video is not assessed; the checks on the
+        # state alone stand
+        why = f"the recorded state is not on these cameras' frames: {ctx['state_unaligned']}"
+        for c in STATE_VS_VIDEO + (("video_frozen_run",) if extra["frozen_needs_motion"] else ()):
+            R[c] = _na(why)
     return {"checks": R, "cameras": cam_metrics, "actors": actor_metrics,
             "episode": {"duration_s": round(duration, 2), "rig": rig, "state_kind": kind, "gripper_unit": unit,
                         "clock": "capture times" if real_times else "frame_index / fps"}}

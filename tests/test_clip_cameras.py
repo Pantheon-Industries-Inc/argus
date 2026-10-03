@@ -69,13 +69,14 @@ T_LEFT = 0.5 + np.arange(60) / 30.0
 T_RIGHT = np.arange(75) / 30.0
 
 
-def _recording(tmp_path: Path, size: str = "160x120") -> tuple[Path, Path]:
-    """One recording on one recorder clock: a top camera, a left wrist camera that starts 0.5 s after it with as many
-    frames, and a right wrist camera with more; two arms' joints (14 values) recorded on the top camera's frames, row k
-    holding k, and a force signal on the same frames."""
+def _recording(tmp_path: Path, size: str = "160x120", left_start: float = 0.5) -> tuple[Path, Path]:
+    """One recording on one recorder clock: a top camera, a left wrist camera that starts left_start s after it with
+    as many frames, and a right wrist camera with more; two arms' joints (14 values) recorded on the top camera's
+    frames, row k holding k, and a force signal on the same frames."""
     up = tmp_path / "up"
     up.mkdir()
-    for stem, t in (("top", T_EXO), ("wrist_left", T_LEFT), ("wrist_right", T_RIGHT)):
+    t_left = left_start + np.arange(60) / 30.0
+    for stem, t in (("top", T_EXO), ("wrist_left", t_left), ("wrist_right", T_RIGHT)):
         _video(up / f"{stem}.mp4", len(t), size)
     state = np.tile(np.arange(60, dtype=np.float32)[:, None], (1, 14))
     eps = tmp_path / "episodes"
@@ -83,7 +84,7 @@ def _recording(tmp_path: Path, size: str = "160x120") -> tuple[Path, Path]:
     ep = eps / "episode_a"
     files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4"),
              "right": ("wrist_right", up / "wrist_right.mp4")}
-    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": T_LEFT,
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, real={"exo": T_EXO, "left": t_left,
                                                                              "right": T_RIGHT},
                                 state=state, action=state.copy(), signals={"force": np.arange(60.0)[:, None]})
     return eps, ep
@@ -125,12 +126,20 @@ def test_a_main_camera_taken_out_moves_the_state_and_signals_onto_the_new_main_c
     assert np.array_equal(sig[:45, 0], np.arange(15, 60)) and np.isnan(sig[45:]).all()
     assert ctx["n_state_frames"] == 60 and ctx["fps"] == 30.0 and ctx["duration_s"] == 2.5
     assert "exo" not in ctx["capture_qc"]["metrics"]["cameras"]          # the checks were run again without it
+    # the state covers the left camera's frames 0 to 44 only: limited to that stretch, said once, and never counted as
+    # missing values by the capture checks
+    assert ctx["state_span"] == [0, 45]
+    partial = [x for x in ctx["reader_issues"] if x["kind"] == "state_partial"]
+    assert len(partial) == 1 and "0.50 s to 1.97 s" in partial[0]["what"]
+    assert not [f for f in ctx["capture_qc"]["flags"] if f["check"] == "nonfinite_signal"]
     e = me.load(ep)
     pl = me.plan(e)
-    assert me.anchor(e) == "left" and pl["state_usable"]
+    assert me.anchor(e) == "left" and pl["state_usable"] and pl["state_span"] == (0, 45) and 44 in pl["ks"]
     assert me.frame_time(e, 0) == pytest.approx(0.5) and e["state"][0][0] == 15
     req = me.build_request(ep)
     assert req["views"] == ["left", "right"]
+    assert "nan" not in req["prompt"].lower().replace("nanosecond", "")
+    assert "The recorded state covers only 0.50 s to 1.97 s of the episode" in req["prompt"]
     # the left clip, cut as a side camera on the first run, is cut again as the main camera, still 0.5 s in
     left = out / "wrist_left" / f"{ep.name}.mp4"
     assert _clip_timing(left) == (1600, pytest.approx(0.5, abs=0.02))
@@ -142,13 +151,13 @@ def test_a_main_camera_taken_out_moves_the_state_and_signals_onto_the_new_main_c
 
 
 def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligned(tmp_path):
-    """With no capture times to move the state onto the new main camera, the state and signals are not used and the
-    episode says why."""
+    """The new main camera was paired to the old one by time (its kmap), and the capture times are gone: nothing can
+    place the state on its frames, so the state and signals are not used and the episode says why. The checks that
+    compare the state with the video are not assessed; those on the state alone still run."""
+    from checks import capture_qc
+    from checks import stream_pairing as sp
     eps, ep = _recording(tmp_path)
-    src = json.loads((ep / "sources.json").read_text())
-    for s in src.values():
-        s.pop("kmap", None)
-    (ep / "sources.json").write_text(json.dumps(src))
+    assert json.loads((ep / "sources.json").read_text())["left"].get("kmap")
     ctx = json.loads((ep / "context.json").read_text())
     ctx.pop("real_times", None)
     (ep / "context.json").write_text(json.dumps(ctx))
@@ -164,6 +173,65 @@ def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligne
     assert not me.plan(e)["state_usable"] and not e["signals"]
     req = me.build_request(ep)
     assert "state" not in req["blocks"] and "signals" not in req["blocks"]
+    assert sp.pairing(ep)["not_assessed"] and "crossed" not in sp.pairing(ep)
+    assert sp.jumps(ep)["not_assessed"] and "flagged" not in sp.jumps(ep)
+    assert sp.grippers(ep)["actors"]                         # the state alone is still checked
+    rows = {r["check"]: r for r in capture_qc.run_episode(ep)["checks"]}
+    for c in ("camera_state_alignment_mismatch", "video_frozen_run"):
+        assert rows[c]["status"] == "not_applicable" and "not on these cameras' frames" in rows[c]["why"], rows[c]
+    assert rows["invalid_state_shape"]["status"] == "clear"
+
+
+def test_a_main_camera_taken_out_of_a_shared_frame_index_keeps_the_state(tmp_path):
+    """LeRobot v3 style: every camera on one frame index (no kmap, no capture times, as many frames as the state).
+    The state is on the new main camera's frames too, so it is kept as it is and used."""
+    up = tmp_path / "up"
+    up.mkdir()
+    for stem in ("top", "wrist_left", "wrist_right"):
+        _video(up / f"{stem}.mp4", 60)
+    state = np.tile(np.arange(60, dtype=np.float32)[:, None], (1, 14))
+    eps = tmp_path / "episodes"
+    eps.mkdir()
+    ep = eps / "episode_a"
+    files = {"exo": ("top", up / "top.mp4"), "left": ("wrist_left", up / "wrist_left.mp4"),
+             "right": ("wrist_right", up / "wrist_right.mp4")}
+    formats.video_views_episode(ep, files, "teleop_arms", "probe", {}, state=state, action=state.copy())
+    src = json.loads((ep / "sources.json").read_text())
+    assert not any(s.get("kmap") for s in src.values())
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx.pop("real_times", None)
+    (ep / "context.json").write_text(json.dumps(ctx))
+    (ep / "times.npz").unlink()
+    (up / "top.mp4").write_bytes(b"not a video at all" * 50)
+    assert _clips(eps, tmp_path / "clips").returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    assert "state_unaligned" not in ctx and [x["kind"] for x in ctx["reader_issues"]] == ["camera_not_decodable"]
+    assert np.array_equal(np.load(ep / "state.npz")["state"], state)
+    e = me.load(ep)
+    assert me.anchor(e) == "left" and me.plan(e)["state_usable"]
+    assert "state" in me.build_request(ep)["blocks"]
+
+
+def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_frame(tmp_path):
+    """The left wrist camera started 0.5 s before the top camera, which does not decode. The episode's clock now
+    starts at the left camera's first frame, the earliest of the cameras left: frame times, clips and the length
+    agree, no instant before 0 is sampled, and the state covers the stretch the top camera filmed."""
+    eps, ep = _recording(tmp_path, left_start=-0.5)
+    (eps.parent / "up" / "top.mp4").write_bytes(b"not a video at all" * 50)
+    out = tmp_path / "clips"
+    assert _clips(eps, out).returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["clock_zero_s"] == 0.0 and ctx["clock_start_s"] == pytest.approx(-0.5)
+    assert ctx["duration_s"] == 2.0 and ctx["state_span"] == [15, 60]
+    with np.load(ep / "times.npz") as z:
+        assert z["left"][0] == pytest.approx(0.0) and z["right"][0] == pytest.approx(0.5)
+    e = me.load(ep)
+    pl = me.plan(e)
+    assert me.frame_time(e, 0) == pytest.approx(0.0) and min(me.frame_time(e, k) for k in pl["ks"]) >= 0
+    assert e["state"][15][0] == 0
+    assert _clip_timing(out / "wrist_left" / f"{ep.name}.mp4")[1] == pytest.approx(0.0, abs=0.02)
+    assert _clip_timing(out / "wrist_right" / f"{ep.name}.mp4")[1] == pytest.approx(0.5, abs=0.02)
+    assert clips.clip_frames(out / "wrist_left" / f"{ep.name}.mp4") == 60
 
 
 def test_every_camera_a_frame_short_is_labelled_to_the_last_frame_any_camera_has(tmp_path):
@@ -177,6 +245,9 @@ def test_every_camera_a_frame_short_is_labelled_to_the_last_frame_any_camera_has
     last = [t for t in texts if t.startswith("=== detail view, last frame")]
     assert len(last) == 1 and "t=0.93s | cameras top, left, right" in last[0], last
     assert req["timesteps"][-1] == pytest.approx(0.933, abs=0.001)
+    assert ("Every camera's video ends before the episode does, so the last instant is the last frame they have, at "
+            "0.93 s.") in req["prompt"]
+    assert "plus its first frame and the last frame its cameras have." in req["prompt"]
 
 
 def test_two_cameras_short_are_named_together(tmp_path):
@@ -190,8 +261,14 @@ def test_two_cameras_short_are_named_together(tmp_path):
 
 
 def test_a_camera_damaged_partway_leaves_only_its_own_cells_empty(tmp_path):
-    """A camera whose file does not decode for a stretch in the middle: the episode is labelled, that camera's cells
-    are empty where it does not decode, the prompt says so, and the stretch is recorded as a reader issue."""
+    """A camera whose file does not decode for a stretch in the middle: the episode is labelled from a read only
+    folder, that camera's cells are empty where it does not decode, the prompt says so, and the request returns the
+    stretch, which the run's record carries and the board shows as a reader issue. Nothing is written into the
+    episode folder."""
+    import os
+    import stat
+    from board import build as board_build
+    from label import harness
     up = tmp_path / "up"
     up.mkdir()
     _damaged(up / "top.mp4", 300, range(0))
@@ -199,16 +276,44 @@ def test_a_camera_damaged_partway_leaves_only_its_own_cells_empty(tmp_path):
     eps = tmp_path / "episodes"
     rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
     ep = eps / rep["episodes"][0]["episode_id"]
-    req = me.build_request(ep)
+    before = (ep / "context.json").read_text()
+    modes = {p: p.stat().st_mode for p in [ep, *ep.iterdir()]}
+    for p in modes:
+        p.chmod(stat.S_IMODE(modes[p]) & ~0o222)
+    try:
+        req = me.build_request(ep)
+        out = tmp_path / "out.json"
+        harness.label_episode(ep, out, model="m", reasoning="low", api_key="", max_tokens=1, timeout=5,
+                              dry_run=True)
+    finally:
+        for p, m in modes.items():
+            os.chmod(p, m)
     assert req["views"] == ["exo", "left"]
     assert "left's video could not be decoded at" in req["prompt"].lower()
-    issues = [x for x in json.loads((ep / "context.json").read_text()).get("reader_issues") or []
-              if x["kind"] == "camera_decode_failed"]
-    assert len(issues) == 1 and issues[0]["camera"] == "left"
-    assert 4.0 <= issues[0]["t0_s"] <= issues[0]["t1_s"] <= 5.5
-    me.build_request(ep)                                   # built again, the issue is not recorded twice
-    assert len([x for x in json.loads((ep / "context.json").read_text())["reader_issues"]
-                if x["kind"] == "camera_decode_failed"]) == 1
+    (bad,) = req["decode_failed"]
+    assert bad["camera"] == "left" and 4.0 <= bad["t0_s"] <= bad["t1_s"] <= 5.5
+    assert "could not be decoded" in bad["what"]
+    assert (ep / "context.json").read_text() == before
+    assert json.loads(out.read_text())["decode_failed"] == req["decode_failed"]
+    d = {}
+    board_build.add_context(d, json.loads(before), ep, {"decode_failed": req["decode_failed"]})
+    (iss,) = [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "camera_decode_failed"]
+    assert iss["camera"] == "left" and iss["what"] == bad["what"] and iss["t0_s"] == bad["t0_s"]
+
+
+def test_a_missing_camera_file_raises_and_a_garbage_one_is_named_not_decodable(tmp_path):
+    """A camera file that is gone is a fault on our side and raises; a file that is not a video is named as one that
+    does not decode, never as a video that ends early."""
+    rep, eps, ep = _upload(tmp_path, {"top": 60, "wrist_left": 60})
+    left = Path(json.loads((ep / "sources.json").read_text())["left"]["packed"])
+    left.write_bytes(b"not a video at all" * 50)
+    req = me.build_request(ep)
+    assert "Left's video could not be decoded at any instant" in req["prompt"]
+    assert "ends before the episode" not in req["prompt"]
+    assert [x["camera"] for x in req["decode_failed"]] == ["left"]
+    left.unlink()
+    with pytest.raises(FileNotFoundError):
+        me.build_request(ep)
 
 
 def test_the_job_notes_list_every_reader_issue_once(tmp_path):

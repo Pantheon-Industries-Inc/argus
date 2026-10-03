@@ -87,7 +87,8 @@
    "list": "data",
    "name": "Camera video does not decode",
    "reader_issues": [
-    "camera_not_decodable"
+    "camera_not_decodable",
+    "camera_decode_failed"
    ]
   },
   {

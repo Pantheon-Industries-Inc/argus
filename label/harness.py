@@ -192,6 +192,9 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         "sampling": req["sampling"],
         "arm_still_spans": req["still_spans"],
         "dataset_checks": pl["checks"],
+        # the stretches a camera's file could not be decoded at (label/episode.py decode_failures), which the board
+        # shows as reader issues (board/build.py); labelling never writes into the episode folder
+        "decode_failed": req["decode_failed"],
         "example_dir": str(example_dir) if example_dir else None,
         # the recording's contacts (label/contacts.py) and the strips each one shown was drawn with (checks/contacts.py)
         **({"contacts": req["contacts"], "contact_views": req["contact_views"]} if req.get("contact_views") else {}),

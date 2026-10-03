@@ -195,9 +195,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "stream_checks", "pieces",
             "instruction", "instruction_note", "real_times", "timebase_neighbour_lag_frames")}
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
-                  piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3),
-                         # where labelling records a problem it finds in the part (episode.record_decode_failures)
-                         "of_dir": str(Path(ep_dir).resolve())})
+                  piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
         note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total)} recording, from "
                 f"{fmt_clock(t0)} to {fmt_clock(t1)} of it. The labelling pipeline cut the recording into parts at "
                 "moments of little motion to label it; activity that carries across a cut is expected, and a part "
@@ -481,6 +479,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
             "stitched": {"parts": count, "cuts_s": cuts_s},
+            # each part's undecodable stretches, already on the recording's clock (label/episode.py decode_failures)
+            "decode_failed": [x for _, r in parts for x in r.get("decode_failed") or []],
             **({"contacts": [c for c in recorded if c.get("id") in asked], "contact_views": views}
                if views["shown"] else {})}
 

@@ -206,17 +206,21 @@ def reader_notes(ctx: dict) -> dict | None:
 _FAMILIES = None
 
 
-def reader_issues(ctx: dict) -> list[dict]:
-    """The problems an episode was kept and flagged with (context.json reader_issues: {"kind", "what", and optionally
-    "camera", "signal", "t0_s", "t1_s"}, a camera clip shorter than the episode or a camera that does not decode among
-    them, board/clips.py record_cameras), each with the family it raises (board/families.py reader_family), so the
-    page shows each as a data issue under that family's name. An entry without a kind and a sentence says nothing and
-    is left out."""
+def reader_issues(ctx: dict, result: dict | None = None) -> list[dict]:
+    """The problems an episode was kept and flagged with, each with the family it raises (board/families.py
+    reader_family), so the page shows each as a data issue under that family's name: context.json reader_issues
+    ({"kind", "what", and optionally "camera", "signal", "t0_s", "t1_s"}: a camera clip shorter than the episode or a
+    camera that does not decode among them, board/clips.py record_cameras), then the stretches the labelling run could
+    not decode a camera's file at, from its record (decode_failed, label/episode.py decode_failures), as kind
+    camera_decode_failed. An entry without a kind and a sentence says nothing and is left out."""
     global _FAMILIES
     if _FAMILIES is None:
         from board.families import Families
         _FAMILIES = Families()
-    return [{**x, "family": _FAMILIES.reader_family(str(x["kind"]))} for x in ctx.get("reader_issues") or []
+    found = list(ctx.get("reader_issues") or [])
+    found += [{"kind": "camera_decode_failed", **x} for x in (result or {}).get("decode_failed") or []
+              if isinstance(x, dict)]
+    return [{**x, "family": _FAMILIES.reader_family(str(x["kind"]))} for x in found
             if isinstance(x, dict) and x.get("kind") and isinstance(x.get("what"), str) and x["what"].strip()]
 
 
@@ -238,7 +242,7 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
         if ctx.get(key) is not None:
             d["dataset_checks"] = d.get("dataset_checks") or {}
             d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
-    issues = reader_issues(ctx)
+    issues = reader_issues(ctx, result)
     if issues:
         d["dataset_checks"] = d.get("dataset_checks") or {}
         d["dataset_checks"]["reader_issues"] = issues

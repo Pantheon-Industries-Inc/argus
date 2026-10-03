@@ -42,7 +42,6 @@ import base64
 import io
 import json
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,6 +202,19 @@ def state_kind(ep: dict) -> str:
     return k
 
 
+def state_span(ep: dict) -> tuple[int, int]:
+    """The anchor frames [a, b) the recorded state covers: all of them, or context.json state_span when the state was
+    moved onto another camera's frames and covers only part of them (board/clips.py reanchor, which leaves no value
+    outside it). Every use of the state stays inside it."""
+    T = int(len(ep["state"]))
+    sp = ep["context"].get("state_span")
+    if isinstance(sp, (list, tuple)) and len(sp) == 2:
+        a, b = max(0, int(sp[0])), min(T, int(sp[1]))
+        if a < b:
+            return a, b
+    return 0, T
+
+
 def plan(ep: dict) -> dict:
     """Frames to send plus the deterministic checks we report ourselves. With no usable arm state, the quiet spans of
     the signals choose the extra instants (pl["quiet_spans"])."""
@@ -215,6 +227,7 @@ def plan(ep: dict) -> dict:
     paired = {v for v in windows if v != a and v in ep["kmap"] and len(ep["kmap"][v]) >= windows[a]}
     # state_unaligned: the camera the state was recorded on was taken out of the episode, and nothing places the state
     # on the cameras left (board/clips.py drop_cameras), so it is never treated as aligned
+    sa, sb = state_span(ep)
     checks = {"state_frames": T, "camera_frames": windows,
               "camera_windows_match_state": not ep["context"].get("state_unaligned")
               and all(n == T for v, n in windows.items() if v not in paired)}
@@ -222,10 +235,11 @@ def plan(ep: dict) -> dict:
         # sped-up recording (the rig's loop ran below the rate its samples are stamped at): a report
         # field computed from the leader/follower joint lag, not a claim made to the model. It reads the 12 arm
         # joints of two arms (timebase.JOINTS), as measure_folder does, so a one-arm recording is not measured
-        checks["timebase"] = timebase.timebase_check(ep["state"], ep["action"],
+        checks["timebase"] = timebase.timebase_check(ep["state"][sa:sb], ep["action"][sa:sb],
                                                ep["context"].get("timebase_neighbour_lag_frames"), ep_fps(ep))
     if kind != "none" and checks["camera_windows_match_state"]:
-        spans = ms.still_spans(ep["state"], fps=fps, kind=kind, grip_range=ms.gripper_full_range(ep["context"]))
+        spans = [(x + sa, y + sa) for x, y in ms.still_spans(ep["state"][sa:sb], fps=fps, kind=kind,
+                                                            grip_range=ms.gripper_full_range(ep["context"]))]
         n = T
     else:
         # video only, or a dataset defect (the cameras do not cover the same frames as the state): label the
@@ -249,7 +263,11 @@ def plan(ep: dict) -> dict:
                                int(round(ms.MIN_STILL_S * fps)))
         sample_spans = quiet
     ks = ms.sample_frames(n, sample_spans, fps=fps, moving_every_s=every, still_every_s=every)
-    pl = {"n": n, "ks": ks, "spans": spans, "checks": checks,
+    if kind != "none" and checks["camera_windows_match_state"] and (sa, sb) != (0, T):
+        # a state that covers part of the episode: its first and last frame are instants too, so the recorded motion
+        # covers all of it and stops there (_motion_table)
+        ks = sorted(set(ks) | {sa, sb - 1})
+    pl = {"n": n, "ks": ks, "spans": spans, "checks": checks, "state_span": (sa, sb),
           "state_usable": checks["camera_windows_match_state"], "touch": touch_verdicts(ep, n)}
     if quiet is not None:
         pl["quiet_spans"] = quiet
@@ -327,15 +345,23 @@ def actors(ep: dict) -> list[str]:
     return [cam_name(ep, (mounted or views(ep)[:1])[-1])]
 
 
+def _decode_error(e: Exception) -> bool:
+    """Whether e is the decoder failing on a file that is there (PyAV's errors, the frame reader's own): a fault of the
+    recording, which costs only the frames it hits. A file that is missing or cannot be opened (OSError, including
+    PyAV's FileNotFoundError and PermissionError) is a fault on our side and is never one of these."""
+    import av
+    return isinstance(e, (av.error.FFmpegError, mf.FrameError)) and not isinstance(e, OSError)
+
+
 def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=(), failed: set | None = None):
     """Frames for anchor indices ks. A camera paired to the anchor by real time (kmap) is decoded at
     its own frame nearest each anchor frame; results are keyed by the anchor index. With widths, a frame wider
     than the widest of them is kept full size only at detail_ks, and otherwise only at those widths.
 
-    A camera never fails its episode. Its file may end before the episode does (an upload's every camera one frame
-    short), and then the instants after its last frame have no frame. Its file may be damaged partway (packets that do
-    not decode), and then each instant is decoded on its own, so only the instants it cannot decode lose its frame;
-    those go into failed, when given."""
+    A camera never fails its episode over its own data. Its file may end before the episode does (an upload's every
+    camera one frame short), and then the instants after its last frame have no frame. Its file may not decode, or be
+    damaged partway, and then each instant is decoded on its own, so only the instants it cannot decode lose its
+    frame; those go into failed, when given. A missing file still raises (_decode_error)."""
     s = ep["sources"][v]
     km = ep["kmap"].get(v)
     own = [int(km[k]) for k in ks] if km is not None else list(ks)
@@ -356,12 +382,16 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
             return go()
     try:
         got = run(own)
-    except Exception:
+    except Exception as e:
+        if not _decode_error(e):
+            raise
         got, bad = {}, set()
         for j in sorted(set(own)):
             try:
                 got.update(run([j]))
-            except Exception:
+            except Exception as e1:
+                if not _decode_error(e1):
+                    raise
                 bad.add(j)
         if failed is not None:
             failed.update(k for k, j in zip(ks, own) if j in bad)
@@ -374,10 +404,11 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
 
     An instant no camera has a frame at is dropped from pl["ks"], and when the episode's last instants are past every
     camera's last frame (an upload whose every camera's file ends a frame before the episode does), the last frame any
-    camera has takes their place, so the last detail view is the end of the footage. ep["no_frame"] holds the instants
-    each camera has no frame at, which recording_at then reports as not recording, so every grid and view leaves it
-    out there, and ep["decode_failed"] the instants a camera's damaged file could not be decoded at (_coverage_note,
-    record_decode_failures). Raises only when no camera has any frame."""
+    camera has takes their place, so the last detail view is the end of the footage (ep["footage_end"]). The episode
+    keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,
+    which recording_at then reports as not recording, so every grid and view leaves it out there; ep["decode_failed"],
+    the instants a camera's file could not be decoded at, before its last frame or, for a file none of whose frames
+    decodes, all of them (_coverage_note, decode_failures). Raises only when no camera has any frame."""
     vs = views(ep)
     failed = {v: set() for v in vs}
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
@@ -387,6 +418,7 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     keep = [k for k in ks if any(k in got[v] for v in vs)]
     if not keep:
         raise mf.FrameError(f"{ep.get('dir', '?')}: no camera has a frame at any instant")
+    ep.pop("footage_end", None)
     if len(keep) < len(ks):
         past = [k for k in ks if k > keep[-1]]
         if past:
@@ -398,51 +430,37 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
                     for v in vs:
                         got[v].update(more[v])
                     keep = sorted(set(keep) | {k})
+                    ep["footage_end"] = k
                     break
         pl["ks"] = keep
         if pl.get("contact"):
             pl["contact"] = [k for k in pl["contact"] if k in keep]
     ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
-    # a damaged stretch is an instant the camera could not decode before its last frame; the instants after its last
-    # frame are where its file ended
-    bad = {v: sorted(k for k in failed[v] if k in keep and got[v] and k < max(got[v])) for v in vs}
+    # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
+    # where its file ended); a camera with no frame at all that failed to decode does not decode anywhere
+    bad = {v: sorted(k for k in failed[v] if k in keep and (not got[v] or k < max(got[v]))) for v in vs}
     ep["decode_failed"] = {v: ks_ for v, ks_ in bad.items() if ks_}
+    ep["undecodable"] = {v for v in ep["decode_failed"] if not got[v]}
     return got
 
 
-DECODE_LOCK = threading.Lock()      # one write at a time to a recording's context.json from labelling threads
-
-
-def record_decode_failures(ep: dict) -> None:
-    """Record each stretch a camera's damaged file could not be decoded at (frames) as a reader issue in the
-    recording's context.json, {"kind": "camera_decode_failed", "camera", "what", "t0_s", "t1_s"}, on the recording's
-    clock, once. A part of a long recording (label/pieces.py) writes to the recording it was cut from. The board then
-    shows it as a data issue (board/build.py reader_issues)."""
-    bad = ep.get("decode_failed") or {}
-    if not bad:
-        return
+def decode_failures(ep: dict) -> list[dict]:
+    """The stretches each camera's file could not be decoded at (frames), for the run's record and the board
+    (board/build.py reader_issues): [{"camera", "t0_s", "t1_s", "what"}], on the recording's clock (a part of a long
+    recording adds where it starts, label/pieces.py). Labelling never writes into the episode folder."""
     from board.clips import camera_label
-    piece = ep["context"].get("piece") or {}
-    target = Path(piece["of_dir"]) if piece.get("of_dir") else Path(ep["dir"]).resolve()
-    off = float(piece.get("t0_s") or 0.0) if piece.get("of_dir") else 0.0
-    new = []
-    for v, ks in bad.items():
+    off = float((ep["context"].get("piece") or {}).get("t0_s") or 0.0)
+    out = []
+    for v, ks in (ep.get("decode_failed") or {}).items():
         t0, t1 = round(frame_time(ep, min(ks)) + off, 3), round(frame_time(ep, max(ks)) + off, 3)
-        when = f"at {t0:.2f} s" if t0 == t1 else f"from {t0:.2f} s to {t1:.2f} s"
-        new.append({"kind": "camera_decode_failed", "camera": v, "t0_s": t0, "t1_s": t1,
-                    "what": f"The {camera_label(v, ep['context'])} video could not be decoded {when}, so the labels "
-                            "have no frame of it there."})
-    with DECODE_LOCK:
-        p = target / "context.json"
-        if not p.exists():
-            return
-        ctx = json.loads(p.read_text())
-        have = ctx.get("reader_issues") or []
-        seen = {(x.get("kind"), x.get("camera"), x.get("t0_s"), x.get("t1_s")) for x in have if isinstance(x, dict)}
-        add = [x for x in new if (x["kind"], x["camera"], x["t0_s"], x["t1_s"]) not in seen]
-        if add:
-            ctx["reader_issues"] = have + add
-            p.write_text(json.dumps(ctx, indent=1))
+        name = camera_label(v, ep["context"])
+        if v in (ep.get("undecodable") or ()):
+            what = f"The {name} video could not be decoded, so the labels have no frame of it."
+        else:
+            when = f"at {t0:.2f} s" if t0 == t1 else f"from {t0:.2f} s to {t1:.2f} s"
+            what = f"The {name} video could not be decoded {when}, so the labels have no frame of it there."
+        out.append({"camera": v, "t0_s": t0, "t1_s": t1, "what": what})
+    return out
 
 
 def _in_span(ep: dict, v: str, k: int) -> bool:
@@ -824,8 +842,10 @@ def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
 
 def _coverage_note(ep: dict, pl: dict) -> str:
     """A camera that has no frame at some instants (recording_at), said so its empty cells are read as what they are:
-    when it records (_in_span), the instants after its file ends (frames), and the instants its damaged file could not
-    be decoded at. One camera can have more than one of these, and each is said."""
+    when it records (_in_span), the instants after its file ends (frames), and the instants its file could not be
+    decoded at (all of them for a file none of whose frames decodes). One camera can have more than one of these, and
+    each is said. When every camera's file ends before the episode does, the last instant is the last frame they have
+    (frames, ep["footage_end"]), which is said too."""
     gaps, ended, broken = [], [], []
     at = lambda ks: ", ".join(f"{frame_time(ep, k):.2f} s" for k in sorted(ks))
     for v in views(ep):
@@ -836,7 +856,9 @@ def _coverage_note(ep: dict, pl: dict) -> str:
             t = ep["times"][v]
             gaps.append(f"{name} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
         bad = set((ep.get("decode_failed") or {}).get(v) or ())
-        if bad:
+        if v in (ep.get("undecodable") or ()):
+            broken.append(f"{name}'s video could not be decoded at any instant")
+        elif bad:
             broken.append(f"{name}'s video could not be decoded at {at(bad)}")
         ends = {k for k in (ep.get("no_frame") or {}).get(v, ()) if k not in bad and _in_span(ep, v, k)}
         if ends:
@@ -854,6 +876,9 @@ def _coverage_note(ep: dict, pl: dict) -> str:
         s = "; ".join(parts)
         lead = " " + s[0].upper() + s[1:]
         out += lead + (", " if tail.startswith("so") else ". ") + tail.format(**words)
+    if ep.get("footage_end") is not None:
+        out += (" Every camera's video ends before the episode does, so the last instant is the last frame they have, "
+                f"at {frame_time(ep, ep['footage_end']):.2f} s.")
     return out
 
 
@@ -1149,9 +1174,11 @@ def _motion_table(ep: dict, pl: dict) -> str:
     cameras. Mounted cameras are rigid on their gripper, so a real move shows in that camera."""
     names, kind, n = actors(ep), state_kind(ep), _rig_nouns(rig(ep))
     st = ep["state"][:pl["n"]]
+    sa, sb = pl.get("state_span") or (0, len(st))
+    ks = [k for k in pl["ks"] if sa <= k < sb]
     rows = []
     if kind == "ee_pose":
-        for r in ms.recorded_motion(st, pl["ks"], names):
+        for r in ms.recorded_motion(st, ks, names):
             parts = [f"{a} {g['move_cm']:.1f}, {g['max_step_cm']:.1f}, {g['turn_deg']:.0f}, "
                      f"{g['open_a']:.2f}>{g['open_b']:.2f}" for a, g in r["grippers"].items()]
             rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
@@ -1163,7 +1190,7 @@ def _motion_table(ep: dict, pl: dict) -> str:
                  "AND the recorded turn is near 0 deg (the pose stopped updating); a recorded single-frame "
                  "step of several cm with no jump in the view at that moment")
     else:
-        for r in ms.recorded_joint_motion(st, pl["ks"], names):
+        for r in ms.recorded_joint_motion(st, ks, names):
             parts = [f"{a} {g['max_deg']:.1f}, {g['max_step_deg']:.1f}, {g['grip_a']:.2f}>{g['grip_b']:.2f}"
                      for a, g in r["arms"].items()]
             rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
@@ -1191,6 +1218,8 @@ def _motion_table(ep: dict, pl: dict) -> str:
         "depends on the lens, the distance to the scene and the direction of travel. Likewise never compare "
         "how open the fingers look with the gripper number: its scale is not a picture of how wide the "
         "fingers look, so only the timing of a change can be compared with the video.\n"
+        + (f"The recorded state covers only {frame_time(ep, sa):.2f} s to {frame_time(ep, sb - 1):.2f} s of the "
+           "episode, so the rows stop there and nothing is recorded outside it.\n" if (sa, sb) != (0, len(st)) else "")
         + "\n".join(rows))
 
 
@@ -1440,8 +1469,10 @@ def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
 
 
 def _instants_line(ep: dict) -> str:
+    # when every camera's file ends before the episode does, the last instant is the last frame they have (frames)
+    last = "frame and the last frame its cameras have" if ep.get("footage_end") is not None else "and last frame"
     return (f"Which instants you get: one every {SAMPLE_EVERY_S[rig(ep)]:g} s for the whole episode, plus its first "
-            "and last frame.")
+            f"{last}.")
 
 
 def task_block(ep: dict) -> str:
@@ -1523,7 +1554,6 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
         pl["contact"] = []   # wide cells already show contact in detail
     # full size is kept only where a detail view shows it: the first and last instant and the contact instants
     imgs = frames(ep, pl, gate, widths=widths, detail_ks={pl["ks"][0], pl["ks"][-1], *(pl.get("contact") or [])})
-    record_decode_failures(ep)
     any_img = next(im[pl["ks"][0]] for im in imgs.values() if pl["ks"][0] in im)
     # a circular image with black corners names a fisheye lens in that camera's line (label/lens.py)
     ep["lens"] = {v: lens.circular_image(imgs[v]) for v in order_views(imgs)}
@@ -1598,7 +1628,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
             "given_prompt": (ep["context"].get("instruction") or "").strip() or None,
             "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels,
             "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]], "lens": ep["lens"],
-            "grid_cols": grid_cols,
+            "grid_cols": grid_cols, "decode_failed": decode_failures(ep),
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
             "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s",
             "blocks": [b.name for b in blocks],
