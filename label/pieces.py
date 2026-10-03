@@ -188,8 +188,13 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         for v, s in src.items():
             s2 = {kk: vv for kk, vv in s.items() if kk != "kmap"}
             km = ep["kmap"].get(v)
-            if v == a or km is None:
+            if v == a:
                 j0, j1 = k0, k1
+            elif km is None:
+                # a camera not paired by time shares the anchor's frame index up to its own last frame, so a part past
+                # that has none of it (label/episode.py _decode_view)
+                own = int(s["n_frames"])
+                j0, j1 = min(k0, own), min(k1, own)
             else:
                 j0, j1 = int(km[k0]), int(km[k1 - 1]) + 1
                 np.save(d / f"kmap_{v}.npy", (np.asarray(km[k0:k1]) - j0).astype(np.int32))

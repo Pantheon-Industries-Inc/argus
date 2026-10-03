@@ -149,6 +149,59 @@ def test_a_lerobot_episode_is_as_long_as_its_main_camera_and_a_short_camera_is_f
     assert abs(short["t0_s"] - 0.3) < 0.05 and abs(short["t1_s"] - 1.0) < 0.05, short
 
 
+def _lerobot_short_wrist(root: Path, n_main: int = 90, n_wrist: int = 30) -> None:
+    """A LeRobot v2.1 episode of a moving 14 value state, one row per main camera frame, and a wrist camera whose video
+    is shorter than the main camera's."""
+    state = np.cumsum(np.random.default_rng(1).normal(0, 0.02, (n_main, 14)), axis=0)
+    _lerobot(root, {0: {"observation.state": list(state), "action": list(state)}}, n_video=0,
+             feats={"observation.images.cam_left_wrist": {"dtype": "video", "shape": [48, 64, 3]}})
+    videos = root / "videos" / "chunk-000"
+    _mp4(videos / "observation.images.cam_high" / "episode_000000.mp4", n_main)
+    _mp4(videos / "observation.images.cam_left_wrist" / "episode_000000.mp4", n_wrist)
+
+
+def test_a_short_side_camera_never_cuts_what_is_labelled(tmp_path):
+    """The labelling plan had taken the shortest camera's length, so a wrist camera of 1 s beside a 3 s main camera
+    cut the request to 1 s and judged the state unusable, which dropped its recorded motion, while the prompt spoke of
+    the whole episode. The request covers the main camera's frames with the state on them, and the wrist camera only
+    loses its cells past its end, which the prompt names."""
+    from label import episode as me
+    root = tmp_path / "lr"
+    _lerobot_short_wrist(root)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ep_dir = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    ep = me.load(ep_dir)
+    pl = me.plan(ep)
+    assert pl["n"] == 90 and pl["state_usable"], (pl["n"], pl["checks"])
+    assert me.frame_time(ep, pl["ks"][-1]) > 2.5, pl["ks"]
+    me.frames(ep, pl)
+    assert ep["no_frame"]["left"] == {k for k in pl["ks"] if k >= 30}, ep["no_frame"]
+    assert not ep["decode_failed"], ep["decode_failed"]
+    req = me.build_request(ep_dir)
+    assert "RECORDED MOTION" in req["prompt"]
+    assert "Left's video ends before the episode does" in req["prompt"], req["prompt"]
+
+
+def test_a_part_of_a_long_recording_past_a_short_cameras_end_has_no_frame_of_it(tmp_path, monkeypatch):
+    """A part cut out of a long recording had given a camera that stopped before it a window of the anchor's length,
+    so every instant read as a frame that could not be decoded. Each part keeps only the camera's own frames inside
+    it: a part past its end has none, and its prompt says the video ended, not that it failed."""
+    from label import episode as me
+    from label import pieces
+    monkeypatch.setitem(pieces.PIECE_MAX_S, "teleop_arms", 1.0)
+    root = tmp_path / "lr"
+    _lerobot_short_wrist(root)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    parts = pieces.write_pieces(tmp_path / "eps" / rep["episodes"][0]["episode_id"], tmp_path / "pieces")
+    assert len(parts) == 3
+    windows = [int(json.loads((p / "sources.json").read_text())["left"]["n_frames"]) for p in parts]
+    assert sum(windows) == 30 and windows[-1] == 0, windows
+    ep = me.load(parts[-1])
+    pl = me.plan(ep)
+    me.frames(ep, pl)
+    assert ep["no_frame"]["left"] == set(pl["ks"]) and not ep["decode_failed"], (ep["no_frame"], ep["decode_failed"])
+
+
 def test_a_side_camera_that_ends_early_is_flagged(tmp_path):
     root = tmp_path / "up"
     _mp4(root / "ep1" / "top.mp4", 60)

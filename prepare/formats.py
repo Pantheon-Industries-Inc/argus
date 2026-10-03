@@ -3083,6 +3083,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             note = "Labelled from the video: no data file came with this episode."
         if notes:
             note = None                  # the read failure already says why, in notes
+    from label import episode as me
     packed = all(isinstance(row["videos"][k], tuple) for k in vmap.values())
     if packed:
         if not fps:
@@ -3114,10 +3115,14 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
                 cameras[v]["desc"] = descs[key]
         note_broken_cameras(extra, broken, bool(sources))
         vmap = {v: k for v, k in vmap.items() if v in sources}
-        n_frames = min(s["n_frames"] for s in sources.values())
+        # the episode is as long as its main camera's window, as in one file per camera below
+        anchor = me.order_views(sources)[0]
+        n_frames = sources[anchor]["n_frames"]
+        camera_span_issues(extra, {v: np.arange(s["n_frames"]) / fps for v, s in sources.items()}, anchor,
+                           dict(vmap), {"profile": rig, "cameras": cameras})
         state, action, kind, note, fixes = state_on_frames(df, state, action, n_frames, fps, kind, note)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
-               "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(min(s["n_frames"] for s in sources.values())),
+               "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_frames),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
         un = lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps)
         if un:
@@ -3136,7 +3141,6 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     opened = {v: (key, row["videos"][key]) for v, key in vmap.items()}
     prs = open_cameras(opened, extra)
     vmap = {v: k for v, k in vmap.items() if v in opened}
-    from label import episode as me
     anchor = me.order_views(prs)[0]
     if not fps:
         fps = measured_fps(prs[anchor]["pts"].astype(np.float64) * float(prs[anchor]["time_base"])) or 30.0

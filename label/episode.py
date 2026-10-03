@@ -221,16 +221,18 @@ def plan(ep: dict) -> dict:
     T = int(len(ep["state"]))
     r, kind, fps = rig(ep), state_kind(ep), ep_fps(ep)
     windows = {v: int(ep["sources"][v]["n_frames"]) for v in views(ep)}
-    # the state follows the anchor camera's frames; a camera paired to the anchor by real time (kmap) has
-    # its own frame count and is matched through the map, so only unpaired cameras must equal the state
+    # the episode is the anchor camera's frames, which the state's rows follow. A camera paired to the anchor by real
+    # time (kmap) is matched through its map, which must cover every anchor frame; any other camera only shows its own
+    # frames, and one that ends before the anchor has no frame past its end (_decode_view), so it never decides how
+    # long the episode is or whether the state lines up
     a = anchor(ep)
-    paired = {v for v in windows if v != a and v in ep["kmap"] and len(ep["kmap"][v]) >= windows[a]}
+    short_maps = [len(km) for v, km in ep["kmap"].items() if v != a and v in windows and len(km) < windows[a]]
     # state_unaligned: the camera the state was recorded on was taken out of the episode, and nothing places the state
     # on the cameras left (board/clips.py drop_cameras), so it is never treated as aligned
     sa, sb = state_span(ep)
     checks = {"state_frames": T, "camera_frames": windows,
               "camera_windows_match_state": not ep["context"].get("state_unaligned")
-              and all(n == T for v, n in windows.items() if v not in paired)}
+              and windows[a] == T and not short_maps}
     if ep.get("action") is not None and r == "teleop_arms" and kind == "joints" and ep["state"].shape[1] == 14:
         # sped-up recording (the rig's loop ran below the rate its samples are stamped at): a report
         # field computed from the leader/follower joint lag, not a claim made to the model. It reads the 12 arm
@@ -242,11 +244,11 @@ def plan(ep: dict) -> dict:
                                                             grip_range=ms.gripper_full_range(ep["context"]))]
         n = T
     else:
-        # video only, or a dataset defect (the cameras do not cover the same frames as the state): label the
-        # video as shipped over the anchor frames every camera not paired to it by time also has, and make no
-        # state claims (the defect is reported in checks)
+        # video only, or a dataset defect (the anchor's frames are not the state's rows): label the video as shipped
+        # over the anchor's frames that every camera paired to it by time has a map for, and make no state claims (the
+        # defect is reported in checks)
         spans = []
-        n = min([windows[a]] + [w for v, w in windows.items() if v != a and v not in paired])
+        n = min([windows[a]] + short_maps)
     if ep["context"].get("stream_checks"):
         checks["streams"] = ep["context"]["stream_checks"].get("streams")
     if ep["context"].get("stream_pairing"):
@@ -365,13 +367,15 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
     its own frame nearest each anchor frame; results are keyed by the anchor index. With widths, a frame wider
     than the widest of them is kept full size only at detail_ks, and otherwise only at those widths.
 
-    A camera never fails its episode over its own data. Its file may end before the episode does (an upload's every
-    camera one frame short), and then the instants after its last frame have no frame. Its file may not decode, or be
-    damaged partway, and then each instant is decoded on its own, so only the instants it cannot decode lose its
-    frame; those go into failed, when given. A missing file still raises (_decode_error)."""
+    A camera never fails its episode over its own data. It may have fewer frames than the anchor (a camera that stopped
+    first), or its file may end before its own last frame (an upload's every camera one frame short), and then the
+    instants after its last frame have no frame. Its file may not decode, or be damaged partway, and then each instant
+    is decoded on its own, so only the instants it cannot decode lose its frame; those go into failed, when given. A
+    missing file still raises (_decode_error)."""
     s = ep["sources"][v]
     km = ep["kmap"].get(v)
     own = [int(km[k]) for k in ks] if km is not None else list(ks)
+    mine = [j for j in own if j < int(s["n_frames"])]      # the instants past the camera's last frame have none
     pts = ep["times"].get(f"{v}_pts") if ep.get("times") is not None else None
     keep = None
     if widths:
@@ -388,12 +392,12 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
         with gate:
             return go()
     try:
-        got = run(own)
+        got = run(mine)
     except Exception as e:
         if not _decode_error(e):
             raise
         got, bad = {}, set()
-        for j in sorted(set(own)):
+        for j in sorted(set(mine)):
             try:
                 got.update(run([j]))
             except Exception as e1:
