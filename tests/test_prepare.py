@@ -656,6 +656,34 @@ def test_galaxea_habit_and_openaoe_annotation_helpers():
                     {"t0": 5.0, "t1": 7.0, "label": "segment", "ok": True}]
 
 
+@pytest.mark.parametrize("malformed", [False, True])
+def test_habit_task_table_releases_file_after_read_or_parse_failure(tmp_path, monkeypatch, malformed):
+    import builtins
+
+    path = tmp_path / "subtasks.jsonl"
+    path.write_text('{"task_index": 9007199254740993, "task": "拿起 cup"}\n'
+                    + ('{broken\n' if malformed else '{"task_index": 7, "task": "place cup"}\n'))
+    opened = []
+
+    def tracked_open(*args, **kwargs):
+        stream = builtins.open(*args, **kwargs)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr(habit, "open", tracked_open, raising=False)
+    try:
+        if malformed:
+            with pytest.raises(json.JSONDecodeError):
+                habit._texts(path)
+        else:
+            assert habit._texts(path) == {9007199254740993: "拿起 cup", 7: "place cup"}
+        assert len(opened) == 1
+        assert opened[0].closed
+    finally:
+        for stream in opened:
+            stream.close()
+
+
 def test_realomin_quaternion_to_roll_pitch_yaw():
     half = np.sqrt(0.5)
     rpy = realomin.quat_to_rpy(np.array([[0, 0, 0, 1], [half, 0, 0, half], [0, 0, half, half]], dtype=float))

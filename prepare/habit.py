@@ -76,7 +76,8 @@ def timed_parts(idx: np.ndarray, texts: dict, fps: float) -> list[str]:
 
 
 def _texts(p: Path) -> dict:
-    return {json.loads(line)["task_index"]: json.loads(line)["task"] for line in open(p)}
+    with open(p) as source:
+        return {json.loads(line)["task_index"]: json.loads(line)["task"] for line in source}
 
 
 def task_note(root: Path, df: pd.DataFrame, fps: float) -> str:
