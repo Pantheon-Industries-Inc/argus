@@ -50,6 +50,25 @@ def test_complete_constant_signals_keep_their_existing_words():
         "name": "qpos", "dims": 2, "constant": True, "value": [1., 2.]}
 
 
+@pytest.mark.parametrize("gap", [np.inf, -np.inf, np.nan])
+def test_partial_constant_keeps_every_finite_value_without_a_complete_row(gap):
+    a = np.array([[1., gap], [np.nan, 2.]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        text = me._signals_table(_episode(a), {"n": 2, "ks": [0, 1], "spans": [], "touch": frozenset()})
+    assert "qpos [1, 2] (partial reading at 2 of 2 frames)" in text
+    assert "inf" not in text
+
+
+def test_partial_signal_keeps_an_empty_column_without_a_warning():
+    a = np.array([[1., np.nan], [1., np.nan]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        text = me._signals_table(_episode(a), {"n": 2, "ks": [0, 1], "spans": [], "touch": frozenset()})
+    assert "partial reading at 2 of 2 frames" in text
+    assert "qpos [0]: 1 1" in text and "qpos [1]: - -" in text
+
+
 def test_a_value_with_no_reading_is_preserved_without_a_warning():
     a = np.array([[1., np.nan], [2., np.nan], [3., np.nan]])
     ep = _episode(a)

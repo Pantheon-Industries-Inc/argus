@@ -1103,7 +1103,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
             if _constant(a):
                 # a value repeated wherever it reads (a setting, a calibration, or a sensor that sent nothing new):
                 # named once, as the same at every frame only when it reads at every frame
-                v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
+                complete = np.isfinite(a).all(axis=1)
+                v = a[complete][0] if complete.any() else sg.finite_range(a)[0]
                 said = name + (f" {_num(v[0])}" if len(v) == 1 else
                                " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else "")
                 gaps = sg.gap_words(a)
