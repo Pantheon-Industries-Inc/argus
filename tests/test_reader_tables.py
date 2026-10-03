@@ -301,9 +301,8 @@ def test_an_arm_file_damaged_inside_before_any_message_leaves_no_arm_state(tmp_p
     ctx = _recorder(tmp_path, _damage_whole_chunk)
     assert ctx["state_kind"] == "none" and not (ctx["_ep"] / "state.npz").exists()
     assert ctx["state_why"] == "unreadable" and "state" not in ctx["source"]
-    assert ctx["state_note"].startswith("Labelled from the cameras, because yam_left.mcap is damaged inside, though "
-                                        "its index is whole, so none of its messages could be read. What it records "
-                                        "is unknown, so the other sensor files are not read as the arm state")
+    assert "yam_left.mcap is damaged inside" in ctx["state_note"]
+    assert "declared channels" in ctx["state_note"] and "/yam_left/joint_state" in ctx["state_note"]
     assert "/yam_right/joint_state joint_pos" in _signal_names(ctx)
 
 
@@ -1068,3 +1067,32 @@ def test_sensor_file_and_signal_span_issues_are_named_data_families():
     assert slugs["mcap_file_damaged"] == slugs["sensor_file_cut"] and not slugs["sensor_file_cut"].startswith("d:")
     assert not slugs["signal_partial_span"].startswith("d:")
     assert {fam.catalog()[s]["list"] for s in slugs.values()} == {"data"}
+
+
+@pytest.mark.parametrize("topic,blocked", [("/yam_left/joint_state", True),
+                                          ("/yam_leader_left/joint_pos", False),
+                                          ("/yam_camera/joint_state", False)])
+def test_an_outside_follower_blocks_state_but_commands_and_a_third_arm_do_not(tmp_path, topic, blocked):
+    name = topic.split("/")[1] + ".mcap"
+    ctx = _recorder(tmp_path, lambda d: _arm_mcap(d / name, seconds=2, t0=T0 + 3600, topic=topic))
+    assert (ctx["state_kind"] == "none") == blocked
+    if blocked:
+        assert ctx["state_why"] == "short" and name in ctx["state_note"]
+        assert "outside" in ctx["state_note"] and "/yam_right/joint_state joint_pos" in _signal_names(ctx)
+        assert _issues(ctx, "sensor_outside_footage")
+    elif "leader" in topic:
+        with np.load(ctx["_ep"] / "state.npz") as z:
+            assert z["state"].shape == (60, 14) and "action" not in z.files
+
+
+def test_a_damaged_command_file_costs_only_the_action_and_names_its_channels(tmp_path):
+    ctx = _recorder(tmp_path, lambda d: _damage_whole_chunk(d, "yam_leader_left.mcap"))
+    assert ctx["state_kind"] == "joints" and "state_note" not in ctx
+    with np.load(ctx["_ep"] / "state.npz") as z:
+        assert z["state"].shape == (60, 14) and "action" not in z.files
+
+
+def test_a_damaged_follower_names_its_declared_channels_without_calling_them_unknown(tmp_path):
+    ctx = _recorder(tmp_path, _damage_whole_chunk)
+    assert "/yam_left/joint_state" in ctx["state_note"]
+    assert "What it records is unknown" not in ctx["state_note"]

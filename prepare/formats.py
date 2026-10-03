@@ -2574,7 +2574,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     streams = mcap_joint_streams(mcap_files, real[anchor], lost) if arm_rig and mcap_files else {}
     bad = unreadable_sensors(unplaced) + damaged_files(lost) if rig != "ego_head" else []
     others = "the other sensor files" if len(by_clock) + len(assumed) + len(unplaced) > len(bad) else None
-    blocked = state_blockers(bad, assumed_arms(assumed, streams) if arm_rig and by_clock else [], others)
+    blocked = state_blockers(bad, assumed_arms(assumed, streams) if arm_rig and by_clock else [], others,
+                             unplaced_arms(unplaced, streams) if arm_rig else [])
     if by_clock:
         if not arm_rig or not mcap_files:
             # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP
@@ -4725,7 +4726,8 @@ def damaged_unread(p: Path, chans: list[tuple[str, str]], seen: set, damaged: li
     if first is not None and q is not None and covers_footage(first, last, np.asarray(q, dtype=np.float64)):
         return []
     counts = mcap_message_counts(p)
-    return sorted(t for t, s in chans if t not in seen and counts.get(t, 1) and not bookkeeping_why(t, s))
+    return sorted(t for t, s in chans if t not in seen and counts.get(t, 1) and not bookkeeping_why(t, s)
+                  and not ACTION_TOPIC.search(t))
 
 
 def _mcap_channels_by_scan(path: Path) -> list[tuple[str, str]]:
@@ -5869,7 +5871,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q, lost)
         bad = unreadable_sensors(unplaced) + damaged_files(lost)
         others = "the recording's other files" if 1 + len(by_clock) + len(assumed) + len(unplaced) > len(bad) else None
-        blocked = state_blockers(bad, assumed_arms(assumed, streams), others)
+        blocked = state_blockers(bad, assumed_arms(assumed, streams), others, unplaced_arms(unplaced, streams))
         state, action, note = joint_state(streams, q) if not blocked else (None, None, blocked)
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)
@@ -6432,8 +6434,7 @@ def damaged_files(lost: list) -> list[tuple[str, str]]:
     """[(name, what happened to it)] of the MCAP files damaged inside whose channels could not be read where the
     footage needs them (lost, as mcap_joint_streams appends them: path, channels, whether any message was read)."""
     head = "is damaged inside, though its index is whole, so "
-    return [(Path(p).name, head + (f"nothing on {_and_words(chans)} could be read" if read else
-                                   "none of its messages could be read")) for p, chans, read in lost]
+    return [(Path(p).name, head + f"nothing on the declared channels {_and_words(chans)} could be read") for p, chans, read in lost]
 
 
 def unread_sensors_note(bad: list[tuple[str, str]], others: str | None) -> StateNote | None:
@@ -6445,8 +6446,9 @@ def unread_sensors_note(bad: list[tuple[str, str]], others: str | None) -> State
     held, since a tactile pad, a leader's commands or a log is no arm."""
     if not bad:
         return None
-    note = ("Labelled from the cameras, because " + "; ".join(f"{name} {why}" for name, why in bad)
-            + f". What {'they record' if len(bad) > 1 else 'it records'} is unknown")
+    note = "Labelled from the cameras, because " + "; ".join(f"{name} {why}" for name, why in bad)
+    if any("declared channels" not in why for _, why in bad):
+        note += f". What {'they record' if len(bad) > 1 else 'it records'} is unknown"
     if others:
         note += f", so {others} are not read as the arm state, and their channels are given as signals"
     return StateNote(note + ".", "unreadable")
@@ -6501,7 +6503,7 @@ def assumed_arms_note(arms: list[tuple[str, list[str]]], others: str | None, lea
 
 
 def state_blockers(bad: list[tuple[str, str]], arms: list[tuple[str, list[str]]],
-                   others: str | None) -> StateNote | None:
+                   others: str | None, outside: list[tuple[str, str, list[str]]] = ()) -> StateNote | None:
     """Why no arm state is read beside an episode's sensor files, or None: a file whose content is unknown (bad,
     unread_sensors_note) or a working arm only on an assumed clock (arms, assumed_arms_note). An arm state is given
     only when every arm the episode's sensor files may hold was read on the footage's clock, since a state that lacks
@@ -6510,7 +6512,20 @@ def state_blockers(bad: list[tuple[str, str]], arms: list[tuple[str, list[str]]]
     then = assumed_arms_note(arms, others, lead=first is None)
     if first and then:
         return StateNote(f"{first} {then}", first.why)
-    return first or then
+    prior = first or then
+    if outside:
+        note = StateNote("Labelled from the cameras, because " + "; ".join(
+            f"{name} records an arm ({', '.join(chans)}), but {why}" for name, why, chans in outside)
+            + ". A state of the other files would lack that arm, so every arm channel is given as a signal.", "short")
+        return StateNote(f"{prior} {note}", prior.why) if prior else note
+    return prior
+
+
+def unplaced_arms(unplaced: list, clocked: dict) -> list[tuple[str, str, list[str]]]:
+    """Readable working arms not placed on the footage, with the file's placement reason. Declared outside times
+    do not prove a separate take, so a follower here blocks a complete state just as an assumed arm does."""
+    arms = dict(assumed_arms([p for p, _ in unplaced if sensor_times(p) is not None], clocked))
+    return [(Path(p).name, why, arms[Path(p).name]) for p, why in unplaced if Path(p).name in arms]
 
 
 def sensor_cut(p: Path) -> bool:
@@ -6543,8 +6558,8 @@ def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path],
     (assign_sensors): its own files (item["state"]) and those it shares with the other episodes of its folder
     (item["state_shared"]). A file is placed by its clock when the footage's frame times q are on a recorder's clock
     (clocked: capture times, an MCAP's log times, an HDF5 camera's clock) and the file's times are on one too and
-    overlap the footage; when both are on a recorder's clock and the file covers none of the footage, it recorded
-    something else and is listed as recorded outside the footage. Otherwise an own file is placed from both starts, an
+    overlap the footage; when both are on a recorder's clock and the file covers none of the footage, it is listed
+    as recorded outside the footage. This alone never proves it is a separate take. Otherwise an own file is placed from both starts, an
     alignment that is assumed (its signals are marked so and never read as the arm state), while a shared file is
     listed on the episode with the reason: it could be any of the folder's episodes' recording, and placing it from
     both starts on each would be a guess."""
@@ -6558,7 +6573,7 @@ def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path],
         elif on_clock and recorder_clock(t) and overlaps(t, np.asarray(q, dtype=np.float64)):
             by_clock.append(p)
         elif on_clock and recorder_clock(t):
-            # both clocks are real and comparable: a file that covers none of the footage recorded something else
+            # comparable clocks whose spans do not meet: keep the disagreement visible
             unplaced.append((p, outside_words(t, np.asarray(q, dtype=np.float64))))
         elif p in own:
             assumed.append(p)
@@ -6599,6 +6614,9 @@ def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, u
     how.update({Path(p).name: f"not placed: {why}" for p, why in unplaced})
     extra["source"]["sensor_files"] = how
     signals.left_out += [(Path(p).name, why) for p, why in unplaced]
+    for p, why in unplaced:
+        if why.endswith(OUTSIDE_FOOTAGE):
+            signals.issues.append({"kind": "sensor_outside_footage", "what": f"{Path(p).name}: {why}"})
 
 
 ASSUMED_START = ("{} (from {}) was placed on the footage from both starts, since the two share no clock, so its "
