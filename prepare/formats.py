@@ -1760,7 +1760,10 @@ def bookkeeping_columns(name: str, meta: dict, width: int) -> tuple[list[int], s
     if topic in LOG_CHANNELS:
         return list(range(width)), "bookkeeping log fields, retained with the recording"
     fields = meta.get("names") or ([name.rsplit("/", 1)[-1].rsplit(" ", 1)[-1]] if width == 1 else [])
-    cols = [i for i, field in enumerate(fields) if "_".join(tokens(str(field))) in PROCESS_FIELDS]
+    normalized = ["_".join(tokens(str(field))) for field in fields]
+    # PID can name a robot controller output. A plain pid column needs another process diagnostic as evidence.
+    evidence = any(field in PROCESS_FIELDS - {"pid"} for field in normalized)
+    cols = [i for i, field in enumerate(normalized) if field in PROCESS_FIELDS and (field != "pid" or evidence)]
     return cols, "bookkeeping process diagnostics, retained with the recording"
 
 
@@ -1820,7 +1823,8 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         if cols:
             names = m.get("names")
             bookkeeping.append({"name": k, "key": key, "file": "signals.npz", "columns": cols, "why": why,
-                                **({"names": [names[c] for c in cols]} if names else {}),
+                                **({"names": [names[c] for c in cols], "record_names": list(names)} if names else {}),
+                                "record_shape": m.get("shape") or [int(a.shape[1])],
                                 **({"source": m["source"]} if m.get("source") else {})})
             selected = [c for c in range(a.shape[1]) if c not in cols]
             if not selected:
@@ -1841,7 +1845,8 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         ctx.pop("signals", None)
     if bookkeeping:
         ctx.setdefault("source", {})["bookkeeping"] = bookkeeping
-        ctx["source"].setdefault("unused_signals", []).extend(f"{s['name']} ({s['why']})" for s in bookkeeping)
+        previous = ctx["source"].get("unused_signals") or []
+        ctx["source"]["unused_signals"] = list(dict.fromkeys(previous + [f"{s['name']} ({s['why']})" for s in bookkeeping]))
 
 
 # ---------------------------------------------------------------- depth

@@ -3116,7 +3116,7 @@ def _process_diagnostics_and_logs_stay_bookkeeping_with_their_values(tmp_path):
     sig = f.Signals()
     sig.add("/worker/status", values, names=["pid", "rss_kb", "cpu_percent"], source="MCAP channel /worker/status")
     sig.add("/logger/rosout", values[:, :1], names=["level"], source="MCAP channel /logger/rosout")
-    sig.add("/device/system_info", values[:, :2], names=["pid", "temperature"], source="column status")
+    sig.add("/device/system_info", values[:, :2], names=["rss_kb", "temperature"], source="column status")
     sig.add("/sensor/log_force", values[:, :1], names=["force"])
     sig.add("/sensor/environment", values[:, :2], names=["temperature", "humidity"])
     ctx = f.video_views_episode(tmp_path / "ep", {"exo": ("top", video)}, "teleop_arms", "test", {}, signals=sig)
@@ -3570,3 +3570,39 @@ def _camera_metadata_keeps_its_owners_without_becoming_the_task(tmp_path):
 def test_camera_metadata_keeps_its_owners_without_becoming_the_task():
     with tempfile.TemporaryDirectory() as t:
         _camera_metadata_keeps_its_owners_without_becoming_the_task(Path(t))
+
+
+def test_pid_control_values_stay_sensor_readings():
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        values = np.arange(20, dtype=np.float32).reshape(10, 2)
+        signals = f.Signals()
+        signals.add('/controller/pid', values[:, :1], names=['pid'])
+        signals.add('/worker/status', values, names=['pid', 'rss_kb'], shape=[2])
+        ctx = {'n_state_frames': 10, 'fps': 30}
+        f.write_signals(Path(t), ctx, signals)
+        assert [s['name'] for s in ctx['signals']] == ['/controller/pid'], ctx
+        saved = np.load(Path(t) / 'signals.npz')
+        assert np.array_equal(saved['s0'], values[:, :1])
+        assert np.array_equal(saved['s1'], values)
+        saved.close()
+
+
+def test_writing_bookkeeping_again_keeps_the_same_metadata():
+    import copy
+    import numpy as np
+    with tempfile.TemporaryDirectory() as t:
+        values = np.arange(20, dtype=np.float32).reshape(10, 2)
+        signals = f.Signals()
+        signals.add('/worker/status', values, names=['rss_kb', 'temperature'], shape=[2])
+        ctx = {'n_state_frames': 10, 'fps': 30}
+        f.write_signals(Path(t), ctx, signals)
+        first = copy.deepcopy(ctx)
+        f.write_signals(Path(t), ctx, signals)
+        assert ctx == first, ctx
+        book = ctx['source']['bookkeeping'][0]
+        assert book['record_names'] == ['rss_kb', 'temperature'] and book['record_shape'] == [2], book
+        assert ctx['signals'][0]['names'] == ['temperature'] and ctx['signals'][0]['dims'] == 1
+        saved = np.load(Path(t) / 'signals.npz')
+        assert np.array_equal(saved['s0'], values) and np.array_equal(saved['s0_readings'], values[:, 1:])
+        saved.close()
