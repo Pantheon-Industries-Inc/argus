@@ -834,7 +834,7 @@ STATE_WORD_SPLIT = re.compile(r"[._/ -]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Za-z])(?=
 STATE_UNIT_WORDS = {"m", "mm", "cm", "rad", "deg", "degree", "degrees"}
 STATE_AXIS_WORDS = {"x", "y", "z", "roll", "pitch", "yaw", "rx", "ry", "rz"}
 STATE_POSITION_AXES = {"x", "y", "z"}
-STATE_POSITION_WORDS = {"pos", "position"}
+STATE_POSITION_WORDS = {"pos", "position", "positions"}
 STATE_NOT_POSITION_WORDS = {"vel", "velocity", "velocities", "speed", "effort", "efforts", "torque", "torques",
                             "current", "currents", "force", "forces", "acc", "accel", "acceleration"}
 STATE_FRAME_WORDS = {"cartesian", "eef", "ee", "tcp", "pose", "effector", "flange", "tool", "rot", "rotation",

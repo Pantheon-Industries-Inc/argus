@@ -528,6 +528,8 @@ def test_names_that_name_a_position_a_velocity_or_an_effort_never_read_as_joints
         ("teleop_arms", ["wrist_pos_0", "wrist_pos_1", "wrist_pos_2", "wrist_rot_0", "wrist_rot_1", "wrist_rot_2",
                          "gripper"], "none"),
         ("teleop_arms", [f"actual_TCP_pose_{i}" for i in range(6)] + ["gripper_position"], "none"),
+        # a plural position word cancels a quantity word as the singular does (current, the present position)
+        ("teleop_arms", [f"current_joint_positions_{i}" for i in range(6)] + ["gripper"], "joints"),
         # names that say neither keep the width rule
         ("teleop_arms", [f"position_{i}" for i in range(14)], "joints"),
         ("teleop_arms", [f"motor_{i}" for i in range(7)], "joints"),
