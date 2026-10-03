@@ -618,17 +618,22 @@ def test_the_report_says_infrared_and_mask_videos_are_on_the_board(tmp_path):
 # ---------------------------------------------------------------- a board clip that fails
 
 def test_a_failed_cut_leaves_no_temporary_file(tmp_path, monkeypatch):
+    """An ffmpeg cut that fails after writing part of its clip had left the half written file in the clips folder."""
     import subprocess
+
+    import pytest
     from board import clips
 
+    real = subprocess.run
+
     def run(cmd, **kw):
+        if not str(cmd[-1]).endswith(".tmp.mp4"):
+            return real(cmd, **kw)                 # the size probe runs as usual; the cut fails part way
         Path(cmd[-1]).write_bytes(b"part of a clip")
         raise subprocess.CalledProcessError(1, cmd)
-    monkeypatch.setattr(clips, "source_size", lambda ffmpeg, path: (64, 48, False))
+    src = _mp4(tmp_path / "src.mp4", 30)
     monkeypatch.setattr(clips.subprocess, "run", run)
     out = tmp_path / "clips" / "episode_1.mp4"
-    try:
-        clips.extract_one(str(tmp_path / "src.mp4"), 0.0, 30, out, "ffmpeg", 1)
-    except subprocess.CalledProcessError:
-        pass
+    with pytest.raises(subprocess.CalledProcessError):
+        clips.extract_one(str(src), 0.0, 30, out, clips.find_ffmpeg(), 1)
     assert not list(out.parent.glob("*.tmp.mp4"))

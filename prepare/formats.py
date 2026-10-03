@@ -486,7 +486,9 @@ DEMUXER = {".mp4": "mov", ".mov": "mov", ".m4v": "mov", ".mkv": "matroska", ".we
 
 def sniff_container(path: Path) -> str | None:
     """The demuxer of the video containers we accept (DEMUXER) that a file's first bytes name: Matroska or WebM by
-    its EBML header, MP4 or QuickTime by an atom type at byte 4, AVI by its RIFF header; None for anything else."""
+    its EBML header, MP4 or QuickTime by an atom type at byte 4, AVI by its RIFF header; None for anything else. Data
+    Review's upload page reads a video's container by the same rule (read.js sniffContainer), so the page measures and
+    sends the videos the reader opens."""
     with open(path, "rb") as fh:
         head = fh.read(12)
     if head[:4] == b"\x1a\x45\xdf\xa3":
@@ -573,18 +575,17 @@ def probe(path: Path) -> dict:
             "codec": codec, "fps": float(rate) if rate else None, "rotation": rot, **extra}
 
 
-def open_cameras(files: dict, extra: dict, prs: dict | None = None) -> dict:
-    """{view: probe} of the cameras of one episode ({view: (camera name, path)}) that open, each probed on its own. A
-    camera that cannot be opened, or holds no frame, is taken out of files and is a camera_not_decodable issue on
-    extra naming it and why, and is listed among the unused cameras; the camera first in row order of the rest is the
-    episode's anchor, as board/clips.py drop_cameras makes it when a main camera does not decode. One camera had
-    dropped its whole episode. Raises, naming every camera and why, only when none opens."""
-    prs = dict(prs or {})
+def open_cameras(files: dict, extra: dict) -> dict:
+    """{view: probe} of the cameras of one episode ({view: (camera name, path)}) that open, each probed on its own, so
+    one camera that cannot be opened never costs the episode. A camera that cannot be opened, or holds no frame, is
+    taken out of files and is a camera_not_decodable issue on extra naming it and why, and is listed among the unused
+    cameras; the camera first in row order of the rest is the episode's anchor, as board/clips.py drop_cameras makes
+    it when a main camera does not decode. Raises, naming every camera and why, only when none opens."""
+    prs = {}
     broken = {}
     for v, (name, path) in list(files.items()):
         try:
-            if v not in prs:
-                prs[v] = probe(Path(path))
+            prs[v] = probe(Path(path))
             if not len(prs[v]["pts"]):
                 raise ValueError("it holds no frame")
         except Exception as e:
@@ -656,7 +657,7 @@ def camera_span_issues(extra: dict, times: dict, anchor: str, names: dict, ctx: 
 
 def unshown_not_decodable(extra: dict, name: str) -> None:
     """A camera the model is not shown none of whose frames could be read, named as a camera_not_decodable issue on
-    extra: it had been left off the board without a word."""
+    extra, since the board cannot show it either."""
     add_issue(extra, "camera_not_decodable", f"No frame of the camera {name}, which the model is not shown, could be "
                                              "decoded, so the board cannot show it.", camera=name)
 
@@ -1675,8 +1676,8 @@ def depth_camera(depth_name: str, cameras: dict[str, str], scene: str) -> tuple[
 
 def depth_kmap(t_depth: np.ndarray, t_anchor: np.ndarray) -> np.ndarray:
     """For each anchor frame, the depth frame recorded nearest it, or -1 when none is within one frame of it (the
-    longer of a depth and an anchor frame's step): there the camera has no depth reading. The nearest frame alone had
-    given a depth stream's last frame to every instant after it ended."""
+    longer of a depth and an anchor frame's step): there the camera has no depth reading, so a depth stream that ends
+    early never gives its last frame to the instants after it."""
     td, ta = np.asarray(t_depth, dtype=np.float64), np.asarray(t_anchor, dtype=np.float64)
     km = nearest(td, ta)
     if len(td) and len(ta):
@@ -2083,8 +2084,7 @@ def group_videos(rels: list[str], length_of=None, grouping: dict | None = None) 
         takes: dict[str, list[str]] = {}
         for r in fs:
             takes.setdefault(parts[r]["take"], []).append(r)
-        # a take of more than MAX_CAMERAS cameras is one episode too when many_cameras says so; it had been split into
-        # one episode per camera with no word
+        # a take of more than MAX_CAMERAS cameras is one episode too when many_cameras says so
         many = {k for k, g in takes.items() if len(g) > MAX_CAMERAS
                 and many_cameras([stem(r) for r in g], [length_of(r) if length_of else None for r in g])}
         good = [g for k, g in takes.items() if k in many or (2 <= len(g) <= MAX_CAMERAS
@@ -3091,8 +3091,10 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
     unshown_keys = list(unused)
     descs = colour_depth_views(r, row, vmap)
-    # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused
-    # too, and one whose packed video could not be placed on this episode says why (_episodes_v3)
+    # a camera the metadata lists whose video is not in the upload for this episode (an adapter downloads only the
+    # cameras it uses) is unused too, with that reason, and one whose packed video could not be placed on this episode
+    # says why (_episodes_v3). Data Review's upload page names the same cameras on its card (read.js inspectLeRobot,
+    # missingCams), finding each camera's video as _episodes_v2 does
     unplaced = row.get("unplaced") or {}
     unused = unused + [f"{k} ({unplaced.get(k) or 'no video of it for this episode is in the upload'})"
                        for k in r["cams"] if k not in video_cams]
@@ -3190,8 +3192,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             times[v] = np.arange(len(pr["pts"])) / fps
             times[f"{v}_pts"] = pr["pts"]
     # the episode is as long as its main camera, as its frames are what the table's rows and the labels are on; a
-    # shorter camera is flagged with what it does not cover (camera_span_issues). The shortest camera had cut the
-    # whole episode, labels and signals included, to its length
+    # shorter camera is flagged with what it does not cover (camera_span_issues) and never shortens the episode
     n_video = sources[anchor]["n_frames"]
     camera_span_issues(extra, {v: np.arange(s["n_frames"]) / fps for v, s in sources.items()}, anchor,
                        {v: k for v, k in vmap.items()}, {"profile": rig, "cameras": cameras})
@@ -5488,7 +5489,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     video_topics = [t for t in cam_topics if not DEPTH_TOPIC.search(t)]
     raw_topics = {t for t, s in chan_topics if RAW_IMAGE_SCHEMA.search(s)}
     # a recording whose only cameras are depth is labelled from its depth drawn as a picture (depth_picture), as a
-    # data issue (camera_not_colour), as one whose only camera is a mask is; it had failed whole
+    # data issue (camera_not_colour), as one whose only camera is a mask is
     video_topics = video_topics or [t for t in cam_topics if DEPTH_TOPIC.search(t)]
     if not video_topics:
         raise ValueError("the file has no camera channel"
@@ -5508,7 +5509,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 unused.append(f"{t} (depth with no camera of its own)")
                 lone.append(t)
     # the cameras the model is not shown are written too, for the board (unshown_cameras), a depth channel with no
-    # camera of its own drawn as a picture of near and far; it had been listed and never shown
+    # camera of its own drawn as a picture of near and far
     unshown_of = {t: f"unshown{i + 1}.mp4" for i, t in enumerate([x for x in unused if x in cam_topics] + lone)}
     pictured = {t for t in set(vmap.values()) | set(unshown_of) if DEPTH_TOPIC.search(t)}
     depth_rng: dict = {}
@@ -5763,9 +5764,8 @@ class FrameWriter:
     An image that does not decode (or a row with no image, missing) is never written as a neighbour's picture: its
     time is kept in bad, which the reader flags with its span (bad_frames_issues). Where a camera's frames are one
     per row of a table (a LeRobot data file, an HDF5 episode: blank=True), a black frame is written in its place, so
-    every row after it stays on its own frame; one skipped frame had put every later state row one frame early, and
-    made the camera a frame short of its table, which dropped the whole state. A camera with real frame times (an
-    MCAP) skips it, and its state is placed on the frames' own times."""
+    every row after it stays on its own frame and the camera keeps as many frames as its table has rows. A camera with
+    real frame times (an MCAP) skips it, and its state is placed on the frames' own times."""
 
     def __init__(self, out: Path, fmt: str, blank: bool = False):
         self.out, self.fmt, self.pts, self.kind = out, fmt, [], None
