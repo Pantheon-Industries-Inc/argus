@@ -823,10 +823,10 @@ def read_context(ep_dir: Path) -> tuple[dict, str | None]:
 def context_unreadable(why: str) -> dict:
     """The issue of an episode whose context.json the board could not use (kind context_unreadable): it is shown with
     the model's reply as it came, labels or not, and without what the context gives (its length, checks, the reader's
-    issues and notes)."""
-    return {"kind": "context_unreadable",
-            "what": f"The file of this episode's recorded facts and checks (context.json) does not read ({why}), so "
-                    "its length, checks and the reader's notes are not shown; the model's reply is shown as it came."}
+    issues and notes). The error is kept apart from the sentence, for whoever looks into it."""
+    return {"kind": "context_unreadable", "error": why,
+            "what": "This episode's recorded details (its length, checks and the reader's notes) could not be read, so "
+                    "they are not shown; the model's reply is shown as it came."}
 
 
 def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path, ctx: dict,

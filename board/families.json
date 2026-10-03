@@ -145,7 +145,7 @@
   {
    "slug": "context-unreadable",
    "list": "handling",
-   "name": "Episode details file does not read",
+   "name": "Episode details could not be read",
    "reader_issues": [
     "context_unreadable"
    ]
