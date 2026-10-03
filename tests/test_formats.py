@@ -2796,6 +2796,10 @@ def test_notes_cut_for_the_prompt_name_the_files_left_out():
     txt = f.annotation_text(notes, files=True)
     assert txt.endswith(" [truncated, the end of b.txt and all of c.txt left out]"), txt[-120:]
     assert f.annotation_text("x" * (f.ANNOTATION_MAX_CHARS + 5)).endswith("x [truncated]")
+    # a file whose notes hold another file's name as a key is never taken for where that file starts
+    nested = {"a.json": {"b.txt": "y" * 10, "pad": "x" * f.ANNOTATION_MAX_CHARS}, "b.txt": "z"}
+    txt = f.annotation_text(nested, files=True)
+    assert txt.endswith(" [truncated, the end of a.json and all of b.txt left out]"), txt[-120:]
 
 
 def _the_no_camera_refusal_accounts_for_every_file(tmp_path):

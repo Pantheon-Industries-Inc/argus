@@ -926,9 +926,14 @@ def annotation_text(obj, files: bool = False) -> str | None:
     if len(txt) > ANNOTATION_MAX_CHARS:
         cut = "truncated"
         if files and isinstance(obj, dict):
-            # each file's notes sit in the text from its name to the next file's name
-            at = [txt.find(json.dumps(k, ensure_ascii=False) + ": ") for k in obj]
-            ends = at[1:] + [len(txt)]
+            # where each file's notes sit in the text, from the pieces json.dumps joins: "{", then each '"name": notes'
+            # with ", " between, then "}"
+            at, ends, pos = [], [], 1
+            for k, v in obj.items():
+                n = len(json.dumps(str(k), ensure_ascii=False) + ": " + json.dumps(v, ensure_ascii=False))
+                at.append(pos)
+                ends.append(pos + n)
+                pos += n + 2
             part = [k for k, a, e in zip(obj, at, ends) if a < ANNOTATION_MAX_CHARS < e]
             out = [k for k, a in zip(obj, at) if a >= ANNOTATION_MAX_CHARS]
             said = ([f"the end of {part[0]}"] if part else []) + ([f"all of {_and_words(out)}"] if out else [])
