@@ -214,6 +214,30 @@
    "names": [
     "Scale or display unreadable"
    ]
+  },
+  {
+   "slug": "sensor-clock-outside",
+   "list": "data",
+   "name": "Sensor recording is outside the footage",
+   "reader_issues": [
+    "sensor_outside_footage"
+   ]
+  },
+  {
+   "slug": "sensor-clock-coarse",
+   "list": "data",
+   "name": "Sensor clock stamps cannot place every row precisely",
+   "reader_issues": [
+    "signal_clock_coarse"
+   ]
+  },
+  {
+   "slug": "table-number-inferred",
+   "list": "handling",
+   "name": "Ambiguous table numbers were read by an inferred convention",
+   "reader_issues": [
+    "table_number_ambiguous"
+   ]
   }
  ]
 }

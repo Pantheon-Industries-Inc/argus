@@ -223,7 +223,8 @@ def test_an_indexed_mcap_damaged_inside_is_flagged_with_the_span_read(tmp_path):
     out = f.mcap_signals([p], T0 + np.arange(120) / 30.0)
     hit = _issues(out, "mcap_file_damaged")
     assert len(hit) == 1 and "yam_left.mcap" in hit[0]["what"]
-    assert hit[0]["t0_s"] == 0.0 and 0.5 < hit[0]["t1_s"] < 3.9
+    assert hit[0]["t0_s"] == 0.0 and hit[0]["t1_s"] == pytest.approx(119 / 30)
+    assert not hit[0]["footage_complete"] and hit[0]["unreadable_spans_s"]
     assert f"{hit[0]['t1_s']:.1f} s of the footage" in hit[0]["what"]
 
 
@@ -239,12 +240,13 @@ def _damage_chunk_after(p: Path, seconds: float) -> None:
     p.write_bytes(bytes(b))
 
 
-def test_a_damaged_mcap_whose_messages_read_cover_the_footage_raises_no_issue(tmp_path):
+def test_file_damage_past_the_footage_stays_visible_without_claiming_missing_footage(tmp_path):
     p = tmp_path / "yam_left.mcap"
     _arm_mcap(p)
     _damage_chunk_after(p, 3.0)                     # the footage ends at 2 s
     q = T0 + np.arange(60) / 30.0
-    assert not _issues(f.mcap_signals([p], q), "mcap_file_damaged")
+    (issue,) = _issues(f.mcap_signals([p], q), "mcap_file_damaged")
+    assert issue["footage_complete"] and "cover the whole footage" in issue["what"]
     lost = []
     streams = f.mcap_joint_streams([p], q, lost)
     assert lost == [] and "/yam_left/joint_state" in streams
@@ -1203,3 +1205,84 @@ def test_missing_lerobot_state_names_recorded_observation_motion_truthfully(tmp_
         assert column in ctx["state_note"] and column in _signal_names(ctx)
     else:
         assert "records no observation.state" in ctx["state_note"]
+
+
+@pytest.mark.parametrize("indexed", [False, True])
+def test_a_crc_mismatch_keeps_readable_messages_and_names_damage(tmp_path, indexed):
+    import struct
+    from mcap.reader import make_reader
+    p = tmp_path / "arm.mcap"
+    _arm_mcap(p, seconds=2, compressed=False)
+    with p.open("rb") as fh:
+        chunk = make_reader(fh).get_summary().chunk_indexes[1]
+    b = bytearray(p.read_bytes())
+    # Chunk header has opcode and length, then three uint64 fields before its CRC.
+    at = chunk.chunk_start_offset + 9 + 24
+    crc = struct.unpack_from("<I", b, at)[0]
+    struct.pack_into("<I", b, at, crc ^ 1)
+    if not indexed:
+        b = b[:chunk.chunk_start_offset + chunk.chunk_length]
+    p.write_bytes(b)
+    with p.open("rb") as fh:
+        damaged = []
+        msgs = list(f.mcap_messages(fh, p, ["/yam_left/joint_state"], damaged))
+    assert damaged and len(msgs) > 10
+    if indexed:
+        assert len(msgs) == 200 and msgs[-1][2].log_time > int((T0 + 1.9) * 1e9)
+    out = f.mcap_signals([p], T0 + np.arange(30) / 30)
+    assert _issues(out, "mcap_file_damaged") and list(out)
+
+
+def test_a_bad_middle_chunk_preserves_messages_in_later_chunks(tmp_path):
+    p = tmp_path / "arm.mcap"
+    _arm_mcap(p, seconds=4)
+    _damage_chunk_after(p, 1.0)
+    with p.open("rb") as fh:
+        damage = []
+        msgs = list(f.mcap_messages(fh, p, ["/yam_left/joint_state"], damage))
+    assert damage and msgs[-1][2].log_time > int((T0 + 3.9) * 1e9)
+    assert len(msgs) > 300
+
+
+def test_a_cut_summary_names_file_damage_but_keeps_complete_footage(tmp_path):
+    from mcap.reader import make_reader
+    p = tmp_path / "arm.mcap"
+    _arm_mcap(p, seconds=2)
+    with p.open("rb") as fh:
+        last = make_reader(fh).get_summary().chunk_indexes[-1]
+    p.write_bytes(p.read_bytes()[:last.chunk_start_offset + last.chunk_length])
+    out = f.Signals()
+    f.note_sensors({}, out, [p], [], [], T0 + np.arange(30) / 30)
+    (issue,) = _issues(out, "sensor_file_cut")
+    assert issue["footage_complete"] and "cover the whole footage" in issue["what"]
+
+
+
+def test_new_reader_issues_have_explicit_data_or_handling_families():
+    from board.families import Families
+    fam = Families()
+    for kind, category in [("sensor_outside_footage", "data"), ("signal_clock_coarse", "data"),
+                           ("table_number_ambiguous", "handling")]:
+        slug = fam.reader_family(kind)
+        assert not slug.startswith("d:") and fam.catalog()[slug]["list"] == category
+
+
+
+def test_camera_crc_damage_keeps_all_decodable_frames_and_flags_the_recording(tmp_path):
+    import struct
+    from mcap.reader import make_reader
+    from test_formats import _camera_mcap
+    root = tmp_path / "up"
+    root.mkdir()
+    p = root / "rec.mcap"
+    _camera_mcap(p, ["/cam/image/compressed"])
+    with p.open("rb") as fh:
+        chunk = make_reader(fh).get_summary().chunk_indexes[0]
+    b = bytearray(p.read_bytes())
+    at = chunk.chunk_start_offset + 9 + 24
+    struct.pack_into("<I", b, at, struct.unpack_from("<I", b, at)[0] ^ 1)
+    p.write_bytes(b)
+    rep = f.convert(root, "ego_head", tmp_path / "out", "t", 900)
+    ep = tmp_path / "out" / rep["episodes"][0]["episode_id"]
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["n_state_frames"] == 20 and _issues(ctx, "mcap_file_damaged")

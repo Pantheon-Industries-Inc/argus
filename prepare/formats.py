@@ -161,7 +161,8 @@ def files_under(root: Path) -> list[Path]:
 # ---------------------------------------------------------------- data issues
 
 def add_issue(ctx: dict, kind: str, what: str, camera: str | None = None, signal: str | None = None,
-              t0_s: float | None = None, t1_s: float | None = None) -> dict:
+              t0_s: float | None = None, t1_s: float | None = None,
+              footage_complete: bool | None = None, unreadable_spans_s: list | None = None) -> dict:
     """One entry appended to ctx["reader_issues"] (the module docstring's No drop): kind, a short snake_case tag; what,
     one plain sentence for the board; the camera or signal it is about and its time span in seconds of the episode
     when known. An entry already there is not added twice, so a reader that writes an episode's context twice
@@ -173,6 +174,10 @@ def add_issue(ctx: dict, kind: str, what: str, camera: str | None = None, signal
     for k, v in (("t0_s", t0_s), ("t1_s", t1_s)):
         if v is not None and np.isfinite(v):
             entry[k] = round(float(v), 3)
+    if footage_complete is not None:
+        entry["footage_complete"] = bool(footage_complete)
+    if unreadable_spans_s is not None:
+        entry["unreadable_spans_s"] = unreadable_spans_s
     issues = ctx.setdefault("reader_issues", [])
     if entry not in issues:
         issues.append(entry)
@@ -3676,7 +3681,7 @@ def plan_mcap(det: dict, root: Path) -> list[dict]:
     for f in det["files"]:
         try:
             with open(f, "rb") as fh:
-                s = make_reader(fh).get_summary()
+                s = make_reader(fh, validate_crcs=True).get_summary()
         except Exception:
             s = None
         st = s.statistics if s else None
@@ -4719,67 +4724,157 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
     return ctx
 
 
-def _mcap_stream(path: Path, topics: set | None = None):
-    """(schema, channel, message) for every message in file order, read record by record, so a recording cut off
-    before its summary (or mid-chunk) yields every message written before the cut."""
-    from mcap.records import Channel, Message, Schema
-    from mcap.stream_reader import StreamReader
-    schemas, chans = {}, {}
+def _mcap_stream(path: Path, topics: set | None = None, damaged: list | None = None, summary=None):
+    """Messages in file order, validating chunk and data CRCs. A bad chunk is parsed only as far as its bounded
+    records remain readable, then later chunks are still read. CRC failure stays visible even if all records parse.
+    Summary declarations recover channels whose definitions were in a broken first chunk."""
+    from mcap.records import Channel, Chunk, Message, Schema
+    from mcap.stream_reader import CRCValidationError, StreamReader, get_chunk_data_stream
+    schemas = dict(summary.schemas) if summary is not None else {}
+    chans = dict(summary.channels) if summary is not None else {}
+    first = last = None
+    damage, missing, suspect, counts = False, [], [], {}
+
+    def records(chunk):
+        nonlocal damage
+        try:
+            stream, length = get_chunk_data_stream(chunk, validate_crc=True)
+        except CRCValidationError:
+            damage = True
+            suspect.append((chunk.message_start_time / 1e9, chunk.message_end_time / 1e9))
+            stream, length = get_chunk_data_stream(chunk, validate_crc=False)
+        while stream.count < length:
+            if length - stream.count < 9:
+                raise ValueError("incomplete chunk record")
+            opcode, size = stream.read1(), stream.read8()
+            if size > length - stream.count:
+                raise ValueError("chunk record extends past its data")
+            end = stream.count + size
+            if opcode == 3:
+                r = Schema.read(stream)
+            elif opcode == 4:
+                r = Channel.read(stream)
+            elif opcode == 5:
+                r = Message.read(stream, size)
+            else:
+                stream.read(size)
+                continue
+            if stream.count != end:
+                raise ValueError("chunk record length disagrees with its fields")
+            yield r
+
+    def messages(records):
+        nonlocal first, last
+        for r in records:
+            if isinstance(r, Schema):
+                schemas[r.id] = r
+            elif isinstance(r, Channel):
+                chans[r.id] = r
+            elif isinstance(r, Message):
+                ch = chans.get(r.channel_id)
+                if ch is not None and (topics is None or ch.topic in topics):
+                    counts[ch.id] = counts.get(ch.id, 0) + 1
+                    t = r.log_time / 1e9
+                    first, last = min(first, t) if first is not None else t, max(last, t) if last is not None else t
+                    yield schemas.get(ch.schema_id), ch, r
+
+    def file_records(fh):
+        nonlocal damage
+        if summary is None or not summary.chunk_indexes:
+            yield from StreamReader(fh, emit_chunks=True, validate_crcs=True).records
+            return
+        from io import BytesIO
+        for ci in sorted(summary.chunk_indexes, key=lambda c: c.chunk_start_offset):
+            fh.seek(ci.chunk_start_offset)
+            try:
+                # Read only the indexed extent, so damaged inner lengths cannot reach another chunk's bytes.
+                block = BytesIO(fh.read(ci.chunk_length))
+                yield next(iter(StreamReader(block, skip_magic=True, emit_chunks=True, validate_crcs=True).records))
+            except Exception:
+                damage = True
+                missing.append((ci.message_start_time / 1e9, ci.message_end_time / 1e9))
+
     with open(path, "rb") as fh:
         try:
-            for r in StreamReader(fh, skip_magic=False).records:
-                if isinstance(r, Schema):
-                    schemas[r.id] = r
-                elif isinstance(r, Channel):
-                    chans[r.id] = r
-                elif isinstance(r, Message):
-                    ch = chans.get(r.channel_id)
-                    if ch is not None and (topics is None or ch.topic in topics):
-                        yield schemas.get(ch.schema_id), ch, r
-        except Exception:
-            return                  # the cut: everything before it has been yielded
+            for r in file_records(fh):
+                if isinstance(r, Chunk):
+                    try:
+                        yield from messages(records(r))
+                    except Exception:
+                        damage = True
+                        missing.append((r.message_start_time / 1e9, r.message_end_time / 1e9))
+                else:
+                    yield from messages([r])
+        except Exception as exc:
+            if isinstance(exc, CRCValidationError) or not sensor_cut(path):
+                damage = True
+    if suspect:
+        expected = summary.statistics.channel_message_counts if summary is not None and summary.statistics else None
+        declared = {cid: n for cid, n in (expected or {}).items()
+                    if cid in chans and (topics is None or chans[cid].topic in topics)}
+        if expected is None or counts != declared:
+            missing.extend(span for span in suspect if span not in missing)
+    if damage and damaged is not None:
+        damaged.append((Path(path), first, last, missing))
 
 
 def mcap_messages(fh, path: Path, topics, damaged: list | None = None):
-    """(schema, channel, message) of these topics in an open MCAP file fh (at path): by its index in log time order
-    when it has a summary that can be read, and record by record otherwise (_mcap_stream), a file cut short, whose
-    messages before the cut are then all it holds: its index had made every reader of it throw, so its arms and
-    signals were lost. An indexed file damaged inside (a chunk that does not read, its summary whole) gives the
-    messages before the damage, and (its path, the first and last log time read in seconds, None when none was) is
-    appended to damaged, so the reader can say so: the file is whole by every other sign (sensor_cut)."""
+    """Messages in indexed log order with CRC validation, or bounded streaming recovery when the index or a chunk
+    fails. Recovery retains readable records before and after damage and yields no indexed message twice."""
+    from collections import Counter
+    import zlib
     from mcap.reader import make_reader
     try:
-        indexed = make_reader(fh).get_summary() is not None
+        summary = make_reader(fh, validate_crcs=True).get_summary()
     except Exception:
-        indexed = False
+        summary = None
     fh.seek(0)
-    if not indexed:
-        yield from _mcap_stream(path, set(topics))
+    if summary is None:
+        yield from _mcap_stream(path, set(topics), damaged)
         return
-    first = last = None
+    seen = Counter()
+    key = lambda ch, m: (ch.id, m.log_time, m.publish_time, m.sequence, zlib.crc32(m.data))
     try:
-        for schema, ch, msg in make_reader(fh).iter_messages(topics=sorted(topics), log_time_order=True):
-            first, last = first if first is not None else msg.log_time / 1e9, msg.log_time / 1e9
+        for schema, ch, msg in make_reader(fh, validate_crcs=True).iter_messages(
+                topics=sorted(topics), log_time_order=True):
+            seen[key(ch, msg)] += 1
             yield schema, ch, msg
     except Exception:
+        recovered = []
+        for schema, ch, msg in _mcap_stream(path, set(topics), recovered, summary):
+            k = key(ch, msg)
+            if seen[k]:
+                seen[k] -= 1
+            else:
+                yield schema, ch, msg
         if damaged is not None:
-            damaged.append((Path(path), first, last))
+            damaged.extend(recovered or [(Path(path), None, None, [])])
 
 
-def damaged_issue(p: Path, t0: float | None, t1: float | None, q: np.ndarray) -> dict | None:
-    """The data issue of an MCAP file whose messages stop at damage inside it (mcap_messages), with the span of the
-    footage (q, its frame times on the file's clock) its messages read cover (span_on_footage). None when they cover
-    the whole footage (covers_footage): the damage is past what the footage needs, so nothing of it was lost."""
-    what = f"{Path(p).name} is damaged inside, though its index is whole"
+def damaged_issue(p: Path, t0: float | None, t1: float | None, q: np.ndarray, missing=()) -> dict:
+    """File damage stays visible even when readable messages cover the footage. Coverage uses the same edge rule
+    as a cut file and also checks unreadable chunk spans, so a recovered later chunk never hides an internal loss."""
+    what = f"{Path(p).name} is damaged inside"
     if t0 is None:
-        return {"kind": "mcap_file_damaged", "what": what + ", and none of its messages could be read"}
+        return {"kind": "mcap_file_damaged", "what": what + ", and none of its messages could be read",
+                "footage_complete": False}
     q = np.asarray(q, dtype=np.float64)
-    if covers_footage(t0, t1, q):
-        return None
+    complete = message_coverage(t0, t1, q, missing)
     a, b = span_on_footage(t0, t1, float(q[0]) if len(q) else t0, float(q[-1] - q[0]) if len(q) else 0.0)
-    return {"kind": "mcap_file_damaged", "t0_s": a, "t1_s": b,
-            "what": what + f", so only the messages before the damage were read; they cover {a:.1f} s to {b:.1f} s "
-                           "of the footage"}
+    issue = {"kind": "mcap_file_damaged", "t0_s": a, "t1_s": b, "footage_complete": complete,
+             "what": what + (", but its readable messages cover the whole footage" if complete else
+                              f"; its readable messages cover {a:.1f} s to {b:.1f} s of the footage, with damage "
+                              "where some messages could not be read")}
+    if missing:
+        issue["unreadable_spans_s"] = [list(span_on_footage(x, y, float(q[0]), float(q[-1] - q[0])))
+                                       for x, y in missing if len(q) and x <= q[-1] and y >= q[0]]
+    return issue
+
+
+def message_coverage(t0, t1, q: np.ndarray, missing=()) -> bool:
+    """Readable message coverage of footage, including any unreadable chunk spans, with one edge slack rule."""
+    return bool(t0 is not None and t1 is not None and len(q) and covers_footage(t0, t1, q)
+                and not any(x <= q[-1] and y >= q[0] for x, y in missing))
 
 
 def mcap_message_counts(path: Path) -> dict[str, int]:
@@ -4787,7 +4882,7 @@ def mcap_message_counts(path: Path) -> dict[str, int]:
     from mcap.reader import make_reader
     try:
         with open(path, "rb") as fh:
-            s = make_reader(fh).get_summary()
+            s = make_reader(fh, validate_crcs=True).get_summary()
     except Exception:
         return {}
     if s is None or s.statistics is None:
@@ -4807,8 +4902,8 @@ def damaged_unread(p: Path, chans: list[tuple[str, str]], seen: set, damaged: li
     past what the footage needs. Such a channel could be an arm, so a state read beside it could lack one."""
     if not damaged:
         return []
-    _, first, last = damaged[0]
-    if first is not None and q is not None and covers_footage(first, last, np.asarray(q, dtype=np.float64)):
+    _, first, last, missing = damaged[0]
+    if q is not None and message_coverage(first, last, np.asarray(q, dtype=np.float64), missing):
         return []
     counts = mcap_message_counts(p)
     return sorted(t for t, s in chans if t not in seen and counts.get(t, 1) and not bookkeeping_why(t, s)
@@ -4821,13 +4916,14 @@ def _mcap_channels_by_scan(path: Path) -> list[tuple[str, str]]:
     schemas, seen = {}, {}
     with open(path, "rb") as fh:
         try:
-            for r in StreamReader(fh, skip_magic=False).records:
+            for r in StreamReader(fh, skip_magic=False, validate_crcs=True).records:
                 if isinstance(r, Schema):
                     schemas[r.id] = r.name
                 elif isinstance(r, Channel):
                     seen.setdefault(r.topic, schemas.get(r.schema_id, ""))
         except Exception:
-            pass
+            for schema, ch, _ in _mcap_stream(path):
+                seen.setdefault(ch.topic, schema.name if schema is not None else "")
     return sorted(seen.items())
 
 
@@ -4840,7 +4936,7 @@ def mcap_channels(path: Path) -> list[tuple[str, str]]:
     from mcap.reader import make_reader
     try:
         with open(path, "rb") as fh:
-            s = make_reader(fh).get_summary()
+            s = make_reader(fh, validate_crcs=True).get_summary()
     except Exception:
         s = None
     if s is None:
@@ -5424,7 +5520,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                 pass                                  # a cut-off file: the messages before the cut are kept
     out = Signals()
     out.left_out += sorted(books.items())
-    out.issues += [i for i in (damaged_issue(p, t0, t1, q) for p, t0, t1 in damaged) if i]
+    out.issues += [damaged_issue(p, t0, t1, q, missing) for p, t0, t1, missing in damaged]
     named, by_field = {}, {}
     for (topic, field, i), r in rows.items():
         by_field.setdefault((topic, field), {})[i] = r
@@ -5793,7 +5889,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     from mcap.reader import make_reader
     with open(item["file"], "rb") as fh:
         try:
-            summ = make_reader(fh).get_summary()
+            summ = make_reader(fh, validate_crcs=True).get_summary()
         except Exception:
             summ = None
     if summ is not None:
@@ -5834,11 +5930,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     texts: dict[str, list] = {}               # topic: its messages in time order, (log time ns, text) (add_text)
     n_text: dict[str, int] = {}
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
+    camera_damage: list = []
     ep.mkdir(parents=True, exist_ok=True)
     with open(item["file"], "rb") as fh:
         try:
-            msgs = make_reader(fh).iter_messages(topics=sorted(want), log_time_order=True) if summ is not None \
-                else _mcap_stream(item["file"], want)
+            msgs = mcap_messages(fh, item["file"], want, camera_damage)
             for schema, ch, msg in msgs:
                 if ch.topic in texts and len(texts[ch.topic]) > TEXT_MSGS_MAX and not _is_step(ch.topic):
                     n_text[ch.topic] += 1
@@ -5943,6 +6039,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     from label import episode as me
     pr = prs[me.order_views(files)[0]]
     q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])          # its frames were written from t0
+    for p, a, b, missing in camera_damage:
+        add_issue(extra, **damaged_issue(p, a, b, q, missing))
     used = {}
     # sensor files of the episode's folder (assign_sensors): on the recording's log clock when they share it, else
     # from both starts and never the state (split_sensors)
@@ -6468,7 +6566,7 @@ def _read_file_times(p: Path) -> np.ndarray | None:
             from mcap.reader import make_reader
             try:
                 with open(p, "rb") as fh:
-                    s = make_reader(fh).get_summary()
+                    s = make_reader(fh, validate_crcs=True).get_summary()
             except Exception:
                 s = None                  # cut short: no footer to find the summary by
             st = s.statistics if s is not None else None
@@ -6692,6 +6790,12 @@ def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, u
             t0, t1 = span_on_footage(float(t[0]), float(t[-1]), zero, length)
             issue.update(t0_s=t0, t1_s=t1, what=issue["what"] + f"; its messages cover {t0:.1f} s to {t1:.1f} s of "
                                                                  "the footage")
+        coverage_q = np.asarray(q, dtype=np.float64) if q is not None else np.array([])
+        if p in assumed and t is not None and len(coverage_q):
+            coverage_q = coverage_q - coverage_q[0] + t[0]
+        issue["footage_complete"] = bool(t is not None and message_coverage(t[0], t[-1], coverage_q))
+        if issue["footage_complete"]:
+            issue["what"] += "; its readable messages cover the whole footage"
         signals.issues.append(issue)
     extra.setdefault("source", {})["sensors"] = [Path(p).name for p in files]
     how = {Path(p).name: "placed by its own clock" for p in by_clock}
