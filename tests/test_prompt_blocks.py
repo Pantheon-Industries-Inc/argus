@@ -459,3 +459,67 @@ def test_a_rate_is_stated_only_below_nine_tenths_of_the_frame_rate():
     assert "recorded at" not in line(27.0, 30.0)
     for rate_hz, fps in ((None, 30.0), (0, 30.0), (15.0, None)):
         assert "recorded at" not in line(rate_hz, fps)
+
+
+def test_the_values_at_each_instant_keep_what_moves_most_and_name_the_rest():
+    """60 signals do not fit: every row of the 25 that sweep is kept, the readout stays in its budget, and each of the
+    35 that only jitter is either shown whole or named with its size and rate in one line, never dropped silently.
+    The 100 sweep rows take about 9500 of the 12000 characters, so they all fit whatever their number formats."""
+    ep, pl = CASES["teleop_video_only"]()
+    t = np.arange(450) / 30.0
+    rng = np.random.default_rng(0)
+    ep["signals"], ep["signal_meta"] = {}, {}
+    for i in range(25):
+        ep["signals"][f"sweep_{i:02d}"] = np.stack([np.sin(0.2 * t + i + j) for j in range(4)], axis=1)
+        ep["signal_meta"][f"sweep_{i:02d}"] = {}
+    for i in range(35):
+        ep["signals"][f"jitter_{i:02d}"] = rng.normal(0, 1, (450, 4))
+        ep["signal_meta"][f"jitter_{i:02d}"] = {"rate_hz": 200.0}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    table = episode.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
+    assert "would not fit" not in table
+    readout = table.split("at every instant you receive")[1]
+    left = [l for l in table.splitlines() if l.startswith("  The values at each instant leave out ")]
+    assert len(left) == 1 and left[0].endswith(", because these move least and there is no more room.")
+    body = readout.split(left[0])[0]
+    assert len(body) <= me.SIGNAL_TABLE_MAX_CHARS + 200
+    assert all(f"    sweep_{i:02d} [{j}]: " in body for i in range(25) for j in range(4))
+    assert "sweep_" not in left[0] and "(4 values, 200 Hz" in left[0]
+    for i in range(35):
+        nm = f"jitter_{i:02d}"
+        shown = sum(f"    {nm} [{j}]: " in body for j in range(4))
+        assert shown == 4 or nm in left[0], nm
+
+
+def _humanoid_overflow(state_w, vel_w):
+    """A 60 s humanoid's 26 named joint readings, their 26 velocities and a base's 5 value odometry: 57 rows of 41
+    instants, past SIGNAL_TABLE_MAX_CHARS. A slower sweep moves more (movements is range over typical step), so the
+    angular rates state_w and vel_w decide which of the two is kept whole."""
+    ep, _ = CASES["teleop_video_only"]()
+    n = 1800
+    t = np.arange(n) / 30.0
+    ep["state"] = np.zeros((n, 0))
+    ep["signals"] = {"observation.state": np.stack([0.3 * np.sin(state_w * t + j) for j in range(26)], axis=1),
+                     "observation.velocity": np.stack([0.3 * np.sin(vel_w * t + j) for j in range(26)], axis=1),
+                     "observation.base.odom": np.stack([0.01 * t, 0.001 * t, 0.02 * t, 0.2 + 0.1 * np.sin(t),
+                                                        0.1 * np.cos(t)], axis=1)}
+    ep["signal_meta"] = {"observation.state": {"names": HUMANOID},
+                         "observation.velocity": {"names": [f"{j}.vel" for j in HUMANOID]},
+                         "observation.base.odom": {"names": ["x", "y", "yaw", "vx", "wz"]}}
+    episode = me.build_prompt(ep, _pl(n), cell_w=448, cell_h=252)[1]
+    table = episode.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
+    left = next(l for l in table.splitlines() if l.startswith("  The values at each instant leave out "))
+    shown = sum(f"    observation.state {j}: " in table for j in HUMANOID)
+    return episode, left, shown
+
+
+def test_over_the_budget_the_state_line_names_the_joint_readings_only_when_every_row_of_them_is_shown():
+    named = ("The joint readings it records (observation.state) are given value by value under their own names among "
+             "the other recorded signals below.")
+    episode, left, shown = _humanoid_overflow(0.4, 0.8)
+    assert shown == 26 and "observation.state" not in left and "observation.velocity (26 values" in left
+    assert named in episode
+    episode, left, shown = _humanoid_overflow(0.8, 0.4)
+    assert 0 < shown < 26 and f"observation.state (26 values, {26 - shown} of its 26 rows)" in left
+    assert "RECORDED STATE: no arm state in the layout our checks read.\n" in episode
+    assert "joint readings" not in episode

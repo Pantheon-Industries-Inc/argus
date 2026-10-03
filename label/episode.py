@@ -840,17 +840,16 @@ def contacts_block(ep: dict, pl: dict) -> str:
             "moment a hand clearly takes hold of or presses something that no contact of the recording covers.\n")
 
 
-SIGNAL_TABLE_MAX_CHARS = 12000     # the per-instant readout of the signals stays under this
+SIGNAL_TABLE_MAX_CHARS = 12000     # the values at each instant stay under this; the rows that move most are kept
 
 
 def _signals_table(ep: dict, pl: dict) -> str:
     """The recording's other per-frame numbers (ep["signals"], under the dataset's own names): every one listed once
-    with its shape and the range its values take; over each recorded still span how much each one changed (the claim
-    they bear on: a mobile base can drive while the arms are still); the exact times at which a signal that holds one
-    level leaves it and comes back (label/signals.py), which the sampled instants alone cannot give; and the values at
-    every sampled instant, as long as that readout stays under SIGNAL_TABLE_MAX_CHARS, except a touch signal's, whose
-    timing is given once as the episode's contacts (contacts_block). They are shown, not interpreted: the model reads
-    what each is from its name and the robot's description."""
+    with its shape, its value names and the range its values take (label/signals.py describe); over each recorded
+    still span how much each one changed (the claim they bear on: a mobile base can drive while the arms are still);
+    and the values at every sampled instant (_signal_readout), except a touch signal's, whose timing is given once as
+    the episode's contacts (contacts_block). They are shown, not interpreted: the model reads what each is from its
+    name and the robot's description."""
     from label import signals as sg
     sig = ep.get("signals") or {}
     if not sig:
@@ -889,32 +888,88 @@ def _signals_table(ep: dict, pl: dict) -> str:
                     ch.append(f"{name} {_num(c)}")
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
                          + ("; ".join(ch) if ch else "none changed"))
-    # a touch signal's timing is given once, as the episode's contacts (contacts_block), so the frames are read on their
-    # own first and the contacts are checked against them; touch is the rule the contacts shown follow (_touch_signal)
-    touch = {nm for nm in arrs if _touch_signal(ep, nm, n)}
-    ks = pl["ks"]
-    rows = []
-    for name, a in arrs.items():
-        if name in touch or not len(a) or not np.isfinite(a).any():
-            continue
-        with np.errstate(all="ignore"):
-            if (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all():
-                continue
-        rows += sg.summary_rows(name, a, ks, (meta.get(name) or {}).get("shape"), (meta.get(name) or {}).get("names"))
-    if rows:
-        head = "    at: " + " ".join(f"{frame_time(ep, k):.2f}" for k in ks)
-        body = [f"    {lb}: " + " ".join(v) for lb, v in rows]
-        if len(head) + sum(len(b) for b in body) <= SIGNAL_TABLE_MAX_CHARS:
-            lines.append("  Each signal that changes, at every instant you receive (seconds in the first row; \"-\" is "
-                         "no reading):")
-            lines += [head] + body
-        else:
-            lines.append("  (The signals' values at each instant are left out: they would not fit.)")
+    lines += _readout_of(ep, pl)[0]
     return ("\nOTHER RECORDED SIGNALS: every other number the dataset records per frame, under the dataset's own "
             "name, with the range each of its values takes over the episode (one that never changes is given as its "
             "value). They are not interpreted for you: read what each is from its name and the robot's description "
             "above. Like the rest of the recording they are claims to check against the video; a camera carried by "
             "something they show moving (a mobile base, a torso) moves with it.\n" + "\n".join(lines))
+
+
+def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
+    """(lines, whole): the values of the signals at every sampled instant, and the signals every row of which is in
+    them. A touch signal has no rows (its timing is given once as the episode's contacts, contacts_block, so the frames
+    are read on their own first and the contacts are checked against them; touch is the rule the contacts shown follow,
+    _touch_signal), nor has a signal that never changes or has no reading. The rows are ranked by how much their
+    values move over the episode (label/signals.py movements) and added in that order while they fit
+    SIGNAL_TABLE_MAX_CHARS, then printed in the signals' own order; every signal left out, whole or in part, is named
+    in one line with its size and rate. Until the 2026-10-02 audit the readout was dropped whole past the budget, so
+    a 66 s ego MCAP with IMU, hand, body and SLAM streams showed none of its 15 signals over time."""
+    from label import signals as sg
+    sig = ep.get("signals") or {}
+    meta = ep.get("signal_meta") or {}
+    n = pl["n"]
+    arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
+    touch = {nm for nm in arrs if _touch_signal(ep, nm, n)}
+    ks = pl["ks"]
+    rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)
+    for i, (name, a) in enumerate(arrs.items()):
+        if name in touch or not len(a) or not np.isfinite(a).any():
+            continue
+        with np.errstate(all="ignore"):
+            if (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all():
+                continue
+        m = meta.get(name) or {}
+        got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"))
+        mv = sg.movements(a)
+        by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"))
+        for j, (lb, v) in enumerate(got):
+            rows.append((float(mv[j]) if by_value else float(np.median(mv)), i, j, name, lb, v))
+    if not rows:
+        return [], frozenset()
+    lines = []
+    head = "    at: " + " ".join(f"{frame_time(ep, k):.2f}" for k in ks)
+    text = {(r[1], r[2]): f"    {r[4]}: " + " ".join(r[5]) for r in rows}
+    room, chosen = SIGNAL_TABLE_MAX_CHARS - len(head), set()
+    for r in sorted(rows, key=lambda r: (-r[0], r[1], r[2])):
+        if len(text[r[1], r[2]]) <= room:
+            chosen.add((r[1], r[2]))
+            room -= len(text[r[1], r[2]])
+    if chosen:
+        lines.append("  Each signal that changes, at every instant you receive (seconds in the first row; \"-\" is "
+                     "no reading):")
+        lines += [head] + [text[r[1], r[2]] for r in rows if (r[1], r[2]) in chosen]
+    left = {}
+    for r in rows:
+        if (r[1], r[2]) not in chosen:
+            left.setdefault(r[3], []).append(r)
+    if left:
+        lines.append("  The values at each instant leave out "
+                     + _and_list([_left_out(nm, arrs[nm], meta.get(nm) or {}, len(left[nm]),
+                                            sum(r[3] == nm for r in rows)) for nm in left])
+                     + ", because these move least and there is no more room.")
+    return lines, frozenset(r[3] for r in rows if r[3] not in left)
+
+
+def _readout_of(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
+    """The readout episode_text made once for this prompt (pl["readout"]), or, for a block text called on its own,
+    made now."""
+    return pl["readout"] if "readout" in pl else _signal_readout(ep, pl)
+
+
+def _left_out(name: str, a: np.ndarray, m: dict, n_left: int, n_rows: int) -> str:
+    """One signal left out of the values at each instant: its name, its size, its rate when known, and how many of its
+    rows were left out when some of them were shown."""
+    shape = m.get("shape")
+    size = (" x ".join(str(int(x)) for x in shape) + " values" if shape and len(shape) > 1
+            else f"{a.shape[1]} value{'s' if a.shape[1] > 1 else ''}")
+    rate = f", {_num(m['rate_hz'])} Hz" if m.get("rate_hz") else ""
+    part = f", {n_left} of its {n_rows} rows" if n_left < n_rows else ""
+    return f"{name} ({size}{rate}{part})"
+
+
+def _and_list(xs: list[str]) -> str:
+    return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
 
 
 BETWEEN_INSTANTS = (
@@ -1116,7 +1171,10 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     if _has_signals(ep, pl):
         from label import signals as sg
         meta = ep.get("signal_meta") or {}
-        joints = [nm for nm, a in ep["signals"].items() if sg.JOINT_LIKE.search(nm)
+        # only joint readings whose every value is at each instant in the readout below (_signal_readout): one left
+        # out of it in whole or in part, or with no rows there (constant, no reading, touch), is not named
+        whole = _readout_of(ep, pl)[1]
+        joints = [nm for nm, a in ep["signals"].items() if nm in whole and sg.JOINT_LIKE.search(nm)
                   and sg.per_value(nm, np.shape(a)[1], (meta.get(nm) or {}).get("shape"),
                                    (meta.get(nm) or {}).get("names"))]
         return (f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
@@ -1241,6 +1299,10 @@ def task_block(ep: dict) -> str:
 def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -> str:
     """The episode's part of the prompt: the base, with each present block's text in its slot."""
     got = dict.fromkeys(PROMPT_SLOTS, "")
+    if _has_signals(ep, pl):
+        # the readout of the signals is made once: the signals block prints it and the state line names only the
+        # joint readings it shows whole
+        pl = {**pl, "readout": _signal_readout(ep, pl)}
     for b in present_blocks(ep, pl):
         got[b.slot] += b.text(ep, pl)
     return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep, is_recorded(ep, pl)) + "\n"
