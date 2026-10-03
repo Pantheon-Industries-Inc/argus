@@ -3223,6 +3223,23 @@ def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
     return ctx
 
 
+
+OBSERVATION_MOTION = re.compile(r"(^|[./])(joint_pos(itions?)?|qpos|robot_state|state|pose|ee_pose|eef_pose|gripper"
+                                r"(_position|_pos|_width|_opening)?)($|[./])", re.I)
+
+
+def missing_lerobot_state(df) -> StateNote:
+    """Why observation.state cannot supply the state. Other recorded observation motion stays a signal, so absence
+    of that one field never claims that the recording contains no state at all. Commands do not count as state."""
+    motion = [str(c) for c in df if str(c).startswith("observation.") and OBSERVATION_MOTION.search(str(c))
+              and not ACTION_TOPIC.search(str(c)) and _cells(df[c]) is not None]
+    if motion:
+        return StateNote("Labelled from the video: the dataset records " + ", ".join(motion)
+                         + ", but no usable observation.state in the layout our checks read.", "layout")
+    return StateNote("Labelled from the video: the dataset's observation.state holds no numbers."
+                     if "observation.state" in df else
+                     "Labelled from the video: the dataset records no observation.state.", "not_recorded")
+
 def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=()) -> dict:
     """hold_back: columns an adapter keeps out of the prompt (a publisher's own labels, kept to score against)."""
     r, row = item["root"], item["row"]
@@ -3285,11 +3302,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if state is None and rig != "ego_head":
         # no observation.state, or one with no numbers, is a state not recorded; a data file that did not come is
         # one that could not be read
-        note = (StateNote("Labelled from the video: the dataset's observation.state holds no numbers.", "not_recorded")
-                if df is not None and "observation.state" in df.columns else
-                StateNote("Labelled from the video: the dataset records no observation.state.", "not_recorded")
-                if df is not None or row.get("data") is None else
-                StateNote(note, "not_recorded") if note else None)
+        note = missing_lerobot_state(df) if df is not None else StateNote(note, "not_recorded") if note else None
         if row.get("data") is None:
             note = StateNote("Labelled from the video: no data file came with this episode.", "unreadable")
         if notes:
@@ -3599,6 +3612,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     extra["source"]["images_in_parquet"] = True
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
     note = StateNote(note, "layout") if note else None
+    if state is None and rig != "ego_head":
+        note = missing_lerobot_state(df)
     # the state's frames with no reading filled as in convert_lerobot (state_on_frames), one row per image frame
     state, action, kind, note, fixes = state_on_frames(df, state, action, len(df), fps, kind, note)
     for i in fixes:
@@ -3612,7 +3627,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
                               times={k: v for k, v in np.load(ep / "times.npz").items()}, signals=signals)
     if rig != "ego_head":
         # no observation.state at all is a state not recorded, whatever the layout note says of its width
-        no_state(ctx, StateNote(note, "not_recorded" if state is None else note.why) if note else StateNote(
+        no_state(ctx, note if note else StateNote(
             "Labelled from the video: the recorded state and the image frames cannot be lined up.", "layout"))
         (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
     return ctx
@@ -4201,7 +4216,6 @@ def plan_hdf5(det: dict, root: Path) -> list[dict]:
     return items
 
 
-NOT_FINITE = "values that are not finite numbers"    # why a signal is left out when it holds an inf (h5_state reads it)
 
 
 def overlaps(t: np.ndarray, q: np.ndarray) -> bool:
@@ -4371,10 +4385,6 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         notes.append(note)
         failed.setdefault((side_of(name), unsided(name)), note)
     for name in cands:
-        if name not in signals and left_out[name] == NOT_FINITE:
-            fail(name, f"Labelled from the video, because the recorded state {name} has values that are not all "
-                         "finite numbers.", "unreadable")
-            continue
         if name not in signals:
             # a state recorded outside the footage covers none of it ("short"); rows with no clock to line them up
             # by are not a layout the checks read ("layout")

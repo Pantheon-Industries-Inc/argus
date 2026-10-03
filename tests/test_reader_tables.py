@@ -1176,3 +1176,30 @@ def test_a_coarse_table_clock_names_its_uncertainty_without_false_gaps(tmp_path)
     out = f.table_signals([p], T0 + np.arange(60) / 30, _anchor(60), {})
     assert out.meta["traj"]["aligned_by"] == "coarse clock" and _issues(out, "signal_clock_coarse")
     assert np.isfinite(out["traj"]).all()
+
+
+@pytest.mark.parametrize("images", [False, True])
+@pytest.mark.parametrize("column,reason", [("observation.joint_positions", "layout"),
+                                           ("action.joint_positions", "not_recorded"),
+                                           ("force", "not_recorded")])
+def test_missing_lerobot_state_names_recorded_observation_motion_truthfully(tmp_path, images, column, reason):
+    from test_formats import _lerobot, _jpeg
+    root = tmp_path / "ds"
+    cols = {column: np.tile(np.linspace(0, 1, 30)[:, None], (1, 6)).tolist()}
+    feats = {column: {"dtype": "float32", "shape": [6]}}
+    if images:
+        cols["observation.images.top"] = [{"bytes": _jpeg(k * 8, 96, 72)} for k in range(30)]
+        feats["observation.images.top"] = {"dtype": "image", "shape": [72, 96, 3]}
+    _lerobot(root, {0: cols}, feats=feats, n_video=0 if images else 30)
+    ip = root / "meta" / "info.json"
+    info = json.loads(ip.read_text())
+    info["features"].pop("observation.state")
+    ip.write_text(json.dumps(info))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "t", 900)
+    ctx = json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert ctx["state_kind"] == "none" and ctx["state_why"] == reason
+    assert "0 values per frame" not in ctx["state_note"]
+    if reason == "layout":
+        assert column in ctx["state_note"] and column in _signal_names(ctx)
+    else:
+        assert "records no observation.state" in ctx["state_note"]
