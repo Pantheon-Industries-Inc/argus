@@ -46,15 +46,16 @@ def _issues(x, kind: str) -> list[dict]:
 
 # ---------------------------------------------------------------- a sensor MCAP cut short
 
-def _arm_mcap(path: Path, seconds: float = 4.0, hz: float = 100.0, topic: str = "/yam_left/joint_state") -> None:
-    from mcap.writer import Writer
+def _arm_mcap(path: Path, seconds: float = 4.0, hz: float = 100.0, topic: str = "/yam_left/joint_state",
+              t0: float = T0, compressed: bool = True) -> None:
+    from mcap.writer import CompressionType, Writer
     with open(path, "wb") as fh:
-        w = Writer(fh, chunk_size=2048)
+        w = Writer(fh, chunk_size=2048, **({} if compressed else {"compression": CompressionType.NONE}))
         w.start()
         sid = w.register_schema(name="arm", encoding="jsonschema", data=b"{}")
         ch = w.register_channel(topic=topic, message_encoding="json", schema_id=sid)
         for i in range(int(seconds * hz)):
-            t = int((T0 + i / hz) * 1e9)
+            t = int((t0 + i / hz) * 1e9)
             msg = {"joint_pos": [0.01 * i] * 6, "gripper_pos": [0.5]}
             w.add_message(ch, log_time=t, publish_time=t, data=json.dumps(msg).encode())
         w.finish()
@@ -193,6 +194,20 @@ def test_a_third_arm_file_that_cannot_be_read_puts_no_camera_on_a_third_arm(tmp_
     ctx = _recorder_with(tmp_path, "yam_camera.mcap", third_arm=True)
     assert ctx["state_kind"] == "none" and "yam_camera.mcap" in ctx["state_note"]
     assert "third arm" not in ctx["state_note"] and "third arm" not in (ctx["cameras"]["exo"].get("desc") or "")
+
+
+def test_a_sensor_file_copied_over_at_the_same_size_and_time_is_read_again(tmp_path):
+    import os
+    import shutil
+    p, later = tmp_path / "yam_left.mcap", tmp_path / "later.mcap"
+    _arm_mcap(p, compressed=False)          # uncompressed, so both files are the same size
+    _arm_mcap(later, t0=T0 + 100.0, compressed=False)
+    st = os.stat(p)
+    assert st.st_size == os.stat(later).st_size
+    assert f.sensor_times(p)[0] - T0 == pytest.approx(0.0, abs=0.01)
+    shutil.copyfile(later, p)
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert f.sensor_times(p)[0] - T0 == pytest.approx(100.0, abs=0.01)
 
 
 # ---------------------------------------------------------------- a damaged archive

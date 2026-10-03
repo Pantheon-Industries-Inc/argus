@@ -6152,19 +6152,20 @@ def sensor_times(p: Path) -> np.ndarray | None:
     """A sensor file's own times in seconds, sorted: an MCAP's message log times (from its summary's first and last
     time and count, or scanned when it has no summary or its summary cannot be read, a file cut short, whose
     messages before the cut are then its times), an HDF5 file's longest clock (h5_streams); None when it has none.
-    The times of a file are read once while it is unchanged (_file_times, by its size and modification time), since
-    placing it, flagging its cut and placing it from both starts each ask for them, and a cut file is scanned whole;
-    they come read only, so no caller changes them for the next."""
+    The times of a file are read once while it is unchanged (_file_times, by its inode, size, and modification and
+    change times, so a file copied over it at the same size and modification time is read again), since placing it,
+    flagging its cut and placing it from both starts each ask for them, and a cut file is scanned whole; they come
+    read only, so no caller changes them for the next."""
     try:
         st = os.stat(p)
     except OSError:
         return None
-    return _file_times(str(Path(p).resolve()), st.st_size, st.st_mtime_ns)
+    return _file_times(str(Path(p).resolve()), st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
 @functools.lru_cache(maxsize=SENSOR_TIMES_KEPT)
-def _file_times(p: str, size: int, mtime_ns: int) -> np.ndarray | None:
-    """sensor_times of the file at p, which has this size and modification time."""
+def _file_times(p: str, inode: int, size: int, mtime_ns: int, ctime_ns: int) -> np.ndarray | None:
+    """sensor_times of the file at p, as it is with this inode, size, and modification and change times."""
     t = _read_file_times(Path(p))
     if t is not None:
         t.setflags(write=False)
