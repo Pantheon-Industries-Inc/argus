@@ -477,6 +477,18 @@ def test_an_episode_past_the_minutes_left_is_skipped_and_later_ones_still_tried(
     assert [s["name"] for s in rep["skipped"]] == ["ep2/top"] and "minutes" in rep["skipped"][0]["why"]
 
 
+def test_once_the_minutes_are_used_up_no_later_episode_is_converted(tmp_path, monkeypatch):
+    """As the upload page counts them (read.js chooseEpisodes), the minutes are used up once what is taken comes within
+    a second of the limit: a later episode is listed, never converted and then deleted."""
+    for name in ("ep1", "ep2", "ep3"):
+        _clip(tmp_path / "up" / name / "top.mp4", 30)
+    calls, convert_video = [], f.convert_video
+    monkeypatch.setattr(f, "convert_video", lambda it, *a: calls.append(it["name"]) or convert_video(it, *a))
+    rep = f.convert(tmp_path / "up", "teleop_arms", tmp_path / "out" / "eps", "t", 3.0)
+    assert [e["name"] for e in rep["episodes"]] == ["ep1/top", "ep2/top"] == calls
+    assert [s["name"] for s in rep["skipped"]] == ["ep3/top"]
+
+
 def test_episodes_under_the_minutes_are_all_taken(tmp_path):
     for name in ("ep1", "ep2"):
         _clip(tmp_path / "up" / name / "top.mp4", 30)

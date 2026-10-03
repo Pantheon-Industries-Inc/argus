@@ -6529,6 +6529,9 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
             continue
         total += secs
         report["episodes"].append(episode_row(it, ctx, secs))
+        # within a second of the limit the minutes are used up, as the upload page counts them (read.js
+        # chooseEpisodes): a later episode is listed, never converted and then deleted for not fitting
+        full = full or total >= max_seconds - 1
     used, missing = sensor_lines(out, report["episodes"])
     report["used"] += used
     report["missing"] += missing
