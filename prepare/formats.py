@@ -2544,6 +2544,9 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
         if times and view in times:
             placed, note = presentation_clock(times[view], nominal_fps)
             if note:
+                if note.get("clock_problem") and ctx.get("clock_start_assumed"):
+                    note = {**note, "origin_assumed": True,
+                            "what": note["what"] + " " + ctx["clock_origin_note"]}
                 presentation[view], notes[view] = placed, note
     if presentation:
         ctx.update(presentation_times="presentation_times.npz", camera_clock=notes)
@@ -5453,7 +5456,8 @@ def not_finite(name: str, a: np.ndarray, t: np.ndarray, zero: float, out: Signal
     return a
 
 
-def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor: int) -> Signals:
+def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor: int,
+               presentation_q: np.ndarray | None = None) -> Signals:
     """Every signal of an episode on the anchor camera's frames: by its own clock, as mcap_signals places a channel
     (nearest sample, NaN where none is near, so a signal that starts or ends inside the footage is NaN outside its
     readings, and left out only when it records nothing inside the footage), or, with no clock, one row per anchor
@@ -5461,6 +5465,8 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
     out = Signals()
     recorded_q = np.asarray(q_abs, dtype=np.float64)
     q, camera_note = presentation_clock(recorded_q, fps)
+    if presentation_q is not None:
+        q = np.asarray(presentation_q, dtype=np.float64)
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
     for s in streams["signal"]:
         ds = f[s["path"]]
@@ -5737,11 +5743,19 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         def first_time(s):
             t = times_of(s)
             finite = np.flatnonzero(np.isfinite(t))
-            return float(t[finite[0]]) if len(finite) else None
+            if not len(finite):
+                return None
+            first = int(finite[0])
+            if first:
+                # The missing prefix has only assumed row cadence. Reuse that cadence to estimate its origin.
+                shown, _ = presentation_clock(t, fps)
+                return float(t[first] - shown[first])
+            return float(t[0])
         timed = [s for s in chosen.values() if first_time(s) is not None]
         t0 = min(first_time(s) for s in timed) if timed else 0.0
         coarse = any(presentation_clock(times_of(s), fps)[1] for s in st["camera"] + st["depth"])
         origin_stream = min(timed, key=first_time) if timed else next(iter(chosen.values()))
+        origin_assumed = bool(timed) and not np.isfinite(times_of(origin_stream)[0])
 
         def scale_of(s):
             raw = st["native_clock"][s["clock"]].ravel()
@@ -5833,8 +5847,13 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if dw.close():
                 depth[v] = {"path": ep / f"depth_{v}.mkv", "real": t if coarse else None,
                             "capture_clock": coarse, "scale_m": dw.scale_m, "source": source}
-        signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
-        q_selected = presentation_clock(q_abs, fps)[0]
+        q_selected, anchor_note = presentation_clock(q_abs, fps)
+        presentation_q = None
+        if anchor_note and anchor_note.get("clock_problem") and not np.isfinite(q_abs[0]):
+            # All consumers use the same assumed source origin as the actual camera presentation.
+            q_selected = presentation_clock(real[anchor], fps)[0] + t0
+            presentation_q = q_selected
+        signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"], presentation_q=presentation_q)
         # sensor files of the episode's folder (assign_sensors): on the camera's clock when both are on a recorder's
         # clock, which may give the state; else from both starts, after the state is read, so an assumed alignment
         # is never the recorded state (split_sensors)
@@ -5842,7 +5861,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         sensor_h5s = [p for p in by_clock if p.suffix.lower() in H5_EXT]
         sensor_mcaps = [p for p in by_clock if p.suffix.lower() == ".mcap"]
         if sensor_h5s:
-            merge_signals(signals, h5_file_signals(sensor_h5s, q_abs, len(q_abs), fps=fps))
+            merge_signals(signals, h5_file_signals(sensor_h5s, q_abs, len(q_abs), fps=fps,
+                                                 presentation_q=presentation_q))
         if sensor_mcaps:
             merge_signals(signals, mcap_signals(sensor_mcaps, q_selected))
         identity_extra: dict = {}
@@ -5892,7 +5912,12 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if notes:
         set_uploader_notes(extra, notes)
     if chosen[anchor]["clock"]:
-        extra["clock_origin_s"] = t0         # the recorder's time at the clips' zero
+        extra["clock_origin_s"] = t0
+    if origin_assumed:
+        extra.update(clock_start_assumed=True,
+                     clock_origin_note="The source clock origin is estimated from the first finite camera stamp "
+                                       "and its assumed row cadence; sensor placement on these camera frames "
+                                       "remains assumed, not measured.")
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth,
                                real=real if coarse else None, real_origin_s=t0 if coarse else None,
                                nominal_fps=fps,
@@ -5932,7 +5957,8 @@ def h5_has_camera(path: Path) -> bool:
         return False
 
 
-def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: float | None = None) -> Signals:
+def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: float | None = None,
+                    presentation_q: np.ndarray | None = None) -> Signals:
     """Every signal of HDF5 files that hold no camera, placed on videos' frame times (q_abs, the recorder's clock):
     a glove's pressure and hand pose recorded beside a head camera. Only arrays with their own clock can be placed."""
     import h5py
@@ -5941,7 +5967,8 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: fl
         try:
             with h5py.File(p, "r") as f:
                 st = h5_streams(f, "")
-                got = h5_signals(f, {**st, "signal": [s for s in st["signal"] if s["clock"]]}, q_abs, fps, n_anchor)
+                got = h5_signals(f, {**st, "signal": [s for s in st["signal"] if s["clock"]]}, q_abs, fps,
+                                 n_anchor, presentation_q=presentation_q)
                 # with several files each array, kept or left out, carries its file's name first
                 named = (lambda k: f"{p.stem} {k}") if len(paths) > 1 else (lambda k: k)
                 for k, v in got.items():
