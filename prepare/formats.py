@@ -3964,12 +3964,12 @@ def read_root(rdir: Path, rel: str) -> dict:
     for (column, path), table in task_tables.items():
         if column is not None:
             reads["metadata_read"].add(Path(path).resolve())
-            for issue in table["issues"]:
-                metadata_failure(reads, Path(path), json.dumps(issue, default=str))
+        for issue in table["issues"]:
+            metadata_failure(reads, Path(path), issue["why"] if column is None else json.dumps(issue, default=str))
     task_labels = resolved_labels(task_tables, "task_index")
     tasks_by_index = {k: v["label"] for k, v in task_labels.items() if v["label"]}
     for path in (rdir / "meta" / "tasks.jsonl", rdir / "meta" / "tasks.parquet"):
-        if path.exists() and ("task_index", str(path)) not in task_tables:
+        if path.exists() and ("task_index", str(path)) not in task_tables and (None, str(path)) not in task_tables:
             metadata_failure(reads, path, "a recorded task_index is required")
     annotated, annot_src = annotated_instructions(rdir / "meta", reads)
     root = {"dir": str(rdir), "rel": rel, "info": info, "version": version, "v3": v3, "fps": fps,
@@ -4348,10 +4348,15 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
         return
     from prepare.annotations import BOOKKEEPING_COLUMNS, annotation_spans, index_tables, original, resolved_labels
     tables = index_tables(Path(root["dir"]) / "meta", df.columns, read_jsonl)
+    failures = {path: original(table) for (column, path), table in tables.items() if column is None}
     owned = {column for column, _ in tables if column is not None}
     columns = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and (c in owned or c.endswith("_index"))]
-    if not columns:
+    if not columns and not failures:
         return
+    for path, table in failures.items():
+        key = Path(path).relative_to(root["dir"]).as_posix()
+        for issue in table["issues"]:
+            add_issue(ctx, "metadata_unreadable", f"{key} could not be fully read: {issue['why']}.")
     times = df["timestamp"].tolist() if "timestamp" in df else None
     frames = df["frame_index"].tolist() if "frame_index" in df else None
     fps = ctx.get("fps") or root.get("fps")
@@ -4417,6 +4422,8 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
     ctx["annotation_subtasks"] = ctx.get("annotation_subtasks", []) + spans
     ctx["annotation_unresolved"] = unresolved
     ctx["annotation_tables"] = table_notes
+    if failures:
+        ctx["annotation_table_failures"] = failures
     previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
     # Preserve the row clock while naming each source once. Repeated equal codes are fully represented by
     # their value and inclusive row range; the complete table claims are retained once under their source.
@@ -4429,6 +4436,8 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
             if k not in ("claims", "data_source", "source", "column")})
     notes = {"recorded annotation data source": str(data_path), "recorded annotation tables": table_notes,
              "recorded annotation spans": shown, "unresolved recorded annotation rows": missing}
+    if failures:
+        notes["unreadable annotation table sources"] = failures
     if previous:
         notes["previous recorded notes"] = previous
     set_uploader_notes(ctx, notes)

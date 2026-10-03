@@ -342,3 +342,39 @@ def test_whole_packed_recording_retains_unmapped_annotation_clocks(tmp_path):
     assert all('t0' not in x and 't1' not in x and x['timing_reason'] for x in ctx['annotation_subtasks'])
     assert ctx['annotation_subtasks'][1]['raw_times'] == [2 / 30, 3 / 30]
     assert ctx['uploader_notes']['recorded annotation spans']['task_index'][1]['raw_times'] == [2 / 30, 3 / 30]
+
+
+def test_failed_annotation_table_retains_its_source_and_decoder_reason_without_consumption(tmp_path):
+    root = tmp_path / 'upload'
+    state = np.arange(56, dtype=np.float32).reshape(4, 14) / 100
+    _lerobot(root, {0: {'observation.state': list(state), 'phase_index': [0, 0, 1, 1],
+                       'sensor': [3, 4, 5, 6]}}, n_video=4)
+    clean_out = tmp_path / 'clean'
+    clean = f.convert(root, 'teleop_arms', clean_out, 'test', 900)
+    assert not clean['failed'] and len(clean['episodes']) == 1
+    path = root / 'meta/subtasks.parquet'
+    path.write_bytes(b'not a parquet table')
+    originals = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()}
+    output = tmp_path / 'failed_table'
+    report = f.convert(root, 'teleop_arms', output, 'test', 900)
+    assert not report['failed'] and len(report['episodes']) == 1, report
+    ep = output / report['episodes'][0]['episode_id']
+    ctx = json.loads((ep / 'context.json').read_text())
+    issue = next(x for x in ctx['reader_issues'] if 'subtasks.parquet' in x['what'])
+    assert issue['kind'] == 'metadata_unreadable' and 'table read failed' in issue['what']
+    failed = ctx['annotation_table_failures'][str(path)]
+    assert failed['labels'] == {} and 'table read failed' in failed['issues'][0]['why']
+    assert ctx['uploader_notes']['unreadable annotation table sources'][str(path)] == failed
+    parsed = f.read_root(root, '')
+    assert path.resolve() not in parsed['metadata_read']
+    assert any('subtasks.parquet' in x['text'] and 'table read failed' in x['text'] for x in parsed['metadata_issues'])
+    assert str(path) not in ctx['annotation_tables'] and not ctx['annotation_subtasks']
+    clean_ep = clean_out / clean['episodes'][0]['episode_id']
+    for name in ('state.npz', 'signals.npz'):
+        with np.load(clean_ep / name) as before, np.load(ep / name) as after:
+            assert before.files == after.files
+            for key in before.files:
+                assert before[key].dtype == after[key].dtype and before[key].shape == after[key].shape
+                assert before[key].tobytes() == after[key].tobytes()
+    assert (clean_ep / 'sources.json').read_bytes() == (ep / 'sources.json').read_bytes()
+    assert {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()} == originals
