@@ -3764,7 +3764,11 @@ def test_structured_notes_preserve_distinct_relative_paths_during_task_disagreem
                     p.write_text(json.dumps(expected[name]))
                 _, episodes = _converted_notes(root, root.parent / 'out')
                 for ctx, prompt in episodes:
-                    assert ctx['uploader_notes'] == expected
+                    assert ctx['uploader_notes']['outside files'] == expected
+                    assert 'recorded notes' in ctx['uploader_notes']
+                    if not recorded:
+                        assert len(ctx['annotation_unresolved']) == 10
+                        assert all(x['value'] == 0 and x['why'] for x in ctx['annotation_unresolved'])
                     assert ctx['source']['note_files'] == list(expected)
                     assert ctx.get('instruction') == ('recorded task' if recorded else 'pick cup' if agree else None)
                     for n, name in enumerate(paths):
@@ -3815,7 +3819,13 @@ def test_metadata_failures_and_limits_have_visible_issue_families():
             root / 'meta/tasks.parquet')
         _, episodes = _converted_notes(root, Path(t) / 'mixed_task_table')
         assert episodes[0][0]['instruction'] == 'valid table task'
-        assert 'invented task' not in episodes[0][1]
+        assert episodes[0][0]['task_label'] == ['valid table task']
+        table = episodes[0][0]['annotation_tables'][str(root / 'meta/tasks.parquet')]['task_index']
+        rejected = table['issues'][0]
+        assert rejected['value'] == 'bad' and type(rejected['value']) is str
+        assert rejected['fields'] == {'task': 'invented task'} and rejected['why']
+        assert rejected['source'] == str(root / 'meta/tasks.parquet')
+        assert 'invented task' in episodes[0][1] and 'unresolved' in episodes[0][1]
         assert 'tasks.parquet' in episodes[0][1]
 
 

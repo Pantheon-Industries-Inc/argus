@@ -3908,7 +3908,6 @@ def read_root(rdir: Path, rel: str) -> dict:
     """One LeRobot dataset folder, normalised: cameras, frame rate, and one row per episode with its video
     paths (or packed windows), its data file and its task text, plus plain-words notes on what was read and
     what was missing."""
-    import pandas as pd
     used, missing = [], []
     reads = {"dir": rdir, "metadata_read": set(), "metadata_issues": [], "missing": missing}
     info = _read_json(rdir / "meta" / "info.json", reads)
@@ -3959,32 +3958,19 @@ def read_root(rdir: Path, rel: str) -> dict:
                 missing.append(f"meta/info.json{where} lists no video cameras, so the cameras in its videos folder were used.")
             cams = on_disk
     fps = float(info["fps"]) if info and info.get("fps") else None
-    tasks_by_index = {}
-    task_file = rdir / "meta" / "tasks.jsonl"
-    for t in read_jsonl(task_file, reads):
-        try:
-            if not isinstance(t.get("task"), str) or not t["task"].strip():
-                raise ValueError("task must be nonempty text")
-            tasks_by_index[recorded_index(t["task_index"])] = t["task"]
-        except (KeyError, TypeError, ValueError) as error:
-            metadata_failure(reads, task_file, plain_error(error))
-    if (rdir / "meta" / "tasks.parquet").exists():
-        try:
-            tp = pd.read_parquet(rdir / "meta" / "tasks.parquet")
-            reads["metadata_read"].add((rdir / "meta" / "tasks.parquet").resolve())
-            if "task_index" not in tp.columns and tp.index.name != "task_index":
-                raise ValueError("a recorded task_index is required")
-            for task, row in tp.iterrows():
-                try:
-                    text = row.get("task", task)
-                    if not isinstance(text, str) or not text.strip():
-                        raise ValueError("task must be nonempty text")
-                    index = row.get("task_index", task)
-                    tasks_by_index[recorded_index(index)] = text
-                except (KeyError, TypeError, ValueError) as error:
-                    metadata_failure(reads, rdir / "meta" / "tasks.parquet", plain_error(error))
-        except Exception as error:
-            metadata_failure(reads, rdir / "meta" / "tasks.parquet", plain_error(error))
+    from prepare.annotations import index_tables, resolved_labels
+    task_tables = index_tables(rdir / "meta", ["task_index"], lambda p: read_jsonl(p, reads)
+                               if p.name == "tasks.jsonl" else read_jsonl(p))
+    for (column, path), table in task_tables.items():
+        if column is not None:
+            reads["metadata_read"].add(Path(path).resolve())
+            for issue in table["issues"]:
+                metadata_failure(reads, Path(path), json.dumps(issue, default=str))
+    task_labels = resolved_labels(task_tables, "task_index")
+    tasks_by_index = {k: v["label"] for k, v in task_labels.items() if v["label"]}
+    for path in (rdir / "meta" / "tasks.jsonl", rdir / "meta" / "tasks.parquet"):
+        if path.exists() and ("task_index", str(path)) not in task_tables:
+            metadata_failure(reads, path, "a recorded task_index is required")
     annotated, annot_src = annotated_instructions(rdir / "meta", reads)
     root = {"dir": str(rdir), "rel": rel, "info": info, "version": version, "v3": v3, "fps": fps,
             "robot_type": (info or {}).get("robot_type"), "features": feats, "cams": cams, "image_cams": image_cams,
@@ -4179,9 +4165,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
             data_of[eidx] = dp
             if "task_index" in g.columns:
                 try:
-                    ti = recorded_index(g["task_index"].iloc[0])
-                    if ti in root["tasks_by_index"]:
-                        tasks_of[eidx] = [root["tasks_by_index"][ti]]
+                    tasks_of[eidx] = constant_index_task(g["task_index"], root["tasks_by_index"])
                 except ValueError as error:
                     metadata_failure(root, dp, f"task_index: {plain_error(error)}; no task was inferred")
             if "timestamp" in g.columns and len(g) > 2:
@@ -4344,6 +4328,112 @@ def _read_episode_table(path: Path, eidx: int, columns: list[str] | None, exclud
     return df
 
 
+def constant_index_task(values, labels) -> list[str]:
+    """Only one valid recorded code across every row can supply the existing episode task fallback."""
+    indices = {recorded_index(x) for x in values}
+    if len(indices) == 1:
+        text = labels.get(next(iter(indices)))
+        if text:
+            return [text]
+    return []
+
+
+def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
+    """Attach recorded codes without changing state, signals or camera clocks.
+
+    Image rows share the native timestamp origin used by their writer. Video rows map by their recorded
+    frame_index only when each index identifies a frame of this episode. Raw times and source claims stay intact.
+    """
+    if df is None or not len(df):
+        return
+    from prepare.annotations import BOOKKEEPING_COLUMNS, annotation_spans, index_tables, original, resolved_labels
+    tables = index_tables(Path(root["dir"]) / "meta", df.columns, read_jsonl)
+    owned = {column for column, _ in tables if column is not None}
+    columns = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and (c in owned or c.endswith("_index"))]
+    if not columns:
+        return
+    times = df["timestamp"].tolist() if "timestamp" in df else None
+    frames = df["frame_index"].tolist() if "frame_index" in df else None
+    fps = ctx.get("fps") or root.get("fps")
+    n = ctx.get("n_state_frames")
+    mapped = None
+    offset = None
+    if image_clock and times is not None:
+        try:
+            offset = -float(times[0])
+            if not np.isfinite(offset):
+                offset = None
+        except (TypeError, ValueError, OverflowError):
+            pass
+    elif frames is not None and fps and n:
+        try:
+            indices = [recorded_index(x) for x in frames]
+            if len(set(indices)) == len(indices) and all(x < n for x in indices):
+                mapped = [x / fps for x in indices]
+        except (TypeError, ValueError):
+            pass
+    spans, unresolved, table_notes = [], [], {}
+    for column in columns:
+        selected = {key: table for key, table in tables.items() if key[0] == column}
+        sources = [path for _, path in selected]
+        source = sources[0] if len(sources) == 1 else str(data_path)
+        labels = resolved_labels(selected, column)
+        steps, missing = annotation_spans(df[column].tolist(), times, labels, source, column, frame_indices=frames)
+        for step in steps:
+            step["data_source"] = str(data_path)
+            for key in ("t0", "t1"):
+                if key not in step:
+                    continue
+                step["raw_" + key] = step[key]
+                if offset is not None:
+                    step[key] += offset
+                    step["clock_offset_s"] = offset
+                    step["clock_mapping"] = "native row timestamp minus the image writer's first timestamp"
+                elif mapped is not None:
+                    row = step["row_start"] if key == "t0" else step["row_end"] + 1
+                    step[key] = mapped[row]
+                    step["clock_mapping"] = "recorded frame_index / fps on this episode's video frames"
+                else:
+                    del step[key]
+                    step["timing_reason"] = "the recorded row clock has no established mapping to the camera clock"
+            if step.get("timing_reason") and step["timing_reason"] != "no measured end boundary on the recorded clock":
+                add_issue(ctx, "metadata_unreadable", f"{column} in {data_path} retains an annotation with incomplete "
+                          f"timing: {step['timing_reason']}.")
+        for claim in missing:
+            claim["data_source"] = str(data_path)
+        if missing:
+            add_issue(ctx, "metadata_unreadable", f"{column} in {data_path} has unresolved recorded annotation codes; "
+                      "all original rows and table claims are retained as uploader notes.")
+        spans.extend(steps)
+        unresolved.extend(missing)
+        for (_, path), table in selected.items():
+            root["metadata_read"].add(Path(path).resolve())
+            if Path(path).suffix == ".jsonl":
+                read_jsonl(Path(path), root)
+            table_notes.setdefault(path, {})[column] = original(table)
+            if table["issues"]:
+                add_issue(ctx, "metadata_unreadable", f"{path} has unresolved {column} table claims; "
+                          "every recorded field and conflicting row is retained as uploader notes.")
+    ctx["annotation_subtasks"] = ctx.get("annotation_subtasks", []) + spans
+    ctx["annotation_unresolved"] = unresolved
+    ctx["annotation_tables"] = table_notes
+    previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
+    # Preserve the row clock while naming each source once. Repeated equal codes are fully represented by
+    # their value and inclusive row range; the complete table claims are retained once under their source.
+    shown, missing = {}, {}
+    for step in spans:
+        shown.setdefault(step["column"], []).append({k: v for k, v in step.items()
+            if k not in ("values", "claims", "data_source", "source", "column")})
+    for claim in unresolved:
+        missing.setdefault(claim["column"], []).append({k: v for k, v in claim.items()
+            if k not in ("claims", "data_source", "source", "column")})
+    notes = {"recorded annotation data source": str(data_path), "recorded annotation tables": table_notes,
+             "recorded annotation spans": shown, "unresolved recorded annotation rows": missing}
+    if previous:
+        notes["previous recorded notes"] = previous
+    set_uploader_notes(ctx, notes)
+
+
 def _cells_rows(col) -> tuple[np.ndarray | None, int]:
     """(a column as (rows, values), how many of its cells could not be read). Each cell is flattened, a list of lists
     (a 16 x 16 pressure map, which parquet gives as an array of arrays) in its own order; the width is the size most
@@ -4391,6 +4481,40 @@ def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
         ctx.setdefault("source", {})["adapter"] = mod.__name__.rsplit(".", 1)[-1]
         if ctx.get("profile") != rig:
             ctx["source"]["rig_note"] = f"the upload was marked {rig}; this dataset's layout is {ctx.get('profile')}"
+        # Galaxea writes its own episode; HABIT already passed through the generic reader above.
+        if "annotation_unresolved" not in ctx and item["row"].get("data") is not None:
+            df = _read_episode_table(item["row"]["data"], item["row"]["eidx"], None,
+                                     exclude=item["root"]["image_cams"])
+            if mod.__name__.rsplit(".", 1)[-1] == "galaxea":
+                # These are the adapter's rounded computations from task_index, not native timed annotations.
+                computed = {"adapter": "galaxea", "data_source": str(item["row"]["data"]),
+                            "provenance": "adapter computed approximations from recorded indices and its FPS; "
+                                          "not original recorded timestamps",
+                            "spans": ctx.pop("annotation_subtasks", []),
+                            "annotation_text": ctx.get("instruction_note"), "quality_tags": ctx.get("quality_tag")}
+                set_uploader_notes(ctx, {"adapter computed annotations": computed})
+                ctx["instruction_note"] = ("The adapter's earlier annotation text is retained as computed "
+                                           "approximations in the uploader notes. Admitted recorded spans are "
+                                           "attributed there separately.")
+                declared = item["root"]["annotated"].get(item["row"]["eidx"])
+                tasks = item["row"].get("tasks") or []
+                if declared or tasks:
+                    ctx["instruction"] = declared or "; ".join(tasks)
+                    ctx["task_label"] = tasks or ctx["task_label"]
+                else:
+                    try:
+                        valid = constant_index_task(df["coarse_task_index"], item["root"]["tasks_by_index"])
+                    except (TypeError, ValueError):
+                        valid = []
+                    if not valid:
+                        ctx.pop("instruction", None)
+                        ctx["task_label"] = [item["name"]]
+                instruction_file = out / ctx["episode_id"] / "instruction.txt"
+                if ctx.get("instruction"):
+                    instruction_file.write_text(ctx["instruction"] + "\n")
+                else:
+                    instruction_file.unlink(missing_ok=True)
+            lerobot_annotations(ctx, item["root"], df, item["row"]["data"])
     notes = item["row"].get("metadata_notes")
     if notes:
         previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
@@ -4448,9 +4572,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     tasks = list(row.get("tasks") or [])
     if not tasks and df is not None and "task_index" in df.columns and len(df):
         try:
-            ti = recorded_index(df["task_index"].iloc[0])
-            if ti in r["tasks_by_index"]:
-                tasks = [r["tasks_by_index"][ti]]
+            tasks = constant_index_task(df["task_index"], r["tasks_by_index"])
         except ValueError as error:
             metadata_failure(r, row["data"], f"task_index: {plain_error(error)}; no task was inferred")
     annotated = r["annotated"].get(eidx)
@@ -4539,6 +4661,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             no_state(ctx, lerobot_state_note(note, notes))
         for i in fixes:
             add_issue(ctx, **i)
+        lerobot_annotations(ctx, r, df, row.get("data"))
         write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
         return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
                               signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
@@ -4584,6 +4707,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         no_state(ctx, lerobot_state_note(note, notes))
     for i in fixes:
         add_issue(ctx, **i)
+    lerobot_annotations(ctx, r, df, row.get("data"))
     write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
     return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
                           signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
@@ -4819,6 +4943,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         elif key not in undecoded:
             unshown_not_decodable(extra, key)
     extra["source"]["images_in_parquet"] = True
+    lerobot_annotations(extra, r, df, item["row"].get("data"), image_clock=True)
     if native is not None:
         keep_container_clocks(ep, extra, {"timestamp": native}, {v: "timestamp" for v in files},
                               {"timestamp": {"source": "parquet timestamp column", "units": None}})
@@ -4873,7 +4998,7 @@ def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
         # the state is recorded, but its rows are not matched to this packed video's episodes, a layout we do not read
         no_state(extra, StateNote("Labelled from the video, as one recording: its episodes could not be matched to "
                                   "the packed video exactly.", "layout"))
-    signals = None
+    signals, df = None, None
     if item.get("data") is not None:
         from label import episode as me
         lead = files[me.order_views(files)[0]][1]
@@ -4892,8 +5017,13 @@ def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
             else:
                 signals.left_out.append((Path(item["data"]).name, f"{len(df)} rows while the video has {n} frames, so "
                                                                   "its rows cannot be placed on the frames"))
-    return video_views_episode(unique_dir(out, item.get("output_name") or episode_name(item["name"])), files, rig, dataset, extra,
-                               signals=signals)
+    ep = unique_dir(out, item.get("output_name") or episode_name(item["name"]))
+    ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals)
+    # An unresolved packed recording has no episode frame-index contract, even if its row count matches.
+    if df is not None:
+        lerobot_annotations(ctx, item["root"], df.drop(columns=["frame_index"], errors="ignore"), item["data"])
+        write_atomic(ep / "context.json", ctx, indent=1, default=str)
+    return ctx
 
 
 # ---------------------------------------------------------------- MCAP
