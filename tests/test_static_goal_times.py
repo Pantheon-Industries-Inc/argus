@@ -1,6 +1,7 @@
 """Invalid saved times retain their labels without requesting an impossible frame."""
 import copy
 import json
+import subprocess
 
 import pytest
 
@@ -45,3 +46,33 @@ def test_integer_outside_float_range_does_not_request_a_goal_frame():
     saved = {'completion': {'completed_at_s': value}}
     assert static.goal_times(saved) == []
     assert saved['completion']['completed_at_s'] == value
+
+
+@pytest.mark.parametrize('value', [1e308, -1e308, 1e20, 1e100, 1e250])
+@pytest.mark.parametrize('field', ['completion', 'task', 'reached'])
+def test_saved_times_without_an_exact_browser_frame_key_do_not_request_frames(value, field):
+    if field == 'task':
+        saved = {'tasks': [{'task': 'lift', 'completed_at_s': value}]}
+    elif field == 'reached':
+        saved = {'completion': {'task_completed': 'success_then_undone', 'goal_reached_at_s': value}}
+    else:
+        saved = {'completion': {'completed_at_s': value}}
+    original = json.dumps(saved)
+    assert static.goal_times(saved) == []
+    assert json.dumps(saved) == original
+
+
+def test_negative_saved_goal_time_does_not_guess_a_picture_at_zero():
+    saved = {'completion': {'completed_at_s': -0.1}}
+    assert static.goal_times(saved) == []
+    assert saved['completion']['completed_at_s'] == -0.1
+
+
+def test_planned_millisecond_keys_match_browser_decimal_lookup():
+    saved = {'tasks': [{'task': 'frame', 'completed_at_s': value}
+                       for value in (0, 0.123456789, 2.34567891, 1e20)]}
+    planned = static.goal_times(saved)
+    code = 'console.log(JSON.stringify(JSON.parse(process.argv[1]).map(t=>String(Math.round(t*1000)))))'
+    browser = json.loads(subprocess.check_output(['node', '-e', code, json.dumps(planned)], text=True))
+    assert [str(static.ms_key(value)) for value in planned] == browser
+    assert planned == [0, 0.123456789, 2.34567891]
