@@ -176,6 +176,20 @@ def names_joints_or_state(name: str) -> bool:
             and not _names_word(name, COMMAND_WORDS))
 
 
+def names_scalar_observed_state(name: str) -> bool:
+    """A scalar can disprove absent arm state only when its name identifies a joint or observed arm state.
+    Sensor readings, bookkeeping and commands do not establish that state, even under observation.*."""
+    from prepare.formats import TOUCH_WORDS, _names_word, tokens
+    if not names_joints_or_state(name) or _names_word(name, TOUCH_WORDS + (
+            "torque", "clock", "time", "timestamp",
+            "battery", "estop", "emergency", "health", "status", "mode", "power", "temperature", "voltage",
+            "current")):
+        return False
+    words = tokens(name)
+    return (_names_word(name, ("joint", "qpos")) or len(words) > 1 and words[-1] in ("state", "states")
+            and _names_word(words[-2], ("observation", "arm", "robot", "gripper", "leader", "follower")))
+
+
 def _num(x: float) -> str:
     return "-" if not np.isfinite(x) else f"{float(x):.3g}"
 

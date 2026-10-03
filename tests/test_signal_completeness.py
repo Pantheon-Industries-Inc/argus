@@ -122,6 +122,47 @@ def test_a_command_channel_does_not_disprove_absent_observed_state():
         {"n": 3, "ks": [0], "spans": [], "touch": frozenset()})
 
 
+@pytest.mark.parametrize("name", ["observation.joint_positions", "qpos", "left_joint1", "observation.state",
+                                 "observation.arm_state", "robot_state", "gripper_state"])
+def test_finite_scalar_observed_joint_or_state_disproves_old_absence(name):
+    ep = _episode(np.array([[1.], [3.], [2.]]))
+    ep["signals"] = {name: ep["signals"]["qpos"]}
+    ep["context"].update(state_why="not_recorded", state_note="no observation.state field was recorded")
+    text = me._no_state_text(ep, {"n": 3, "ks": [0, 1, 2], "spans": [], "touch": frozenset()})
+    assert "the recording holds none" not in text
+    assert "no arm state in the layout our checks read" in text
+
+
+@pytest.mark.parametrize("name", ["observation.joint_command", "action.state", "observation.joint_force",
+    "observation.joint_torque", "observation.touch_state", "observation.tactile_state", "observation.clock_state",
+    "observation.timestamp_state", "observation.battery_state", "observation.estop_state", "observation.health_state",
+    "observation.haptic_state", "observation.joint_fsr", "observation.joint_piezo", "observation.unrelated_state",
+    "temperature_state", "unrelated", "force", "touch", "clock", "battery"])
+def test_unrelated_or_command_scalars_do_not_disprove_absent_state(name):
+    ep = _episode(np.array([[1.], [3.], [2.]]))
+    ep["signals"] = {name: ep["signals"]["qpos"]}
+    ep["context"]["state_why"] = "not_recorded"
+    assert "as the recording holds none" in me._no_state_text(ep,
+        {"n": 3, "ks": [0, 1, 2], "spans": [], "touch": frozenset()})
+
+
+@pytest.mark.parametrize("rows,n", [(np.array([[np.nan], [np.inf], [-np.inf]]), 3),
+                                   (np.array([[np.nan], [np.nan], [2.]]), 2)])
+def test_scalar_joint_must_have_a_finite_value_within_the_episode(rows, n):
+    ep = _episode(rows)
+    ep["signals"] = {"observation.joint_positions": rows}
+    ep["context"]["state_why"] = "not_recorded"
+    assert "as the recording holds none" in me._no_state_text(ep,
+        {"n": n, "ks": [0], "spans": [], "touch": frozenset()})
+
+
+def test_absent_state_reason_keeps_scalar_observation_wording():
+    ep = _episode(np.array([[1.], [3.], [2.]]))
+    ep["signals"] = {"observation.joint_positions": ep["signals"]["qpos"]}
+    assert me._no_state_text(ep, {"n": 3, "ks": [0, 1, 2], "spans": [], "touch": frozenset()}) == (
+        "\nRECORDED STATE: no arm state in the layout our checks read.")
+
+
 def test_an_assumed_contributor_clock_does_not_claim_all_state_has_that_clock():
     ep = _episode(np.arange(18).reshape(3, 6))
     ep["context"].update(state_why="assumed_clock", state_note="the left follower uses an assumed start")

@@ -1476,9 +1476,10 @@ def _no_state_text(ep: dict, pl: dict) -> str:
         why = ctx.get("state_why")
         # An absent designated state field does not prove absence in another recorded observation layout. Inspect
         # preserved values even when their readout is constant or outside the table budget; commands are not state.
-        if why == NOT_RECORDED and any(np.shape(a)[1] > 1 and sg.names_joints_or_state(nm)
-                                          and np.isfinite(a[:pl["n"]]).any()
-                                          for nm, a in ep["signals"].items()):
+        if why == NOT_RECORDED and any((sg.names_joints_or_state(nm) if np.shape(a)[1] > 1
+                                       else sg.names_scalar_observed_state(nm))
+                                      and np.isfinite(a[:pl["n"]]).any()
+                                      for nm, a in ep["signals"].items()):
             why = LAYOUT
         if why == LAYOUT or why is None and not (short and note):
             head = f"no {n['actor']} state in the layout our checks read."
