@@ -218,6 +218,9 @@ BLOCK_CASES = [
     ("table_numbers", "teleop_joints", _add(reader_issues=[
         {"kind": "table_number_ambiguous", "what": "pressure.csv force was read as decimals"}]),
      ("TABLE NUMBER INTERPRETATION", "pressure.csv force was read as decimals")),
+    ("signal_clocks", "teleop_joints", _add(reader_issues=[
+        {"kind": "signal_timestamp_invalid", "what": "force has an unusable recorded clock; its rows are unplaced."}]),
+     ("RECORDED SIGNAL CLOCK LIMITS", "force has an unusable recorded clock; its rows are unplaced.")),
     ("contacts", "teleop_joints", _add_contact, ("CONTACTS:",)),
     ("uploader_notes", "teleop_joints", _add(uploader_annotation='{"operator": "A"}\n'),
      ("THE UPLOADER'S OWN NOTES",)),

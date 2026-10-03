@@ -12,8 +12,10 @@ def coarse_rows(t: np.ndarray) -> tuple[np.ndarray, float | None]:
     interval uses the median positive distinct step. Increasing clocks pass through unchanged. Tables and camera
     display clocks share this rule; neither placement establishes precise recorded instants."""
     t = np.asarray(t, dtype=np.float64)
+    if len(t) < 2 or not np.isfinite(t).all():
+        return t, None
     d = np.diff(t)
-    if len(t) < 2 or not np.isfinite(t).all() or not (d >= 0).all() or not (d == 0).any() or not (d > 0).any():
+    if not (d >= 0).all() or not (d == 0).any() or not (d > 0).any():
         return t, None
     resolution = float(np.median(d[d > 0]))
     starts = np.r_[0, np.flatnonzero(d > 0) + 1]
@@ -25,12 +27,29 @@ def coarse_rows(t: np.ndarray) -> tuple[np.ndarray, float | None]:
 
 
 def presentation_clock(t: np.ndarray, nominal_fps: float | None = None) -> tuple[np.ndarray, dict | None]:
-    """Camera times and an explicit assumed placement note, only for finite nondecreasing clocks with ties.
+    """Camera times and an explicit assumed placement note for tied or unusable recorded clocks.
     Ties share the table interval rule. An all tied clock uses its declared nominal rate when supplied, otherwise
     the named unknown cadence fallback. The original input is never changed and encoded PTS never enter this rule."""
     t = np.asarray(t, dtype=np.float64)
-    d = np.diff(t)
-    if len(t) < 2 or not np.isfinite(t).all() or not (d >= 0).all() or not (d == 0).any():
+    if not len(t):
+        return t, None
+    finite = np.isfinite(t).all()
+    d = np.diff(t) if finite else np.empty(0)
+    problem = "nonfinite" if not finite else "backwards" if (d < 0).any() else None
+    if problem:
+        declared = (nominal_fps is not None and not isinstance(nominal_fps, bool)
+                    and np.isfinite(nominal_fps) and nominal_fps > 0)
+        fps = float(nominal_fps) if declared else UNKNOWN_CAMERA_FPS
+        source = "declared nominal cadence" if declared else "unknown cadence fallback"
+        start = float(t[0]) if np.isfinite(t[0]) else 0.0
+        what = "nonfinite values" if problem == "nonfinite" else "backwards steps"
+        return start + np.arange(len(t)) / fps, {"method": "nominal cadence", "nominal_fps": fps,
+            "clock_problem": problem, "cadence_source": source,
+            "what": f"the recorded camera clock contains {what} and cannot order all frames; their assumed "
+                    f"presentation times place every frame in row order at {fps:g} Hz from {source}, never a "
+                    "measured capture rate. A nonfinite first stamp uses display zero. Original capture times "
+                    "and encoded PTS are kept."}
+    if len(t) < 2 or not (d == 0).any():
         return t, None
     placed, resolution = coarse_rows(t)
     if resolution is not None:
@@ -112,3 +131,8 @@ def unshown_span(ep_dir: Path, entries: list, t0: float, t1: float, zero_s: floa
             e["start_s"] = float(times[lo] - t0) if hi > lo else 0.0
         out.append(e)
     return out
+
+
+def camera_issue_kind(note: dict) -> str:
+    """The recorded problem, distinct from the assumption used to display its frames."""
+    return "camera_timestamp_invalid" if note.get("clock_problem") else "camera_timestamp_repeated"

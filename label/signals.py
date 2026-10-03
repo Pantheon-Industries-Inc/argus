@@ -592,7 +592,8 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
 
 
 def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None, rate_hz=None,
-             fps=None, aligned_by=None, camera_aligned_by=None) -> str:
+             fps=None, aligned_by=None, camera_aligned_by=None, clock_problem=None,
+             source_rows=None, camera_frames=None) -> str:
     """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
     (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
     to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it has as many rows as the
@@ -607,10 +608,15 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
         what += " (" + ", ".join(names) + ")"
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
         rate = _num(float(rate_hz))
-        what += (f", estimated at {rate} Hz from assumed placement" if aligned_by == COARSE_CLOCK else
+        what += (f", estimated at {rate} Hz from assumed placement" if aligned_by == COARSE_CLOCK or clock_problem else
                  f", recorded at {rate} Hz")
     if aligned_by == ALIGNED_ROWS:
-        what += ", placed one row per frame as it has as many rows as the video has frames"
+        if clock_problem:
+            what += ", placed one row per frame as an assumption"
+            if source_rows is not None and camera_frames is not None:
+                what += f" from {source_rows} original rows and {camera_frames} original camera frames"
+        else:
+            what += ", placed one row per frame as it has as many rows as the video has frames"
     elif aligned_by == COARSE_CLOCK:
         what += ", tied readings placed within each stamp interval as an assumption"
     elif aligned_by == ALIGNED_CAMERA:

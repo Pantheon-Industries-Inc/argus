@@ -335,6 +335,22 @@
    ]
   },
   {
+   "slug": "camera-clock-invalid",
+   "list": "data",
+   "name": "Recorded camera timestamps cannot order the frames",
+   "reader_issues": [
+    "camera_timestamp_invalid"
+   ]
+  },
+  {
+   "slug": "signal-clock-invalid",
+   "list": "data",
+   "name": "Recorded signal timestamps do not settle every reading's timing",
+   "reader_issues": [
+    "signal_timestamp_invalid"
+   ]
+  },
+  {
    "slug": "camera-unaligned",
    "list": "data",
    "name": "Camera files cannot be aligned",

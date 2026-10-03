@@ -1185,12 +1185,25 @@ def _depth_note(ep: dict) -> str:
     # a depth stream that stops before its camera has no reading at the instants past it (prepare/formats.py
     # depth_kmap -1), where no depth view follows
     gaps = [cam_name(ep, v) for v in order_views(d) if "km" in d[v] and (np.asarray(d[v]["km"]) < 0).any()]
-    assumed = bool(ep["context"].get("camera_clock") or ep["context"].get("depth_camera_clock"))
+    clocks = ep["context"].get("camera_clock") or {}
+    depth_clocks = ep["context"].get("depth_camera_clock") or {}
+    assumed = bool(clocks or depth_clocks)
+    invalid = any(isinstance(note, dict) and note.get("clock_problem")
+                  for notes in (clocks, depth_clocks) for note in notes.values())
+    if invalid:
+        # A malformed side clock does not qualify depth paired only to a valid anchor and its own valid clock.
+        relevant = [clocks.get(anchor(ep)), *(clocks.get(v) for v in d), *depth_clocks.values()]
+        assumed = any(relevant)
+        invalid = any(isinstance(note, dict) and note.get("clock_problem") for note in relevant)
+    qualification = "".join(f" {cam_name(ep, v)} depth. {note['what']}" for v, note in depth_clocks.items()
+                            if v in d and isinstance(note, dict) and note.get("clock_problem"))
+    precision = (". Depth is paired using assumed presentation times. "
+                 + ("An unusable recorded clock does not establish exact capture instants." if invalid else
+                    "Shared timestamps do not establish exact capture instants.") + qualification) if assumed else " at that instant."
     return (f"\nDEPTH: {names} {'records' if len(d) == 1 else 'record'} depth as well as colour. Each detail view is "
             "followed by the depth from the same "
             + ("camera's depth sensor" if len(d) == 1 else "cameras' depth sensors")
-            + (". Depth is paired using assumed presentation times. Shared timestamps do not establish exact "
-               "capture instants." if assumed else " at that instant.")
+            + precision
             + (f" {', '.join(gaps)} {'has' if len(gaps) == 1 else 'have'} no depth for part of the episode; a detail "
                "view there is followed by no depth." if gaps else ""))
 
@@ -1376,7 +1389,9 @@ def _signals_table(ep: dict, pl: dict) -> str:
             m = meta.get(name) or {}
             lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
                                      fps=ep_fps(ep), aligned_by=m.get("aligned_by"),
-                                     camera_aligned_by=m.get("camera_aligned_by")))
+                                     camera_aligned_by=m.get("camera_aligned_by"),
+                                     clock_problem=m.get("clock_problem"), source_rows=m.get("source_rows"),
+                                     camera_frames=m.get("camera_frames")))
         except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
             lines.append(f"  {name}: could not be read ({type(e).__name__})")
     if still:
@@ -1817,6 +1832,20 @@ def _has_table_numbers(ep: dict, pl: dict) -> bool:
     return bool(_table_number_notes(ep))
 
 
+def _signal_clock_notes(ep: dict) -> list[str]:
+    """Unusable signal timing stays visible even when unequal row counts cannot be placed on footage."""
+    return [issue["what"] for issue in ep["context"].get("reader_issues") or []
+            if isinstance(issue, dict) and issue.get("kind") == "signal_timestamp_invalid" and issue.get("what")]
+
+
+def _signal_clocks_text(ep: dict, pl: dict) -> str:
+    return "\nRECORDED SIGNAL CLOCK LIMITS:\n" + "\n".join(_signal_clock_notes(ep)) + "\n"
+
+
+def _has_signal_clock_notes(ep: dict, pl: dict) -> bool:
+    return bool(_signal_clock_notes(ep))
+
+
 BLOCKS = (
     Block("collection_note", "intro", _has_collection_note, _collection_text),
     Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
@@ -1827,6 +1856,7 @@ BLOCKS = (
     Block("state_unaligned", "state", _state_unaligned, _state_unaligned_text, checks=("camera_windows_match_state",)),
     Block("no_state", "state", _no_state, _no_state_text),
     Block("table_numbers", "signals", _has_table_numbers, _table_numbers_text),
+    Block("signal_clocks", "signals", _has_signal_clock_notes, _signal_clocks_text),
     Block("signals", "signals", _has_signals, _signals_table, checks=("sensor_checks",)),
     Block("contacts", "after_frames", _has_contacts, contacts_block,
           schema_fields=("contacts", "contacts_missing"),
