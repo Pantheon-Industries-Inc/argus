@@ -64,6 +64,9 @@ identified uploaded owners; the absent take is reported separately, and a file n
 different tasks give none of them: each is given as a note and the disagreement is a data issue of the episode. One
 that names neither the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
+Camera metadata retains its file path on the episodes that own the camera, including unshown cameras.
+A camera task stays a camera note unless the established episode task rule proves agreement.
+
 MCAP and HDF5 container sidecars belong to the episodes in that container. LeRobot sidecars name the recorded
 episode index. Applicable outside files retain their filenames as uploader notes. Recorded instruction text keeps
 priority over every outside task. Standard log channels and named process diagnostics remain in the saved signal
@@ -1018,7 +1021,8 @@ def note_files(item: dict) -> list[Path]:
     (top.txt beside top.mp4, or ep1.txt beside each camera folder's ep1.mp4); a video with no note folder (one of
     several episodes of its folder) has only its own. Names are compared in lower case (files_by_name)."""
     fs = [Path(f) for f in item["files"]]
-    cands = [(f.parent, f.stem + x) for f in fs for x in NOTE_OWN_EXT]
+    camera_files = [Path(f) for f in item.get("camera_files") or []]
+    cands = [(f.parent, f.stem + x) for f in fs + camera_files for x in NOTE_OWN_EXT]
     nf = item.get("note_folder")
     if nf:
         named = [f"{name}{x}" for name in nf.get("aliases", [nf["name"]]) if name for x in (".json", ".txt")]
@@ -1067,7 +1071,10 @@ def episode_notes(item: dict) -> dict:
                  for x in (".json", ".txt")} if nf else set()
     named = {p for p in files if p.parent == nf["dir"] and p.name.lower() in own_names} if nf else set()
     owned = {p for p in files for f in fs if p.parent == f.parent and p.stem.lower() == f.stem.lower()} - named
-    cams = owned if len(fs) > 1 else set()
+    camera_owned = {p for p in files for f in item.get("camera_files") or []
+                    if p.parent == Path(f).parent and p.stem.lower() == Path(f).stem.lower()}
+    owned |= camera_owned
+    cams = (owned if len(fs) > 1 else set()) | camera_owned
     keys = [p.relative_to(nf["dir"]).as_posix() if nf and nf["dir"] in p.parents else p.name for p in files]
     notes = [(k, read_annotation(p)) for k, p in zip(keys, files)]
     got = {p: o for p, (_, o) in zip(files, notes)}
@@ -1097,7 +1104,7 @@ def episode_notes(item: dict) -> dict:
         for f in fs:
             own = [q for q in (own_note(f, ".json"), own_note(f, ".txt")) if task_of(q)]
             owns.append((task_rank(own[0], own=True), task_of(own[0])) if own else None)
-        if all(owns) and len({t for _, t in owns}) == 1:
+        if all(owns) and len({task_key(t) for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
     read, disagree, absent, attributed = list(files), [], [], []
@@ -1112,6 +1119,15 @@ def episode_notes(item: dict) -> dict:
         owners, gone = named_for(p, nf["names"])
         if gone:
             absent.append(p)              # named for a take that is not in the upload
+        camera_names = nf.get("camera_names")
+        camera_owners = named_for(p, camera_names)[0] if camera_names else frozenset()
+        if None in owners and nf["episode"] in camera_owners:
+            # filename ownership identifies this camera, without making its task the episode's instruction
+            key = p.relative_to(nf["dir"]).as_posix()
+            notes.append((key, read_annotation(p)))
+            read.append(p)
+            attributed.append(key)
+            continue
         if not instr and (x := instruction_from(_read_json(p))):
             if not owners and not gone:
                 shared.append((p, x))
@@ -2553,6 +2569,24 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
         take = name_parts(Path(r).stem)["take"]
         for it in here if len(here) == 1 else [it for it in here if take and item_take(it) == take]:
             it["unshown"].append(root / r)
+    # Notes for selected and unshown cameras use the same proven episode assignments as the board's camera files.
+    # Shared camera labels match only a whole filename; longer video stems identify their own camera and take.
+    for d in set(homes):
+        here = [it for it, home in zip(items, homes) if home == d]
+        camera_names, labels = collections.defaultdict(set), collections.defaultdict(set)
+        for it in here:
+            for label in it["cams"]:
+                for alias in (label, name_parts(label)["cam"]):
+                    labels[name_words(alias, names[d].takes)].add(it["name"])
+            paths = list(it["files"]) + list(it.get("unshown") or []) + list(it["depth"].values())
+            for path in paths:
+                if path.parent == root / d:
+                    camera_names[name_words(path.stem, names[d].takes)].add(it["name"])
+        registry = FolderNames(names[d].takes, {w: frozenset(v) for w, v in camera_names.items() if w},
+                               {w: frozenset(v) for w, v in labels.items() if w}, (), frozenset())
+        for it in here:
+            if it.get("note_folder"):
+                it["note_folder"]["camera_names"] = registry
     for it in items:
         try:
             it["seconds"] = max((durations.get(Path(f).relative_to(root).as_posix()) or _duration(f)) for f in it["files"])
@@ -6118,7 +6152,9 @@ def attach_structured_notes(items: list[dict]) -> None:
         registry = FolderNames(frozenset(takes), {w: frozenset(v) for w, v in names.items() if w}, {},
                                name_words(d.name, takes), frozenset({6}) if any(it["kind"] == "lerobot" for it, _, _ in entries) else frozenset())
         for it, file, aliases in entries:
-            it["side_notes"] = {"files": [file], "side_metadata": True,
+            videos = (it.get("row") or {}).get("videos") or {}
+            camera_files = [Path(v[0] if isinstance(v, tuple) else v) for v in videos.values()]
+            it["side_notes"] = {"files": [file], "camera_files": camera_files, "side_metadata": True,
                                 "metadata_dirs": [d / "meta"] if it["kind"] == "lerobot" else [],
                                 "metadata_reserved": {"info.json", "stats.json"},
                                 "note_folder": {"dir": d, "name": aliases[0], "aliases": aliases,

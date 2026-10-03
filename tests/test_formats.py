@@ -2837,7 +2837,9 @@ def _another_episodes_note_never_gives_an_episode_its_task(tmp_path):
     # in a folder of one episode, the file of a video that is not one of its cameras (an infrared video) is not its task
     ctx, rep = _upload_notes(tmp_path / "e", ["ep1/top.mp4", "ep1/wrist.mp4", "ep1/top_ir.mp4"],
                              {"ep1/top_ir.json": {"task": "calibrate the infrared camera"}})
-    assert "instruction" not in ctx["ep1"] and "ep1/top_ir.json" in _unread_line(rep)
+    assert "instruction" not in ctx["ep1"]
+    assert ctx["ep1"]["uploader_notes"] == {"top_ir.json": {"task": "calibrate the infrared camera"}}
+    assert "ep1/top_ir.json" not in _unread_line(rep)
 
 
 def test_another_episodes_note_never_gives_an_episode_its_task():
@@ -2914,10 +2916,11 @@ def _a_folder_json_named_for_an_episode_by_its_words_never_gives_another_episode
     dashed = ["d/top_ep-1.mp4", "d/wrist_ep-1.mp4", "d/top_ep-2.mp4", "d/wrist_ep-2.mp4"]
     ctx, _ = _upload_notes(tmp_path / "e", dashed, {"d/ep-2.json": {"task": "pour the tea"}})
     assert "instruction" not in ctx["d/ep_1"] and ctx["d/ep_2"]["instruction"] == "pour the tea", ctx
-    # top.json in a folder of takes is about the top camera of every take: no take's task, and named as not read
+    # top.json in a folder of takes is about the top camera of every take: no take's task, retained as its camera note
     ctx, rep = _upload_notes(tmp_path / "f", takes, {"d/top.json": {"task": "calibrate the top camera"}})
     assert not any("instruction" in c for c in ctx.values()), ctx
-    assert "d/top.json" in _unread_line(rep), rep["missing"]
+    assert all(c["uploader_notes"] == {"top.json": {"task": "calibrate the top camera"}} for c in ctx.values())
+    assert "d/top.json" not in _unread_line(rep), rep["missing"]
     # a recorder's file named for nothing stays every take's
     ctx, _ = _upload_notes(tmp_path / "g", tens, {"d/session_meta.json": {"prompt": "pour the tea"}})
     assert [c.get("instruction") for c in ctx.values()] == ["pour the tea", "pour the tea"], ctx
@@ -3016,7 +3019,9 @@ def _a_folder_json_whose_words_name_no_episode_stays_shared(tmp_path):
     ctx, _ = _upload_notes(tmp_path / "b", scene, {"d/scene_description.json": {"task": "pick the cup"}})
     assert [c.get("instruction") for c in ctx.values()] == ["pick the cup"] * 2, ctx
     ctx, rep = _upload_notes(tmp_path / "c", scene, {"d/scene.json": {"task": "calibrate the scene camera"}})
-    assert not any("instruction" in c for c in ctx.values()) and "d/scene.json" in _unread_line(rep), ctx
+    assert not any("instruction" in c for c in ctx.values()), ctx
+    assert all(c["uploader_notes"] == {"scene.json": {"task": "calibrate the scene camera"}} for c in ctx.values())
+    assert "d/scene.json" not in _unread_line(rep)
     takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
     ctx, _ = _upload_notes(tmp_path / "d", takes + ["d/session/clip.mp4"],
                            {"d/session_meta.json": {"prompt": "pour the tea"}})
@@ -3503,6 +3508,8 @@ def _structured_recordings_read_owned_side_notes(tmp_path):
         (root / 'broken_meta.json').write_text('{broken')
         if kind == 'lerobot':
             (root / 'meta' / 'Session.JSON').write_text(json.dumps({'note': 'root metadata'}))
+            cam_note = 'videos/chunk-000/observation.images.cam_high/episode_000000.json'
+            (root / cam_note).write_text(json.dumps({'task': 'camera task', 'note': 'camera lens glare'}))
         rep = f.convert(root, 'teleop_arms', out, 'test', 900)
         assert not rep['failed'], rep
         for ep in rep['episodes']:
@@ -3515,6 +3522,7 @@ def _structured_recordings_read_owned_side_notes(tmp_path):
             assert notes['Instruction.txt'] == 'outside text task', notes
             if kind == 'lerobot':
                 assert notes['meta/Session.JSON']['note'] == 'root metadata'
+                assert notes[cam_note]['note'] == 'camera lens glare'
             assert 'ep99_meta.json' not in notes and 'broken_meta.json' not in notes, notes
         _, items = f.plan(root)
         opened = {p.name for p in f.opened_notes(items)}
@@ -3525,3 +3533,40 @@ def _structured_recordings_read_owned_side_notes(tmp_path):
 def test_structured_recordings_read_owned_side_notes():
     with tempfile.TemporaryDirectory() as t:
         _structured_recordings_read_owned_side_notes(Path(t))
+
+
+def _camera_metadata_keeps_its_owners_without_becoming_the_task(tmp_path):
+    import json
+    videos = ['d/top_ep1.mp4', 'd/wrist_ep1.mp4', 'd/top_ep2.mp4', 'd/wrist_ep2.mp4',
+              'd/top_ep1_ir.mp4', 'd/top_ep9_ir.mp4']
+    notes = {'d/top.json': {'task': 'calibrate top', 'note': 'top lens glare'},
+             'd/top_ep1_ir_meta.json': {'task': 'calibrate infrared', 'note': 'infrared lens glare'},
+             'd/top_ep9_ir.json': {'task': 'unowned task', 'note': 'unowned lens glare'}}
+    contexts, rep = _upload_notes(tmp_path / 'whole', videos, notes)
+    for name, ctx in contexts.items():
+        assert 'instruction' not in ctx, ctx
+        assert ctx['uploader_notes']['top.json']['note'] == 'top lens glare'
+        if name == 'd/ep1':
+            assert ctx['uploader_notes']['top_ep1_ir_meta.json']['note'] == 'infrared lens glare'
+        else:
+            assert 'top_ep1_ir_meta.json' not in ctx['uploader_notes']
+        assert 'top_ep9_ir.json' not in ctx['uploader_notes']
+    root = tmp_path / 'whole' / 'upload'
+    _, items = f.plan(root)
+    for item in items:
+        ctx = f.convert_video(item, 'teleop_arms', tmp_path / 'subset' / item['name'].replace('/', '_'), 'test')
+        assert ctx.get('instruction') == contexts[item['name']].get('instruction')
+        assert ctx['uploader_notes'] == contexts[item['name']]['uploader_notes']
+    contexts, _ = _upload_notes(tmp_path / 'folders', ['top/ep1.mp4', 'wrist/ep1.mp4'],
+                                {'top.json': {'task': 'calibrate top', 'note': 'lens glare'}})
+    assert contexts['ep1']['uploader_notes'] == {'top.json': {'task': 'calibrate top', 'note': 'lens glare'}}
+    assert 'instruction' not in contexts['ep1']
+    contexts, _ = _upload_notes(tmp_path / 'equal', ['top/ep1.mp4', 'wrist/ep1.mp4'],
+                                {'top/ep1.json': {'task': 'Pick  the cup'},
+                                 'wrist/ep1.json': {'task': 'pick the cup'}})
+    assert contexts['ep1']['instruction'] == 'Pick  the cup'
+
+
+def test_camera_metadata_keeps_its_owners_without_becoming_the_task():
+    with tempfile.TemporaryDirectory() as t:
+        _camera_metadata_keeps_its_owners_without_becoming_the_task(Path(t))
