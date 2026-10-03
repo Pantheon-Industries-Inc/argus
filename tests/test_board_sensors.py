@@ -426,3 +426,30 @@ def test_the_boards_touch_flag_needs_a_touch_name_as_the_contacts_do():
     t = np.arange(60) / 30.0
     assert sensors.signal_doc({"name": "observation.state.torso"}, a, t, 1)["touch"] is False
     assert sensors.signal_doc({"name": "left_pressure"}, a, t, 1)["touch"] is True
+
+
+def test_a_wide_float32_signal_is_drawn_without_a_whole_float64_copy(tmp_path):
+    """pad keeps a float32 signal in float32 (NaN after its rows), and the sensors file of an episode with a wide
+    float32 signal peaks within about three times the signal's size, with every entry as a float64 copy gives it."""
+    import tracemalloc
+    a = np.ones((5, 3), np.float32)
+    p = sensors.pad(a, 7)
+    assert p.dtype == np.float32 and np.isnan(p[5:]).all() and sensors.pad(a, 4).dtype == np.float32
+    assert sensors.pad(np.ones((2, 1), np.int16), 3).dtype == np.float64
+    ep = _episode(tmp_path / "eps", n=200)
+    rng = np.random.default_rng(0)
+    wide = (3000 + rng.normal(0, 3, (200, 100_000))).astype(np.float32)
+    wide[50:80, :40] -= 800
+    _resave(ep, s3=wide)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"].append({"name": "skin pressure", "key": "s3", "dims": 100_000, "shape": [250, 400]})
+    (ep / "context.json").write_text(json.dumps(ctx))
+    tracemalloc.start()
+    try:
+        doc = sensors.episode_doc(ep)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak <= 3 * wide.nbytes, peak / wide.nbytes
+    skin = next(s for s in doc["signals"] if s["name"] == "skin pressure")
+    assert skin["constant"] is False and "activity" in skin

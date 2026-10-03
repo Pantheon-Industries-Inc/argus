@@ -179,20 +179,42 @@ def clip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
     return np.arange(n, dtype=np.float64) / fps
 
 
+def _range(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each value's smallest and largest finite reading (NaN for a value with none), a few thousand rows at a time, so
+    a wide signal is never copied whole."""
+    import warnings
+    step = max(1, (1 << 19) // max(1, a.shape[1]))
+    lo = np.full(a.shape[1], np.nan)
+    hi = np.full(a.shape[1], np.nan)
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)      # a value with no reading in a stretch: NaN, as wanted
+        for i in range(0, len(a), step):
+            c = np.asarray(a[i:i + step], dtype=np.float64)
+            c = np.where(np.isfinite(c), c, np.nan)
+            lo = np.fmin(lo, np.nanmin(c, axis=0))
+            hi = np.fmax(hi, np.nanmax(c, axis=0))
+    return lo, hi
+
+
 def pad(a: np.ndarray, n: int) -> np.ndarray:
     """A signal's rows as floats on n anchor frames: its own rows, then no reading (NaN) after its last, so a signal
-    shorter than the others is drawn for the frames it has; a longer one is cut to the frames the clip has."""
-    a = np.asarray(a, dtype=np.float64)
+    shorter than the others is drawn for the frames it has; a longer one is cut to the frames the clip has. A floating
+    signal keeps its precision (a wide float32 skin is never copied whole as float64; label/signals.py reads it in
+    float64 pieces), and any other is made float64, which can hold no reading."""
+    a = np.asarray(a)
+    if not np.issubdtype(a.dtype, np.floating):
+        a = a.astype(np.float64)
     if len(a) >= n:
         return a[:n]
-    return np.concatenate([a, np.full((n - len(a),) + a.shape[1:], np.nan)])
+    return np.concatenate([a, np.full((n - len(a),) + a.shape[1:], np.nan, dtype=a.dtype)])
 
 
 def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact: bool = False) -> dict:
     """One signal's entry (module docstring); in_contact: one of the episode's contacts is timed by it, so its strength
     is kept too."""
     from label import signals as S
-    a = np.asarray(a, dtype=np.float64)
+    a = np.asarray(a)
+    a = a if np.issubdtype(a.dtype, np.floating) else a.astype(np.float64)    # as stored, never a whole float64 copy
     if a.ndim == 1:
         a = a[:, None]
     d = a.shape[1]
@@ -201,8 +223,7 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         if meta.get(k) is not None:
             doc[k] = meta[k]
     fin = np.isfinite(a)
-    with np.errstate(all="ignore"):
-        lo, hi = np.nanmin(np.where(fin, a, np.nan), axis=0), np.nanmax(np.where(fin, a, np.nan), axis=0)
+    lo, hi = _range(a)
     if not fin.any() or bool((hi[fin.any(axis=0)] == lo[fin.any(axis=0)]).all() and fin.any(axis=0).all()):
         first = next((r for r in a if np.isfinite(r).all()), None)
         doc["constant"] = True

@@ -64,12 +64,12 @@ MERGE_GAP_S = 0.15
 HOLD_BAND = 0.02
 SETTING_STATES = 3        # a signal of several values with this many distinct readings or fewer is a setting
 HOLD_SHARE = 0.3
-# A signal is read in pieces of about this many values (16 MB as float64), each in float64, so a large one (a tactile
+# A signal is read in pieces of about this many values (4 MB as float64), each in float64, so a large one (a tactile
 # skin of 480 MB float32) is never copied whole and every number comes out as a whole float64 copy would give it. Only
 # a percentile over all its values (a resting end, the typical swing) holds one array of them while it is taken: float64
 # up to POOL_F64_BYTES, so every prompt of a small signal reads as before, and float32 past it, one copy the size of a
 # float32 signal, whose percentile is then to float32 precision.
-CHUNK_VALUES = 1 << 21
+CHUNK_VALUES = 1 << 19
 POOL_F64_BYTES = 64 << 20
 
 
