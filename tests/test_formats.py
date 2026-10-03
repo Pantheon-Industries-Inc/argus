@@ -436,6 +436,60 @@ def test_a_third_arm_that_carries_the_scene_camera_is_neither_working_arm():
         assert z["state"].shape == (12, 14) and z["action"].shape == (12, 14)
 
 
+def _videos_with_an_hdf5_arm_state(root: Path, n: int = 12, t0: float = 1_790_000_000.0) -> Path:
+    """One episode of two cameras (each with a file of its frames' capture times) and a robot.h5 beside them holding
+    two arms of six joints and a gripper as qpos, with the commands as action, at 100 Hz on the same recorder clock."""
+    import h5py
+    import numpy as np
+    d = root / "episode_000001"
+    d.mkdir(parents=True)
+    for k, cam in enumerate(("exo_cam", "left_wrist_cam")):
+        _clip(d / f"{cam}-images-rgb.mp4", n)
+        np.save(d / f"{cam}-rgb-timestamp.npy", t0 + 0.01 * k + np.arange(n) / 30)
+    t = t0 - 0.1 + np.arange(int((n / 30 + 0.2) * 100)) / 100
+    q = np.stack([0.3 * np.sin(t - t0 + j) for j in range(14)], axis=1)
+    q[:, 6] = q[:, 13] = (t - t0 > 0.2).astype(float)
+    with h5py.File(d / "robot.h5", "w") as h:
+        h["timestamps"] = (t * 1e9).astype(np.int64)
+        h["qpos"] = q
+        h["action"] = q + 0.01
+    return d
+
+
+def test_an_hdf5_arm_state_beside_videos_is_the_episodes_state():
+    """A robot.h5 of two arms' qpos beside the videos had every number read as a signal, since the video path never
+    asked whether one of its arrays is the state, so the episode was labelled as if no arm state was recorded. Its
+    qpos is the state and its action the action, by the same rule as an HDF5 episode's (h5_state), also when a
+    second HDF5 file beside it puts each file's name before its arrays' names."""
+    import json
+    import h5py
+    import numpy as np
+    for glove in (False, True):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t) / "upload"
+            d = _videos_with_an_hdf5_arm_state(root)
+            if glove:
+                with h5py.File(d / "glove.h5", "w") as h:
+                    tg = 1_790_000_000.0 - 0.1 + np.arange(60) / 100
+                    h["timestamps"] = (tg * 1e9).astype(np.int64)
+                    h["pressure"] = np.abs(np.sin(tg))[:, None].repeat(4, axis=1)
+            det, items = f.plan(root)
+            assert det["format"] == "video" and len(items) == 1 and len(items[0]["state"]) == 1 + glove
+            rep = f.convert(root, "teleop_arms", Path(t) / "eps", "test", 900)
+            assert not rep["failed"] and len(rep["episodes"]) == 1
+            ep = Path(t) / "eps" / rep["episodes"][0]["episode_id"]
+            ctx = json.loads((ep / "context.json").read_text())
+            assert ctx["state_kind"] == "joints" and not ctx.get("state_note"), ctx.get("state_note")
+            prefix = "robot " if glove else ""
+            assert ctx["source"]["state"] == f"{prefix}qpos"
+            names = {s["name"] for s in ctx.get("signals") or []}
+            assert f"{prefix}qpos" not in names and f"{prefix}action" not in names, names
+            assert ("glove pressure" in names) == glove, names
+            z = np.load(ep / "state.npz")
+            assert z["state"].shape == (12, 14) and z["action"].shape == (12, 14)
+            assert np.allclose(z["action"], z["state"] + 0.01, atol=1e-4)
+
+
 def test_joint_state_reads_only_the_layout_the_checks_read():
     import numpy as np
     q = np.linspace(0.0, 1.0, 11)

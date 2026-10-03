@@ -1771,7 +1771,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
     prs = {v: probe(p) for v, (_, p) in files.items()}
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
-    state = action = None
+    state = action = state_names = None
     descs, signals = {}, {}
     if item.get("state"):
         from label import episode as me
@@ -1782,8 +1782,9 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place the "
                                    "recorded " + ("arm state" if rig == "teleop_arms" else "sensor data") + " against.")
         elif rig != "teleop_arms" or not mcap_files:
-            # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP and
-            # HDF5 files record, on the videos' clock (mcap_signals, h5_file_signals); there is no arm state to read
+            # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP
+            # files record, on the videos' clock (mcap_signals); an MCAP arm channel is read as the state on an arm rig
+            # only, and an HDF5 array named as the state below (h5_state)
             signals = mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals()
             extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
         else:
@@ -1803,6 +1804,15 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                         descs["exo"] = third_arm_camera_desc(third)
         if real[anchor] is not None and h5_files:
             more = h5_file_signals(h5_files, real[anchor], len(real[anchor]))
+            if state is None and rig != "ego_head":
+                # an HDF5 array named as the state (a robot.h5's qpos beside the videos) is read by the rule an HDF5
+                # episode's is (h5_state), and leaves the signals when it is read
+                state, action, state_names, state_src, h5_note = h5_state(more, rig, real[anchor])
+                if state is not None:
+                    extra["source"]["state"] = state_src
+                    extra.pop("state_note", None)        # a note on the MCAP arm channels, which are not the state
+                elif h5_note:
+                    extra.setdefault("state_note", h5_note)
             if not hasattr(signals, "meta"):
                 signals = Signals(signals)
             for k, v in more.items():
@@ -1844,7 +1854,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                     "scale_m": depth_scale_from(Path(dp).parent), "source": Path(dp).name}
     ep = unique_dir(out, episode_name(item["name"]))
     return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
-                               descs=descs, signals=signals, depth=depth)
+                               descs=descs, signals=signals, depth=depth, state_names=state_names)
 
 
 # ---------------------------------------------------------------- LeRobot: reading a dataset root
@@ -3044,11 +3054,12 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
 # state or robot_state, or joint_positions. It is then read by the same rule as a LeRobot observation.state
 # (state_layout). An array named for joint positions names every value a joint, so DROID's seven Franka joints are not
 # taken for six joints and a gripper; robomimic's obs/robot0_joint_pos is not named as the state and stays a signal.
-# An array under a group named for the action (DROID's action/joint_position) is a command, never the state.
-H5_STATE_NAME = re.compile(r"(^|/)(qpos|state|states|robot_state|joint_positions?|joint_pos)$", re.I)
-H5_JOINT_ARRAY = re.compile(r"(^|/)joint_pos(itions?)?$", re.I)
-H5_ACTION_NAME = re.compile(r"(^|/)actions?$", re.I)
-H5_ACTION_GROUP = re.compile(r"(^|/)actions?/", re.I)
+# An array under a group named for the action (DROID's action/joint_position) is a command, never the state. Beside
+# videos, the arrays of several HDF5 files carry their file's name first ("robot qpos", h5_file_signals).
+H5_STATE_NAME = re.compile(r"(^|[/ ])(qpos|state|states|robot_state|joint_positions?|joint_pos)$", re.I)
+H5_JOINT_ARRAY = re.compile(r"(^|[/ ])joint_pos(itions?)?$", re.I)
+H5_ACTION_NAME = re.compile(r"(^|[/ ])actions?$", re.I)
+H5_ACTION_GROUP = re.compile(r"(^|[/ ])actions?/", re.I)
 
 
 def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
