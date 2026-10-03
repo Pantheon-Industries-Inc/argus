@@ -57,8 +57,9 @@ note's task keys, then a plain text note named for the task (instruction.txt, ta
 episode, then a video's own .txt; any other text note stays a note. A recorder's metadata file in an episode's folder
 that names the task (its prompt, instruction or task) gives the instruction to the folder's episodes when its name
 names nothing there, and to one episode alone when it names that one; a file whose name holds the words of another
-episode, video, camera or subfolder holding an episode is never an episode's task (named_for). One that names neither
-the task nor a depth scale is listed as not read. A note's name is compared in any case.
+episode, video, camera or subfolder holding an episode is never an episode's task (named_for). Files that name
+different tasks give none of them: each is given as a note and the disagreement is a data issue of the episode. One
+that names neither the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
 arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
@@ -1028,7 +1029,8 @@ def episode_notes(item: dict) -> dict:
     """What an episode's note files give (note_files): "notes", each file's notes as sent under its path from the
     episode's note folder (ep1.txt, or top/ep1.txt in camera folders, whose folder names the camera);
     "instruction", the task text; "repeats", the notes whose whole text is the task, which need not be given again;
-    "camera_notes", the notes that are about one of several cameras; and "read", every file read.
+    "camera_notes", the notes that are about one of several cameras; "read", every file read; and "disagree", the
+    folder .json files that name different tasks.
 
     The task comes from the first source that gives one, in this order: a JSON note's task keys (instruction_from),
     then instruction.txt or task.txt (TASK_NOTE_NAMES), then the text file named for the episode (ep1.txt), then a
@@ -1037,11 +1039,13 @@ def episode_notes(item: dict) -> dict:
     several cameras it is about its camera: never the task beside differently named cameras (top.txt beside top.mp4
     and wrist.mp4), and in camera folders (top/ep1.txt, wrist/ep1.txt) the task only when every camera's own note gives
     the same one. A lower source is a note under its file name. When none gives a task, the note folder's other .json
-    files (up to NOTE_JSON_MAX_BYTES) are searched in name order for one that names it. A file named for nothing
-    (named_for: session_meta.json) is a recorder's, which the folder's episodes share; one named for this episode alone
+    files (up to NOTE_JSON_MAX_BYTES) are searched for one that names it. A file named for nothing (named_for:
+    session_meta.json) is a recorder's, which the folder's episodes share; one named for this episode alone
     (ep1_meta.json) is this episode's; one named for anything else (ep2_meta.json, an infrared video's file, top.json
     beside takes that each have a top camera, ep2.json beside the subfolder ep2 holding an episode) is never this
-    episode's task. One that gives none is not read (opened_notes) and is listed."""
+    episode's task. When several of this episode's name different tasks, none is guessed to be the task: each is a
+    note under its file name, and "disagree" names them for a data issue. One that gives none is not read
+    (opened_notes) and is listed."""
     files = note_files(item)
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
@@ -1076,19 +1080,25 @@ def episode_notes(item: dict) -> dict:
         if all(owns) and len({t for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
-    read = list(files)
+    read, disagree = list(files), []
     if not instr and nf:
         weighed = {p.resolve() for p in files}
+        found = []                        # (file, task) of each folder .json that may give this episode its task
         for p in folder_json(nf["dir"]):
             if p.resolve() in weighed or p.stat().st_size > NOTE_JSON_MAX_BYTES:
                 continue
             if named_for(p, nf["names"]) - {nf["episode"]}:
                 continue                  # named for another episode, or a video that is no episode's
             if x := instruction_from(_read_json(p)):
-                instr = x
-                read.append(p)
-                break
-    return {"notes": notes, "instruction": instr, "read": read,
+                found.append((p, x))
+        read += [p for p, _ in found]
+        if len({x for _, x in found}) == 1:
+            instr = found[0][1]
+        elif found:
+            # files that name different tasks: none is guessed to be the task, and each is a note under its name
+            notes += [(p.name, read_annotation(p)) for p, _ in found]
+            disagree = [p.name for p, _ in found]
+    return {"notes": notes, "instruction": instr, "read": read, "disagree": disagree,
             "repeats": [k for k, o in notes if instr and isinstance(o, str) and o.strip() == instr],
             "camera_notes": [k for k, p in zip(keys, files) if p in cams]}
 
@@ -2439,6 +2449,9 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if instr:
         extra["instruction"] = instr
         extra["instruction_note"] = "This instruction is the task text the uploader sent with the episode."
+    if got["disagree"]:
+        add_issue(extra, "task_files_disagree", f"{_and_words(got['disagree'])} name different tasks, so none of them "
+                                                "is given as the task and each is given as a note")
     notes = [(k, o) for k, o in got["notes"] if k not in got["repeats"]]
     # a camera's own note (top.txt beside top.mp4 and wrist.mp4) keeps its file name, which says the camera it is about
     if len(notes) == 1 and len(got["notes"]) == 1 and notes[0][0] not in got["camera_notes"]:

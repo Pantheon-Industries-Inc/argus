@@ -2929,6 +2929,32 @@ def test_a_folder_json_named_for_an_episode_by_its_words_never_gives_another_epi
         _a_folder_json_named_for_an_episode_by_its_words_never_gives_another_episode_its_task(Path(t))
 
 
+def _folder_json_files_that_name_different_tasks_give_none_and_are_named(tmp_path):
+    """Two recorder files of one folder that named different tasks gave every episode the first one by name order,
+    and the other was listed as not read. Neither is the task then: both are given as notes under their file names and
+    the disagreement is a data issue of the episode. Files that name the same task give it and are both read."""
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    ctx, rep = _upload_notes(tmp_path / "a", takes, {"d/a_session.json": {"prompt": "pick the cup"},
+                                                     "d/b_session.json": {"prompt": "pour the tea"}})
+    for c in ctx.values():
+        assert "instruction" not in c, c
+        assert c["uploader_notes"] == {"a_session.json": {"prompt": "pick the cup"},
+                                       "b_session.json": {"prompt": "pour the tea"}}, c
+        (issue,) = [i for i in c.get("reader_issues") or [] if i["kind"] == "task_files_disagree"]
+        assert "a_session.json" in issue["what"] and "b_session.json" in issue["what"], issue
+    assert not _unread_line(rep), rep["missing"]
+    ctx, rep = _upload_notes(tmp_path / "b", ["ep1/top.mp4", "ep1/wrist.mp4"],
+                             {"ep1/a.json": {"prompt": "pick the cup"}, "ep1/b.json": {"task": "pick the cup"}})
+    assert ctx["ep1"]["instruction"] == "pick the cup" and "uploader_notes" not in ctx["ep1"], ctx
+    assert not ctx["ep1"].get("reader_issues") and not _unread_line(rep), rep["missing"]
+
+
+def test_folder_json_files_that_name_different_tasks_give_none_and_are_named():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _folder_json_files_that_name_different_tasks_give_none_and_are_named(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a
