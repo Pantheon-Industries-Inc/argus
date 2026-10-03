@@ -664,6 +664,24 @@ def test_a_short_start_up_lead_is_not_a_gap_but_a_real_gap_is():
     assert f.signal_gaps("s", b, t) == []
 
 
+def test_an_arm_state_is_never_held_over_a_lead_the_signals_call_missing():
+    """A 1 s episode whose arms start 0.4 s late: the signals flag the lead, so the state must not hold the first
+    reading over it as recorded stillness. One edge slack (edge_slack) serves both."""
+    q = 100.0 + np.arange(30) / 30.0
+    t = 100.4 + np.arange(60) / 100.0
+    pos = np.column_stack([np.linspace(0, 1, 60)] * 6 + [np.full(60, 0.5)])
+    streams = {f"/yam_{s}/joint_state": {"t": t, "pos": pos, "names": None} for s in ("left", "right")}
+    state, _, note = f.joint_state(streams, q)
+    assert state is None and "/yam_left/joint_state has readings from 0.4 s" in note
+    rows, gap = f.fill_rows(q, t, pos)
+    assert rows is None and "a gap longer than the 0.1 s the reader fills" in f.gap_words(gap, q[0])
+    a = np.full((30, 1), np.nan)
+    a[12:] = 1.0
+    assert [i["kind"] for i in f.signal_gaps("arm", a, q - q[0])] == ["signal_partial_span"]
+    # a minute of footage keeps half a second, as before
+    assert f.edge_slack(60.0) == f.EDGE_SLACK_S == 0.5
+
+
 def test_a_short_episode_missing_a_large_share_at_an_edge_gets_its_issue():
     t = np.arange(30) / 30.0                        # a 1 s episode
     a = np.ones((30, 1))

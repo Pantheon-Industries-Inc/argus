@@ -1442,22 +1442,25 @@ def _nested(x):
     return x
 
 
-# A signal's lead or tail with no reading is a recorder starting up or stopping, no data issue, while it is within
-# STATE_EDGE_SLACK_S (the slack a state is allowed at its edges, fill_rows) and within this share of the episode: half
-# a second is nothing in a minute of footage, but 40 percent of a 1 s episode is a sensor that missed it.
-SIGNAL_EDGE_SHARE = 0.1
+# A stream's lead or tail with no reading at the footage's ends is a recorder starting up or stopping, not data
+# missing, while it is within both of these: half a second is nothing in a minute of footage, but 40 percent of a 1 s
+# episode is a sensor that missed it. One rule for every stream: a signal's lead within it is no data issue
+# (signal_gaps), and an arm state is held from its first or last reading across it and never further (fill_rows,
+# joint_state), so no stretch the signals call missing is shown as recorded stillness.
+EDGE_SLACK_S = 0.5
+EDGE_SLACK_SHARE = 0.1
 
 
-def signal_edge_slack(span_s: float) -> float:
-    """The lead or tail with no reading that a signal is allowed in an episode of span_s seconds: the smaller of
-    STATE_EDGE_SLACK_S and SIGNAL_EDGE_SHARE of the episode."""
-    return min(STATE_EDGE_SLACK_S, SIGNAL_EDGE_SHARE * span_s)
+def edge_slack(span_s: float) -> float:
+    """The lead or tail with no reading that a stream is allowed in footage of span_s seconds: the smaller of
+    EDGE_SLACK_S and EDGE_SLACK_SHARE of the footage."""
+    return min(EDGE_SLACK_S, EDGE_SLACK_SHARE * span_s)
 
 
 def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
     """The data issues of a kept signal's frames with no reading (a row with no finite value), in seconds of the
     episode (t, its frames' times): before its first reading or after its last one, when longer than the edge slack
-    (signal_edge_slack), a signal_partial_span each (a sensor started late or stopped early), and every other frame
+    (edge_slack), a signal_partial_span each (a sensor started late or stopped early), and every other frame
     without a reading counted in one signal_gap with its longest run. A lead or a tail within the slack is a recorder
     starting up or stopping, no issue: a camera's calibration first sent 0.2 s in had made a gap issue of every value
     it holds."""
@@ -1466,7 +1469,7 @@ def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
     if not none.any() or none.all() or len(t) != n:
         return []
     t = np.asarray(t, dtype=np.float64) - float(t[0])
-    slack = signal_edge_slack(float(t[-1]))
+    slack = edge_slack(float(t[-1]))
     read = np.flatnonzero(~none)
     first, last = int(read[0]), int(read[-1])
     out = []
@@ -3345,13 +3348,13 @@ def state_filled_issue(what: str, k: int, n: int, t0: float, t1: float) -> dict:
     """The data issue of a state whose frames with no reading were filled (fill_rows)."""
     return {"kind": "state_filled", "signal": what, "t0_s": t0, "t1_s": t1,
             "what": f"{what} has no reading at {k} of its {n} frames; they were filled from the readings around them, "
-                    f"across no gap longer than {STATE_EDGE_SLACK_S:g} s"}
+                    f"across no gap longer than {STATE_GAP_S:g} s"}
 
 
 def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, note: str | None) -> tuple:
     """(state, action, kind, note, data issues) of a LeRobot episode's state and action rows (_cells, NaN where a cell
     could not be read) on its n video frames: each row at its frame (frame_rows, on_frames), and a frame with no
-    reading filled from the readings around it across no gap longer than STATE_EDGE_SLACK_S (fill_rows), as the MCAP
+    reading filled from the readings around it across no gap longer than STATE_GAP_S (fill_rows), as the MCAP
     and HDF5 state readers fill an arm's frames, with a state_filled issue. A state with a longer gap (a table shorter
     than its video) is not read as the state, with the gap in the note; its column stays a signal (_used_columns). A
     state with one NaN frame had been dropped and the episode told the dataset records no observation.state."""
@@ -4127,9 +4130,9 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
     already on the anchor camera's frames, at times q). The arrays named as the state (H5_STATE_NAME, outside an action
     group) are tried shortest name first, and the first that state_layout lays out with the names the file gives its
     values is the state; the array named as the action goes with it when it has the state's shape. A frame with no
-    reading (a clocked array that starts or ends within STATE_EDGE_SLACK_S of the footage, which h5_signals keeps) is
-    filled as joint_state fills an MCAP arm's frames (fill_rows), so an HDF5 state is accepted wherever an MCAP one is,
-    and a gap longer than STATE_EDGE_SLACK_S leaves it unread with the gap's time in the note.
+    reading (a clocked array that starts or ends within the edge slack of the footage, edge_slack, which h5_signals
+    keeps) is filled as joint_state fills an MCAP arm's frames (fill_rows), so an HDF5 state is accepted wherever an
+    MCAP one is, and a longer gap leaves it unread with the gap's time in the note.
     Both leave the signals when the state is read; otherwise they stay, and note gives the first array's reason, named.
     All None on a head camera, which has no state and no note about one, or when no array is named as the state.
     files are the names of the HDF5 files whose arrays carry them first (h5_file_signals), passed over to read each
@@ -4787,7 +4790,7 @@ def _join_gripper(groups: list[dict], q: np.ndarray | None = None) -> list[dict]
     """A channel's two name sets as one arm when one names only a gripper and the other names joints and no gripper
     (an arm's driver and its gripper's driver both publishing /joint_states): the gripper's first value (one finger
     of two, as _joint_row takes a gripper field's first value), placed at the arm's message times, follows the joints.
-    Kept apart when the gripper leaves a gap longer than STATE_EDGE_SLACK_S (fill_rows) in the footage's frame times q,
+    Kept apart when the gripper leaves a gap fill_rows does not fill in the footage's frame times q,
     or in the arm's message times without q, or the channel has any other name set."""
     grip = [g for g in groups if g["names"] and all(STATE_GRIPPER_NAME.search(x) for x in g["names"])]
     if len(groups) != 2 or len(grip) != 1:
@@ -4878,24 +4881,26 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
 # outside its messages, never held flat where nothing was recorded, and the span it misses is a data issue.
 SIGNAL_MIN_HZ = 1.0
 SIGNAL_SKIP_PARTS = {"header", "timestamp", "stamp"}      # a message's own time and sequence bookkeeping
-STATE_EDGE_SLACK_S = 0.5
-# a gap between two readings is a stop only when it is also longer than this many of the stream's own median steps:
-# a 30 Hz recorder that stops for 2 s is caught, and an arm logged at 1 Hz is read as it was before (fill_rows)
+# A gap between two readings inside the footage longer than STATE_GAP_S is a stop the state is never filled across,
+# when it is also longer than STATE_STOP_STEPS of the stream's own median steps: a 30 Hz recorder that stops for 2 s
+# is caught, and an arm logged at 1 Hz is read as it was before (fill_rows). The footage's ends are edge_slack's.
+STATE_GAP_S = 0.5
 STATE_STOP_STEPS = 3
 
 
 def lerp_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> np.ndarray:
     """y's rows, read at times t, at times q: each column linearly interpolated, and a time before the first reading or
     after the last one holding that reading (np.interp). abc130k's arms are placed on the frames this way, and the
-    state readers do it through fill_rows, which fills no gap longer than STATE_EDGE_SLACK_S."""
+    state readers do it through fill_rows, which fills no gap longer than STATE_GAP_S."""
     return np.stack([np.interp(q, t, y[:, j]) for j in range(y.shape[1])], axis=1)
 
 
-def fill_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray | None, tuple[float, float] | None]:
-    """(y's rows at times q by lerp_rows, None), or (None, (start, end) of the longest gap) when two readings in a row
-    leave more of q's span without a reading than both STATE_EDGE_SLACK_S and STATE_STOP_STEPS of the stream's median
-    step, or the first or last reading is further than STATE_EDGE_SLACK_S from q's ends. A gap is measured inside the
-    footage, so a message latched seconds before the first frame does not make the stretch before the footage a gap.
+def fill_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray | None, tuple | None]:
+    """(y's rows at times q by lerp_rows, None), or (None, (start, end, the longest gap allowed there) of the longest
+    gap) when two readings in a row leave more of q's span without a reading than both STATE_GAP_S and STATE_STOP_STEPS
+    of the stream's median step, or the first or last reading is further than the edge slack (edge_slack of q's span)
+    from q's ends. A gap is measured inside the footage, so a message latched seconds before the first frame does not
+    make the stretch before the footage a gap.
     A straight line across a recorder that stopped for 2 s would be shown as recorded motion, and a reading held past
     the ends as stillness, where no still span can tell, so a state is filled across no longer gap than the slack its
     edges are allowed, unless the stream always reads that far apart (an arm logged at 1 Hz). Both state readers place
@@ -4905,19 +4910,20 @@ def fill_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray |
     if len(t) and len(q):
         lo, hi = np.maximum(t[:-1], q[0]), np.minimum(t[1:], q[-1])
         step = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
-        longest = max(STATE_EDGE_SLACK_S, STATE_STOP_STEPS * step)
-        gaps = [(float(lo[i]), float(hi[i])) for i in np.flatnonzero(hi - lo > longest)]
-        gaps += [(float(q[0]), float(t[0]))] if t[0] > q[0] + STATE_EDGE_SLACK_S else []
-        gaps += [(float(t[-1]), float(q[-1]))] if t[-1] < q[-1] - STATE_EDGE_SLACK_S else []
+        longest, edge = max(STATE_GAP_S, STATE_STOP_STEPS * step), edge_slack(float(q[-1] - q[0]))
+        gaps = [(float(lo[i]), float(hi[i]), STATE_GAP_S) for i in np.flatnonzero(hi - lo > longest)]
+        gaps += [(float(q[0]), float(t[0]), edge)] if t[0] > q[0] + edge else []
+        gaps += [(float(t[-1]), float(q[-1]), edge)] if t[-1] < q[-1] - edge else []
         if gaps:
             return None, max(gaps, key=lambda g: g[1] - g[0])
     return lerp_rows(q, t, y), None
 
 
-def gap_words(gap: tuple[float, float], zero: float) -> str:
-    """A gap fill_rows will not fill, in seconds of the footage (zero its first frame), for a state note."""
+def gap_words(gap: tuple, zero: float) -> str:
+    """A gap fill_rows will not fill, (start, end, the longest gap allowed there), in seconds of the footage (zero its
+    first frame), for a state note."""
     return (f"has no reading from {gap[0] - zero:.1f} s to {gap[1] - zero:.1f} s, a gap longer than the "
-            f"{STATE_EDGE_SLACK_S:g} s the reader fills")
+            f"{round(gap[2], 2):g} s the reader fills")
 
 
 def _msg_items(m) -> list:
@@ -5295,7 +5301,7 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
         # the arm's samples must span the footage: a frame np.interp places past the first or last sample holds that
         # sample's value, so the state would seem to record an arm standing still where nothing was recorded
         t = streams[topic]["t"]
-        return span > 0 and t[0] <= q[0] + STATE_EDGE_SLACK_S and t[-1] >= q[-1] - STATE_EDGE_SLACK_S
+        return span > 0 and t[0] <= q[0] + edge_slack(span) and t[-1] >= q[-1] - edge_slack(span)
     short = [st[s] for s in order if not covers(st[s])]
     if short:
         # each arm that falls short is named with the span of the footage it covers, so an arm whose file was cut
