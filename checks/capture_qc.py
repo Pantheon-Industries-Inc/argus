@@ -690,7 +690,15 @@ def assess(feats: dict) -> dict:
     def clock(values_s: np.ndarray, label: str, camera: str | None):
         """Repeat-or-backwards events, gap events and metrics of one clock (seconds per frame)."""
         dup_ev, gap_ev = [], []
-        tns = np.round(np.asarray(values_s, dtype=np.float64) * 1e9).astype(np.int64)
+        values_s = np.asarray(values_s, dtype=np.float64)
+        if not np.isfinite(values_s).all():
+            return [], [], {"status": "not_assessed", "why": f"the {camera or 'state'} capture clock contains nonfinite values"}
+        # Reject unrepresentable seconds before multiplying or casting them into the upstream int64 clock.
+        limit = np.iinfo(np.int64).max / 1e9
+        if (np.abs(values_s) >= limit).any():
+            return [], [], {"status": "not_assessed",
+                            "why": f"the {camera or 'state'} capture clock exceeds the int64 nanosecond range"}
+        tns = np.round(values_s * 1e9).astype(np.int64)
         reasons: list[str] = []
         dts = up._strict_timestamps(tns, label, reasons)
         if any(r.endswith("_non_monotonic_or_duplicate") for r in reasons):
@@ -721,9 +729,10 @@ def assess(feats: dict) -> dict:
             recorded = ep.get("recorded_times") or ep.get("times")
             raw_anchor = np.asarray(recorded[me.anchor(ep)], dtype=np.float64)[:len(ts)]
             dup, gap, m = clock(raw_anchor, "state_time", me.anchor(ep))
-            R["state_time_non_monotonic_or_duplicate"] = _fired(dup, metrics=m)
-            R["state_timestamp_gap"] = _fired(gap, metrics=m)
-            nev, nm = [], {}
+            anchor_bad = m.get("status") == "not_assessed"
+            bad = [m["why"]] if anchor_bad else []
+            R["state_timestamp_gap"] = _na(m["why"]) if anchor_bad else _fired(gap, metrics=m)
+            nev, nm, assessed = [], {}, 0
             for v in me.views(ep):
                 if v == me.anchor(ep):
                     continue
@@ -734,9 +743,29 @@ def assess(feats: dict) -> dict:
                 dup.extend(d2)
                 nev.extend(g2)
                 nm[v] = m2
-            R["state_time_non_monotonic_or_duplicate"] = _fired(dup, metrics=m)
-            R["native_camera_timestamp_gap"] = (_fired(nev, metrics=nm) if nm
-                                                else _na("no camera has a clock of its own besides the main one"))
+                if m2.get("status") == "not_assessed":
+                    bad.append(m2["why"])
+                else:
+                    assessed += 1
+            duplicate = _fired(dup, metrics=m)
+            if bad:
+                duplicate["why"] = "; ".join(bad)
+                if not dup:
+                    duplicate["status"] = "not_assessed"
+                duplicate["metrics"] = {"anchor": m, "cameras": nm}
+            R["state_time_non_monotonic_or_duplicate"] = duplicate
+            if nm and assessed:
+                result = _fired(nev, metrics=nm)
+                invalid = [x["why"] for x in nm.values() if x.get("status") == "not_assessed"]
+                if invalid:
+                    result["why"] = "; ".join(invalid)
+                    if not nev:
+                        result["status"] = "not_assessed"
+                R["native_camera_timestamp_gap"] = result
+            elif nm:
+                R["native_camera_timestamp_gap"] = {**_na("; ".join(x["why"] for x in nm.values())), "metrics": nm}
+            else:
+                R["native_camera_timestamp_gap"] = _na("no camera has a clock of its own besides the main one")
         else:
             why = "the dataset has no capture clock, so frame times are the frame number divided by the frame rate"
             R["state_time_non_monotonic_or_duplicate"] = _na(why)
@@ -1468,8 +1497,16 @@ def format_result(a: dict) -> dict:
             notes.append(note_record(check, e["evidence"], rig))
         listing.append({**row, "status": "fired", "shown_as": "note", "events": len(r["events"]),
                         **({"why": why} if why else {}), **({"unchecked": r["why"]} if r.get("why") else {})})
+    metrics = {"cameras": a["cameras"], "actors": a["actors"], "episode": a["episode"]}
+    clock_metrics = (a["checks"].get("state_time_non_monotonic_or_duplicate") or {}).get("metrics") or {}
+    if "anchor" in clock_metrics:
+        # A partial clock assessment retains both the unusable clock and each other clock's available evidence.
+        def availability(m):
+            return {"status": "assessed", **m}
+        metrics["clocks"] = {"anchor": availability(clock_metrics["anchor"]),
+                             "cameras": {v: availability(m) for v, m in clock_metrics["cameras"].items()}}
     return {"source": SOURCE, "version": VERSION, "flags": flags, "notes": notes, "not_assessed": not_assessed,
-            "checks": listing, "metrics": {"cameras": a["cameras"], "actors": a["actors"], "episode": a["episode"]}}
+            "checks": listing, "metrics": metrics}
 
 
 def errored_record(e: Exception) -> dict:
