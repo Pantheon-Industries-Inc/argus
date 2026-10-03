@@ -548,6 +548,16 @@ def test_a_short_start_up_lead_is_not_a_gap_but_a_real_gap_is():
     assert f.signal_gaps("s", b, t) == []
 
 
+def test_a_short_episode_missing_a_large_share_at_an_edge_gets_its_issue():
+    t = np.arange(30) / 30.0                        # a 1 s episode
+    a = np.ones((30, 1))
+    a[:12] = np.nan                                 # no reading over its first 0.4 s, 40 percent of it
+    assert [i["kind"] for i in f.signal_gaps("s", a, t)] == ["signal_partial_span"]
+    b = np.ones((30, 1))
+    b[-12:] = np.nan
+    assert [i["kind"] for i in f.signal_gaps("s", b, t)] == ["signal_partial_span"]
+
+
 # ---------------------------------------------------------------- a LeRobot dataset's other files are named
 
 def test_a_readme_in_a_lerobot_root_is_named_as_not_read(tmp_path):

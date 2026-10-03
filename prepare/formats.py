@@ -1442,27 +1442,40 @@ def _nested(x):
     return x
 
 
+# A signal's lead or tail with no reading is a recorder starting up or stopping, no data issue, while it is within
+# STATE_EDGE_SLACK_S (the slack a state is allowed at its edges, fill_rows) and within this share of the episode: half
+# a second is nothing in a minute of footage, but 40 percent of a 1 s episode is a sensor that missed it.
+SIGNAL_EDGE_SHARE = 0.1
+
+
+def signal_edge_slack(span_s: float) -> float:
+    """The lead or tail with no reading that a signal is allowed in an episode of span_s seconds: the smaller of
+    STATE_EDGE_SLACK_S and SIGNAL_EDGE_SHARE of the episode."""
+    return min(STATE_EDGE_SLACK_S, SIGNAL_EDGE_SHARE * span_s)
+
+
 def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
     """The data issues of a kept signal's frames with no reading (a row with no finite value), in seconds of the
-    episode (t, its frames' times): before its first reading or after its last one, when longer than
-    STATE_EDGE_SLACK_S, a signal_partial_span each (a sensor started late or stopped early), and every other frame
-    without a reading counted in one signal_gap with its longest run. A lead or a tail within STATE_EDGE_SLACK_S, the
-    slack a state is allowed at its edges (fill_rows), is a recorder starting up or stopping, no issue: a camera's
-    calibration first sent 0.2 s in had made a gap issue of every value it holds."""
+    episode (t, its frames' times): before its first reading or after its last one, when longer than the edge slack
+    (signal_edge_slack), a signal_partial_span each (a sensor started late or stopped early), and every other frame
+    without a reading counted in one signal_gap with its longest run. A lead or a tail within the slack is a recorder
+    starting up or stopping, no issue: a camera's calibration first sent 0.2 s in had made a gap issue of every value
+    it holds."""
     none = ~np.isfinite(np.asarray(a)).any(axis=1)
     n = len(none)
     if not none.any() or none.all() or len(t) != n:
         return []
     t = np.asarray(t, dtype=np.float64) - float(t[0])
+    slack = signal_edge_slack(float(t[-1]))
     read = np.flatnonzero(~none)
     first, last = int(read[0]), int(read[-1])
     out = []
-    if first and t[first] > STATE_EDGE_SLACK_S:
+    if first and t[first] > slack:
         out.append({"kind": "signal_partial_span", "signal": name, "t0_s": 0.0, "t1_s": float(t[first]),
                     "what": f"{name} has no reading before {t[first]:.1f} s, so it is missing over the start of the "
                             "footage"})
     none[:first] = False
-    if last < n - 1 and t[-1] - t[last] > STATE_EDGE_SLACK_S:
+    if last < n - 1 and t[-1] - t[last] > slack:
         out.append({"kind": "signal_partial_span", "signal": name, "t0_s": float(t[last]), "t1_s": float(t[-1]),
                     "what": f"{name} has no reading after {t[last]:.1f} s, so it is missing over the end of the "
                             "footage"})
