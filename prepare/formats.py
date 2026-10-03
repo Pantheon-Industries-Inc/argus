@@ -809,6 +809,17 @@ def recorded_state_side(source=None, names=None) -> str | None:
     return recorded_state_identity(source, names)["side"]
 
 
+def state_contract_actors(ctx: dict, count: int) -> list[str] | None:
+    """An explicit source schema can establish ordered sides when native value names do not.
+    A saved actor list alone is not evidence for newly read groups with absent recorded identity."""
+    contract = ctx.get("state_actor_contract") or {}
+    names = contract.get("actors") if isinstance(contract, dict) else None
+    if isinstance(names, list) and len(names) == count and all(name in ("left", "right") for name in names) \
+            and len(set(names)) == count and isinstance(contract.get("source"), str) and contract["source"]:
+        return names
+    return None
+
+
 def record_state_groups(ctx: dict, groups: list[tuple]) -> None:
     """Keep source claims in numeric group order before selected arrays or streams leave the signals.
     Each seven value group has its own identity. Conflicting claims never establish a wrist mapping, and
@@ -837,6 +848,13 @@ def record_state_groups(ctx: dict, groups: list[tuple]) -> None:
         ctx["state_identity_note"] = (
             f"Separate recorded state groups name the same side ({', '.join(repeated)}). Each keeps its group "
             f"number and values; no mounted camera can be assigned uniquely from these claims ({claims}).")
+    elif len(identities) > 1 and all(i["status"] == "absent" for i in identities) \
+            and state_contract_actors(ctx, len(identities)) is None:
+        claims = "; ".join(f"group {g + 1}, source {i['source']!r}, value names {i['names']!r}"
+                           for g, i in enumerate(identities))
+        ctx["state_identity_note"] = (
+            "The recorded state groups establish no left or right side and no explicit ordered side contract "
+            f"({claims}). Each keeps its group number and values; no mounted camera is assigned to any group.")
 
 
 def record_state_identity(ctx: dict, source=None, names=None, dims: int = JOINT_DIMS) -> None:

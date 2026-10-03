@@ -180,11 +180,10 @@ def test_a_known_group_keeps_its_side_beside_an_unnamed_group():
     assert me.actor_views(ep) == [None, "left"]
 
 
-def test_two_unnamed_groups_keep_the_existing_layout_convention():
+def test_old_unmarked_groups_keep_the_existing_layout_convention():
     from test_recorded_actor_identity import single_state
     ep = single_state()
     ep["state"] = values(40)
-    formats.record_state_identity(ep["context"], "qpos", None, 14)
     assert me.actors(ep) == ["left", "right"]
     assert me.actor_views(ep) == ["left", "right"]
 

@@ -400,7 +400,7 @@ def contact_views(ep: dict, pl: dict) -> list[tuple[int, list[str]]]:
 
 def actors(ep: dict) -> list[str]:
     """Unique names of the native seven value groups in state order, using each group's recorded claims.
-    Only a two group layout with no identity evidence retains the legacy left then right convention.
+    Only an old context without native group metadata retains the legacy left then right convention.
     On a person (ego), the actors are their own two hands."""
     if rig(ep) == "ego_head":
         return ["left", "right"]
@@ -413,8 +413,12 @@ def actors(ep: dict) -> list[str]:
     identities = ctx.get("state_identities")
     noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
     if isinstance(identities, list) and len(identities) == count and all(isinstance(i, dict) for i in identities):
-        if any(i.get("status") != "absent" for i in identities):
-            sides = [i.get("side") if i.get("status") == "known" else None for i in identities]
+        if count > 1 or any(i.get("status") != "absent" for i in identities):
+            from prepare.formats import state_contract_actors
+            contract = state_contract_actors(ctx, count)
+            sides = [i.get("side") if i.get("status") == "known" else
+                     contract[g] if contract and i.get("status") == "absent" else None
+                     for g, i in enumerate(identities)]
             return [side if side and sides.count(side) == 1 else
                     f"{side} (recorded group {g + 1})" if side else
                     f"recorded {noun}" + (f" {g + 1}" if count > 1 else "") + " (side unknown)"
