@@ -13,9 +13,10 @@ recording labelled in parts carries the parts it was stitched from and the issue
 (carry_pieces), and an outcome or severity outside its known values is shown as "unclear" (normalize_enums). An
 episode whose model reply did not parse or was cut off is on the board too, with its footage, checks and sensors, no
 labels, the reply itself, and a data issue saying so (label_failure); a rerun's reply of that kind never replaces a
-label that parsed. So is every prepared episode of the entry that got no reply at all (the spend cap reached, a
-request that could not be built, a run stopped before it), saying why, and one whose reply the board cannot read,
-with the reply and the error: one episode never stops the build.
+label that parsed. So is every episode that got no reply at all (the spend cap reached, a request that could not be
+built), saying why, and on an entry whose run labels every episode of its folder (labels_every_episode) every
+prepared episode the run never reached; and one whose reply the board cannot read, with the reply and the error: one
+episode never stops the build.
 
 manifest.json. Paths are absolute or relative to the board folder; a run given as RUNS/<dataset>/latest is that
 dataset's newest finished run that is not a dry run (run ids start with their start time).
@@ -26,7 +27,9 @@ dataset's newest finished run that is not a dry run (run ids start with their st
         "run": "../../runs/molmo/latest",                     a run folder: run.json and out/
         "episodes": "../../episodes/molmo/quickstart",        the prepared episodes the run labelled
         "rules": [...],                                       optional: definitions applied after labelling
-        "file_prefix": "..."},                                optional: a prefix for its board file names
+        "file_prefix": "...",                                 optional: a prefix for its board file names
+        "labels_every_episode": true},                        optional: the run labels every episode of the folder,
+                                                              so one it has no reply for is listed (own_data_entry)
        ...],
      "comparisons": [...],                                    optional: other models' runs (compare/metrics.py)
      "hands": {"src": KEYPOINT_RUN, "clips": CLIPS},          optional: hand pose overlay (board/hands.py)
@@ -742,10 +745,13 @@ def _swap(board: Path, name: str, keep: bool) -> None:
 
 
 def unlabelled(entry: dict, eps: Path, run: Path, labels: dict) -> dict:
-    """{board file: (episode name, None, output, run)} for every prepared episode of the entry (an episode_* folder with
-    a context.json) that no run of it has an output for: the run never recorded a reply for it (stopped before it, or
-    written before the harness kept why), so it is shown with its footage, checks and sensors and says so
-    (label_failed no_reply)."""
+    """{board file: (episode name, None, output, run)} for every prepared episode of an entry whose run labels every
+    episode of its folder (labels_every_episode, board/rules.py own_data_entry) that no run of it has an output for:
+    the run never recorded a reply for it (stopped before it, or written before the harness kept why), so it is shown
+    with its footage, checks and sensors and says so (label_failed no_reply). Nothing for an entry whose run labelled
+    a chosen few of the folder's episodes: the others were never sent."""
+    if not entry.get("labels_every_episode"):
+        return {}
     pre = entry.get("file_prefix") or ""
     have = {name for name, _, _, _ in labels.values()}
     out = {}

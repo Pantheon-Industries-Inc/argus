@@ -1135,8 +1135,8 @@ def test_every_prepared_episode_is_on_the_board_and_says_why_it_has_no_labels(tm
         "episode_dir": str(eps / "episode_000001"), "parse_ok": False, "no_reply": "spend cap $20.00 reached"}))
     board = tmp_path / "board"
     board.mkdir()
-    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
-        {"dataset": "demo", "run": str(run), "episodes": str(eps), "rules": rules.rules_for("teleop_arms")}]}))
+    entry = rules.own_data_entry("demo", str(run), str(eps), "teleop_arms")
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [entry]}))
     built = board_build.build(board)
     assert built["counts"]["demo"]["episodes"] == 3
     fam = Families()
@@ -1152,6 +1152,12 @@ def test_every_prepared_episode_is_on_the_board_and_says_why_it_has_no_labels(tm
     ok = json.loads((board / "qa" / "episode_000000.json").read_text())
     assert "_label_failed" not in ok and not any(x["kind"] == "model_no_reply"
                                                  for x in ok["dataset_checks"].get("reader_issues") or [])
+    # a board whose run labelled a chosen few of a larger folder lists no episode the run never sent: only the one with
+    # a reply and the one the harness recorded as given none
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps), "rules": rules.rules_for("teleop_arms")}]}))
+    assert board_build.build(board)["counts"]["demo"]["episodes"] == 2
+    assert sorted(p.name for p in (board / "qa").glob("*.json")) == ["episode_000000.json", "episode_000001.json"]
 
 
 def test_a_reply_that_breaks_the_output_format_is_flagged_and_never_stops_the_build(tmp_path):
