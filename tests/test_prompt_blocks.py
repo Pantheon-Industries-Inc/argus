@@ -561,7 +561,7 @@ def test_the_rows_shown_at_each_instant_are_always_the_top_of_the_ranking():
                          "and flag_2 (1 value), because these move least and there is no more room.")
 
 
-def test_with_no_row_that_fits_every_signal_is_named_as_left_out_because_none_fits(monkeypatch):
+def test_with_no_row_that_fits_each_signal_with_rows_is_named_as_left_out_because_none_fits(monkeypatch):
     """Nothing is said to move least when nothing is shown: a budget smaller than the instants' row, or than the row
     that moves most."""
     ep, pl = _sweeps_wide_and_flags()
@@ -570,5 +570,6 @@ def test_with_no_row_that_fits_every_signal_is_named_as_left_out_because_none_fi
         monkeypatch.setattr(me, "SIGNAL_TABLE_MAX_CHARS", budget)
         lines, whole = me._signal_readout(ep, pl)
         assert len(lines) == 1 and not whole
-        assert lines[0].startswith("  The values at each instant leave out every signal, sweep_00 (1 value), ")
-        assert lines[0].endswith(" and flag_2 (1 value), because they do not fit.") and "move least" not in lines[0]
+        assert lines[0].startswith("  The values at each instant leave out sweep_00 (1 value), sweep_01 (1 value), ")
+        assert lines[0].endswith(" and flag_2 (1 value), because not even one row fits.")
+        assert "move least" not in lines[0] and "every signal" not in lines[0]

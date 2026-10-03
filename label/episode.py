@@ -946,8 +946,8 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
         named = _and_list([_left_out(nm, arrs[nm], meta.get(nm) or {}, len(left[nm]), sum(r[3] == nm for r in rows))
                            for nm in left])
         lines.append("  The values at each instant leave out " + named
-                     + ", because these move least and there is no more room." if chosen else
-                     "  The values at each instant leave out every signal, " + named + ", because they do not fit.")
+                     + (", because these move least and there is no more room." if chosen else
+                        ", because not even one row fits."))
     return lines, frozenset(r[3] for r in rows if r[3] not in left)
 
 
