@@ -29,12 +29,17 @@ One file:
    "depth": {view: {"units", "scale_m", "kind", "ticks", "bar"}}}
 
 A signal: "name", "dims", and when the dataset gives them "shape" ([16, 16]), "names" (one per value), "rate_hz" and
-"source". "constant": true when no value ever changes (its "value" is the first row, or null with no reading); the
-page lists those by name. Otherwise "rests_and_rises" and "touch" (label/signals.py; touch is is_touch, by the
-signal's name and its numbers), "direction" ("up", "down" or null), "spans" ([[start s, end s], ...] on the clip clock,
-from every frame, for a signal that rests and rises or is touch), for a signal that times one of the episode's
-contacts (context.json "contacts") its "strength" ({"lo", "step", "data"}, one value per sample: its activity over its
-swing, label/contacts.py, so the page sums a contact's signals into the curve drawn inside its bar), and its samples:
+"source", and "aligned_by" when the reader placed it on the video from both starts because no clock was shared
+(prepare/formats.py mark_assumed), which the page says in its lane. Each signal keeps its own length: one that ends
+before the others has no reading after its last row, and a gap or a stretch before a signal starts is no reading, which
+the page draws as a gap. A signal that cannot be drawn is left out and named in the file's "errors" ([{"name",
+"error"}]), and the page names it under the lanes it drew. "constant": true when no value ever changes (its "value" is
+the first row, or null with no reading); the page lists those by name. Otherwise "rests_and_rises" and "touch"
+(label/signals.py; touch is is_touch, by the signal's name and its numbers), "direction" ("up", "down" or null), "spans"
+([[start s, end s], ...] on the clip clock, from every frame, for a signal that rests and rises or is touch), for a
+signal that times one of the episode's contacts (context.json "contacts") its "strength" ({"lo", "step", "data"}, one
+value per sample: its activity over its swing, label/contacts.py, so the page sums a contact's signals into the curve
+drawn inside its bar), and its samples:
 
   a vector of SMALL values or fewer   "values": {"lo": [...], "step": [...], "data"}: per value v = lo + q * step
   an array of more values             "activity": {"lo": [x], "step": [x], "data"}: its activity (label/signals.py)
@@ -174,6 +179,15 @@ def clip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
     return np.arange(n, dtype=np.float64) / fps
 
 
+def pad(a: np.ndarray, n: int) -> np.ndarray:
+    """A signal's rows as floats on n anchor frames: its own rows, then no reading (NaN) after its last, so a signal
+    shorter than the others is drawn for the frames it has; a longer one is cut to the frames the clip has."""
+    a = np.asarray(a, dtype=np.float64)
+    if len(a) >= n:
+        return a[:n]
+    return np.concatenate([a, np.full((n - len(a),) + a.shape[1:], np.nan)])
+
+
 def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact: bool = False) -> dict:
     """One signal's entry (module docstring); in_contact: one of the episode's contacts is timed by it, so its strength
     is kept too."""
@@ -183,7 +197,7 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         a = a[:, None]
     d = a.shape[1]
     doc = {"name": meta["name"], "dims": d}
-    for k in ("shape", "names", "rate_hz", "source"):
+    for k in ("shape", "names", "rate_hz", "source", "aligned_by"):
         if meta.get(k) is not None:
             doc[k] = meta[k]
     fin = np.isfinite(a)
@@ -272,16 +286,25 @@ def episode_doc(ep_dir: Path) -> dict | None:
     if has_sig:
         with np.load(ep_dir / "signals.npz") as z:
             arrays = {m["key"]: np.asarray(z[m["key"]]) for m in metas if m.get("key") in z.files}
-        n = min((len(v) for v in arrays.values()), default=0)
+        # every anchor frame any signal reaches: a signal shorter than the others keeps its own length and has no
+        # reading after it (pad), never cutting the others to it
+        n = max((len(v) for v in arrays.values()), default=0)
         t = clip_times(ep_dir, ctx, n)
         n = min(n, len(t))
         t = t[:n]
         dt = float(np.median(np.diff(t))) if n > 1 else 1.0 / RATE_HZ
         stride = max(1, int(np.ceil((1.0 / max(dt, 1e-6)) / RATE_HZ - 1e-6)))
         touched = {nm for c in ctx.get("contacts") or [] for nm in c.get("signals") or []}
+        docs, errors = [], []
+        for m in metas:
+            if m.get("key") not in arrays:
+                continue
+            try:
+                docs.append(signal_doc(m, pad(arrays[m["key"]], n), t, stride, m["name"] in touched))
+            except Exception as err:  # noqa: BLE001 - this signal is named with the reason, the others are drawn
+                errors.append({"name": m["name"], "error": f"{type(err).__name__}: {err}"[:300]})
         doc.update({"frames": n, "times": encode_times(t), "stride": stride, "n": len(range(0, n, stride)),
-                    "signals": [signal_doc(m, arrays[m["key"]][:n], t, stride, m["name"] in touched)
-                                for m in metas if m.get("key") in arrays]})
+                    "signals": docs, **({"errors": errors} if errors else {})})
     if depth_p.exists():
         from label import depth as dp
         entries = dp.load(ep_dir)

@@ -3945,7 +3945,7 @@ function snBlock(blk, rows, bits) {
   return {dims, v};
 }
 function snDecode(doc) {
-  const out = {depth: doc.depth || {}, signals: [], constant: [], t: new Float64Array(0)};
+  const out = {depth: doc.depth || {}, signals: [], constant: [], t: new Float64Array(0), errors: doc.errors || []};
   if (!doc.signals || !doc.frames) return out;
   const n = doc.n, stride = doc.stride || 1, ft = new Float64Array(doc.frames), tr = hpReader(doc.times.d);
   let ms = doc.times.ms0;
@@ -4018,7 +4018,19 @@ function snWhat(s) {
     const k = (s.spans || []).length;
     w += k ? `, away from rest ${k === 1 ? 'once' : k + ' times'}` : '';
   }
+  // placed on the video from both starts, because the recording shares no clock with the cameras
+  // (prepare/formats.py mark_assumed), as the prompt says it
+  if (s.aligned_by) w += ', placed from both starts, as no clock is shared';
   return w;
+}
+// the signals the board could not draw (board/sensors.py "errors"), each named with the reason, under the lanes it drew
+function snErrorsHtml(errors) {
+  const xs = (Array.isArray(errors) ? errors : []).filter(x => x && x.name);
+  if (!xs.length) return '';
+  const each = xs.map(x => `${esc(x.name)} (${esc(x.error || 'no reason given')})`);
+  const list = each.length > 1 ? `${each.slice(0, -1).join(', ')} and ${each[each.length - 1]}` : each[0];
+  return `<div class="sn-note">${list} could not be drawn, so ${xs.length === 1 ? 'it has' : 'they have'} no lane `
+    + `here.</div>`;
 }
 // one lane's strip: each value a line on one scale (an array, its activity filled from 0), on the timeline's time scale
 function snPlot(s, ts, duration) {
@@ -4168,7 +4180,7 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
     if (!D || !document.body.contains(slot) || file !== _activeFile) return;
     const sigs = D.signals, maps = sigs.filter(s => s.map && s.shape && s.shape.length === 2);
     const nDepth = Object.keys(D.depth || {}).length;
-    if (!sigs.length && !D.constant.length && !nDepth) return;
+    if (!sigs.length && !D.constant.length && !nDepth && !(D.errors || []).length) return;
     const counts = [];
     if (sigs.length || D.constant.length) counts.push(`${sigs.length} ${sigs.length === 1 ? 'signal changes'
       : 'signals change'}${D.constant.length ? `, ${D.constant.length} constant` : ''}`);
@@ -4188,7 +4200,7 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
         ${first}
         ${more ? `<div class="ck-all"><div class="ck-all-in">${more}</div></div><button class="ck-more sn-more" `
           + `type="button">${SN_OPEN ? 'Hide the other signals' : `Show all ${sigs.length} signals`}</button>` : ''}
-        ${constHtml}`;
+        ${constHtml}${snErrorsHtml(D.errors)}`;
     const fold = !!hasContacts && (sigs.length > 0 || D.constant.length > 0);
     const shown = !fold || SN_SHOWN;
     const foldWord = on_ => on_ ? 'Hide the recorded signals' : `Show all recorded signals`;

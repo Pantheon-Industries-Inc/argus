@@ -120,6 +120,60 @@ def test_the_uploads_rest_and_swing_are_used_when_prepare_measured_them(tmp_path
     assert pmap["swing"] == 2000.0 and pmap["swing_from"] == "upload" and pmap["rest"] == [3100.0] * 16
 
 
+def _resave(ep: Path, **arrays) -> None:
+    with np.load(ep / "signals.npz") as z:
+        a = {k: z[k] for k in z.files}
+    np.savez(ep / "signals.npz", **{**a, **arrays})
+
+
+def test_each_signal_keeps_its_own_length_and_its_gaps(tmp_path):
+    """A signal shorter than the others is drawn for the frames it has and as no reading after them; a gap inside a
+    signal and a signal that starts late are drawn as gaps, never as values; the episode keeps every frame."""
+    ep = _episode(tmp_path)
+    force = np.load(ep / "signals.npz")["s0"][:250].astype(np.float64)
+    force[100:120] = np.nan
+    force[:10] = np.nan
+    _resave(ep, s0=force)
+    doc = sensors.episode_doc(ep)
+    assert doc["frames"] == 300 and doc["n"] == 150
+    f = next(s for s in doc["signals"] if s["name"] == "fingertip force")
+    v = sensors.dequantize(f["values"], doc["n"])[:, 0]
+    assert np.isnan(v[125:]).all() and np.isnan(v[50:60]).all() and np.isnan(v[:5]).all()
+    assert np.isfinite(v[30:50]).all() and np.isfinite(v[60:120]).all()
+
+
+def test_a_signal_that_cannot_be_drawn_is_named_and_the_others_are_drawn(tmp_path, monkeypatch):
+    ep = _episode(tmp_path)
+    real = sensors.signal_doc
+
+    def doc_or_fail(meta, *a, **kw):
+        if meta["name"] == "pressure":
+            raise ValueError("boom")
+        return real(meta, *a, **kw)
+    monkeypatch.setattr(sensors, "signal_doc", doc_or_fail)
+    doc = sensors.episode_doc(ep)
+    assert [s["name"] for s in doc["signals"]] == ["fingertip force", "health"]
+    assert doc["errors"] == [{"name": "pressure", "error": "ValueError: boom"}]
+
+
+def test_a_signal_placed_by_an_assumed_start_says_so(tmp_path):
+    ep = _episode(tmp_path)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"][0]["aligned_by"] = "assumed start"
+    (ep / "context.json").write_text(json.dumps(ctx))
+    doc = sensors.episode_doc(ep)
+    f = next(s for s in doc["signals"] if s["name"] == "fingertip force")
+    assert f["aligned_by"] == "assumed start" and "aligned_by" not in doc["signals"][1]
+
+
+def test_the_page_names_a_signal_placed_by_an_assumed_start_and_one_it_cannot_draw():
+    import subprocess
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("sensor_lanes.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_an_episode_without_signals_or_depth_has_no_file(tmp_path):
     ep = tmp_path / "episode_000000"
     ep.mkdir()
