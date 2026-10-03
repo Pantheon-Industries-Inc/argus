@@ -193,7 +193,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             new_src[v] = s2
         c2 = {kk: vv for kk, vv in ctx.items() if kk not in (
             "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "stream_checks", "pieces",
-            "instruction", "instruction_note", "real_times", "timebase_neighbour_lag_frames")}
+            "instruction", "instruction_note", "real_times", "timebase_neighbour_lag_frames",
+            "clock_zero_s")}  # a part's times start at its own first frame, never on the recording's clock zero
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
         note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total)} recording, from "

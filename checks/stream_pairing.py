@@ -116,7 +116,7 @@ def unaligned(ep: dict) -> dict | None:
     state_unaligned: the camera it was recorded on was taken out, board/clips.py drop_cameras), so a check that compares
     the state with the video is not run on it; None otherwise."""
     why = ep["context"].get("state_unaligned")
-    return {"not_assessed": f"the recorded state is not on these cameras' frames: {why}"} if why else None
+    return {"not_assessed": f"The recorded state is not on these cameras' frames. {why}"} if why else None
 
 
 def pairing(ep_dir: Path) -> dict | None:

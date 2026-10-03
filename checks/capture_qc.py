@@ -950,7 +950,7 @@ def assess(feats: dict) -> dict:
         # the recorded state is not on these cameras' frames (the camera it was recorded on was taken out,
         # board/clips.py drop_cameras): every check that compares it with the video is not assessed; the checks on the
         # state alone stand
-        why = f"the recorded state is not on these cameras' frames: {ctx['state_unaligned']}"
+        why = f"The recorded state is not on these cameras' frames. {ctx['state_unaligned']}"
         for c in STATE_VS_VIDEO + (("video_frozen_run",) if extra["frozen_needs_motion"] else ()):
             R[c] = _na(why)
     return {"checks": R, "cameras": cam_metrics, "actors": actor_metrics,

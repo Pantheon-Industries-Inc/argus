@@ -530,8 +530,9 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
             for s in src.values():
                 s.pop("kmap", None)
             if ctx.get("state_kind") not in (None, "none") or ctx.get("signals"):
-                ctx["state_unaligned"] = (f"recorded on the frames of the {old_name}, which could not be decoded, with "
-                                          "no capture times to place it on the other cameras' frames")
+                ctx["state_unaligned"] = (f"It was recorded on the frames of the {old_name}, which could not be "
+                                          "decoded, and the episode has no capture times to place it on the other "
+                                          "cameras' frames.")
                 issues.append({"kind": "state_unaligned", "what": f"The recorded state and signals are on the frames "
                                f"of the {old_name}, which could not be decoded, and the episode has no capture times "
                                f"to place them on the {camera_label(main, ctx)}'s frames, so they are not used."})
@@ -627,13 +628,18 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
                            "of it is not shown."})
     ctx["clock_zero_s"] = zero
     step = float(np.median(np.diff(t_new))) if len(t_new) > 1 else step_old
-    ctx.update(n_state_frames=int(len(t_new)), fps=round(1.0 / step, 3),
-               duration_s=round(float(t_new[-1]) - zero + step, 3))
+    duration = float(t_new[-1]) - zero + step
+    if keep_clock:
+        # the labels span the recording as it was: its length never shrinks to the new main camera's span, and reaches
+        # every camera left's last frame
+        duration = max([duration, float(ctx.get("duration_s") or 0.0)]
+                       + [float(t[v][-1]) - zero + step for v in first])
+    ctx.update(n_state_frames=int(len(t_new)), fps=round(1.0 / step, 3), duration_s=round(duration, 3))
     if ctx.get("state_kind") in (None, "none") and not ctx.get("signals"):
         return issues                            # nothing recorded on the frames to place
     if not near.any():
-        ctx["state_unaligned"] = (f"recorded on the frames of the {old_name}, which could not be decoded, and no "
-                                  "frame of the cameras left is within half a frame of it")
+        ctx["state_unaligned"] = (f"It was recorded on the frames of the {old_name}, which could not be decoded, "
+                                  "and no frame of the cameras left was filmed within half a frame of it.")
         issues.append({"kind": "state_unaligned", "what": f"The recorded state and signals are on the frames of the "
                        f"{old_name}, which could not be decoded, and no frame of the cameras left was filmed at the "
                        "same time, so they are not used."})

@@ -263,6 +263,13 @@ def plan(ep: dict) -> dict:
                                int(round(ms.MIN_STILL_S * fps)))
         sample_spans = quiet
     ks = ms.sample_frames(n, sample_spans, fps=fps, moving_every_s=every, still_every_s=every)
+    zero = ep["context"].get("clock_zero_s")
+    if zero is not None and ep.get("times") is not None:
+        # a camera that started before the episode's clock (kept for an episode labelled already, board/clips.py
+        # reanchor) is main: nothing before the clock's start is sampled, and its first frame at the start is
+        before = [k for k in range(n) if frame_time(ep, k) < float(zero) - 0.5 / fps]
+        if before and len(before) < n:
+            ks = sorted({k for k in ks if k > before[-1]} | {before[-1] + 1})
     if kind != "none" and checks["camera_windows_match_state"] and (sa, sb) != (0, T):
         # a state that covers part of the episode: its first and last frame are instants too, so the recorded motion
         # covers all of it and stops there (_motion_table)

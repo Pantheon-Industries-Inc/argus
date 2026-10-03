@@ -181,6 +181,8 @@ def test_a_main_camera_taken_out_with_no_capture_times_leaves_the_state_unaligne
     rows = {r["check"]: r for r in capture_qc.run_episode(ep)["checks"]}
     for c in ("camera_state_alignment_mismatch", "video_frozen_run"):
         assert rows[c]["status"] == "not_applicable" and "not on these cameras' frames" in rows[c]["why"], rows[c]
+        assert ":" not in rows[c]["why"]                     # a reason is whole sentences, read on the job page
+    assert ":" not in sp.pairing(ep)["not_assessed"]
     assert rows["invalid_state_shape"]["status"] == "clear"
 
 
@@ -258,6 +260,12 @@ def test_a_labelled_episode_keeps_its_clock_and_says_the_camera_starts_before_it
     with np.load(ep / "times.npz") as z:
         assert z["left"][0] == pytest.approx(-0.5) and z["right"][0] == pytest.approx(0.0)
     assert ctx["clock_start_s"] == pytest.approx(0.0) and ctx["state_span"] == [15, 60]
+    # the length is the recording's, through the right camera's last frame (2.47 s), never the new main camera's span
+    assert ctx["duration_s"] == 2.5
+    # a relabel samples nothing before the clock's start: the first instant is the left camera's frame at 0 s
+    e = me.load(ep)
+    pl = me.plan(e)
+    assert pl["ks"][0] == 15 and min(me.frame_time(e, k) for k in pl["ks"]) == pytest.approx(0.0)
     (off,) = [x for x in ctx["reader_issues"] if x["kind"] == "camera_offset"]
     assert off["camera"] == "left" and "0.50 s before" in off["what"]
     assert clips.clip_frames(out / "wrist_left" / f"{ep.name}.mp4") == 45
