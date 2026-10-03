@@ -656,7 +656,7 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
     is cut from the clock's start, and a reader issue says how much of it is not shown."""
     import numpy as np
 
-    from prepare.formats import CLOCK_TIME_KEYS, nearest
+    from prepare.formats import CLOCK_TIME_KEYS, depth_kmap, nearest
     t_old, t_new = t[old], t[new]
     step_old = float(np.median(np.diff(t_old))) if len(t_old) > 1 else 1.0 / float(ctx.get("fps") or 30.0)
     idx = nearest(t_old, t_new)
@@ -693,7 +693,7 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
             td = dt.get(f"depth_{v}", t.get(f"depth_{v}"))
             kp = ep_dir / e["kmap"]
             if td is not None and len(td):
-                np.save(kp, nearest(np.asarray(td, dtype=np.float64), t_new))
+                np.save(kp, depth_kmap(td, t_new))        # no reading where no depth frame is within a frame
             elif kp.exists():
                 np.save(kp, np.load(kp)[idx])            # no depth times: the depth frame of the nearest old frame
     # the clock: its start is the times.npz value zero (clock_zero_s, else the old main camera's first frame), moved

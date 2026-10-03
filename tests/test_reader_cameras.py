@@ -295,3 +295,49 @@ def test_undecodable_frames_inside_an_mcap_camera_are_flagged(tmp_path):
     assert iss["camera"] == "/camera/front/image"
     assert abs(iss["t0_s"] - 10 / 30) < 0.01 and abs(iss["t1_s"] - 12 / 30) < 0.01, iss
     assert "3" in iss["what"]
+
+
+# ---------------------------------------------------------------- depth shorter than its colour camera
+
+def test_depth_that_ends_before_its_camera_gives_no_reading_past_its_end(tmp_path):
+    """A depth video a third as long as its colour camera had its last frame given to the model for every later
+    instant. Anchor frames with no depth frame within a frame of them get no depth reading, the prompt says so, and
+    the stretch is a depth_partial issue."""
+    from label import depth as dp
+    from label import episode as me
+    root = tmp_path / "up"
+    d = root / "ep1"
+    _mp4(d / "exo_cam-images-rgb.mp4", 60)
+    dw = f.DepthWriter(d / "exo_cam-images-depth.mkv")
+    for k in range(20):
+        dw.add(k / 30, np.full((48, 64), 800 + k, np.uint16), 0.001)
+    dw.close()
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    ep = tmp_path / "eps" / ctx["episode_id"]
+    km = np.load(ep / "depth_kmap_exo.npy")
+    assert (km[:20] == np.arange(20)).all() and (km[21:] < 0).all(), km
+    (part,) = _issues(ctx, "depth_partial")
+    assert abs(part["t0_s"] - 20 / 30) < 0.05 and abs(part["t1_s"] - 59 / 30) < 0.05, part
+    e = me.load(ep)
+    assert dp.at_anchor(e, dp.load(ep), "exo", [5, 50]).keys() == {5}
+    assert "no depth" in me._depth_note({**e, "depth": dp.load(ep)})
+
+
+def test_depth_as_long_as_its_camera_reads_at_every_frame(tmp_path):
+    from label import depth as dp
+    from label import episode as me
+    root = tmp_path / "up"
+    d = root / "ep1"
+    _mp4(d / "exo_cam-images-rgb.mp4", 30)
+    dw = f.DepthWriter(d / "exo_cam-images-depth.mkv")
+    for k in range(30):
+        dw.add(k / 30, np.full((48, 64), 800 + k, np.uint16), 0.001)
+    dw.close()
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ctx = _ctx(tmp_path / "eps", rep)
+    ep = tmp_path / "eps" / ctx["episode_id"]
+    assert (np.load(ep / "depth_kmap_exo.npy") == np.arange(30)).all()
+    assert not _issues(ctx)
+    note = me._depth_note({**me.load(ep), "depth": dp.load(ep)})
+    assert note.endswith("at that instant.")

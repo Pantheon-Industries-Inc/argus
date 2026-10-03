@@ -1647,13 +1647,45 @@ def depth_camera(depth_name: str, cameras: dict[str, str], scene: str) -> tuple[
     return scene, f"{depth_name} (its words name no one camera, so it goes with the scene camera)"
 
 
+def depth_kmap(t_depth: np.ndarray, t_anchor: np.ndarray) -> np.ndarray:
+    """For each anchor frame, the depth frame recorded nearest it, or -1 when none is within one frame of it (the
+    longer of a depth and an anchor frame's step): there the camera has no depth reading. The nearest frame alone had
+    given a depth stream's last frame to every instant after it ended."""
+    td, ta = np.asarray(t_depth, dtype=np.float64), np.asarray(t_anchor, dtype=np.float64)
+    km = nearest(td, ta)
+    if len(td) and len(ta):
+        step = lambda t: float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+        far = np.abs(td[km] - ta) > max(step(td), step(ta), 1e-3) + 1e-6
+        km = np.where(far, -1, km).astype(np.int32)
+    return km
+
+
+def depth_gap_issues(extra: dict, name: str, km: np.ndarray, t_anchor: np.ndarray) -> None:
+    """The stretches of the anchor's frames with no depth reading (depth_kmap -1) as depth_partial issues on extra,
+    one per stretch, on the episode's clock (t_anchor, the anchor's frame times on it)."""
+    miss = np.flatnonzero(np.asarray(km) < 0)
+    if not len(miss):
+        return
+    ta = np.asarray(t_anchor, dtype=np.float64)
+    for run in np.split(miss, np.flatnonzero(np.diff(miss) > 1) + 1):
+        t0, t1 = float(ta[run[0]]), float(ta[run[-1]])
+        add_issue(extra, "depth_partial", f"The {name} camera's depth has no frame from {t0:.2f} s to {t1:.2f} s, so "
+                                          "there is no depth reading for that part of the episode.",
+                  camera=name, t0_s=t0, t1_s=t1)
+
+
 def depth_entry(ep: Path, view: str, path: Path, t_depth: np.ndarray, t_anchor: np.ndarray, pts: np.ndarray,
-                scale_m: float | None, source: str) -> tuple[dict, dict]:
+                scale_m: float | None, source: str, extra: dict | None = None, name: str | None = None) \
+        -> tuple[dict, dict]:
     """(depth.json entry, times) for one camera's depth stream: its file, its frame for each anchor frame (nearest in
-    time, depth_kmap_<view>.npy), its frame times and exact pts, and metres per unit when known."""
+    time within a frame, else -1, depth_kmap, in depth_kmap_<view>.npy), its frame times and exact pts, and metres per
+    unit when known. The anchor frames with no depth reading are depth_partial issues on extra, naming the camera
+    (name, else the view)."""
     ep.mkdir(parents=True, exist_ok=True)     # a LeRobot episode writes depth before finish_episode makes its folder
-    km = nearest(np.asarray(t_depth, dtype=np.float64), np.asarray(t_anchor, dtype=np.float64))
+    km = depth_kmap(t_depth, t_anchor)
     np.save(ep / f"depth_kmap_{view}.npy", km)
+    if extra is not None:
+        depth_gap_issues(extra, name or view, km, t_anchor)
     entry = {"packed": str(Path(path).resolve()), "base_s": 0.0, "n_frames": int(len(t_depth)),
              "kmap": f"depth_kmap_{view}.npy", "scale_m": scale_m, "source": source,
              # a disparity (or inverse depth) stream reads larger where nearer; label/depth.py draws it reversed
@@ -1828,7 +1860,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
             td = pd_["pts"].astype(np.float64) * float(pd_["time_base"])
             td = (td - (zero if shared_clock and zero is not None else td[0])
                   + (times[v][0] if not shared_clock else 0.0))
-        entry, tz = depth_entry(ep, v, Path(d["path"]), td, ta, pd_["pts"], d.get("scale_m"), d.get("source") or "")
+        entry, tz = depth_entry(ep, v, Path(d["path"]), td, ta, pd_["pts"], d.get("scale_m"), d.get("source") or "",
+                                extra, files[v][0])
         entry.update(width=pd_["width"], height=pd_["height"], pix_fmt=pd_["pix_fmt"])
         dep[v] = entry
         dtimes.update(tz)
@@ -3203,7 +3236,7 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
         info = (r["features"].get(key) or {}).get("info") or {}
         scale = next((float(x) for k, x in info.items() if DEPTH_SCALE_KEY.search(str(k).split(".")[-1])
                       and isinstance(x, (int, float)) and 0 < x < 10), None)
-        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, source)
+        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, source, ctx, (cams or vmap)[v])
         e.update(width=pr["width"], height=pr["height"], pix_fmt=pr["pix_fmt"])
         dep[v] = e
         tz.update(t)
