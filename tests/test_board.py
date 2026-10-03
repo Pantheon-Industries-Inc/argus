@@ -1087,6 +1087,19 @@ def _strict(text: str):
     return json.loads(text, parse_constant=no)
 
 
+def test_a_time_reads_as_a_number_only_when_written_as_one():
+    """number() read "1_000" as 1000 and Arabic Indic digits as numbers (Python's float accepts both), and "-0" as
+    -0.0, which a prompt prints as "-0.0s". A time in text is a number only in plain ASCII digits, with a sign, a point
+    and an exponent; negative zero is zero."""
+    from label.episode import number
+    assert number("12.5") == 12.5 and number(" 12.5 s ") == 12.5 and number("-3") == -3.0 and number("1e2") == 100.0
+    assert number(".5") == 0.5 and number("+2.") == 2.0 and number(7) == 7.0
+    for bad in ("1_000", "\u0661\u0662", "\uff11", "1,5", "1:30", "nan", "inf", "", "s", True, None, float("nan")):
+        assert number(bad) is None, bad
+    for z in ("-0", "-0.0", -0.0):
+        assert number(z) == 0.0 and str(number(z)) == "0.0", z
+
+
 def test_a_number_that_is_not_finite_never_stops_an_episode_loading(tmp_path):
     """A NaN in a reply (a step's time, the outcome's time) or in a check (a correlation over a NaN state row) was
     written as NaN, which the page cannot parse, so the episode never loaded. Every board file is written as JSON a

@@ -145,20 +145,27 @@ def ep_fps(ep: dict) -> float:
     return float(ep["context"].get("fps") or FPS)
 
 
+# a number written as text: plain ASCII digits with an optional sign, point and exponent. Python's float also reads
+# "1_000" and digits of other scripts, which no dataset or reply means as a time
+NUMBER_TEXT = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)
+
+
 def number(x) -> float | None:
-    """A number as a dataset or the model writes it: a finite number, or text that reads as one ("12.5", or a time
-    "12.5s"). Anything else (none, a word, NaN, true or false) is no number, None, and a time that is none is shown
-    untimed. One rule, so the prompt, the parts of a long recording, the reply's parse and the board read every time
-    alike."""
+    """A number as a dataset or the model writes it: a finite number, or text that reads as one (NUMBER_TEXT: "12.5",
+    or a time "12.5s"). Anything else (none, a word, NaN, true or false) is no number, None, and a time that is none is
+    shown untimed. Negative zero is zero, so no time prints as "-0.0s". One rule, so the prompt, the parts of a long
+    recording, the reply's parse and the board read every time alike."""
     if isinstance(x, bool):
         return None
     if isinstance(x, str):
         x = x.strip().removesuffix("s").strip()
+        if not NUMBER_TEXT.fullmatch(x):
+            return None
     try:
         v = float(x)
     except (TypeError, ValueError):
         return None
-    return v if math.isfinite(v) else None
+    return v + 0.0 if math.isfinite(v) else None
 
 
 def order_views(keys) -> list[str]:
