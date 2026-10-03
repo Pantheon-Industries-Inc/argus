@@ -477,18 +477,35 @@ def public_label(d: dict) -> dict:
     return d
 
 
+def withheld_status(result: dict) -> dict:
+    """What a check a rule withheld found, so the page says it as the check came out, never clear for a check that
+    crashed, fired or measured nothing: {"status": "errored" | "not_assessed" | "fired" | "clear"}, with the error or
+    the reason it was not assessed. A result that lists checks of its own (capture_qc, sensor_checks) also gives how
+    many of them ran ("of") and how many of those fired and errored. The order is the page's for our own checks
+    (checksSection): an error, then not assessed, then fired."""
+    if result.get("error"):
+        return {"status": "errored", "error": str(result["error"])}
+    if isinstance(result.get("checks"), list):
+        st = [c.get("status") for c in result["checks"] if isinstance(c, dict)]
+        n = {"fired": st.count("fired"), "errored": st.count("errored"),
+             "of": sum(s in ("fired", "clear", "errored") for s in st)}
+        return {"status": "errored" if n["errored"] else "fired" if n["fired"] else "clear" if n["of"]
+                else "not_assessed", **n}
+    if result.get("not_assessed"):
+        return {"status": "not_assessed", "why": str(result["not_assessed"])}
+    fired = any(bool(result.get(f)) for f in ("flagged", "crossed", "sped_up_recording"))
+    return {"status": "fired" if fired else "clear"}
+
+
 def episode_view(d: dict) -> dict:
     """The episode as the page shows it: its public fields (public_label), each flagged issue carrying the family it
     is counted under and whether it counts (Families.counts), so the episode's own list names and counts a problem
     exactly as the filter does, and the checks a manifest rule withheld on this dataset (drop_check, kept in the
-    label file's _withheld_checks) as set_aside_checks, each with the rule's reason and whether it fired, so the page
-    lists them as set aside, never hides them. The label file itself is not changed."""
+    label file's _withheld_checks) as set_aside_checks, each with the rule's reason and what it found
+    (withheld_status), so the page lists them as set aside, never hides them. The label file itself is not changed."""
     held = d.get("_withheld_checks") if isinstance(d.get("_withheld_checks"), dict) else {}
     d = public_label(d)
-    # a withheld check that stopped with an error (checks/stream_pairing.py _safe) carries the error
-    aside = [{"check": k, "reason": v.get("reason") or "",
-              "flagged": any(bool(r.get(f)) for f in ("flagged", "crossed", "sped_up_recording")),
-              **({"error": str(r["error"])} if r.get("error") else {})}
+    aside = [{"check": k, "reason": v.get("reason") or "", **withheld_status(r)}
              for k, v in held.items() if isinstance(v, dict) for r in [v.get("result") or {}] if isinstance(r, dict)]
     if aside:
         d["set_aside_checks"] = aside
@@ -2885,9 +2902,18 @@ function untimedRows(d, first = 1) {
 }
 // What this dataset's rules set aside: each issue a rule moved to _excluded (board/build.py apply_rules, and the
 // issues label/pieces.py stitch set aside at our own cuts), with its text, tag, time and the rule's reason, and each
-// check a rule withheld (set_aside_checks, board/serve.py episode_view), with whether it fired and the reason. None of
+// check a rule withheld (set_aside_checks, board/serve.py episode_view), with what it found and the reason. None of
 // them counts. They are rows of the problems' own kind, in a fold that is closed until opened and says how many it
 // holds. Nothing is drawn when nothing was set aside.
+// what a withheld check found (board/serve.py withheld_status) in words: a set of checks says how many of those that ran
+// fired or stopped with an error
+function foundWords(c) {
+  if (c.status === 'errored') return c.error ? `stopped with an error (${c.error})`
+    : `${c.errored} of ${c.of} stopped with an error${c.fired ? `, ${c.fired} fired` : ''}`;
+  if (c.status === 'not_assessed') return c.why ? `not assessed (${c.why})` : 'not assessed';
+  if (c.status === 'fired') return c.of != null ? `${c.fired} of ${c.of} fired` : 'fired';
+  return 'clear';
+}
 function setAsideHtml(d) {
   const ex = (Array.isArray(d._excluded) ? d._excluded : []).filter(x => x && x.issue);
   const ck = (Array.isArray(d.set_aside_checks) ? d.set_aside_checks : []).filter(x => x && x.check);
@@ -2908,8 +2934,7 @@ function setAsideHtml(d) {
       <span class="di-sev">check</span>
       <div class="di-body">
         <div class="di-issue">${esc(fam[c.check] ? famName(fam[c.check]) : tagName(c.check, 'data_issues'))}, ${
-          c.error ? `stopped with an error (${esc(c.error)})` : c.flagged ? 'fired' : 'clear'}, not counted on this `
-          + `dataset</div>
+          esc(foundWords(c))}, not counted on this dataset</div>
         ${c.reason ? `<div class="di-ev">${esc(why(c.reason))}</div>` : ''}
       </div></div>`));
   const closed = `Show the ${n} set aside by this dataset's rules`;

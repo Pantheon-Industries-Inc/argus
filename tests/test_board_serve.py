@@ -95,14 +95,32 @@ def test_the_page_is_given_the_checks_a_rule_withheld_with_the_reason():
     d = {"dataset": "molmo", "_withheld_checks": {"gripper_channels": {"reason": "one-armed tasks",
                                                                        "result": {"flagged": True}}}}
     view = serve.episode_view(d)
-    assert view["set_aside_checks"] == [{"check": "gripper_channels", "reason": "one-armed tasks", "flagged": True}]
+    assert view["set_aside_checks"] == [{"check": "gripper_channels", "reason": "one-armed tasks", "status": "fired"}]
     assert "_withheld_checks" not in view
     assert "set_aside_checks" not in serve.episode_view({"_withheld_checks": [3]})
     # a withheld check that stopped with an error says so, never clear
     err = serve.episode_view({"_withheld_checks": {"recorded_jumps": {"reason": "r", "result": {
         "error": "ValueError: boom", "flagged": False}}}})
-    assert err["set_aside_checks"] == [{"check": "recorded_jumps", "reason": "r", "flagged": False,
+    assert err["set_aside_checks"] == [{"check": "recorded_jumps", "reason": "r", "status": "errored",
                                         "error": "ValueError: boom"}]
+
+
+def test_a_withheld_check_reads_as_what_it_found():
+    """A withheld check read clear whatever it found: the capture checks and the sensor checks keep their findings in
+    a list of checks, and a check that measured nothing says so in not_assessed. Each reads as it came out: an error,
+    not assessed with why, or how many of its own checks that ran fired and errored."""
+    st = serve.withheld_status
+    assert st({"not_assessed": "the right arm reads at too few frames", "flagged": False}) == {
+        "status": "not_assessed", "why": "the right arm reads at too few frames"}
+    capture = {"checks": [{"status": "fired"}, {"status": "fired"}, {"status": "clear"},
+                          {"status": "not_applicable"}, {"status": "errored"}], "not_assessed": {"x": "y"}}
+    assert st(capture) == {"status": "errored", "fired": 2, "errored": 1, "of": 4}
+    sensors = {"flagged": False, "notes": [{"check": "constant"}], "checks": [{"status": "fired"}, {"status": "clear"},
+                                                                             {"status": "na"}]}
+    assert st(sensors) == {"status": "fired", "fired": 1, "errored": 0, "of": 2}
+    assert st({"checks": [{"status": "na"}]})["status"] == "not_assessed"
+    assert st({"checks": [{"status": "clear"}]})["status"] == "clear"
+    assert st({"crossed": False, "left_vs_left": 0.9})["status"] == "clear"
 
 
 def test_render_index_fills_every_placeholder():
