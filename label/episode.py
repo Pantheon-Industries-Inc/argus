@@ -704,9 +704,9 @@ def _map_tile(ep: dict, name: str, k: int):
     shape = m.get("shape") or []
     if len(shape) != 2 or name not in (ep.get("signals") or {}):
         return None
-    a = np.asarray(ep["signals"][name], dtype=np.float64)
-    d, swing = sg._distance(a, m.get("rest"), m.get("swing"))
-    row = d[min(k, len(d) - 1)].reshape(int(shape[0]), int(shape[1]))
+    a = ep["signals"][name]
+    d, swing = sg.distance_at(a, min(k, len(a) - 1), m.get("rest"), m.get("swing"))
+    row = d.reshape(int(shape[0]), int(shape[1]))
     g = np.where(np.isfinite(row), np.clip(row / swing, 0, 1) if swing > 0 else 0.0, 0.0)
     cell = max(1, MAP_TILE_PX // max(int(shape[0]), int(shape[1])))
     return Image.fromarray((g * 255).astype(np.uint8), "L").resize((int(shape[1]) * cell, int(shape[0]) * cell),
@@ -971,8 +971,8 @@ def touch_verdicts(ep: dict, n: int) -> frozenset:
     out = set()
     for name, a in (ep.get("signals") or {}).items():
         m = meta.get(name) or {}
-        if m["touch"] if "touch" in m else sg.is_touch(name, np.asarray(a[:n], dtype=np.float64), m.get("rest"),
-                                                      m.get("swing")):
+        # read as stored (a float32 skin is never copied whole as float64, label/signals.py CHUNK_VALUES)
+        if m["touch"] if "touch" in m else sg.is_touch(name, a[:n], m.get("rest"), m.get("swing")):
             out.add(name)
     return frozenset(out)
 
@@ -1044,7 +1044,9 @@ def _signals_table(ep: dict, pl: dict) -> str:
         return ""
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
-    arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
+    # as stored: every number below is the one a float64 copy would give (largest and smallest readings are exact in
+    # any precision, and their differences are taken in float64), with no whole copy of a large signal
+    arrs = {k: a[:n] for k, a in sig.items()}
     lines, still = [], []
     for name, a in arrs.items():
         if not len(a):
@@ -1068,7 +1070,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
             for name, a in arrs.items():
                 seg = a[a0:b0 + 1]
                 with np.errstate(all="ignore"):
-                    c = (float(np.nanmax(np.nanmax(seg, axis=0) - np.nanmin(seg, axis=0)))
+                    c = (float(np.nanmax(np.nanmax(seg, axis=0).astype(np.float64)
+                                         - np.nanmin(seg, axis=0).astype(np.float64)))
                          if np.isfinite(seg).any() else 0.0)
                 if c > 0:
                     ch.append(f"{name} {_num(c)}")
@@ -1096,7 +1099,7 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     sig = ep.get("signals") or {}
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
-    arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
+    arrs = {k: a[:n] for k, a in sig.items()}      # as stored; label/signals.py reads them in float64 pieces
     touch = _touch(ep, pl)
     ks = pl["ks"]
     rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)

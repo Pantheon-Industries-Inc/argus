@@ -45,7 +45,7 @@ def _side(name: str) -> str | None:
 
 def _strength(a: np.ndarray, m: dict) -> np.ndarray:
     act = sg.activity(a, m.get("rest"), m.get("swing"))
-    _, swing = sg._distance(a, m.get("rest"), m.get("swing"))
+    swing = sg.swing_of(a, m.get("rest"), m.get("swing"))
     return np.nan_to_num(act / swing) if swing > 0 else np.zeros(len(a))
 
 
@@ -57,7 +57,7 @@ def find(signals: dict, meta: dict, t: np.ndarray, verdicts=None) -> list[dict]:
     n = len(t)
     touch = {}
     for name, a in signals.items():
-        a = np.asarray(a[:n], dtype=np.float64)
+        a = np.asarray(a[:n])          # as stored: label/signals.py reads it in float64 pieces
         m = meta.get(name) or {}
         if m.get("variation_of") or name.endswith(VARIATION_SUFFIX):
             continue
@@ -129,7 +129,7 @@ def _regions(touch: dict, names: set, k: int) -> dict:
     active = []
     for nm in sorted(names):
         a, m = touch[nm]
-        act = sg._active(a, m.get("rest"), m.get("swing"))[k]
+        act = sg.active_at(a, k, m.get("rest"), m.get("swing"))
         if act.any():
             active.append(nm)
         shape = m.get("shape")

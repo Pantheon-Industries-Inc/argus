@@ -64,6 +64,60 @@ MERGE_GAP_S = 0.15
 HOLD_BAND = 0.02
 SETTING_STATES = 3        # a signal of several values with this many distinct readings or fewer is a setting
 HOLD_SHARE = 0.3
+# A signal is read in pieces of about this many values (16 MB as float64), each in float64, so a large one (a tactile
+# skin of 480 MB float32) is never copied whole and every number comes out as a whole float64 copy would give it. Only
+# a percentile over all its values (a resting end, the typical swing) holds one array of them while it is taken: float64
+# up to POOL_F64_BYTES, so every prompt of a small signal reads as before, and float32 past it, one copy the size of a
+# float32 signal, whose percentile is then to float32 precision.
+CHUNK_VALUES = 1 << 21
+POOL_F64_BYTES = 64 << 20
+
+
+def _float(a) -> np.ndarray:
+    """a as a floating array without a copy when it already is one (a float32 signal stays float32)."""
+    a = np.asarray(a)
+    return a if np.issubdtype(a.dtype, np.floating) else a.astype(np.float64)
+
+
+def _row_chunks(a: np.ndarray):
+    """(start, end) row ranges of a (frames by values) of about CHUNK_VALUES values each."""
+    step = max(1, CHUNK_VALUES // max(1, int(np.prod(a.shape[1:]))))
+    return [(i, min(i + step, len(a))) for i in range(0, len(a), step)]
+
+
+def _col_chunks(a: np.ndarray):
+    """(start, end) column ranges of a (frames by values) of about CHUNK_VALUES values each."""
+    step = max(1, CHUNK_VALUES // max(1, len(a)))
+    return [(j, min(j + step, a.shape[1])) for j in range(0, a.shape[1], step)]
+
+
+def _rows64(a: np.ndarray):
+    """Each row chunk of a as float64, with where it starts."""
+    for i, j in _row_chunks(a):
+        yield i, np.asarray(a[i:j], dtype=np.float64)
+
+
+def _pool(a: np.ndarray) -> np.ndarray:
+    """An empty array to hold every value of a once (POOL_F64_BYTES says its precision)."""
+    return np.empty(a.size, dtype=np.float64 if a.size * 8 <= POOL_F64_BYTES else np.float32)
+
+
+def _percentile(a: np.ndarray, q, pick):
+    """np.percentile(values, q) of the values pick(chunk) gives from each float64 row chunk of a, held in one array of
+    them (_pool) and taken in place; None when there are none."""
+    buf = _pool(a)
+    k = 0
+    for _, c in _rows64(a):
+        v = pick(c)
+        buf[k:k + len(v)] = v
+        k += len(v)
+    if not k:
+        return None
+    return np.percentile(buf[:k], q, overwrite_input=True)
+
+
+def _any_finite(a: np.ndarray) -> bool:
+    return any(bool(np.isfinite(a[i:j]).any()) for i, j in _row_chunks(a))
 
 
 def per_value(name: str, d: int, shape=None, names=None) -> bool:
@@ -96,10 +150,10 @@ def _num(x: float) -> str:
 
 def _pooled_end(a: np.ndarray) -> str | None:
     """"low" or "high" when an array's values pooled sit near one end of their range (a pressure map), else None."""
-    v = a[np.isfinite(a)]
-    if not len(v):
+    got = _percentile(a, [1, 50, 99], lambda c: c[np.isfinite(c)])
+    if got is None:
         return None
-    lo, med, hi = np.percentile(v, [1, 50, 99])
+    lo, med, hi = got
     if not hi > lo:
         return None
     pos = (med - lo) / (hi - lo)
@@ -111,16 +165,17 @@ def resting_level(a: np.ndarray, rest=None) -> np.ndarray:
     measure_signal_scales), is used as given when it has one value per value."""
     if rest is not None and len(rest) == a.shape[1]:
         return np.asarray(rest, dtype=np.float64)
-    if not np.isfinite(a).any():
+    if not _any_finite(a):
         return np.zeros(a.shape[1])
     with np.errstate(all="ignore"):
         if a.shape[1] > SMALL:
             end = _pooled_end(a)
-            if end == "low":
-                return np.nan_to_num(np.nanpercentile(a, 1, axis=0))
-            if end == "high":
-                return np.nan_to_num(np.nanpercentile(a, 99, axis=0))
-            return np.nan_to_num(np.nanmedian(a, axis=0))
+            # value by value, a few thousand values at a time
+            per = (lambda c: np.nanpercentile(c, 1, axis=0)) if end == "low" else \
+                (lambda c: np.nanpercentile(c, 99, axis=0)) if end == "high" else (lambda c: np.nanmedian(c, axis=0))
+            return np.nan_to_num(np.concatenate([per(np.asarray(a[:, i:j], dtype=np.float64))
+                                                 for i, j in _col_chunks(a)]))
+        a = np.asarray(a, dtype=np.float64)
         lo, med, hi = np.nanpercentile(a, [5, 50, 95], axis=0)
     span = hi - lo
     pos = np.where(span > 0, (med - lo) / np.where(span > 0, span, 1), 0.5)
@@ -133,17 +188,30 @@ def direction(a: np.ndarray, rest=None, swing=None) -> str | None:
     at rest when on the other side its readings go no further than REST_FRACTION of how far it moves: a pressure
     never reads past its unloaded value except by noise, while a position that holds one level for a while moves past
     it whenever the hand does."""
-    dev = a - resting_level(a, rest)
-    act = _active(a, rest, swing)
-    if not act.any():
+    level = resting_level(a, rest)
+    sw = _swing(a, level, swing)
+    if not sw > 0:
         return None
-    up = float((dev[act] > 0).mean())
+    n_act = n_up = 0
+    for _, c in _rows64(a):
+        dev = c - level
+        act = np.nan_to_num(np.abs(dev)) > REST_FRACTION * sw
+        n_act += int(act.sum())
+        n_up += int((dev[act] > 0).sum())
+    if not n_act:
+        return None
+    up = n_up / n_act
     way = "up" if up >= 0.8 else "down" if up <= 0.2 else None
     if way is None:
         return None
-    toward = (dev if way == "up" else -dev)[np.isfinite(dev)]
-    beyond = float(np.percentile(np.maximum(-toward, 0.0), 99))
-    return way if beyond <= REST_FRACTION * float(toward.max()) else None
+    sign = 1.0 if way == "up" else -1.0
+
+    def toward(c):
+        t = sign * (c - level)
+        return t[np.isfinite(t)]
+    beyond = float(_percentile(a, 99, lambda c: np.maximum(-toward(c), 0.0)))
+    most = max(float(t.max()) for t in (toward(c) for _, c in _rows64(a)) if len(t))
+    return way if beyond <= REST_FRACTION * most else None
 
 
 def rounding_only(a: np.ndarray, rest=None, swing=None) -> bool:
@@ -151,12 +219,29 @@ def rounding_only(a: np.ndarray, rest=None, swing=None) -> bool:
     more than the smallest step between its readings, so its cells only flip between neighbouring readings (an
     untouched pad read in whole numbers flickers between 0 and 1). A map of a few readings (taxels that are on or
     off) moves by one step when pressed, so it is never rounding only."""
-    v = a[np.isfinite(a)]
-    u = np.unique(v)
-    if a.shape[1] <= SMALL or len(u) <= SETTING_STATES:
+    if a.shape[1] <= SMALL:
         return False
-    _, sw = _distance(a, rest, swing)
-    return sw <= float(np.diff(u).min()) * (1 + 1e-6)
+    # the readings sorted (one array of them, _pool): how many distinct ones, and the smallest step between two
+    buf = _pool(a)
+    k = 0
+    for _, c in _rows64(a):
+        v = c[np.isfinite(c)]
+        buf[k:k + len(v)] = v
+        k += len(v)
+    v = buf[:k]
+    v.sort()
+    distinct, gap = min(k, 1), np.inf
+    for i in range(0, max(k - 1, 0), CHUNK_VALUES):
+        dv = np.diff(np.asarray(v[i:i + CHUNK_VALUES + 1], dtype=np.float64))
+        pos = dv[dv > 0]
+        distinct += len(pos)
+        if len(pos):
+            gap = min(gap, float(pos.min()))
+    del buf, v
+    if distinct <= SETTING_STATES:
+        return False
+    sw = _swing(a, resting_level(a, rest), swing)
+    return sw <= gap * (1 + 1e-6)
 
 
 def _distance(a: np.ndarray, rest=None, swing=None) -> tuple[np.ndarray, float]:
@@ -169,25 +254,72 @@ def _distance(a: np.ndarray, rest=None, swing=None) -> tuple[np.ndarray, float]:
     return d, (float(np.percentile(ok, 99)) if len(ok) else 0.0)
 
 
+def _swing(a: np.ndarray, level: np.ndarray, swing=None) -> float:
+    """The typical swing (_distance) from the resting level, read in row chunks: the upload's when given."""
+    if swing is not None and swing > 0:
+        return float(swing)
+    got = _percentile(a, 99, lambda c: (lambda d: d[np.isfinite(d)])(np.abs(c - level)))
+    return float(got) if got is not None else 0.0
+
+
+def swing_of(a: np.ndarray, rest=None, swing=None) -> float:
+    """The typical swing of a signal (_distance's), never holding a whole float64 copy of it."""
+    a = _float(a)
+    return _swing(a, resting_level(a, rest), swing)
+
+
+def distance_at(a: np.ndarray, k: int, rest=None, swing=None) -> tuple[np.ndarray, float]:
+    """(every value's distance from rest at frame k, the typical swing): _distance's row k, never a whole copy."""
+    a = _float(a)
+    level = resting_level(a, rest)
+    return np.abs(np.asarray(a[k], dtype=np.float64) - level), _swing(a, level, swing)
+
+
+def active_at(a: np.ndarray, k: int, rest=None, swing=None) -> np.ndarray:
+    """_active's row k: which values are away from rest at frame k."""
+    d, sw = distance_at(a, k, rest, swing)
+    return np.nan_to_num(d) > REST_FRACTION * sw if sw > 0 else np.zeros(len(d), dtype=bool)
+
+
 def _active(a: np.ndarray, rest=None, swing=None) -> np.ndarray:
-    d, sw = _distance(a, rest, swing)
-    return np.nan_to_num(d) > REST_FRACTION * sw if sw > 0 else np.zeros(a.shape, dtype=bool)
+    a = _float(a)
+    level = resting_level(a, rest)
+    sw = _swing(a, level, swing)
+    out = np.zeros(a.shape, dtype=bool)
+    if sw > 0:
+        for i, c in _rows64(a):
+            out[i:i + len(c)] = np.nan_to_num(np.abs(c - level)) > REST_FRACTION * sw
+    return out
 
 
 def activity(a: np.ndarray, rest=None, swing=None) -> np.ndarray:
     """Per frame, the summed distance from rest of the signal's active values (NaN where it has no reading)."""
-    d, sw = _distance(a, rest, swing)
-    m = np.nansum(np.where(np.nan_to_num(d) > REST_FRACTION * sw, d, 0.0), axis=1) if sw > 0 else np.zeros(len(a))
-    m = m.astype(np.float64)
-    m[np.isnan(a).all(axis=1)] = np.nan
+    a = _float(a)
+    level = resting_level(a, rest)
+    sw = _swing(a, level, swing)
+    m = np.zeros(len(a))
+    for i, c in _rows64(a):
+        if sw > 0:
+            d = np.abs(c - level)
+            m[i:i + len(c)] = np.nansum(np.where(np.nan_to_num(d) > REST_FRACTION * sw, d, 0.0), axis=1)
+        m[i:i + len(c)][np.isnan(c).all(axis=1)] = np.nan
     return m
 
 
 def has_rest(a: np.ndarray, rest=None, swing=None) -> bool:
     """Whether a signal holds one level: HOLD_SHARE of its readings within HOLD_BAND of its swing from rest."""
-    d, sw = _distance(a, rest, swing)
-    ok = d[np.isfinite(d)]
-    return sw > 0 and len(ok) > 0 and float((ok <= HOLD_BAND * sw).mean()) >= HOLD_SHARE
+    a = _float(a)
+    level = resting_level(a, rest)
+    sw = _swing(a, level, swing)
+    if not sw > 0:
+        return False
+    n_ok = n_in = 0
+    for _, c in _rows64(a):
+        d = np.abs(c - level)
+        ok = d[np.isfinite(d)]
+        n_ok += len(ok)
+        n_in += int((ok <= HOLD_BAND * sw).sum())
+    return n_ok > 0 and n_in / n_ok >= HOLD_SHARE
 
 
 def localized(a: np.ndarray, rest=None, swing=None) -> bool:
@@ -195,9 +327,15 @@ def localized(a: np.ndarray, rest=None, swing=None) -> bool:
     active."""
     if not has_rest(a, rest, swing):
         return False
-    act = _active(a, rest, swing)
-    rows = act.any(axis=1)
-    return bool(rows.any()) and float(np.median(act[rows].mean(axis=1))) < 0.5
+    a = _float(a)
+    level = resting_level(a, rest)
+    sw = _swing(a, level, swing)
+    shares = []
+    for _, c in _rows64(a):
+        act = np.nan_to_num(np.abs(c - level)) > REST_FRACTION * sw
+        shares.append(act[act.any(axis=1)].mean(axis=1))
+    shares = np.concatenate(shares) if shares else np.zeros(0)
+    return bool(len(shares)) and float(np.median(shares)) < 0.5
 
 
 def rests_and_rises(a: np.ndarray, rest=None, swing=None) -> bool:
@@ -219,14 +357,33 @@ def touch_like(a: np.ndarray, rest=None, swing=None) -> bool:
     either; a camera's calibration that switches between two settings rests and moves one way too, but a sensor of
     several values never takes only SETTING_STATES readings; and a pad that only flickers by one step of its readout
     (rounding_only) has measured nothing."""
-    a = np.asarray(a, dtype=np.float64)
+    a = _float(a)
     if not len(a) or not has_rest(a, rest, swing) or direction(a, rest, swing) is None:
         return False
-    if a.shape[1] > 1 and len(np.unique(a[np.isfinite(a).all(axis=1)], axis=0)) <= SETTING_STATES:
+    if a.shape[1] > 1 and _few_rows(a, SETTING_STATES):
         return False  # several values that only ever take a few readings together: a setting switching, not a sensor
     if rounding_only(a, rest, swing):
         return False
     return rests_and_rises(a, rest, swing) or (a.shape[1] > SMALL and localized(a, rest, swing))
+
+
+def _few_rows(a: np.ndarray, most: int) -> bool:
+    """Whether a's rows with a reading at every value take at most `most` distinct readings together (np.unique of
+    them, axis 0, has at most that many), read in row chunks."""
+    seen: list = []
+    for _, c in _rows64(a):
+        c = c[np.isfinite(c).all(axis=1)]
+        while len(c):
+            new = np.ones(len(c), dtype=bool)
+            for r in seen:
+                new &= ~(c == r).all(axis=1)
+            if not new.any():
+                break
+            seen.append(c[int(np.flatnonzero(new)[0])].copy())
+            if len(seen) > most:
+                return False
+            c = c[new]
+    return True
 
 
 def is_touch(name: str, a: np.ndarray, rest=None, swing=None) -> bool:
@@ -268,7 +425,7 @@ MOVING_MIN = 10.0     # a value moves when its range is at least this many times
 
 def _columns(a) -> np.ndarray:
     """a as frames by values: a vector is one value, further axes (a pressure map) are flattened."""
-    a = np.asarray(a, dtype=np.float64)
+    a = _float(a)
     return a.reshape(a.shape[0], int(np.prod(a.shape[1:])))
 
 
@@ -279,12 +436,15 @@ def _range_and_step(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     a = _columns(a)
     if len(a) == 0:
         return np.full(a.shape[1], np.nan), np.full(a.shape[1], np.nan)
+    rs, steps = [], []
     with np.errstate(all="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        r = np.nanmax(a, axis=0) - np.nanmin(a, axis=0)
-        d = np.abs(np.diff(a, axis=0))
-        step = np.nanmedian(np.where(d > 0, d, np.nan), axis=0) if len(a) > 1 else np.full(a.shape[1], np.nan)
-    return r, step
+        for i, j in _col_chunks(a):
+            c = np.asarray(a[:, i:j], dtype=np.float64)
+            rs.append(np.nanmax(c, axis=0) - np.nanmin(c, axis=0))
+            d = np.abs(np.diff(c, axis=0))
+            steps.append(np.nanmedian(np.where(d > 0, d, np.nan), axis=0) if len(c) > 1 else np.full(j - i, np.nan))
+    return np.concatenate(rs), np.concatenate(steps)
 
 
 def _score(r: np.ndarray, step: np.ndarray) -> np.ndarray:
@@ -332,16 +492,20 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
                  swing=None) -> list[tuple[str, list[str]]]:
     """[(row label, one value per sampled instant)] for one signal: its values when it gets one row per value
     (per_value), else the numbers that summarise the array (module docstring). "-" is no reading at that instant."""
-    a = np.asarray(a, dtype=np.float64)
+    a = _float(a)
     d = a.shape[1]
     if per_value(name, d, shape, names):
         labels = names if names and len(names) == d else ([""] if d == 1 else [f"[{i}]" for i in range(d)])
         return [(f"{name}{(' ' + lb) if lb else ''}", [_num(a[k, i]) for k in ks]) for i, lb in enumerate(labels)]
     rows = []
     if localized(a, rest, swing):
-        dist, _ = _distance(a, rest, swing)
-        act = _active(a, rest, swing)
-        m = activity(a, rest, swing)
+        # the distances, the active values and the activity at the sampled instants alone, as the whole would give them
+        level = resting_level(a, rest)
+        sw = _swing(a, level, swing)
+        dist = {k: np.abs(np.asarray(a[k], dtype=np.float64) - level) for k in ks}
+        act = {k: (np.nan_to_num(v) > REST_FRACTION * sw if sw > 0 else np.zeros(d, dtype=bool))
+               for k, v in dist.items()}
+        m = {k: (np.nan if np.isnan(a[k]).all() else float(np.nansum(np.where(act[k], dist[k], 0.0)))) for k in ks}
         rows.append((f"{name} total activity", [_num(m[k]) for k in ks]))
         rows.append((f"{name} active values", ["-" if np.isnan(a[k]).all() else str(int(act[k].sum())) for k in ks]))
         if shape and len(shape) == 2:
@@ -357,7 +521,7 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
     else:
         ch = ["-"]
         for a0, b0 in zip(ks, ks[1:]):
-            x = np.abs(a[b0] - a[a0])
+            x = np.abs(np.asarray(a[b0], dtype=np.float64) - np.asarray(a[a0], dtype=np.float64))
             ch.append("-" if not np.isfinite(x).any() else _num(np.nanmax(x)))
         rows.append((f"{name} largest change of any value since the instant before", ch))
     return rows
@@ -368,7 +532,7 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
     (rate_hz below RATE_SLOWER of fps), and the range each value takes, up to PER_VALUE_MAX values (for a wider
     array, the range of all its values together)."""
-    a = np.asarray(a, dtype=np.float64)
+    a = _float(a)          # as stored: its smallest and largest readings are exact in any precision
     d = a.shape[1]
     what = (f"{' x '.join(str(int(x)) for x in shape)} values" if shape and len(shape) > 1 else
             f"{d} value{'s' if d > 1 else ''}")

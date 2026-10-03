@@ -228,7 +228,7 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
     if len(shape) == 2 and touch:
         level = rest if rest is not None else np.asarray(_call(S.resting_level, a, rest, swing), dtype=np.float64)
         if swing is None:
-            swing_ep = S._distance(a)[1]
+            swing_ep = S.swing_of(a)
             doc["swing"], doc["swing_from"] = float(swing_ep), "episode"
         else:
             doc["swing"], doc["swing_from"] = swing, "upload"
