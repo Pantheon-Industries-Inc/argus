@@ -58,8 +58,9 @@ video's own .txt; any other text note stays a note. A recorder's metadata file i
 task (its prompt, instruction or task) gives the instruction to the folder's episodes when its name names nothing
 there, and to the episodes it names when it names only episodes; a file whose name holds the words of another
 episode, a video that is no episode's, a camera every episode there has (as its whole name) or a subfolder holding
-an episode is never an episode's task, and one named for a take that is not in the upload is named as not read for
-that reason (named_for). A file named for the episode outranks a shared one, and files of one rank that name
+an episode is never an episode's task. A file naming an absent take keeps its task or attributed note on its
+identified uploaded owners; the absent take is reported separately, and a file naming only absent takes is not read
+(named_for). A file named for the episode outranks a shared one, and files of one rank that name
 different tasks give none of them: each is given as a note and the disagreement is a data issue of the episode. One
 that names neither the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
@@ -1048,7 +1049,8 @@ def episode_notes(item: dict) -> dict:
     one (ep1_meta.json, ep1_ep2_summary.json) is theirs; one named for anything else (ep2_meta.json, an infrared
     video's file, top.json beside takes that each have a top camera, ep2.json beside the subfolder ep2 holding an
     episode) is never this episode's task, and one named for a take that is not in the upload (ep3.json beside ep1
-    and ep2) is "absent", which no episode reads. A file named for this episode outranks a shared one, as a source
+    and ep2) is "absent". Its uploaded owners still read it, and its absent take is reported separately. A file
+    named for this episode outranks a shared one, as a source
     more about the episode. When several of one rank name different tasks (task_key), none is guessed to be the task:
     each is a note under its file name, and "disagree" names them for a data issue. One that gives none, or is
     outranked, is not read (opened_notes) and is listed."""
@@ -1092,7 +1094,7 @@ def episode_notes(item: dict) -> dict:
         if all(owns) and len({t for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
-    read, disagree, absent = list(files), [], []
+    read, disagree, absent, attributed = list(files), [], [], []
     named_here, shared = [], []           # (file, task) of the folder .json files named for this episode, or for none
     weighed = {p.resolve() for p in files}
     for p in folder_json(nf["dir"]) if nf else []:
@@ -1101,11 +1103,17 @@ def episode_notes(item: dict) -> dict:
         owners, gone = named_for(p, nf["names"])
         if gone:
             absent.append(p)              # named for a take that is not in the upload
-        elif not instr and (x := instruction_from(_read_json(p))):
-            if not owners:
+        if not instr and (x := instruction_from(_read_json(p))):
+            if not owners and not gone:
                 shared.append((p, x))
             elif None not in owners and nf["episode"] in owners:
                 named_here.append((p, x))
+                continue
+        if gone and nf["episode"] in owners:
+            # a known owner keeps the file as a note when it does not supply the task
+            notes.append((p.name, read_annotation(p)))
+            read.append(p)
+            attributed.append(p.name)
     if not instr:
         # a file named for this episode outranks the folder's shared ones; only files of one rank can disagree
         found = named_here or shared
@@ -1117,6 +1125,7 @@ def episode_notes(item: dict) -> dict:
             notes += [(p.name, read_annotation(p)) for p, _ in found]
             disagree = [p.name for p, _ in found]
     return {"notes": notes, "instruction": instr, "read": read, "disagree": disagree, "absent": absent,
+            "attributed_notes": attributed,
             "repeats": [k for k, o in notes if instr and isinstance(o, str) and o.strip() == instr],
             "camera_notes": [k for k, p in zip(keys, files) if p in cams]}
 
@@ -2557,7 +2566,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                                                 "is given as the task and each is given as a note")
     notes = [(k, o) for k, o in got["notes"] if k not in got["repeats"]]
     # a camera's own note (top.txt beside top.mp4 and wrist.mp4) keeps its file name, which says the camera it is about
-    if len(notes) == 1 and len(got["notes"]) == 1 and notes[0][0] not in got["camera_notes"]:
+    if (len(notes) == 1 and len(got["notes"]) == 1
+            and notes[0][0] not in got["camera_notes"] + got["attributed_notes"]):
         set_uploader_notes(extra, notes[0][1])
     elif notes:
         set_uploader_notes(extra, dict(notes), files=True)
@@ -5984,11 +5994,18 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
                                   f"{'their' if len(lost) != 1 else 'its'} folder to place the data against, so "
                                   f"{'they were' if len(lost) != 1 else 'it was'} not read.")
     det["used"] += possible_duplicates(root, items)
-    absent = sorted(p.relative_to(root).as_posix() for p in absent_take_notes(items))
+    absent_files = absent_take_notes(items)
+    retained = absent_files & opened_notes(items)
+    absent = sorted(p.relative_to(root).as_posix() for p in absent_files - retained)
     if absent:
         det["missing"].append(f"{len(absent)} file{'s' if len(absent) != 1 else ''} named for a take that is not in "
                               f"the upload, so {'they were' if len(absent) != 1 else 'it was'} not read: "
                               + _and_words(absent) + ".")
+    if retained:
+        names = sorted(p.relative_to(root).as_posix() for p in retained)
+        det["missing"].append(f"{len(names)} file{'s' if len(names) != 1 else ''} named for a take that is not in "
+                              "the upload and for uploaded episodes; kept only on the identified uploaded owners "
+                              f"({_and_words(names)}).")
     unread = unread_files(root, det, items)
     if unread:
         det["missing"].append(f"{len(unread)} file{'s' if len(unread) != 1 else ''} that no reader opens: "
@@ -6047,8 +6064,8 @@ def opened_notes(items: list[dict]) -> set[Path]:
 
 
 def absent_take_notes(items: list[dict]) -> set[Path]:
-    """The .json files of episodes' folders named for a take that is not in the upload (named_for), which no episode
-    reads and which the report names apart from the files no reader opens."""
+    """The .json files of episodes' folders naming a take that is not in the upload (named_for). Uploaded owners
+    still read them; the report names the absent take apart from the files no reader opens."""
     return {p for it in items if it.get("kind") == "video" for p in episode_notes(it)["absent"]}
 
 

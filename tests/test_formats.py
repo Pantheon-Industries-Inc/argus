@@ -3124,6 +3124,34 @@ def test_a_folder_json_named_for_its_episodes_outranks_a_shared_one():
         _a_folder_json_named_for_its_episodes_outranks_a_shared_one(Path(t))
 
 
+def _a_folder_json_keeps_its_uploaded_owners_when_another_take_is_absent(tmp_path):
+    """An absent take in a metadata name had discarded its uploaded owners too. Only those owners keep the task
+    or an attributed note, and the absent take is reported without saying the whole file was unread."""
+    takes = [f"d/{c}_ep{i}.mp4" for i in (1, 2, 4) for c in ("top", "wrist")]
+    name = "ep1_ep3_ep4_summary.json"
+    for mode, data in (("task", {"task": "pick the cup"}), ("note", {"note": "cup handle is loose"}),
+                       ("own_task", {"task": "pick the cup", "note": "cup handle is loose"})):
+        files = {f"d/{name}": data}
+        if mode == "own_task":
+            files.update({f"d/ep{i}.json": {"task": "pour the tea"} for i in (1, 4)})
+        ctx, rep = _upload_notes(tmp_path / mode, takes, files)
+        for owner in ("d/ep1", "d/ep4"):
+            if mode == "task":
+                assert ctx[owner]["instruction"] == "pick the cup", ctx
+            else:
+                assert ctx[owner]["uploader_notes"][name] == data, ctx
+                assert ctx[owner].get("instruction") == ("pour the tea" if mode == "own_task" else None), ctx
+        assert "instruction" not in ctx["d/ep2"] and "uploader_notes" not in ctx["d/ep2"], ctx
+        line = _absent_line(rep)
+        assert f"d/{name}" in line and "not read" not in line, rep["missing"]
+        assert f"d/{name}" not in _unread_line(rep), rep["missing"]
+
+
+def test_a_folder_json_keeps_its_uploaded_owners_when_another_take_is_absent():
+    with tempfile.TemporaryDirectory() as t:
+        _a_folder_json_keeps_its_uploaded_owners_when_another_take_is_absent(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a

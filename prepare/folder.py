@@ -18,7 +18,8 @@ video that is the only episode there) the .txt or .json named for the episode, a
 meta.json, instruction.txt, task.txt, annotations.jsonl and notes.txt. The task comes from a JSON note's task key,
 then instruction.txt or task.txt, then the .txt named for the episode, then a video's own .txt. A recorder's .json
 in the folder that names the task gives it to the episodes its name names, or to every episode there when its name
-names none; one named for a take that is not in the upload is not read. --max-minutes stops after that much footage
+names none. One naming an absent take keeps its task or note on its uploaded owners and reports the absent take;
+one naming only absent takes is not read. --max-minutes stops after that much footage
 (default: no limit). prepare/formats.py documents every layout it accepts and what it does when metadata is missing.
 
 Writes EPISODES/episode_<name>/ with context.json, sources.json, state.npz when the recording has usable state,
