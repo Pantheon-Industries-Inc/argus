@@ -94,3 +94,58 @@ def test_a_sensor_file_that_cannot_be_opened_is_not_said_to_have_no_time(tmp_pat
     assert unplaced and "could not be opened" in unplaced[0][1]
 
 
+# ---------------------------------------------------------------- a damaged archive
+
+_RNG = np.random.default_rng(0)
+MEMBERS = {f"take/a_camera{k}.mp4": _RNG.bytes(20000) for k in (1, 2, 3)}     # incompressible, so a cut lands in the last
+
+
+def _zip_one_encrypted(path: Path) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for k, v in MEMBERS.items():
+            z.writestr(k, v)
+    b = bytearray(path.read_bytes())
+    # mark the last member encrypted in the central directory, as zip -P writes it
+    cd = b.rfind(b"PK\x01\x02")
+    b[cd + 8] |= 1
+    path.write_bytes(bytes(b))
+
+
+def _tar_cut(path: Path, mode: str) -> None:
+    with tarfile.open(path, mode) as tf:
+        for k, v in MEMBERS.items():
+            ti = tarfile.TarInfo(k)
+            ti.size = len(v)
+            tf.addfile(ti, io.BytesIO(v))
+    b = path.read_bytes()
+    path.write_bytes(b[: int(len(b) * 0.8)])
+
+
+@pytest.mark.parametrize("kind", ["zip", "tar", "tar.gz"])
+def test_a_damaged_archive_keeps_its_good_members_and_names_the_bad_one(tmp_path, kind):
+    a = tmp_path / f"upload.{kind}"
+    if kind == "zip":
+        _zip_one_encrypted(a)
+    else:
+        _tar_cut(a, "w" if kind == "tar" else "w:gz")
+    root, notes = f.open_archives(a, tmp_path / "unpacked")
+    got = sorted(p.relative_to(root).as_posix() for p in f.files_under(root))
+    assert got == ["take/a_camera1.mp4", "take/a_camera2.mp4"]
+    assert (root / "take" / "a_camera1.mp4").read_bytes() == MEMBERS["take/a_camera1.mp4"]
+    words = " ".join(notes)
+    assert "a_camera3.mp4" in words
+    assert ("password" in words) if kind == "zip" else ("cut short" in words)
+
+
+def test_a_refused_upload_carries_what_the_archive_says(tmp_path):
+    a = tmp_path / "upload.zip"
+    with zipfile.ZipFile(a, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("take/a_camera1.mp4", b"A" * 1000)
+    b = bytearray(a.read_bytes())
+    b[b.rfind(b"PK\x01\x02") + 8] |= 1
+    a.write_bytes(bytes(b))
+    with pytest.raises(ValueError) as e:
+        f.convert(a, "handheld_gripper", tmp_path / "out" / "eps", "t", 900)
+    assert "password" in str(e.value) and "a_camera1.mp4" in str(e.value)
+    assert "it is empty" not in str(e.value)
+

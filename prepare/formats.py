@@ -229,13 +229,20 @@ def zip_name(info) -> str:
 ZIP_METHODS = {9: "Deflate64", 93: "Zstandard", 95: "XZ", 98: "PPMd"}
 
 
+class UnpackLimit(ValueError):
+    """An upload that unpacks to more than one upload may hold: it stops the unpacking, never only one member."""
+
+
 def _archive_members(path: Path):
-    """[(parts, size, open)] for every regular file in the archive, and how many members were left out.
-    Links, devices, folders, hidden files and __MACOSX are never unpacked."""
+    """([(parts, size, open)] for every regular file in the archive, how many members were left out, the open archive,
+    the members that cannot be read, each named with why). Links, devices, folders, hidden files and __MACOSX are
+    never unpacked. A password-protected member or one in a compression Python does not open is left out by itself,
+    and a tar cut short keeps every member whose header comes before the cut, as the upload page does: one bad member
+    had cost the whole archive."""
     import stat
     import tarfile
     import zipfile
-    out, skipped = [], 0
+    out, skipped, bad = [], 0, []
     if zipfile.is_zipfile(path):              # by its bytes, not its name: a tar named .zip is opened as a tar
         zf = zipfile.ZipFile(path)
         infos = zf.infolist()
@@ -263,20 +270,30 @@ def _archive_members(path: Path):
                 skipped += 1
                 continue
             if info.flag_bits & 1:
-                raise ValueError(f"{path.name} is password-protected")
+                bad.append(f"{zip_name(info)} (password-protected)")
+                continue
             if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED, zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
                 # Deflate64 (Windows Explorer, for large files) and others; the upload page decodes Deflate64 itself
                 method = ZIP_METHODS.get(info.compress_type, f"method {info.compress_type}")
-                raise ValueError(f"{path.name} uses {method} compression, which Python's zip reader does not open; "
-                                 "unzip it and give the folder")
+                bad.append(f"{zip_name(info)} ({method} compression, which Python's zip reader does not open; unzip "
+                           "it and give the folder)")
+                continue
             parts = _member_parts(zip_name(info))
             if parts is None:
                 skipped += 1
                 continue
             out.append((parts, info.file_size, lambda i=info: zf.open(i)))
-        return out, skipped, zf
+        return out, skipped, zf, bad
     tf = tarfile.open(path, "r:*")
-    for m in tf:
+    members = []
+    try:
+        for m in tf:
+            members.append(m)
+    except Exception:
+        # cut short: every member whose header came before the cut is listed, and one whose bytes the cut reaches
+        # fails as it is unpacked (open_archives)
+        bad.append(f"{path.name} is cut short, so only the files before the cut were unpacked")
+    for m in members:
         if m.isdir():
             continue
         if m.islnk() or m.issym():
@@ -284,7 +301,7 @@ def _archive_members(path: Path):
             # archive's own members only, never on disk); read.js resolveLinks, the same rule
             try:
                 target = tf._find_link_target(m)
-            except KeyError:
+            except Exception:                   # not in the archive, or after the cut of one cut short
                 target = None
             if target is None or not target.isreg():
                 skipped += 1
@@ -303,7 +320,7 @@ def _archive_members(path: Path):
             skipped += 1
             continue
         out.append((parts, m.size, lambda mm=m: tf.extractfile(mm)))
-    return out, skipped, tf
+    return out, skipped, tf, bad
 
 
 def open_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
@@ -331,7 +348,7 @@ def open_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
         if done.exists():
             continue
         try:
-            members, skipped, handle = _archive_members(a)
+            members, skipped, handle, bad = _archive_members(a)
         except ValueError as e:
             notes.append(f"{e}, so it was not opened.")
             continue
@@ -347,7 +364,7 @@ def open_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
             wrote = 0
             for parts, size, opener in members:
                 if count >= UNPACK_MAX_FILES or total + size > UNPACK_MAX_BYTES:
-                    raise ValueError(f"{a.name} holds more than one upload can: at most {UNPACK_MAX_FILES:,} files "
+                    raise UnpackLimit(f"{a.name} holds more than one upload can: at most {UNPACK_MAX_FILES:,} files "
                                      f"and {UNPACK_MAX_BYTES / 1e9:.0f} GB unpacked")
                 target = base.joinpath(*parts)
                 if broot not in target.resolve().parents:
@@ -361,23 +378,40 @@ def open_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 tmp = target.with_name(target.name + ".part")
-                with opener() as src, open(tmp, "wb") as dst:
-                    while True:
-                        buf = src.read(1 << 20)
-                        if not buf:
-                            break
-                        total += len(buf)
-                        if total > UNPACK_MAX_BYTES:
-                            dst.close()
-                            tmp.unlink()
-                            raise ValueError(f"{a.name} unpacks to more than {UNPACK_MAX_BYTES / 1e9:.0f} GB")
-                        dst.write(buf)
+                got = 0
+                try:
+                    with opener() as src, open(tmp, "wb") as dst:
+                        while True:
+                            buf = src.read(1 << 20)
+                            if not buf:
+                                break
+                            got += len(buf)
+                            if total + got > UNPACK_MAX_BYTES:
+                                dst.close()
+                                tmp.unlink()
+                                raise UnpackLimit(f"{a.name} unpacks to more than {UNPACK_MAX_BYTES / 1e9:.0f} GB")
+                            dst.write(buf)
+                except UnpackLimit:
+                    raise
+                except Exception:
+                    # a member cut short or damaged (a tar cut inside it, a zip member that fails its check) is left
+                    # out by itself and named; the members before and after it are unpacked
+                    tmp.unlink(missing_ok=True)
+                    bad.append(f"{'/'.join(parts)} (cut short or damaged)")
+                    continue
+                total += got
                 tmp.replace(target)
                 count += 1
                 wrote += 1
         done.write_text("")
+        cut = [b for b in bad if b.startswith(a.name + " is cut short")]
+        members_bad = [b for b in bad if b not in cut]
         notes.append(f"Opened {a.name}: {wrote} files" + (f"; {skipped} left out (links, or names that could leave "
-                                                            "the archive's folder)" if skipped else "") + ".")
+                                                            "the archive's folder)" if skipped else "")
+                     + (f"; {len(members_bad)} left out because {'they' if len(members_bad) != 1 else 'it'} could "
+                        f"not be unpacked: {_and_words(members_bad[:12])}"
+                        + (f" and {len(members_bad) - 12} more" if len(members_bad) > 12 else "")
+                        if members_bad else "") + "." + "".join(f" {c}." for c in cut))
     if root.is_file():
         return Path(dest), notes
     return root, notes
@@ -6085,7 +6119,15 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
         raise ValueError(f"rig must be one of {RIGS}")
     root, out = Path(root), Path(out)
     root, opened = open_archives(root, out.parent / "upload_unpacked")
-    det, items = plan(root, grouping)
+    try:
+        det, items = plan(root, grouping)
+    except ValueError as e:
+        if not opened:
+            raise
+        # what the archives said (a member left out, an archive cut short) is why the upload holds nothing readable
+        if not files_under(root):
+            raise ValueError("nothing in the upload could be unpacked: " + " ".join(opened)) from e
+        raise ValueError(f"{e}. {' '.join(opened)}") from e
     out.mkdir(parents=True, exist_ok=True)
     total = 0.0
     report = {"format": det["format"], "version": det.get("version"), "rig": rig,
