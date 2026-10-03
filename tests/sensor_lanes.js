@@ -28,6 +28,8 @@ const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } 
 check(T.snWhat({dims: 1, aligned_by: 'assumed start'}).includes('placed from both starts, as no clock is shared'),
   'a signal placed by an assumed start says so');
 check(!T.snWhat({dims: 1}).includes('both starts'), 'any other signal says nothing of it');
+check(T.snWhat({dims: 1, aligned_by: 'row per frame'}).includes('placed one row per frame, as it has no time of its own')
+  && !T.snWhat({dims: 1, aligned_by: 'row per frame'}).includes('both starts'), 'a table placed row by row says so');
 check(T.snErrorsHtml([]) === '' && T.snErrorsHtml(undefined) === '', 'no error, nothing drawn');
 const h = T.snErrorsHtml([{name: 'pressure <map>', error: 'ValueError: boom'}, {name: 'glove', error: 'KeyError: x'}]);
 check(h.includes('pressure &lt;map&gt;') && h.includes('ValueError: boom') && h.includes('glove')

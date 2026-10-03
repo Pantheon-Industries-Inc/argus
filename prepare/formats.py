@@ -2017,21 +2017,60 @@ TABLE_CHUNK_ROWS = 200_000
 TABLE_STREAM_MAX_ROWS = 2_000_000   # a table longer than this keeps every so many rows, still finer than the frames
 
 
-def read_number_table(p: Path):
-    """(a CSV or TSV table, the stride its rows were kept at, how many rows it has). A table up to TABLE_MAX_BYTES is
-    read whole; a larger one in chunks of TABLE_CHUNK_ROWS, keeping the columns numeric in its first chunk (a cell
-    that is not a number is NaN), and once more than TABLE_STREAM_MAX_ROWS rows are kept, every other kept row is
-    dropped and the stride doubled, so memory stays bounded and the rows stay spread over the whole recording. A
-    table over 20 MB beside the videos had been ignored."""
+TABLE_SEPARATORS = (",", ";", "\t", "|")
+
+
+def table_separator(p: Path) -> str:
+    """The separator of a CSV or TSV table: the one of TABLE_SEPARATORS its header line holds most often (a table
+    written with semicolons, as spreadsheets in many locales write it, had been read as one column of text), a tab for
+    a .tsv with none, a comma for a header of one column."""
+    with open(p, newline="", errors="replace") as fh:
+        head = next((line for line in (fh.readline() for _ in range(20)) if line.strip()), "")
+    counts = {s: head.count(s) for s in TABLE_SEPARATORS}
+    best = max(TABLE_SEPARATORS, key=lambda s: counts[s])
+    if counts[best]:
+        return best
+    return "\t" if Path(p).suffix.lower() == ".tsv" else ","
+
+
+NUMBER_COLUMN_SHARE = 0.5    # a column is numbers when at least this share of its filled cells read as numbers
+
+
+def number_columns(df):
+    """The columns of a table that hold numbers, as floats: a column whose filled cells read as numbers at least
+    NUMBER_COLUMN_SHARE of the time, each cell that does not (a stray "ERR", an empty cell) NaN, so one text cell
+    never drops its column (the table's bad cells are flagged where it is placed, table_signals); a column of text
+    (a task, a note) is left to annotation_tables. A column with no cell filled stays, as one with no reading."""
     import pandas as pd
-    sep = "\t" if Path(p).suffix.lower() == ".tsv" else ","
+    keep = {}
+    for c in df.columns:
+        col = df[c]
+        if pd.api.types.is_numeric_dtype(col) and not pd.api.types.is_bool_dtype(col):
+            keep[c] = col.astype(np.float64)
+            continue
+        x = pd.to_numeric(col, errors="coerce")
+        filled = int((col.notna() & (col.astype(str).str.strip() != "")).sum())
+        if filled == 0 or int(x.notna().sum()) >= NUMBER_COLUMN_SHARE * filled and x.notna().any():
+            keep[c] = x.astype(np.float64)
+    return pd.DataFrame(keep, index=df.index)
+
+
+def read_number_table(p: Path):
+    """(the number columns of a CSV or TSV table, number_columns, the stride its rows were kept at, how many rows it
+    has), read with its own separator (table_separator). A table up to TABLE_MAX_BYTES is read whole; a larger one in
+    chunks of TABLE_CHUNK_ROWS, keeping the columns its first chunk holds numbers in (a cell that is not a number is
+    NaN), and once more than TABLE_STREAM_MAX_ROWS rows are kept, every other kept row is dropped and the stride
+    doubled, so memory stays bounded and the rows stay spread over the whole recording. A table over 20 MB beside the
+    videos had been ignored."""
+    import pandas as pd
+    sep = table_separator(p)
     if Path(p).stat().st_size <= TABLE_MAX_BYTES:
-        df = pd.read_csv(p, sep=sep)
+        df = number_columns(pd.read_csv(p, sep=sep))
         return df, 1, len(df)
     parts, cols, stride, rows, kept = [], None, 1, 0, 0
     for ch in pd.read_csv(p, sep=sep, chunksize=TABLE_CHUNK_ROWS):
         if cols is None:
-            cols = list(ch.select_dtypes("number").columns)
+            cols = list(number_columns(ch).columns)
         start = (-rows) % stride
         rows += len(ch)
         # a time column keeps float64: float32 holds about 7 digits, so epoch seconds at 100 Hz collapse together
@@ -2047,21 +2086,52 @@ def read_number_table(p: Path):
     return df, stride, rows
 
 
+def table_seconds(raw: np.ndarray, real_anchor, t_vid: np.ndarray) -> np.ndarray:
+    """A table's time column in seconds. Beside capture times (real_anchor, seconds on the recorder's clock) it is read
+    against them as the clocks of one recording are (_clocks_in_seconds: the unit under which its range overlaps
+    theirs), so a table on the epoch clock at 0.5 Hz, whose step alone says milliseconds, is read in seconds. Without
+    them it is read by its own unit (_seconds), unless that puts its span more than SPAN_MATCH away from the
+    footage's (t_vid) and another of CLOCK_SCALES puts it within: the units are 1000 apart, so at most one can."""
+    raw = np.asarray(raw, dtype=np.float64)
+    if real_anchor is not None:
+        return _clocks_in_seconds({"table": raw, "camera": np.asarray(real_anchor, dtype=np.float64)}, "camera")["table"]
+    t = _seconds(raw)
+    ok = raw[np.isfinite(raw)]
+    span, vspan = (float(ok[-1] - ok[0]) if len(ok) > 1 else 0.0), float(t_vid[-1] - t_vid[0]) if len(t_vid) > 1 else 0.0
+    if span > 0 and vspan > 0 and abs(np.log(span * _seconds_scale(raw) / vspan)) > np.log(SPAN_MATCH):
+        fits = [s for s in CLOCK_SCALES if abs(np.log(span * s / vspan)) <= np.log(SPAN_MATCH)]
+        if fits:
+            return raw * fits[0]
+    return t
+
+
+ALIGNED_ROWS = "row per frame"   # a signal's meta "aligned_by" when a table of no time was placed one row per frame
+ROWS_ASSUMED = ("{} (from {}) has no time column and one row per video frame, so each row was placed on one frame; "
+                "its timing assumes one row per frame")
+SPAN_DIFFERS_MIN_S = 0.5         # a table with one row per frame whose own times span this much more or less than the
+SPAN_DIFFERS_SHARE = 0.05        # footage, and this share of it, is said to disagree with the footage's frame rate
+
+
 def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) -> Signals:
     """The numbers of CSV tables beside an episode's videos as signals, one per table under its own name (the file's
-    name without its take: "traj"), its numeric columns as the named values. A table is placed on the anchor camera's
-    frames by its time column (a rising column named for time) on the recorder's clock when the videos carry capture
-    times, row by row when it has exactly one row per frame, and otherwise by its time column from the videos' start,
-    an alignment that is assumed: each such signal is marked (mark_assumed) and a data issue. A table that cannot be
-    placed is left out with the reason."""
-    import pandas as pd
+    name without its take: "traj"), its number columns (number_columns) as the named values. A table with a time
+    column (a rising column named for time) is placed by it (table_seconds): on the recorder's clock when the videos
+    carry capture times its readings overlap, recorded timing; otherwise from the videos' start, an alignment that is
+    assumed: each such signal is marked (mark_assumed) and a data issue, and when the table also has exactly one row
+    per frame while its own times span another length than the footage (a 24 s log at 10 Hz beside 8 s of video), a
+    data issue says so (table_span_differs), since its rows may instead be one per frame. Only a table with no time
+    column and one row per frame is placed row by row, marked (ALIGNED_ROWS) and a data issue too, never presented as
+    recorded timing. A table placed by its time records its rate (rate_hz), so a slow one is said to be held between
+    readings. Every value's bad cells (empty, not a number, not finite) are missing readings and a data issue each
+    (signal_bad_cells), and a value with no reading at all is left out and flagged. A table that cannot be placed, or
+    has a single row (a setting, not a reading over time), is left out with the reason."""
     out = Signals()
     n = int(len(pr_anchor["pts"]))
     t_vid = pr_anchor["pts"].astype(np.float64) * float(pr_anchor["time_base"])
     t_vid = t_vid - t_vid[0]
     for p in paths:
         try:
-            df, stride, rows = read_number_table(p)
+            num, stride, rows = read_number_table(p)
         except Exception:
             out.left_out.append((p.name, "could not be read as a table"))
             continue
@@ -2069,9 +2139,13 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             out.issues.append({"kind": "table_downsampled", "what": f"{p.name} has {rows:,} rows, more than the "
                                                                     f"{TABLE_STREAM_MAX_ROWS:,} read whole, so every "
                                                                     f"{stride}th row was read"})
-        num = df.select_dtypes("number")
-        if num.shape[1] == 0 or len(num) < 2:
+        if num.shape[1] == 0:
             continue                      # text only: the uploader's notes, read by annotation_tables
+        if len(num) < 2:
+            vals = ", ".join(f"{c} {x:g}" for c, x in zip(num.columns[:8], num.iloc[0, :8])) if len(num) else ""
+            out.left_out.append((p.name, f"one row ({vals}), so a setting or a report rather than a reading over time"
+                                 if len(num) else "no rows"))
+            continue
         clocks = [c for c in num.columns if is_named_clock(c, num[c].to_numpy())]
         tcol = clocks[0] if clocks else None
         skip = [c for c in num.columns if c in clocks or SIGNAL_SKIP.search(str(c))]
@@ -2080,31 +2154,80 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
         vals = num.drop(columns=skip + counters)
         if vals.shape[1] == 0:
             continue
-        v = vals.to_numpy(dtype=np.float64)
         parts = name_parts(p.stem)
         name = parts["cam"] or p.stem
-        assumed = False
+        v = vals.to_numpy(dtype=np.float64)
         if tcol is not None:
-            t = _seconds(num[tcol].to_numpy(dtype=np.float64))
+            raw = num[tcol].to_numpy(dtype=np.float64)
+            timed = np.isfinite(raw)
+            if not timed.all():
+                # a row with no time cannot be placed: left out, and said
+                out.issues.append({"kind": "signal_bad_cells", "signal": name,
+                                   "what": f"{name} has {int((~timed).sum())} of {len(raw)} rows with no time in "
+                                           f"its time column {tcol}, so those rows could not be placed"})
+                raw, v = raw[timed], v[timed]
+            t = table_seconds(raw, real_anchor, t_vid)
+        assumed, aligned, rate = False, None, None
         if tcol is not None and real_anchor is not None and t[0] < real_anchor[-1] and t[-1] > real_anchor[0]:
             a, var, gaps = place_on_frames(t, v, np.asarray(real_anchor, dtype=np.float64))
-        elif len(v) == n:
-            a, gaps = v, 0
+            row_t = t - float(real_anchor[0])
         elif tcol is not None:
             a, var, gaps = place_on_frames(t - t[0], v, t_vid)
+            row_t = t - t[0]
             assumed = True
+        elif len(v) == n:
+            a, gaps, row_t, aligned = v, 0, t_vid, ALIGNED_ROWS
         else:
             out.left_out.append((p.name, f"{len(v)} rows and no time column, while the video has {n} frames"))
             continue
-        out.add(name, a, names=[str(c) for c in vals.columns], source=f"table {p.name}")
+        if tcol is not None and len(t) > 1 and t[-1] > t[0]:
+            rate = (len(t) - 1) / float(t[-1] - t[0])
+        names = [str(c) for c in vals.columns]
+        # every value's bad cells, where they are in the episode; a value with no reading at all is left out
+        bad = ~np.isfinite(v)
+        empty = [j for j in range(v.shape[1]) if bad[:, j].all()]
+        for j in range(v.shape[1]):
+            k = int(bad[:, j].sum())
+            if not k:
+                continue
+            if j in empty:
+                what = f"{name} {names[j]} has no reading in any of its {len(v)} rows, so it is left out"
+                out.issues.append({"kind": "signal_bad_cells", "signal": name, "what": what})
+                continue
+            rows_bad = np.flatnonzero(bad[:, j])
+            out.issues.append({"kind": "signal_bad_cells", "signal": name,
+                               "what": f"{name} {names[j]} has {k} of {len(v)} cells that are empty, not a number or "
+                                       "not finite; they are read as missing",
+                               "t0_s": float(row_t[rows_bad[0]]), "t1_s": float(row_t[rows_bad[-1]])})
+        if empty:
+            out.left_out += [(f"{names[j]} in {p.name}", "no reading in any row") for j in empty]
+            keep = [j for j in range(v.shape[1]) if j not in empty]
+            if not keep:
+                continue
+            a = np.asarray(a)[:, keep]
+            names = [names[j] for j in keep]
+        a = np.where(np.isfinite(a), a, np.nan)
+        out.add(name, a, names=names, source=f"table {p.name}")
         if gaps:
             out.meta[name]["gaps"] = gaps
+        if rate:
+            out.meta[name]["rate_hz"] = round(rate, 2)
         if assumed:
             # its time column shares no clock with the videos: placed from both starts, marked and flagged
             one = Signals()
             one.add(name, a)
             mark_assumed(one, extra, p.name)
             out.meta[name]["aligned_by"] = ALIGNED_ASSUMED
+            span, vspan = float(t[-1] - t[0]), float(t_vid[-1] - t_vid[0]) if n > 1 else 0.0
+            if len(v) == n and abs(span - vspan) > max(SPAN_DIFFERS_MIN_S, SPAN_DIFFERS_SHARE * vspan):
+                add_issue(extra, "table_span_differs",
+                          f"{p.name} has one row per video frame ({n}), but its own times span {span:.1f} s against "
+                          f"the video's {vspan:.1f} s; it was placed by its own times, so if each row was recorded "
+                          f"with one frame, its readings drift up to {abs(span - vspan):.1f} s from that frame",
+                          signal=name)
+        if aligned:
+            out.meta[name]["aligned_by"] = aligned
+            add_issue(extra, "signal_alignment_assumed", ROWS_ASSUMED.format(name, p.name), signal=name)
     return out
 
 
@@ -5668,6 +5791,11 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
                                   f"{'their' if len(lost) != 1 else 'its'} folder to place the data against, so "
                                   f"{'they were' if len(lost) != 1 else 'it was'} not read.")
     det["used"] += possible_duplicates(root, items)
+    tables = unread_tables(root, det, items)
+    if tables:
+        det["missing"].append(f"{len(tables)} table{'s' if len(tables) != 1 else ''} of numbers that no episode "
+                              "reads: " + _and_words(tables[:12])
+                              + (f" and {len(tables) - 12} more" if len(tables) > 12 else "") + ".")
     unread = unread_files(root, det, items)
     if unread:
         det["missing"].append(f"{len(unread)} file{'s' if len(unread) != 1 else ''} that no reader opens: "
@@ -5731,6 +5859,44 @@ def opened_notes(items: list[dict]) -> set[Path]:
                 {Path(d) / f"{ep_name}{x}" for x in (".json", ".txt")}
         for dp in (it.get("depth") or {}).values():
             out |= set(Path(dp).parent.glob("*.json"))
+    return out
+
+
+TABLE_TEXT_ROWS = 1000     # the rows of a table looked at to tell notes (a cell of text) from a table of numbers
+
+
+def _table_has_text(p: Path) -> bool:
+    """Whether one of a CSV or TSV table's first TABLE_TEXT_ROWS rows holds text (_has_text): notes, which
+    annotation_tables reads for the rows that name an episode."""
+    import csv
+    try:
+        with open(p, newline="", errors="replace") as fh:
+            reader = csv.DictReader(fh, delimiter=table_separator(p))
+            return any(_has_text(r) for _, r in zip(range(TABLE_TEXT_ROWS), reader))
+    except Exception:
+        return False
+
+
+def unread_tables(root: Path, det: dict, items: list[dict]) -> list[str]:
+    """The upload's CSV and TSV tables of numbers that no episode reads, each "path (why)": a table is read as signals
+    beside the videos of its episode (plan_video "series"), so one in a folder with no video episode, or whose name
+    gives none of the takes of the video episodes beside it, is read nowhere; it had gone unmentioned, as
+    unread_files counts every table as read by annotation_tables, which reads only the rows that hold text. A
+    table of a LeRobot dataset is the dataset's."""
+    root = Path(root)
+    parts = det["parts"] if det.get("parts") else [det]
+    rdirs = [Path(r) for p in parts for r in p.get("roots") or []]
+    taken = {Path(p) for it in items for p in it.get("series") or []}
+    video_dirs = {item_folder(it) for it in items if it.get("kind") == "video"}
+    out = []
+    for p in files_under(root):
+        if p.suffix.lower() not in (".csv", ".tsv") or p in taken or any(r in p.parents for r in rdirs):
+            continue
+        if _table_has_text(p):
+            continue
+        why = ("its name gives none of the takes of the video episodes in its folder" if p.parent in video_dirs else
+               "no video episode is in its folder, where a table is read as the episode's signals")
+        out.append(f"{p.relative_to(root).as_posix()} ({why})")
     return out
 
 
@@ -6001,7 +6167,7 @@ def annotation_tables(root: Path) -> list[tuple[str, list[dict]]]:
                     [r for r in _jsonl_rows(p) if _has_text(r)][:TABLE_NOTE_ROWS_MAX]
             else:
                 with open(p, newline="", errors="replace") as fh:
-                    reader = csv.DictReader(fh, delimiter="\t" if p.suffix.lower() == ".tsv" else ",")
+                    reader = csv.DictReader(fh, delimiter=table_separator(p))
                     # a table over TABLE_MAX_BYTES is read row by row for the rows that hold text, the ones that can
                     # name an episode; a large table of numbers is a recording (table_signals), not notes
                     rows = list(reader) if not big else [r for _, r in zip(range(TABLE_NOTE_ROWS_MAX), (

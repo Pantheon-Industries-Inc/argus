@@ -4093,8 +4093,10 @@ function snWhat(s) {
     w += k ? `, away from rest ${k === 1 ? 'once' : k + ' times'}` : '';
   }
   // placed on the video from both starts, because the recording shares no clock with the cameras
-  // (prepare/formats.py mark_assumed), as the prompt says it
-  if (s.aligned_by) w += ', placed from both starts, as no clock is shared';
+  // (prepare/formats.py mark_assumed), or one row per frame, because a table has no time of its own
+  // (prepare/formats.py ALIGNED_ROWS), as the prompt says it
+  if (s.aligned_by === 'row per frame') w += ', placed one row per frame, as it has no time of its own';
+  else if (s.aligned_by) w += ', placed from both starts, as no clock is shared';
   return w;
 }
 // the signals the board could not draw (board/sensors.py "errors"), each named with the reason, under the lanes it drew

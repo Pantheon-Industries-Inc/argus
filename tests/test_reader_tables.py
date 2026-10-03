@@ -149,3 +149,148 @@ def test_a_refused_upload_carries_what_the_archive_says(tmp_path):
     assert "password" in str(e.value) and "a_camera1.mp4" in str(e.value)
     assert "it is empty" not in str(e.value)
 
+
+# ---------------------------------------------------------------- tables read, or named
+
+def test_one_text_cell_keeps_its_column_and_is_flagged(tmp_path):
+    n = 60
+    df = pd.DataFrame({"x": np.arange(n) * 0.1, "y": np.ones(n)}).astype(object)
+    df.loc[10, "x"] = "ERR"
+    df.to_csv(tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["x", "y"]
+    assert np.isnan(out["traj"][10, 0]) and out["traj"][11, 0] == pytest.approx(1.1)
+    bad = _issues(out, "signal_bad_cells")
+    assert len(bad) == 1 and "x" in bad[0]["what"] and "1 of 60" in bad[0]["what"]
+
+
+def test_a_text_column_is_still_not_a_signal(tmp_path):
+    n = 60
+    pd.DataFrame({"note": ["pick"] * n, "y": np.arange(n) * 0.5}).to_csv(tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["y"] and not _issues(out, "signal_bad_cells")
+
+
+@pytest.mark.parametrize("sep", [";", "\t", "|"])
+def test_a_table_is_read_whatever_its_delimiter(tmp_path, sep):
+    n = 60
+    pd.DataFrame({"x": np.arange(n) * 0.5, "y": np.ones(n)}).to_csv(tmp_path / "traj.csv", index=False, sep=sep)
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
+    assert out.meta["traj"]["names"] == ["x", "y"]
+
+
+def test_a_one_row_table_is_named_with_why(tmp_path):
+    pd.DataFrame({"x": [1.5], "y": [2.0]}).to_csv(tmp_path / "calib.csv", index=False)
+    out = f.table_signals([tmp_path / "calib.csv"], None, _anchor(60), {})
+    assert "calib" not in out
+    assert any(name == "calib.csv" and "one row" in why for name, why in out.left_out)
+
+
+def test_a_table_of_numbers_no_episode_takes_is_named(tmp_path):
+    _clip(tmp_path / "videos" / "top.mp4", 30)
+    (tmp_path / "tables").mkdir()
+    pd.DataFrame({"t": np.arange(100) / 10.0, "force": np.sin(np.arange(100))}).to_csv(
+        tmp_path / "tables" / "force.csv", index=False)
+    pd.DataFrame({"episode": ["top"], "task": ["pick the cube"]}).to_csv(tmp_path / "tables" / "notes.csv",
+                                                                          index=False)
+    det, items = f.plan(tmp_path)
+    words = " ".join(det["missing"])
+    assert "tables/force.csv" in words and "tables/notes.csv" not in words
+
+
+# ---------------------------------------------------------------- a table's placement says when it is assumed
+
+def test_a_table_with_one_row_per_frame_is_placed_by_its_own_times(tmp_path):
+    n = 240
+    pd.DataFrame({"timestamp": 1756534813.0 + np.arange(n) / 10.0, "x": np.arange(n) * 0.5}).to_csv(
+        tmp_path / "traj.csv", index=False)
+    extra = {}
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), extra)
+    assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ASSUMED
+    assert out["traj"][120, 0] == pytest.approx(20.0)              # 4 s in, the row its own clock puts at 4 s
+    assert _issues(extra, "signal_alignment_assumed")
+    span = _issues(extra, "table_span_differs")
+    assert len(span) == 1 and "23.9 s" in span[0]["what"] and "8.0 s" in span[0]["what"]
+
+
+def test_a_table_with_no_time_column_and_one_row_per_frame_is_marked_as_placed_row_by_row(tmp_path):
+    n = 60
+    pd.DataFrame({"x": np.arange(n) * 0.5, "y": np.ones(n)}).to_csv(tmp_path / "traj.csv", index=False)
+    extra = {}
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), extra)
+    assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS
+    assert out["traj"][30, 0] == 15.0
+    got = _issues(extra, "signal_alignment_assumed")
+    assert len(got) == 1 and "one row per frame" in got[0]["what"]
+
+
+def test_the_prompt_says_how_an_assumed_table_was_placed():
+    from label import signals as sg
+    a = np.arange(60, dtype=float)[:, None] * 0.5
+    rows = sg.describe("traj", a, aligned_by=f.ALIGNED_ROWS)
+    assert "one row per frame" in rows and "both starts" not in rows
+    assert "both starts" in sg.describe("traj", a, aligned_by=f.ALIGNED_ASSUMED)
+
+
+def test_a_table_on_the_capture_clock_is_recorded_timing(tmp_path):
+    n = 60
+    real = T0 + np.arange(n) / 30.0
+    pd.DataFrame({"timestamp": real, "x": np.arange(n) * 0.5}).to_csv(tmp_path / "traj.csv", index=False)
+    extra = {}
+    out = f.table_signals([tmp_path / "traj.csv"], real, _anchor(n), extra)
+    assert "aligned_by" not in out.meta["traj"] and not extra.get("reader_issues")
+
+
+# ---------------------------------------------------------------- a slow table keeps its unit
+
+def test_a_table_under_1_hz_on_the_capture_clock_is_read_in_seconds(tmp_path):
+    n = 240
+    real = T0 + np.arange(n) / 30.0
+    pd.DataFrame({"timestamp": T0 + np.arange(5) * 2.0, "x": np.arange(5) * 1.0}).to_csv(
+        tmp_path / "traj.csv", index=False)
+    extra = {}
+    out = f.table_signals([tmp_path / "traj.csv"], real, _anchor(n), extra)
+    assert "aligned_by" not in out.meta["traj"]
+    assert out["traj"][60, 0] == 1.0 and out["traj"][180, 0] == 3.0
+    assert np.isfinite(out["traj"][:, 0]).sum() > 200
+
+
+def test_a_table_under_1_hz_with_no_capture_times_is_read_in_the_unit_that_spans_the_footage(tmp_path):
+    n = 240
+    pd.DataFrame({"timestamp": T0 + np.arange(5) * 2.0, "x": np.arange(5) * 1.0}).to_csv(
+        tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
+    assert out["traj"][60, 0] == 1.0 and out["traj"][180, 0] == 3.0
+
+
+# ---------------------------------------------------------------- bad cells flagged where they are
+
+def test_bad_cells_of_a_table_are_missing_and_flagged_value_by_value(tmp_path):
+    n = 60
+    df = pd.DataFrame({"x": np.arange(n) * 0.5, "y": np.arange(n) * 2.0, "g": np.ones(n), "q": np.nan})
+    df.loc[10:20, "x"] = np.nan
+    df.loc[30, "y"] = np.inf
+    df.loc[31, "y"] = -np.inf
+    df["g"] = df["g"].astype(object)
+    df.loc[40:45, "g"] = ""
+    df.to_csv(tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
+    a = out["traj"]
+    assert not np.isinf(a).any()
+    assert out.meta["traj"]["names"] == ["x", "y", "g"]
+    bad = {i["what"].split(" has ")[0]: i for i in _issues(out, "signal_bad_cells")}
+    assert set(bad) == {"traj x", "traj y", "traj g", "traj q"}
+    assert "11 of 60" in bad["traj x"]["what"] and "2 of 60" in bad["traj y"]["what"]
+    assert "no reading" in bad["traj q"]["what"]
+    assert any(name == "q in traj.csv" for name, _ in out.left_out)
+
+
+# ---------------------------------------------------------------- a sparse table keeps its rate
+
+def test_a_sparse_table_records_its_rate(tmp_path):
+    n = 240
+    real = T0 + np.arange(n) / 30.0
+    pd.DataFrame({"timestamp": T0 + np.arange(10) * 0.8, "x": np.arange(10) * 1.0}).to_csv(
+        tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], real, _anchor(n), {})
+    assert out.meta["traj"]["rate_hz"] == pytest.approx(1.25, abs=0.01)
