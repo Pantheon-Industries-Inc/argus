@@ -39,6 +39,8 @@ import warnings
 
 import numpy as np
 
+from prepare.signal_alignment import ALIGNED_ROWS, COARSE_CLOCK
+
 REST_FRACTION = 0.1
 MIN_REST = 0.2
 MIN_ACTIVE = 0.02
@@ -593,7 +595,9 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
              fps=None, aligned_by=None) -> str:
     """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
     (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
-    to place it by (aligned_by, prepare/formats.py mark_assumed), and the range each value takes, up to PER_VALUE_MAX
+    to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it has as many rows as the
+    video has frames (ALIGNED_ROWS), or tied readings placed within each recorded stamp interval as an assumption
+    (COARSE_CLOCK, whose rate is estimated from that placement), and the range each value takes, up to PER_VALUE_MAX
     values (for a wider array, the range of all its values together)."""
     a = _float(a)          # as stored: its smallest and largest readings are exact in any precision
     d = a.shape[1]
@@ -602,8 +606,14 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     if names and len(names) == d and d <= PER_VALUE_MAX:
         what += " (" + ", ".join(names) + ")"
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
-        what += f", recorded at {_num(float(rate_hz))} Hz"
-    if aligned_by:
+        rate = _num(float(rate_hz))
+        what += (f", estimated at {rate} Hz from assumed placement" if aligned_by == COARSE_CLOCK else
+                 f", recorded at {rate} Hz")
+    if aligned_by == ALIGNED_ROWS:
+        what += ", placed one row per frame as it has as many rows as the video has frames"
+    elif aligned_by == COARSE_CLOCK:
+        what += ", tied readings placed within each stamp interval as an assumption"
+    elif aligned_by:
         what += ", placed from both starts as no clock is shared"
     head = f"  {name} ({what})"
     if not np.isfinite(a).any():

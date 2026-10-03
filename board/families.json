@@ -100,6 +100,23 @@
    ]
   },
   {
+   "slug": "sensor-file-damaged",
+   "list": "data",
+   "name": "Sensor file damaged or cut short",
+   "reader_issues": [
+    "mcap_file_damaged",
+    "sensor_file_cut"
+   ]
+  },
+  {
+   "slug": "signal-partial",
+   "list": "data",
+   "name": "Signal starts late or stops early",
+   "reader_issues": [
+    "signal_partial_span"
+   ]
+  },
+  {
    "slug": "task-files-disagree",
    "list": "data",
    "name": "Uploaded files name different tasks",
@@ -261,6 +278,38 @@
    "name": "Scale or display unreadable",
    "names": [
     "Scale or display unreadable"
+   ]
+  },
+  {
+   "slug": "sensor-clock-outside",
+   "list": "data",
+   "name": "Sensor recording is outside the footage",
+   "reader_issues": [
+    "sensor_outside_footage"
+   ]
+  },
+  {
+   "slug": "sensor-clock-coarse",
+   "list": "data",
+   "name": "Sensor clock stamps cannot place every row precisely",
+   "reader_issues": [
+    "signal_clock_coarse"
+   ]
+  },
+  {
+   "slug": "table-number-inferred",
+   "list": "handling",
+   "name": "Ambiguous table numbers were read by an inferred convention",
+   "reader_issues": [
+    "table_number_ambiguous"
+   ]
+  },
+  {
+   "slug": "camera-clock-repeated",
+   "list": "data",
+   "name": "Distinct camera frames share recorded timestamps",
+   "reader_issues": [
+    "camera_timestamp_repeated"
    ]
   }
  ]

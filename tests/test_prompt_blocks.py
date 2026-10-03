@@ -215,6 +215,9 @@ BLOCK_CASES = [
     ("state_unaligned", "teleop_joints", _misalign, ("RECORDED STATE: not given",)),
     ("no_state", "teleop_joints", _drop_state, ("RECORDED STATE: none",)),
     ("signals", "teleop_joints", _add_signals, ("OTHER RECORDED SIGNALS", "base.odom")),
+    ("table_numbers", "teleop_joints", _add(reader_issues=[
+        {"kind": "table_number_ambiguous", "what": "pressure.csv force was read as decimals"}]),
+     ("TABLE NUMBER INTERPRETATION", "pressure.csv force was read as decimals")),
     ("contacts", "teleop_joints", _add_contact, ("CONTACTS:",)),
     ("uploader_notes", "teleop_joints", _add(uploader_annotation='{"operator": "A"}\n'),
      ("THE UPLOADER'S OWN NOTES",)),
@@ -540,6 +543,30 @@ def test_a_rate_is_stated_only_below_nine_tenths_of_the_frame_rate():
         assert "recorded at" not in line(rate_hz, fps)
 
 
+@pytest.mark.parametrize("source", ["pressure/force", "/left/tactile force"])
+def test_a_coarse_variation_rate_is_an_estimate_from_assumed_placement(source):
+    ep, pl = CASES["teleop_video_only"]()
+    name = source + " variation within each frame"
+    ep["signals"] = {name: np.arange(450, dtype=float)[:, None] / 100}
+    ep["signal_meta"] = {name: {"rate_hz": 20.0, "aligned_by": "coarse clock",
+                                "variation_of": source}}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    line = next(line for line in episode.splitlines() if line.startswith("  " + name + " ("))
+    assert "estimated at 20 Hz from assumed placement" in line
+    assert "recorded at" not in line
+    assert "tied readings placed within each stamp interval as an assumption" in line
+
+
+@pytest.mark.parametrize("aligned_by", [None, "row per frame", "assumed start"])
+def test_other_signal_alignment_rate_descriptions_stay_exact(aligned_by):
+    from label import signals as sg
+    suffix = {None: "", "row per frame": (
+        ", placed one row per frame as it has as many rows as the video has frames"),
+        "assumed start": ", placed from both starts as no clock is shared"}[aligned_by]
+    assert sg.describe("force", np.arange(3)[:, None], rate_hz=15, fps=30, aligned_by=aligned_by) == (
+        "  force (1 value, recorded at 15 Hz" + suffix + "): 0 to 2")
+
+
 def test_the_values_at_each_instant_keep_what_moves_most_and_name_the_rest():
     """60 signals do not fit: every row of the 25 that sweep is kept, the readout stays in its budget, and each of the
     35 that only jitter is either shown whole or named with its size and rate in one line, never dropped silently.
@@ -652,3 +679,14 @@ def test_with_no_row_that_fits_each_signal_with_rows_is_named_as_left_out_becaus
         assert lines[0].startswith("  The values at each instant leave out sweep_00 (1 value), sweep_01 (1 value), ")
         assert lines[0].endswith(" and flag_2 (1 value), because not even one row fits.")
         assert "move least" not in lines[0] and "every signal" not in lines[0]
+
+
+def test_other_reader_notes_do_not_add_a_table_interpretation_block():
+    ep, pl = case_ego_plain()
+    before = me.build_prompt(ep, pl, cell_w=256, cell_h=144)
+    ep["context"]["reader_issues"] = [
+        {"kind": "signal_bad_cells", "what": "Other reader note"},
+        {"kind": "table_number_ambiguous", "what": " "},
+    ]
+    assert me.build_prompt(ep, pl, cell_w=256, cell_h=144) == before
+    assert "table_numbers" not in [b.name for b in me.present_blocks(ep, pl)]

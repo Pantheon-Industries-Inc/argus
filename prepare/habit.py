@@ -158,7 +158,7 @@ def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dic
                                  "intervention_spans_s": spans(df["is_intervention_segment"].to_numpy(), fps),
                                  "high_jerk_spans_s": spans(df["is_high_jerk_segment"].to_numpy(), fps),
                                  "sid": r.get("sid"), "unit_name": r.get("unit_name")})
-    ctx.pop("state_note", None)
+    formats.drop_no_state(ctx)
     (ep / "context.json").write_text(json.dumps(ctx, indent=1))
     return ctx
 

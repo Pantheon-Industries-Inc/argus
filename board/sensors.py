@@ -29,8 +29,9 @@ One file:
    "depth": {view: {"units", "scale_m", "kind", "ticks", "bar"}}}
 
 A signal: "name", "dims", and when the dataset gives them "shape" ([16, 16]), "names" (one per value), "rate_hz" and
-"source", and "aligned_by" when the reader placed it on the video from both starts because no clock was shared
-(prepare/formats.py mark_assumed), which the page says in its lane. Each signal keeps its own length: one that ends
+"source", and "aligned_by" when its placement on the video is assumed, which the page says in its lane: "assumed
+start" from both starts, because no clock was shared (prepare/formats.py mark_assumed), or "row per frame", one row on
+each frame, because a table has as many rows as the video has frames (prepare/formats.py ALIGNED_ROWS). Each signal keeps its own length: one that ends
 before the others has no reading after its last row, and a gap or a stretch before a signal starts is no reading, which
 the page draws as a gap. A signal that cannot be drawn is left out and named in the file's "errors" ([{"name",
 "error"}]), and the page names it under the lanes it drew. "no_reading": true when it has no reading at any frame, and

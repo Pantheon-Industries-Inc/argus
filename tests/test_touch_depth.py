@@ -776,10 +776,11 @@ def _convert(tmp_path: Path, arrays: dict) -> tuple[dict, Path]:
     return json.loads((ep / "context.json").read_text()), ep
 
 
-@pytest.mark.parametrize("hz, late_s", [(100, 0.0), (100, 0.06), (100, 0.3), (20, 0.2)])
+@pytest.mark.parametrize("hz, late_s", [(100, 0.0), (100, 0.06), (100, 0.15), (20, 0.2)])
 def test_an_hdf5_state_on_its_own_clock_is_placed_as_an_mcap_arm_is(tmp_path, hz, late_s):
     """An arm logged on its own clock that starts a little after the camera leaves the first frames with no reading;
-    they hold its first reading, as joint_state places an MCAP arm's channel that starts within STATE_EDGE_SLACK_S."""
+    they hold its first reading, as joint_state places an MCAP arm's channel that starts within the edge slack
+    (edge_slack)."""
     n, cam_ns = 40, 10**12
     m = int(round(2.0 * hz))
     t = np.arange(m) / hz + late_s
@@ -843,7 +844,7 @@ def test_a_state_with_a_value_that_is_not_a_number_is_read_with_that_value_fille
 
 def test_a_long_gap_in_an_hdf5_state_is_not_drawn_as_motion(tmp_path):
     """A qpos with no reading for 1 s (a recorder that stopped) had the gap filled by a straight line and shown as
-    recorded motion. A gap longer than STATE_EDGE_SLACK_S leaves the state unread, and the note names the array and
+    recorded motion. A gap longer than STATE_GAP_S leaves the state unread, and the note names the array and
     the gap's time; the array stays a signal with no reading there. A gap of three frames is filled as before."""
     q = _aloha()
     q[11:30] = np.nan

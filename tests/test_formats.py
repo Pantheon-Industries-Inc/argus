@@ -1218,7 +1218,7 @@ def test_state_that_covers_only_part_of_the_footage_is_not_held_flat_into_a_stil
 
 def test_a_long_gap_in_an_arms_readings_is_not_drawn_as_motion():
     """An arm channel whose recorder stopped for 2 s had the gap filled by a straight line, which the prompt showed as
-    recorded motion and no still span could see. A gap longer than STATE_EDGE_SLACK_S leaves the state unread with a
+    recorded motion and no still span could see. A gap longer than STATE_GAP_S leaves the state unread with a
     note naming the channel and the gap's time; a gap of three frames is filled as before."""
     import numpy as np
     q = np.arange(300) / 30.0
@@ -1256,7 +1256,7 @@ def test_a_long_gap_in_an_arms_readings_is_not_drawn_as_motion():
     rows = np.stack([np.sin(hz30 + j) for j in range(7)], axis=1)
     state, _, note = f.joint_state({"/left_arm/joint_states": {"t": hz30, "pos": rows}}, q)
     assert state is None and "has no reading from 4.0 s to 6.0 s" in note, note
-    for first, want in ((0.3, None), (0.8, (0.0, 0.8))):
+    for first, want in ((0.3, None), (0.8, (0.0, 0.8, 0.5))):      # (start, end, the longest gap allowed there)
         tt = np.concatenate([[-3.0], np.arange(first, 10.0, 0.01)])
         assert f.fill_rows(q, tt, np.zeros((len(tt), 1)))[1] == want, first
 
@@ -2442,7 +2442,7 @@ def test_a_streamed_table_keeps_its_epoch_times_and_rows_sit_on_their_frame_inde
         saved = f.TABLE_MAX_BYTES
         f.TABLE_MAX_BYTES = 10
         try:
-            big, _, _ = f.read_number_table(p)
+            big, _, _, _ = f.read_number_table(p)
         finally:
             f.TABLE_MAX_BYTES = saved
     assert big["timestamp"].dtype == np.float64 and big["timestamp"].nunique() == n
@@ -2450,9 +2450,11 @@ def test_a_streamed_table_keeps_its_epoch_times_and_rows_sit_on_their_frame_inde
     out = f.recorded_signals(df, set(), 10)
     assert np.flatnonzero(np.isfinite(out["force"][:, 0])).tolist() == list(range(3, 10))
     assert out["force"][3, 0] == 3.0
-    st = np.stack([np.arange(3, 10, dtype=float)] * 14, axis=1)
-    state, _, kind, note, _ = f.state_on_frames(df, st, None, 10, 30.0, "joints", None)
-    assert kind == "joints" and state[3, 0] == 3.0 and state[9, 0] == 9.0, (kind, note)
+    # a state's first row at frame 3 of 60 is held across the lead, within the edge slack (edge_slack)
+    df = pd.DataFrame({"frame_index": np.arange(3, 60)})
+    st = np.stack([np.arange(3, 60, dtype=float)] * 14, axis=1)
+    state, _, kind, note, _ = f.state_on_frames(df, st, None, 60, 30.0, "joints", None)
+    assert kind == "joints" and state[3, 0] == 3.0 and state[59, 0] == 59.0, (kind, note)
 
 
 def _a_table_placed_from_both_starts_is_marked_signal_by_signal(tmp_path):
@@ -2570,13 +2572,17 @@ def test_signals_over_the_episode_budget_are_kept_as_summaries():
         _signals_over_the_episode_budget_are_kept_as_summaries(Path(t))
 
 
-def test_a_short_gap_at_the_start_of_a_signal_is_reported():
+def test_a_short_lead_at_the_start_of_a_signal_is_no_issue_and_a_short_gap_inside_it_is():
+    """A first reading within the edge slack (edge_slack) is a recorder starting up, as a camera's calibration
+    first sent 0.2 s in; three frames with no reading inside the signal are a gap."""
     import numpy as np
     a = np.ones((60, 2))
     a[:3] = np.nan
+    assert f.signal_gaps("force", a, np.arange(60) / 30) == []
+    a[30:33] = np.nan
     got = f.signal_gaps("force", a, np.arange(60) / 30)
-    assert got and got[0]["t0_s"] == 0.0 and "3 of its 60 frames" in got[0]["what"], got
-    assert "0.07 s" in got[0]["what"], got
+    assert got and got[0]["t0_s"] == 1.0 and "3 of its 60 frames" in got[0]["what"], got
+    assert "1.07 s" in got[0]["what"], got
 
 
 def test_a_short_channel_whose_name_says_time_is_a_clock_not_a_reading():

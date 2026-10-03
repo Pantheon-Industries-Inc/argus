@@ -1526,6 +1526,22 @@ def _has_metadata_issues(ep: dict, pl: dict) -> bool:
                for i in ep["context"].get("reader_issues", []))
 
 
+def _table_number_notes(ep: dict) -> list[str]:
+    """Numeric interpretation assumptions that qualify the table values shown to the model."""
+    return [issue["what"].strip() for issue in ep["context"].get("reader_issues") or []
+            if isinstance(issue, dict) and issue.get("kind") == "table_number_ambiguous"
+            and isinstance(issue.get("what"), str) and issue["what"].strip()]
+
+
+def _table_numbers_text(ep: dict, pl: dict) -> str:
+    return ("\nTABLE NUMBER INTERPRETATION, inferred while reading the tables:\n"
+            + "\n".join("  " + note for note in _table_number_notes(ep)) + "\n")
+
+
+def _has_table_numbers(ep: dict, pl: dict) -> bool:
+    return bool(_table_number_notes(ep))
+
+
 BLOCKS = (
     Block("collection_note", "intro", _has_collection_note, _collection_text),
     Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
@@ -1535,6 +1551,7 @@ BLOCKS = (
           checks=("timebase", "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")),
     Block("state_unaligned", "state", _state_unaligned, _state_unaligned_text, checks=("camera_windows_match_state",)),
     Block("no_state", "state", _no_state, _no_state_text),
+    Block("table_numbers", "signals", _has_table_numbers, _table_numbers_text),
     Block("signals", "signals", _has_signals, _signals_table, checks=("sensor_checks",)),
     Block("contacts", "after_frames", _has_contacts, contacts_block,
           schema_fields=("contacts", "contacts_missing"),
