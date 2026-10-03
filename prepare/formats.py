@@ -2136,18 +2136,18 @@ def table_format(p: Path) -> tuple[str, str]:
         lines = [line for line in (fh.readline() for _ in range(TABLE_SNIFF_LINES)) if line.strip()]
     rows = {s: [r for r in csv.reader(lines, delimiter=s) if r] for s in TABLE_SEPARATORS}
     tsv = Path(p).suffix.lower() == ".tsv"
-    if tsv and rows["\t"] and len(rows["\t"][0]) > 1:
-        return "\t", "."
     widths = {s: {len(r) for r in rs} for s, rs in rows.items()}
     steady = [s for s in TABLE_SEPARATORS if len(widths[s]) == 1 and min(widths[s]) > 1]
-    if steady:
+    if tsv and rows["\t"] and len(rows["\t"][0]) > 1:
+        sep = "\t"
+    elif steady:
         sep = max(steady, key=lambda s: min(widths[s]))
     else:
         head = {s: len(rs[0]) if rs else 0 for s, rs in rows.items()}
         sep = max(TABLE_SEPARATORS, key=lambda s: head[s])
         if head[sep] < 2:
             sep = "\t" if tsv else ","
-    cells = [c for r in rows[sep][1:] for c in r] if sep == ";" else []
+    cells = [c for r in rows[sep][1:] for c in r]
     return sep, "," if any(DECIMAL_COMMA.match(c) or GROUPED_NUMBER.match(c) and "," in c for c in cells) else "."
 
 
@@ -2166,31 +2166,46 @@ CODE_VALUES_MAX = 8
 UNNAMED_COLUMN = re.compile(r"^Unnamed: \d+$")      # pandas' name for a column whose header cell is blank
 
 
+def number_syntax(col) -> tuple[bool, bool, bool]:
+    """Proof of thousands, contradicting dot decimals, and ambiguous single dot groups in a column. A decimal
+    such as 1.5 or 0.896 prevents a grouped cell from reinterpreting all its neighbours as thousands."""
+    cells = col.astype(str).str.strip()
+    grouped = cells.str.match(GROUPED_NUMBER)
+    proof = cells.str.match(THOUSANDS_PROOF)
+    dotted = cells.str.match(r"^[-+]?(\d+\.\d*|\d*\.\d+)([eE][-+]?\d+)?$")
+    return bool(proof.any()), bool((dotted & ~grouped).any()), bool((grouped & ~proof).any())
+
+
 def proves_thousands(col) -> bool:
-    """Whether a table column has a cell whose dots can only be between thousands (THOUSANDS_PROOF)."""
-    return bool(col.astype(str).str.strip().str.match(THOUSANDS_PROOF).any())
+    """Whether the whole column proves thousands without contradictory dot decimals (number_syntax)."""
+    proof, decimal, _ = number_syntax(col)
+    return proof and not decimal
 
 
 def column_numbers(col, decimal: str = ".", thousands: bool | None = None):
-    """A table column's cells as numbers (NaN where a cell is not one), read as pandas reads a number, and with two
-    marks it does not know. Dots between thousands (GROUPED_NUMBER) are read as such in a column whose cells prove
-    them (proves_thousands, or thousands when the column was judged already), never across a table, so a column of
-    0.896 beside one of 1.234,56 keeps its decimal point. A decimal comma (DECIMAL_COMMA) is read in a table whose
-    decimal mark is a comma (table_format) and in a column with thousands dots, also in a column holding a cell of
-    text, which pandas leaves as text whole. A column pandas read as numbers is kept as it is."""
+    """Cells as numbers, NaN for unreadable cells. Explicit grouped syntax and decimal commas are always read.
+    Single dot groups take thousands only when the whole column proves that syntax without a contradicting decimal;
+    otherwise they keep their decimal point. A caller streaming a file passes the whole column's decision."""
     import pandas as pd
     x = pd.to_numeric(col, errors="coerce")
     if pd.api.types.is_numeric_dtype(col):
         return x
+    cells = col.astype(str).str.strip()
     if thousands is None:
         thousands = proves_thousands(col)
-    if not thousands and decimal != ",":
-        return x
-    cells = col.astype(str).str.strip()
-    grouped = cells.str.match(GROUPED_NUMBER) if thousands else pd.Series(False, index=col.index)
+    grouped = cells.str.match(GROUPED_NUMBER) if thousands else cells.str.match(THOUSANDS_PROOF)
     fix = grouped | (cells.str.match(DECIMAL_COMMA) & x.isna())
     plain = cells.where(~grouped, cells.str.replace(".", "", regex=False)).str.replace(",", ".", regex=False)
     return x.where(~fix, pd.to_numeric(plain, errors="coerce"))
+
+
+def number_inferences(syntax: dict, decimal: str) -> list[str]:
+    """Columns with ambiguous dot groups read as decimals, and why. Explicit proof cells still read as grouped."""
+    return [f"{c} has single dot groups that could be decimals or thousands; they were read as decimals"
+            + (" because other cells use dot decimals, though grouped cells also occur" if proof and conflict else
+               " because no cell proves thousands")
+            for c, (proof, conflict, ambiguous) in syntax.items()
+            if ambiguous and ((proof and conflict) or (decimal == "," and not proof))]
 
 
 def number_columns(df, decimal: str = ".") -> tuple:
@@ -2226,36 +2241,59 @@ def number_columns(df, decimal: str = ".") -> tuple:
 
 
 def read_number_table(p: Path):
-    """(the number columns of a CSV or TSV table, number_columns, the columns of it that are not numbers with how many
-    of their cells are not, the stride its rows were kept at, how many rows it has), read with its own separator,
-    decimal mark (table_format). A table up to TABLE_MAX_BYTES is read whole; a larger one in chunks of
-    TABLE_CHUNK_ROWS, keeping the columns its first chunk holds numbers in, each read with the thousands its first
-    chunk proves (column_numbers; a cell that is not a number is NaN), and once more than TABLE_STREAM_MAX_ROWS rows
-    are kept, every other kept row is dropped and the stride doubled, so memory stays bounded and the rows stay spread
-    over the whole recording. A table over 20 MB beside the videos had been ignored."""
+    """Number columns, text column counts, kept stride and total rows of a table. Syntax is judged across the
+    entire file before any value is interpreted, so chunk boundaries cannot change decimal or grouped readings.
+    Large files need two bounded passes: syntax flags, then numeric rows and column counts. Once more than
+    TABLE_STREAM_MAX_ROWS rows are kept, every other row is dropped and the stride doubles."""
     import pandas as pd
     sep, decimal = table_format(p)
-    if Path(p).stat().st_size <= TABLE_MAX_BYTES:
-        df, text = number_columns(pd.read_csv(p, sep=sep, decimal=decimal), decimal)
+    big = Path(p).stat().st_size > TABLE_MAX_BYTES
+    kwargs = {"sep": sep, "dtype": str}
+    if not big:
+        raw = pd.read_csv(p, **kwargs)
+        df, text = number_columns(raw, decimal)
+        df.attrs["number_inferences"] = number_inferences({c: number_syntax(raw[c]) for c in raw}, decimal)
         return df, text, 1, len(df)
-    parts, cols, text, stride, rows, kept = [], None, [], 1, 0, 0
-    for ch in pd.read_csv(p, sep=sep, decimal=decimal, chunksize=TABLE_CHUNK_ROWS):
-        if cols is None:
-            first, text = number_columns(ch, decimal)
-            cols = list(first.columns)
-            grouped = {c: proves_thousands(ch[c]) for c in cols}
+    syntax = {}
+    for ch in pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs):
+        for c in ch:
+            flags = number_syntax(ch[c])
+            syntax[c] = tuple(a or b for a, b in zip(syntax.get(c, (False,) * 3), flags))
+    parts, totals, stride, rows, kept = [], {}, 1, 0, 0
+    for ch in pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs):
+        nums = {}
+        for c in ch:
+            x = column_numbers(ch[c], decimal, syntax[c][0] and not syntax[c][1])
+            filled = ch[c].notna() & (ch[c].str.strip() != "")
+            words = ch.loc[filled & x.isna(), c].str.strip()
+            total = totals.setdefault(c, {"filled": 0, "bad": 0, "words": set(), "values": set()})
+            total["filled"] += int(filled.sum())
+            total["bad"] += len(words)
+            if len(total["words"]) < 2:
+                total["words"].update(words.unique()[:2])
+            if len(total["values"]) <= CODE_VALUES_MAX:
+                total["values"].update(x.dropna().unique()[:CODE_VALUES_MAX + 1])
+            nums[c] = x.astype(np.float64)
         start = (-rows) % stride
         rows += len(ch)
-        # a time column keeps float64: float32 holds about 7 digits, so epoch seconds at 100 Hz collapse together
-        ch = pd.DataFrame({c: column_numbers(ch[c], decimal, grouped[c]) for c in cols}, index=ch.index)
-        ch = ch.astype({c: np.float64 if is_time_name(c) else np.float32 for c in cols}).iloc[start::stride]
-        parts.append(ch)
-        kept += len(ch)
+        part = pd.DataFrame(nums, index=ch.index).iloc[start::stride]
+        parts.append(part)
+        kept += len(part)
         while kept > TABLE_STREAM_MAX_ROWS:
-            # keep every other row of what is kept so far, counted across the parts as if they were one table
             joined = pd.concat(parts, ignore_index=True).iloc[::2]
             parts, kept, stride = [joined], len(joined), stride * 2
-    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    cols, text = [], []
+    for c, total in totals.items():
+        n, bad = total["filled"], total["bad"]
+        if not n and UNNAMED_COLUMN.match(str(c)):
+            continue
+        mark = len(total["words"]) == 1 and len(total["values"]) > CODE_VALUES_MAX
+        if not n or n - bad >= NUMBER_COLUMN_SHARE * n or mark:
+            cols.append(c)
+        else:
+            text.append((str(c), bad, n))
+    df = pd.concat(parts, ignore_index=True)[cols] if parts else pd.DataFrame()
+    df.attrs["number_inferences"] = number_inferences(syntax, decimal)
     return df, text, stride, rows
 
 
@@ -2311,6 +2349,8 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
     for p in paths:
         try:
             num, text, stride, rows = read_number_table(p)
+            out.issues += [{"kind": "table_number_ambiguous", "what": f"{p.name}: {why}"}
+                           for why in num.attrs.get("number_inferences", [])]
         except Exception:
             out.left_out.append((p.name, "could not be read as a table"))
             continue

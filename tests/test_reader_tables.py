@@ -1096,3 +1096,57 @@ def test_a_damaged_follower_names_its_declared_channels_without_calling_them_unk
     ctx = _recorder(tmp_path, _damage_whole_chunk)
     assert "/yam_left/joint_state" in ctx["state_note"]
     assert "What it records is unknown" not in ctx["state_note"]
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test_late_grouping_proof_keeps_every_readable_cell_consistently(tmp_path, monkeypatch, chunked):
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force\n0,0;1.234\n0,1;2.345\n0,2;12.345.678\n0,3;23.456.789\n")
+    if chunked:
+        monkeypatch.setattr(f, "TABLE_MAX_BYTES", 1)
+        monkeypatch.setattr(f, "TABLE_CHUNK_ROWS", 2)
+    df, text, _, _ = f.read_number_table(p)
+    assert text == [] and df["force"].tolist() == [1234., 2345., 12345678., 23456789.]
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test_decimal_evidence_prevents_grouping_proof_from_flipping_decimal_cells(tmp_path, monkeypatch, chunked):
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force\n0,0;1.000\n0,1;1.286\n0,2;1.5\n0,3;1.234.567\n")
+    if chunked:
+        monkeypatch.setattr(f, "TABLE_MAX_BYTES", 1)
+        monkeypatch.setattr(f, "TABLE_CHUNK_ROWS", 2)
+    df, _, _, _ = f.read_number_table(p)
+    assert df["force"].tolist() == pytest.approx([1., 1.286, 1.5, 1234567.])
+    out = f.table_signals([p], None, _anchor(4), {})
+    assert any("force" in i["what"] and "decimal" in i["what"] for i in _issues(out, "table_number_ambiguous"))
+
+
+def test_single_dot_groups_in_a_decimal_comma_table_name_the_inferred_reading(tmp_path):
+    p = tmp_path / "traj.csv"
+    p.write_text("time;force\n0,0;12.500\n0,1;13.500\n0,2;14.500\n")
+    df, _, _, _ = f.read_number_table(p)
+    assert df["force"].tolist() == [12.5, 13.5, 14.5]
+    out = f.table_signals([p], None, _anchor(3), {})
+    assert _issues(out, "table_number_ambiguous")
+
+
+@pytest.mark.parametrize("separator,suffix", [("\t", ".tsv"), (",", ".csv")])
+def test_decimal_commas_in_quoted_csv_and_tsv_are_numbers_to_notes_and_signals(tmp_path, separator, suffix):
+    import csv
+    p = tmp_path / ("traj" + suffix)
+    with p.open("w", newline="") as fh:
+        w = csv.writer(fh, delimiter=separator)
+        w.writerows([["time", "force"], ["0,0", "0,5"], ["0,1", "1,5"], ["0,2", "2,5"]])
+    df, text, _, _ = f.read_number_table(p)
+    assert df["force"].tolist() == [0.5, 1.5, 2.5] and text == []
+    assert not f._table_has_text(p)
+
+
+def test_a_numeric_column_starting_after_the_first_chunk_is_kept(tmp_path, monkeypatch):
+    p = tmp_path / "traj.csv"
+    p.write_text("time,force\n0,ERR\n1,ERR\n" + "".join(f"{i},{i / 3}\n" for i in range(2, 22)))
+    monkeypatch.setattr(f, "TABLE_MAX_BYTES", 1)
+    monkeypatch.setattr(f, "TABLE_CHUNK_ROWS", 2)
+    df, text, _, _ = f.read_number_table(p)
+    assert "force" in df and np.isnan(df["force"].iloc[:2]).all() and text == []
