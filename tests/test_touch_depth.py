@@ -313,6 +313,34 @@ def test_one_request_judges_each_signal_touch_at_most_once(tmp_path, monkeypatch
     assert calls and max(calls.values()) == 1, calls
 
 
+def test_a_contact_touching_at_the_first_frame_is_told_and_asked_only_for_the_strip_its_picture_has(tmp_path):
+    """A press from the first frame has no begin of its own in the clip, so its picture has no begin strip
+    (contact_image): the prompt says so and asks only for last_touch_frame. Beside a contact with both strips, the
+    begin strip and first_touch_frame are said to be for that contact only."""
+    root = tmp_path / "up"
+    root.mkdir()
+    _hdf5(root / "kitchen_p1.hdf5", demos=1, press=(0, 20))
+    rep = formats.convert(root, "ego_head", tmp_path / "eps", "touchset", 900)
+    r = me.build_request(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
+    (c,) = r["contacts"]
+    assert c["from_start"] and not c["to_end"] and list(r["contact_views"]["strips"]["c1"]) == ["end"]
+    assert ("each contact above has one picture: three frames around the time the signal says the touch ends, "
+            "numbered 1 to 3, and the moment it is strongest") in r["prompt"]
+    assert "first_touch_frame" not in r["prompt"] and "begin strip" not in r["prompt"]
+    assert '"last_touch_frame": <1-3, the last frame of the end strip' in r["prompt"]
+    ep = me.load(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
+    pl = me.plan(ep)
+    later = {**c, "id": "c2", "from_start": False, "start_s": 0.9, "end_s": 1.1, "peak_s": 1.0}
+    ep["contacts"] = ep["contacts_shown"] = [c, later]
+    block = me.contacts_block(ep, pl)
+    assert ("five frames around the time the signal says the touch begins, numbered 1 to 5 (not for c1, already "
+            "touching at the first frame), three around the time it says the touch ends, numbered 1 to 3, and the "
+            "moment it is strongest") in block
+    assert ('"first_touch_frame": <for c2 only, 1-5, the first frame of the begin strip in which the hand is touching, '
+            'or null>') in block
+    assert '"last_touch_frame": <1-3, the last frame of the end strip' in block
+
+
 def test_a_depth_video_beside_its_colour_video_goes_with_that_camera(tmp_path):
     d = tmp_path / "up" / "ep1"
     d.mkdir(parents=True)

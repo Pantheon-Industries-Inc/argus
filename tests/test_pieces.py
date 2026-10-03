@@ -214,6 +214,40 @@ def test_a_stitched_record_keeps_the_contacts_its_parts_showed_and_every_parts_b
     assert out["config"]["schema_fields"] == ["contacts", "contacts_missing"]
 
 
+def test_a_contact_cut_by_our_cuts_asks_each_part_only_for_the_strips_it_shows_and_stitches_them_back(tmp_path,
+                                                                                                    monkeypatch):
+    """The press from 3 s to 6 s crosses several cuts: the part where it begins shows only its begin strip, the part
+    where it ends only its end strip, and the parts inside it neither, so none of them is asked for a frame of a strip
+    it does not show. The stitched answer takes first_touch_frame from the part that showed the begin strip and
+    last_touch_frame from the part that showed the end strip, each with that strip's times on the recording's clock."""
+    src, parts = _long_press(tmp_path, monkeypatch)
+    results, kinds = [], []
+    for i, p in enumerate(parts):
+        r = me.build_request(p)
+        strips = (r.get("contact_views") or {}).get("strips", {}).get("c1")
+        kinds.append(sorted(strips) if strips is not None else None)
+        if strips is not None:
+            assert ("first_touch_frame" in r["prompt"]) == ("begin" in strips)
+            assert ("last_touch_frame" in r["prompt"]) == ("end" in strips)
+        answer = {"id": "c1", "touch_seen": "yes", "first_touch_frame": 10 + i, "last_touch_frame": 20 + i}
+        results.append({"episode_dir": str(p), "parse_ok": True, "model": "m", "usage": {},
+                        "config": {"timesteps_s": [0.0]}, "labels": {"task_summary": p.name, "contacts": [answer]},
+                        **({"contacts": r["contacts"], "contact_views": r["contact_views"]} if strips is not None
+                           else {})})
+    shown = [k for k in kinds if k is not None]
+    assert shown[0] == ["begin"] and shown[-1] == ["end"] and [] in shown[1:-1]
+    first, last = kinds.index(["begin"]), kinds.index(["end"])
+    pcs = [json.loads((p / "context.json").read_text()) for p in parts]
+    out = pieces.stitch(src, list(zip(pcs, results)))
+    (c,) = out["labels"]["contacts"]
+    assert c["first_touch_frame"] == 10 + first and c["last_touch_frame"] == 20 + last
+    strips = out["contact_views"]["strips"]["c1"]
+    shifted = lambda i, kind: [round(x + pcs[i]["piece"]["t0_s"], 3)
+                               for x in results[i]["contact_views"]["strips"]["c1"][kind]]
+    assert strips["begin"] == shifted(first, "begin") and strips["end"] == shifted(last, "end")
+    assert abs(strips["begin"][2] - 3.0) < 0.05 and abs(strips["end"][1] - 6.0) < 0.05
+
+
 def test_a_part_of_a_long_head_camera_recording_gets_its_subtasks_on_its_own_clock(tmp_path, monkeypatch):
     """The dataset's timed subtasks are on the recording's clock; a part's frames start at 0 at its cut."""
     from prepare import formats

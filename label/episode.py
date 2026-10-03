@@ -483,7 +483,8 @@ def _frame_at(ep: dict, t_s: float) -> int:
 
 def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
     """(picture, strips) of one contact: for each camera shown (_contact_views) five frames around the signal's begin
-    and five around its end (STRIP_OFFSETS_S, numbered 1 to 5), then the strongest moment with the cameras' depth and
+    (STRIP_OFFSETS_S) and three around its end (END_OFFSETS_S), each strip only when the contact has it in the clip
+    (contact_strips), then the strongest moment with the cameras' depth and
     the touch sensor's maps (the contact's 2-D signals, bright away from rest on the upload's scale). strips gives each
     strip's frame times ({"begin": [...], "end": [...]}), which checks/contacts.py reads the model's frame numbers
     against. None when its frames cannot be decoded."""
@@ -492,10 +493,11 @@ def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
     vs, pvs, dvs = _contact_views(ep, c)
     t_end = frame_time(ep, len(ep["state"]) - 1)
     strips = []
-    if not c.get("from_start"):
+    begin, end = contact_strips(c)
+    if begin:
         strips.append(("touch begins by the recording",
                        [min(max(c["start_s"] + o, 0.0), t_end) for o in STRIP_OFFSETS_S]))
-    if not c.get("to_end"):
+    if end:
         strips.append(("touch ends by the recording", [min(max(c["end_s"] + o, 0.0), t_end) for o in END_OFFSETS_S]))
     kp = _frame_at(ep, c["peak_s"])
     ks = sorted({_frame_at(ep, t) for _, ts in strips for t in ts} | {kp})
@@ -759,6 +761,14 @@ PEAK_CELL_W = 288
 MAP_TILE_PX = 160
 
 
+def contact_strips(c: dict) -> tuple[bool, bool]:
+    """(begin, end): whether a contact's picture (contact_image) has a begin strip and an end strip, and so whether the
+    prompt describes each and asks for its frame (contacts_block). A contact already touching at the first frame
+    (from_start) has no begin in the clip, and one still touching at the last (to_end) no end: label/pieces.py
+    write_pieces sets them for every contact that crosses one of our cuts."""
+    return not c.get("from_start"), not c.get("to_end")
+
+
 def chosen_contacts(ep: dict, contacts: list[dict]) -> list[dict]:
     """The contacts shown to the model: the strongest, at most CONTACT_VIEWS_MAX and one per CONTACT_EVERY_S of
     footage, in time order."""
@@ -831,18 +841,30 @@ def contacts_block(ep: dict, pl: dict) -> str:
         return ""
     rest = [c for c in touch_contacts(ep, pl, ep.get("contacts")) if c["id"] not in {x["id"] for x in shown}]
     depth = any(_contact_views(ep, c)[2] for c in shown)
+    # each strip is described, and its frame asked for, only for the contacts whose picture has it (contact_strips)
+    begin = [c["id"] for c in shown if contact_strips(c)[0]]
+    end = [c["id"] for c in shown if contact_strips(c)[1]]
+    lacking = lambda have, why: ("" if len(have) == len(shown) else
+                                 f" (not for {_and_list([c['id'] for c in shown if c['id'] not in have])}, {why})")
+    only = lambda have: "" if len(have) == len(shown) else f"for {_and_list(have)} only, "
+    picture = ((["five frames around the time the signal says the touch begins, numbered 1 to 5"
+                 + lacking(begin, "already touching at the first frame")] if begin else [])
+               + ([f"three{'' if begin else ' frames'} around the time {'it' if begin else 'the signal'} says the "
+                   "touch ends, numbered 1 to 3" + lacking(end, "still touching at the last frame")] if end else []))
     return ("\nCONTACTS: the recording's touch signals say a hand is touching something in these spans. They are the "
             "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
             + (("  The signals record more contacts that are not shown: "
                 + "; ".join(f"{c['id']} {c['start_s']:.2f}-{c['end_s']:.2f} s" for c in rest) + ".\n") if rest else "")
-            + "After the detail views, each contact above has one picture: five frames around the time the signal says "
-            "the touch begins, numbered 1 to 5, three around the time it says the touch ends, numbered 1 to 3, and the "
-            "moment it is strongest" + (" with that camera's depth" if depth else "") + " and the touch sensor's "
-            "reading, each frame with its time. Return, beside the other fields:\n"
+            + "After the detail views, each contact above has one picture: " + "".join(p + ", " for p in picture)
+            + ("and " if picture else "") + "the moment it is strongest"
+            + (" with that camera's depth" if depth else "")
+            + " and the touch sensor's reading, each frame with its time. Return, beside the other fields:\n"
             '  "contacts": [{"id": "<c1, ...>", "touch_seen": "yes" | "no" | "unclear", '
-            '"first_touch_frame": <1-5, the first frame of the begin strip in which the hand is touching, or null>, '
-            '"last_touch_frame": <1-3, the last frame of the end strip in which it is still touching, or null>, '
-            '"hand": "left" | "right" | "both" | "unclear", "object": "<what it touches>", '
+            + (f'"first_touch_frame": <{only(begin)}1-5, the first frame of the begin strip in which the hand is '
+               'touching, or null>, ' if begin else "")
+            + (f'"last_touch_frame": <{only(end)}1-3, the last frame of the end strip in which it is still touching, '
+               'or null>, ' if end else "")
+            + '"hand": "left" | "right" | "both" | "unclear", "object": "<what it touches>", '
             '"grip": "<how the hand holds or presses it>", "action": "<what the contact does in the task>", '
             '"slip": "yes" | "no" | "unclear", "notes": "<or null>"}], one per contact shown,\n'
             '  "contacts_missing": [{"t_s": <float>, "hand": "left" | "right" | "unclear", "object": "<name>"}], each '

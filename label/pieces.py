@@ -312,6 +312,8 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
 
 T_KEYS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
           "recovered_at_s")
+# a contact's strips and the answer that counts frames in each (label/episode.py contacts_block, checks/contacts.py)
+STRIP_FIELDS = {"begin": "first_touch_frame", "end": "last_touch_frame"}
 
 
 def _shift(x, dt: float):
@@ -355,7 +357,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     L = {"scene": {"objects": [], "setting": ""}, "timeline": [], "key_events": [], "state_changes": [],
          "scene_graph": [], "recovery": [], "instruction_variants": [], "data_issues": [], "operator_mistakes": [],
          "tasks": []}
-    contacts_model, contacts_missing, views = [], [], {"shown": [], "strips": {}}
+    contacts_model, contacts_missing, views, strip_part = {}, [], {"shown": [], "strips": {}}, {}
     excluded, summaries, reviews, seen_obj = [], [], [], set()
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "est_cost_usd": 0.0,
              "cached_tokens": 0, "cache_write_tokens": 0, "latency_s": 0.0}
@@ -389,17 +391,28 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
                                                "off at this point describes our cut, not the recording"})
                 else:
                     L[k].append(iss)
-        # a contact cut by one of our cuts is answered by each part it reaches; the first answer that saw it is kept
-        for c in lab.get("contacts") or []:
-            if isinstance(c, dict) and not any(x.get("id") == c.get("id") for x in contacts_model):
-                contacts_model.append(c)
-        contacts_missing += [c for c in lab.get("contacts_missing") or [] if isinstance(c, dict)]
+        # a contact cut by one of our cuts is shown by each part it reaches, with the begin strip only in the part where
+        # it begins and the end strip only where it ends (label/episode.py contact_strips); each strip's times come from
+        # the part that showed it, on the recording's clock
         cv = r.get("contact_views") or {}
         for cid in cv.get("shown") or []:
             if cid not in views["shown"]:
                 views["shown"].append(cid)
-                views["strips"][cid] = {k: [round(float(x) + t0, 3) for x in ts]
-                                        for k, ts in ((cv.get("strips") or {}).get(cid) or {}).items()}
+                views["strips"][cid] = {}
+            for k, ts in ((cv.get("strips") or {}).get(cid) or {}).items():
+                if k not in views["strips"][cid]:
+                    views["strips"][cid][k] = [round(float(x) + t0, 3) for x in ts]
+                    strip_part[cid, k] = i
+        # the first answer that saw a contact is kept, with its first and last touch frame from the parts whose strips
+        # they count in
+        for c in lab.get("contacts") or []:
+            if not isinstance(c, dict):
+                continue
+            m = contacts_model.setdefault(c.get("id"), {k: v for k, v in c.items() if k not in STRIP_FIELDS.values()})
+            for k, field in STRIP_FIELDS.items():
+                if strip_part.get((c.get("id"), k)) == i and field in c:
+                    m[field] = c[field]
+        contacts_missing += [c for c in lab.get("contacts_missing") or [] if isinstance(c, dict)]
         summ = (lab.get("task_summary") or "").strip()
         if summ:
             summaries.append(summ)
@@ -453,7 +466,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     if excluded:
         L["_excluded"] = excluded
     if views["shown"]:
-        L["contacts"], L["contacts_missing"] = contacts_model, contacts_missing
+        L["contacts"], L["contacts_missing"] = list(contacts_model.values()), contacts_missing
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
             # each part inferred its own task, with the recording's task text given only as context (write_pieces), so
             # no part was graded against that text and the recording is not either
