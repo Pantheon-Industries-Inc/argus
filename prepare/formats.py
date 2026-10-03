@@ -703,10 +703,11 @@ def _stereo_twin(a: str, b: str) -> bool:
 
 
 # a camera whose name says it is not a colour picture: depth, confidence, disparity, a mask or segmentation, thermal,
-# infrared (RealSense's infra1), or a visualisation. Matched by whole words (not_rgb): the pattern it replaced matched
-# inside words, so segway_cam, a conference room and visual_top were taken for masks and confidence maps
+# infrared, or a visualisation. Matched by whole words (not_rgb): the pattern it replaced matched inside words, so
+# segway_cam, a conference room and visual_top were taken for masks and confidence maps. A RealSense infra1 stream is
+# a grey picture of the scene the model has been shown as a camera, and stays one
 NOT_RGB_WORDS = ("depth", "conf", "confidence", "disparity", "mask", "seg", "segmentation", "thermal", "infrared",
-                 "infra", "ir", "vis")
+                 "ir", "vis")
 
 
 def not_rgb(name: str) -> bool:
@@ -2098,39 +2099,26 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     prs = {v: probe(p) for v, (_, p) in files.items()}
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
     state = action = state_names = None
-    descs, signals = {}, {}
+    descs = {}
+    signals = Signals()
     from label import episode as me
     anchor = me.order_views(files)[0]
-    shared = [Path(p) for p in item.get("state_shared") or []]
-    if shared and real[anchor] is None:
-        # a sensor file of a folder of several episodes whose name gives no take: only capture times could place it
-        signals = Signals()
-        signals.left_out += [(p.name, "several episodes share its folder, its name gives none of their takes, and the "
-                                      "videos carry no capture times to tell which it recorded") for p in shared]
-        shared = []
-    sensor_files = [Path(p) for p in item.get("state") or []] + shared
-    if sensor_files:
-        mcap_files = [p for p in sensor_files if p.suffix.lower() == ".mcap"]
-        h5_files = [p for p in sensor_files if p.suffix.lower() in H5_EXT]
-        extra["source"]["sensors"] = [p.name for p in sensor_files]
-        if real[anchor] is None:
-            if rig == "teleop_arms" and (mcap_files or h5_files):
-                extra["state_note"] = ("Labelled from the cameras, because the videos carry no capture times to place "
-                                       "the recorded arm state against; its channels are kept as signals.")
-            if not hasattr(signals, "meta"):
-                signals = Signals(signals)
-            merge_signals(signals, sensors_from_start(sensor_files, seconds(prs[anchor]), extra))
-        elif rig != "teleop_arms" or not mcap_files:
+    # sensor files of the episode's folder (assign_sensors): by their clock on the capture times, from both starts when
+    # they share no clock with the footage, or listed (split_sensors)
+    by_clock, assumed, unplaced = split_sensors(item, real[anchor], real[anchor] is not None)
+    note_sensors(extra, signals, by_clock, assumed, unplaced)
+    if by_clock:
+        mcap_files = [p for p in by_clock if p.suffix.lower() == ".mcap"]
+        h5_files = [p for p in by_clock if p.suffix.lower() in H5_EXT]
+        if rig != "teleop_arms" or not mcap_files:
             # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP
             # files record, on the videos' clock (mcap_signals); an MCAP arm channel is read as the state on an arm rig
             # only, and an HDF5 array named as the state below (h5_state)
-            signals = merge_signals(signals if hasattr(signals, "meta") else Signals(signals),
-                                    mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals())
+            merge_signals(signals, mcap_signals(mcap_files, real[anchor]) if mcap_files else Signals())
         else:
             streams = mcap_joint_streams(mcap_files, real[anchor])
             state, action, note = joint_state(streams, real[anchor])
-            signals = merge_signals(signals if hasattr(signals, "meta") else Signals(signals),
-                                    mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action)))
+            merge_signals(signals, mcap_signals(mcap_files, real[anchor], state_fields(streams, state, action)))
             if note:
                 extra["state_note"] = note
             elif state is not None:
@@ -2142,7 +2130,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                     # a scene camera whose name says it is on an arm, beside a third arm, is carried by that arm
                     if "exo" in files and is_mount_named(files["exo"][0]):
                         descs["exo"] = third_arm_camera_desc(third)
-        if real[anchor] is not None and h5_files:
+        if h5_files:
             more = h5_file_signals(h5_files, real[anchor], len(real[anchor]))
             if state is None and rig != "ego_head":
                 # an HDF5 array named as the state (a robot.h5's qpos beside the videos) is read by the rule an HDF5
@@ -2154,9 +2142,15 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                     extra.pop("state_note", None)        # a note on the MCAP arm channels, which are not the state
                 elif h5_note:
                     extra.setdefault("state_note", h5_note)
-            if not hasattr(signals, "meta"):
-                signals = Signals(signals)
             merge_signals(signals, more)
+    if assumed:
+        t_rel = (np.asarray(real[anchor], dtype=np.float64) - float(real[anchor][0])) if real[anchor] is not None \
+            else seconds(prs[anchor])
+        if rig == "teleop_arms" and state is None:
+            extra.setdefault("state_note", "Labelled from the cameras, because the sensor files share no clock with "
+                                           "the videos to place a recorded arm state against; their channels are "
+                                           "kept as signals.")
+        merge_signals(signals, sensors_from_start(assumed, t_rel, extra))
     if item.get("series"):
         more = table_signals(item["series"], real.get(anchor), prs[anchor], extra)
         if not hasattr(signals, "meta"):
@@ -3896,14 +3890,20 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if dw.close():
                 depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": source}
         signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
-        # sensor files of the episode's folder (assign_sensors), on the file's clock
-        sensor_h5s = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() in H5_EXT]
-        sensor_mcaps = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() == ".mcap"]
+        # sensor files of the episode's folder (assign_sensors): on the camera's clock when both are on a recorder's
+        # clock, which may give the state; else from both starts, after the state is read, so an assumed alignment
+        # is never the recorded state (split_sensors)
+        by_clock, assumed, unplaced = split_sensors(item, q_abs, chosen[anchor]["clock"] is not None)
+        sensor_h5s = [p for p in by_clock if p.suffix.lower() in H5_EXT]
+        sensor_mcaps = [p for p in by_clock if p.suffix.lower() == ".mcap"]
         if sensor_h5s:
             merge_signals(signals, h5_file_signals(sensor_h5s, q_abs, len(q_abs)))
         if sensor_mcaps:
             merge_signals(signals, mcap_signals(sensor_mcaps, q_abs))
         state, action, state_names, state_src, state_note = h5_state(signals, rig, q_abs)
+        sensor_extra: dict = {}
+        if assumed:
+            merge_signals(signals, sensors_from_start(assumed, q_abs - q_abs[0], sensor_extra))
         instr, notes = h5_text(f, g, st["text"])
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
@@ -3914,8 +3914,9 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["unshown_cameras"] = [u for u in unshown if u]
     if st["unused"]:
         extra["source"]["unused_arrays"] = st["unused"]
-    if item.get("state"):
-        extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
+    for i in sensor_extra.get("reader_issues") or []:
+        add_issue(extra, **i)
+    note_sensors(extra, signals, by_clock, assumed, unplaced)
     if state_src:
         extra["source"]["state"] = state_src
     if state_note:
@@ -4064,6 +4065,13 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
         ctx["duration_s"] = round(ctx["n_state_frames"] / float(ctx["fps"]), 3)
     if ctx.get("profile") != rig:
         ctx["source"]["rig_note"] = f"the upload was marked {rig}; the {layout} layout is {ctx.get('profile')}"
+    # the layout's reader places only the recording's own channels: its folder's sensor files are listed on it
+    extra_files = [Path(x) for x in (item.get("state") or []) + (item.get("state_shared") or [])]
+    if extra_files:
+        why = f"the {layout} reader of this recording places only its own channels"
+        ctx["source"].setdefault("unused_signals", []).extend(f"{p.name} ({why})" for p in extra_files)
+        ctx["source"]["sensors"] = [p.name for p in extra_files]
+        ctx["source"]["sensor_files"] = {p.name: f"not placed: {why}" for p in extra_files}
     (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
     return ctx
 
@@ -5013,17 +5021,17 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     else:
         chan_topics = _mcap_channels_by_scan(item["file"])
     cam_topics = sorted({t for t, s in chan_topics if CAMERA_SCHEMA.search(s)})
-    video_topics = [t for t in cam_topics if not not_rgb(t)]
-    # a recording whose only cameras are infrared, thermal or a mask is labelled from them, as a data issue; a depth
-    # channel alone is distances, not a picture to label
-    not_colour = [] if video_topics else [t for t in cam_topics if not DEPTH_TOPIC.search(t)]
-    video_topics = video_topics or not_colour
+    # every camera channel but depth (distances, read as depth below) is chosen among (pick_cameras): one whose name
+    # says it is not colour (thermal, a mask) goes to the unused cameras and the board, never nowhere, and a recording
+    # whose only cameras are not colour is labelled from them, as a data issue
+    video_topics = [t for t in cam_topics if not DEPTH_TOPIC.search(t)]
     raw_topics = {t for t, s in chan_topics if RAW_IMAGE_SCHEMA.search(s)}
     if not video_topics:
         raise ValueError("the file has no colour camera channel"
                          + (f" (its channels: {', '.join(item['topics'][:12])})" if item["topics"] else ""))
     all_topics = [t for t, _ in chan_topics]
     vmap, unused = pick_cameras(video_topics, rig, all_topics)
+    not_colour = [t for t in vmap.values() if not_rgb(t)]
     text_topics = sorted({t for t in all_topics if TEXT_TOPIC.search(t) and t not in video_topics})
     # depth image channels, each with the camera whose topic it shares the most of (depth_partner), one per camera
     depth_of = {}
@@ -5154,9 +5162,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     pr = prs[me.order_views(files)[0]]
     q = t0 / 1e9 + pr["pts"].astype(np.float64) * float(pr["time_base"])          # its frames were written from t0
     used = {}
-    # sensor files of the episode's folder (assign_sensors) are read on the same log clock as the file's own channels
-    sensor_mcaps = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() == ".mcap"]
-    sensor_h5s = [Path(p) for p in item.get("state") or [] if Path(p).suffix.lower() in H5_EXT]
+    # sensor files of the episode's folder (assign_sensors): on the recording's log clock when they share it, else
+    # from both starts and never the state (split_sensors)
+    by_clock, assumed, unplaced = split_sensors(item, q, True)
+    sensor_mcaps = [p for p in by_clock if p.suffix.lower() == ".mcap"]
+    sensor_h5s = [p for p in by_clock if p.suffix.lower() in H5_EXT]
     if rig == "teleop_arms":
         streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q)
         state, action, note = joint_state(streams, q)
@@ -5165,8 +5175,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     signals = mcap_signals([item["file"]] + sensor_mcaps, q, used)
     if sensor_h5s:
         merge_signals(signals, h5_file_signals(sensor_h5s, q, len(q)))
-    if item.get("state"):
-        extra["source"]["sensors"] = [Path(p).name for p in item["state"]]
+    if assumed:
+        merge_signals(signals, sensors_from_start(assumed, q - q[0], extra))
+    note_sensors(extra, signals, by_clock, assumed, unplaced)
     # motion the file records but this reader does not use (hand, body or camera poses in a human recording, joints
     # in a layout the checks do not read): named on the job page, so a missing check is never a silent gap
     motion = [t for t in item["topics"] if re.search(r"hand|pose|slam|body|joint|odom|/tf$", t, re.I)
@@ -5403,21 +5414,11 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
             if part.get("version"):
                 det["version"] = part["version"]
     sensors = [Path(p) for p in det.get("state") or []]
+    # a folder's episodes are counted across every format, so one sensor file never joins two episodes as its own
+    assign_sensors(items, sensors)
     if sensors:
-        own = {Path(p) for it in items for p in it.get("state") or []}
-        shared = {Path(p) for it in items for p in it.get("state_shared") or []} - own
-        taken = own | shared
-        n = sum(1 for p in sensors if p in own)
-        if n:
-            det["used"].append(f"{n} sensor file{'s' if n != 1 else ''} with no camera (MCAP or HDF5), read with the "
-                               f"episode of {'their' if n != 1 else 'its'} folder or of the take "
-                               f"{'their names give' if n != 1 else 'its name gives'}.")
-        if shared:
-            det["used"].append(f"{_and_words(sorted(p.relative_to(root).as_posix() for p in shared))} "
-                               f"{'sit' if len(shared) != 1 else 'sits'} in a folder of several episodes and "
-                               f"{'name' if len(shared) != 1 else 'names'} none of their takes, so "
-                               f"{'each is' if len(shared) != 1 else 'it is'} placed by its own clock on the episodes "
-                               "whose videos carry capture times, and listed on the others.")
+        # what became of each sensor file is said after conversion (convert, sensor_lines), once it is known
+        taken = {Path(p) for it in items for p in (it.get("state") or []) + (it.get("state_shared") or [])}
         lost = [p for p in sensors if p not in taken]
         if lost:
             det["missing"].append(f"{_and_words([p.relative_to(root).as_posix() for p in lost])} "
@@ -5487,7 +5488,6 @@ def _plan_part(det: dict, root: Path, grouping: dict | None) -> list[dict]:
         items = plan_video(det, root, grouping)
         det["used"].append(f"{len(items)} video episodes." if len(items) != 1
                            else "1 video episode.")
-    assign_sensors(items, [Path(p) for p in det.get("state") or []])
     _mark_packaging(det, items)
     return items
 
@@ -5507,10 +5507,12 @@ def assign_sensors(items: list[dict], sensors: list[Path]) -> None:
     holds the sensor files of its folder when the folder holds that one episode, and in a folder of several episodes
     the files whose name gives its take (glove_run2.h5 goes with run2.mp4). A file of such a folder whose name gives
     no episode's take is it["state_shared"] of every episode there: its own clock places it on the one it recorded,
-    and without capture times on the videos it cannot be placed and is listed with the reason (convert_video)."""
+    and without a clock in common it is listed with the reason (split_sensors). The episodes of a folder are counted
+    across every format, so a folder of run.mp4 and cam.h5 holds two."""
     per_folder: dict[Path, list[dict]] = {}
     for it in items:
-        per_folder.setdefault(item_folder(it), []).append(it)
+        if it.get("kind") in ("video", "mcap", "hdf5"):    # a LeRobot dataset's own files are its own
+            per_folder.setdefault(item_folder(it), []).append(it)
     for it in items:
         it.setdefault("state", [])
         it.setdefault("state_shared", [])
@@ -5528,48 +5530,111 @@ def assign_sensors(items: list[dict], sensors: list[Path]) -> None:
                 it["state_shared"].append(p)
 
 
-def sensor_start(p: Path) -> float | None:
-    """The first time a sensor file records, in seconds on its own clock: an MCAP's first message's log time, an HDF5
-    file's earliest clock reading (h5_streams); None when it has none."""
+def sensor_times(p: Path) -> np.ndarray | None:
+    """A sensor file's own times in seconds, sorted: an MCAP's message log times (from its summary's first and last
+    time and count, or scanned when it has no summary), an HDF5 file's longest clock (h5_streams); None when it has
+    none."""
     try:
         if Path(p).suffix.lower() == ".mcap":
             from mcap.reader import make_reader
             with open(p, "rb") as fh:
                 s = make_reader(fh).get_summary()
-            if s is not None and s.statistics and s.statistics.message_count:
-                return s.statistics.message_start_time / 1e9
-            first = next((m.log_time for _, _, m in _mcap_stream(Path(p))), None)
-            return first / 1e9 if first is not None else None
+            st = s.statistics if s is not None else None
+            if st and st.message_count:
+                return np.linspace(st.message_start_time, st.message_end_time, max(int(st.message_count), 1)) / 1e9
+            t = np.sort(np.array([m.log_time for _, _, m in _mcap_stream(Path(p))], dtype=np.float64)) / 1e9
+            return t if len(t) else None
         import h5py
         with h5py.File(p, "r") as f:
-            clocks = [t for t in h5_streams(f, "")["clock"].values() if len(t)]
-        return min(float(np.nanmin(t)) for t in clocks) if clocks else None
+            clocks = [np.sort(t[np.isfinite(t)]) for t in h5_streams(f, "")["clock"].values() if len(t)]
+        clocks = [t for t in clocks if len(t)]
+        return max(clocks, key=len) if clocks else None
     except Exception:
         return None
 
 
-ASSUMED_START = ("{} was placed on the video from both starts, since the videos carry no capture times on its "
-                 "clock, so its alignment assumes a common start")
+def recorder_clock(t) -> bool:
+    """Whether times count on a recorder's clock, from boot or the epoch (far from zero in their own steps), so the
+    times of another file on that clock can be compared with them. Times that count from their own start (0, 0.033,
+    ...) share no clock with anything: two such files are lined up only by assuming they started together."""
+    if t is None:
+        return False
+    ok, step, size = _clock_facts(np.asarray(t, dtype=np.float64))
+    return len(ok) > 1 and step > 0 and size > FAR_FROM_ZERO_STEPS * step
+
+
+def split_sensors(item: dict, q, clocked: bool) -> tuple[list[Path], list[Path], list[tuple[Path, str]]]:
+    """(placed by their own clock, placed from both starts, not placed with why) for an episode's sensor files
+    (assign_sensors): its own files (item["state"]) and those it shares with the other episodes of its folder
+    (item["state_shared"]). A file is placed by its clock when the footage's frame times q are on a recorder's clock
+    (clocked: capture times, an MCAP's log times, an HDF5 camera's clock) and the file's times are on one too and
+    overlap the footage. Otherwise an own file is placed from both starts, an alignment that is assumed (its signals
+    are marked so and never read as the arm state), while a shared file is listed on the episode with the reason: it
+    could be any of the folder's episodes' recording, and placing it from both starts on each would be a guess."""
+    by_clock, assumed, unplaced = [], [], []
+    on_clock = bool(clocked) and q is not None and recorder_clock(q)
+    own = [Path(x) for x in item.get("state") or []]
+    for p in own + [Path(x) for x in item.get("state_shared") or [] if Path(x) not in own]:
+        t = sensor_times(p)
+        if t is None:
+            unplaced.append((p, "no time in it to place it on the footage by"))
+        elif on_clock and recorder_clock(t) and overlaps(t, np.asarray(q, dtype=np.float64)):
+            by_clock.append(p)
+        elif p in own:
+            assumed.append(p)
+        elif on_clock and recorder_clock(t):
+            unplaced.append((p, "its clock records nothing during this episode's footage"))
+        else:
+            unplaced.append((p, "several episodes share its folder, its name gives none of their takes, and it shares "
+                                "no clock with this episode's footage to tell whether it recorded it"))
+    return by_clock, assumed, unplaced
+
+
+def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, unplaced: list) -> None:
+    """What became of an episode's sensor files: their names (source "sensors", which says sensor data was read or
+    tried, label/episode.py), how each was placed or why it was not (source "sensor_files", which convert gathers into
+    the report), and each file not placed listed among the signals left out with the reason."""
+    files = [*by_clock, *assumed, *(p for p, _ in unplaced)]
+    if not files:
+        return
+    extra.setdefault("source", {})["sensors"] = [Path(p).name for p in files]
+    how = {Path(p).name: "placed by its own clock" for p in by_clock}
+    how.update({Path(p).name: "placed from both starts" for p in assumed})
+    how.update({Path(p).name: f"not placed: {why}" for p, why in unplaced})
+    extra["source"]["sensor_files"] = how
+    signals.left_out += [(Path(p).name, why) for p, why in unplaced]
+
+
+ASSUMED_START = ("{} (from {}) was placed on the footage from both starts, since the two share no clock, so its "
+                 "alignment assumes a common start")
+ALIGNED_ASSUMED = "assumed start"     # a signal's meta "aligned_by" when it was placed from both starts
+
+
+def mark_assumed(sig: Signals, extra: dict, source: str) -> Signals:
+    """Every signal of sig marked as placed from both starts: meta "aligned_by" ALIGNED_ASSUMED, which the prompt and
+    the board state beside it, and one data issue per signal (signal_alignment_assumed) naming it and its source."""
+    for k in sig:
+        sig.meta.setdefault(k, {})["aligned_by"] = ALIGNED_ASSUMED
+        add_issue(extra, "signal_alignment_assumed", ASSUMED_START.format(k, source), signal=k)
+    return sig
 
 
 def sensors_from_start(paths: list[Path], t_video: np.ndarray, extra: dict) -> Signals:
-    """The signals of sensor files beside videos that carry no capture times (frame_times), each file placed from
-    both starts as table_signals places a table: its own first reading at the video's first frame (t_video, the
-    anchor camera's seconds from its first frame). Each file so placed is a data issue (signal_alignment_assumed), and
-    its arm channels stay signals, never the recorded state: a state is read only on capture times."""
+    """The signals of sensor files that share no clock with the footage, each file placed from both starts as
+    table_signals places a table: its own first reading at the anchor camera's first frame (t_video, the anchor's
+    seconds from its first frame). Every signal so placed is marked (mark_assumed), and an arm's channels stay
+    signals, never the recorded state: a state is read only where the alignment is recorded."""
     out = Signals()
     t_video = np.asarray(t_video, dtype=np.float64)
     for p in paths:
         p = Path(p)
-        start = sensor_start(p)
-        if start is None:
-            out.left_out.append((p.name, "no time in it to place it on the video by"))
+        t = sensor_times(p)
+        if t is None:
+            out.left_out.append((p.name, "no time in it to place it on the footage by"))
             continue
-        q = start + t_video
+        q = float(t[0]) + t_video
         got = mcap_signals([p], q) if p.suffix.lower() == ".mcap" else h5_file_signals([p], q, len(q))
-        merge_signals(out, got)
-        if got:
-            add_issue(extra, "signal_alignment_assumed", ASSUMED_START.format(p.name))
+        merge_signals(out, mark_assumed(got, extra, p.name))
     return out
 
 
@@ -5776,6 +5841,9 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
             break
         total += secs
         report["episodes"].append(episode_row(it, ctx, secs))
+    used, missing = sensor_lines(out, report["episodes"])
+    report["used"] += used
+    report["missing"] += missing
     notes = sorted({e["state_note"] for e in report["episodes"] if e.get("state_note")})
     report["notes"] += notes
     report["seconds"] = round(total, 2)
@@ -5785,6 +5853,34 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     measure_signal_scales(out, ids)
     measure_contacts(out, ids)
     return report
+
+
+def sensor_lines(out: Path, episodes: list[dict]) -> tuple[list[str], list[str]]:
+    """(used, missing) report lines saying exactly what became of each sensor file (source "sensor_files", written by
+    note_sensors): on how many episodes it was placed by its own clock, placed from both starts, or listed with the
+    reason. A file listed on every episode it went with is in missing, any other in used."""
+    by: dict[str, dict[str, list[str]]] = {}
+    for e in episodes:
+        try:
+            ctx = json.loads((Path(out) / e["episode_id"] / "context.json").read_text())
+        except Exception:
+            continue
+        for name, how in ((ctx.get("source") or {}).get("sensor_files") or {}).items():
+            by.setdefault(name, {}).setdefault(how, []).append(e["name"])
+    used, missing = [], []
+    count = lambda xs: f"{len(xs)} episode{'s' if len(xs) != 1 else ''}"
+    for name, hows in sorted(by.items()):
+        parts = []
+        for how, eps in sorted(hows.items()):
+            if how == "placed by its own clock":
+                parts.append(f"placed by its own clock on {count(eps)}")
+            elif how == "placed from both starts":
+                parts.append(f"placed from both starts on {count(eps)}, so its alignment there is assumed")
+            else:
+                parts.append(f"listed on {count(eps)} and not read, since {how.split(': ', 1)[-1]}")
+        line = f"{name}, a sensor file with no camera: " + "; ".join(parts) + "."
+        (missing if all(h.startswith("not placed") for h in hows) else used).append(line)
+    return used, missing
 
 
 TRIM_MIN_S = 1.0       # an episode is trimmed to the room left under the cap only when at least this much is left

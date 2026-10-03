@@ -1774,7 +1774,9 @@ def _episode_ctx(out: Path, rep: dict, name_part: str) -> dict:
 def _a_mixed_upload_reads_every_format_it_holds(tmp_path):
     """An upload of plain videos, an HDF5 file with a camera and an HDF5 glove file with none had been read as HDF5
     alone: the videos were never mentioned. Every format is read, the glove file goes with the camera episode of its
-    folder, and a file no reader opens is named."""
+    folder, and a file no reader opens is named. The camera file has no clock and the glove's counts from its own
+    start, so the glove is placed from both starts: its arrays are signals marked as aligned by an assumed start,
+    each a data issue, and its qpos is never read as the arm state."""
     import h5py
     import numpy as np
     root = tmp_path / "upload"
@@ -1785,6 +1787,7 @@ def _a_mixed_upload_reads_every_format_it_holds(tmp_path):
         h["cam"] = np.zeros((10, 96, 96, 3), np.uint8)
     with h5py.File(root / "glove.h5", "w") as h:
         h["pressure"] = np.random.default_rng(0).random((10, 16, 16))
+        h["qpos"] = np.stack([0.3 * np.sin(np.arange(10) / 3 + j) for j in range(14)], axis=1)
         h["time"] = np.arange(10) / 30
     (root / "calib.bin").write_bytes(b"x")
     det, items = f.plan(root)
@@ -1795,7 +1798,11 @@ def _a_mixed_upload_reads_every_format_it_holds(tmp_path):
     rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
     assert not rep["failed"] and len(rep["episodes"]) == 3, rep
     ctx = _episode_ctx(tmp_path / "eps", rep, "b")
-    assert "pressure" in [s["name"] for s in ctx["signals"]], ctx.get("signals")
+    sig = {s["name"]: s for s in ctx["signals"]}
+    assert {"pressure", "qpos"} <= set(sig), ctx.get("signals")
+    assert ctx["state_kind"] == "none" and "state" not in ctx["source"], (ctx["state_kind"], ctx["source"])
+    assert sig["qpos"].get("aligned_by") == "assumed start" and sig["pressure"].get("aligned_by") == "assumed start"
+    assert {i["signal"] for i in _issues(ctx, "signal_alignment_assumed")} == {"pressure", "qpos"}, ctx["reader_issues"]
 
 
 def test_a_mixed_upload_reads_every_format_it_holds():
@@ -2036,7 +2043,8 @@ def _every_camera_that_holds_a_picture_is_read(tmp_path):
     import numpy as np
     assert not f.not_rgb("/segway_cam/image") and not f.not_rgb("conference_room") and not f.not_rgb("visual_top")
     assert f.not_rgb("/camera/depth/image") and f.not_rgb("/thermal/image") and f.not_rgb("ir_cam")
-    assert f.not_rgb("/camera/infra1/image_rect_raw") and f.not_rgb("hand_mask")
+    # a RealSense infra1 stream stays a camera the model is shown, as it was before whole words
+    assert not f.not_rgb("/camera/infra1/image_rect_raw") and f.not_rgb("hand_mask")
     assert set(f.pick_cameras(["/segway_cam/image", "/top/image"], "teleop_arms")[0].values()) == {
         "/segway_cam/image", "/top/image"}
     root = tmp_path / "mcap"
@@ -2322,3 +2330,93 @@ def test_an_upload_or_episode_with_no_camera_names_every_file_and_why():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _an_upload_or_episode_with_no_camera_names_every_file_and_why(Path(t))
+
+
+def _a_sensor_file_in_a_folder_of_several_episodes_of_any_format_joins_none_by_guess(tmp_path):
+    """A folder with run.mp4, cam.h5 and glove.h5 had the glove joined to both episodes, since each format counted
+    only its own episodes, and the HDF5 episode read its qpos as the arm state on an assumed start. A folder's
+    episodes are counted across every format: the glove names no take, neither episode has a recorder clock to
+    place it by, so it is listed on each with the reason and read as neither's state."""
+    import h5py
+    import numpy as np
+    root = tmp_path / "upload"
+    (root / "a").mkdir(parents=True)
+    _clip(root / "a" / "run.mp4", 30)
+    with h5py.File(root / "a" / "cam.h5", "w") as h:
+        h["cam"] = np.random.default_rng(0).integers(0, 255, (30, 96, 96, 3)).astype(np.uint8)
+    with h5py.File(root / "a" / "glove.h5", "w") as h:
+        th = np.arange(30) / 30
+        h["time"] = th
+        h["qpos"] = np.stack([0.3 * np.sin(th * 3 + j) for j in range(14)], axis=1)
+    det, items = f.plan(root)
+    assert all(not it["state"] and [Path(p).name for p in it["state_shared"]] == ["glove.h5"] for it in items), items
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 2, rep
+    for e in rep["episodes"]:
+        ctx = _episode_ctx(tmp_path / "eps", rep, e["name"])
+        assert ctx["state_kind"] == "none" and not ctx.get("signals"), (e["name"], ctx.get("signals"))
+        assert any(u.startswith("glove.h5") for u in ctx["source"]["unused_signals"]), ctx["source"]
+    assert any("glove.h5" in m and "listed" in m for m in rep["used"] + rep["missing"]), rep
+
+
+def _a_shared_sensor_file_is_placed_by_clock_on_every_episode_of_any_format(tmp_path):
+    """Two HDF5 camera episodes and a glove file whose name gives no take, in one folder: the glove had been
+    silently unread while the report said it was placed. Both episodes have a recorder clock, so the glove is placed
+    by its clock on each, and the report says it was placed on both."""
+    import h5py
+    import numpy as np
+    root = tmp_path / "upload"
+    root.mkdir()
+    for k in (1, 2):
+        with h5py.File(root / f"run{k}.h5", "w") as h:
+            h["cam"] = np.random.default_rng(k).integers(0, 255, (30, 96, 96, 3)).astype(np.uint8)
+            h["timestamps"] = 1_790_000_000.0 + 10 * k + np.arange(30) / 30
+    with h5py.File(root / "glove.h5", "w") as h:
+        h["time"] = 1_790_000_000.0 + np.arange(900) / 30
+        h["pressure"] = np.arange(900, dtype=np.float64)[:, None] * np.ones((1, 4))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 2, rep
+    for k in (1, 2):
+        ctx = _episode_ctx(tmp_path / "eps", rep, f"run{k}")
+        z = np.load(tmp_path / "eps" / ctx["episode_id"] / "signals.npz")
+        s = next(s for s in ctx.get("signals") or [] if s["name"] == "pressure")
+        assert abs(float(z[s["key"]][0, 0]) - 300 * k) < 1.5, (k, z[s["key"]][:3, 0])
+        assert not s.get("aligned_by"), s
+    assert any("glove.h5" in u and "placed by its own clock on 2 episodes" in u for u in rep["used"]), rep["used"]
+
+
+def _every_mcap_camera_is_named_and_the_models_choice_is_kept(tmp_path):
+    """The whole word rule for cameras that are not colour took a RealSense infra1 stream for infrared and dropped it
+    before cameras were chosen, so a camera the model had been shown was nowhere; a thermal or mask channel was
+    never listed at all. infra1 is shown as before, and a thermal camera the model is not shown is listed among the
+    unused cameras and written for the board."""
+    root = tmp_path / "upload"
+    root.mkdir()
+    _camera_mcap(root / "rs.mcap", ["/realsense/color/image_raw/compressed", "/realsense/infra1/image_rect_raw",
+                                    "/thermal/image/compressed"])
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "rs")
+    keys = {c["key"] for c in ctx["cameras"].values()}
+    assert "/realsense/infra1/image_rect_raw" in keys and "/thermal/image/compressed" not in keys, keys
+    assert "/thermal/image/compressed" in ctx["source"]["unused_cameras"], ctx["source"]
+    assert [u["name"] for u in ctx.get("unshown_cameras") or []] == ["/thermal/image/compressed"], ctx.get(
+        "unshown_cameras")
+
+
+def test_a_sensor_file_in_a_folder_of_several_episodes_of_any_format_joins_none_by_guess():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_sensor_file_in_a_folder_of_several_episodes_of_any_format_joins_none_by_guess(Path(t))
+
+
+def test_a_shared_sensor_file_is_placed_by_clock_on_every_episode_of_any_format():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_shared_sensor_file_is_placed_by_clock_on_every_episode_of_any_format(Path(t))
+
+
+def test_every_mcap_camera_is_named_and_the_models_choice_is_kept():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _every_mcap_camera_is_named_and_the_models_choice_is_kept(Path(t))
