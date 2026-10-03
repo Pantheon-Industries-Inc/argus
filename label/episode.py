@@ -1577,18 +1577,24 @@ def _motion_table(ep: dict, pl: dict) -> str:
         + "\n".join(rows))
 
 
+def annotation_lines(ctx: dict) -> list[str]:
+    """Every dataset step with its declared time and success flag."""
+    def when(x):            # a step with no end time is a moment, one with no time is listed without one
+        t0, t1 = number(x.get("t0")), number(x.get("t1"))
+        return ("no time" if t0 is None else tenths(t0) if t1 is None or t1 == t0
+                else f"{tenths(t0)[:-1]}-{tenths(t1)}")
+    lines = [f"  {when(x)}  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
+             for x in (ctx.get("annotation_subtasks") or []) if isinstance(x, dict)]
+    return lines
+
+
 def ego_annotation_block(ctx: dict) -> str:
     goal = (ctx.get("instruction") or "").strip()
     subs = ctx.get("annotation_subtasks") or []
     if not goal and not subs:
         return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
-    def when(x):            # a step with no end time is a moment, one with no time is listed without one
-        t0, t1 = number(x.get("t0")), number(x.get("t1"))
-        return ("no time" if t0 is None else tenths(t0) if t1 is None or t1 == t0
-                else f"{tenths(t0)[:-1]}-{tenths(t1)}")
-    lines = [f"  {when(x)}  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
-             for x in subs if isinstance(x, dict)]
+    lines = annotation_lines(ctx)
     return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE (claims to check, see ABOUT THE DATASET'S ANNOTATION above):\n"
             + (f"  goal: \"{goal}\"\n" if goal else "")
             + ("  subtasks, with the times the dataset gives:\n" + "\n".join(lines) + "\n" if lines else "")
@@ -1970,6 +1976,18 @@ def _instants_line(ep: dict) -> str:
             f"{last}.")
 
 
+def robot_annotation_block(ctx: dict) -> str:
+    """Dataset step claims, independent of the episode instruction."""
+    if not ctx.get("annotation_subtasks"):
+        return ""
+    lines = annotation_lines(ctx)
+    return ("\nTHE DATASET'S STEP ANNOTATIONS FOR THIS EPISODE (claims to check against the footage):\n"
+            + "These are the dataset's claims, not observed actions or an instruction. Check them against the footage; "
+              "an unsuccessful flag is the dataset's claim about the outcome.\n"
+            + ("  subtasks, with the times the dataset gives:\n" + "\n".join(lines) + "\n" if lines else "")
+            + (f"  about these annotations: {ctx['annotation_note'].strip()}\n" if ctx.get("annotation_note") else ""))
+
+
 def task_block(ep: dict) -> str:
     """The task, part of the base: the dataset's instruction (robot rigs) or annotation (head camera). A head camera
     with no annotation is told there is none, because its shared instructions always ask for goal_alignment."""
@@ -1977,8 +1995,9 @@ def task_block(ep: dict) -> str:
     if rig(ep) == "ego_head":
         return ego_annotation_block(ctx)
     given = (ctx.get("instruction") or "").strip()
+    annotations = robot_annotation_block(ctx)
     if not given:
-        return ""
+        return annotations
     label = "; ".join(ctx.get("task_label") or [])
     # the rules for using the instruction are the same for every episode and live in the cached
     # instructions (instruction_rules); only the instruction itself belongs to the episode
@@ -1990,7 +2009,7 @@ def task_block(ep: dict) -> str:
         s += (f"The dataset's coarse task label for this episode is \"{label}\"; the "
               "instruction above is the dataset's per-episode annotation of it, and "
               "the outcome is graded against it.\n")
-    return s
+    return s + annotations
 
 
 def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple,
