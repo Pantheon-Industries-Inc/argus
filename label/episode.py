@@ -1348,7 +1348,19 @@ def contacts_block(ep: dict, pl: dict) -> str:
             "moment a hand clearly takes hold of or presses something that no contact of the recording covers.\n")
 
 
-SIGNAL_TABLE_MAX_CHARS = 12000     # the values at each instant stay under this; the rows that move most are kept
+SIGNAL_TABLE_MIN_CHARS = 12000
+SIGNAL_TABLE_CHARS_PER_INSTANT = 400
+SIGNAL_TABLE_MAX_CHARS = 96000
+
+
+def signal_readout_budget(instants: int) -> int:
+    """Keep the small readout allowance and grow with selected instants, up to a fixed character cap.
+    Retained 28 to 134 instant recordings need more room than the old fixed 12000 characters; 400 per instant
+    permits dozens of numeric rows without allowing a long recording to grow the prompt without limit.
+    This counts characters, not provider tokens, and excludes descriptor and omission text.
+    """
+    return min(SIGNAL_TABLE_MAX_CHARS, max(SIGNAL_TABLE_MIN_CHARS,
+                                         SIGNAL_TABLE_CHARS_PER_INSTANT * instants))
 
 
 def _signals_table(ep: dict, pl: dict) -> str:
@@ -1424,11 +1436,10 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     them. A touch signal has no rows (its timing is given once as the episode's contacts, contacts_block, so the frames
     are read on their own first and the contacts are checked against them; touch is the rule the contacts shown follow,
     touch_verdicts), nor has a signal that never changes or has no reading. The rows are ranked by how much their
-    values move over the episode (label/signals.py movements) and added in that order until the first that does not
-    fit SIGNAL_TABLE_MAX_CHARS, then printed in the signals' own order, so the rows shown are always the ones that move
-    most; every signal left out, whole or in part, is named in one line with its size and rate. Until the 2026-10-02
-    audit the readout was dropped whole past the budget, so a 66 s ego MCAP with IMU, hand, body and SLAM streams
-    showed none of its 15 signals over time."""
+    values move over the episode (label/signals.py movements) and kept when they fit the allowance for the selected
+    instants, then printed in the signals' own order. An oversized row does not prevent smaller rows being shown.
+    Every signal left out, whole or in part, is named with its size and rate; original value names remain in metadata.
+    """
     from label import signals as sg
     sig = ep.get("signals") or {}
     meta = ep.get("signal_meta") or {}
@@ -1454,12 +1465,14 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     lines = []
     head = "    at: " + " ".join(f"{frame_time(ep, k):.2f}" for k in ks)
     text = {(r[1], r[2]): f"    {r[4]}: " + " ".join(r[5]) for r in rows}
-    room, chosen = SIGNAL_TABLE_MAX_CHARS - len(head), set()
+    budget = signal_readout_budget(len(ks))
+    room, chosen = budget - len(head), set()
+    skipped, kept_after_skip = False, False
     for r in sorted(rows, key=lambda r: (-r[0], r[1], r[2])):
-        # the first row that does not fit ends the readout: a shorter row that moves less, kept after it, would leave
-        # the line below false in saying the rows left out move least
         if len(text[r[1], r[2]]) > room:
-            break
+            skipped = True
+            continue
+        kept_after_skip |= skipped
         chosen.add((r[1], r[2]))
         room -= len(text[r[1], r[2]])
     if chosen:
@@ -1473,9 +1486,12 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     if left:
         named = _and_list([_left_out(nm, arrs[nm], meta.get(nm) or {}, len(left[nm]), sum(r[3] == nm for r in rows))
                            for nm in left])
-        lines.append("  The values at each instant leave out " + named
-                     + (", because these move least and there is no more room." if chosen else
-                        ", because not even one row fits."))
+        reason = (", because these move least and there is no more room." if chosen else
+                  ", because not even one row fits.")
+        if kept_after_skip or budget != SIGNAL_TABLE_MIN_CHARS:
+            reason = (f", because rows are ranked by movement and kept when they fit the {budget} character budget."
+                      if chosen else f", because no row fits the {budget} character budget after the times row.")
+        lines.append("  The values at each instant leave out " + named + reason)
     return lines, frozenset(r[3] for r in rows if r[3] not in left)
 
 
@@ -1764,7 +1780,9 @@ def _no_state_text(ep: dict, pl: dict) -> str:
                                       and np.isfinite(a[:pl["n"]]).any()
                                       for nm, a in ep["signals"].items()):
             why = LAYOUT
-        if why == LAYOUT or why is None and not (short and note):
+        if r == "ego_head" and (why == LAYOUT or why is None and not (short and note)):
+            head = "no tracked actor state was read; the recorded signals below retain their own shapes and names."
+        elif why == LAYOUT or why is None and not (short and note):
             head = f"no {n['actor']} state in the layout our checks read."
         else:
             reason = STATE_WORDING.get(why) if why is not None else None
@@ -1884,8 +1902,12 @@ def present_blocks(ep: dict, pl: dict) -> list[Block]:
 
 
 def is_recorded(ep: dict, pl: dict, blocks: list[Block] | None = None) -> bool:
-    """Whether the episode is a recording rather than video only, from its present blocks (given, or found now)."""
-    return any(b.name in RECORDED_BLOCKS for b in (present_blocks(ep, pl) if blocks is None else blocks))
+    """Whether shared motion wording has state or other signals behind it. Touch alone measures contact,
+    not actor motion; its sensor and contact blocks still remain present with their checks and schema fields.
+    """
+    return any(b.name in RECORDED_BLOCKS and (b.name != "signals" or any(
+        name not in _touch(ep, pl) for name in ep.get("signals", {})))
+        for b in (present_blocks(ep, pl) if blocks is None else blocks))
 
 
 def requested_schema(ep: dict, pl: dict, blocks: list[Block] | None = None) -> tuple:
@@ -1966,14 +1988,26 @@ def _excluded_camera_clock_notes(ep: dict) -> str:
     return " " + " ".join(notes) if notes else ""
 
 
-def _instants_line(ep: dict) -> str:
+def _instants_line(ep: dict, pl: dict | None = None) -> str:
+    """Describe the selector's cadence and boundary instants without modifying its picks."""
+    spans = (pl.get("quiet_spans") or pl.get("spans") or []) if pl else []
+    boundaries = sorted({k for a, b in spans for k in (a, b + 1) if k in pl["ks"]}) if pl else []
+    extra = ""
+    if spans:
+        what = "quiet signal spans" if pl.get("quiet_spans") else "recorded still spans"
+        times = ", ".join(f"{frame_time(ep, k):.2f}" for k in boundaries)
+        extra = (f" Sampling restarts at the boundary instants of {what} ({times} s), at each span's start and "
+                 "the first frame after its end where available.")
+        if pl.get("quiet_spans"):
+            extra += " Signal quiet does not establish that an arm was still."
     # when every camera's file ends before the episode does, the last instant is the last frame they have (frames)
     last = "frame and the last frame its cameras have" if ep.get("footage_end") is not None else "and last frame"
+    cadence = ("within each stretch between boundaries" if spans else "for the whole episode")
     if ep.get("unavailable_instants"):
-        return (f"Which instants are planned: one every {SAMPLE_EVERY_S[rig(ep)]:g} s for the whole episode, plus its "
-                "first and last frame. Unavailable instants and available replacements are named below.")
-    return (f"Which instants you get: one every {SAMPLE_EVERY_S[rig(ep)]:g} s for the whole episode, plus its first "
-            f"{last}.")
+        return (f"Which instants are planned: one every {SAMPLE_EVERY_S[rig(ep)]:g} s {cadence}, plus its "
+                "first and last frame. Unavailable instants and available replacements are named below." + extra)
+    return (f"Which instants you get: one every {SAMPLE_EVERY_S[rig(ep)]:g} s {cadence}, plus its first "
+            f"{last}." + extra)
 
 
 def robot_annotation_block(ctx: dict) -> str:
@@ -2025,7 +2059,7 @@ def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple,
         got[b.slot] += b.text(ep, pl)
     return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep, is_recorded(ep, pl, blocks))
             + "\n"
-            + _frames_head(ep, cell_w, cell_h, native) + got["frames_detail"] + "\n" + _instants_line(ep)
+            + _frames_head(ep, cell_w, cell_h, native) + got["frames_detail"] + "\n" + _instants_line(ep, pl)
             + got["frames"] + got["state"] + got["signals"] + BETWEEN_INSTANTS + got["after_frames"] + "\n"
             + task_block(ep) + got["after_task"])
 

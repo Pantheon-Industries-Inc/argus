@@ -49,6 +49,9 @@ SMALL = 4
 # widest a prompt showed value by value before arrays were read as wholes, so a 14-joint action or a 9-value camera
 # matrix keeps every number, while a pressure map or hand landmarks get the pooled range of all their values
 PER_VALUE_MAX = 64
+# Ordinary retained descriptors are at most 585 characters. Longer rows group readings by value index and keep
+# their full names in the original metadata, retaining every range without an unbounded inline name list.
+DESCRIBE_ROW_MAX_CHARS = 768
 # The values at each instant follow describe for a flat vector of up to PER_VALUE_MAX values whose values the dataset
 # names, or whose own name says it holds joints or a state: one row per value under its own name. A humanoid's 26
 # joints and a base's x, y, yaw, vx, wz reached that readout as one "largest change" or "total activity" row while
@@ -604,8 +607,14 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     d = a.shape[1]
     what = (f"{' x '.join(str(int(x)) for x in shape)} values" if shape and len(shape) > 1 else
             f"{d} value{'s' if d > 1 else ''}")
+    named = None
     if names and len(names) == d and d <= PER_VALUE_MAX:
-        what += " (" + ", ".join(names) + ")"
+        named = ", ".join(names)
+        if len(named) <= DESCRIBE_ROW_MAX_CHARS:
+            what += " (" + named + ")"
+        else:
+            what = (f"{d} named values in value order, value names retained in episode metadata"
+                    + (f", {' x '.join(str(int(x)) for x in shape)} shape" if shape and len(shape) > 1 else ""))
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
         rate = _num(float(rate_hz))
         what += (f", estimated at {rate} Hz from assumed placement" if aligned_by == COARSE_CLOCK or clock_problem else
@@ -639,5 +648,18 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
         return f"{head}: values from {_num(np.nanmin(lo))} to {_num(np.nanmax(hi))}{tail}"
     if (hi == lo).all():
         value = _num(lo[0]) if d == 1 else "[" + ", ".join(_num(x) for x in lo) + "]"
-        return f"{head}: {value} throughout{tail}"
-    return f"{head}: " + ", ".join(_num(l) if l == h else f"{_num(l)} to {_num(h)}" for l, h in zip(lo, hi)) + tail
+        text = f"{head}: {value} throughout{tail}"
+    else:
+        text = f"{head}: " + ", ".join(_num(l) if l == h else f"{_num(l)} to {_num(h)}"
+                                     for l, h in zip(lo, hi)) + tail
+    if len(text) <= DESCRIBE_ROW_MAX_CHARS:
+        return text
+    if named and f" ({named})" in what:
+        what = what.replace(f" ({named})", "", 1)
+        what += ", value names retained in episode metadata"
+    readings = [_num(l) + " throughout" if l == h else f"{_num(l)} to {_num(h)}" for l, h in zip(lo, hi)]
+    # Eight ranges fit within the descriptor allowance even at the longest numeric format. The signal name and
+    # clock qualifications are never truncated; the allowance bounds value detail, not original source identities.
+    groups = [f"    values {i}-{min(i + 7, d - 1)}: " + ", ".join(readings[i:i + 8])
+              for i in range(0, d, 8)]
+    return "\n".join([f"  {name} ({what}): ranges by value index"] + groups) + tail

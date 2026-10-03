@@ -474,10 +474,14 @@ def test_a_humanoid_state_and_a_bases_odometry_are_shown_value_by_value_under_th
     ep["signal_meta"] = {"observation.state": {"names": HUMANOID},
                          "observation.base.odom": {"names": ["x", "y", "yaw", "vx", "wz"]}}
     episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
-    # the signal's own line already names and ranges every value since 942d399; kept here as a guard
-    assert "observation.state (26 values (left_arm_j1, left_arm_j2," in episode and "right_hand_pinky))" in episode
-    line = next(l for l in episode.splitlines() if l.startswith("  observation.state (26 values"))
-    assert "values from" not in line and line.count(" to ") == 26
+    # Long descriptors group every original range by value index; the readout retains each original value name.
+    from label import signals as sg
+    description = sg.describe("observation.state", ep["signals"]["observation.state"], names=HUMANOID)
+    assert description in episode and "value names retained in episode metadata" in description
+    assert "values from" not in description and description.count(" to ") == 26
+    for name, lo, hi in zip(HUMANOID, *sg.finite_range(ep["signals"]["observation.state"])):
+        assert f"    observation.state {name}: " in episode
+        assert f"{sg._num(lo)} to {sg._num(hi)}" in description
     # new: one row per value at each instant, and the state line names the joint readings
     assert "    observation.state left_arm_j1: " in episode and "    observation.base.odom vx: " in episode
     assert "total activity" not in episode
@@ -660,37 +664,46 @@ def _sweeps_wide_and_flags():
     return ep, _pl(n)
 
 
-def test_the_rows_shown_at_each_instant_are_always_the_top_of_the_ranking():
-    """A row that does not fit ends the readout: shorter rows that move less are never kept past it, so the line that
-    says the rows left out move least is true."""
+def test_the_rows_shown_at_each_instant_are_always_the_top_of_the_ranking(monkeypatch):
+    """Choose in movement rank order when each row fits. An oversized row leaves space for smaller later rows,
+    and the omission reason never claims all omitted rows moved least.
+    """
     from label import signals as sg
+    monkeypatch.setattr(me, "SIGNAL_TABLE_MAX_CHARS", 12000)
     ep, pl = _sweeps_wide_and_flags()
     lines, whole = me._signal_readout(ep, pl)
     shown = [l.split(":")[0].strip() for l in lines if l.startswith("    ") and not l.startswith("    at: ")]
     order = list(ep["signals"])
     ranked = sorted(order, key=lambda k: (-float(sg.movements(ep["signals"][k])[0]), order.index(k)))
-    # printed in the signals' own order, chosen from the top of the ranking down
-    assert set(shown) == set(ranked[:len(shown)]) == whole and shown == [k for k in order if k in whole]
-    assert ranked[len(shown)] == "wide"
-    # first fit would have kept two flags after skipping the wide row
-    room = me.SIGNAL_TABLE_MAX_CHARS - sum(len(l) for l in lines if l.startswith("    "))
+    # Printed in original signal order, with exact first fit selection from the movement ranking.
+    room = me.SIGNAL_TABLE_MAX_CHARS - len(lines[1])
+    expected = set()
+    for name in ranked:
+        row = "    " + name + ": " + " ".join(me._num(x) for x in ep["signals"][name][pl["ks"], 0])
+        if len(row) <= room:
+            expected.add(name)
+            room -= len(row)
+    assert set(shown) == expected == whole and shown == [k for k in order if k in whole]
+    assert ranked[42] == "wide" and "wide" not in whole
     flag = len("    flag_0: " + " ".join(me._num(x) for x in ep["signals"]["flag_0"][pl["ks"], 0]))
-    assert 2 * flag <= room < 375
-    assert lines[-1] == ("  The values at each instant leave out wide (1 value), flag_0 (1 value), flag_1 (1 value) "
-                         "and flag_2 (1 value), because these move least and there is no more room.")
+    assert room < flag and {"flag_0", "flag_1"} <= whole and "flag_2" not in whole
+    assert lines[-1] == ("  The values at each instant leave out wide (1 value) and flag_2 (1 value), because rows are "
+                        "ranked by movement and kept when they fit the 12000 character budget.")
 
 
 def test_with_no_row_that_fits_each_signal_with_rows_is_named_as_left_out_because_none_fits(monkeypatch):
-    """Nothing is said to move least when nothing is shown: a budget smaller than the instants' row, or than the row
-    that moves most."""
+    """A budget smaller than the times row or any value row names every omitted signal with the actual reason."""
     ep, pl = _sweeps_wide_and_flags()
     head = len("    at: " + " ".join(f"{me.frame_time(ep, k):.2f}" for k in pl["ks"]))
-    for budget in (head - 1, head + 100):
+    shortest = min(len("    " + name + ": " + " ".join(me._num(x) for x in a[pl["ks"], 0]))
+                   for name, a in ep["signals"].items())
+    for budget in (head - 1, head + shortest - 1):
         monkeypatch.setattr(me, "SIGNAL_TABLE_MAX_CHARS", budget)
         lines, whole = me._signal_readout(ep, pl)
         assert len(lines) == 1 and not whole
         assert lines[0].startswith("  The values at each instant leave out sweep_00 (1 value), sweep_01 (1 value), ")
-        assert lines[0].endswith(" and flag_2 (1 value), because not even one row fits.")
+        assert lines[0].endswith(f" and flag_2 (1 value), because no row fits the {budget} character budget "
+                                 "after the times row.")
         assert "move least" not in lines[0] and "every signal" not in lines[0]
 
 
