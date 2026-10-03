@@ -163,11 +163,16 @@ def depth_findings(ep: dict) -> list[dict]:
             n = int(pl["n"])
             ta = np.array([me.frame_time(ep, k) for k in range(n)])
             step = float(np.median(np.diff(ta))) if n > 1 else 1 / me.ep_fps(ep)
-            off = np.abs(np.asarray(td)[np.asarray(e["km"][:n], dtype=int)] - ta)
+            # only the frames with a depth reading: one with none (depth_kmap -1, a stream that ends early) is the
+            # reader's depth_partial issue, not depth far from its colour frame
+            km = np.asarray(e["km"][:n], dtype=int)
+            has = km >= 0
+            off = np.abs(np.asarray(td)[km[has]] - ta[has])
             far = off > DEPTH_OFFSET_FRAMES * step
-            if far.mean() > 0.01:
+            if len(far) and far.mean() > 0.01:
                 out.append({"check": "depth_offset", "camera": name,
-                            "evidence": f"{int(far.sum())} of {n} of {name}'s colour frames have no depth frame within "
+                            "evidence": f"{int(far.sum())} of {len(far)} of {name}'s colour frames with depth have no "
+                                        "depth frame within "
                                         f"{DEPTH_OFFSET_FRAMES:g} frames of them (median gap "
                                         f"{float(np.median(off)) * 1000:.0f} ms)"})
     return out

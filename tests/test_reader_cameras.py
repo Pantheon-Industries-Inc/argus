@@ -440,6 +440,23 @@ def test_depth_that_ends_before_its_camera_gives_no_reading_past_its_end(tmp_pat
     assert "no depth" in me._depth_note({**e, "depth": dp.load(ep)})
 
 
+def test_depth_that_ends_early_is_not_also_called_offset_from_its_camera(tmp_path):
+    """The depth check had measured the gap to a colour frame's depth frame at frames with no depth reading too
+    (depth_kmap -1, which picked the stream's last frame), so depth that ends early was also reported as depth far
+    from its colour frames. Only frames with a depth reading are measured; the missing stretch is depth_partial."""
+    from checks import sensors
+    from label import episode as me
+    d = tmp_path / "up" / "ep1"
+    _mp4(d / "exo_cam-images-rgb.mp4", 60)
+    dw = f.DepthWriter(d / "exo_cam-images-depth.mkv")
+    for k in range(20):
+        dw.add(k / 30, np.full((48, 64), 800 + k, np.uint16), 0.001)
+    dw.close()
+    rep = f.convert(tmp_path / "up", "teleop_arms", tmp_path / "eps", "test", 900)
+    ep = me.load(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
+    assert not [x for x in sensors.depth_findings(ep) if x["check"] == "depth_offset"]
+
+
 def test_depth_as_long_as_its_camera_reads_at_every_frame(tmp_path):
     from label import depth as dp
     from label import episode as me
