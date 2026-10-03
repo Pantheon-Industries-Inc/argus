@@ -2992,6 +2992,88 @@ def test_a_hidden_file_names_nothing():
         _a_hidden_file_names_nothing(Path(t))
 
 
+def _absent_line(rep) -> str:
+    return next((m for m in rep["missing"] if "not in the upload" in m), "")
+
+
+def _a_folder_json_whose_words_name_no_episode_stays_shared(tmp_path):
+    """A recorder's file had been read as named for an episode by a word that names none: metadata_v2.json beside the
+    takes 1 and 2 gave only take 2 its task (v2 split into v and 2), robot1_config.json and rs2_settings.json likewise;
+    session_01.json inside the folder session_01 of takes 01 and 02 counted as named for take 01; scene_description.json
+    beside takes whose cameras are all named scene counted as named for every take; session_meta.json beside a
+    subfolder session holding a lone clip counted as named for that clip. Each names no episode, so every take of the
+    folder shares it. A number is split from the letters before it only after a take word (ep1, take3), a file named
+    as its own folder is the folder's, a camera every take has names a file only as its whole name (scene.json), and a
+    subfolder named in words alone names a file only as its whole name."""
+    two = ["d/top_1.mp4", "d/wrist_1.mp4", "d/top_2.mp4", "d/wrist_2.mp4"]
+    for name in ("metadata_v2.json", "robot1_config.json", "rs2_settings.json"):
+        ctx, _ = _upload_notes(tmp_path / name, two, {f"d/{name}": {"task": "pick the cup"}})
+        assert [c.get("instruction") for c in ctx.values()] == ["pick the cup"] * 2, (name, ctx)
+    folder = [f"session_01/{c}_{i}.mp4" for i in ("01", "02") for c in ("top", "wrist")]
+    ctx, _ = _upload_notes(tmp_path / "a", folder, {"session_01/session_01.json": {"task": "pick the cup"}})
+    assert [c.get("instruction") for c in ctx.values()] == ["pick the cup"] * 2, ctx
+    scene = ["d/scene_1.mp4", "d/wrist_1.mp4", "d/scene_2.mp4", "d/wrist_2.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "b", scene, {"d/scene_description.json": {"task": "pick the cup"}})
+    assert [c.get("instruction") for c in ctx.values()] == ["pick the cup"] * 2, ctx
+    ctx, rep = _upload_notes(tmp_path / "c", scene, {"d/scene.json": {"task": "calibrate the scene camera"}})
+    assert not any("instruction" in c for c in ctx.values()) and "d/scene.json" in _unread_line(rep), ctx
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "d", takes + ["d/session/clip.mp4"],
+                           {"d/session_meta.json": {"prompt": "pour the tea"}})
+    assert [ctx[k].get("instruction") for k in ("d/ep1", "d/ep2")] == ["pour the tea"] * 2, ctx
+    ctx, _ = _upload_notes(tmp_path / "e", ["ep1/top.mp4", "ep1/wrist.mp4", "ep1/raw/full.mp4"],
+                           {"ep1/raw_meta.json": {"task": "pour the tea"}})
+    assert ctx["ep1"]["instruction"] == "pour the tea", ctx
+
+
+def test_a_folder_json_whose_words_name_no_episode_stays_shared():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_folder_json_whose_words_name_no_episode_stays_shared(Path(t))
+
+
+def _a_take_number_is_read_by_its_value(tmp_path):
+    """ep1.json beside the takes ep01 and ep02 named no take, so both were given its task. A number is read by its
+    value, so ep1 is the take ep01."""
+    takes = ["d/top_ep01.mp4", "d/wrist_ep01.mp4", "d/top_ep02.mp4", "d/wrist_ep02.mp4"]
+    ctx, _ = _upload_notes(tmp_path, takes, {"d/ep1.json": {"task": "pick the cup"}})
+    assert ctx["d/ep01"]["instruction"] == "pick the cup" and "instruction" not in ctx["d/ep02"], ctx
+
+
+def test_a_take_number_is_read_by_its_value():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_take_number_is_read_by_its_value(Path(t))
+
+
+def _a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task(tmp_path):
+    """ep3.json, ep3_meta.json or take3.json beside the takes ep1 and ep2, 3.json beside the takes 1 and 2, and
+    ep2.json in the folder of the one episode ep1 named no episode there, so every take was given the task of a take
+    that was not uploaded. A take word and a number no episode of the folder has (a bare number of the takes' digit
+    count, not beside another number) name an absent take: the file gives no episode its task and is named as not read
+    because its take is not in the upload."""
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    for name in ("ep3.json", "ep3_meta.json", "take3.json"):
+        ctx, rep = _upload_notes(tmp_path / name, takes, {f"d/{name}": {"task": "stack the blocks"}})
+        assert not any("instruction" in c for c in ctx.values()), (name, ctx)
+        assert f"d/{name}" in _absent_line(rep) and f"d/{name}" not in _unread_line(rep), rep["missing"]
+    two = ["d/top_1.mp4", "d/wrist_1.mp4", "d/top_2.mp4", "d/wrist_2.mp4"]
+    ctx, rep = _upload_notes(tmp_path / "bare", two, {"d/3.json": {"task": "stack the blocks"}})
+    assert not any("instruction" in c for c in ctx.values()) and "d/3.json" in _absent_line(rep), ctx
+    ctx, rep = _upload_notes(tmp_path / "one", ["ep1/top.mp4", "ep1/wrist.mp4"],
+                             {"ep1/ep2.json": {"task": "stack the blocks"}})
+    assert "instruction" not in ctx["ep1"] and "ep1/ep2.json" in _absent_line(rep), ctx
+    # a date beside numbered takes names no take and stays shared
+    ctx, _ = _upload_notes(tmp_path / "date", two, {"d/session_2024_10_03.json": {"task": "stack the blocks"}})
+    assert [c.get("instruction") for c in ctx.values()] == ["stack the blocks"] * 2, ctx
+
+
+def test_a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a

@@ -56,8 +56,10 @@ truth; every such file is read, and several are given each under its file name. 
 note's task keys, then a plain text note named for the task (instruction.txt, task.txt), then one named for the
 episode, then a video's own .txt; any other text note stays a note. A recorder's metadata file in an episode's folder
 that names the task (its prompt, instruction or task) gives the instruction to the folder's episodes when its name
-names nothing there, and to one episode alone when it names that one; a file whose name holds the words of another
-episode, video, camera or subfolder holding an episode is never an episode's task (named_for). Files that name
+names nothing there, and to the episodes it names when it names only episodes; a file whose name holds the words of
+another episode, a video that is no episode's, a camera every episode there has (as its whole name) or a subfolder
+holding an episode is never an episode's task, and one named for a take that is not in the upload is named as not
+read for that reason (named_for). Files that name
 different tasks give none of them: each is given as a note and the disagreement is a data issue of the episode. One
 that names neither the task nor a depth scale is listed as not read. A note's name is compared in any case.
 
@@ -118,6 +120,7 @@ board plays it named as not shown to the model; an MCAP or HDF5 camera is writte
 from __future__ import annotations
 
 import collections
+import dataclasses
 import json
 import os
 import re
@@ -1041,12 +1044,13 @@ def episode_notes(item: dict) -> dict:
     and wrist.mp4), and in camera folders (top/ep1.txt, wrist/ep1.txt) the task only when every camera's own note gives
     the same one. A lower source is a note under its file name. When none gives a task, the note folder's other .json
     files (up to NOTE_JSON_MAX_BYTES) are searched for one that names it. A file named for nothing (named_for:
-    session_meta.json) is a recorder's, which the folder's episodes share; one named for this episode alone
-    (ep1_meta.json) is this episode's; one named for anything else (ep2_meta.json, an infrared video's file, top.json
-    beside takes that each have a top camera, ep2.json beside the subfolder ep2 holding an episode) is never this
-    episode's task. When several of this episode's name different tasks, none is guessed to be the task: each is a
-    note under its file name, and "disagree" names them for a data issue. One that gives none is not read
-    (opened_notes) and is listed."""
+    session_meta.json) is a recorder's, which the folder's episodes share; one named for episodes that include this
+    one (ep1_meta.json, ep1_ep2_summary.json) is theirs; one named for anything else (ep2_meta.json, an infrared
+    video's file, top.json beside takes that each have a top camera, ep2.json beside the subfolder ep2 holding an
+    episode) is never this episode's task, and one named for a take that is not in the upload (ep3.json beside ep1
+    and ep2) is "absent", which no episode reads. When several of this episode's name different tasks, none is
+    guessed to be the task: each is a note under its file name, and "disagree" names them for a data issue. One that
+    gives none is not read (opened_notes) and is listed."""
     files = note_files(item)
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
@@ -1081,17 +1085,19 @@ def episode_notes(item: dict) -> dict:
         if all(owns) and len({t for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
-    read, disagree = list(files), []
-    if not instr and nf:
-        weighed = {p.resolve() for p in files}
-        found = []                        # (file, task) of each folder .json that may give this episode its task
-        for p in folder_json(nf["dir"]):
-            if p.resolve() in weighed or p.stat().st_size > NOTE_JSON_MAX_BYTES:
-                continue
-            if named_for(p, nf["names"]) - {nf["episode"]}:
-                continue                  # named for another episode, or a video that is no episode's
+    read, disagree, absent, found = list(files), [], [], []
+    weighed = {p.resolve() for p in files}
+    for p in folder_json(nf["dir"]) if nf else []:
+        if p.resolve() in weighed or p.stat().st_size > NOTE_JSON_MAX_BYTES:
+            continue
+        owners, gone = named_for(p, nf["names"])
+        if gone:
+            absent.append(p)              # named for a take that is not in the upload
+        elif not instr and (not owners or None not in owners and nf["episode"] in owners):
+            # named for nothing (shared), or for episodes that include this one
             if x := instruction_from(_read_json(p)):
                 found.append((p, x))
+    if not instr:
         read += [p for p, _ in found]
         if len({x for _, x in found}) == 1:
             instr = found[0][1]
@@ -1099,34 +1105,73 @@ def episode_notes(item: dict) -> dict:
             # files that name different tasks: none is guessed to be the task, and each is a note under its name
             notes += [(p.name, read_annotation(p)) for p, _ in found]
             disagree = [p.name for p, _ in found]
-    return {"notes": notes, "instruction": instr, "read": read, "disagree": disagree,
+    return {"notes": notes, "instruction": instr, "read": read, "disagree": disagree, "absent": absent,
             "repeats": [k for k, o in notes if instr and isinstance(o, str) and o.strip() == instr],
             "camera_notes": [k for k, p in zip(keys, files) if p in cams]}
 
 
-def name_words(name: str) -> tuple[str, ...]:
-    """The words a file's name is compared by (named_for): its lower case words (tokens), with a number apart from the
-    letters beside it, so EP2, ep_2, Ep-2 and ep2 are all ep 2 while ep10 stays ep 10. read.js nameWords."""
-    return tuple(w for t in tokens(name) for w in re.findall(r"[a-z]+|[0-9]+", t))
+# the take words after which a number written together is the take's number (ep1 is ep 1, take3 is take 3) in every
+# folder, beside those a folder's own episodes are named with (TAKE_WORD: demo3, seq_2); after any other letters a
+# number stays part of its word (v2, rs2, robot1), so a version or a device number never reads as a take
+TAKE_NUMBER_WORDS = frozenset({"ep", "episode", "take", "run", "trial"})
 
 
-def named_for(p: Path, names: dict) -> set:
-    """The episodes a file of an episode's folder is named for: those of every name of the folder (note_folder_names)
-    whose words appear in a row among the words of the file's name (ep1_meta.json is named for ep1 and never for ep10;
-    top.json in a folder of takes for the top camera of every take). A name inside a longer name the file holds counts
-    as the longer one (top_ep1_meta.json is named for the video top_ep1 of ep1, not for every take's top camera), and
-    a bare number beside other numbers is a date or a time, never a take's name (2024_01_02_session.json beside the
-    takes 01 and 02). None stands for a video that is no episode's. A file named for nothing (session_meta.json) is a
-    recorder's, which the folder's episodes share. read.js namedFor."""
-    w = name_words(p.stem)
-    hits = []
-    for i in range(len(w)):
-        for j in range(i + 1, len(w) + 1):
-            beside = (i > 0 and w[i - 1].isdigit()) or (j < len(w) and w[j].isdigit())
-            if w[i:j] in names and not (beside and all(x.isdigit() for x in w[i:j])):
-                hits.append((i, j))
+def name_words(name: str, take_words=TAKE_NUMBER_WORDS, by_value: bool = True) -> tuple[str, ...]:
+    """The words a file's name is compared by (named_for): its words as tokens gives them (lower case letters and
+    digits, any other character a separator, camelCase split), a number written after a take word split from it (ep1
+    is ep 1, while v2 stays v2), and a number read by its value (01 is 1) unless by_value is false. read.js
+    nameWords."""
+    out = []
+    for t in tokens(name):
+        m = re.fullmatch(r"([a-z]+)([0-9]+)", t)
+        for w in ([m[1], m[2]] if m and m[1] in take_words else [t]):
+            out.append(str(int(w)) if by_value and w.isdigit() else w)
+    return tuple(out)
+
+
+@dataclasses.dataclass(frozen=True)
+class FolderNames:
+    """What a .json file of a folder episodes read their notes in can be named for (note_folder_names), each name as
+    name_words with the episodes it belongs to (None for something that is no episode). "names" are matched anywhere
+    in a file's name as a run of its words, "whole" only as the file's whole name, "own" is the folder's own name,
+    "takes" the folder's take words and "bare_digits" the digit counts of its takes named by a bare number."""
+    takes: frozenset
+    names: dict
+    whole: dict
+    own: tuple
+    bare_digits: frozenset
+
+
+def named_for(p: Path, fn: FolderNames) -> tuple[frozenset, bool]:
+    """(the episodes a .json of an episode's folder is named for, whether it names a take that is not in the upload).
+
+    A name of the folder (FolderNames) counts where its words appear in a row among the file's words (ep1_meta.json is
+    named for ep1 and never for ep10). A name inside a longer name the file holds counts as the longer one
+    (top_ep1_meta.json is the video top_ep1's), and a bare number beside other numbers is a date or a time, never a
+    take's (2024_01_02_session.json beside the takes 01 and 02). A file named as its folder is the folder's, and a
+    camera every episode there has names a file only as its whole name (top.json; scene_description.json beside the
+    cameras scene_1 and scene_2 names nothing). A take word with a number no episode there has (ep3_meta.json beside
+    ep1 and ep2), or beside takes named by bare numbers a number of their digit count not beside another number
+    (3.json beside 1 and 2), names a take that is not in the upload. A file named for nothing (session_meta.json) is a
+    recorder's, which the folder's episodes share. read.js namedFor, the same rule."""
+    w = name_words(p.stem, fn.takes)
+    if fn.own and w == fn.own:
+        return frozenset(), False
+    if w in fn.whole:
+        return fn.whole[w], False
+    raw = name_words(p.stem, fn.takes, by_value=False)
+    num = [x.isdigit() for x in w]
+
+    def beside(i: int, j: int) -> bool:
+        return (i > 0 and num[i - 1]) or (j < len(w) and num[j])
+    hits = [(i, j) for i in range(len(w)) for j in range(i + 1, len(w) + 1)
+            if w[i:j] in fn.names and not (all(num[i:j]) and beside(i, j))]
     longest = [(i, j) for i, j in hits if not any(a <= i and j <= b and (a, b) != (i, j) for a, b in hits)]
-    return {who for i, j in longest for who in names[w[i:j]]}
+    named = {i for a, b in hits for i in range(a, b)}
+    taken = [i + 1 for i in range(len(w) - 1) if w[i] in fn.takes and num[i + 1] and not beside(i + 1, i + 2)]
+    bare = [i for i in range(len(w)) if num[i] and not beside(i, i + 1) and len(raw[i]) in fn.bare_digits]
+    absent = any(i not in named for i in taken + bare)
+    return frozenset(who for i, j in longest for who in fn.names[w[i:j]]), absent
 
 
 def task_rank(p: Path, named_for_episode: bool) -> int | None:
@@ -2302,33 +2347,52 @@ def episode_note_name(e: dict) -> str | None:
     return episode_home(e).rsplit("/", 1)[-1] or None
 
 
-def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path) -> dict:
-    """{folder: {words: the episodes it belongs to}} for each folder an episode sits in (episode_home): what a file of
-    that folder can be named for (named_for), as name_words. Each episode there by its note name (episode_note_name),
-    its videos' names and its cameras' names (top_ep1 and top, or the camera folder top); any other video there by its
-    name, a depth video belonging to its colour camera's episode and an infrared or mask video to none (None); and each
-    subfolder that holds an episode's video, belonging to the episodes whose videos it holds (ep2 of ep1/ep2/top.mp4).
-    read.js noteNames, the same rule."""
+def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path) -> dict[str, FolderNames]:
+    """{folder: FolderNames} for each folder an episode sits in (episode_home): what a .json there can be named for
+    (named_for). Each episode there by its note name (episode_note_name) and its videos' names; each camera name by
+    the episodes that have it, matched only as a file's whole name when every episode there has it (top, or the camera
+    folder top); any other video there by its name, a depth video belonging to its colour camera's episode and an
+    infrared or mask video to none; and each subfolder that is or holds an episode's folder (ep2 of ep1/ep2/top.mp4
+    and ep1/ep2/wrist.mp4), or that holds a lone video and carries a number as a take's name does (ep2 of
+    ep1/ep2/top.mp4 alone), by the episodes in it. A subfolder named in words alone that holds only lone videos
+    (raw/full.mp4, session/clip.mp4) names nothing. Hidden files are never read for names (hidden_part). read.js
+    noteNames, the same rule."""
     owner = {r: e["name"] for e in eps for _, r in e["cams"]}
     owner.update({dep: owner[col] for col, dep in pairs.items() if col in owner})
-    out: dict = {d: collections.defaultdict(set) for d in homes}
-
-    def add(d: str, name: str | None, who) -> None:
-        if d in out and (w := name_words(name or "")):
-            out[d][w].add(who)
-    for e, d in zip(eps, homes):
-        add(d, episode_note_name(e), e["name"])
-        for c, r in e["cams"]:
-            for name in (c, name_parts(c)["cam"], r.rsplit("/", 1)[-1].rsplit(".", 1)[0]):
-                add(d, name, e["name"])
-            parts = r.split("/")[:-1]
-            for i, sub in enumerate(parts):
-                add("/".join(parts[:i]), sub, e["name"])
-    for d in out:
+    by_home, subs = collections.defaultdict(list), collections.defaultdict(list)
+    for e, h in zip(eps, homes):
+        by_home[h].append(e)
+        parts = h.split("/") if h else []
+        for i, sub in enumerate(parts):
+            # each folder above the episode's own: (its subfolder toward the episode, the episode, an episode folder)
+            subs["/".join(parts[:i])].append((sub, e["name"], e["dir"] is not None))
+    out = {}
+    for d, here in by_home.items():
+        spelt = [episode_note_name(e) or "" for e in here] + [Path(r).stem for e in here for _, r in e["cams"]]
+        takes = TAKE_NUMBER_WORDS | {m[1] for x in spelt for t in tokens(x) if (m := TAKE_WORD.match(t)) and m[2]}
+        names, cams = collections.defaultdict(set), collections.defaultdict(set)
+        for e in here:
+            for x in [episode_note_name(e) or ""] + [Path(r).stem for _, r in e["cams"]]:
+                names[name_words(x, takes)].add(e["name"])
+            for c, _ in e["cams"]:
+                for x in (c, name_parts(c)["cam"]):
+                    cams[name_words(x, takes)].add(e["name"])
+        every = {e["name"] for e in here}
+        whole = {w: frozenset({None}) for w, who in cams.items() if who == every}
+        for w, who in cams.items():
+            if w not in whole:
+                names[w] |= who
+        for sub, who, episode_folder in subs.get(d, []):
+            if episode_folder or any(x.isdigit() for x in name_words(sub, takes)):
+                names[name_words(sub, takes)].add(who)
         for p in (root / d).iterdir():
             if p.is_file() and not hidden_part(p.name) and p.suffix.lower() in VIDEO_EXT:
-                add(d, p.stem, owner.get(p.relative_to(root).as_posix()))
-    return {d: {w: frozenset(who) for w, who in ns.items()} for d, ns in out.items()}
+                names[name_words(p.stem, takes)].add(owner.get(p.relative_to(root).as_posix()))
+        bare = frozenset(len(x) for e in here if (x := episode_note_name(e) or "").isdigit())
+        out[d] = FolderNames(frozenset(takes), {w: frozenset(who) for w, who in names.items() if w},
+                             {w: who for w, who in whole.items() if w},
+                             name_words(d.rsplit("/", 1)[-1], takes) if d else (), bare)
+    return out
 
 
 def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict]:
@@ -5892,6 +5956,11 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
                                   f"{'their' if len(lost) != 1 else 'its'} folder to place the data against, so "
                                   f"{'they were' if len(lost) != 1 else 'it was'} not read.")
     det["used"] += possible_duplicates(root, items)
+    absent = sorted(p.relative_to(root).as_posix() for p in absent_take_notes(items))
+    if absent:
+        det["missing"].append(f"{len(absent)} file{'s' if len(absent) != 1 else ''} named for a take that is not in "
+                              f"the upload, so {'they were' if len(absent) != 1 else 'it was'} not read: "
+                              + _and_words(absent) + ".")
     unread = unread_files(root, det, items)
     if unread:
         det["missing"].append(f"{len(unread)} file{'s' if len(unread) != 1 else ''} that no reader opens: "
@@ -5949,6 +6018,12 @@ def opened_notes(items: list[dict]) -> set[Path]:
     return out
 
 
+def absent_take_notes(items: list[dict]) -> set[Path]:
+    """The .json files of episodes' folders named for a take that is not in the upload (named_for), which no episode
+    reads and which the report names apart from the files no reader opens."""
+    return {p for it in items if it.get("kind") == "video" for p in episode_notes(it)["absent"]}
+
+
 def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     """The upload's files (relative paths) that no reader opens. Opened are the files of a LeRobot dataset, videos,
     MCAP and HDF5 files (a sensor file no episode takes is named apart), archives, tables (annotation_tables reads
@@ -5959,7 +6034,7 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     parts = det["parts"] if det.get("parts") else [det]
     rdirs = [Path(r) for p in parts for r in p.get("roots") or []]
     vid_dirs = {Path(p).parent for p in files_under(root) if p.suffix.lower() in VIDEO_EXT}
-    notes = {p.resolve() for p in opened_notes(items)}
+    notes = {p.resolve() for p in opened_notes(items) | absent_take_notes(items)}
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
