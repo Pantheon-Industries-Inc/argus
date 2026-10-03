@@ -409,14 +409,16 @@ STRIP_FIELDS = {"begin": "first_touch_frame", "end": "last_touch_frame"}
 
 
 def _shift(x, dt: float):
-    """Every time field of a label structure shifted by dt seconds."""
+    """Every time field of a label structure shifted by dt seconds, one written as text that reads as a number
+    (label/episode.py number) as well; one that reads as none is left as it is."""
+    from label.episode import number
     if isinstance(x, list):
         return [_shift(v, dt) for v in x]
     if isinstance(x, dict):
         out = {}
         for k, v in x.items():
-            if k in T_KEYS and isinstance(v, (int, float)) and not isinstance(v, bool):
-                out[k] = round(float(v) + dt, 3)
+            if k in T_KEYS and number(v) is not None:
+                out[k] = round(number(v) + dt, 3)
             else:
                 out[k] = _shift(v, dt)
         return out
@@ -430,7 +432,9 @@ def outside_part(lab: dict, t0: float, t1: float) -> dict:
     (board/build.py steps_outside). Empty when every time lies within the part."""
     from label.episode import STEP_SLACK_S, number
     lo, hi = t0 - STEP_SLACK_S, t1 + STEP_SLACK_S
-    out = lambda x: x is not None and not lo <= x <= hi
+
+    def out(x) -> bool:
+        return x is not None and not lo <= x <= hi
     n = sum(any(out(number(s.get(k))) for k in ("start_s", "end_s"))
             for s in lab.get("timeline") or [] if isinstance(s, dict))
     k = sum(out(number(e.get("t_s"))) for e in lab.get("key_events") or [] if isinstance(e, dict))

@@ -370,6 +370,16 @@ def test_a_long_recording_none_of_whose_parts_parsed_is_still_on_the_board(tmp_p
             and "part 3 never answered" in iss["what"]), iss["what"]
 
 
+def test_a_part_time_written_as_text_is_moved_onto_the_recordings_clock():
+    """_shift moved only times written as numbers, so a part's step at "0.2" stayed at 0.2 s of the recording though it
+    lies in a later part. A time written as text that reads as a number (number()) is shifted like any other; one that
+    reads as none is left as it is."""
+    lab = {"timeline": [{"start_s": "0.2", "end_s": "0.5s", "action": "a"}, {"start_s": "late", "end_s": 1}]}
+    out = pieces._shift(lab, 10.0)
+    assert out["timeline"][0]["start_s"] == 10.2 and out["timeline"][0]["end_s"] == 10.5
+    assert out["timeline"][1] == {"start_s": "late", "end_s": 11.0}
+
+
 def test_a_part_time_outside_its_own_part_is_kept_and_flagged(tmp_path, monkeypatch):
     """A step the model timed before its own part began (part 2 says -0.8 s) was moved onto the recording's clock into
     the previous part's footage with no flag, and so was a key event past its part's end. They are kept as given, the
