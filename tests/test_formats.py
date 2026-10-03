@@ -2749,6 +2749,32 @@ def test_a_cameras_own_json_never_gives_the_task():
         _a_cameras_own_json_never_gives_the_task(Path(t))
 
 
+def _only_a_task_file_gives_the_task(tmp_path):
+    """notes.txt of one line ("camera bumped at 3 s") had become the episode's task, the task text the uploader sent,
+    and was dropped from the notes. A plain text file gives the task only when it is named for a task (instruction.txt,
+    task.txt) or for the episode (ep1.txt, or the own .txt of an episode's only video); every other one is a note under
+    its name. A JSON gives the task only through its task keys."""
+    ctx, _ = _notes_case(tmp_path / "b", {"meta.json": {"operator": "A"}, "notes.txt": "camera bumped at 3 s"})
+    assert "instruction" not in ctx
+    assert ctx["uploader_notes"] == {"meta.json": {"operator": "A"}, "notes.txt": "camera bumped at 3 s"}
+    ctx, _ = _notes_case(tmp_path / "n", {"notes.txt": "camera bumped at 3 s"})
+    assert "instruction" not in ctx and ctx["uploader_notes"] == "camera bumped at 3 s"
+    ctx, _ = _notes_case(tmp_path / "m", {"annotations.json": "pick the cup"})
+    assert "instruction" not in ctx and ctx["uploader_notes"] == "pick the cup"
+    ctx, _ = _notes_case(tmp_path / "f", {"instruction.txt": "pick the cup", "notes.txt": "dropped it once"})
+    assert ctx["instruction"] == "pick the cup" and ctx["uploader_notes"] == {"notes.txt": "dropped it once"}
+    ctx, _ = _notes_case(tmp_path / "e", {"ep1.txt": "pick the cup"})
+    assert ctx["instruction"] == "pick the cup" and "uploader_notes" not in ctx
+    ctx, _ = _notes_case(tmp_path / "g", {"top.txt": "pick the cup"}, cams=("top",))
+    assert ctx["instruction"] == "pick the cup" and "uploader_notes" not in ctx
+
+
+def test_only_a_task_file_gives_the_task():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _only_a_task_file_gives_the_task(Path(t))
+
+
 def test_notes_cut_for_the_prompt_name_the_files_left_out():
     notes = {"a.txt": "x" * (f.ANNOTATION_MAX_CHARS - 20), "b.txt": "y" * 100, "c.txt": "z"}
     txt = f.annotation_text(notes, files=True)
