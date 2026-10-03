@@ -155,6 +155,24 @@ def test_unreadable_shared_root_note_is_retained_with_one_issue_per_episode(tmp_
         assert ctx["uploader_notes"]["a.json"] == '{"task": "incomplete shared task"'
 
 
+def test_single_container_keeps_shared_task_conflicts_without_inventing_group_ownership(tmp_path):
+    from test_ownership_context import containers
+
+    original = containers(tmp_path / "a")
+    (original / "b.h5").unlink()
+    with h5py.File(original / "a.h5", "a") as h:
+        del h["data/demo_1"]
+    (original / "a.json").write_text(json.dumps({"task": "shared root task"}))
+    output = tmp_path / "units"
+    report = formats.convert(original, "ego_head", output, "identity", 900)
+    assert not report["failed"] and len(report["episodes"]) == 1
+    row = report["episodes"][0]
+    assert not row.get("instruction")
+    ctx = json.loads((output / row["episode_id"] / "context.json").read_text())
+    assert any(issue["kind"] == "task_files_disagree" for issue in ctx["reader_issues"])
+    assert {"a.json", "demo0_meta.json"} <= ctx["uploader_notes"].keys()
+
+
 def test_root_openaoe_does_not_guess_identity_when_context_omits_root_name(tmp_path):
     original = tmp_path / "original_clip"
     original.mkdir()

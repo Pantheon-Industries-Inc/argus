@@ -1275,7 +1275,7 @@ def episode_notes(item: dict) -> dict:
     more about the episode. When several of one rank name different tasks (task_key), none is guessed to be the task:
     each is a note under its file name, and "disagree" names them for a data issue. One that gives none, or is
     outranked, is not read (opened_notes) and is listed. A folder's own JSON remains shared even when a container or
-    video in that folder has the same basename."""
+    video in that folder has the same basename. A folder that is itself the sole episode keeps its primary note."""
     files = note_files(item)
     fs = [Path(f) for f in item["files"]]
     nf = item.get("note_folder")
@@ -1286,8 +1286,13 @@ def episode_notes(item: dict) -> dict:
     owned = {p for p in files for f in fs if p.parent == f.parent and p.stem.lower() == f.stem.lower()} - named
     camera_owned = {p for p in files for f in item.get("camera_files") or []
                     if p.parent == Path(f).parent and p.stem.lower() == Path(f).stem.lower()}
-    # A folder's own JSON is shared even when its name also matches a container or video alias.
-    folder_shared = {p for p in files if nf and p.parent == nf["dir"] and p.suffix.lower() == ".json"
+    # An actual episode folder keeps its primary note; a container alias cannot give a shared folder that rank.
+    folder_owners = {owner for owners in nf["names"].names.values() for owner in owners
+                     if owner is not None} if nf else set()
+    folder_episode = nf and not item.get("side_metadata") and folder_owners == {nf["episode"]} and (
+        name_words(nf["episode"].rsplit("/", 1)[-1], nf["names"].takes) == nf["names"].own)
+    folder_shared = {p for p in files if nf and not folder_episode
+                     and p.parent == nf["dir"] and p.suffix.lower() == ".json"
                      and nf["names"].own and name_words(p.stem, nf["names"].takes) == nf["names"].own}
     owned |= camera_owned
     cams = (owned if len(fs) > 1 else set()) | camera_owned
