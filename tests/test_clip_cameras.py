@@ -510,3 +510,31 @@ def test_board_clips_cuts_a_camera_the_model_is_not_shown_again_when_the_main_ca
     _, _, tb, pts = probe_pts(tmp_path / "clips" / "unshown1" / "episode_000000.mp4")
     assert len(pts) == 45 and abs(float(pts[0] * tb) - 3.0) < 0.02
     assert not [x for x in ctx.get("reader_issues") or [] if x.get("kind") == "unshown_camera_not_decodable"]
+
+
+def test_a_check_that_crashes_when_run_again_is_recorded_as_errored(tmp_path, monkeypatch):
+    """Running the checks again after a camera is taken out (clips.recheck) had taken a check that crashed out of the
+    context, so a finding that had fired vanished. It is recorded as errored, the way each check's own runner does,
+    and the board shows it as an error."""
+    from checks import capture_qc, sensors, stream_pairing as sp
+    d = tmp_path / "episode_a"
+    d.mkdir()
+    (d / "context.json").write_text(json.dumps({"stream_pairing": {"crossed": True},
+                                                "recorded_jumps": {"flagged": False},
+                                                "capture_qc": {"checks": []}, "sensor_checks": {"checks": []}}))
+
+    def boom(p):
+        raise ValueError("state shorter than its span")
+    monkeypatch.setattr(sp, "MODES", {k: (key, boom, f) for k, (key, fn, f) in sp.MODES.items()})
+    monkeypatch.setattr(capture_qc, "run_episode", boom)
+    monkeypatch.setattr(sensors, "run_episode", boom)
+    clips.recheck(d)
+    ctx = json.loads((d / "context.json").read_text())
+    err = "ValueError: state shorter than its span"
+    assert ctx["stream_pairing"] == {"error": err, "crossed": False}
+    assert ctx["recorded_jumps"] == {"error": err, "flagged": False}
+    assert ctx["capture_qc"]["checks"] and all(c["status"] == "errored" and err in c["why"]
+                                               for c in ctx["capture_qc"]["checks"])
+    assert ctx["sensor_checks"]["error"] == err and all(c["status"] == "errored"
+                                                        for c in ctx["sensor_checks"]["checks"])
+    assert "gripper_channels" not in ctx           # a check the episode never had is not added

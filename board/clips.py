@@ -752,24 +752,28 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
 def recheck(ep_dir: Path) -> None:
     """Run again, for an episode a camera was taken out of, the deterministic checks whose results in its context.json
     read its cameras or the frames its state is on (checks/stream_pairing.py, checks/capture_qc.py, checks/sensors.py),
-    so no result names a camera the episode no longer has. A check that cannot run now is taken out of the context,
-    never left describing the episode as it was."""
+    so no result names a camera the episode no longer has. A check that crashes now is recorded as errored, the way
+    each check's own runner records it (stream_pairing._safe, capture_qc.run_episode, sensors._safe), never left
+    describing the episode as it was and never taken out, so a finding that had fired never vanishes unseen."""
     from checks import capture_qc
     from checks import sensors
     from checks import stream_pairing
     ctx = _context(ep_dir)
-    runs = {key: fn for key, fn, _ in stream_pairing.MODES.values()}
-    runs.update(capture_qc=capture_qc.run_episode, sensor_checks=sensors.run_episode)
+
+    def capture(d):
+        try:
+            return capture_qc.run_episode(d)
+        except Exception as e:  # noqa: BLE001 - recorded on every check, as run_episode records a crash inside it
+            return capture_qc.format_result({"checks": {c: capture_qc._errored(e) for c in capture_qc.CHECKS},
+                                             "cameras": {}, "actors": {}, "episode": {}})
+    runs = {key: (lambda d, m=mode: stream_pairing._safe(m, str(d))[1])
+            for mode, (key, _, _) in stream_pairing.MODES.items()}
+    runs.update(capture_qc=capture, sensor_checks=lambda d: sensors._safe(str(d))[1])
     for key, fn in runs.items():
         if key not in ctx:
             continue
         old = ctx[key]
-        try:
-            new = fn(ep_dir)
-        except Exception as e:
-            sys.stderr.write(f"recheck {ep_dir.name} {key}: {type(e).__name__}: {str(e)[:160]}\n")
-            ctx.pop(key, None)
-            continue
+        new = fn(ep_dir)
         if key == "sensor_checks" and isinstance(new, dict) and isinstance(old, dict):
             # dead values are judged across a whole folder (checks/sensors.py main), not by run_episode: kept as found
             dead = [n for n in old.get("notes") or [] if isinstance(n, dict) and n.get("check") == "dead_values"]
