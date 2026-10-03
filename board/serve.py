@@ -563,6 +563,9 @@ def _rail_record(p: Path, d: dict) -> dict:
         "hands_hidden_s": FAMILIES.hands_hidden_seconds(d),
         # the board's own model reply gave no labels (board/to_board.py label_failed): unparsed or cut_off
         **({"label_failed": d["_label_failed"].get("status")} if isinstance(d.get("_label_failed"), dict) else {}),
+        # a long recording labelled in parts, some of which gave no labels (label/pieces.py stitch_run)
+        **({"parts_missing": len(d["_stitched"]["missing"]), "parts": d["_stitched"].get("parts")}
+           if isinstance(d.get("_stitched"), dict) and d["_stitched"].get("missing") else {}),
         # another model's labels (compare/): how its response came out (parsed, unparsed, cut_off, no_response)
         **({"cmp_status": d["_compare"].get("status")} if isinstance(d.get("_compare"), dict) else {}),
     }
@@ -2923,6 +2926,28 @@ function unshownNote(d) {
   return `<p class="unshown-note">The model was not shown ${us.length === 1 ? 'the camera' : 'the cameras'} ${list}. `
     + `${us.length === 1 ? 'It plays' : 'They play'} here so every camera of the upload can be watched.</p>`;
 }
+// The outcome a list card shows. A session of tasks (head cameras) has no single verdict: the per-task success ratio
+// ("8/9 tasks") instead of a misleading "unrated"; a single task shows its completion verdict. A long recording with a
+// part the model gave no labels for (parts_missing, label/pieces.py stitch_run) never reads complete, and an episode
+// whose own reply gave no labels says so.
+function cardOutcomeHtml(ep) {
+  if (ep.label_failed && !ep.cmp_status) {
+    // the board's own reply gave no labels: no outcome to rate, which "unrated" would hide
+    return `<span class="outcome-tag fail">no labels</span>`;
+  }
+  if (ep.cmp_status && ep.cmp_status !== 'parsed') {
+    // a model's response that did not parse, was cut off or never came: a result, listed like any other
+    return `<span class="outcome-tag fail">${esc(ST_WORDS[ep.cmp_status] || ep.cmp_status)}</span>`;
+  }
+  if (ep.n_tasks) {
+    const allOk = ep.n_task_success === ep.n_tasks && !ep.parts_missing;
+    const gap = ep.parts_missing ? `, ${ep.parts_missing} of ${ep.parts} parts not labelled` : '';
+    return `<span class="outcome-tag ${allOk ? 'success' : 'partial'}">${ep.n_task_success}/${ep.n_tasks} tasks${gap}`
+      + `</span>`;
+  }
+  const oc = (ep.task_completed || '').toLowerCase();
+  return `<span class="outcome-tag ${oc || 'none'}">${esc(oc ? outcomeWords(oc, ep.failure_kind) : 'unrated')}</span>`;
+}
 // What the model was not shown of the upload, from board/build.py reader_notes. It draws the reader's note on the
 // recorded state as text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it
 // gave, in the same fold as the notes in the files. The fold is closed until opened, since an upload can leave out
@@ -3554,24 +3579,7 @@ function renderRail(ds, keepFile, fromSearch) {
     const card = document.createElement('div');
     card.className = 'ep-card';
     card.dataset.file = ep.file;
-    // a session of tasks (head cameras) has no single verdict: the per-task success ratio ("8/9 tasks") instead of a
-    // misleading "unrated"; a single task shows its completion verdict
-    let outcomeHtml;
-    if (ep.label_failed && !ep.cmp_status) {
-      // the board's own reply gave no labels: no outcome to rate, which "unrated" would hide
-      outcomeHtml = `<span class="outcome-tag fail">no labels</span>`;
-    } else if (ep.cmp_status && ep.cmp_status !== 'parsed') {
-      // a model's response that did not parse, was cut off or never came: a result, listed like any other
-      outcomeHtml = `<span class="outcome-tag fail">${esc(ST_WORDS[ep.cmp_status] || ep.cmp_status)}</span>`;
-    } else if (ep.n_tasks) {
-      const allOk = ep.n_task_success === ep.n_tasks;
-      const cls = allOk ? 'success' : 'partial';
-      outcomeHtml = `<span class="outcome-tag ${cls}">${ep.n_task_success}/${ep.n_tasks} tasks</span>`;
-    } else {
-      const oc = (ep.task_completed || '').toLowerCase();
-      outcomeHtml = `<span class="outcome-tag ${oc || 'none'}">${esc(oc ? outcomeWords(oc, ep.failure_kind)
-        : 'unrated')}</span>`;
-    }
+    const outcomeHtml = cardOutcomeHtml(ep);
     // flag data issues right of the outcome so a "success" with severe metadata
     // faults is not silently trusted, and say WHAT the top issue is (a mispaired
     // or mislabeled camera is foundational, not a footnote).

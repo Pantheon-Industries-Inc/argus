@@ -573,3 +573,17 @@ def test_the_list_is_encoded_once_and_follows_the_files(server):
     f.write_text(json.dumps(d))
     code, _, body = _get(server + "/api/episodes")
     assert code == 200 and any(e.get("episode_prompt") == d["episode_prompt"] for e in json.loads(body))
+
+
+
+def test_a_long_recording_with_a_part_not_labelled_never_reads_complete_on_its_card(tmp_path):
+    d = _episode("mine", "teleop_arms", tasks=[{"task": "a", "outcome": "success"}, {"task": "b", "outcome": "success"}],
+                 _stitched={"parts": 3, "cuts_s": [300.0, 600.0], "missing": [{"part": 2, "t0_s": 300.0,
+                                                                              "t1_s": 600.0, "why": "x"}]})
+    rec = serve._rail_record(tmp_path / "episode_000001.json", d)
+    assert rec["parts_missing"] == 1 and rec["parts"] == 3
+    assert "parts_missing" not in serve._rail_record(tmp_path / "episode_000001.json", _episode("mine", "teleop_arms"))
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("card_outcome.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
