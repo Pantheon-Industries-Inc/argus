@@ -74,4 +74,16 @@ const hn = T.checksSection({_rig: 'teleop_arms', dataset_checks: {capture_qc: {c
   flags: [], notes: [{check: 'video_low_contrast', evidence: 'Camera left is nearly uniform.'}]}}});
 check(hn.includes('Camera left is nearly uniform. It was not run on every camera, as the check stopped with an error '
   + '(camera right: TypeError: x).'), 'a note\'s reason reads as a sentence');
+// a sensor check not run on a signal names it; one run on no signal is shown as not applicable with why, never clear
+// and never left out, and only the checks that ran are counted
+const hs = T.checksSection({_rig: 'teleop_arms', dataset_checks: {sensor_checks: {notes: [], checks: [
+  {check: 'pinned', name: 'Values pinned at the end of their range', status: 'clear',
+   not_run_on: 'probe empty (it has no rows)'},
+  {check: 'constant', name: 'Signal never changes', status: 'na', why: 'no signal could be checked: probe empty'},
+  {check: 'depth_invalid', name: 'Depth pictures mostly without readings', status: 'na'}]}}});
+check(hs.includes('Not run on probe empty (it has no rows).'), 'a sensor check names the signal it was not run on');
+check(hs.slice(hs.indexOf('Signal never changes')).includes('>not applicable<')
+  && hs.includes('no signal could be checked'), 'a sensor check run on no signal says why, as not applicable');
+check(!hs.includes('Depth pictures mostly'), 'a sensor check with nothing to run on is left out');
+check(/0 of 1 noted/.test(hs), 'the sensor checks\' line counts only the checks that ran');
 process.exit(bad ? 1 : 0);

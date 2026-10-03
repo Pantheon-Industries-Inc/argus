@@ -3204,12 +3204,16 @@ function checksSection(d) {
   if (sc) {
     const ev = {};
     for (const n of sc.notes || []) (ev[n.check] = ev[n.check] || []).push(n.evidence);
-    const all = sc.checks.filter(c => c.status !== 'na').map(c => ({name: c.name,
-      st: c.status === 'fired' ? 'note' : c.status === 'errored' ? 'err' : 'clear',
-      text: c.status === 'errored' ? `The check stopped with an error (${c.error}).`
-        : (ev[c.check] || []).map(sentences).join(' ')}));
+    // a check not run on some signal (one with no rows, or whose checks stopped with an error) names it, and one run on
+    // no signal at all says why; a check with nothing to run on (no depth, one clock) is left out
+    const all = sc.checks.filter(c => c.status !== 'na' || c.why).map(c => ({name: c.name,
+      st: c.status === 'fired' ? 'note' : c.status === 'errored' ? 'err' : c.status === 'na' ? 'na' : 'clear',
+      text: c.status === 'errored' ? `The check stopped with an error (${c.error}).` : c.status === 'na'
+        ? sentences(c.why)
+        : (ev[c.check] || []).map(sentences).concat(c.not_run_on ? [`Not run on ${c.not_run_on}.`] : []).join(' ')}));
     if (all.length) sensors = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Sensor and depth checks`
-      + `</span><span class="ck-sum">${all.filter(r => r.st === 'note').length} of ${all.length} noted</span></div>`
+      + `</span><span class="ck-sum">${all.filter(r => r.st === 'note').length} of ${all.filter(r => r.st
+        !== 'na').length} noted</span></div>`
       + `${all.map(row).join('')}</div>`;
   }
   let touch = '';

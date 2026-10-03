@@ -597,3 +597,40 @@ def test_a_nan_state_row_is_left_out_and_too_few_readings_are_not_assessed(tmp_p
     d3 = write_episode(tmp_path / "episode_000002", s2, {"left": levels_for(vL), "right": levels_for(vR)})
     g = stream_pairing.grippers(d3)
     assert g["flagged"] is True and "not_assessed" not in g and "not_assessed" in g["actors"]["right"]
+
+
+def test_a_one_dimensional_or_empty_signal_never_costs_the_others(tmp_path):
+    """A signal stored as one value per frame without a column crashed the episode's request and errored every signal
+    check, and a signal with no rows read clear on every check. The vector is read as one column, so it is checked and
+    shown like any other; the empty signal has no reading at any frame, the other checks name it as not run on it, and
+    the prompt names it. With no signal that has rows, the signal checks are not assessed, never clear."""
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.linspace(0, 1, 300).astype(np.float32)
+    z["s4"] = np.zeros((0, 3), np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe vector", "key": "s3", "dims": 1}, {"name": "probe empty", "key": "s4", "dims": 3}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    r = sc.run_episode(ep)
+    st = {c["check"]: c for c in r["checks"]}
+    assert not any(c["status"] == "errored" for c in r["checks"])
+    assert any(n["check"] == "no_reading" and n["signal"] == "probe empty" and "no rows" in n["evidence"]
+               for n in r["notes"])
+    assert st["no_reading"]["status"] == "fired" and "not_run_on" not in st["no_reading"]
+    assert st["pinned"]["status"] == "clear" and st["pinned"]["not_run_on"] == "probe empty (it has no rows)"
+    e = me.load(ep)
+    assert e["signals"]["probe vector"].shape == (300, 1)
+    pl = me.plan(e)
+    text = me._signals_table(e, pl)
+    assert "probe vector" in text and "probe empty: no rows, so no reading at any frame" in text
+    assert any("probe vector" in row for row in me._signal_readout(e, pl)[0])
+    only = tmp_path / "only" / "episode_000000"
+    shutil.copytree(ep, only)
+    np.savez(only / "signals.npz", s4=np.zeros((0, 3), np.float32))
+    (only / "context.json").write_text(json.dumps({**ctx, "state_kind": "none", "signals": ctx["signals"][-1:]}))
+    st = {c["check"]: c for c in sc.run_episode(only)["checks"]}
+    assert st["constant"]["status"] == "na" and st["constant"]["why"].startswith("no signal could be checked")
+    assert st["no_reading"]["status"] == "fired"

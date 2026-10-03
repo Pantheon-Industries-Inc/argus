@@ -120,8 +120,9 @@ def load(ep_dir: Path) -> dict:
         # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz) and everything else its reader wrote,
         # so a field a reader adds reaches the checks without being listed here. Signals on the frames of a camera
         # taken out of the episode, with nothing to place them on the others (state_unaligned), are not read
+        from label import signals as sg
         z = np.load(ep_dir / "signals.npz")
-        ep["signals"] = {s["name"]: z[s["key"]] for s in ctx["signals"]}
+        ep["signals"] = {s["name"]: sg.columns(z[s["key"]]) for s in ctx["signals"]}
         ep["signal_meta"] = {s["name"]: {k: v for k, v in s.items() if k not in ("name", "key")}
                              for s in ctx["signals"]}
     if ctx.get("real_times"):
@@ -1060,17 +1061,22 @@ def _signals_table(ep: dict, pl: dict) -> str:
     arrs = {k: a[:n] for k, a in sig.items()}
     lines, still = [], []
     for name, a in arrs.items():
-        if not len(a):
-            continue
-        if _constant(a):
-            # a value repeated at every frame (a setting, a calibration, or a sensor that sent nothing new): named once
-            v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
-            still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
-                                 " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else ""))
-            continue
-        m = meta.get(name) or {}
-        lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
-                                 fps=ep_fps(ep), aligned_by=m.get("aligned_by")))
+        try:
+            if not len(a):
+                lines.append(f"  {name}: no rows, so no reading at any frame")
+                continue
+            if _constant(a):
+                # a value repeated at every frame (a setting, a calibration, or a sensor that sent nothing new): named
+                # once
+                v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
+                still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
+                                     " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else ""))
+                continue
+            m = meta.get(name) or {}
+            lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
+                                     fps=ep_fps(ep), aligned_by=m.get("aligned_by")))
+        except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
+            lines.append(f"  {name}: could not be read ({type(e).__name__})")
     if still:
         lines.append("  The same at every frame: " + "; ".join(still))
     if pl["spans"]:
@@ -1115,12 +1121,15 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     ks = pl["ks"]
     rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)
     for i, (name, a) in enumerate(arrs.items()):
-        if name in touch or not len(a) or not np.isfinite(a).any() or _constant(a):
+        try:
+            if name in touch or not len(a) or not np.isfinite(a).any() or _constant(a):
+                continue
+            m = meta.get(name) or {}
+            got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"))
+            mv = sg.movements(a)
+            by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"))
+        except Exception:  # noqa: BLE001 - named as not read in the signals' list (_signals_table), the rest are given
             continue
-        m = meta.get(name) or {}
-        got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"))
-        mv = sg.movements(a)
-        by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"))
         for j, (lb, v) in enumerate(got):
             rows.append((float(mv[j]) if by_value else float(np.median(mv)), i, j, name, lb, v))
     if not rows:

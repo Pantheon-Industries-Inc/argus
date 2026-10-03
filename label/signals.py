@@ -425,8 +425,10 @@ def active_spans(a: np.ndarray, t: np.ndarray, rest=None, swing=None) -> list[tu
 MOVING_MIN = 10.0     # a value moves when its range is at least this many times its typical step between readings
 
 
-def _columns(a) -> np.ndarray:
-    """a as frames by values: a vector is one value, further axes (a pressure map) are flattened."""
+def columns(a) -> np.ndarray:
+    """a as frames by values: a vector is one value per frame, further axes (a pressure map) are flattened. The readers
+    write every signal this way; label/episode.py load applies it too, so a signal stored as a bare vector is read as
+    one column by the prompt and the checks rather than breaking them."""
     a = _float(a)
     return a.reshape(a.shape[0], int(np.prod(a.shape[1:])))
 
@@ -435,7 +437,7 @@ def _range_and_step(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Per value of a (frames by values, any further axes flattened): its range, and its typical step, the median of
     its nonzero absolute steps between consecutive readings (a pair with a missing reading is no step). NaN where a
     value has no reading or never changes."""
-    a = _columns(a)
+    a = columns(a)
     if len(a) == 0:
         return np.full(a.shape[1], np.nan), np.full(a.shape[1], np.nan)
     rs, steps = [], []
@@ -473,7 +475,7 @@ def quiet_spans(arrs: dict, need: int) -> list[tuple[int, int]]:
     from label import state as ms
     cols, tols = [], []
     for a in arrs.values():
-        a = _columns(a)
+        a = columns(a)
         r, step = _range_and_step(a)
         for j in np.flatnonzero(_score(r, step) >= MOVING_MIN):
             cols.append(a[:, j])
