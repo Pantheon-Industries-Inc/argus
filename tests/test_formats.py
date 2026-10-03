@@ -2955,6 +2955,27 @@ def test_folder_json_files_that_name_different_tasks_give_none_and_are_named():
         _folder_json_files_that_name_different_tasks_give_none_and_are_named(Path(t))
 
 
+def _a_folder_json_is_named_for_the_longest_name_it_holds_and_a_date_names_no_take(tmp_path):
+    """top_ep1_meta.json beside the takes ep1 and ep2 holds top, the camera of every take, inside top_ep1, the video
+    of ep1 alone, and was read as named for every take, so it gave ep1 no task; 2024_01_02_session.json beside the
+    takes 01 and 02 was read as named for both, so the session's task reached neither. A name inside a longer name the
+    file holds counts as the longer one, and a bare number beside other numbers (a date or a time) is no take's name."""
+    takes = ["d/top_ep1.mp4", "d/wrist_ep1.mp4", "d/top_ep2.mp4", "d/wrist_ep2.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "a", takes, {"d/top_ep1_meta.json": {"task": "pick the cup"}})
+    assert ctx["d/ep1"]["instruction"] == "pick the cup" and "instruction" not in ctx["d/ep2"], ctx
+    numbered = ["d/top_01.mp4", "d/wrist_01.mp4", "d/top_02.mp4", "d/wrist_02.mp4"]
+    ctx, _ = _upload_notes(tmp_path / "b", numbered, {"d/2024_01_02_session.json": {"prompt": "pick the cup"}})
+    assert [c.get("instruction") for c in ctx.values()] == ["pick the cup", "pick the cup"], ctx
+    ctx, _ = _upload_notes(tmp_path / "c", numbered, {"d/session_02.json": {"prompt": "pour the tea"}})
+    assert "instruction" not in ctx["d/01"] and ctx["d/02"]["instruction"] == "pour the tea", ctx
+
+
+def test_a_folder_json_is_named_for_the_longest_name_it_holds_and_a_date_names_no_take():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_folder_json_is_named_for_the_longest_name_it_holds_and_a_date_names_no_take(Path(t))
+
+
 def _the_notes_of_a_folder_holding_one_video_are_read(tmp_path):
     """A video alone in its folder (ep1/top.mp4) is an episode of its own, and the notes of its folder (instruction.txt,
     ep1.txt named for the folder, a recorder's session_meta.json) had never been read, so its task was lost. When a

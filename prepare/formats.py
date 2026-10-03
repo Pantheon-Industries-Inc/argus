@@ -1112,10 +1112,20 @@ def name_words(name: str) -> tuple[str, ...]:
 def named_for(p: Path, names: dict) -> set:
     """The episodes a file of an episode's folder is named for: those of every name of the folder (note_folder_names)
     whose words appear in a row among the words of the file's name (ep1_meta.json is named for ep1 and never for ep10;
-    top.json in a folder of takes for the top camera of every take). None stands for a video that is no episode's. A
-    file named for nothing (session_meta.json) is a recorder's, which the folder's episodes share. read.js namedFor."""
+    top.json in a folder of takes for the top camera of every take). A name inside a longer name the file holds counts
+    as the longer one (top_ep1_meta.json is named for the video top_ep1 of ep1, not for every take's top camera), and
+    a bare number beside other numbers is a date or a time, never a take's name (2024_01_02_session.json beside the
+    takes 01 and 02). None stands for a video that is no episode's. A file named for nothing (session_meta.json) is a
+    recorder's, which the folder's episodes share. read.js namedFor."""
     w = name_words(p.stem)
-    return {who for i in range(len(w)) for j in range(i + 1, len(w) + 1) for who in names.get(w[i:j], ())}
+    hits = []
+    for i in range(len(w)):
+        for j in range(i + 1, len(w) + 1):
+            beside = (i > 0 and w[i - 1].isdigit()) or (j < len(w) and w[j].isdigit())
+            if w[i:j] in names and not (beside and all(x.isdigit() for x in w[i:j])):
+                hits.append((i, j))
+    longest = [(i, j) for i, j in hits if not any(a <= i and j <= b and (a, b) != (i, j) for a, b in hits)]
+    return {who for i, j in longest for who in names[w[i:j]]}
 
 
 def task_rank(p: Path, named_for_episode: bool) -> int | None:
