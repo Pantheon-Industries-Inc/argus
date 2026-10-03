@@ -3974,8 +3974,13 @@ def chunk_size(info: dict) -> int | None:
     path templates (data_path, video_path); None when it is not a whole number above 0. The browser mirror is
     read.js chunkSize."""
     x = info.get("chunks_size", 1000)
+    if isinstance(x, (bool, np.bool_)):
+        return None
     try:
-        n = int(x) if not isinstance(x, bool) and float(x) == int(x) else 0
+        n = int(x)
+        # Recorded integers and integer text keep their exact path arithmetic above float precision.
+        if not isinstance(x, (int, np.integer, str)) and float(x) != n:
+            return None
     except (TypeError, ValueError, OverflowError):
         return None
     return n if n > 0 else None
