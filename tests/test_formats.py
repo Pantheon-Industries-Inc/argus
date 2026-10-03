@@ -595,6 +595,50 @@ def _two_arms_in_their_own_files_or_messages(tmp_path):
     assert not {"left qpos", "right qpos", "left action", "right action"} & kept, kept
 
 
+def _a_side_from_value_names_only_completes_a_pair(tmp_path):
+    """A side read from value names had replaced "only" on any arm whose topic names no side, so one arm named
+    right_* beside a base's wheels, one named r_* beside a gripper channel, a sideless arm beside left and right legs,
+    and a follower named left_* beside a sideless leader lost their state or action. A side from value names is used
+    only when it completes one left and one right arm of six joints and a gripper; otherwise the topics' sides stand."""
+    import numpy as np
+    t0 = 1_790_000_000.0
+    joints = [f"joint{i}" for i in range(1, 7)]
+    tt = np.arange(0, 10.0, 0.01)
+    q = t0 + np.arange(0, 10, 1 / 30)
+    arm = lambda s, k=0: [float(np.sin(s + j + k)) for j in range(7)]
+    cases = {
+        "wheels": {"/joint_states": [(s, {"name": [f"right_{n}" for n in joints] + ["right_gripper"],
+                                          "position": arm(s)}) for s in tt],
+                   "/base/joint_states": [(s, {"name": ["left_wheel", "right_wheel"], "position": [s, -s]})
+                                          for s in tt]},
+        "leader": {"/follower/joint_states": [(s, {"name": [f"left_{n}" for n in joints] + ["left_gripper"],
+                                                   "position": arm(s)}) for s in tt],
+                   "/leader/joint_states": [(s, {"name": joints + ["gripper"], "position": arm(s, 0.1)}) for s in tt]},
+        "gripper": {"/arm/joint_states": [(s, {"name": [f"r_{n}" for n in joints] + ["r_gripper"],
+                                               "position": arm(s)}) for s in tt],
+                    "/gripper/joint_states": [(s, {"name": ["finger_joint"], "position": [0.04]}) for s in tt]},
+        "legs": {"/arm/joint_states": [(s, {"name": joints + ["gripper"], "position": arm(s)}) for s in tt],
+                 "/joint_states": [(s, {"name": [f"left_leg_{i}" for i in range(6)], "position": [0.1] * 6})
+                                   for s in tt]
+                 + [(s + 0.002, {"name": [f"right_leg_{i}" for i in range(6)], "position": [0.2] * 6}) for s in tt]},
+    }
+    ref = np.stack([np.interp(q - t0, tt, [arm(s)[j] for s in tt]) for j in range(7)], axis=1)
+    for label, chans in cases.items():
+        path = tmp_path / f"{label}.mcap"
+        _json_mcap(path, chans, t0)
+        st = f.mcap_joint_streams([path], q)
+        state, action, note = f.joint_state(st, q)
+        assert note is None and state.shape == (len(q), 7), (label, note)
+        assert np.abs(state - ref).max() < 1e-3, label
+        assert (action is not None) == (label == "leader"), label
+
+
+def test_a_side_from_value_names_only_completes_a_pair():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_side_from_value_names_only_completes_a_pair(Path(t))
+
+
 def test_two_arms_in_their_own_files_or_messages():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:

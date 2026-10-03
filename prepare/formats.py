@@ -4151,15 +4151,21 @@ def _topic(streams: dict, key: str) -> str:
     return streams[key].get("topic", key)
 
 
-def _side(streams: dict, key: str) -> str | None:
-    """left or right of an arm stream: the side its channel's topic names (side_of), or else the side every value name
-    of its name set says (left_joint1 .. left_gripper), so two arms in messages of their own on one /joint_states are
-    two arms, as two topics are. None when neither says one side."""
-    side = side_of(_topic(streams, key))
-    if side is None:
-        sides = {side_of(str(n)) for n in streams[key].get("names") or []}
-        side = sides.pop() if len(sides) == 1 else None
-    return side
+def _sides(streams: dict, role: bool) -> dict:
+    """{key: left, right or None} of the arm streams (the commands when role): the side each channel's topic names
+    (side_of). An arm of six joints and a gripper whose topic names none takes the side every one of its value names
+    says (left_joint1 .. left_gripper) only when that completes one left and one right arm the topics did not, so two
+    arms in messages of their own on one /joint_states are two arms, as two topics are. Otherwise the topics' sides
+    stand: one arm named right_* beside a base's left and right wheels is still the only arm."""
+    keys = [t for t in streams if bool(ACTION_TOPIC.search(_topic(streams, t))) == role]
+    sides = {t: side_of(_topic(streams, t)) for t in keys}
+    named = dict(sides)
+    for t in keys:
+        if named[t] is None and streams[t]["pos"].shape[1] == JOINT_DIMS:
+            said = {side_of(str(n)) for n in streams[t].get("names") or []}
+            named[t] = said.pop() if len(said) == 1 else None
+    pair = lambda by: {"left", "right"} <= {by[t] for t in keys if streams[t]["pos"].shape[1] == JOINT_DIMS}
+    return named if pair(named) and not pair(sides) else sides
 
 
 def _arm_rank(streams: dict, key: str) -> tuple:
@@ -4175,10 +4181,9 @@ def arm_streams(streams: dict, role: bool) -> dict:
     """{side: key} of the arm streams joint_state reads, the commands when role: per side its channel names (left,
     right, or "only"), a stream of six joints and a gripper when there is one (an arm can also record other vectors),
     else the widest, so a channel's arm is chosen over the gripper published apart from it."""
-    by_side = {}
-    for t in sorted(streams, key=lambda t: _arm_rank(streams, t)):
-        if bool(ACTION_TOPIC.search(_topic(streams, t))) == role:
-            by_side.setdefault(_side(streams, t) or "only", t)
+    by_side, sides = {}, _sides(streams, role)
+    for t in sorted(sides, key=lambda t: _arm_rank(streams, t)):
+        by_side.setdefault(sides[t] or "only", t)
     return by_side
 
 
@@ -4186,10 +4191,10 @@ def third_arms(streams: dict) -> list[str]:
     """The recorded arm channels that are neither working arm: those whose topic names no side, beside a left and a
     right arm (a third arm that carries the scene camera, as on a rig whose camera an operator moves). joint_state
     reads the two sided arms and leaves these out."""
-    st = [t for t in streams if not ACTION_TOPIC.search(_topic(streams, t))]
-    if not {"left", "right"} <= {_side(streams, t) for t in st}:
+    sides = _sides(streams, False)
+    if not {"left", "right"} <= set(sides.values()):
         return []
-    return sorted(t for t in st if _side(streams, t) is None)
+    return sorted(t for t, side in sides.items() if side is None)
 
 
 def state_fields(streams: dict, state, action) -> dict:
