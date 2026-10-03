@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 
@@ -24,9 +25,28 @@ LISTS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "
 
 def _time(x) -> float | None:
     try:
-        return round(float(x), 3)
+        t = round(float(x), 3)
     except (TypeError, ValueError):
         return None
+    return t if math.isfinite(t) else None
+
+
+def finite(x):
+    """x with every number that is not finite (NaN, inf) as null, at any depth. JSON has no such number: json.dumps
+    writes NaN, which the page cannot parse, so one NaN in a reply or a check would stop the whole episode loading."""
+    if isinstance(x, float):
+        return x if math.isfinite(x) else None
+    if isinstance(x, dict):
+        return {k: finite(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [finite(v) for v in x]
+    return x
+
+
+def dumps(x, **kw) -> str:
+    """Every board file and every response the board serves as JSON: non finite numbers written as null (finite), and
+    allow_nan off, so anything that still slips through fails here rather than on the page."""
+    return json.dumps(finite(x), allow_nan=False, **kw)
 
 
 RAW_HEAD = 3000       # characters of a reply that did not parse kept on the board (the run's output keeps it whole)
@@ -244,7 +264,7 @@ def convert_run(in_dir: Path, out_dir: Path, dataset: str) -> tuple[int, list[st
     out_dir.mkdir(parents=True, exist_ok=True)
     outs, skipped = label_outputs(in_dir)
     for eid, (_, r) in outs.items():
-        (out_dir / f"{eid}.json").write_text(json.dumps(convert(r, dataset), indent=2))
+        (out_dir / f"{eid}.json").write_text(dumps(convert(r, dataset), indent=2))
     return len(outs), skipped
 
 

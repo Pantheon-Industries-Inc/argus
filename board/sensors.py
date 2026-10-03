@@ -73,6 +73,7 @@ from pathlib import Path
 import numpy as np
 
 from board.hands import vlq_append, vlq_decode
+from board.to_board import dumps
 
 FORMAT = "board-sensors/1"
 RATE_HZ = 15.0           # the page's samples a second, at most
@@ -354,14 +355,14 @@ def build(episodes: dict, out_dir: Path) -> dict:
             continue
         if doc is None:
             continue
-        body = json.dumps(doc, separators=(",", ":"))
+        body = dumps(doc, separators=(",", ":"))
         tmp = out_dir / f".{f}.part"
         tmp.write_text(body)
         os.replace(tmp, out_dir / f)
         files[f] = summary(doc)
         total += len(body)
         biggest = max(biggest, len(body))
-    (out_dir / "index.json").write_text(json.dumps({"format": FORMAT, "files": files}, separators=(",", ":")))
+    (out_dir / "index.json").write_text(dumps({"format": FORMAT, "files": files}, separators=(",", ":")))
     return {"written": len(files), "skipped": skipped, "bytes": {"total": total, "max": biggest}}
 
 

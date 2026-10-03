@@ -1077,3 +1077,39 @@ def test_the_video_menu_opens_from_the_row_of_buttons_on_a_narrow_screen():
     assert ".vd { position: static; }" in narrow
     assert ".ep-head .ep-head-acts { position: relative;" in narrow
     assert ".vd-menu { right: auto; left: 0; }" in narrow
+
+
+def _strict(text: str):
+    """JSON as a browser's JSON.parse reads it: NaN and Infinity are not JSON."""
+    def no(c):
+        raise ValueError(f"{c} is not JSON")
+    return json.loads(text, parse_constant=no)
+
+
+def test_a_number_that_is_not_finite_never_stops_an_episode_loading(tmp_path):
+    """A NaN in a reply (a step's time, the outcome's time) or in a check (a correlation over a NaN state row) was written
+    as NaN, which the page cannot parse, so the episode never loaded. Every board file is written as JSON a browser
+    reads, a time that is not finite is untimed, and every other non finite number is null."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "full",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    ctx = json.loads((eps / "episode_000000" / "context.json").read_text())
+    ctx["stream_pairing"] = {"left_vs_left": float("nan"), "crossed": False}
+    (eps / "episode_000000" / "context.json").write_text(json.dumps(ctx))
+    out = _output("episode_000000", completion={"task_completed": "success", "completed_at_s": float("nan")})
+    out["episode_dir"] = str(eps / "episode_000000")
+    out["labels"]["timeline"][0]["start_s"] = float("nan")
+    out["labels"]["key_events"][0]["t_s"] = float("inf")
+    (run / "out" / "episode_000000.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    d = _strict((board / "qa" / "episode_000000.json").read_text())
+    assert d["event_labels"][0]["t_s"] is None and d["key_events"][0]["t_s"] is None
+    assert d["completion"]["completed_at_s"] is None
+    assert d["dataset_checks"]["stream_pairing"]["left_vs_left"] is None
+    assert to_board.dumps({"a": [float("nan"), 1.5, {"b": float("-inf")}]}) == '{"a": [null, 1.5, {"b": null}]}'

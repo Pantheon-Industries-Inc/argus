@@ -593,3 +593,28 @@ def test_a_long_recording_with_a_part_not_labelled_never_reads_complete_on_its_c
                         str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_board_file_with_a_number_that_is_not_finite_is_served_as_json_a_browser_reads(server):
+    """A board file built before non finite numbers were written as null still loads: the server writes them as null
+    in the episode, the list and the export, never as NaN, which the page's JSON.parse rejects."""
+    qa = serve.HERE
+    d = json.loads((qa / "episode_000001.json").read_text())
+    d["dataset_checks"] = {"stream_pairing": {"left_vs_left": float("nan"), "crossed": False}}
+    d["event_labels"][0]["t_s"] = float("nan")
+    d["duration_s"] = float("inf")
+    (qa / "episode_000001.json").write_text(json.dumps(d))
+
+    def strict(body: bytes):
+        def no(c):
+            raise ValueError(f"{c} is not JSON")
+        return json.loads(body, parse_constant=no)
+    code, _, body = _get(server + "/api/episode?file=episode_000001.json")
+    assert code == 200 and strict(body)["dataset_checks"]["stream_pairing"]["left_vs_left"] is None
+    code, _, body = _get(server + "/api/episodes")
+    assert code == 200 and len(strict(body)) == 3
+    code, _, body = _get(server + "/api/episode?file=episode_000001.json&download=1")
+    assert code == 200 and strict(body)["event_labels"][0]["t_s"] is None
+    code, _, body = _get(server + "/api/export", {"Content-Type": "application/json"},
+                         json.dumps({"files": ["episode_000001.json"]}).encode())
+    assert code == 200 and strict(body.decode().splitlines()[0])["duration_s"] is None

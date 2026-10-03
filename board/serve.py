@@ -59,6 +59,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from board.families import Families
+from board.to_board import dumps
 from compare.metrics import model_names, reasoning_effort
 
 
@@ -432,7 +433,7 @@ def list_json(here: Path | None = None) -> tuple:
         hit = _LIST_BODY.get(key)
     if hit and hit[0] is out:
         return hit[1], hit[2]
-    raw = json.dumps(out).encode()
+    raw = dumps(out).encode()
     gz = gzip.compress(raw, compresslevel=5)
     with _LIST_LOCK:
         _LIST_BODY[key] = (out, raw, gz)
@@ -6722,7 +6723,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json", gzipped: bytes | None = None):
         """gzipped: the body already compressed (list_json), sent instead of compressing it again."""
         if isinstance(body, (dict, list)):
-            body = json.dumps(body)
+            body = dumps(body)
         if isinstance(body, str):
             body = body.encode()
         # compress large JSON and HTML: a large board's episode list is megabytes, about ten times smaller
@@ -6831,7 +6832,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not _under(HERE, p) or not p.is_file() or p.suffix != ".json":
                 self._send(404, {"error": f"no such file: {fname}"})
                 return
-            lines.append(json.dumps(public_label(json.loads(p.read_text())), separators=(",", ":")))
+            lines.append(dumps(public_label(json.loads(p.read_text())), separators=(",", ":")))
         body = ("\n".join(lines) + "\n").encode()
         gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
         if gz:
@@ -6869,7 +6870,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(404, {"error": "no such file"})
                 return
             if (q.get("download") or [""])[0] == "1":
-                body = json.dumps(public_label(json.loads(p.read_text())), separators=(",", ":")).encode()
+                body = dumps(public_label(json.loads(p.read_text())), separators=(",", ":")).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
@@ -6877,7 +6878,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            self._send(200, json.dumps(episode_view(json.loads(p.read_text()))), "application/json")
+            self._send(200, dumps(episode_view(json.loads(p.read_text()))), "application/json")
             return
         if parsed.path.startswith("/api/compare/"):
             # other models' labels (board/build.py compare/): kept beside the board's own and never in its lists
@@ -6906,7 +6907,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not key or "/" in key or not _under(COMPARE_DIR, p) or not p.is_file() or p.suffix != ".json":
                     self._send(404, {"error": "no such comparison"})
                     return
-                self._send(200, json.dumps(episode_view(json.loads(p.read_text()))), "application/json")
+                self._send(200, dumps(episode_view(json.loads(p.read_text()))), "application/json")
                 return
             self._send(404, {"error": "unknown path"})
             return

@@ -94,7 +94,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from board.to_board import convert, label_failed, label_outputs
+from board.to_board import convert, dumps, label_failed, label_outputs
 from checks import label_consistency
 
 SEVERITIES = ["low", "medium", "high"]
@@ -532,13 +532,13 @@ def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict
                 info.update({"out_tokens": r.get("out_tokens"), "tail": (r.get("tail") or "")[-1500:]})
             d["_compare"] = info
             (out / m["key"]).mkdir(exist_ok=True)
-            (out / m["key"] / f).write_text(json.dumps(d))
+            (out / m["key"] / f).write_text(dumps(d))
             srcs[m["key"]] = r["status"]
             written[m["key"]] += 1
         if srcs:
             index["episodes"][f] = srcs
-    (out / "index.json").write_text(json.dumps(index, separators=(",", ":")))
-    (out / "metrics.json").write_text(json.dumps(mc.public(metrics), separators=(",", ":")))
+    (out / "index.json").write_text(dumps(index, separators=(",", ":")))
+    (out / "metrics.json").write_text(dumps(mc.public(metrics), separators=(",", ":")))
     return {"models": {m["key"]: {"run_id": m["run_id"], "files": written[m["key"]]} for m in models},
             "episodes": len(index["episodes"])}
 
@@ -709,7 +709,7 @@ def build(board: Path) -> dict:
                                    "episode (file_prefix separates datasets whose episode names repeat)")
             carry_pieces(d, r, ctx)
             d = normalize_enums(d)
-            dest.write_text(json.dumps(d))
+            dest.write_text(dumps(d))
             board_src[fname] = src
         counts[entry["dataset"]] = {"run_id": json.loads((run / "run.json").read_text())["run_id"],
                                     "episodes": len(labels), **({"skipped": skipped} if skipped else {})}
@@ -727,7 +727,7 @@ def build(board: Path) -> dict:
     built = {"manifest": {**manifest, "datasets": built_entries}, "counts": counts,
              **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {}),
              **({"sensors": sensors} if sensors else {})}
-    (board / "BUILT.json").write_text(json.dumps(built, indent=1))
+    (board / "BUILT.json").write_text(dumps(built, indent=1))
     return built
 
 

@@ -71,6 +71,8 @@ from collections import Counter
 from fractions import Fraction
 from pathlib import Path
 
+from board.to_board import dumps
+
 FORMAT = "board-hand-pose/1"
 STEP = 4
 TOL = 0.5
@@ -314,7 +316,7 @@ def build_one(job: tuple) -> dict:
         for h in ("left", "right"):
             hh = hands_[h]
             doc[h] = encode_hand(hh["kp"], [c is not None and c >= 0.5 for c in hh["conf"]], sx, sy)
-        body = json.dumps(doc, separators=(",", ":"))
+        body = dumps(doc, separators=(",", ":"))
         tmp = out_dir / f".{label_file}.part"
         tmp.write_text(body)
         os.replace(tmp, out_dir / label_file)
@@ -435,7 +437,7 @@ def keypoints_one(job: tuple) -> dict:
         ctx = json.loads((episode / "context.json").read_text())
         doc = keypoints_doc(key, json.loads(Path(src_file).read_text()), video, label_path.name, eid, ctx,
                             json.loads(label_path.read_text()).get("dataset_source"))
-        body = json.dumps(doc, separators=(",", ":"))
+        body = dumps(doc, separators=(",", ":"))
         tmp = out_dir / f".{label_path.name}.part"
         tmp.write_text(body)
         os.replace(tmp, out_dir / label_path.name)
@@ -455,7 +457,7 @@ def build_keypoints(src: Path, qa: Path, episodes: dict, out_dir: Path, jobs: in
     with cf.ProcessPoolExecutor(max(1, jobs)) as ex:
         res = list(ex.map(keypoints_one, jobs_))
     written = sorted((r for r in res if "file" in r), key=lambda r: r["file"])
-    (out_dir / "index.json").write_text(json.dumps(
+    (out_dir / "index.json").write_text(dumps(
         {"format": KP_FORMAT, "licence": LICENCE,
          "files": {r["file"]: {"frames": r["frames"], "bytes": r["bytes"]} for r in written}}, separators=(",", ":")))
     return {"written": len(written), "skipped": [r for r in res if "skip" in r],
