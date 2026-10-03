@@ -43,6 +43,7 @@ import numpy as np
 from label import depth as dp
 from label import episode as me
 from label import signals as sg
+from label.atomic import write_atomic
 
 NO_READING_SHARE = 0.2
 PINNED_SHARE = 0.1
@@ -51,7 +52,8 @@ DEPTH_OFFSET_FRAMES = 2.0
 DEPTH_SAMPLES = 24
 CLOCK_OFFSET_FRAMES = 1.0
 
-NAMES = {"no_reading": "Signal has no reading at many frames", "constant": "Signal never changes",
+NAMES = {"no_reading": "Signal has no reading at many frames", "partial_reading": "Signal has partial readings",
+         "constant": "Signal never changes",
          "dead_values": "Values of an array never change", "pinned": "Values pinned at the end of their range",
          "slow_sensor": "Sensor slower than the camera", "clock_offset": "Sensor clocks apart",
          "depth_invalid": "Depth pictures mostly without readings",
@@ -59,7 +61,7 @@ NAMES = {"no_reading": "Signal has no reading at many frames", "constant": "Sign
          "depth_offset": "Depth frames far in time from their colour frames"}
 
 
-SIGNAL_CHECKS = ("no_reading", "constant", "dead_values", "pinned", "slow_sensor")
+SIGNAL_CHECKS = ("no_reading", "partial_reading", "constant", "dead_values", "pinned", "slow_sensor")
 DEPTH_CHECKS = ("depth_invalid", "depth_frozen", "depth_offset")
 
 
@@ -70,48 +72,71 @@ def _cell(i: int, shape) -> str:
     return f"[{int(i)}]"
 
 
-def signal_findings(ep: dict) -> list[dict]:
+def signal_findings(ep: dict, skipped: dict | None = None) -> list[dict]:
+    """The signal checks' findings. Each signal is checked on its own, over every frame of the episode: one whose rows
+    stop short has no reading past them, so one with no rows has no reading at any frame (no_reading). One with no
+    reading at any frame has no other check run on it, and one whose checks stop with an error has that error; both
+    are named in skipped ({signal: why}), and the other signals are checked as usual."""
     sig = ep.get("signals") or {}
+    skipped = {} if skipped is None else skipped
+    out = []
+    for name, a in sig.items():
+        try:
+            out += _signal_findings(ep, name, a, skipped)
+        except Exception as e:  # noqa: BLE001 - this signal is named with the error, the others are checked
+            skipped[name] = f"its checks stopped with an error ({type(e).__name__}: {e})"[:300]
+    return out
+
+
+def _signal_findings(ep: dict, name: str, a, skipped: dict) -> list[dict]:
+    """One signal's findings (signal_findings)."""
     meta = ep.get("signal_meta") or {}
     fps = me.ep_fps(ep)
     out = []
-    for name, a in sig.items():
-        a = np.asarray(a, dtype=np.float64)
-        if not len(a):
-            continue
-        m = meta.get(name) or {}
-        gone = np.isnan(a).all(axis=1)
-        if gone.mean() > NO_READING_SHARE:
-            out.append({"check": "no_reading", "signal": name,
-                        "evidence": f"{name} has no reading at {int(gone.sum())} of {len(a)} frames"})
-        ok = a[~gone]
-        if not len(ok):
-            continue
-        with np.errstate(all="ignore"):
-            span = np.nanmax(ok, axis=0) - np.nanmin(ok, axis=0)
-        if (span == 0).all() and len(ok) > 1:
-            out.append({"check": "constant", "signal": name,
-                        "evidence": f"every value of {name} is the same at all {len(ok)} frames"})
-            continue
-        if a.shape[1] > sg.SMALL and (span > 0).any():
-            if sg.has_rest(ok):
-                way = sg.direction(ok)
-                if way:
-                    edge = np.nanmax(ok) if way == "up" else np.nanmin(ok)
-                    pinned = (ok == edge).mean(axis=0)
-                    many = np.flatnonzero(pinned > PINNED_SHARE)
-                    if len(many):
-                        out.append({"check": "pinned", "signal": name, "count": int(len(many)),
-                                    "evidence": f"{len(many)} values of {name} read exactly {sg._num(edge)}, the "
-                                                f"{'top' if way == 'up' else 'bottom'} of its range, at more than "
-                                                f"{PINNED_SHARE:.0%} of the frames ("
-                                                + ", ".join(_cell(i, m.get("shape")) for i in many[:8])
-                                                + (" and more" if len(many) > 8 else "") + ")"})
-        rate = m.get("rate_hz")
-        if rate and rate < fps / 2:
-            out.append({"check": "slow_sensor", "signal": name,
-                        "evidence": f"{name} is recorded at {rate:g} per second under a {fps:.0f} fps camera, so each "
-                                    f"reading is held for about {fps / rate:.0f} frames"})
+    # every frame of the episode and only those: a signal whose rows stop short of it (none at all, at the least) has no
+    # reading past its last row, and rows past the episode's last frame are not the episode's
+    n = len(ep["state"])
+    a = np.asarray(a, dtype=np.float64)[:n]
+    m = meta.get(name) or {}
+    gone = ~np.isfinite(a).any(axis=1)
+    missing, partial = sg.reading_gaps(a)
+    unread = missing + n - len(a)
+    if n and unread / n > NO_READING_SHARE:
+        out.append({"check": "no_reading", "signal": name,
+                    "evidence": f"{name} has no reading at {unread} of {n} frames"})
+    if partial:
+        out.append({"check": "partial_reading", "signal": name,
+                    "evidence": f"{name} has partial reading at {partial} of {n} frames"})
+    ok = a[~gone]
+    if not len(ok):
+        skipped[name] = "it has no reading at any frame"
+        return out
+    lo, hi = sg.finite_range(ok)
+    span = hi - lo
+    if (span == 0).all() and len(ok) > 1:
+        out.append({"check": "constant", "signal": name,
+                    "evidence": (f"every value of {name} is the same wherever it reads" if unread or partial else
+                                 f"every value of {name} is the same at all {len(ok)} frames")})
+        return out
+    if a.shape[1] > sg.SMALL and (span > 0).any():
+        if sg.has_rest(ok):
+            way = sg.direction(ok)
+            if way:
+                edge = np.nanmax(ok) if way == "up" else np.nanmin(ok)
+                pinned = (ok == edge).mean(axis=0)
+                many = np.flatnonzero(pinned > PINNED_SHARE)
+                if len(many):
+                    out.append({"check": "pinned", "signal": name, "count": int(len(many)),
+                                "evidence": f"{len(many)} values of {name} read exactly {sg._num(edge)}, the "
+                                            f"{'top' if way == 'up' else 'bottom'} of its range, at more than "
+                                            f"{PINNED_SHARE:.0%} of the frames ("
+                                            + ", ".join(_cell(i, m.get("shape")) for i in many[:8])
+                                            + (" and more" if len(many) > 8 else "") + ")"})
+    rate = m.get("rate_hz")
+    if rate and rate < fps / 2:
+        out.append({"check": "slow_sensor", "signal": name,
+                    "evidence": f"{name} is recorded at {rate:g} per second under a {fps:.0f} fps camera, so each "
+                                f"reading is held for about {fps / rate:.0f} frames"})
     return out
 
 
@@ -181,8 +206,8 @@ def constant_values(ep_dir: Path) -> dict:
         a = np.asarray(a, dtype=np.float64)
         if a.shape[1] <= sg.SMALL or not np.isfinite(a).any():
             continue
-        with np.errstate(all="ignore"):
-            span = np.nanmax(a, axis=0) - np.nanmin(a, axis=0)
+        lo, hi = sg.finite_range(a)
+        span = hi - lo
         out[name] = {"never": [int(i) for i in np.flatnonzero(span == 0)], "n": int(a.shape[1]),
                      "shape": (ep.get("signal_meta") or {}).get(name, {}).get("shape")}
     return out
@@ -218,8 +243,8 @@ def run_episode(ep_dir: Path) -> dict | None:
         return None
     # each group of checks runs on its own: a crash in one records its checks as errored, with the error, and the
     # others' findings are kept
-    found, errored = [], {}
-    for fn, names in ((signal_findings, SIGNAL_CHECKS), (clock_findings, ("clock_offset",)),
+    found, errored, skipped = [], {}, {}
+    for fn, names in ((lambda e: signal_findings(e, skipped), SIGNAL_CHECKS), (clock_findings, ("clock_offset",)),
                       (depth_findings, DEPTH_CHECKS)):
         try:
             found += fn(ep)
@@ -227,16 +252,27 @@ def run_episode(ep_dir: Path) -> dict | None:
             errored.update({c: f"{type(e).__name__}: {e}"[:300] for c in names})
     applies = set()
     if ep.get("signals"):
-        applies |= {"no_reading", "constant", "dead_values", "pinned", "slow_sensor"}
+        applies |= set(SIGNAL_CHECKS)
     if len(ep["context"].get("clocks") or []) >= 2:
         applies.add("clock_offset")
     if ep.get("depth"):
         applies |= {"depth_invalid", "depth_frozen", "depth_offset"}
     fired = {f["check"] for f in found}
-    return {"notes": found, "flagged": False,
-            "checks": [{"check": c, "name": NAMES[c], "status": "errored", "error": errored[c]} if c in errored else
-                       {"check": c, "name": NAMES[c],
-                        "status": "fired" if c in fired else "clear" if c in applies else "na"} for c in NAMES],
+    ran_on = {(f["check"], f.get("signal")) for f in found}     # a check with a finding on a signal ran on it
+
+    def status(c: str) -> dict:
+        if c in errored:
+            return {"check": c, "name": NAMES[c], "status": "errored", "error": errored[c]}
+        row = {"check": c, "name": NAMES[c], "status": "fired" if c in fired else "clear" if c in applies else "na"}
+        # a signal check names the signals it was not run on; one run on no signal is not assessed, never clear
+        left = {nm: why for nm, why in skipped.items() if (c, nm) not in ran_on} if c in SIGNAL_CHECKS else {}
+        if left and row["status"] != "na":
+            words = "; ".join(f"{nm} ({why})" for nm, why in left.items())
+            if row["status"] == "clear" and set(left) == set(ep["signals"]):
+                return {**row, "status": "na", "why": f"no signal could be checked: {words}"}
+            row["not_run_on"] = words
+        return row
+    return {"notes": found, "flagged": False, "checks": [status(c) for c in NAMES],
             "rule": ("notes only: a sensor check counts as an issue once every episode it fires on is confirmed on the "
                      "frames")}
 
@@ -301,7 +337,7 @@ def main():
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx["sensor_checks"] = r
-            p.write_text(json.dumps(ctx, indent=1))
+            write_atomic(p, ctx, indent=1)
             if r and r["notes"]:
                 fired += 1
                 print(f"SENSORS {Path(d).name}: " + "; ".join(n["evidence"] for n in r["notes"][:4]), flush=True)

@@ -37,4 +37,15 @@ check(cut.includes('cut off') && cut.includes('64,000') && cut.includes('>end</p
   'the board\'s own cut-off reply shows its end');
 const cmp = T.cmpFailHtml({status: 'unparsed', raw_head: 'x'}, 'Other', {}, false);
 check(cmp.includes('The comparison counts it'), 'another model\'s failure keeps its comparison wording');
+// an episode that got no reply, one whose reply the board could not read, and a part's own reply of a long recording
+const nr = T.cmpFailHtml({status: 'no_reply', why: 'spend cap $20.00 reached'}, 'Astra', {}, true);
+check(nr.includes('No response from Astra') && nr.includes('spend cap $20.00 reached')
+  && nr.includes('footage, checks and sensors'), 'an episode with no reply says why and that the rest is shown');
+const ns = T.cmpFailHtml({status: 'not_shown', error: 'KeyError: x', raw_head: '{"a": <1>}', raw_chars: 10}, 'Astra',
+                         {}, true);
+check(ns.includes('could not be shown') && ns.includes('KeyError: x') && ns.includes('{&quot;a&quot;: &lt;1&gt;}'),
+  'a reply the board could not read shows the error and the reply, escaped');
+const np = T.cmpFailHtml({status: 'no_part', parts: [{part: 1, t0_s: 0, t1_s: 400, why: 'did not parse',
+                                                       raw_head: 'oops'}]}, 'Astra', {}, true);
+check(np.includes('Start of part 1') && np.includes('>oops</pre>'), 'a failed part shows the start of its own reply');
 process.exit(bad ? 1 : 0);

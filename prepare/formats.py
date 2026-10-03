@@ -646,7 +646,7 @@ TOUCH_CORE = ("tactile", "touch", "visuotactile", "haptic", "taxel", "skin")
 SENSING_WORDS = TOUCH_CORE + ("gelsight", "digit", "xense", "heatmap")
 TOUCH_WORDS = TOUCH_CORE + ("pressure", "contact", "force", "fsr", "piezo")
 # a name with one of these words is a command, not a measurement (action.gripper_force, gripper_force_cmd)
-COMMAND_WORDS = ("action", "cmd", "command", "target", "setpoint", "goal", "desired")
+COMMAND_WORDS = ("action", "cmd", "command", "commanded", "target", "setpoint", "goal", "desired")
 
 
 def _names_word(name: str, words) -> bool:
@@ -4826,7 +4826,7 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Sign
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "videos"}
+NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "state_notes", "videos"}
 
 
 def upload_adapters(kind: str) -> list:

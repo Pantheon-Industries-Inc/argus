@@ -59,6 +59,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from board.families import Families
+from board.to_board import dumps
 from compare.metrics import model_names, reasoning_effort
 
 
@@ -432,7 +433,7 @@ def list_json(here: Path | None = None) -> tuple:
         hit = _LIST_BODY.get(key)
     if hit and hit[0] is out:
         return hit[1], hit[2]
-    raw = json.dumps(out).encode()
+    raw = dumps(out).encode()
     gz = gzip.compress(raw, compresslevel=5)
     with _LIST_LOCK:
         _LIST_BODY[key] = (out, raw, gz)
@@ -476,18 +477,36 @@ def public_label(d: dict) -> dict:
     return d
 
 
+def withheld_status(result: dict) -> dict:
+    """What a check a rule withheld found, so the page says it as the check came out, never clear for a check that
+    crashed, fired or measured nothing: {"status": "errored" | "not_assessed" | "fired" | "clear"}, with the error or
+    the reason it was not assessed. A result that lists checks of its own (capture_qc, sensor_checks) also gives how
+    many of them ran ("of") and how many of those fired and errored. The order is the page's for our own checks
+    (checksSection): an error, then not assessed, then fired."""
+    if result.get("error"):
+        return {"status": "errored", "error": str(result["error"])}
+    flagged = any(bool(result.get(f)) for f in ("flagged", "crossed", "sped_up_recording"))
+    if isinstance(result.get("checks"), list):
+        st = [c.get("status") for c in result["checks"] if isinstance(c, dict)]
+        n = {"fired": st.count("fired"), "errored": st.count("errored"),
+             "of": sum(s in ("fired", "clear", "errored") for s in st)}
+        # a result that says it flagged fired, whatever its own list of checks holds
+        return {"status": "errored" if n["errored"] else "fired" if n["fired"] or flagged else "clear" if n["of"]
+                else "not_assessed", **n}
+    if result.get("not_assessed"):
+        return {"status": "not_assessed", "why": str(result["not_assessed"])}
+    return {"status": "fired" if flagged else "clear"}
+
+
 def episode_view(d: dict) -> dict:
     """The episode as the page shows it: its public fields (public_label), each flagged issue carrying the family it
     is counted under and whether it counts (Families.counts), so the episode's own list names and counts a problem
     exactly as the filter does, and the checks a manifest rule withheld on this dataset (drop_check, kept in the
-    label file's _withheld_checks) as set_aside_checks, each with the rule's reason and whether it fired, so the page
-    lists them as set aside, never hides them. The label file itself is not changed."""
+    label file's _withheld_checks) as set_aside_checks, each with the rule's reason and what it found
+    (withheld_status), so the page lists them as set aside, never hides them. The label file itself is not changed."""
     held = d.get("_withheld_checks") if isinstance(d.get("_withheld_checks"), dict) else {}
     d = public_label(d)
-    # a withheld check that stopped with an error (checks/stream_pairing.py _safe) carries the error
-    aside = [{"check": k, "reason": v.get("reason") or "",
-              "flagged": any(bool(r.get(f)) for f in ("flagged", "crossed", "sped_up_recording")),
-              **({"error": str(r["error"])} if r.get("error") else {})}
+    aside = [{"check": k, "reason": v.get("reason") or "", **withheld_status(r)}
              for k, v in held.items() if isinstance(v, dict) for r in [v.get("result") or {}] if isinstance(r, dict)]
     if aside:
         d["set_aside_checks"] = aside
@@ -835,6 +854,12 @@ body.lb-swap #ep-list, body.lb-swap .issue-filter, body.lb-swap .coverage .cv-nu
 .ep-head-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
 .kp-note { width: 0; min-width: 100%; }
 .kp-note-in { padding-top: 7px; text-align: right; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
+/* a note shown on few episodes (hand keypoints laid a frame or two off) takes no room while hidden: its gap is a
+   margin, eased to nothing with the fold, since padding inside the fold would keep 7 px of it and move the buttons
+   above */
+.kp-note.gap-fold { margin-top: 7px; }
+.kp-note.gap-fold.off { margin-top: 0; }
+.kp-note.gap-fold .kp-note-in { padding-top: 0; }
 #kp-dl[hidden] { display: none; }
 
 /* ---------- main grid ---------- */
@@ -2193,13 +2218,14 @@ main.src-fade.ep-fade #left-col > .video-wrap, main.src-fade.ep-fade .ep-head { 
   padding: 16px 20px; margin-bottom: 20px; }
 .cmp-fail h4 { margin: 0 0 8px; font: 700 15px/1.3 var(--sans); color: var(--fg); }
 .cmp-fail p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: var(--fg-2); }
-.cmp-fail pre { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; background: var(--bg);
+.cmp-fail pre, .di-raw { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--r-sm); font: 400 11.5px/1.5 var(--mono); color: var(--fg-2); white-space: pre-wrap;
   overflow-wrap: anywhere; }
 /* a goal frame a static build has not extracted yet: the caption stays, the broken image does not */
 .goal-frame.nofr img { display: none; }
 .cmp-fail .cf-k { font: 600 11px/1.3 var(--sans); color: var(--fg-3); margin: 12px 0 6px; }
+.di-raw { max-height: 160px; margin-top: 4px; }
 
 /* ---------- the comparison view ---------- */
 #cmp-view { display: none; height: calc(100vh - var(--top-h)); overflow-y: auto; background: var(--bg); }
@@ -2473,7 +2499,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
           rel="noreferrer">ACE-Ego-Hand</a> (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank"
           rel="noreferrer">CC BY-NC 4.0</a>), which uses <a href="https://mano.is.tue.mpg.de/license.html"
           target="_blank" rel="noreferrer">MANO</a>.</div></div>
-        <div class="kp-note off" id="hp-aligned"><div class="kp-note-in"></div></div>
+        <div class="kp-note gap-fold off" id="hp-aligned"><div class="kp-note-in"></div></div>
       </div>
     </div>
     <div id="left-col"></div>
@@ -2832,7 +2858,8 @@ function datasetSourceHtml(s) {
 // that gave no labels, a limit of how we read it; board/families.py COUNTED_LISTS) is marked as not counted, as the
 // filter and the counts leave it out. Each is a row of the recording checks card, in the sentence the
 // entry carries, under the family it raises (board/families.py reader_family), with its camera or signal and its time
-// when the entry has them. Nothing is drawn when the episode has none.
+// when the entry has them, and the start of the reply of a long recording's part that gave no labels. Nothing is drawn
+// when the episode has none.
 function readerIssueRows(d) {
   const ri = (d && d.dataset_checks || {}).reader_issues;
   const num = v => v != null && v !== '' && !isNaN(parseFloat(v));
@@ -2847,6 +2874,8 @@ function readerIssueRows(d) {
         <div class="di-issue">${esc(x.what)}</div>
         <div class="di-tags"><span class="di-cat">${esc(famName(fam))}</span>${t != null ? `<span class="di-t">@ `
           + `${esc(fmtT(t))}</span>` : ''}${x.signal ? `<span class="di-cat">${esc(x.signal)}</span>` : ''}</div>
+        ${x.reply_head ? `<div class="di-ev">Start of the reply</div><pre class="di-raw">${esc(x.reply_head)}</pre>`
+          : ''}
       </div></div>`;
   });
 }
@@ -2877,9 +2906,20 @@ function untimedRows(d, first = 1) {
   });
   return {steps, keys};
 }
+// what a withheld check found (board/serve.py withheld_status) in words: a set of checks says how many of those that
+// ran fired or stopped with an error
+function foundWords(c) {
+  if (c.status === 'errored') return c.error ? `stopped with an error (${c.error})`
+    : `${c.errored} of ${c.of} stopped with an error${c.fired ? `, ${c.fired} fired` : ''}`;
+  if (c.status === 'not_assessed') return c.why ? `not assessed (${c.why})` : 'not assessed';
+  // a result can say it flagged with none of its own checks listed as fired (board/serve.py withheld_status)
+  if (c.status === 'fired') return c.of == null ? 'fired' : c.fired ? `${c.fired} of ${c.of} fired`
+    : 'flagged, with none of its own checks listed as fired';
+  return 'clear';
+}
 // What this dataset's rules set aside: each issue a rule moved to _excluded (board/build.py apply_rules, and the
 // issues label/pieces.py stitch set aside at our own cuts), with its text, tag, time and the rule's reason, and each
-// check a rule withheld (set_aside_checks, board/serve.py episode_view), with whether it fired and the reason. None of
+// check a rule withheld (set_aside_checks, board/serve.py episode_view), with what it found and the reason. None of
 // them counts. They are rows of the problems' own kind, in a fold that is closed until opened and says how many it
 // holds. Nothing is drawn when nothing was set aside.
 function setAsideHtml(d) {
@@ -2902,8 +2942,7 @@ function setAsideHtml(d) {
       <span class="di-sev">check</span>
       <div class="di-body">
         <div class="di-issue">${esc(fam[c.check] ? famName(fam[c.check]) : tagName(c.check, 'data_issues'))}, ${
-          c.error ? `stopped with an error (${esc(c.error)})` : c.flagged ? 'fired' : 'clear'}, not counted on this `
-          + `dataset</div>
+          esc(foundWords(c))}, not counted on this dataset</div>
         ${c.reason ? `<div class="di-ev">${esc(why(c.reason))}</div>` : ''}
       </div></div>`));
   const closed = `Show the ${n} set aside by this dataset's rules`;
@@ -3198,12 +3237,16 @@ function checksSection(d) {
   if (sc) {
     const ev = {};
     for (const n of sc.notes || []) (ev[n.check] = ev[n.check] || []).push(n.evidence);
-    const all = sc.checks.filter(c => c.status !== 'na').map(c => ({name: c.name,
-      st: c.status === 'fired' ? 'note' : c.status === 'errored' ? 'err' : 'clear',
-      text: c.status === 'errored' ? `The check stopped with an error (${c.error}).`
-        : (ev[c.check] || []).map(sentences).join(' ')}));
+    // a check not run on some signal (one with no rows, or whose checks stopped with an error) names it, and one run on
+    // no signal at all says why; a check with nothing to run on (no depth, one clock) is left out
+    const all = sc.checks.filter(c => c.status !== 'na' || c.why).map(c => ({name: c.name,
+      st: c.status === 'fired' ? 'note' : c.status === 'errored' ? 'err' : c.status === 'na' ? 'na' : 'clear',
+      text: c.status === 'errored' ? `The check stopped with an error (${c.error}).` : c.status === 'na'
+        ? sentences(c.why)
+        : (ev[c.check] || []).map(sentences).concat(c.not_run_on ? [`Not run on ${c.not_run_on}.`] : []).join(' ')}));
     if (all.length) sensors = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Sensor and depth checks`
-      + `</span><span class="ck-sum">${all.filter(r => r.st === 'note').length} of ${all.length} noted</span></div>`
+      + `</span><span class="ck-sum">${all.filter(r => r.st === 'note').length} of ${all.filter(r => r.st
+        !== 'na').length} noted</span></div>`
       + `${all.map(row).join('')}</div>`;
   }
   let touch = '';
@@ -4030,7 +4073,8 @@ function snBlock(blk, rows, bits) {
   return {dims, v};
 }
 function snDecode(doc) {
-  const out = {depth: doc.depth || {}, signals: [], constant: [], t: new Float64Array(0), errors: doc.errors || []};
+  const out = {depth: doc.depth || {}, signals: [], constant: [], none: [], t: new Float64Array(0),
+    errors: doc.errors || []};
   if (!doc.signals || !doc.frames) return out;
   const n = doc.n, stride = doc.stride || 1, ft = new Float64Array(doc.frames), tr = hpReader(doc.times.d);
   let ms = doc.times.ms0;
@@ -4039,6 +4083,7 @@ function snDecode(doc) {
   out.t = new Float64Array(n);
   for (let i = 0; i < n; i++) out.t[i] = ft[Math.min(doc.frames - 1, i * stride)];
   for (const s of doc.signals) {
+    if (s.no_reading) { out.none.push(s); continue; }
     if (s.constant) { out.constant.push(s); continue; }
     const g = Object.assign({}, s);
     if (s.values) g.vals = snBlock(s.values, n, 16);
@@ -4255,6 +4300,26 @@ function snMapDraw(m, i, ink) {
   m.now.textContent = none ? 'No reading at the playhead' : active ? `Row ${Math.floor(bi / cols) + 1}, column `
     + `${bi % cols + 1} is the strongest, ${snNum(best)} ${snAway(s.direction)} rest` : 'At rest';
 }
+// the signals with no lane, by name: those whose every value is the same at every frame, those the same wherever they
+// read but with no reading at some frames (board/sensors.py signal_doc no_reading_frames), and those with no reading at
+// any frame (signal_doc no_reading), which never read anything and so are no constant
+function snStillHtml(D) {
+  const size = s => s.shape && s.shape.length > 1 ? `${s.shape.join(' x ')} values`
+    : `${s.dims} value${s.dims === 1 ? '' : 's'}`;
+  const what = s => `${esc(s.name)} (${s.dims > 4 || !s.value ? size(s) : s.value.map(snNum).join(', ')})`;
+  const hasGaps = s => s.no_reading_frames || s.partial_reading_frames;
+  const every = D.constant.filter(s => !hasGaps(s)), gaps = D.constant.filter(hasGaps);
+  const gapsText = s => [s.no_reading_frames ? `no reading at ${s.no_reading_frames} of ${s.frames} frames` : '',
+    s.partial_reading_frames ? `partial reading at ${s.partial_reading_frames} of ${s.frames} frames` : '']
+    .filter(Boolean).join('; ');
+  return (every.length ? `<div class="sn-note">Constant through this episode: ${every.map(what).join(', ')}.</div>`
+    : '')
+    + (gaps.length ? `<div class="sn-note">The same wherever it reads${gaps.some(s => s.partial_reading_frames)
+      ? '. ' : ': '}${gaps.map(s =>
+      `${what(s)}, with ${gapsText(s)}`).join('; ')}.</div>` : '')
+    + (D.none.length ? `<div class="sn-note">No reading at any frame: ${D.none.map(s =>
+      `${esc(s.name)} (${size(s)})`).join(', ')}.</div>` : '');
+}
 // lay out the panel for the episode renderEp just drew, and wire it to the playhead (its listeners go with the render).
 // On an episode with contacts the Touch lane above shows what matters, so the signals start folded away.
 function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts) {
@@ -4265,10 +4330,12 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
     if (!D || !document.body.contains(slot) || file !== _activeFile) return;
     const sigs = D.signals, maps = sigs.filter(s => s.map && s.shape && s.shape.length === 2);
     const nDepth = Object.keys(D.depth || {}).length;
-    if (!sigs.length && !D.constant.length && !nDepth && !(D.errors || []).length) return;
+    const still = D.constant.length + D.none.length;
+    if (!sigs.length && !still && !nDepth && !(D.errors || []).length) return;
     const counts = [];
-    if (sigs.length || D.constant.length) counts.push(`${sigs.length} ${sigs.length === 1 ? 'signal changes'
-      : 'signals change'}${D.constant.length ? `, ${D.constant.length} constant` : ''}`);
+    if (sigs.length || still) counts.push(`${sigs.length} ${sigs.length === 1 ? 'signal changes'
+      : 'signals change'}${D.constant.length ? `, ${D.constant.length} constant` : ''}${D.none.length
+      ? `, ${D.none.length} with no reading` : ''}`);
     if (nDepth) counts.push(`depth on ${nDepth} ${nDepth === 1 ? 'camera' : 'cameras'}`);
     const lane = (s, i) => `<div class="lane sn-lane">
         <div class="lane-head"><span class="lane-title">${esc(s.name)} <span class="lane-sum">${esc(snWhat(s))}`
@@ -4277,16 +4344,13 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
       </div>`;
     const first = sigs.slice(0, SN_FIRST).map(lane).join('');
     const more = sigs.slice(SN_FIRST).map((s, j) => lane(s, j + SN_FIRST)).join('');
-    const constHtml = D.constant.length ? `<div class="sn-note">Constant through this episode: ${D.constant.map(s =>
-      `${esc(s.name)} (${s.dims > 4 || !s.value ? `${s.shape && s.shape.length > 1 ? s.shape.join(' x ')
-        : s.dims} values` : s.value.map(snNum).join(', ')})`).join(', ')}.</div>` : '';
     const signalsHtml = `${maps.length ? `<div class="sn-maps">${maps.map((s) => snMapHtml(s, sigs.indexOf(s)))
         .join('')}</div>` : ''}
         ${first}
         ${more ? `<div class="ck-all"><div class="ck-all-in">${more}</div></div><button class="ck-more sn-more" `
           + `type="button">${SN_OPEN ? 'Hide the other signals' : `Show all ${sigs.length} signals`}</button>` : ''}
-        ${constHtml}${snErrorsHtml(D.errors)}`;
-    const fold = !!hasContacts && (sigs.length > 0 || D.constant.length > 0);
+        ${snStillHtml(D)}${snErrorsHtml(D.errors)}`;
+    const fold = !!hasContacts && (sigs.length > 0 || still > 0);
     const shown = !fold || SN_SHOWN;
     const foldWord = on_ => on_ ? 'Hide the recorded signals' : `Show all recorded signals`;
     slot.innerHTML = `<h3 class="section sn-h">All recorded signals <span class="count">${counts.join(', ')}</span></h3>
@@ -4907,9 +4971,12 @@ function renderEp(d, opts) {
   const touch = tcData(d);
   for (const c of touch.contacts) duration = Math.max(duration, c.end_s);
   for (const x of touch.missing) duration = Math.max(duration, x.t_s);
-  // the recording's own length when the episode has one, so the timeline, its lanes and the video end together;
-  // without it, the last labelled time with a second's margin
-  duration = d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
+  // the recording's own length when the episode has one, so the timeline, its lanes and the video end together, and a
+  // step the model placed past the end is drawn at the end (board/build.py flags it) rather than stretching the
+  // timeline; without a length, or with one estimated from the sampled times, the last labelled time with a margin
+  duration = d.duration_s > 0 && !d.duration_estimated ? d.duration_s
+    : d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
+  const onTl = t => Math.max(0, Math.min(duration, Number(t)));     // a time as drawn: on the episode's timeline
 
   // a head-camera session is a sequence of self-directed tasks (d.tasks), each with its own goal frame; every other
   // episode has one completion and one goal
@@ -4958,7 +5025,8 @@ function renderEp(d, opts) {
   let progOverlayHtml = '';
   if (progPts.length >= 2) {
     const W = 100, H = 24;
-    const full = progPts.map(pt => `${(pt.t / duration * W).toFixed(2)},${((1 - pt.p) * H).toFixed(2)}`).join(' ');
+    const full = progPts.map(pt => `${(onTl(pt.t) / duration * W).toFixed(2)},${((1 - pt.p) * H).toFixed(2)}`)
+      .join(' ');
     progOverlayHtml = `<div class="prog-overlay" id="prog-overlay">
       <span class="po-pct" id="po-pct">0%</span>
       <svg class="po-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
@@ -5058,7 +5126,7 @@ function renderEp(d, opts) {
   let markersHtml = '';
   for (const e of eventLabels) {
     if (e.t_s == null) continue;
-    const pct = (e.t_s / duration) * 100;
+    const pct = (onTl(e.t_s) / duration) * 100;
     const cls = contribClass(e.contribution);
     const tip = `${fmtT(e.t_s)}   ${esc(e.verb_class || '')}`;
     markersHtml += `<div class="marker seg ${cls}" style="left:${pct}%" data-t="${e.t_s}"><div class="tip">${esc(tip)}`
@@ -5114,7 +5182,7 @@ function renderEp(d, opts) {
     : ((k.outcome || '').toLowerCase() === 'failure' ? 'var(--danger)' : 'var(--fg-2)');
   let keyMarkersHtml = '';
   for (const k of keyEvents) {
-    const pct = (k.t_s / duration) * 100;
+    const pct = (onTl(k.t_s) / duration) * 100;
     const oc = (k.outcome || '').toLowerCase();
     keyMarkersHtml += `<div class="marker key" style="left:${pct}%;background:${keyColor(k)}" data-t="${k.t_s}"><div `
       + `class="tip">${esc(fmtT(k.t_s))}   ${k.kind ? esc(kindName(k.kind)) + ': ' : ''}${esc(k.label || '')}${oc
@@ -5419,10 +5487,10 @@ function renderEp(d, opts) {
     </div>
     <div class="timeline" id="timeline">
       ${markersHtml}${keyMarkersHtml}${comp.completed_at_s != null ? `<div class="marker goal" `
-        + `style="left:${(comp.completed_at_s / duration) * 100}%" data-t="${comp.completed_at_s}"><div `
+        + `style="left:${(onTl(comp.completed_at_s) / duration) * 100}%" data-t="${comp.completed_at_s}"><div `
         + `class="tip">goal reached ${fmtT(comp.completed_at_s)}</div></div>` : ''}${taskGoalTimes.map((gt,
-        i) => `<div class="marker goal" style="left:${(gt / duration) * 100}%" data-t="${gt}"><div class="tip">task `
-        + `done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
+        i) => `<div class="marker goal" style="left:${(onTl(gt) / duration) * 100}%" data-t="${gt}"><div `
+        + `class="tip">task done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
     ${laneHtml}${belowLanes}
@@ -6083,6 +6151,8 @@ function noLabelsHtml(lf) {
   const why = lf && lf.status === 'cut_off' ? 'reply was cut off at the output limit'
     : lf && lf.status === 'unreadable' ? 'output file does not read'
     : lf && lf.status === 'no_part' ? 'replies gave no labels for any part of this long recording'
+    : lf && lf.status === 'no_reply' ? 'request got no reply'
+    : lf && lf.status === 'not_shown' ? 'reply could not be read by the board'
     : 'reply did not parse';
   return `<p class="no-labels">The model's ${why}, so this episode has no labels: no key events, outcome, `
     + `recoveries or scene. Its footage, checks, sensors and the dataset's own labels are shown as recorded.</p>`;
@@ -6103,7 +6173,20 @@ function cmpFailHtml(c, who, usage, own) {
   if (c.status === 'no_part') return `<div class="cmp-fail"><h4>No part of the recording has labels</h4>
     <p>This long recording was labelled in parts, and no part's response gave labels.${rest}${cost}</p>
     <div class="cf-k">Each part</div><pre>${esc((c.parts || []).map(g => `part ${g.part}, ${Number(g.t0_s).toFixed(1)}`
-      + ` to ${Number(g.t1_s).toFixed(1)} s: ${g.why}`).join('\n'))}</pre></div>`;
+      + ` to ${Number(g.t1_s).toFixed(1)} s: ${g.why}`).join('\n'))}</pre>${(c.parts || []).filter(g => g.raw_head)
+      .map(g => `<div class="cf-k">Start of part ${esc(g.part)}'s response</div><pre>${esc(g.raw_head)}</pre>`)
+      .join('')}</div>`;
+  // the board's own: the request got no reply (the spend cap reached, a request that could not be built), or its reply
+  // parsed but the board could not read it
+  if (c.status === 'no_reply') return `<div class="cmp-fail"><h4>No response from ${esc(who)}</h4>
+    <p>This episode got no response, so there are no labels to show.${rest}</p>
+    ${c.why ? `<div class="cf-k">Why</div><pre>${esc(c.why)}</pre>` : ''}</div>`;
+  if (c.status === 'not_shown') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s response could not be shown</h4>
+    <p>The response parsed, but the board could not read it, so there are no labels to show. It is kept as it came.`
+      + `${rest}${cost}</p>
+    ${c.error ? `<div class="cf-k">Error</div><pre>${esc(c.error)}</pre>` : ''}
+    <div class="cf-k">Start of the response, ${Number(c.raw_chars || 0).toLocaleString()} characters in all</div>`
+      + `<pre>${esc(c.raw_head || '(empty)')}</pre></div>`;
   if (c.status === 'unreadable') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s output file does not read</h4>
     <p>The labelling run's output file for this episode does not read, so there are no labels to show.${rest}</p>
     ${c.error ? `<div class="cf-k">Error</div><pre>${esc(c.error)}</pre>` : ''}</div>`;
@@ -6717,7 +6800,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json", gzipped: bytes | None = None):
         """gzipped: the body already compressed (list_json), sent instead of compressing it again."""
         if isinstance(body, (dict, list)):
-            body = json.dumps(body)
+            body = dumps(body)
         if isinstance(body, str):
             body = body.encode()
         # compress large JSON and HTML: a large board's episode list is megabytes, about ten times smaller
@@ -6826,7 +6909,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not _under(HERE, p) or not p.is_file() or p.suffix != ".json":
                 self._send(404, {"error": f"no such file: {fname}"})
                 return
-            lines.append(json.dumps(public_label(json.loads(p.read_text())), separators=(",", ":")))
+            lines.append(dumps(public_label(json.loads(p.read_text())), separators=(",", ":")))
         body = ("\n".join(lines) + "\n").encode()
         gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
         if gz:
@@ -6864,7 +6947,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(404, {"error": "no such file"})
                 return
             if (q.get("download") or [""])[0] == "1":
-                body = json.dumps(public_label(json.loads(p.read_text())), separators=(",", ":")).encode()
+                body = dumps(public_label(json.loads(p.read_text())), separators=(",", ":")).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
@@ -6872,7 +6955,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            self._send(200, json.dumps(episode_view(json.loads(p.read_text()))), "application/json")
+            self._send(200, dumps(episode_view(json.loads(p.read_text()))), "application/json")
             return
         if parsed.path.startswith("/api/compare/"):
             # other models' labels (board/build.py compare/): kept beside the board's own and never in its lists
@@ -6901,7 +6984,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not key or "/" in key or not _under(COMPARE_DIR, p) or not p.is_file() or p.suffix != ".json":
                     self._send(404, {"error": "no such comparison"})
                     return
-                self._send(200, json.dumps(episode_view(json.loads(p.read_text()))), "application/json")
+                self._send(200, dumps(episode_view(json.loads(p.read_text()))), "application/json")
                 return
             self._send(404, {"error": "unknown path"})
             return

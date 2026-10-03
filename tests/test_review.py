@@ -220,7 +220,9 @@ def test_a_camera_clip_a_frame_short_keeps_the_episode_and_is_a_data_issue(tmp_p
     assert ctx["reader_issues"] == [{"kind": "clip_frame_count", "camera": "left", "what": what}]
     assert set(json.loads((ep / "sources.json").read_text())) == {"exo", "left"}
     d = _board_episode(tmp_path, eps, ep)
-    assert d["dataset_checks"]["reader_issues"] == [{**ctx["reader_issues"][0], "family": "clip-frames"}]
+    # the canned label's steps run past this 1 s episode, which the board flags beside it (model_steps_outside_episode)
+    assert [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "clip_frame_count"] == [
+        {**ctx["reader_issues"][0], "family": "clip-frames"}]
     assert "clip-frames" in serve._families(d)["families"]
     clips.note_camera_problems(rep, eps)
     assert rep["notes"] == ["episode_1: the left wrist camera video has 29 frames where the episode has 30."]
@@ -288,6 +290,32 @@ def test_an_episode_none_of_whose_cameras_decodes_is_set_aside_with_its_reason(t
     assert not ep.exists() and (tmp_path / "episodes_unclipped" / ep.name).is_dir()
     clips.drop_from_report(rep, left)
     assert rep["episodes"] == [] and rep["failed"] == [{"name": "episode_1", "why": left[0]["why"]}]
+
+
+def test_review_runs_the_sensor_checks_as_data_review_does(tmp_path, monkeypatch):
+    """python -m review never ran checks.sensors, which Data Review runs after the capture checks on an upload whose
+    episodes have other signals or depth, so a folder reviewed here had no sensor checks on its board."""
+    import pytest
+    import review.__main__ as rv
+    root = tmp_path / "upload"
+    recorder_folder(root, n=30)
+    steps = []
+
+    def record(job, step, cmd, env, ok_codes=(0,)):
+        steps.append((step, cmd[2] if len(cmd) > 2 else None))
+        if step == "clips":
+            raise SystemExit("stop after the checks")
+        return 0
+    monkeypatch.setattr(rv, "run_step", record)
+    monkeypatch.setattr(sys, "argv", ["python -m review", "--data", str(root), "--rig", "teleop_arms", "--out",
+                                      str(tmp_path / "job"), "--dataset", "mine", "--free"])
+    with pytest.raises(SystemExit, match="stop after the checks"):
+        rv.main()
+    ep = next((tmp_path / "job" / "episodes").glob("episode_*"))
+    assert (ep / "depth.json").exists() or (ep / "signals.npz").exists()
+    names = [s for s, _ in steps]
+    assert ("checks_sensors", "checks.sensors") in steps
+    assert names.index("checks_capture") < names.index("checks_sensors") < names.index("clips")
 
 
 def test_review_says_why_when_no_episode_can_be_put_on_the_board(tmp_path, monkeypatch):

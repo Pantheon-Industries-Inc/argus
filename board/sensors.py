@@ -33,8 +33,10 @@ A signal: "name", "dims", and when the dataset gives them "shape" ([16, 16]), "n
 (prepare/formats.py mark_assumed), which the page says in its lane. Each signal keeps its own length: one that ends
 before the others has no reading after its last row, and a gap or a stretch before a signal starts is no reading, which
 the page draws as a gap. A signal that cannot be drawn is left out and named in the file's "errors" ([{"name",
-"error"}]), and the page names it under the lanes it drew. "constant": true when no value ever changes (its "value" is
-the first row, or null with no reading); the page lists those by name. Otherwise "rests_and_rises" and "touch"
+"error"}]), and the page names it under the lanes it drew. "no_reading": true when it has no reading at any frame, and
+"constant": true when no value ever changes (its "value" is the first complete row, or each value's finite reading
+when no row reads in full); the page
+lists both by name, each under its own words. Otherwise "rests_and_rises" and "touch"
 (label/signals.py; touch is is_touch, by the signal's name and its numbers), "direction" ("up", "down" or null), "spans"
 ([[start s, end s], ...] on the clip clock, from every frame, for a signal that rests and rises or is touch), for a
 signal that times one of the episode's contacts (context.json "contacts") its "strength" ({"lo", "step", "data"}, one
@@ -66,13 +68,14 @@ import argparse
 import base64
 import inspect
 import json
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
 
 from board.hands import vlq_append, vlq_decode
+from board.to_board import dumps
+from label.atomic import write_atomic
 
 FORMAT = "board-sensors/1"
 RATE_HZ = 15.0           # the page's samples a second, at most
@@ -117,8 +120,9 @@ def quantize(a: np.ndarray, bits: int = 16, per_value: bool = True) -> dict:
     fin = np.isfinite(a)
     with np.errstate(all="ignore"):
         if per_value:
-            lo = np.where(fin.any(axis=0), np.nanmin(np.where(fin, a, np.nan), axis=0), 0.0)
-            hi = np.where(fin.any(axis=0), np.nanmax(np.where(fin, a, np.nan), axis=0), 0.0)
+            from label import signals as S
+            lo, hi = S.finite_range(a)
+            lo, hi = np.nan_to_num(lo), np.nan_to_num(hi)
         else:
             lo = np.full(a.shape[1], np.nanmin(a[fin]) if fin.any() else 0.0)
             hi = np.full(a.shape[1], np.nanmax(a[fin]) if fin.any() else 0.0)
@@ -182,18 +186,8 @@ def clip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
 def _range(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Each value's smallest and largest finite reading (NaN for a value with none), a few thousand rows at a time, so
     a wide signal is never copied whole."""
-    import warnings
-    step = max(1, (1 << 19) // max(1, a.shape[1]))
-    lo = np.full(a.shape[1], np.nan)
-    hi = np.full(a.shape[1], np.nan)
-    with np.errstate(all="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)      # a value with no reading in a stretch: NaN, as wanted
-        for i in range(0, len(a), step):
-            c = np.asarray(a[i:i + step], dtype=np.float64)
-            c = np.where(np.isfinite(c), c, np.nan)
-            lo = np.fmin(lo, np.nanmin(c, axis=0))
-            hi = np.fmax(hi, np.nanmax(c, axis=0))
-    return lo, hi
+    from label import signals as S
+    return S.finite_range(a)
 
 
 def pad(a: np.ndarray, n: int) -> np.ndarray:
@@ -223,11 +217,22 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         if meta.get(k) is not None:
             doc[k] = meta[k]
     fin = np.isfinite(a)
+    if not fin.any():
+        doc["no_reading"] = True       # it never read anything, so it is no constant (checks/sensors.py no_reading)
+        return doc
+    gaps, partial = S.reading_gaps(a)
+    if gaps or partial:
+        doc["frames"] = int(len(a))
+    if gaps:
+        doc["no_reading_frames"] = gaps
+    if partial:
+        doc["partial_reading_frames"] = partial
     lo, hi = _range(a)
-    if not fin.any() or bool((hi[fin.any(axis=0)] == lo[fin.any(axis=0)]).all() and fin.any(axis=0).all()):
-        first = next((r for r in a if np.isfinite(r).all()), None)
+    if bool((hi[fin.any(axis=0)] == lo[fin.any(axis=0)]).all() and fin.any(axis=0).all()):
+        first = next((r for r in a if np.isfinite(r).all()), lo)
         doc["constant"] = True
-        doc["value"] = None if first is None else [float(x) for x in first[:16]]
+        doc["value"] = [float(x) for x in first[:16]]
+        # constant wherever it reads; the frames with no reading say it is not so at every frame (the prompt's rule)
         return doc
     rest = np.asarray(meta["rest"], dtype=np.float64) if meta.get("rest") is not None else None
     swing = float(meta["swing"]) if meta.get("swing") else None
@@ -307,9 +312,13 @@ def episode_doc(ep_dir: Path) -> dict | None:
     if has_sig:
         with np.load(ep_dir / "signals.npz") as z:
             arrays = {m["key"]: np.asarray(z[m["key"]]) for m in metas if m.get("key") in z.files}
-        # every anchor frame any signal reaches: a signal shorter than the others keeps its own length and has no
-        # reading after it (pad), never cutting the others to it
-        n = max((len(v) for v in arrays.values()), default=0)
+        # The anchor camera owns the episode span. Signals never extend it or shorten one another; pad marks their
+        # missing rows and cuts only rows past the footage. A context frame count serves old sidecars without sources.
+        from label.episode import order_views
+        source_p = ep_dir / "sources.json"
+        src = json.loads(source_p.read_text()) if source_p.exists() else {}
+        anchor = order_views(src)
+        n = int(src[anchor[0]]["n_frames"] if anchor else ctx.get("n_state_frames") or 0)
         t = clip_times(ep_dir, ctx, n)
         n = min(n, len(t))
         t = t[:n]
@@ -336,9 +345,12 @@ def episode_doc(ep_dir: Path) -> dict | None:
 
 
 def summary(doc: dict) -> dict:
-    """The index entry of one file: how many of its signals change, and the cameras with depth."""
-    return {"signals": sum(1 for s in doc.get("signals") or [] if not s.get("constant")),
-            "constant": sum(1 for s in doc.get("signals") or [] if s.get("constant")),
+    """The index entry of one file: how many of its signals change, are constant and have no reading at any frame
+    (counted only when there is one), and the cameras with depth."""
+    sigs = doc.get("signals") or []
+    none = sum(1 for s in sigs if s.get("no_reading"))
+    return {"signals": sum(1 for s in sigs if not s.get("constant") and not s.get("no_reading")),
+            "constant": sum(1 for s in sigs if s.get("constant")), **({"no_reading": none} if none else {}),
             "depth": sorted(doc.get("depth") or {})}
 
 
@@ -354,14 +366,13 @@ def build(episodes: dict, out_dir: Path) -> dict:
             continue
         if doc is None:
             continue
-        body = json.dumps(doc, separators=(",", ":"))
-        tmp = out_dir / f".{f}.part"
-        tmp.write_text(body)
-        os.replace(tmp, out_dir / f)
+        write_atomic(out_dir / f, doc, indent=None, serializer=dumps, separators=(",", ":"))
+        size = (out_dir / f).stat().st_size
         files[f] = summary(doc)
-        total += len(body)
-        biggest = max(biggest, len(body))
-    (out_dir / "index.json").write_text(json.dumps({"format": FORMAT, "files": files}, separators=(",", ":")))
+        total += size
+        biggest = max(biggest, size)
+    write_atomic(out_dir / "index.json", {"format": FORMAT, "files": files}, indent=None,
+                 serializer=dumps, separators=(",", ":"))
     return {"written": len(files), "skipped": skipped, "bytes": {"total": total, "max": biggest}}
 
 

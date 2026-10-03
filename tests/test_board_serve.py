@@ -95,14 +95,40 @@ def test_the_page_is_given_the_checks_a_rule_withheld_with_the_reason():
     d = {"dataset": "molmo", "_withheld_checks": {"gripper_channels": {"reason": "one-armed tasks",
                                                                        "result": {"flagged": True}}}}
     view = serve.episode_view(d)
-    assert view["set_aside_checks"] == [{"check": "gripper_channels", "reason": "one-armed tasks", "flagged": True}]
+    assert view["set_aside_checks"] == [{"check": "gripper_channels", "reason": "one-armed tasks", "status": "fired"}]
     assert "_withheld_checks" not in view
     assert "set_aside_checks" not in serve.episode_view({"_withheld_checks": [3]})
     # a withheld check that stopped with an error says so, never clear
     err = serve.episode_view({"_withheld_checks": {"recorded_jumps": {"reason": "r", "result": {
         "error": "ValueError: boom", "flagged": False}}}})
-    assert err["set_aside_checks"] == [{"check": "recorded_jumps", "reason": "r", "flagged": False,
+    assert err["set_aside_checks"] == [{"check": "recorded_jumps", "reason": "r", "status": "errored",
                                         "error": "ValueError: boom"}]
+
+
+def test_a_withheld_check_reads_as_what_it_found():
+    """A withheld check read clear whatever it found: the capture checks and the sensor checks keep their findings in
+    a list of checks, and a check that measured nothing says so in not_assessed. Each reads as it came out: an error,
+    not assessed with why, or how many of its own checks that ran fired and errored."""
+    st = serve.withheld_status
+    assert st({"not_assessed": "the right arm reads at too few frames", "flagged": False}) == {
+        "status": "not_assessed", "why": "the right arm reads at too few frames"}
+    capture = {"checks": [{"status": "fired"}, {"status": "fired"}, {"status": "clear"},
+                          {"status": "not_applicable"}, {"status": "errored"}], "not_assessed": {"x": "y"}}
+    assert st(capture) == {"status": "errored", "fired": 2, "errored": 1, "of": 4}
+    sensors = {"flagged": False, "notes": [{"check": "constant"}], "checks": [{"status": "fired"}, {"status": "clear"},
+                                                                             {"status": "na"}]}
+    assert st(sensors) == {"status": "fired", "fired": 1, "errored": 0, "of": 2}
+    assert st({"checks": [{"status": "na"}]})["status"] == "not_assessed"
+    assert st({"checks": [{"status": "clear"}]})["status"] == "clear"
+    assert st({"crossed": False, "left_vs_left": 0.9})["status"] == "clear"
+
+
+def test_a_withheld_check_that_flagged_reads_fired_even_with_no_check_listed():
+    """A withheld result that says it flagged, with no check of its own listed or none that ran, read not assessed."""
+    st = serve.withheld_status
+    assert st({"flagged": True, "checks": []}) == {"status": "fired", "fired": 0, "errored": 0, "of": 0}
+    assert st({"flagged": True, "checks": [{"status": "na"}]})["status"] == "fired"
+    assert st({"flagged": False, "checks": []})["status"] == "not_assessed"
 
 
 def test_render_index_fills_every_placeholder():
@@ -593,3 +619,28 @@ def test_a_long_recording_with_a_part_not_labelled_never_reads_complete_on_its_c
                         str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_board_file_with_a_number_that_is_not_finite_is_served_as_json_a_browser_reads(server):
+    """A board file built before non finite numbers were written as null still loads: the server writes them as null
+    in the episode, the list and the export, never as NaN, which the page's JSON.parse rejects."""
+    qa = serve.HERE
+    d = json.loads((qa / "episode_000001.json").read_text())
+    d["dataset_checks"] = {"stream_pairing": {"left_vs_left": float("nan"), "crossed": False}}
+    d["event_labels"][0]["t_s"] = float("nan")
+    d["duration_s"] = float("inf")
+    (qa / "episode_000001.json").write_text(json.dumps(d))
+
+    def strict(body: bytes):
+        def no(c):
+            raise ValueError(f"{c} is not JSON")
+        return json.loads(body, parse_constant=no)
+    code, _, body = _get(server + "/api/episode?file=episode_000001.json")
+    assert code == 200 and strict(body)["dataset_checks"]["stream_pairing"]["left_vs_left"] is None
+    code, _, body = _get(server + "/api/episodes")
+    assert code == 200 and len(strict(body)) == 3
+    code, _, body = _get(server + "/api/episode?file=episode_000001.json&download=1")
+    assert code == 200 and strict(body)["event_labels"][0]["t_s"] is None
+    code, _, body = _get(server + "/api/export", {"Content-Type": "application/json"},
+                         json.dumps({"files": ["episode_000001.json"]}).encode())
+    assert code == 200 and strict(body.decode().splitlines()[0])["duration_s"] is None

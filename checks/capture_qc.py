@@ -5,8 +5,9 @@ deterministic stage.
 
 EPISODES are folders of prepared episode_* folders. For each episode this reads context.json, sources.json,
 state.npz, the real-times file and kmap_*.npy files the sources name, and every camera's video, and writes
-context["capture_qc"]. An episode that already has a result is skipped unless --force. `python -m board build`
-copies the result into the episode's dataset_checks on the board.
+context["capture_qc"]. An episode that already has a result is skipped unless --force, or unless its result was
+written because its worker stopped (needs_check). It exits EXIT_FAILED when some episode's checks could not run.
+`python -m board build` copies the result into the episode's dataset_checks on the board.
 
 The checks themselves are the vendored upstream functions (checks/vendor/public_dataset_adapter_qc.py).
 This module does three things around them:
@@ -54,7 +55,7 @@ import os
 import re
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,7 @@ import numpy as np
 from checks.vendor import public_dataset_adapter_qc as up
 from label import episode as me
 from label import frames as mf
+from label.atomic import write_atomic
 
 SOURCE = up.SOURCE
 VERSION = 2          # the format version of context["capture_qc"]
@@ -397,6 +399,16 @@ def to_anchor(ep: dict, v: str, own: np.ndarray, T: int) -> np.ndarray | None:
     return out
 
 
+def _camera_or_failure(ep: dict, v: str) -> dict:
+    """camera_features, or, when the camera's frames cannot be read at all (its file gone, a crash computing them),
+    {"failed": the exception, "n": its frame count}, which assess records as that camera's crash: the checks not run
+    on it name it with the error and the other cameras are checked."""
+    try:
+        return camera_features(ep, v)
+    except Exception as e:  # noqa: BLE001 - recorded on the camera by assess
+        return {"failed": e, "n": int(ep["sources"][v]["n_frames"])}
+
+
 def extract(ep_dir: Path) -> dict:
     """Load the sidecars and decode every camera once. The result is all assess() needs. The cameras decode at the
     same time (the decoder runs outside Python's lock), each on its own frames, so the result is the same."""
@@ -404,7 +416,7 @@ def extract(ep_dir: Path) -> dict:
     T = len(ep["state"])
     views = me.views(ep)
     with ThreadPoolExecutor(max_workers=max(1, min(len(views), CAMERA_THREADS))) as pool:
-        feats = list(pool.map(lambda v: camera_features(ep, v), views))
+        feats = list(pool.map(lambda v: _camera_or_failure(ep, v), views))
     return {"ep": ep, "T": T, "cams": dict(zip(views, feats))}
 
 
@@ -452,6 +464,11 @@ CLOCK_CHECKS = ("state_time_too_short", "state_time_non_monotonic_or_duplicate",
                 "native_camera_timestamp_gap")
 MOTION_CHECKS = ("action_smoothness_discontinuity", "jump_return_event", "gross_umi_speed", "over_95_percent_static",
                  "largest_action_not_in_video", "visual_change_unexplained_by_action", "pixel_action_corr_mismatch")
+STRUCTURE_CHECKS = ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal")
+GRIPPER_CHECKS = ("normalized_gripper_out_of_range", "gripper_action_integral_out_of_range", "gripper_never_acts",
+                  "gripper_sensor_bug")
+# the checks that read the recorded state (canonical_states): when it cannot be read, these are errored and the rest run
+STATE_CHECKS = STRUCTURE_CHECKS + GRIPPER_CHECKS + MOTION_CHECKS
 
 
 def _ev(evidence: str, t_s: float | None = None, camera: str | None = None, actor: str | None = None) -> dict:
@@ -505,7 +522,15 @@ def assess(feats: dict) -> dict:
     real_times = ep.get("times") is not None
     unit = gripper_unit(ctx)
     normalized = "normalized_open_fraction" in unit
-    cs = canonical_states(ep)
+    # a crash reading the state errors only the checks that read it (STATE_CHECKS, set at the end), and the camera,
+    # clock and length checks run on as for a recording with no usable state
+    state_error = None
+    try:
+        cs = canonical_states(ep)
+    except Exception as e:  # noqa: BLE001 - recorded on the checks that read the state
+        state_error = e
+        cs = {"states": np.zeros((T, 14)), "valid": np.zeros((T, 14), dtype=bool), "actors": me.actors(ep),
+              "kind": kind, "nonfinite": [], "shape_ok": True}
     names = cs["actors"]
     states, valid = cs["states"], cs["valid"]
     has_state = kind != "none"
@@ -525,9 +550,9 @@ def assess(feats: dict) -> dict:
     R["action_time_non_monotonic_or_duplicate"] = _na("action times are taken from the frame times, which are checked on their own")
 
     # ---- structure (filtering.py:1461-1488)
-    with _guard(R, ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal")):
+    with _guard(R, STRUCTURE_CHECKS):
         if not has_state:
-            for c in ("missing_canonical_signal", "invalid_state_shape", "nonfinite_signal"):
+            for c in STRUCTURE_CHECKS:
                 R[c] = _na("the recording has no robot state, only video")
         else:
             shape = np.shape(ep["state"])
@@ -546,6 +571,8 @@ def assess(feats: dict) -> dict:
     with _guard(R, ("episode_too_short",)):
         last = [float(ts[-1])] if len(ts) else [0.0]
         for v, c in cams.items():
+            if "failed" in c:
+                continue        # a camera whose frames could not be read gives no length
             ct = camera_times(ep, v)
             last.append(float(ct[c["n"] - 1]) if ct is not None and len(ct) >= c["n"] else (c["n"] - 1) / c["fps"])
         duration = max(last)
@@ -584,14 +611,12 @@ def assess(feats: dict) -> dict:
     unit_why = ((f"the gripper reading is in {unit}, not a verified opening from 0 to 1" if unit != "unknown"
                  else "the gripper reading's unit is not known for this dataset")
                 + ", and this check needs an opening from 0 to 1")
-    gripper_checks = ("normalized_gripper_out_of_range", "gripper_action_integral_out_of_range", "gripper_never_acts",
-                      "gripper_sensor_bug")
-    with _guard(R, gripper_checks):
+    with _guard(R, GRIPPER_CHECKS):
         if not usable_state:
-            for c in gripper_checks:
+            for c in GRIPPER_CHECKS:
                 R[c] = _na("the recording has no robot state, only video" if not has_state else unusable_why)
         elif not normalized:
-            for c in gripper_checks:
+            for c in GRIPPER_CHECKS:
                 R[c] = _na(unit_why)
         else:
             ev = []
@@ -709,8 +734,11 @@ def assess(feats: dict) -> dict:
     # of the video checks only the frozen picture needs the camera each actor is mounted on (to tell it from a still
     # scene), so failing to work it out errors that check alone (None)
     av_all = None
-    with _guard(R, ("video_frozen_run",)):
-        av_all = actor_views(ep, names) if usable_state and extra["frozen_needs_motion"] else []
+    if state_error is not None and extra["frozen_needs_motion"]:
+        R["video_frozen_run"] = _errored(state_error)     # it needs the recorded motion here, which could not be read
+    else:
+        with _guard(R, ("video_frozen_run",)):
+            av_all = actor_views(ep, names) if usable_state and extra["frozen_needs_motion"] else []
 
     def expected_motion(v: str, t0: float, t1: float) -> str:
         """Why camera v's picture must change between t0 and t1, from the recorded state, or "" when the
@@ -745,6 +773,8 @@ def assess(feats: dict) -> dict:
         # result) standing for this camera
         done = set()
         try:
+            if "failed" in c:
+                raise c["failed"]        # its frames could not be read (_camera_or_failure)
             n = c["n"]
             km = ep["kmap"].get(v)
             if km is None and n != T and has_state:
@@ -1057,6 +1087,8 @@ def assess(feats: dict) -> dict:
         why = f"The recorded state is not on these cameras' frames. {ctx['state_unaligned']}"
         for c in STATE_VS_VIDEO + (("video_frozen_run",) if extra["frozen_needs_motion"] else ()):
             R[c] = _na(why)
+    if state_error is not None:
+        R.update({c: _errored(state_error) for c in STATE_CHECKS})
     return {"checks": R, "cameras": cam_metrics, "actors": actor_metrics,
             "episode": {"duration_s": round(duration, 2), "rig": rig, "state_kind": kind, "gripper_unit": unit,
                         "clock": "capture times" if real_times else "frame_index / fps"}}
@@ -1411,27 +1443,77 @@ def format_result(a: dict) -> dict:
             "checks": listing, "metrics": {"cameras": a["cameras"], "actors": a["actors"], "episode": a["episode"]}}
 
 
+def errored_record(e: Exception) -> dict:
+    """The context["capture_qc"] record of an episode whose checks could not run at all: every check errored, with
+    the error."""
+    return format_result({"checks": {c: _errored(e) for c in CHECKS}, "cameras": {}, "actors": {}, "episode": {}})
+
+
 def run_episode(ep_dir: Path | str) -> dict:
     """Decode, assess and format one episode: its context["capture_qc"] record. An episode that cannot be read or
     decoded at all still gets one, with every check errored and the error, never no record."""
     try:
-        a = assess(extract(Path(ep_dir)))
+        return format_result(assess(extract(Path(ep_dir))))
     except Exception as e:  # noqa: BLE001 - recorded on every check, the episode keeps a record
-        a = {"checks": {c: _errored(e) for c in CHECKS}, "cameras": {}, "actors": {}, "episode": {}}
-    return format_result(a)
+        return errored_record(e)
 
 
 # ------------------------------------------------------------------------------------------ CLI
 
-def _one(d: str) -> tuple[str, dict | None, str | None, float]:
+# the exit status when some episode's checks could not run because its worker stopped: every episode still has a
+# record (those with every check errored), so a caller goes on and reads the errored checks from the records
+EXIT_FAILED = 3
+
+
+def _one(d: str) -> tuple[str, dict, str | None, float]:
+    """(episode, its record, the error when its worker stopped, seconds). A worker that stops outside run_episode still
+    gives the episode a record, every check errored with the error, so it is never left with none."""
     t0 = time.time()
     try:
         return d, run_episode(Path(d)), None, time.time() - t0
-    except Exception as e:  # reported per episode, never silently skipped
-        return d, None, f"{type(e).__name__}: {e}"[:300], time.time() - t0
+    except Exception as e:  # reported per episode and recorded on every check, never silently skipped
+        return d, errored_record(e), f"{type(e).__name__}: {e}"[:300], time.time() - t0
 
 
-def main():
+def _pool(eps: list[str], jobs: int, record) -> list[str]:
+    """Run each episode's _one on one pool of jobs worker processes and record each answer as it finishes. Returns the
+    episodes the pool never finished: a worker that dies (killed by a signal, out of memory) breaks the whole pool, so
+    the episode it was on and every one still waiting come back unfinished, not only the one that killed it."""
+    lost = []
+    with ProcessPoolExecutor(jobs) as ex:
+        futures = {ex.submit(_one, d): d for d in eps}
+        for fut in as_completed(futures):
+            try:
+                res = fut.result()
+            except Exception:  # noqa: BLE001 - the pool broke: retried alone (_alone)
+                lost.append(futures[fut])
+                continue
+            record(*res)
+    return sorted(lost)
+
+
+def _alone(d: str) -> tuple[str, dict, str | None, float]:
+    """_one for one episode in a worker process of its own, so a worker that dies costs that episode only: then it gets
+    a record with every check errored and the error."""
+    try:
+        with ProcessPoolExecutor(1) as ex:
+            return ex.submit(_one, d).result()
+    except Exception as e:  # noqa: BLE001 - its worker died again
+        return d, errored_record(e), f"{type(e).__name__}: {e}"[:300], 0.0
+
+
+def needs_check(ctx: dict) -> bool:
+    """Whether an episode is checked without --force: it has no record, or its record is one written because its
+    worker stopped (worker_stopped), which says nothing about the episode, so a rerun checks it again."""
+    cq = ctx.get("capture_qc")
+    return not isinstance(cq, dict) or bool(cq.get("worker_stopped"))
+
+
+def main() -> int:
+    """Check every episode and write its record into its context.json. Episodes run on a pool of --jobs worker
+    processes; the ones a worker's death left unfinished run again, each in a process of its own, so only an episode
+    whose worker dies on that retry too is recorded with every check errored, marked worker_stopped. Exits EXIT_FAILED
+    when some episode's checks could not run, else 0."""
     ap = argparse.ArgumentParser(prog="python -m checks.capture_qc", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("roots", nargs="+", type=Path, metavar="EPISODES", help="folders of prepared episode_* folders")
@@ -1443,29 +1525,38 @@ def main():
         for d in sorted(root.glob("episode_*")):
             if not (d / "context.json").exists():
                 continue
-            if args.force or "capture_qc" not in json.loads((d / "context.json").read_text()):
+            if args.force or needs_check(json.loads((d / "context.json").read_text())):
                 eps.append(str(d))
     print(f"episodes to check: {len(eps)}", flush=True)
     done = flagged = failed = 0
-    with ProcessPoolExecutor(args.jobs) as ex:
-        for d, r, err, secs in ex.map(_one, eps, chunksize=1):
-            done += 1
-            if err:
-                failed += 1
-                print(f"FAILED {Path(d).name}: {err}", flush=True)
-                continue
-            p = Path(d) / "context.json"
-            ctx = json.loads(p.read_text())
-            ctx["capture_qc"] = r
-            p.write_text(json.dumps(ctx, indent=1))
-            if r["flags"]:
-                flagged += 1
-                print(f"FLAGGED {Path(d).name} " + "; ".join(f"{f['check']} {f['t_s']}" for f in r["flags"]),
-                      flush=True)
-            if done % 25 == 0:
-                print(f"progress {done}/{len(eps)} flagged={flagged} failed={failed} last={secs:.1f}s", flush=True)
+
+    def record(d: str, r: dict, err: str | None, secs: float) -> None:
+        nonlocal done, flagged, failed
+        done += 1
+        if err:
+            failed += 1
+            r = {**r, "worker_stopped": True}
+            print(f"FAILED {Path(d).name}: {err}", flush=True)
+        p = Path(d) / "context.json"
+        ctx = json.loads(p.read_text())
+        ctx["capture_qc"] = r
+        write_atomic(p, ctx, indent=1)
+        if r["flags"]:
+            flagged += 1
+            print(f"FLAGGED {Path(d).name} " + "; ".join(f"{f['check']} {f['t_s']}" for f in r["flags"]), flush=True)
+        if done % 25 == 0:
+            print(f"progress {done}/{len(eps)} flagged={flagged} failed={failed} last={secs:.1f}s", flush=True)
+
+    lost = _pool(eps, args.jobs, record)
+    if lost:
+        print(f"retrying {len(lost)} episodes a worker's death left unfinished, each in a process of its own",
+              flush=True)
+        with ThreadPoolExecutor(args.jobs) as ex:
+            for res in ex.map(_alone, lost):
+                record(*res)
     print(f"done {done} flagged={flagged} failed={failed}", flush=True)
+    return EXIT_FAILED if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

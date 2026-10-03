@@ -46,12 +46,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
+
+from label.atomic import write_atomic
 
 JOINTS = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]    # the 12 arm joints of the 14 state values (6 are grippers)
 
@@ -272,7 +273,7 @@ def measure_folder(eps: Path) -> int:
         else:
             ctx.pop("timebase_neighbour_lag_frames", None)
         ctx["timebase_neighbours_in_upload"] = len(near)
-        p.write_text(json.dumps(ctx, indent=1, default=str))
+        write_atomic(p, ctx, indent=1, default=str)
     return n
 
 
@@ -280,12 +281,6 @@ def cmd_folder(args) -> int:
     for root in args.roots:
         print(f"{root}: neighbour lag measured on {measure_folder(root)} episodes", flush=True)
     return 0
-
-
-def write_json(p: Path, obj) -> None:
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2))
-    os.replace(tmp, p)
 
 
 def cmd_apply(args) -> int:
@@ -297,7 +292,7 @@ def cmd_apply(args) -> int:
             e = int(d.name.split("_")[1])
             ctx = json.loads((d / "context.json").read_text())
             ctx["timebase_neighbour_lag_frames"] = _num(tb.loc[e, "neighbour_lag_frames"])
-            write_json(d / "context.json", ctx)
+            write_atomic(d / "context.json", ctx)
             n_ctx += 1
     for p in sorted(args.labels.glob("episode_*.json")) if args.labels else []:
         r = json.loads(p.read_text())
@@ -312,7 +307,7 @@ def cmd_apply(args) -> int:
                              f"({flag} vs {tb.loc[e, 'sped_up_recording']})")
         changed += flag != bool(t.get("sped_up_recording"))
         t.update({"neighbour_lag_frames": nb, "sped_up_recording": flag, "rule": SPEDUP_RULE})
-        write_json(p, r)
+        write_atomic(p, r)
         n_lab += 1
     print(f"context.json updated {n_ctx}; label files updated {n_lab}, flag changed on {changed}")
     return 0

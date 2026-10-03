@@ -73,6 +73,7 @@ from pathlib import Path
 from board import clips as bc
 from board import hands as hands_overlay
 from board import serve as sa
+from board.to_board import dumps
 
 HERE_DIR = Path(__file__).resolve().parent
 TITLE = "Data Dashboard"
@@ -576,10 +577,10 @@ def cmd_site(a):
         idx_eps.append(row)
         # the page's view of the episode: each issue carries the family it is counted under
         view = sa.episode_view(json.loads((a.qa / rec["file"]).read_text()))
-        (stage / "data/ep" / rec["file"]).write_text(json.dumps(view))
+        (stage / "data/ep" / rec["file"]).write_text(dumps(view))
     for ds, recs in by_ds.items():
-        (stage / "data/lists" / f"{ds}.json").write_text(json.dumps(recs, separators=(",", ":")))
-    (stage / "data/index.json").write_text(json.dumps({"build": bid, "datasets": datasets, "eps": idx_eps},
+        (stage / "data/lists" / f"{ds}.json").write_text(dumps(recs, separators=(",", ":")))
+    (stage / "data/index.json").write_text(dumps({"build": bid, "datasets": datasets, "eps": idx_eps},
                                                       separators=(",", ":")))
     n_cmp = 0
     if compare is not None:
@@ -594,11 +595,11 @@ def cmd_site(a):
             for f in kd.glob("*.json"):
                 if f.name in listed:
                     view = sa.episode_view(json.loads(f.read_text()))
-                    (stage / "data/compare" / kd.name / f.name).write_text(json.dumps(view))
+                    (stage / "data/compare" / kd.name / f.name).write_text(dumps(view))
                     n_cmp += 1
             # the model's rail records, the same the live board serves at /api/compare/list
             recs = [r for r in sa.rail_records(kd) if r["file"] in listed]
-            (stage / "data/compare/lists" / f"{kd.name}.json").write_text(json.dumps(recs, separators=(",", ":")))
+            (stage / "data/compare/lists" / f"{kd.name}.json").write_text(dumps(recs, separators=(",", ":")))
     hands_res = None
     if hands is not None:
         # the hand pose files, each re-timed against the web copy the static page plays (the copy keeps the clip's
@@ -617,7 +618,7 @@ def cmd_site(a):
                 doc = hands_overlay.retime(json.loads((hands / f).read_text()), mp4)
             except (ValueError, RuntimeError) as err:
                 return f, str(err)[:200]
-            (stage / "data/hands" / f).write_text(json.dumps(doc, separators=(",", ":")))
+            (stage / "data/hands" / f).write_text(dumps(doc, separators=(",", ":")))
             return f, None
         with cf.ThreadPoolExecutor(8) as ex:
             res = list(ex.map(one, todo))
@@ -642,7 +643,7 @@ def cmd_site(a):
                 part.write_bytes(body)
                 part.rename(dst)
             v["path"] = rel
-        (stage / "data/keypoints/index.json").write_text(json.dumps(kidx, separators=(",", ":")))
+        (stage / "data/keypoints/index.json").write_text(dumps(kidx, separators=(",", ":")))
         kp_res = {"dir": str(keypoints), "files": len(kidx["files"]),
                   "bytes": sum(v["bytes"] for v in kidx["files"].values())}
     sn_res = None
@@ -654,7 +655,7 @@ def cmd_site(a):
         sidx["files"] = {f: v for f, v in sidx["files"].items() if f in listed and (sensors / f).exists()}
         for f in sidx["files"]:
             shutil.copyfile(sensors / f, stage / "data/sensors" / f)
-        (stage / "data/sensors/index.json").write_text(json.dumps(sidx, separators=(",", ":")))
+        (stage / "data/sensors/index.json").write_text(dumps(sidx, separators=(",", ":")))
         sn_res = {"dir": str(sensors), "files": len(sidx["files"])}
     # the page asks for other models' labels, hand pose files, sensors files and keypoint downloads only when the build
     # has them (no request that can only fail)
@@ -681,7 +682,7 @@ def cmd_site(a):
              "compare": {"dir": str(compare), "files": n_cmp} if compare is not None else None,
              "hands": hands_res, "keypoints": kp_res, "sensors": sn_res,
              "media": st, "missing_media": missing}
-    (stage / "BUILD.json").write_text(json.dumps(build, indent=1))
+    (stage / "BUILD.json").write_text(dumps(build, indent=1))
     if out.exists():
         out.rename(a.out / f".{bid}.old.{int(time.time())}")
     stage.rename(out)

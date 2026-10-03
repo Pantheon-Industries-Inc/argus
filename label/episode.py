@@ -41,6 +41,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ from label import frames as mf
 from label import lens
 from label import prompts
 from label import state as ms
+from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, UNREADABLE
 
 FPS = 30
 VIEW_ORDER = ("exo", "left", "right")          # harness view keys with a role: the scene camera, the two mounted ones
@@ -119,9 +121,11 @@ def load(ep_dir: Path) -> dict:
         # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals), with
         # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz) and everything else its reader wrote,
         # so a field a reader adds reaches the checks without being listed here. Signals on the frames of a camera
-        # taken out of the episode, with nothing to place them on the others (state_unaligned), are not read
+        # taken out of the episode, with nothing to place them on the others (state_unaligned), are not read. One whose
+        # rows stop short of the episode's frames has no reading past them (label/signals.py pad_rows)
+        from label import signals as sg
         z = np.load(ep_dir / "signals.npz")
-        ep["signals"] = {s["name"]: z[s["key"]] for s in ctx["signals"]}
+        ep["signals"] = {s["name"]: sg.pad_rows(sg.columns(z[s["key"]]), len(state)) for s in ctx["signals"]}
         ep["signal_meta"] = {s["name"]: {k: v for k, v in s.items() if k not in ("name", "key")}
                              for s in ctx["signals"]}
     if ctx.get("real_times"):
@@ -140,6 +144,38 @@ def load(ep_dir: Path) -> dict:
 
 def ep_fps(ep: dict) -> float:
     return float(ep["context"].get("fps") or FPS)
+
+
+# a reply's time may lie this far past the edge of the footage it labels (a reply rounding its last time up) before the
+# board flags it (board/build.py steps_outside, label/pieces.py outside_part)
+STEP_SLACK_S = 0.5
+# a number written as text: plain ASCII digits with an optional sign, point and exponent. Python's float also reads
+# "1_000" and digits of other scripts, which no dataset or reply means as a time
+NUMBER_TEXT = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)
+
+
+def number(x) -> float | None:
+    """A number as a dataset or the model writes it: a finite number, or text that reads as one (NUMBER_TEXT: "12.5",
+    or a time "12.5s"). Anything else (none, a word, NaN, true or false) is no number, None, and a time that is none is
+    shown untimed. Negative zero is zero, so no time prints as "-0.0s". One rule, so the prompt, the parts of a long
+    recording, the reply's parse and the board read every time alike."""
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, str):
+        x = x.strip().removesuffix("s").strip()
+        if not NUMBER_TEXT.fullmatch(x):
+            return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError, OverflowError):      # an integer too large for a float is no time either
+        return None
+    return v + 0.0 if math.isfinite(v) else None
+
+
+def tenths(t: float) -> str:
+    """A time as the prompt gives a dataset's label time, to the tenth of a second, never as -0.0s: a time that rounds
+    to zero is zero, not a time before the episode."""
+    return f"{round(float(t), 1) + 0.0:.1f}s"
 
 
 def order_views(keys) -> list[str]:
@@ -1058,21 +1094,34 @@ def _signals_table(ep: dict, pl: dict) -> str:
     # as stored: every number below is the one a float64 copy would give (largest and smallest readings are exact in
     # any precision, and their differences are taken in float64), with no whole copy of a large signal
     arrs = {k: a[:n] for k, a in sig.items()}
-    lines, still = [], []
+    lines, still, wherever = [], [], []
     for name, a in arrs.items():
-        if not len(a):
-            continue
-        if _constant(a):
-            # a value repeated at every frame (a setting, a calibration, or a sensor that sent nothing new): named once
-            v = a[np.isfinite(a).all(axis=1)][0] if np.isfinite(a).all(axis=1).any() else np.nanmax(a, axis=0)
-            still.append(name + (f" {_num(v[0])}" if len(v) == 1 else
-                                 " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else ""))
-            continue
-        m = meta.get(name) or {}
-        lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
-                                 fps=ep_fps(ep), aligned_by=m.get("aligned_by")))
+        try:
+            if not len(a):
+                lines.append(f"  {name}: no rows, so no reading at any frame")
+                continue
+            if _constant(a):
+                # a value repeated wherever it reads (a setting, a calibration, or a sensor that sent nothing new):
+                # named once, as the same at every frame only when it reads at every frame
+                complete = np.isfinite(a).all(axis=1)
+                v = a[complete][0] if complete.any() else sg.finite_range(a)[0]
+                said = name + (f" {_num(v[0])}" if len(v) == 1 else
+                               " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else "")
+                gaps = sg.gap_words(a)
+                if gaps:
+                    wherever.append(f"{said} ({gaps})")
+                else:
+                    still.append(said)
+                continue
+            m = meta.get(name) or {}
+            lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
+                                     fps=ep_fps(ep), aligned_by=m.get("aligned_by")))
+        except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
+            lines.append(f"  {name}: could not be read ({type(e).__name__})")
     if still:
         lines.append("  The same at every frame: " + "; ".join(still))
+    if wherever:
+        lines.append("  The same wherever it reads: " + "; ".join(wherever))
     if pl["spans"]:
         lines.append("  Over each recorded still span, the largest change of any one value of each signal (a signal "
                      "that did not change is left out):")
@@ -1080,10 +1129,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
             ch = []
             for name, a in arrs.items():
                 seg = a[a0:b0 + 1]
-                with np.errstate(all="ignore"):
-                    c = (float(np.nanmax(np.nanmax(seg, axis=0).astype(np.float64)
-                                         - np.nanmin(seg, axis=0).astype(np.float64)))
-                         if np.isfinite(seg).any() else 0.0)
+                lo, hi = sg.finite_range(seg)
+                c = float(np.nanmax(hi - lo)) if np.isfinite(seg).any() else 0.0
                 if c > 0:
                     ch.append(f"{name} {_num(c)}")
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
@@ -1115,12 +1162,15 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     ks = pl["ks"]
     rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)
     for i, (name, a) in enumerate(arrs.items()):
-        if name in touch or not len(a) or not np.isfinite(a).any() or _constant(a):
+        try:
+            if name in touch or not len(a) or not np.isfinite(a).any() or _constant(a):
+                continue
+            m = meta.get(name) or {}
+            got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"))
+            mv = sg.movements(a)
+            by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"))
+        except Exception:  # noqa: BLE001 - named as not read in the signals' list (_signals_table), the rest are given
             continue
-        m = meta.get(name) or {}
-        got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"))
-        mv = sg.movements(a)
-        by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"))
         for j, (lb, v) in enumerate(got):
             rows.append((float(mv[j]) if by_value else float(np.median(mv)), i, j, name, lb, v))
     if not rows:
@@ -1160,10 +1210,11 @@ def _readout_of(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
 
 
 def _constant(a: np.ndarray) -> bool:
-    """Whether a signal has a reading and each of its values never changes over the episode: named once with its
-    value, and given no rows at each instant."""
-    with np.errstate(all="ignore"):
-        return bool(np.isfinite(a).any() and (np.nanmax(a, axis=0) == np.nanmin(a, axis=0)).all())
+    """Whether a signal has a reading and each of its values never changes over the episode wherever it reads: named
+    once with its value, and given no rows at each instant (_signals_table says where it has no reading)."""
+    from label import signals as sg
+    lo, hi = sg.finite_range(a)
+    return bool(np.isfinite(a).any() and (hi == lo).all())
 
 
 def _left_out(name: str, a: np.ndarray, m: dict, n_left: int, n_rows: int) -> str:
@@ -1256,8 +1307,9 @@ def ego_annotation_block(ctx: dict) -> str:
         return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
     def when(x):            # a step with no end time is a moment, one with no time is listed without one
-        t0, t1 = (x.get(k) if isinstance(x.get(k), (int, float)) else None for k in ("t0", "t1"))
-        return ("no time" if t0 is None else f"{t0:.1f}s" if t1 is None or t1 == t0 else f"{t0:.1f}-{t1:.1f}s")
+        t0, t1 = number(x.get("t0")), number(x.get("t1"))
+        return ("no time" if t0 is None else tenths(t0) if t1 is None or t1 == t0
+                else f"{tenths(t0)[:-1]}-{tenths(t1)}")
     lines = [f"  {when(x)}  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
              for x in subs if isinstance(x, dict)]
     return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE (claims to check, see ABOUT THE DATASET'S ANNOTATION above):\n"
@@ -1376,13 +1428,30 @@ def _state_unaligned_text(ep: dict, pl: dict) -> str:
 UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 
 
+# Request wording for the reader's shared reasons (prepare.state_notes). The note names the particular channel or
+# clock limitation; a leading sentence must hold even when other recorded channels use the footage clock.
+STATE_WHY = {
+    LAYOUT: None,
+    NOT_RECORDED: "as the recording holds none",
+    UNREADABLE: "as a sensor file that may hold it could not be read",
+    SHORT: "as it does not cover the footage",
+    ASSUMED_CLOCK: "as a contributing state channel needs an assumed alignment with the cameras",
+}
+
+
 def _no_state_text(ep: dict, pl: dict) -> str:
-    """No arm state. With other signals, that none is in the layout our checks read. With none, that the dataset
-    records none, unless the reader wrote a note on the state or left sensor data unread: then only that none was
-    read, since "records no hand, head or device tracking" was false for an MCAP whose hand tracks the reader did
-    not read yet (2026-10-02 audit). The note and the lists of unread channels go to the board, never to the model:
-    they name the checks and channels that did not run ("the checks on recorded motion ..."), which would put the
-    words about a recorded motion back into a video only prompt."""
+    """No arm state. With other signals the line says why, as the reader recorded it (state_why, STATE_WHY): "layout"
+    says none is in the layout our checks read, and every other reason that no state was read, why, and the reader's
+    note on it (not for "not_recorded", whose note only says the same). A context written before the reader recorded
+    state_why says the layout line, unless a signal whose name says joints or a state stops short of the episode: then
+    the layout is not why (an arm sensor file cut before the footage ends), and the line gives the reader's note on the
+    state, which says why. With no other signal, that the dataset records none, unless the reader wrote a note on the
+    state or left sensor data unread: then only that none was read, since "records no hand, head or device tracking"
+    was false for an MCAP whose hand tracks the reader did not read yet (2026-10-02 audit). There the note and the lists
+    of unread channels go to the board, never to the model: they name the checks and channels that did not run ("the
+    checks on recorded motion ..."), which would put the words about a recorded motion back into a video only prompt;
+    with other signals the prompt is a recording's already. A state_why other than "not_recorded" counts as a note:
+    the state is there but was not read, so only that none was read; "not_recorded" and no state_why read as before."""
     r = rig(ep)
     n = _rig_nouns(r)
     ctx = ep["context"]
@@ -1399,7 +1468,28 @@ def _no_state_text(ep: dict, pl: dict) -> str:
                                    (meta.get(nm) or {}).get("names"))]
         one = len(joints) == 1
         named = all(len((meta.get(nm) or {}).get("names") or []) == np.shape(ep["signals"][nm])[1] for nm in joints)
-        return (f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read."
+        # a joints or state signal with no reading over part of the episode says the state's data stops short (a sensor
+        # file cut before the footage ends), so the layout is not why none was read: the reader's own note says why
+        short = [nm for nm, a in ep["signals"].items() if sg.names_joints_or_state(nm) and len(a[:pl["n"]])
+                 and np.isnan(np.asarray(a[:pl["n"]], dtype=np.float64)).all(axis=1).any()]
+        note = (ctx.get("state_note") or "").strip()
+        why = ctx.get("state_why")
+        # An absent designated state field does not prove absence in another recorded observation layout. Inspect
+        # preserved values even when their readout is constant or outside the table budget; commands are not state.
+        if why == NOT_RECORDED and any((sg.names_joints_or_state(nm) if np.shape(a)[1] > 1
+                                       else sg.names_scalar_observed_state(nm))
+                                      and np.isfinite(a[:pl["n"]]).any()
+                                      for nm, a in ep["signals"].items()):
+            why = LAYOUT
+        if why == LAYOUT or why is None and not (short and note):
+            head = f"no {n['actor']} state in the layout our checks read."
+        else:
+            reason = STATE_WHY.get(why) if why is not None else None
+            # a recording that holds no state needs no note: the reader's note can only say so again (the board
+            # shows it)
+            head = (f"no {n['actor']} state was read{f', {reason}' if reason else ''}."
+                    + (f" The reader's note on it: {note}" if note and why != NOT_RECORDED else ""))
+        return (f"\nRECORDED STATE: {head}"
                 + (f" The signal{'' if one else 's'} whose name{' says' if one else 's say'} joints or a state "
                    f"({', '.join(joints)}) {'is' if one else 'are'} given value by value"
                    + (" under their own names" if named else "") + " among the other recorded signals below."
@@ -1408,7 +1498,8 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     # depth pictures follow the detail views of an episode with depth (the depth block), so there the video is not all
     all_there_is = (("the cameras' colour and depth images are" if _has_depth(ep, pl) else "the video is")
                     + " all there is.")
-    if (ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS):
+    if ((ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS)
+            or ctx.get("state_why") not in (None, NOT_RECORDED)):
         return f"\nRECORDED STATE: none was read from this episode, so {all_there_is}"
     what = "no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state"
     return f"\nRECORDED STATE: none; this dataset records {what}, so {all_there_is}"

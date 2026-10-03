@@ -22,7 +22,9 @@ Output per episode (out.json, or OUT/<episode>.json): the model's labels (`label
 exact instants), the deterministic checks that ran on the episode (`dataset_checks`), the still spans the model
 was told about, the instruction it was graded against, and the billed usage and cost. A reply cut off at the
 output limit is kept as failed_<episode>.json, with what was sent, and counts as a failure; the board shows the
-episode with that reply, as it shows one whose reply did not parse.
+episode with that reply, as it shows one whose reply did not parse. An episode that got no reply at all (the spend
+cap reached, every key out of credit, a request that could not be built, a call that failed) has
+noreply_<episode>.json saying why, so the board shows it too.
 
 Keys: OPENROUTER_API_KEYS, a comma-separated list, or when it holds none OPENAI_API_KEY, which sends every call
 straight to OpenAI and so only runs OpenAI models; keys are used round robin, and a key that runs out of
@@ -35,6 +37,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import re
 import sys
@@ -46,6 +49,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from label import episode as me
+from label.atomic import write_atomic
 from label.route import route_width
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -232,21 +236,39 @@ TIMELINE_COLUMNS = ["start_s", "end_s", "arm", "action", "object", "destination"
 
 def parse_response(text: str) -> tuple[dict, bool]:
     """A model's reply as labels, or the raw text and the reason it could not be read. The one parser for every
-    model and for re-reading stored replies (label/reparse.py)."""
+    model and for re-reading stored replies (label/reparse.py). A reply that is a JSON object but breaks the output
+    format in places keeps the rest of its labels (normalize_timeline, typed_labels)."""
     try:
         # some models ignore json_object and wrap the JSON in a markdown fence
         fenced = re.fullmatch(r"\s*```(?:json)?\s*(.*?)\s*```\s*", text, re.S)
-        return normalize_timeline(json.loads(fenced.group(1) if fenced else text)), True
+        labels = json.loads(fenced.group(1) if fenced else text)
+        if not isinstance(labels, dict):
+            raise ValueError(f"the reply is {json_kind(labels)}, not an object")
+        return typed_labels(normalize_timeline(labels)), True
     except Exception as e:
         return {"_raw": text, "_parse_error": f"{type(e).__name__}: {e}"[:300]}, False
+
+
+def json_kind(x) -> str:
+    """What a JSON value is, in the output format's words, for the board's reason a field was left out."""
+    if isinstance(x, bool):
+        return "true or false"
+    return ("null" if x is None else "a number" if isinstance(x, (int, float)) else "text" if isinstance(x, str)
+            else "a list" if isinstance(x, list) else "an object" if isinstance(x, dict) else type(x).__name__)
+
+
+def _drop(labels: dict, field: str, row, why: str) -> None:
+    """Records a field or a row of the reply left out because it breaks the output format."""
+    labels.setdefault("_dropped", []).append({"field": field, **({"row": row} if row is not None else {}), "why": why})
 
 
 def normalize_timeline(labels: dict) -> dict:
     """The output format sends each timeline segment as one array in the column order of timeline_columns.
     Convert it back to one object per segment, validating every row, so everything downstream sees the usual
-    format. A row with the wrong number of values, a time that is not a number, or a progress that is text
-    raises: a shifted column would silently corrupt the labels. A value that is missing or outside a field's
-    allowed set (a progress or a contribution of null) is kept as the model wrote it and listed in
+    format. A time or a progress written as a number in text ("2.0") is read as that number. A row with the wrong
+    number of values, or a time or a progress that is not a number, is left out and recorded in _dropped (a shifted
+    column would silently corrupt the labels), and the other rows are kept. A value that is missing or outside a
+    field's allowed set (a progress or a contribution of null) is kept as the model wrote it and listed in
     _schema_violations, so one bad field is counted, not a reason to discard a valid answer."""
     tl = labels.get("timeline")
     if not isinstance(tl, list) or not any(isinstance(r, list) for r in tl):
@@ -260,13 +282,22 @@ def normalize_timeline(labels: dict) -> dict:
             continue
         if not isinstance(row, list) or not (len(cols) - 1 <= len(row) <= len(cols)):
             n = len(row) if isinstance(row, list) else "?"
-            raise ValueError(f"timeline row {i} has {n} values for {len(cols)} columns")
+            _drop(labels, "timeline", i, f"it has {n} values for {len(cols)} columns")
+            continue
         seg = dict(zip(cols, row))
+        bad = None
         for k in ("start_s", "end_s", "progress"):
             if k == "progress" and seg.get(k) is None:
                 labels.setdefault("_schema_violations", []).append(f"timeline row {i}: progress null")
-            elif k in seg and not isinstance(seg[k], (int, float)):
-                raise ValueError(f"timeline row {i}: {k} is not a number ({seg[k]!r})")
+            elif k in seg and (isinstance(seg[k], bool) or not isinstance(seg[k], (int, float))):
+                v = me.number(seg[k])
+                if v is None:
+                    bad = f"its {k} is not a number ({seg[k]!r})"
+                    break
+                seg[k] = v
+        if bad:
+            _drop(labels, "timeline", i, bad)
+            continue
         if seg.get("contribution") not in ("advancing", "wasteful", "idle"):
             labels.setdefault("_schema_violations", []).append(
                 f"timeline row {i}: contribution {seg.get('contribution')!r}")
@@ -274,6 +305,71 @@ def normalize_timeline(labels: dict) -> dict:
             seg.pop("notes", None)
         out.append(seg)
     labels["timeline"] = out
+    return labels
+
+
+# the reply's fields by the type the output format gives them (label/prompts.py)
+LIST_FIELDS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues", "operator_mistakes",
+               "tasks", "contacts", "contacts_missing")
+DICT_FIELDS = ("scene", "completion", "goal_alignment")
+TEXT_FIELDS = ("task_summary", "performance_review", "viewpoint")
+TIME_FIELDS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
+               "recovered_at_s")
+
+
+def _times(x: dict, where: str, labels: dict) -> None:
+    """The time fields of one row or object as numbers: a number in text ("12.5", "12.5s") is that number, and a time
+    that is no number ("late", NaN) is null, listed in _schema_violations, so the row is kept and shown untimed."""
+    for k in TIME_FIELDS:
+        v = x.get(k)
+        if v is None or (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)):
+            continue
+        x[k] = me.number(v)
+        if x[k] is None:
+            labels.setdefault("_schema_violations", []).append(f"{where}: {k} {v!r} is not a time, kept untimed")
+
+
+def _rows(labels: dict, field: str, rows: list, kind=dict, what: str = "an object") -> list:
+    """The rows of a list field of this kind; each other row is recorded in _dropped."""
+    if all(isinstance(r, kind) for r in rows):
+        return rows
+    for i, r in enumerate(rows):
+        if not isinstance(r, kind):
+            _drop(labels, field, i, f"{json_kind(r)}, not {what}")
+    return [r for r in rows if isinstance(r, kind)]
+
+
+def typed_labels(labels: dict) -> dict:
+    """The reply with every field of the type the output format gives it. A list field that is not a list, an object
+    field that is not an object or a text field that is not text is left out, and so is a row of a list that is not
+    an object (a key event written as a plain string), an instruction variant that is not text and an entry of
+    scene.objects that is not an object; each is recorded in _dropped ({"field", "row", "why"}), which the board counts
+    and shows, and the rest of the reply is kept. Times are read as numbers (_times). A reply that keeps to the format
+    comes back unchanged, and running this again on its output changes nothing."""
+    for fields, kind, what in ((LIST_FIELDS + ("instruction_variants",), list, "a list"),
+                               (DICT_FIELDS, dict, "an object"), (TEXT_FIELDS, str, "text")):
+        for k in fields:
+            if k in labels and labels[k] is not None and not isinstance(labels[k], kind):
+                _drop(labels, k, None, f"{json_kind(labels[k])}, not {what}")
+                labels.pop(k)
+    if isinstance(labels.get("instruction_variants"), list):
+        labels["instruction_variants"] = _rows(labels, "instruction_variants", labels["instruction_variants"], str,
+                                               "text")
+    for k in LIST_FIELDS:
+        if isinstance(labels.get(k), list):
+            labels[k] = _rows(labels, k, labels[k])
+            for i, r in enumerate(labels[k]):
+                _times(r, f"{k} row {i}", labels)
+    for k in ("completion", "goal_alignment"):
+        if isinstance(labels.get(k), dict):
+            _times(labels[k], k, labels)
+    sc = labels.get("scene")
+    if isinstance(sc, dict) and sc.get("objects") is not None:
+        if not isinstance(sc["objects"], list):
+            _drop(labels, "scene.objects", None, f"{json_kind(sc['objects'])}, not a list")
+            sc.pop("objects")
+        else:
+            sc["objects"] = _rows(labels, "scene.objects", sc["objects"])
     return labels
 
 
@@ -373,16 +469,6 @@ def _served(resp: dict) -> dict:
     id that answered and the provider's system fingerprint (None when a field is absent)."""
     return {"provider_name": resp.get("provider"), "generation_id": resp.get("id"),
             "model_served": resp.get("model"), "system_fingerprint": resp.get("system_fingerprint")}
-
-
-def write_atomic(out_path: Path, result: dict) -> None:
-    """Write JSON through a temporary file, so a kill mid-write never leaves a truncated file that a resume would
-    take for a result."""
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_name(f".{out_path.name}.tmp")
-    tmp.write_text(json.dumps(result, indent=2))
-    os.replace(tmp, out_path)
 
 
 def get_keys() -> list[str]:
@@ -498,9 +584,22 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
             except Exception as e:
                 return ("fail", ep, f"{type(e).__name__}: {e}")
 
+    def no_reply(ep: Path, why: str | None) -> None:
+        """noreply_<episode>.json beside the outputs: why the episode got no reply (the spend cap reached, every key out
+        of credit, a request that could not be built or a call that failed), so the board shows the episode and says
+        why (board/to_board.py label_outputs). Removed once the episode has a reply; a dry run writes none."""
+        p = out_dir / f"noreply_{ep.name}.json"
+        if dry:
+            return
+        if why is None:
+            p.unlink(missing_ok=True)
+            return
+        write_atomic(p, {"episode_dir": str(ep), "model": label_kw.get("model"), "parse_ok": False, "no_reply": why})
+
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
         for f in as_completed([ex.submit(work, ep) for ep in todo]):
             status, ep, info = f.result()
+            no_reply(ep, None if status == "ok" else str(info))
             if status == "ok":
                 done += 1
                 total_cost += float(info or 0)

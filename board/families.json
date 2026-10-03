@@ -124,7 +124,26 @@
     "model_reply_cut_off",
     "part_not_labelled",
     "label_output_unreadable",
-    "no_part_labelled"
+    "no_part_labelled",
+    "model_no_reply",
+    "model_reply_not_shown"
+   ]
+  },
+  {
+   "slug": "label-format",
+   "list": "labelling",
+   "name": "Model reply broke the output format",
+   "reader_issues": [
+    "model_reply_off_schema",
+    "model_reply_fields_dropped"
+   ]
+  },
+  {
+   "slug": "label-times",
+   "list": "labelling",
+   "name": "Model times do not fit the episode",
+   "reader_issues": [
+    "model_steps_outside_episode"
    ]
   },
   {
@@ -148,6 +167,14 @@
     "camera_not_colour"
    ],
    "why": "a recording whose only camera is infrared, thermal or a mask has that as a property, not a fault in it, so it is shown and never counted"
+  },
+  {
+   "slug": "context-unreadable",
+   "list": "handling",
+   "name": "Episode details could not be read",
+   "reader_issues": [
+    "context_unreadable"
+   ]
   },
   {
    "slug": "out-of-view",

@@ -470,7 +470,35 @@ def test_spend_cap_stops_new_episodes(tmp_path, monkeypatch):
     monkeypatch.setattr(harness, "label_episode", fake_label)
     harness.run_batch(_dirs(tmp_path, 10), tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False,
                       max_spend=3.0)
-    assert len(list((tmp_path / "out").glob("*.json"))) == 3
+    assert len(list((tmp_path / "out").glob("episode_*.json"))) == 3
+    # every episode the cap stopped says so, for the board (board/to_board.py label_outputs)
+    left = sorted((tmp_path / "out").glob("noreply_episode_*.json"))
+    assert len(left) == 7 and json.loads(left[0].read_text())["no_reply"] == "spend cap $3.00 reached"
+
+
+def test_an_episode_that_got_no_reply_says_why_until_it_gets_one(tmp_path, monkeypatch):
+    """An episode whose request could not be built, or whose call failed, left no file, so the board never showed it.
+    Each gets noreply_<episode>.json with why; a later run that labels it removes it, and a dry run writes none."""
+    state = {"fail": True}
+
+    def fake_label(ep, out, *, api_key, **kw):
+        if state["fail"] and ep.name.endswith("1"):
+            raise ValueError("the request could not be built")
+        out.write_text(json.dumps({"parse_ok": True, "usage": {"est_cost_usd": 0.1}}))
+        return {"usage": {"est_cost_usd": 0.1}}
+
+    monkeypatch.setattr(harness, "label_episode", fake_label)
+    eps = _dirs(tmp_path, 3)
+    assert harness.run_batch(eps, tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False) == 1
+    rec = json.loads((tmp_path / "out" / "noreply_episode_000001.json").read_text())
+    assert rec["no_reply"] == "ValueError: the request could not be built" and rec["parse_ok"] is False
+    assert rec["episode_dir"] == str(eps[1])
+    state["fail"] = False
+    assert harness.run_batch(eps, tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False) == 0
+    assert not (tmp_path / "out" / "noreply_episode_000001.json").exists()
+    state["fail"] = True
+    harness.run_batch(eps, tmp_path / "dry", keys=["dry-run"], concurrency=1, force=True, dry_run=True)
+    assert not list((tmp_path / "dry").glob("noreply_*"))
 
 
 # ---------------------------------------------------------------- one episode, end to end, offline
@@ -485,13 +513,13 @@ def _packed_episode(tmp_path):
     ep = tmp_path / "episode_000007"
     ep.mkdir()
     T = 120
-    json.dump({v: {"packed": str(packs[v]), "base_s": 50 / 30, "n_frames": T} for v in packs},
-              open(ep / "sources.json", "w"))
+    (ep / "sources.json").write_text(json.dumps({v: {"packed": str(packs[v]), "base_s": 50 / 30, "n_frames": T}
+                                                for v in packs}))
     np.savez(ep / "state.npz", state=_state(T), action=_state(T))
-    json.dump({"dataset": "allenai/MolmoAct2-BimanualYAM-Dataset", "robot_type": "bi_yam_follower", "fps": 30,
-               "task_label": ["Spell out Ai2"], "instruction": "Spell AI2.", "n_state_frames": T,
-               "profile": "teleop_arms", "state_kind": "joints", "cameras": {"exo": {"width": 64, "height": 36}}},
-              open(ep / "context.json", "w"))
+    (ep / "context.json").write_text(json.dumps({
+        "dataset": "allenai/MolmoAct2-BimanualYAM-Dataset", "robot_type": "bi_yam_follower", "fps": 30,
+        "task_label": ["Spell out Ai2"], "instruction": "Spell AI2.", "n_state_frames": T, "profile": "teleop_arms",
+        "state_kind": "joints", "cameras": {"exo": {"width": 64, "height": 36}}}))
     return ep, T
 
 
@@ -663,10 +691,56 @@ def test_timeline_rows_convert_and_malformed_rows_fail():
     assert not ok and labels["_raw"] == "not json" and labels["_parse_error"]
     bad = harness.normalize_timeline({"timeline": [[0.0, 1.0, "left", "reach", "cup", None, None, "fast", 0.1, None]]})
     assert bad["_schema_violations"] == ["timeline row 0: contribution 'fast'"]     # counted, the answer kept
-    with pytest.raises(ValueError):
-        harness.normalize_timeline({"timeline": [[0.0, 1.0, "left"]]})             # a shifted row is refused
-    with pytest.raises(ValueError):
-        harness.normalize_timeline({"timeline": [["0", 1.0, "left", "reach", "cup", None, None, "idle", 0.1, None]]})
+    # a shifted row, or one whose time is no number, is left out and counted; the rest of the reply is kept
+    short = harness.normalize_timeline({"timeline": [
+        [0.0, 1.0, "left"], [0.0, 1.5, "left", "reach", "cup", None, None, "idle", 0.1, None]]})
+    assert [s["action"] for s in short["timeline"]] == ["reach"]
+    assert short["_dropped"] == [{"field": "timeline", "row": 0, "why": "it has 3 values for 10 columns"}]
+    late = harness.normalize_timeline({"timeline": [["late", 1.0, "left", "reach", "cup", None, None, "idle", 0.1,
+                                                     None]]})
+    assert late["timeline"] == [] and late["_dropped"][0]["why"] == "its start_s is not a number ('late')"
+
+
+def test_one_bad_row_or_field_never_costs_the_whole_reply():
+    """One string time in a timeline row made the whole reply unparsed, and a parsed reply with a field of the wrong
+    type (a timeline object, key events as text, a task summary list) crashed the board build or the stitch. A time
+    written as text that reads as a number is that number; a row or field of the wrong type is left out of that reply
+    and counted in _dropped, and everything else is kept. A reply that keeps to the format is unchanged."""
+    good = {"timeline_columns": harness.TIMELINE_COLUMNS,
+            "timeline": [[0.0, 1.5, "left", "reach", "cup", None, None, "advancing", 0.1, None],
+                         ["1.5", "3.0", "left", "lift", "cup", None, None, "advancing", "0.5", None],
+                         ["abc", 4.0, "left", "drop", "cup", None, None, "wasteful", 0.5, None]],
+            "task_summary": ["a", "b"], "key_events": [{"t_s": "2.5s", "label": "lifted"}, "goal reached",
+                                                        {"t_s": "late", "label": "untimed"}],
+            "completion": {"task_completed": "success", "completed_at_s": "3"}, "performance_review": 3,
+            "scene": {"objects": ["cup", {"name": "plate"}]}, "data_issues": {"issue": "x"},
+            "instruction_variants": ["lift the cup", 7]}
+    labels, ok = harness.parse_response(json.dumps(good))
+    assert ok
+    assert [(s["start_s"], s["end_s"], s["progress"]) for s in labels["timeline"]] == [(0.0, 1.5, 0.1),
+                                                                                      (1.5, 3.0, 0.5)]
+    assert [(k["t_s"], k["label"]) for k in labels["key_events"]] == [(2.5, "lifted"), (None, "untimed")]
+    assert labels["completion"]["completed_at_s"] == 3.0
+    assert "task_summary" not in labels and "performance_review" not in labels and "data_issues" not in labels
+    assert labels["scene"]["objects"] == [{"name": "plate"}] and labels["instruction_variants"] == ["lift the cup"]
+    assert sorted((d["field"], d.get("row", -1)) for d in labels["_dropped"]) == [
+        ("data_issues", -1), ("instruction_variants", 1), ("key_events", 1), ("performance_review", -1),
+        ("scene.objects", 0), ("task_summary", -1), ("timeline", 2)]
+    # each reason names the value in the output format's words, never Python's ("a str", "a int")
+    why = {(d["field"], d.get("row", -1)): d["why"] for d in labels["_dropped"]}
+    assert why[("performance_review", -1)] == "a number, not text" and why[("key_events", 1)] == "text, not an object"
+    assert why[("task_summary", -1)] == "a list, not text" and why[("data_issues", -1)] == "an object, not a list"
+    assert "key_events row 1: t_s 'late' is not a time, kept untimed" in labels["_schema_violations"]
+    # running it again on its own output changes nothing, and a reply that keeps to the format comes back unchanged
+    assert harness.typed_labels(json.loads(json.dumps(labels))) == labels
+    clean = {"timeline": [{"start_s": 0.0, "end_s": 1.0, "action": "reach", "progress": 0.1}],
+             "key_events": [{"t_s": 1, "label": "x"}], "completion": {"task_completed": "success",
+                                                                    "completed_at_s": None},
+             "task_summary": "reach", "scene": {"objects": [{"name": "cup"}], "setting": "a table"}}
+    assert harness.parse_response(json.dumps(clean)) == (clean, True)
+    # a reply that is JSON but not an object is a reply that did not parse
+    labels, ok = harness.parse_response("[1, 2]")
+    assert not ok and "not an object" in labels["_parse_error"]
 
 
 # ---------------------------------------------------------------- run folders (label/run.py), git and harness faked

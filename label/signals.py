@@ -120,6 +120,38 @@ def _any_finite(a: np.ndarray) -> bool:
     return any(bool(np.isfinite(a[i:j]).any()) for i, j in _row_chunks(a))
 
 
+def reading_gaps(a: np.ndarray) -> tuple[int, int]:
+    """Counts of wholly missing and partially read frames. A finite value is a reading, so a frame with some
+    finite values remains distinct from one with none on the prompt, board and checks."""
+    missing = partial = 0
+    for i, j in _row_chunks(a):
+        fin = np.isfinite(a[i:j])
+        any_read = fin.any(axis=1)
+        missing += int((~any_read).sum())
+        partial += int((any_read & ~fin.all(axis=1)).sum())
+    return missing, partial
+
+
+def gap_words(a: np.ndarray) -> str:
+    """The recording gaps, with partial values named separately from frames with no reading."""
+    missing, partial = reading_gaps(a)
+    return "; ".join(f"{words} at {count} of {len(a)} frames" for count, words in
+                     ((missing, "no reading"), (partial, "partial reading")) if count)
+
+
+def finite_range(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each value's finite range, NaN for a value with no reading. Empty columns never enter a NaN reduction, and
+    row chunks bound memory when a signal has many values."""
+    lo, hi = np.full(a.shape[1], np.inf), np.full(a.shape[1], -np.inf)
+    for _, c in _rows64(a):
+        fin = np.isfinite(c)
+        lo = np.minimum(lo, np.min(c, axis=0, where=fin, initial=np.inf))
+        hi = np.maximum(hi, np.max(c, axis=0, where=fin, initial=-np.inf))
+    lo[~np.isfinite(lo)] = np.nan
+    hi[~np.isfinite(hi)] = np.nan
+    return lo, hi
+
+
 def per_value(name: str, d: int, shape=None, names=None) -> bool:
     """Whether a signal of d values per frame gets one row per value at each instant (JOINT_LIKE above)."""
     if d <= SMALL:
@@ -142,6 +174,20 @@ def names_joints_or_state(name: str) -> bool:
     words = tokens(name)
     return ((_names_word(name, ("joint", "qpos")) or bool(words) and words[-1] in ("state", "states"))
             and not _names_word(name, COMMAND_WORDS))
+
+
+def names_scalar_observed_state(name: str) -> bool:
+    """A scalar can disprove absent arm state only when its name identifies a joint or observed arm state.
+    Sensor readings, bookkeeping and commands do not establish that state, even under observation.*."""
+    from prepare.formats import TOUCH_WORDS, _names_word, tokens
+    if not names_joints_or_state(name) or _names_word(name, TOUCH_WORDS + (
+            "torque", "clock", "time", "timestamp",
+            "battery", "estop", "emergency", "health", "status", "mode", "power", "temperature", "voltage",
+            "current")):
+        return False
+    words = tokens(name)
+    return (_names_word(name, ("joint", "qpos")) or len(words) > 1 and words[-1] in ("state", "states")
+            and _names_word(words[-2], ("observation", "arm", "robot", "gripper", "leader", "follower")))
 
 
 def _num(x: float) -> str:
@@ -425,17 +471,31 @@ def active_spans(a: np.ndarray, t: np.ndarray, rest=None, swing=None) -> list[tu
 MOVING_MIN = 10.0     # a value moves when its range is at least this many times its typical step between readings
 
 
-def _columns(a) -> np.ndarray:
-    """a as frames by values: a vector is one value, further axes (a pressure map) are flattened."""
+def columns(a) -> np.ndarray:
+    """a as frames by values: a vector is one value per frame, further axes (a pressure map) are flattened. The readers
+    write every signal this way; label/episode.py load applies it too, so a signal stored as a bare vector is read as
+    one column by the prompt and the checks rather than breaking them."""
     a = _float(a)
     return a.reshape(a.shape[0], int(np.prod(a.shape[1:])))
+
+
+def pad_rows(a: np.ndarray, n: int) -> np.ndarray:
+    """a (frames by values) with no reading (NaN) past its last row up to n frames, as a reader writes a signal that
+    ends inside the footage: a signal whose rows stop short of the episode is read over every frame, so the prompt
+    names the frames it has no reading at, and a step that lines every signal up frame by frame (quiet_spans) never
+    breaks on it. A signal with no rows (named as having none) or with at least n rows is kept as it is."""
+    if not 0 < len(a) < n:
+        return a
+    out = np.full((n, a.shape[1]), np.nan, dtype=a.dtype if np.issubdtype(a.dtype, np.floating) else np.float64)
+    out[:len(a)] = a
+    return out
 
 
 def _range_and_step(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Per value of a (frames by values, any further axes flattened): its range, and its typical step, the median of
     its nonzero absolute steps between consecutive readings (a pair with a missing reading is no step). NaN where a
     value has no reading or never changes."""
-    a = _columns(a)
+    a = columns(a)
     if len(a) == 0:
         return np.full(a.shape[1], np.nan), np.full(a.shape[1], np.nan)
     rs, steps = [], []
@@ -473,7 +533,7 @@ def quiet_spans(arrs: dict, need: int) -> list[tuple[int, int]]:
     from label import state as ms
     cols, tols = [], []
     for a in arrs.values():
-        a = _columns(a)
+        a = columns(a)
         r, step = _range_and_step(a)
         for j in np.flatnonzero(_score(r, step) >= MOVING_MIN):
             cols.append(a[:, j])
@@ -548,10 +608,9 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     head = f"  {name} ({what})"
     if not np.isfinite(a).any():
         return f"{head}: no reading"
-    gaps = int(np.isnan(a).all(axis=1).sum())
-    tail = f"; no reading at {gaps} of {len(a)} frames" if gaps else ""
-    with np.errstate(all="ignore"):
-        lo, hi = np.nanmin(a, axis=0), np.nanmax(a, axis=0)
+    gaps = gap_words(a)
+    tail = f"; {gaps}" if gaps else ""
+    lo, hi = finite_range(a)
     if d > PER_VALUE_MAX:
         if (hi == lo).all():
             return f"{head}: every value constant throughout{tail}"

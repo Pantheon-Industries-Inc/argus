@@ -85,7 +85,7 @@ def test_convert_a_reply_that_breaks_the_schema():
     assert [(k["t_s"], k["label"]) for k in d["key_events"]] == [(None, "no number"), (2.0, "kept")]
     assert [i["issue"] for i in d["data_issues"]] == ["kept"] and d["tasks"][0]["outcome"] == ""
     assert d["objects"] == [{"name": "plate", "color": None}]
-    assert d["_off_schema"] == {"key_events": 1, "data_issues": 1}
+    assert d["_off_schema"] == {"key_events": 1, "data_issues": 1, "scene.objects": 1}
     assert "_off_schema" not in to_board.convert(_output("episode_000009"), "demo")
 
 
@@ -933,9 +933,10 @@ READER_ISSUE_KINDS = {
              "signal_bad_cells", "signal_gap", "signal_not_finite", "signal_partial_span", "signal_alignment_assumed",
              "state_filled", "state_unaligned", "state_partial", "table_short", "table_long", "task_files_disagree"],
     "labelling": ["model_reply_unparsed", "model_reply_cut_off", "part_not_labelled", "label_output_unreadable",
-                  "no_part_labelled"],
+                  "no_part_labelled", "model_no_reply", "model_reply_not_shown", "model_reply_off_schema",
+                  "model_reply_fields_dropped"],
     "handling": ["table_downsampled", "signal_summarised", "camera_not_colour", "depth_clip_failed",
-                 "depth_clip_timing", "camera_offset"],
+                 "depth_clip_timing", "camera_offset", "context_unreadable"],
 }
 
 
@@ -1084,3 +1085,364 @@ def test_the_video_menu_opens_from_the_row_of_buttons_on_a_narrow_screen():
     assert ".vd { position: static; }" in narrow
     assert ".ep-head .ep-head-acts { position: relative;" in narrow
     assert ".vd-menu { right: auto; left: 0; }" in narrow
+
+
+def _strict(text: str):
+    """JSON as a browser's JSON.parse reads it: NaN and Infinity are not JSON."""
+    def no(c):
+        raise ValueError(f"{c} is not JSON")
+    return json.loads(text, parse_constant=no)
+
+
+def test_a_time_reads_as_a_number_only_when_written_as_one():
+    """number() read "1_000" as 1000 and Arabic Indic digits as numbers (Python's float accepts both), and "-0" as
+    -0.0, which a prompt prints as "-0.0s". A time in text is a number only in plain ASCII digits, with a sign, a point
+    and an exponent; negative zero is zero."""
+    from label.episode import number
+    assert number("12.5") == 12.5 and number(" 12.5 s ") == 12.5 and number("-3") == -3.0 and number("1e2") == 100.0
+    assert number(".5") == 0.5 and number("+2.") == 2.0 and number(7) == 7.0
+    for bad in ("1_000", "\u0661\u0662", "\uff11", "1,5", "1:30", "nan", "inf", "", "s", True, None, float("nan")):
+        assert number(bad) is None, bad
+    for z in ("-0", "-0.0", -0.0):
+        assert number(z) == 0.0 and str(number(z)) == "0.0", z
+    assert number(10 ** 400) is None and number(-(10 ** 400)) is None
+
+
+def test_a_time_that_rounds_to_zero_is_said_as_zero():
+    """A dataset label at -0.04 s was told to the model as "-0.0s", a time before the episode. A time is said to the
+    tenth with no negative zero."""
+    from label.episode import tenths
+    assert tenths(-0.04) == "0.0s" and tenths(-0.06) == "-0.1s" and tenths(12.34) == "12.3s"
+
+
+def test_a_number_that_is_not_finite_never_stops_an_episode_loading(tmp_path):
+    """A NaN in a reply (a step's time, the outcome's time) or in a check (a correlation over a NaN state row) was
+    written as NaN, which the page cannot parse, so the episode never loaded. Every board file is written as JSON a
+    browser reads, a time that is not finite is untimed, and every other non finite number is null."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "full",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    ctx = json.loads((eps / "episode_000000" / "context.json").read_text())
+    ctx["stream_pairing"] = {"left_vs_left": float("nan"), "crossed": False}
+    (eps / "episode_000000" / "context.json").write_text(json.dumps(ctx))
+    out = _output("episode_000000", completion={"task_completed": "success", "completed_at_s": float("nan")})
+    out["episode_dir"] = str(eps / "episode_000000")
+    out["labels"]["timeline"][0]["start_s"] = float("nan")
+    out["labels"]["key_events"][0]["t_s"] = float("inf")
+    (run / "out" / "episode_000000.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    d = _strict((board / "qa" / "episode_000000.json").read_text())
+    assert d["event_labels"][0]["t_s"] is None and d["key_events"][0]["t_s"] is None
+    assert d["completion"]["completed_at_s"] is None
+    assert d["dataset_checks"]["stream_pairing"]["left_vs_left"] is None
+    assert to_board.dumps({"a": [float("nan"), 1.5, {"b": float("-inf")}]}) == '{"a": [null, 1.5, {"b": null}]}'
+
+
+def test_every_prepared_episode_is_on_the_board_and_says_why_it_has_no_labels(tmp_path):
+    """An episode with no reply was missing from the board: one the spend cap stopped, one whose request could not be
+    built, one a stopped run never reached, and a job whose replies all failed built an empty board. Every prepared
+    episode is on the board with its footage, checks and sensors; one with no reply has a label failed issue saying why,
+    which is not counted. Nothing is charged for it."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    (eps / "episode_000002").mkdir()
+    (eps / "episode_000002" / "context.json").write_text((eps / "episode_000000" / "context.json").read_text())
+    out = _output("episode_000000")
+    out["episode_dir"] = str(eps / "episode_000000")
+    (run / "out" / "episode_000000.json").write_text(json.dumps(out))
+    (run / "out" / "noreply_episode_000001.json").write_text(json.dumps({
+        "episode_dir": str(eps / "episode_000001"), "parse_ok": False, "no_reply": "spend cap $20.00 reached"}))
+    board = tmp_path / "board"
+    board.mkdir()
+    entry = rules.own_data_entry("demo", str(run), str(eps), "teleop_arms")
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [entry]}))
+    built = board_build.build(board)
+    assert built["counts"]["demo"]["episodes"] == 3
+    fam = Families()
+    for name, why in (("episode_000001", "spend cap $20.00 reached"),
+                      ("episode_000002", "the labelling run recorded no reply for it")):
+        d = json.loads((board / "qa" / f"{name}.json").read_text())
+        assert d["_label_failed"] == {"status": "no_reply", "why": why}
+        assert d["_meta"]["episode_id"] == name and d["duration_s"] == 10.0 and "stream_pairing" in d["dataset_checks"]
+        issue = next(x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "model_no_reply")
+        assert why in issue["what"] and issue["family"] == "label-failed"
+        assert "label-failed" in fam.classify(d)["not_counted"] and not fam.classify(d)["counted"].get("label-failed")
+        assert not (d.get("_usage") or {}).get("est_cost_usd")
+    ok = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert "_label_failed" not in ok and not any(x["kind"] == "model_no_reply"
+                                                 for x in ok["dataset_checks"].get("reader_issues") or [])
+    # a board whose run labelled a chosen few of a larger folder lists no episode the run never sent: only the one with
+    # a reply and the one the harness recorded as given none
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps), "rules": rules.rules_for("teleop_arms")}]}))
+    assert board_build.build(board)["counts"]["demo"]["episodes"] == 2
+    assert sorted(p.name for p in (board / "qa").glob("*.json")) == ["episode_000000.json", "episode_000001.json"]
+
+
+def test_a_reply_that_breaks_the_output_format_is_flagged_and_never_stops_the_build(tmp_path):
+    """A reply missing the schema (only a task summary) read as labelled with no flag; rows written as plain strings
+    were counted only in _off_schema, which nothing showed; and one parsed reply with a field of the wrong type (a
+    timeline object, a tasks string) crashed the whole build. Each reply keeps what it gives; one with no timeline is a
+    label failed issue naming what it left out, one with rows or fields left out says which, and an episode the board
+    still cannot read is kept with its reply and the error. The build goes on for every other episode."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = tmp_path / "episodes" / "demo"
+    for i in range(4):
+        e = eps / f"episode_{i:06d}"
+        e.mkdir(parents=True)
+        (e / "context.json").write_text(json.dumps({"dataset": "x", "profile": "teleop_arms", "fps": 30,
+                                                    "n_state_frames": 300}))
+    replies = {"episode_000000": {"task_summary": "only a summary"},
+               "episode_000001": {**_output("x")["labels"], "key_events": ["goal reached", {"t_s": 1.0, "label": "ok"}],
+                                  "tasks": "pour"},
+               "episode_000002": {"timeline": {"a": 1}, "task_summary": "x"},
+               "episode_000003": _output("x")["labels"]}
+    for name, labels in replies.items():
+        out = _output(name)
+        out["episode_dir"], out["labels"] = str(eps / name), labels
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+
+    def issues(name):
+        d = json.loads((board / "qa" / f"{name}.json").read_text())
+        return d, {x["kind"]: x for x in (d.get("dataset_checks") or {}).get("reader_issues") or []}
+    d, iss = issues("episode_000000")
+    assert d["episode_prompt"] == "only a summary" and d["event_labels"] == []
+    assert iss["model_reply_off_schema"]["family"] == "label-format"
+    assert "leaves out the key events, data issues and operator mistakes" in iss["model_reply_off_schema"]["what"]
+    d, iss = issues("episode_000001")
+    assert [k["label"] for k in d["key_events"]] == ["ok"] and d["tasks"] == [] and len(d["event_labels"]) == 3
+    assert d["_off_schema"] == {"key_events": 1, "tasks": 1}
+    assert iss["model_reply_fields_dropped"]["family"] == "label-format"
+    assert "1 row of the key events and the tasks (text, not a list) are" in iss["model_reply_fields_dropped"]["what"]
+    d, iss = issues("episode_000002")
+    assert d["event_labels"] == [] and "model_reply_off_schema" in iss and "model_reply_fields_dropped" not in iss
+    d, iss = issues("episode_000003")
+    assert not iss and "_off_schema" not in d
+    fam = Families()
+    assert fam.list_of("label-format") == "labelling"
+
+
+def test_a_reply_that_breaks_the_format_is_told_in_plain_words_once():
+    """The sentences for a reply that broke the output format used a plural verb for one field ("timeline (an object,
+    not a list) are left out"), listed what a reply left out without an "and", named fields by their code names
+    (key_events), and a timeline given as an object was reported twice, once as left out although the reply gave one.
+    Each field is named in plain words, once, with a verb that agrees, and every list reads as a sentence. A reply with
+    no timeline broke the format; it may still give labels, so it is on the format family, never "gave no labels"."""
+    from board.build import off_schema
+    good = _output("x")["labels"]
+
+    def what(labels):
+        return {x["kind"]: x["what"] for x in off_schema({"parse_ok": True, "labels": labels})}
+    assert what({"task_summary": "only a summary"}) == {"model_reply_off_schema": (
+        "The model's reply has no timeline, so this episode has no steps. It leaves out the key events, data issues "
+        "and operator mistakes, and gives only the task summary; what it gives is shown.")}
+    assert what({}) == {"model_reply_off_schema": (
+        "The model's reply has no timeline, so this episode has no steps. It leaves out the task summary, key events, "
+        "data issues and operator mistakes, and gives nothing else.")}
+    # a field given as null is not given, and the timeline is never among what it gives
+    assert what({"timeline": None, "task_summary": "x", "key_events": [], "data_issues": None,
+                 "operator_mistakes": []}) == {"model_reply_off_schema": (
+        "The model's reply has no timeline, so this episode has no steps. It leaves out the data issues, and gives "
+        "only the key events, operator mistakes and task summary; what it gives is shown.")}
+    # every field given in the wrong form: none of it is in the format, which the other issue names
+    w = what({"timeline": {"a": 1}, "task_summary": ["a"], "key_events": "x", "data_issues": 3,
+              "operator_mistakes": {}})
+    assert w["model_reply_off_schema"] == ("The model's reply gives its timeline as an object, not a list, so this "
+                                           "episode has no steps. Nothing else it gives keeps to the output format.")
+    assert what({"timeline": {"a": 1}, "task_summary": "x", "key_events": [], "data_issues": [],
+                 "operator_mistakes": []}) == {"model_reply_off_schema": (
+        "The model's reply gives its timeline as an object, not a list, so this episode has no steps. It gives only "
+        "the data issues, key events, operator mistakes and task summary; what it gives is shown.")}
+    lead = "The model's reply broke the output format, so "
+    tail = " left out of what is shown; the rest of its labels are shown."
+    for labels, said in (({**good, "key_events": "goal reached"}, "the key events (text, not a list) are"),
+                         ({**good, "task_summary": ["a"]}, "the task summary (a list, not text) is"),
+                         ({**good, "key_events": ["goal reached", {"t_s": 1.0, "label": "ok"}]},
+                          "1 row of the key events is"),
+                         ({**good, "key_events": ["a", "b"], "tasks": "pour"},
+                          "2 rows of the key events and the tasks (text, not a list) are"),
+                         ({**good, "scene": {"objects": ["cup"]}}, "1 row of the scene objects is"),
+                         ({**good, "contacts_missing": "none"}, "the missing contacts (text, not a list) are"),
+                         ({**good, "recovery": {}}, "the recovery (an object, not a list) is"),
+                         ({**good, "scene_graph": 3}, "the scene graph (a number, not a list) is")):
+        assert what(labels) == {"model_reply_fields_dropped": lead + said + tail}, labels
+    fam = Families()
+    assert fam.reader_family("model_reply_off_schema") == "label-format"
+    assert fam.catalog()["label-failed"]["name"] == "Model reply gave no labels"
+    assert fam.catalog()["label-times"]["name"] == "Model times do not fit the episode"
+
+
+def test_an_episode_the_board_cannot_read_is_kept_with_its_reply_and_the_error(tmp_path, monkeypatch):
+    """Whatever still goes wrong building one episode's file keeps that episode, with its reply as text, the error and a
+    label failed issue, and every other episode is built as usual."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    for name in ("episode_000000", "episode_000001"):
+        out = _output(name)
+        out["episode_dir"] = str(eps / name)
+        if name == "episode_000001":
+            out["labels"]["performance_review"] = "boom"
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    real = board_build.label_consistency.check
+
+    def check(d, dur):
+        if d.get("performance_review") == "boom":
+            raise KeyError("a field the check did not expect")
+        return real(d, dur)
+    monkeypatch.setattr(board_build.label_consistency, "check", check)
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    bad = json.loads((board / "qa" / "episode_000001.json").read_text())
+    assert bad["_label_failed"]["status"] == "not_shown" and "KeyError" in bad["_label_failed"]["error"]
+    assert '"performance_review": "boom"' in bad["_label_failed"]["raw_head"] and bad["duration_s"] == 10.0
+    assert any(x["kind"] == "model_reply_not_shown" for x in bad["dataset_checks"]["reader_issues"])
+    good = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert "_label_failed" not in good and good["completion"]["task_completed"] == "success"
+
+
+def test_an_episode_whose_context_does_not_read_keeps_its_labels_and_never_stops_the_build(tmp_path):
+    """A context.json cut mid write, or one whose capture record is not an object, stopped the whole board, and the
+    fallback blamed the model's reply. The context is read once; one the board cannot use leaves its episode with its
+    labels and an issue saying the episode's details did not read and why, the reply is not blamed, and every other
+    episode is built as usual."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = tmp_path / "episodes" / "demo"
+    contexts = {"episode_000000": '{"fps": 30, "cut',
+                "episode_000001": json.dumps({"profile": "teleop_arms", "fps": 30, "n_state_frames": 300,
+                                              "capture_qc": ["not an object"]}),
+                "episode_000002": json.dumps({"profile": "teleop_arms", "fps": 30, "n_state_frames": 300})}
+    for name, text in contexts.items():
+        (eps / name).mkdir(parents=True)
+        (eps / name / "context.json").write_text(text)
+        out = _output(name)
+        out["episode_dir"] = str(eps / name)
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    for name, error in (("episode_000000", "JSONDecodeError"), ("episode_000001", "AttributeError")):
+        d = json.loads((board / "qa" / f"{name}.json").read_text())
+        assert "_label_failed" not in d and d["completion"]["task_completed"] == "success", d
+        (iss,) = d["dataset_checks"]["reader_issues"]
+        assert iss["kind"] == "context_unreadable" and error in iss["error"] and error not in iss["what"], iss
+        assert iss["what"] == ("This episode's recorded details (its length, checks and the reader's notes) could not "
+                               "be read, so they are not shown; the model's reply is shown as it came."), iss
+        assert Families().catalog()["context-unreadable"]["name"] == "Episode details could not be read"
+        assert iss["family"] == "context-unreadable" and Families().list_of(iss["family"]) == "handling"
+    ok = json.loads((board / "qa" / "episode_000002.json").read_text())
+    assert ok["duration_s"] == 10.0 and not (ok.get("dataset_checks") or {}).get("reader_issues")
+
+
+def test_the_checks_write_a_context_whole_or_not_at_all(tmp_path, monkeypatch):
+    """The capture checks, stream pairing and the sensor checks rewrote context.json in place, so a write stopped part
+    way (the process killed) left a file cut mid write, which then stopped everything that reads the episode. Each
+    writes a temporary file beside it and replaces context.json with it, so a stopped write leaves the context as it
+    was."""
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+    from checks import capture_qc, sensors, stream_pairing
+    ep = tmp_path / "eps" / "episode_000000"
+    ep.mkdir(parents=True)
+    before = json.dumps({"fps": 30, "profile": "teleop_arms"})
+    (ep / "context.json").write_text(before)
+    real = Path.write_text
+
+    def stops(self, text, *a, **k):
+        real(self, text[: len(text) // 2], *a, **k)
+        raise KeyboardInterrupt("killed mid write")
+    for mod, argv in ((capture_qc, ["--force"]), (stream_pairing, ["--force"]), (stream_pairing, ["--jumps"]),
+                      (sensors, ["--force"])):
+        monkeypatch.setattr(mod, "ProcessPoolExecutor", ThreadPoolExecutor)
+        monkeypatch.setattr(sys, "argv", ["main", *argv, str(tmp_path / "eps")])
+        monkeypatch.setattr(Path, "write_text", stops)
+        try:
+            mod.main()
+        except KeyboardInterrupt:
+            pass
+        monkeypatch.setattr(Path, "write_text", real)
+        assert (ep / "context.json").read_text() == before, mod.__name__
+
+
+def test_steps_past_the_episode_end_are_kept_and_flagged(tmp_path):
+    """Steps past an 8 s episode's end stretched its timeline to 208 s with no flag. They are kept as given, flagged as
+    a labelling issue (not counted) naming how many lie past the end, start before it and end before they start, and
+    how many key events lie outside it, every time the page draws at the episode's edge, and the page draws the
+    timeline to the episode's length. A step ending within half a second of the end is a rounding."""
+    run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "review",
+                                              "status": "done", "slice": "demo"}))
+    eps = _episodes(tmp_path / "episodes" / "demo")
+    for name, extra in (("episode_000000", [{"start_s": 9.0, "end_s": 10.3, "action": "rounding"}]),
+                        ("episode_000001", [{"start_s": 108.0, "end_s": 208.0, "action": "past the end"},
+                                            {"start_s": -3.0, "end_s": 1.0, "action": "early"},
+                                            {"start_s": 5.0, "end_s": 2.0, "action": "backwards"}])):
+        out = _output(name)
+        out["episode_dir"] = str(eps / name)
+        out["labels"]["timeline"] += extra
+        if extra[0]["action"] == "past the end":
+            out["labels"]["key_events"].append({"t_s": 58.0, "label": "late"})
+        (run / "out" / f"{name}.json").write_text(json.dumps(out))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "demo", "datasets": [
+        {"dataset": "demo", "run": str(run), "episodes": str(eps)}]}))
+    board_build.build(board)
+    ok = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert not any(x["kind"] == "model_steps_outside_episode" for x in ok["dataset_checks"].get("reader_issues") or [])
+    d = json.loads((board / "qa" / "episode_000001.json").read_text())
+    assert [e["verb_class"] for e in d["event_labels"]][-3:] == ["past the end", "early", "backwards"]
+    (iss,) = [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "model_steps_outside_episode"]
+    assert iss["family"] == "label-times" and Families().list_of("label-times") == "labelling"
+    assert ("1 of its 6 steps lies past the episode's end at 10.0 s, 1 starts before the episode does, 1 ends before "
+            "it starts and 1 of its 3 key events lies outside the episode") in iss["what"]
+    assert iss["what"].endswith("They are kept as given, and the timeline is drawn to the episode's length with "
+                                "the times outside it at its edge.")
+
+
+def test_times_that_fit_the_episode_but_not_their_order_or_part_are_never_said_to_be_drawn_at_its_edge():
+    """A step that ends before it starts, and a part's time outside its own part but inside the episode, were said
+    to be drawn at the episode's edge, which they are not; parts were listed with commas that ran into the commas of
+    their spans; a length that is not a number crashed nothing but judged every time against it."""
+    from board.build import steps_outside
+    d = {"duration_s": 10.0, "event_labels": [{"t_s": 5.0, "end_s": 2.0}], "key_events": []}
+    (iss,) = steps_outside(d)
+    assert iss["what"] == ("The model's timeline does not fit the episode: 1 ends before it starts. They are kept as "
+                           "given.")
+    r = {"stitched": {"outside_part": [{"part": 2, "t0_s": 3.0, "t1_s": 6.0, "steps": 1},
+                                       {"part": 3, "t0_s": 6.0, "t1_s": 9.0, "steps": 2, "key_events": 1}]}}
+    (iss,) = steps_outside({"duration_s": 10.0, "event_labels": [], "key_events": []}, r)
+    assert iss["what"] == ("The model's timeline does not fit the episode: 1 step of part 2 lies outside that part's "
+                           "footage, from 3.0 s to 6.0 s; and 2 steps and 1 key event of part 3 lie outside that "
+                           "part's footage, from 6.0 s to 9.0 s. They are kept as given.")
+    assert steps_outside({"duration_s": float("nan"), "event_labels": [{"t_s": 50.0}], "key_events": []}) == []
+    page = (REPO / "board" / "serve.py").read_text()
+    assert "duration = d.duration_s > 0 && !d.duration_estimated ? d.duration_s" in page

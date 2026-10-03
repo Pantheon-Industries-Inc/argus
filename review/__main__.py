@@ -12,7 +12,8 @@ uploaded to Data Review get the same requests and the same board:
               a report of what was read, used and left out (JOB/report.json)
   2. checks   crossed camera streams, recorded jumps and flat gripper channels where the data has arm state
               (checks.stream_pairing), sped-up recordings measured against their neighbours in the same folder
-              (checks.timebase measure_folder), and the capture checks (checks.capture_qc)
+              (checks.timebase measure_folder), the capture checks (checks.capture_qc), and the checks on the
+              other signals and depth streams where the data has them (checks.sensors)
   3. clips    browser-playable copies of each camera for the board (python -m board clips)
   4. dry run  every request built exactly as it would be sent, free. A recording longer than label/pieces.py's
               PIECE_MAX_S is labelled in parts cut at still moments
@@ -108,7 +109,7 @@ def main() -> int:
     from board import build as build_board
     from board import clips as board_clips
     from board import rules as board_rules
-    from checks import timebase
+    from checks import capture_qc, timebase
     from label import pieces
     from prepare import formats
 
@@ -135,7 +136,15 @@ def main() -> int:
             run_step(job, f"checks{''.join(flag).replace('--', '_')}",
                      [PY, "-m", "checks.stream_pairing", *flag, "--jobs", jobs, str(eps)], env)
         timebase.measure_folder(eps)
-    run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env)
+    # EXIT_FAILED is some episode's capture checks not running (its worker died twice): that episode's record has every
+    # check errored with the error, which the board shows, and the other episodes go on
+    if run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env,
+                ok_codes=(0, capture_qc.EXIT_FAILED)):
+        print("capture checks could not run on some episodes; each is shown with its checks errored "
+              f"(log {job / 'logs' / 'checks_capture.log'})", flush=True)
+    if any((eps / e["episode_id"] / "signals.npz").exists() or (eps / e["episode_id"] / "depth.json").exists()
+           for e in rep["episodes"]):
+        run_step(job, "checks_sensors", [PY, "-m", "checks.sensors", "--jobs", jobs, str(eps)], env)
     # exit 1 is board clips saying no episode came out at all (clips/failed.json lists why), told below as the upload's
     # own reason; any other failure of the step is still an error. An episode with a camera that decodes is kept, and
     # what was wrong with its other cameras goes into the report's notes
