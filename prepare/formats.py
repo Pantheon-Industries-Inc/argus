@@ -3561,11 +3561,13 @@ NAME_SETS_MAX = 8
 
 class NameSets(list):
     """One channel's (or one field's) name sets [(names, width)] in the order first seen (name_group), with each set's
-    place by its frozenset of names, and overflow once its messages named more than NAME_SETS_MAX sets."""
+    place by its frozenset of names (an unnamed set's by its width), how many sets are named, and overflow once its
+    messages named more than NAME_SETS_MAX sets. Unnamed widths never count toward that limit."""
 
     def __init__(self):
         super().__init__()
         self.index: dict = {}
+        self.named = 0
         self.overflow = False
 
 
@@ -3580,9 +3582,10 @@ def name_group(groups: NameSets, names, vals: list) -> tuple[int | None, list]:
         key = frozenset(names)
         i = groups.index.get(key)
         if i is None:
-            if len(groups.index) >= NAME_SETS_MAX:
+            if groups.named >= NAME_SETS_MAX:
                 groups.overflow = True
                 return None, vals
+            groups.named += 1
             groups.index[key] = i = len(groups)
             groups.append((list(names), n))
             return i, vals

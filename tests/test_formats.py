@@ -871,6 +871,11 @@ def test_a_field_whose_names_change_every_message_is_grouped_in_linear_time():
     assert f.name_group(groups, ["obj0", "obj1"], [0.9, 0.8]) == (0, [0.9, 0.8])     # a set already seen still reads
     assert f.name_group(groups, ["obj1", "obj0"], [0.9, 0.8]) == (0, [0.8, 0.9])
     assert f.name_group(groups, ["new", "set"], [0.9, 0.8])[0] is None
+    # only named sets count toward the limit: a field of eight unnamed widths still takes its first named set
+    groups = f.NameSets()
+    for n in range(1, 9):
+        f.name_group(groups, None, [0.0] * n)
+    assert f.name_group(groups, ["a", "b"], [1.0, 2.0]) == (8, [1.0, 2.0]) and not groups.overflow
 
 
 def test_a_joint_states_rows_follow_their_own_names():
