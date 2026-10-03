@@ -7,12 +7,12 @@ import os
 from pathlib import Path
 
 
-def write_atomic(out_path: Path, result, indent: int = 2, default=None) -> None:
+def write_atomic(out_path: Path, result, indent: int | None = 2, default=None, serializer=json.dumps, **options) -> None:
     """Write JSON through a temporary file in the same folder, then replace the file with it, so a kill mid-write never
     leaves a truncated file: a resume would take it for a result, and a context.json cut short would stop everything
-    that reads the episode."""
+    that reads the episode. A serializer can apply a consumer's JSON normalization, with the same write rule."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(f".{out_path.name}.tmp")
-    tmp.write_text(json.dumps(result, indent=indent, default=default))
+    tmp.write_text(serializer(result, indent=indent, default=default, **options))
     os.replace(tmp, out_path)

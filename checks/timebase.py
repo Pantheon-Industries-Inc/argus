@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -284,12 +283,6 @@ def cmd_folder(args) -> int:
     return 0
 
 
-def write_json(p: Path, obj) -> None:
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2))
-    os.replace(tmp, p)
-
-
 def cmd_apply(args) -> int:
     import pandas as pd
     tb = pd.read_csv(args.timebase).set_index("episode_index")
@@ -299,7 +292,7 @@ def cmd_apply(args) -> int:
             e = int(d.name.split("_")[1])
             ctx = json.loads((d / "context.json").read_text())
             ctx["timebase_neighbour_lag_frames"] = _num(tb.loc[e, "neighbour_lag_frames"])
-            write_json(d / "context.json", ctx)
+            write_atomic(d / "context.json", ctx)
             n_ctx += 1
     for p in sorted(args.labels.glob("episode_*.json")) if args.labels else []:
         r = json.loads(p.read_text())
@@ -314,7 +307,7 @@ def cmd_apply(args) -> int:
                              f"({flag} vs {tb.loc[e, 'sped_up_recording']})")
         changed += flag != bool(t.get("sped_up_recording"))
         t.update({"neighbour_lag_frames": nb, "sped_up_recording": flag, "rule": SPEDUP_RULE})
-        write_json(p, r)
+        write_atomic(p, r)
         n_lab += 1
     print(f"context.json updated {n_ctx}; label files updated {n_lab}, flag changed on {changed}")
     return 0

@@ -67,7 +67,6 @@ import argparse
 import base64
 import inspect
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -75,6 +74,7 @@ import numpy as np
 
 from board.hands import vlq_append, vlq_decode
 from board.to_board import dumps
+from label.atomic import write_atomic
 
 FORMAT = "board-sensors/1"
 RATE_HZ = 15.0           # the page's samples a second, at most
@@ -365,14 +365,13 @@ def build(episodes: dict, out_dir: Path) -> dict:
             continue
         if doc is None:
             continue
-        body = dumps(doc, separators=(",", ":"))
-        tmp = out_dir / f".{f}.part"
-        tmp.write_text(body)
-        os.replace(tmp, out_dir / f)
+        write_atomic(out_dir / f, doc, indent=None, serializer=dumps, separators=(",", ":"))
+        size = (out_dir / f).stat().st_size
         files[f] = summary(doc)
-        total += len(body)
-        biggest = max(biggest, len(body))
-    (out_dir / "index.json").write_text(dumps({"format": FORMAT, "files": files}, separators=(",", ":")))
+        total += size
+        biggest = max(biggest, size)
+    write_atomic(out_dir / "index.json", {"format": FORMAT, "files": files}, indent=None,
+                 serializer=dumps, separators=(",", ":"))
     return {"written": len(files), "skipped": skipped, "bytes": {"total": total, "max": biggest}}
 
 

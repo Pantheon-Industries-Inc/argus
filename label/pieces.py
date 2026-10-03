@@ -241,7 +241,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             dj = json.loads((ep_dir / "depth.json").read_text())
             for v, e in dj.items():
                 np.save(d / e["kmap"], np.asarray(np.load(ep_dir / e["kmap"])[k0:k1]))
-            (d / "depth.json").write_text(json.dumps(dj, indent=1))
+            write_atomic(d / "depth.json", dj, indent=1)
             if (ep_dir / "depth_times.npz").exists():
                 shutil.copy(ep_dir / "depth_times.npz", d / "depth_times.npz")
         if z is not None:
@@ -264,7 +264,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                  **({"t1": round(min(a if b is None else b, t1) - t0, 3) if b is not None else None} if "t1" in x
                     else {})}
                 for x, a, b in subs if a is None or ((a if b is None else b) >= t0 and a < t1)]
-        (d / "sources.json").write_text(json.dumps(new_src, indent=1))
+        write_atomic(d / "sources.json", new_src, indent=1)
         write_atomic(d / "context.json", c2, indent=1, default=str)
         (d / "instruction.txt").write_text("\n")
         out.append(d)
@@ -373,12 +373,12 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
                             **({"raw_head": _raw_head(r)} if _raw_head(r) else {})})
             failed.append((pc, r))
         if got:
-            (out / f"{ep}.json").write_text(json.dumps(stitch(Path(eps) / ep, got, missing)))
+            write_atomic(out / f"{ep}.json", stitch(Path(eps) / ep, got, missing), indent=None)
             res["stitched"] += 1
             if missing:
                 res["incomplete"].append(ep)
             continue
-        (out / f"{ep}.json").write_text(json.dumps(unlabelled(Path(eps) / ep, failed, missing)))
+        write_atomic(out / f"{ep}.json", unlabelled(Path(eps) / ep, failed, missing), indent=None)
         res["unlabelled"].append(ep)
     return res
 

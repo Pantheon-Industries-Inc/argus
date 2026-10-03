@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 from label.harness import episode_cost, get_keys, is_openrouter_key
+from label.atomic import write_atomic
 
 REPO = Path(__file__).resolve().parent.parent
 PY = Path(sys.executable)
@@ -111,7 +112,7 @@ def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> None
                  "cost_usd": cost, "episodes_done": len(done_eps), "episodes_parsed": parsed(run, done_eps),
                  "episodes_failed": int(m.get("failed", 0)),
                  "footage_hours": round(hours, 3), "usd_per_hour": round(cost / hours, 2) if hours and cost else None})
-    (run / "run.json").write_text(json.dumps(info, indent=1))
+    write_atomic(run / "run.json", info, indent=1)
     print(json.dumps({k: info[k] for k in ("run_id", "status", "cost_usd", "episodes_done", "episodes_failed",
                                            "footage_hours", "usd_per_hour")} | {"run": str(run)}))
 
@@ -139,7 +140,7 @@ def resume(a, slice_dir: Path) -> None:
     info.setdefault("resumes", []).append({"at": dt.datetime.now().isoformat(timespec="seconds"), "why": a.why,
                                            "spent_before": round(spent, 2), "command": cmd})
     info["status"] = "running"
-    (run / "run.json").write_text(json.dumps(info, indent=1))
+    write_atomic(run / "run.json", info, indent=1)
     finish(run, info, cmd, slice_dir, "a")
 
 
@@ -176,7 +177,7 @@ def main() -> None:
     info = {"run_id": run_id, "kind": a.kind, "dataset": a.dataset, "slice": str(a.episodes.resolve()),
             "code": sha, "code_dirty": dirty, "started_at": now.isoformat(timespec="seconds"), "cap_usd": a.cap,
             "status": "running", "command": cmd, "note": a.note}
-    (run / "run.json").write_text(json.dumps(info, indent=1))
+    write_atomic(run / "run.json", info, indent=1)
     finish(run, info, cmd, a.episodes, "w")
 
 

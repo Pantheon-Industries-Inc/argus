@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 
 from label import harness
+from label.atomic import write_atomic
 from label.run import commit
 
 
@@ -37,16 +38,14 @@ def reparse(run: Path) -> dict:
         shutil.copy2(p, keep / p.name)
         labels["_reparsed"] = {"was": r["labels"].get("_parse_error"), "code": code}
         r["labels"], r["parse_ok"] = labels, True
-        harness.write_atomic(p, r)
+        write_atomic(p, r)
         done.append({"episode": p.stem, "was": labels["_reparsed"]["was"]})
     rj = run / "run.json"
     meta = json.loads(rj.read_text())
     meta.setdefault("reparsed", []).append({"at": dt.datetime.now().isoformat(timespec="seconds"), "code": code,
                                             "why": "stored replies re-read with the current parser, no model call",
                                             "parsed_now": done, "still_unparsed": still})
-    tmp = rj.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(meta, indent=1))
-    tmp.replace(rj)
+    write_atomic(rj, meta, indent=1)
     return {"run": run.name, "parsed_now": len(done), "still_unparsed": len(still)}
 
 

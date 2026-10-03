@@ -104,6 +104,7 @@ from pathlib import Path
 from board.to_board import (and_list, convert, dumps, field_words, label_failed, label_outputs, off_schema_text,
                             typed)
 from checks import label_consistency
+from label.atomic import write_atomic
 
 SEVERITIES = ["low", "medium", "high"]
 # the deterministic checks copied from context.json into the episode's dataset_checks
@@ -643,13 +644,13 @@ def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict
                 info.update({"out_tokens": r.get("out_tokens"), "tail": (r.get("tail") or "")[-1500:]})
             d["_compare"] = info
             (out / m["key"]).mkdir(exist_ok=True)
-            (out / m["key"] / f).write_text(dumps(d))
+            write_atomic(out / m["key"] / f, d, indent=None, serializer=dumps)
             srcs[m["key"]] = r["status"]
             written[m["key"]] += 1
         if srcs:
             index["episodes"][f] = srcs
-    (out / "index.json").write_text(dumps(index, separators=(",", ":")))
-    (out / "metrics.json").write_text(dumps(mc.public(metrics), separators=(",", ":")))
+    write_atomic(out / "index.json", index, indent=None, serializer=dumps, separators=(",", ":"))
+    write_atomic(out / "metrics.json", mc.public(metrics), indent=None, serializer=dumps, separators=(",", ":"))
     return {"models": {m["key"]: {"run_id": m["run_id"], "files": written[m["key"]]} for m in models},
             "episodes": len(index["episodes"])}
 
@@ -907,7 +908,7 @@ def build(board: Path) -> dict:
             if dest.exists():
                 raise RuntimeError(f"{dest.name} comes from two manifest entries; a board holds one label per "
                                    "episode (file_prefix separates datasets whose episode names repeat)")
-            dest.write_text(dumps(d))
+            write_atomic(dest, d, indent=None, serializer=dumps)
             if src is not None:
                 board_src[fname] = src
         counts[entry["dataset"]] = {"run_id": json.loads((run / "run.json").read_text())["run_id"],
@@ -926,7 +927,7 @@ def build(board: Path) -> dict:
     built = {"manifest": {**manifest, "datasets": built_entries}, "counts": counts,
              **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {}),
              **({"sensors": sensors} if sensors else {})}
-    (board / "BUILT.json").write_text(dumps(built, indent=1))
+    write_atomic(board / "BUILT.json", built, indent=1, serializer=dumps)
     return built
 
 
