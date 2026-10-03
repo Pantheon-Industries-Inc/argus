@@ -247,8 +247,8 @@ def label_failure(result: dict | None) -> list[dict]:
                          "and sensors as recorded."}]
     if lf["status"] == "no_reply":
         return [{"kind": "model_no_reply",
-                 "what": f"The model gave no reply for this episode ({str(lf.get('why') or 'no reason recorded').rstrip('.')}"
-                         f"), {rest}."}]
+                 "what": "The model gave no reply for this episode "
+                         f"({str(lf.get('why') or 'no reason recorded').rstrip('.')}), {rest}."}]
     if lf["status"] == "not_shown":
         return [{"kind": "model_reply_not_shown",
                  "what": f"The model's reply parsed but the board could not read it ({lf.get('error')}), {rest}; the "
@@ -284,7 +284,8 @@ def off_schema(result: dict) -> list[dict]:
         gave = sorted(k for k in labels if not str(k).startswith("_"))
         out.append({"kind": "model_reply_off_schema",
                     "what": "The model's reply has no timeline, so this episode has no steps. It leaves out "
-                            + ", ".join(missing) + (f" and gives only {', '.join(gave)}" if gave else " and gives nothing")
+                            + ", ".join(missing)
+                            + (f" and gives only {', '.join(gave)}" if gave else " and gives nothing")
                             + "; what it gives is shown."})
     left = off_schema_text(result)
     if left:
@@ -818,7 +819,7 @@ def build(board: Path) -> dict:
             info = infos.get(from_run) or infos.setdefault(from_run, json.loads((from_run / "run.json").read_text()))
             try:
                 d = episode_file(entry, manifest, fname, name, r, info, eps)
-            except Exception as e:  # noqa: BLE001 - this episode is shown with its reply and the error, the build goes on
+            except Exception as e:  # noqa: BLE001 - shown with its reply and the error, the build goes on
                 print(f"board: {fname}: the reply could not be read ({type(e).__name__}: {e})", file=sys.stderr)
                 d = episode_file(entry, manifest, fname, name, not_shown(r, e), info, eps)
             if (eps / name / "context.json").exists():

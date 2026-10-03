@@ -1088,9 +1088,9 @@ def _strict(text: str):
 
 
 def test_a_number_that_is_not_finite_never_stops_an_episode_loading(tmp_path):
-    """A NaN in a reply (a step's time, the outcome's time) or in a check (a correlation over a NaN state row) was written
-    as NaN, which the page cannot parse, so the episode never loaded. Every board file is written as JSON a browser
-    reads, a time that is not finite is untimed, and every other non finite number is null."""
+    """A NaN in a reply (a step's time, the outcome's time) or in a check (a correlation over a NaN state row) was
+    written as NaN, which the page cannot parse, so the episode never loaded. Every board file is written as JSON a
+    browser reads, a time that is not finite is untimed, and every other non finite number is null."""
     run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
     (run / "out").mkdir(parents=True)
     (run / "run.json").write_text(json.dumps({"run_id": run.name, "code": "abc1234", "kind": "full",

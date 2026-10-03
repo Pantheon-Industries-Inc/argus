@@ -192,7 +192,8 @@ def test_a_camera_that_cannot_be_read_costs_only_its_own_capture_evidence(tmp_pa
                                                                 if f["check"] == "video_frozen_run"] == ["left"]
     assert "right" in listed["video_frozen_run"]["why"] and "FileNotFoundError" in listed["video_frozen_run"]["why"]
     assert "FileNotFoundError" in r["metrics"]["cameras"]["right"]["error"]
-    assert listed["nonfinite_signal"]["status"] == "clear" and listed["episode_too_short"]["status"] in ("fired", "clear")
+    assert listed["nonfinite_signal"]["status"] == "clear"
+    assert listed["episode_too_short"]["status"] in ("fired", "clear")
     assert len([c for c in r["checks"] if c["status"] == "errored"]) < 10
 
 
@@ -632,7 +633,8 @@ def test_a_one_dimensional_or_empty_signal_never_costs_the_others(tmp_path):
     z["s4"] = np.zeros((0, 3), np.float32)
     np.savez(ep / "signals.npz", **z)
     ctx = json.loads((ep / "context.json").read_text())
-    ctx["signals"] += [{"name": "probe vector", "key": "s3", "dims": 1}, {"name": "probe empty", "key": "s4", "dims": 3}]
+    ctx["signals"] += [{"name": "probe vector", "key": "s3", "dims": 1},
+                       {"name": "probe empty", "key": "s4", "dims": 3}]
     (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
     r = sc.run_episode(ep)
     st = {c["check"]: c for c in r["checks"]}
@@ -670,7 +672,8 @@ def test_a_signal_that_stops_short_or_never_reads_is_counted_over_every_frame(tm
     z["s4"] = np.full((300, 2), np.nan, np.float32)
     np.savez(ep / "signals.npz", **z)
     ctx = json.loads((ep / "context.json").read_text())
-    ctx["signals"] += [{"name": "probe short", "key": "s3", "dims": 1}, {"name": "probe unread", "key": "s4", "dims": 2}]
+    ctx["signals"] += [{"name": "probe short", "key": "s3", "dims": 1},
+                       {"name": "probe unread", "key": "s4", "dims": 2}]
     (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
     r = sc.run_episode(ep)
     ev = {n["signal"]: n["evidence"] for n in r["notes"] if n["check"] == "no_reading"}

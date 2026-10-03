@@ -692,8 +692,8 @@ def test_timeline_rows_convert_and_malformed_rows_fail():
     bad = harness.normalize_timeline({"timeline": [[0.0, 1.0, "left", "reach", "cup", None, None, "fast", 0.1, None]]})
     assert bad["_schema_violations"] == ["timeline row 0: contribution 'fast'"]     # counted, the answer kept
     # a shifted row, or one whose time is no number, is left out and counted; the rest of the reply is kept
-    short = harness.normalize_timeline({"timeline": [[0.0, 1.0, "left"],
-                                                     [0.0, 1.5, "left", "reach", "cup", None, None, "idle", 0.1, None]]})
+    short = harness.normalize_timeline({"timeline": [
+        [0.0, 1.0, "left"], [0.0, 1.5, "left", "reach", "cup", None, None, "idle", 0.1, None]]})
     assert [s["action"] for s in short["timeline"]] == ["reach"]
     assert short["_dropped"] == [{"field": "timeline", "row": 0, "why": "it has 3 values for 10 columns"}]
     late = harness.normalize_timeline({"timeline": [["late", 1.0, "left", "reach", "cup", None, None, "idle", 0.1,

@@ -99,7 +99,8 @@ def _signal_findings(ep: dict, name: str, a, skipped: dict) -> list[dict]:
     gone = np.isnan(a).all(axis=1)
     unread = int(gone.sum()) + n - len(a)
     if n and unread / n > NO_READING_SHARE:
-        out.append({"check": "no_reading", "signal": name, "evidence": f"{name} has no reading at {unread} of {n} frames"})
+        out.append({"check": "no_reading", "signal": name,
+                    "evidence": f"{name} has no reading at {unread} of {n} frames"})
     ok = a[~gone]
     if not len(ok):
         skipped[name] = "it has no reading at any frame"

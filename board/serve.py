@@ -853,8 +853,9 @@ body.lb-swap #ep-list, body.lb-swap .issue-filter, body.lb-swap .coverage .cv-nu
 .ep-head-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
 .kp-note { width: 0; min-width: 100%; }
 .kp-note-in { padding-top: 7px; text-align: right; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
-/* a note shown on few episodes (hand keypoints laid a frame or two off) takes no room while hidden: its gap is a margin,
-   eased to nothing with the fold, since padding inside the fold would keep 7 px of it and move the buttons above */
+/* a note shown on few episodes (hand keypoints laid a frame or two off) takes no room while hidden: its gap is a
+   margin, eased to nothing with the fold, since padding inside the fold would keep 7 px of it and move the buttons
+   above */
 .kp-note.gap-fold { margin-top: 7px; }
 .kp-note.gap-fold.off { margin-top: 0; }
 .kp-note.gap-fold .kp-note-in { padding-top: 0; }
@@ -2904,13 +2905,8 @@ function untimedRows(d, first = 1) {
   });
   return {steps, keys};
 }
-// What this dataset's rules set aside: each issue a rule moved to _excluded (board/build.py apply_rules, and the
-// issues label/pieces.py stitch set aside at our own cuts), with its text, tag, time and the rule's reason, and each
-// check a rule withheld (set_aside_checks, board/serve.py episode_view), with what it found and the reason. None of
-// them counts. They are rows of the problems' own kind, in a fold that is closed until opened and says how many it
-// holds. Nothing is drawn when nothing was set aside.
-// what a withheld check found (board/serve.py withheld_status) in words: a set of checks says how many of those that ran
-// fired or stopped with an error
+// what a withheld check found (board/serve.py withheld_status) in words: a set of checks says how many of those that
+// ran fired or stopped with an error
 function foundWords(c) {
   if (c.status === 'errored') return c.error ? `stopped with an error (${c.error})`
     : `${c.errored} of ${c.of} stopped with an error${c.fired ? `, ${c.fired} fired` : ''}`;
@@ -2918,6 +2914,11 @@ function foundWords(c) {
   if (c.status === 'fired') return c.of != null ? `${c.fired} of ${c.of} fired` : 'fired';
   return 'clear';
 }
+// What this dataset's rules set aside: each issue a rule moved to _excluded (board/build.py apply_rules, and the
+// issues label/pieces.py stitch set aside at our own cuts), with its text, tag, time and the rule's reason, and each
+// check a rule withheld (set_aside_checks, board/serve.py episode_view), with what it found and the reason. None of
+// them counts. They are rows of the problems' own kind, in a fold that is closed until opened and says how many it
+// holds. Nothing is drawn when nothing was set aside.
 function setAsideHtml(d) {
   const ex = (Array.isArray(d._excluded) ? d._excluded : []).filter(x => x && x.issue);
   const ck = (Array.isArray(d.set_aside_checks) ? d.set_aside_checks : []).filter(x => x && x.check);
