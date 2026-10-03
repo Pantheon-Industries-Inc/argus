@@ -98,9 +98,10 @@ camera_not_decodable, ...), "what": one plain sentence a reviewer reads on the b
 the board shows them as the episode's data issues. What could not be used at all is still listed with its reason
 (context["source"] unused_*), and an episode with nothing to label is listed in the report with why. A signal placed
 from both starts, because the reader had no clock in common to place it by, also carries "aligned_by": "assumed start"
-in its context.json signal entry (mark_assumed), which the prompt's signal line states; it is never read as the arm
-state. A signal past the episode's SIGNAL_EPISODE_BYTES is kept as its lowest, mean and highest value at each frame,
-with "summary_of" giving its width.
+in its context.json signal entry (mark_assumed), and a table placed one row per frame "aligned_by": "row per frame"
+(ALIGNED_ROWS), which the prompt's signal line states; neither is ever read as the arm state. A signal past the
+episode's SIGNAL_EPISODE_BYTES is kept as its lowest, mean and highest value at each frame, with "summary_of" giving
+its width.
 
 Every camera reaches the board. A camera the model is not shown (more extra cameras than MAX_EXTRA_CAMERAS, the second
 eye of a stereo camera, every camera but one on a head rig, an infrared, thermal or mask video) is listed in
@@ -2127,26 +2128,31 @@ def table_seconds(raw: np.ndarray, real_anchor, t_vid: np.ndarray) -> np.ndarray
     return t
 
 
-ALIGNED_ROWS = "row per frame"   # a signal's meta "aligned_by" when a table of no time was placed one row per frame
-ROWS_ASSUMED = ("{} (from {}) has no time column and one row per video frame, so each row was placed on one frame; "
-                "its timing assumes one row per frame")
-SPAN_DIFFERS_MIN_S = 0.5         # a table with one row per frame whose own times span this much more or less than the
-SPAN_DIFFERS_SHARE = 0.05        # footage, and this share of it, is said to disagree with the footage's frame rate
+ALIGNED_ROWS = "row per frame"   # a signal's meta "aligned_by" when a table was placed one row per frame
+ROWS_ASSUMED = ("{} (from {}) has as many rows as the video has frames, so each row was placed on one frame; its "
+                "timing assumes one row per frame")
+SPAN_DIFFERS_MIN_S = 0.5         # a table placed one row per frame whose own times span this much more or less than
+SPAN_DIFFERS_SHARE = 0.05        # the footage, and this share of it, is said to disagree with the footage's frame rate
 
 
 def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) -> Signals:
     """The numbers of CSV tables beside an episode's videos as signals, one per table under its own name (the file's
-    name without its take: "traj"), its number columns (number_columns) as the named values. A table with a time
-    column (a rising column named for time) is placed by it (table_seconds): on the recorder's clock when the videos
-    carry capture times its readings overlap, recorded timing; otherwise from the videos' start, an alignment that is
-    assumed: each such signal is marked (mark_assumed) and a data issue, and when the table also has exactly one row
-    per frame while its own times span another length than the footage (a 24 s log at 10 Hz beside 8 s of video), a
-    data issue says so (table_span_differs), since its rows may instead be one per frame. Only a table with no time
-    column and one row per frame is placed row by row, marked (ALIGNED_ROWS) and a data issue too, never presented as
-    recorded timing. A table placed by its time records its rate (rate_hz), so a slow one is said to be held between
-    readings. Every value's bad cells (empty, not a number, not finite) are missing readings and a data issue each
-    (signal_bad_cells), and a value with no reading at all is left out and flagged. A table that cannot be placed, or
-    has a single row (a setting, not a reading over time), is left out with the reason."""
+    name without its take: "traj"), its number columns (number_columns) as the named values. A table is placed:
+    - by its time column (a rising column named for time, read in seconds by table_seconds) on the recorder's clock,
+      when the videos carry capture times its readings overlap: recorded timing;
+    - otherwise, when it has as many rows as the video has frames, one row per frame, whatever its time column says:
+      a recorder that writes a row as it writes each frame stamps the row on its own clock, which may run at another
+      rate than the video's nominal one (rows that span 10.3 s beside 8 s of video at 30 fps), and placed by those
+      stamps its readings drift from the motion they record; a time column that counts frames reads as one second
+      per row the same way. The placement is assumed, marked (ALIGNED_ROWS) and a data issue, and a time column whose
+      span disagrees with the footage's is a data issue too (table_span_differs: by its own times the video plays
+      fast or slow);
+    - otherwise by its time column from the videos' start, an alignment that is assumed: marked (mark_assumed) and a
+      data issue. A row with no time is left out of this placement and said.
+    A table placed by its time records its rate (rate_hz), so a slow one is said to be held between readings. Every
+    value's bad cells (empty, not a number, not finite) are missing readings and a data issue each (signal_bad_cells),
+    and a value with no reading at all is left out and flagged. A table that cannot be placed, or has a single row (a
+    setting, not a reading over time), is left out with the reason."""
     out = Signals()
     n = int(len(pr_anchor["pts"]))
     t_vid = pr_anchor["pts"].astype(np.float64) * float(pr_anchor["time_base"])
@@ -2179,31 +2185,39 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
         parts = name_parts(p.stem)
         name = parts["cam"] or p.stem
         v = vals.to_numpy(dtype=np.float64)
+        t = timed = None
         if tcol is not None:
             raw = num[tcol].to_numpy(dtype=np.float64)
             timed = np.isfinite(raw)
-            if not timed.all():
-                # a row with no time cannot be placed: left out, and said
-                out.issues.append({"kind": "signal_bad_cells", "signal": name,
-                                   "what": f"{name} has {int((~timed).sum())} of {len(raw)} rows with no time in "
-                                           f"its time column {tcol}, so those rows could not be placed"})
-                raw, v = raw[timed], v[timed]
-            t = table_seconds(raw, real_anchor, t_vid)
-        assumed, aligned, rate = False, None, None
-        if tcol is not None and real_anchor is not None and t[0] < real_anchor[-1] and t[-1] > real_anchor[0]:
-            a, var, gaps = place_on_frames(t, v, np.asarray(real_anchor, dtype=np.float64))
-            row_t = t - float(real_anchor[0])
-        elif tcol is not None:
-            a, var, gaps = place_on_frames(t - t[0], v, t_vid)
-            row_t = t - t[0]
-            assumed = True
-        elif len(v) == n:
+            t = table_seconds(raw[timed], real_anchor, t_vid) if timed.sum() > 1 else None
+        on_clock = t is not None and real_anchor is not None and t[0] < real_anchor[-1] and t[-1] > real_anchor[0]
+        assumed, aligned, rate, span_note = False, None, None, None
+        if not on_clock and len(v) == n:
             a, gaps, row_t, aligned = v, 0, t_vid, ALIGNED_ROWS
+            span, vspan = (float(t[-1] - t[0]) if t is not None else 0.0), float(t_vid[-1])
+            if t is not None and abs(span - vspan) > max(SPAN_DIFFERS_MIN_S, SPAN_DIFFERS_SHARE * vspan):
+                span_note = (f"{p.name} was placed one row per video frame, but its time column {tcol} says its {n} "
+                             f"rows span {span:.1f} s, not the video's {vspan:.1f} s; by its own times the video "
+                             f"plays {'fast' if span > vspan else 'slow'}, unless {tcol} does not count seconds")
+        elif t is not None:
+            if not timed.all():
+                # a row with no time cannot be placed by time: left out, and said
+                out.issues.append({"kind": "signal_bad_cells", "signal": name,
+                                   "what": f"{name} has {int((~timed).sum())} of {len(timed)} rows with no time in "
+                                           f"its time column {tcol}, so those rows could not be placed"})
+                v = v[timed]
+            if on_clock:
+                a, var, gaps = place_on_frames(t, v, np.asarray(real_anchor, dtype=np.float64))
+                row_t = t - float(real_anchor[0])
+            else:
+                a, var, gaps = place_on_frames(t - t[0], v, t_vid)
+                row_t = t - t[0]
+                assumed = True
+            if len(t) > 1 and t[-1] > t[0]:
+                rate = (len(t) - 1) / float(t[-1] - t[0])
         else:
             out.left_out.append((p.name, f"{len(v)} rows and no time column, while the video has {n} frames"))
             continue
-        if tcol is not None and len(t) > 1 and t[-1] > t[0]:
-            rate = (len(t) - 1) / float(t[-1] - t[0])
         names = [str(c) for c in vals.columns]
         # every value's bad cells, where they are in the episode; a value with no reading at all is left out
         bad = ~np.isfinite(v)
@@ -2240,16 +2254,11 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             one.add(name, a)
             mark_assumed(one, extra, p.name)
             out.meta[name]["aligned_by"] = ALIGNED_ASSUMED
-            span, vspan = float(t[-1] - t[0]), float(t_vid[-1] - t_vid[0]) if n > 1 else 0.0
-            if len(v) == n and abs(span - vspan) > max(SPAN_DIFFERS_MIN_S, SPAN_DIFFERS_SHARE * vspan):
-                add_issue(extra, "table_span_differs",
-                          f"{p.name} has one row per video frame ({n}), but its own times span {span:.1f} s against "
-                          f"the video's {vspan:.1f} s; it was placed by its own times, so if each row was recorded "
-                          f"with one frame, its readings drift up to {abs(span - vspan):.1f} s from that frame",
-                          signal=name)
         if aligned:
             out.meta[name]["aligned_by"] = aligned
             add_issue(extra, "signal_alignment_assumed", ROWS_ASSUMED.format(name, p.name), signal=name)
+        if span_note:
+            add_issue(extra, "table_span_differs", span_note, signal=name)
     return out
 
 

@@ -200,17 +200,41 @@ def test_a_table_of_numbers_no_episode_takes_is_named(tmp_path):
 
 # ---------------------------------------------------------------- a table's placement says when it is assumed
 
-def test_a_table_with_one_row_per_frame_is_placed_by_its_own_times(tmp_path):
+def test_a_table_with_one_row_per_frame_is_placed_one_row_per_frame_whatever_its_times_span(tmp_path):
+    """A table with as many rows as the video has frames was written one row per frame, also when its own time column
+    spans another length, as a recorder that stamps each frame's row on the wall clock while the video is written at
+    its nominal rate does: placed by its times, its readings drift from the motion they record. Each row sits on its
+    frame, marked so, and a data issue says that by its own times the video plays fast."""
     n = 240
-    pd.DataFrame({"timestamp": 1756534813.0 + np.arange(n) / 10.0, "x": np.arange(n) * 0.5}).to_csv(
+    pd.DataFrame({"timestamp": 1756534813.0 + np.arange(n) * 0.043, "x": np.arange(n) * 0.5}).to_csv(
         tmp_path / "traj.csv", index=False)
     extra = {}
     out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), extra)
-    assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ASSUMED
-    assert out["traj"][120, 0] == pytest.approx(20.0)              # 4 s in, the row its own clock puts at 4 s
-    assert _issues(extra, "signal_alignment_assumed")
+    assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS and "rate_hz" not in out.meta["traj"]
+    assert out["traj"][120, 0] == 60.0                              # row 120 on frame 120
+    assert len(_issues(extra, "signal_alignment_assumed")) == 1
     span = _issues(extra, "table_span_differs")
-    assert len(span) == 1 and "23.9 s" in span[0]["what"] and "8.0 s" in span[0]["what"]
+    assert len(span) == 1 and span[0]["signal"] == "traj"
+    assert "10.3 s" in span[0]["what"] and "8.0 s" in span[0]["what"] and "plays fast" in span[0]["what"]
+
+
+def test_a_time_column_that_counts_frames_is_placed_one_row_per_frame(tmp_path):
+    n = 240
+    pd.DataFrame({"time": np.arange(n), "force": np.sin(np.arange(n) / 20)}).to_csv(tmp_path / "traj.csv", index=False)
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), {})
+    assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS and "rate_hz" not in out.meta["traj"]
+    assert out["traj"][120, 0] == pytest.approx(np.sin(6.0), abs=1e-6)
+    assert np.isfinite(out["traj"][:, 0]).all()
+
+
+def test_a_table_with_one_row_per_frame_whose_times_agree_has_no_span_issue(tmp_path):
+    n = 240
+    pd.DataFrame({"timestamp_ms": np.arange(n) * 1000 / 30, "x": np.arange(n) * 0.5}).to_csv(
+        tmp_path / "traj.csv", index=False)
+    extra = {}
+    out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), extra)
+    assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS and out["traj"][120, 0] == 60.0
+    assert not _issues(extra, "table_span_differs")
 
 
 def test_a_table_with_no_time_column_and_one_row_per_frame_is_marked_as_placed_row_by_row(tmp_path):
@@ -229,6 +253,8 @@ def test_the_prompt_says_how_an_assumed_table_was_placed():
     a = np.arange(60, dtype=float)[:, None] * 0.5
     rows = sg.describe("traj", a, aligned_by=f.ALIGNED_ROWS)
     assert "one row per frame" in rows and "both starts" not in rows
+    # a table placed row by row may have a time column of its own, so the line gives the reason that holds for both
+    assert "as many rows as the video has frames" in rows and "no time of its own" not in rows
     assert "both starts" in sg.describe("traj", a, aligned_by=f.ALIGNED_ASSUMED)
 
 

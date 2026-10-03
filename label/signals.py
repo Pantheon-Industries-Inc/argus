@@ -533,8 +533,8 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
              fps=None, aligned_by=None) -> str:
     """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
     (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
-    to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it had no time at all
-    (prepare/formats.py ALIGNED_ROWS), and the range each value takes, up to PER_VALUE_MAX
+    to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it has as many rows as the
+    video has frames (prepare/formats.py ALIGNED_ROWS), and the range each value takes, up to PER_VALUE_MAX
     values (for a wider array, the range of all its values together)."""
     a = _float(a)          # as stored: its smallest and largest readings are exact in any precision
     d = a.shape[1]
@@ -545,7 +545,7 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
         what += f", recorded at {_num(float(rate_hz))} Hz"
     if aligned_by == "row per frame":
-        what += ", placed one row per frame as it has no time of its own"
+        what += ", placed one row per frame as it has as many rows as the video has frames"
     elif aligned_by:
         what += ", placed from both starts as no clock is shared"
     head = f"  {name} ({what})"
