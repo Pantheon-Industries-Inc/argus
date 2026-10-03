@@ -676,10 +676,23 @@ def test_each_array_named_as_the_state_is_tried_and_the_first_one_laid_out_is_re
 
 
 def test_an_array_under_an_action_group_is_never_the_state(tmp_path):
-    """DROID keeps the commanded joints in action/joint_position: a command, not the arm's state."""
-    ctx, _ = _convert(tmp_path, {"action/joint_position": _aloha()})
-    assert ctx["state_kind"] == "none" and "state_note" not in ctx
-    assert "action/joint_position" in {x["name"] for x in ctx["signals"]}
+    """DROID keeps the commanded joints in action/joint_position: a command, not the arm's state. An action/qpos of
+    two arms of six joints and a gripper, the layout the checks read, is a command all the same."""
+    for i, name in enumerate(["action/joint_position", "action/qpos"]):
+        ctx, _ = _convert(tmp_path / str(i), {name: _aloha()})
+        assert ctx["state_kind"] == "none" and "state_note" not in ctx
+        assert name in {x["name"] for x in ctx["signals"]}
+
+
+def test_a_state_with_values_that_are_not_numbers_says_so(tmp_path):
+    """A qpos holding an infinity is left out of the signals for it, and the note says that, not that it could not be
+    placed on the frames."""
+    q = _aloha()
+    q[5, 2] = np.inf
+    ctx, _ = _convert(tmp_path, {"observations/qpos": q})
+    assert ctx["state_kind"] == "none"
+    # every array sits under observations/, which h5_streams leaves off the names
+    assert "recorded state qpos has values that are not all finite numbers" in ctx["state_note"]
 
 
 def test_an_action_of_another_width_stays_a_signal(tmp_path):

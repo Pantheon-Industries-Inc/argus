@@ -110,9 +110,7 @@ def measured_fps(t_ns: np.ndarray) -> float:
 
 
 def interp(stream: dict, q: np.ndarray) -> np.ndarray:
-    x = np.asarray(stream["t"], dtype=np.float64)
-    y = np.asarray(stream["pos"], dtype=np.float64)
-    return np.stack([np.interp(q, x, y[:, j]) for j in range(y.shape[1])], axis=1)
+    return formats.lerp_rows(q, np.asarray(stream["t"], dtype=np.float64), np.asarray(stream["pos"], dtype=np.float64))
 
 
 def gaps(t_ns: list[int]) -> dict:

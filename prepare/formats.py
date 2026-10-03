@@ -2983,6 +2983,9 @@ def plan_hdf5(det: dict, root: Path) -> list[dict]:
     return items
 
 
+NOT_FINITE = "values that are not finite numbers"    # why a signal is left out when it holds an inf (h5_state reads it)
+
+
 def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor: int) -> Signals:
     """Every signal of an episode on the anchor camera's frames: by its own clock, as mcap_signals places a channel
     (nearest sample, NaN where none is near, left out when it does not cover the footage), or, with no clock, one row
@@ -3027,7 +3030,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             out.left_out.append((s["name"], f"{len(a)} rows and no clock, while the camera has {n_anchor} frames"))
             continue
         if not np.isfinite(v[~np.isnan(v).all(axis=1)] if np.isnan(v).any() else v).all():
-            out.left_out.append((s["name"], "values that are not finite numbers"))
+            out.left_out.append((s["name"], NOT_FINITE))
             continue
         out.add(s["name"], v, shape=shape if len(shape) > 1 else None, names=names, source=f"HDF5 dataset {s['path']}")
         if rate:
@@ -3074,6 +3077,10 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray) -> tuple:
         return a if ok.all() else lerp_rows(q, q[ok], a[ok])
     notes = []
     for name in cands:
+        if name not in signals and left_out[name] == NOT_FINITE:
+            notes.append(f"Labelled from the video, because the recorded state {name} has values that are not all "
+                         "finite numbers.")
+            continue
         if name not in signals:
             notes.append(f"Labelled from the video, because the recorded state {name} could not be placed on the "
                          f"camera's frames ({left_out[name]}).")
@@ -3468,7 +3475,8 @@ STATE_EDGE_SLACK_S = 0.5
 def lerp_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> np.ndarray:
     """y's rows, read at times t, at times q: each column linearly interpolated, and a time before the first reading or
     after the last one holding that reading (np.interp). An arm's state is placed on the frames this way, whether its
-    readings come from an MCAP channel (joint_state) or are an HDF5 state's frames with a reading (h5_state)."""
+    readings come from an MCAP channel (joint_state, abc130k's arms) or are an HDF5 state's frames with a reading
+    (h5_state)."""
     return np.stack([np.interp(q, t, y[:, j]) for j in range(y.shape[1])], axis=1)
 
 
@@ -3734,7 +3742,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             continue
         v = np.asarray(r["v"], dtype=np.float64)
         if not np.isfinite(v).all():
-            out.left_out.append((name, "values that are not finite numbers"))
+            out.left_out.append((name, NOT_FINITE))
             continue
         rate = len(t) / max(float(t[-1] - t[0]), 1e-9)
         # a frame with no message near it (a hand the tracker lost, a sensor that paused) is NaN, not the last value
