@@ -1005,7 +1005,11 @@ def episode_notes(item: dict) -> tuple[list[tuple[str, object]], str | None, lis
                   if x), None)
     read = list(files)
     if not instr and item["dir"] is not None:
+        # the note files were weighed above, and a camera's own file (top.json beside top.mp4) is about that camera
+        skip = {p.resolve() for p in files} | {f.with_suffix(".json").resolve() for f in fs}
         for p in sorted(Path(item["dir"]).glob("*.json")):
+            if p.resolve() in skip:
+                continue
             if p.stat().st_size <= 1_000_000 and (x := instruction_from(_read_json(p))):
                 instr = x
                 if p not in read:

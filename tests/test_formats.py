@@ -2720,6 +2720,35 @@ def test_one_note_file_is_read_as_it_was_sent():
         _one_note_file_is_read_as_it_was_sent(Path(t))
 
 
+def _notes_case(tmp_path, files: dict, cams=("top", "wrist")):
+    """The context of one episode folder ep1 with these cameras and note files ({name: text or JSON object})."""
+    import json
+    root = tmp_path / "upload"
+    ep1 = root / "ep1"
+    ep1.mkdir(parents=True)
+    for c in cams:
+        _clip(ep1 / f"{c}.mp4", 10)
+    for k, v in files.items():
+        (ep1 / k).write_text(v if isinstance(v, str) else json.dumps(v))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    return json.loads((tmp_path / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text()), rep
+
+
+def _a_cameras_own_json_never_gives_the_task(tmp_path):
+    """top.json beside top.mp4 and wrist.mp4 is about the top camera: its task key had been taken for the episode's
+    task by the search of the folder's other .json files. It stays that camera's note."""
+    import json
+    ctx, _ = _notes_case(tmp_path, {"top.json": {"task": "calibrate the top camera"}})
+    assert "instruction" not in ctx, ctx.get("instruction")
+    assert "calibrate the top camera" in json.dumps(ctx["uploader_notes"])
+
+
+def test_a_cameras_own_json_never_gives_the_task():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_cameras_own_json_never_gives_the_task(Path(t))
+
+
 def test_notes_cut_for_the_prompt_name_the_files_left_out():
     notes = {"a.txt": "x" * (f.ANNOTATION_MAX_CHARS - 20), "b.txt": "y" * 100, "c.txt": "z"}
     txt = f.annotation_text(notes, files=True)
