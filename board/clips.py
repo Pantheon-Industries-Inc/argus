@@ -440,6 +440,11 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
     if dpts is None:
         raise RuntimeError(f"{ep_dir.name}: neither depth_times.npz nor times.npz has depth_{cam}_pts")
     issues, ctx = [], _context(ep_dir)
+    if ctx.get("depth_presentation_times"):
+        from prepare.camera_clock import load_times
+        times.update(load_times(ep_dir, ctx))
+        with np.load(ep_dir / ctx["depth_presentation_times"]) as z:
+            times.update({k: z[k] for k in z.files})
     if cam in times and f"depth_{cam}" in times:
         ct = times[cam][skip:skip + len(pts)]
         want = depth_frame_map(ct, times[f"depth_{cam}"]) + [None] * (len(pts) - len(ct))
@@ -1002,6 +1007,10 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
             dt = {k: np.asarray(z[k]) for k in z.files}
     if dj.exists():
         recorded_new = t_new
+        depth_display = {}
+        if ctx.get("depth_presentation_times"):
+            with np.load(ep_dir / ctx["depth_presentation_times"]) as z:
+                depth_display = {k: z[k] for k in z.files}
         if ctx.get("presentation_times"):
             from prepare.camera_clock import load_times
             recorded_new = load_times(ep_dir, ctx, recorded=True)[new]
@@ -1009,7 +1018,9 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
             td = dt.get(f"depth_{v}", t.get(f"depth_{v}"))
             kp = ep_dir / e["kmap"]
             if td is not None and len(td):
-                np.save(kp, depth_kmap(td, recorded_new))        # no reading where no depth frame is within a frame
+                display = depth_display.get(f"depth_{v}")
+                np.save(kp, depth_kmap(display if display is not None else td,
+                                      t_new if display is not None else recorded_new))
             elif kp.exists():
                 np.save(kp, np.load(kp)[idx])            # no depth times: the depth frame of the nearest old frame
     # the clock: its start is clock_zero_s, or 0 as in the request, moved
@@ -1035,6 +1046,10 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
         if dt:
             np.savez(ep_dir / "depth_times.npz", **{k: (a if k.endswith("_pts") else np.asarray(a, dtype=np.float64)
                                                          - shift) for k, a in dt.items()})
+        if ctx.get("depth_presentation_times"):
+            with np.load(ep_dir / ctx["depth_presentation_times"]) as z:
+                moved_depth = {k: z[k] - shift for k in z.files}
+            np.savez(ep_dir / ctx["depth_presentation_times"], **moved_depth)
         if ctx.get("clock_start_s") is not None:
             ctx["clock_start_s"] = round(float(ctx["clock_start_s"]) + shift, 6)
         for key, fields in CLOCK_TIME_KEYS.items():

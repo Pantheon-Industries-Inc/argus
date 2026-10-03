@@ -914,6 +914,8 @@ def set_unshown(ctx: dict, found: list[tuple[str, dict | None]]) -> None:
     if kept:
         ctx["unshown_cameras"] = kept
     for name, e in found:
+        if e and e.get("camera_clock"):
+            add_issue(ctx, "camera_timestamp_repeated", f"{name} frames. {e['camera_clock']['what']}", camera=name)
         if not e:
             add_issue(ctx, UNSHOWN_NOT_READ, f"The camera {name}, which the model is not shown, could not be read, so "
                                              "the board cannot play it either.", camera=name)
@@ -2394,8 +2396,31 @@ def qualify_camera_signals(ctx: dict, signals: dict | None, state=None, action=N
     return signals
 
 
+def keep_container_clocks(ep: Path, extra: dict, clocks: dict, cameras: dict, metadata: dict) -> None:
+    """Keep native source values and their declared units before any seconds conversion or encoder adjustment.
+    These full source arrays are provenance, not a part's shifted or trimmed presentation clock."""
+    name = "recorded_container_times.npz"
+    np.savez(ep / name, **clocks)
+    extra["recorded_container_times"] = {"file": name, "cameras": cameras,
+        "clocks": {k: {"dtype": str(a.dtype), **metadata.get(k, {})} for k, a in clocks.items()}}
+
+
+def keep_unshown_clock(ep: Path, entry: dict | None, capture: np.ndarray, pts: list,
+                       nominal_fps: float | None = None) -> dict | None:
+    """A board camera's explicit assumed presentation, beside its unchanged capture and packet clocks."""
+    if entry is None or len(capture) != len(pts):
+        return entry
+    shown, note = presentation_clock(capture, nominal_fps)
+    if note:
+        name = Path(entry["packed"]).stem + "_times.npz"
+        np.savez(ep / name, capture=capture, pts=np.asarray(pts, dtype=np.int64), presentation=shown)
+        entry.update(camera_times=name, camera_clock=note, fps=measured_fps(shown), start_s=float(shown[0]),
+                     why=entry["why"] + ". " + note["what"])
+    return entry
+
+
 def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, times: dict | None = None,
-                   signals: dict | None = None) -> dict:
+                   signals: dict | None = None, nominal_fps: float | None = None) -> dict:
     ep.mkdir(parents=True, exist_ok=True)
     if state is not None and ctx.get("state_kind") != "none":
         arrs = {"state": np.asarray(state, dtype=np.float32)}
@@ -2407,7 +2432,7 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
     presentation, notes = {}, {}
     for view in sources:
         if times and view in times:
-            placed, note = presentation_clock(times[view])
+            placed, note = presentation_clock(times[view], nominal_fps)
             if note:
                 presentation[view], notes[view] = placed, note
     if presentation:
@@ -2446,7 +2471,8 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
 def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: dict, shared_clock: bool = False,
                         prs: dict | None = None, real: dict | None = None, state=None, action=None,
                         descs: dict | None = None, signals: dict | None = None, depth: dict | None = None,
-                        state_names: list | None = None, placeholders: dict | None = None) -> dict:
+                        state_names: list | None = None, placeholders: dict | None = None,
+                        nominal_fps: float | None = None, real_origin_s: float | None = None) -> dict:
     """An episode made of video files {view: (camera name, path)}: real frame times from each file's pts,
     the first view in harness order as the anchor, the others paired by nearest time. Separate video files
     have no common clock, so each starts at its own first frame; cameras written from one MCAP
@@ -2469,7 +2495,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     # the recorder's time of the episode's first frame, so times the uploader gives on that clock land on the episode's
     origin = extra.pop("clock_origin_s", None)
     if use_real:
-        extra["clock_start_s"] = zero
+        extra["clock_start_s"] = zero + (real_origin_s or 0.0)
     elif shared_clock and origin is not None:
         extra["clock_start_s"] = origin + zero
 
@@ -2497,9 +2523,10 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         cams[v] = camera_entry(v, name, pr, rig)
         if (descs or {}).get(v):
             cams[v]["desc"] = descs[v]
-    camera_span_issues(extra, {v: times[v] for v in order}, anchor, {v: files[v][0] for v in order},
+    placed = {v: presentation_clock(times[v], nominal_fps)[0] for v in order}
+    camera_span_issues(extra, placed, anchor, {v: files[v][0] for v in order},
                        {"profile": rig, "cameras": cams})
-    dep, dtimes = {}, {}
+    dep, dtimes, depth_placement, depth_notes = {}, {}, {}, {}
     for v, d in (depth or {}).items():
         if v not in files:
             continue
@@ -2518,8 +2545,15 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
             td = pd_["pts"].astype(np.float64) * float(pd_["time_base"])
             td = (td - (zero if shared_clock and zero is not None else td[0])
                   + (times[v][0] if not shared_clock else 0.0))
-        entry, tz = depth_entry(ep, v, Path(d["path"]), td, ta, pd_["pts"], d.get("scale_m"), d.get("source") or "",
+        display_td, depth_note = presentation_clock(td, nominal_fps) if d.get("capture_clock") else (td, None)
+        display_ta = placed[anchor] if d.get("capture_clock") else ta
+        entry, tz = depth_entry(ep, v, Path(d["path"]), display_td, display_ta, pd_["pts"], d.get("scale_m"), d.get("source") or "",
                                 extra, files[v][0])
+        tz[f"depth_{v}"] = td
+        if depth_note:
+            depth_placement[f"depth_{v}"], depth_notes[v] = display_td, depth_note
+            name = d.get("source") or f"{files[v][0]} depth"
+            add_issue(extra, "camera_timestamp_repeated", f"{name} depth frames. {depth_note['what']}", camera=name)
         entry.update(width=pd_["width"], height=pd_["height"], pix_fmt=pd_["pix_fmt"])
         dep[v] = entry
         dtimes.update(tz)
@@ -2536,7 +2570,11 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     if state is not None:
         ctx["state_kind"] = state_layout(state.shape[1], rig, state_names)[0]
     write_depth(ep, ctx, dep, dtimes)
-    return finish_episode(ep, ctx, sources, state=state, action=action, times=times, signals=signals)
+    if depth_placement:
+        ctx.update(depth_presentation_times="depth_presentation_times.npz", depth_camera_clock=depth_notes)
+        np.savez(ep / ctx["depth_presentation_times"], **depth_placement)
+    return finish_episode(ep, ctx, sources, state=state, action=action, times=times, signals=signals,
+                          nominal_fps=nominal_fps)
 
 
 def episode_name(s: str) -> str:
@@ -2774,7 +2812,7 @@ def depth_videos(rels: list[str]) -> dict[str, str]:
     return out
 
 
-def frame_times(video: Path, n: int, depth: bool = False) -> np.ndarray | None:
+def frame_times(video: Path, n: int, depth: bool = False, native: bool = False) -> np.ndarray | tuple | None:
     """A video's frames' capture times in seconds on its recorder's clock, from the per-frame timestamp array a
     recorder writes beside it (exo_cam-rgb-timestamp.npy beside exo_cam-images-rgb.mp4): a .npy in its folder whose
     name says time and has the video's camera words, holding n rising numbers (seconds, or ms, us or ns, read
@@ -2792,13 +2830,15 @@ def frame_times(video: Path, n: int, depth: bool = False) -> np.ndarray | None:
             continue
         if a.ndim != 1 or len(a) != n or not np.issubdtype(a.dtype, np.number):
             continue
-        a = a.astype(np.float64)
-        if n > 1 and not (np.all(np.diff(a) >= 0) and a[-1] > a[0]):
+        if n > 1 and not (np.isfinite(a).all() and np.all(np.diff(a) >= 0)):
             continue                      # never backwards (a recorder can stamp two frames alike)
-        cands.append((bool(tk & NON_COLOUR) != depth, -len(os.path.commonprefix([p.stem, video.stem])), p.name, a))
+        cands.append((bool(tk & NON_COLOUR) != depth, -len(os.path.commonprefix([p.stem, video.stem])), p.name, a, p))
     if not cands:
         return None
-    a = min(cands, key=lambda c: c[:3])[3]
+    chosen = min(cands, key=lambda c: c[:3])
+    if native:
+        return chosen[4], chosen[3]
+    a = chosen[3].astype(np.float64)
     # the unit from the frame step (a camera runs at 1 to 1000 fps), so stamps counted from the recording's start
     # (0, 33.3, 66.7 ms) read as well as stamps since 1970; a single frame falls back to the stamp's own size
     step = float(np.median(np.diff(a))) if n > 1 else 0.0
@@ -3436,6 +3476,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
             extra["source"].setdefault("unused_depth", []).append(
                 f"{Path(dp).name} (its colour camera could not be opened)")
     real = {v: frame_times(Path(p), len(prs[v]["pts"])) for v, (_, p) in files.items()}
+    native = {v: frame_times(Path(p), len(prs[v]["pts"]), native=True) for v, (_, p) in files.items()}
+    native = {v: source for v, source in native.items() if source is not None}
     state = action = state_names = None
     descs = {}
     signals = Signals()
@@ -3552,8 +3594,30 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                                              if not_rgb(Path(q).stem) else "an infrared, mask or unmatched depth "
                                              "video, not the colour picture the model reads", start_s=start_of(q)))
                 for q in item.get("unshown") or []]
-    set_unshown(extra, unshown)
     ep = unique_dir(out, item.get("output_name") or episode_name(item["name"]))
+    ep.mkdir(parents=True, exist_ok=True)
+    for index, (name, entry) in enumerate(unshown):
+        if entry is None:
+            continue
+        path = Path(entry["packed"])
+        original = frame_times(path, entry["n_frames"], native=True)
+        if original is None:
+            continue
+        pr = probe(path)
+        recorded = frame_times(path, len(pr["pts"]))
+        native[f"unshown{index + 1}"] = original
+        if recorded is not None:
+            unshown[index] = (name, keep_unshown_clock(ep, entry, recorded - (zero if zero is not None else recorded[0]),
+                                                       pr["pts"].tolist()))
+    set_unshown(extra, unshown)
+    if (any(a.dtype.kind in "iu" for _, a in native.values())
+            or any(t is not None and presentation_clock(t)[1] for t in real.values())
+            or any(e and e.get("camera_clock") for _, e in unshown)):
+        home = Path(os.path.commonpath([str(p.parent) for p, _ in native.values()]))
+        key = lambda p: p.relative_to(home).as_posix()
+        clocks = {key(p): a for p, a in native.values()}
+        keep_container_clocks(ep, extra, clocks, {v: key(p) for v, (p, _) in native.items()},
+                              {key(p): {"source": str(p.resolve()), "units": None} for p, _ in native.values()})
     return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
                                descs=descs, signals=signals, depth=depth, state_names=state_names)
 
@@ -4581,14 +4645,16 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     unused = unused + [f"{k} (listed in meta/info.json, not in the data file)" for k in absent]
     ep.mkdir(parents=True, exist_ok=True)
     fi = df["frame_index"].to_numpy() if "frame_index" in df.columns else np.arange(len(df))
-    t = df["timestamp"].to_numpy(dtype=np.float64) if "timestamp" in df.columns else fi / fps
+    native = df["timestamp"].to_numpy() if "timestamp" in df.columns else None
+    t = np.asarray(native, dtype=np.float64) if native is not None else fi / fps
     t = t - t[0]
+    coarse = presentation_clock(t, fps)[1] is not None
     files, undecoded, written = {}, [], {}
 
     def write(key, out):
         # a frame for every row, black where its image is missing or does not decode (FrameWriter blank), so the
         # state's rows stay one per frame
-        w = written[key] = FrameWriter(out, "", blank=True)
+        w = written[key] = FrameWriter(out, "", blank=True, fine_clock=coarse)
         for ts, cell in zip(t, df[key].to_numpy()):
             b = cell.get("bytes") if isinstance(cell, dict) else cell
             if isinstance(b, (bytes, bytearray)) and b:
@@ -4612,10 +4678,10 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     for i, key in enumerate(not_shown):
         n_u = write(key, ep / f"unshown{i + 1}.mp4")
         w = written[key]
-        un.append((key, unshown_entry(key, ep / f"unshown{i + 1}.mp4", unshown_why(key, rig, list(vmap.values())),
+        entry = unshown_entry(key, ep / f"unshown{i + 1}.mp4", unshown_why(key, rig, list(vmap.values())),
                                       n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
-                                      fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN))
-                   if n_u else None))
+                                      fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)) if n_u else None
+        un.append((key, keep_unshown_clock(ep, entry, t, w.pts, fps)))
     set_unshown(extra, un)
     for key in undecoded:
         add_issue(extra, "camera_not_decodable", f"None of the {key} images in the data file could be decoded, so the "
@@ -4626,6 +4692,9 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         elif key not in undecoded:
             unshown_not_decodable(extra, key)
     extra["source"]["images_in_parquet"] = True
+    if coarse and native is not None:
+        keep_container_clocks(ep, extra, {"timestamp": native}, {v: "timestamp" for v in files},
+                              {"timestamp": {"source": "parquet timestamp column", "units": None}})
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
     note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
@@ -4637,11 +4706,14 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     # the table's other numbers go with the frames as they do beside videos (recorded_signals)
     signals = recorded_signals(df, _used_columns(kind, state, action) | set(r["image_cams"]), 0, r["features"])
     ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals,
+                              real={v: t for v in files} if coarse else None, nominal_fps=fps,
                               placeholders={v: written[key].placeholders() for v, (key, _) in files.items()})
     if state is not None and kind != "none" and len(state) == ctx["n_state_frames"]:
         ctx["state_kind"] = kind
+        with np.load(ep / "times.npz") as clocks:
+            times = {k: clocks[k] for k in clocks.files}
         return finish_episode(ep, ctx, json.loads((ep / "sources.json").read_text()), state, action,
-                              times={k: v for k, v in np.load(ep / "times.npz").items()}, signals=signals)
+                              times=times, signals=signals, nominal_fps=fps)
     if rig != "ego_head":
         # no observation.state at all is a state not recorded, whatever the layout note says of its width
         no_state(ctx, note if note else StateNote(
@@ -4900,7 +4972,7 @@ def h5_kind(name: str, ds) -> str | None:
     per = shape[1:]
     if len(per) <= 1 and (not per or per[0] == 1) and n > 1 and is_time_name(leaf):
         a = np.asarray(ds[: min(n, 4096)], dtype=np.float64).ravel()
-        if np.all(np.diff(a) >= 0) and a[-1] > a[0]:
+        if np.isfinite(a).all() and np.all(np.diff(a) >= 0):
             return "time"
     if _picture_axes(per) is not None and (dt == np.uint8 or (dt.kind == "f" and _picture_values(ds))):
         return "camera"
@@ -5099,8 +5171,10 @@ def h5_streams(f, group: str) -> dict:
     items = _h5_datasets(g)
     kinds = {p: h5_kind(p, ds) for p, ds in items}
     # raw until the streams are paired with their clocks by length, then in seconds read against a camera's clock
-    clocks = {p: np.asarray(ds[()], dtype=np.float64).ravel() for p, ds in items if kinds[p] == "time"}
-    out = {"camera": [], "depth": [], "signal": [], "text": [], "clock": clocks, "unused": []}
+    native = {p: np.asarray(ds[()]) for p, ds in items if kinds[p] == "time"}
+    clocks = {p: np.asarray(a, dtype=np.float64).ravel() for p, a in native.items()}
+    out = {"camera": [], "depth": [], "signal": [], "text": [], "clock": clocks, "unused": [],
+           "native_clock": native}
     for p, ds in items:
         k = kinds[p]
         if k == "time":
@@ -5258,6 +5332,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
     frame when it has as many rows as the anchor has frames. A value that is not finite is NaN (not_finite)."""
     out = Signals()
     q = np.asarray(q_abs, dtype=np.float64)
+    camera_note = presentation_clock(q, fps)[1]
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
     for s in streams["signal"]:
         ds = f[s["path"]]
@@ -5280,7 +5355,13 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
                 stated = [x.decode() if isinstance(x, bytes) else str(x) for x in np.asarray(ds.attrs[key]).ravel()]
                 names = value_names(stated, a.shape[1])
                 break
-        if s["clock"]:
+        same_tied_rows = (s["clock"] and camera_note is not None and len(a) == len(q)
+                          and np.array_equal(streams["clock"][s["clock"]], q))
+        if same_tied_rows:
+            # Every retained row keeps its recorded value. Shared tied stamps only establish assumed row order.
+            v, rate, far, var = not_finite(s["name"], a, q, q[0], out), fps, None, None
+            coarse = 0.0
+        elif s["clock"]:
             t, coarse = coarse_rows(streams["clock"][s["clock"]])
             if coarse is not None:
                 out.issues.append(coarse_issue(s["name"], coarse))
@@ -5486,48 +5567,74 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             return np.arange(s["n"]) / (fps or 30.0)
         chosen = {v: by_name[nm] for v, nm in vmap.items()}
         t0 = min(float(times_of(s)[0]) for s in chosen.values())
+        coarse = any(presentation_clock(times_of(s), fps)[1] for s in st["camera"] + st["depth"])
+        origin_stream = min(chosen.values(), key=lambda s: float(times_of(s)[0]))
+
+        def scale_of(s):
+            raw = st["native_clock"][s["clock"]].ravel()
+            nonzero = np.flatnonzero(raw)
+            if not len(nonzero):
+                return _seconds_scale(raw)
+            k = int(nonzero[0])
+            # Use the shared multi clock normalization's unit, which may differ from a stream's step heuristic.
+            return min(CLOCK_SCALES, key=lambda scale: abs(float(raw[k]) * scale - float(times_of(s)[k])))
+
+        def relative_times(s):
+            t = times_of(s)
+            if coarse and s["clock"]:
+                raw = st["native_clock"][s["clock"]].ravel()
+                # Subtract in the original integer unit first. Epoch sized float conversion loses native ticks.
+                scale = scale_of(s)
+                offset = float(t[0] - t0)
+                if origin_stream["clock"]:
+                    origin_raw = st["native_clock"][origin_stream["clock"]].ravel()
+                    if raw.dtype.kind in "iu" and origin_raw.dtype.kind in "iu" and scale == scale_of(origin_stream):
+                        offset = (int(raw[0]) - int(origin_raw[0])) * scale
+                return np.asarray(raw - raw[0], dtype=np.float64) * scale + offset
+            return t - t0
         files, real = {}, {}
         undecoded, written = [], {}
         for v, s in chosen.items():
             ds = f[s["path"]]
-            t = times_of(s)
+            t = relative_times(s)
             # a frame for every row, black where an encoded image does not decode, so the state's rows stay on
             # their frames (FrameWriter blank)
-            w = written[s["name"]] = FrameWriter(ep / f"{v}.mp4", "", blank=True)
+            w = written[s["name"]] = FrameWriter(ep / f"{v}.mp4", "", blank=True, fine_clock=coarse)
             # a float picture stored 0 to 1 is scaled to 0 to 255, judged on its first frame
             scale = picture_scale(ds)
             for i in range(s["n"]):
                 x = ds[i]
                 b = _h5_bytes(x) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
                 if b is not None:
-                    w.add(float(t[i] - t0), b)
+                    w.add(float(t[i]), b)
                 else:
-                    w.add_image(float(t[i] - t0), picture(x, scale))
+                    w.add_image(float(t[i]), picture(x, scale))
             if not w.close():
                 unused.append(f"{s['name']} (no frame could be decoded)")
                 undecoded.append(s["name"])
                 continue
             files[v] = (s["name"], ep / f"{v}.mp4")
+            real[v] = t
         if not files:
             raise ValueError("no frame of the HDF5 episode's cameras could be decoded")
         # the cameras the model is not shown are written too, for the board (unshown_cameras)
         unshown = []
         for i, nm in enumerate(x for x in unused if x in by_name):
             s = by_name[nm]
-            ds, t = f[s["path"]], times_of(s)
-            w = written[nm] = FrameWriter(ep / f"unshown{i + 1}.mp4", "", blank=True)
+            ds, t = f[s["path"]], relative_times(s)
+            w = written[nm] = FrameWriter(ep / f"unshown{i + 1}.mp4", "", blank=True, fine_clock=coarse)
             scale = picture_scale(ds)
             for k in range(s["n"]):
                 b = _h5_bytes(ds[k]) if (ds.dtype.kind in "OV" or ds.ndim == 1) else None
                 if b is not None:
-                    w.add(float(t[k] - t0), b)
+                    w.add(float(t[k]), b)
                 else:
-                    w.add_image(float(t[k] - t0), picture(ds[k], scale))
+                    w.add_image(float(t[k]), picture(ds[k], scale))
             n_u = w.close()
-            unshown.append((nm, unshown_entry(nm, ep / f"unshown{i + 1}.mp4", unshown_why(nm, rig, names_shown(files)),
+            entry = unshown_entry(nm, ep / f"unshown{i + 1}.mp4", unshown_why(nm, rig, names_shown(files)),
                                               n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
-                                              fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN))
-                            if n_u else None))
+                                              fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)) if n_u else None
+            unshown.append((nm, keep_unshown_clock(ep, entry, t, w.pts, fps)))
         from label import episode as me
         anchor = me.order_views(files)[0]
         q_abs = times_of(chosen[anchor])
@@ -5539,13 +5646,15 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 unused.append(f"{d['name']} (depth with no camera of its own)")
                 continue
             ds = f[d["path"]]
-            t = times_of(d)
+            t = relative_times(d)
+            display_t = presentation_clock(t, fps)[0] if coarse else t
             scale = 1.0 if ds.dtype.kind == "f" else depth_scale_attr(ds)
             dw = DepthWriter(ep / f"depth_{v}.mkv")
             for i in range(d["n"]):
-                dw.add(float(t[i] - t0), ds[i], scale)
+                dw.add(float(display_t[i]), ds[i], scale)
             if dw.close():
-                depth[v] = {"path": ep / f"depth_{v}.mkv", "real": None, "scale_m": dw.scale_m, "source": source}
+                depth[v] = {"path": ep / f"depth_{v}.mkv", "real": t if coarse else None,
+                            "capture_clock": coarse, "scale_m": dw.scale_m, "source": source}
         signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
         # sensor files of the episode's folder (assign_sensors): on the camera's clock when both are on a recorder's
         # clock, which may give the state; else from both starts, after the state is read, so an assumed alignment
@@ -5562,8 +5671,18 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         if assumed:
             merge_signals(signals, sensors_from_start(assumed, q_abs - q_abs[0], sensor_extra))
         instr, notes = h5_text(f, g, st["text"])
+        native_meta = {}
+        if coarse:
+            for name in st["native_clock"]:
+                ds = f[f"{g}/{name}" if g else name]
+                units = ds.attrs.get("units")
+                units = units.decode() if isinstance(units, bytes) else str(units) if units is not None else None
+                native_meta[name] = {"source": ds.name, "units": units}
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
+    if coarse:
+        keep_container_clocks(ep, extra, st["native_clock"],
+                              {v: chosen[v]["clock"] for v in files}, native_meta)
     for nm in undecoded:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {nm} could be decoded, so it is not shown.",
                   camera=nm)
@@ -5594,6 +5713,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     if chosen[anchor]["clock"]:
         extra["clock_origin_s"] = t0         # the recorder's time at the clips' zero
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, signals=signals, depth=depth,
+                               real=real if coarse else None, real_origin_s=t0 if coarse else None,
+                               nominal_fps=fps,
                                state=state, action=action, state_names=state_names,
                                placeholders={v: written[nm].placeholders() for v, (nm, _) in files.items()})
 
@@ -6395,6 +6516,7 @@ def place_on_frames(t: np.ndarray, v: np.ndarray, q: np.ndarray) -> tuple[np.nda
     its interval and their standard deviation, so a vibration or a slip between two frames is not lost by picking one
     sample; a frame whose interval holds no sample is NaN."""
     t, q = np.asarray(t, dtype=np.float64), np.asarray(q, dtype=np.float64)
+    q = presentation_clock(q)[0]
     v = float_rows(v)
     acc = v.dtype
     dq = float(np.median(np.diff(q))) if len(q) > 1 else 1 / 30
@@ -7280,11 +7402,12 @@ class FrameWriter:
     every row after it stays on its own frame and the camera keeps as many frames as its table has rows. A camera with
     real frame times (an MCAP) skips it, and its state is placed on the frames' own times."""
 
-    def __init__(self, out: Path, fmt: str, blank: bool = False):
+    def __init__(self, out: Path, fmt: str, blank: bool = False, fine_clock: bool = False):
         self.out, self.fmt, self.pts, self.kind = out, fmt, [], None
         self.raw = self.enc = self.dst = None
         self.held = []                    # encoded packets waiting for the next frame's time (_mux)
         self.blank, self.bad, self.waiting = blank, [], []    # waiting: blank frames before the first decoded one
+        self.fine_clock = fine_clock
 
     def _at(self, t_s: float) -> int:
         p = int(round(t_s * TIME_BASE_DEN))
@@ -7352,7 +7475,8 @@ class FrameWriter:
         import av
         from PIL import Image
         if self.enc is None:
-            self.dst = av.open(str(self.out), "w")
+            self.dst = av.open(str(self.out), "w", options={"movie_timescale": str(TIME_BASE_DEN)}
+                               if self.fine_clock else {})
             self.enc = self.dst.add_stream("libx264", rate=30, time_base=Fraction(1, TIME_BASE_DEN))
             self.enc.width, self.enc.height = im.width - im.width % 2, im.height - im.height % 2
             self.enc.pix_fmt = "yuv420p"

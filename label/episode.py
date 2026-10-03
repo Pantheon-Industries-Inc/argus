@@ -1138,9 +1138,12 @@ def _depth_note(ep: dict) -> str:
     # a depth stream that stops before its camera has no reading at the instants past it (prepare/formats.py
     # depth_kmap -1), where no depth view follows
     gaps = [cam_name(ep, v) for v in order_views(d) if "km" in d[v] and (np.asarray(d[v]["km"]) < 0).any()]
+    assumed = bool(ep["context"].get("camera_clock") or ep["context"].get("depth_camera_clock"))
     return (f"\nDEPTH: {names} {'records' if len(d) == 1 else 'record'} depth as well as colour. Each detail view is "
             "followed by the depth from the same "
-            + ("camera's depth sensor" if len(d) == 1 else "cameras' depth sensors") + " at that instant."
+            + ("camera's depth sensor" if len(d) == 1 else "cameras' depth sensors")
+            + (". Depth is paired using assumed presentation times. Shared timestamps do not establish exact "
+               "capture instants." if assumed else " at that instant.")
             + (f" {', '.join(gaps)} {'has' if len(gaps) == 1 else 'have'} no depth for part of the episode; a detail "
                "view there is followed by no depth." if gaps else ""))
 

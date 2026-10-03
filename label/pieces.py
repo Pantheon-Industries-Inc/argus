@@ -232,6 +232,9 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
         if ctx.get("recorded_camera_ns"):
             c2["recorded_camera_ns"] = str((ep_dir / ctx["recorded_camera_ns"]).resolve())
+        if ctx.get("recorded_container_times"):
+            c2["recorded_container_times"] = {**ctx["recorded_container_times"],
+                "file": str((ep_dir / ctx["recorded_container_times"]["file"]).resolve())}
         if ctx.get("unshown_cameras"):
             from prepare.camera_clock import unshown_span
             c2["unshown_cameras"] = unshown_span(ep_dir, ctx["unshown_cameras"], t0, t1,
@@ -288,6 +291,9 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                     origin = float(t[k0]) + float(ctx.get("clock_zero_s") or 0.0)
                     np.savez(d / "depth_times.npz", **{key: dt[key] if key.endswith("_pts") else dt[key] - origin
                                                       for key in dt.files})
+            if ctx.get("depth_presentation_times"):
+                with np.load(ep_dir / ctx["depth_presentation_times"]) as dt:
+                    np.savez(d / ctx["depth_presentation_times"], **{key: dt[key] - origin for key in dt.files})
         if z is not None:
             arrs = {kk: z[kk][k0:k1] for kk in z.files}
             np.savez(d / "state.npz", **arrs)
