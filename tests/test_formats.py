@@ -686,8 +686,24 @@ def _a_joint_states_rows_follow_their_own_names(tmp_path):
     _json_mcap(path, {"/detections": [(s, {"labels": [objects[k % 10], objects[(k + 3) % 10]], "scores": [0.9, 0.8]})
                                       for k, s in enumerate(tt)]}, t0)
     sig = f.mcap_signals([path], t0 + q)
-    assert not sig and sig.left_out == [("/detections scores", "its messages name its values in 10 different ways, "
-                                                               "so no value is one reading over time")], sig.left_out
+    assert not sig and sig.left_out == [("/detections scores", "its messages name its values in more than 8 "
+                                                               "different ways, so no value is one reading over time")]
+
+
+def test_a_field_whose_names_change_every_message_is_grouped_in_linear_time():
+    """Each row was compared with every name set seen, so a detector's 7200 messages of new labels took 1.6 s where
+    the reader took 0.06 s. Name sets are looked up by set, and a field stops being grouped once it passes
+    NAME_SETS_MAX: 20000 messages of changing labels take well under a second."""
+    import time
+    groups = f.NameSets()
+    start = time.perf_counter()
+    for k in range(20000):
+        f.name_group(groups, [f"obj{k}", f"obj{k + 1}"], [0.9, 0.8])
+    assert time.perf_counter() - start < 0.5
+    assert groups.overflow and len(groups) == f.NAME_SETS_MAX
+    assert f.name_group(groups, ["obj0", "obj1"], [0.9, 0.8]) == (0, [0.9, 0.8])     # a set already seen still reads
+    assert f.name_group(groups, ["obj1", "obj0"], [0.9, 0.8]) == (0, [0.8, 0.9])
+    assert f.name_group(groups, ["new", "set"], [0.9, 0.8])[0] is None
 
 
 def test_a_joint_states_rows_follow_their_own_names():

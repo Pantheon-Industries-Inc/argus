@@ -3524,27 +3524,43 @@ def _joint_fields(msg) -> set:
 NAME_SETS_MAX = 8
 
 
-def name_group(groups: list, names, vals: list) -> tuple[int, list]:
-    """(the index in groups of one message's row, its values in that group's order). groups [(names, width)] is one
-    channel's (or one field's) name sets in the order first seen, extended here. A row whose names give one distinct
-    name per value is grouped with the rows that name the same set and reordered by name to the group's first order;
-    a row without such names is grouped with the unnamed rows of its width."""
+class NameSets(list):
+    """One channel's (or one field's) name sets [(names, width)] in the order first seen (name_group), with each set's
+    place by its frozenset of names, and overflow once its messages named more than NAME_SETS_MAX sets."""
+
+    def __init__(self):
+        super().__init__()
+        self.index: dict = {}
+        self.overflow = False
+
+
+def name_group(groups: NameSets, names, vals: list) -> tuple[int | None, list]:
+    """(the index in groups of one message's row, its values in that group's order), extending groups. A row whose
+    names give one distinct name per value is grouped with the rows that name the same set (looked up by set, so a
+    detector's labels cost one lookup a message) and reordered by name to the group's first order; a row without such
+    names is grouped with the unnamed rows of its width. None for a row naming a new set once groups has
+    NAME_SETS_MAX sets, when groups.overflow is set and grouping stops."""
     n = len(vals)
     if names is not None and len(names) == n and len(set(names)) == n:
         key = frozenset(names)
-        for i, (gn, _) in enumerate(groups):
-            if gn is not None and frozenset(gn) == key:
-                if list(names) != list(gn):
-                    at = {x: j for j, x in enumerate(names)}
-                    vals = [vals[at[x]] for x in gn]
-                return i, vals
-        groups.append((list(names), n))
-        return len(groups) - 1, vals
-    for i, (gn, w) in enumerate(groups):
-        if gn is None and w == n:
+        i = groups.index.get(key)
+        if i is None:
+            if len(groups.index) >= NAME_SETS_MAX:
+                groups.overflow = True
+                return None, vals
+            groups.index[key] = i = len(groups)
+            groups.append((list(names), n))
             return i, vals
-    groups.append((None, n))
-    return len(groups) - 1, vals
+        gn = groups[i][0]
+        if list(names) != gn:
+            at = {x: j for j, x in enumerate(names)}
+            vals = [vals[at[x]] for x in gn]
+        return i, vals
+    i = groups.index.get(n)
+    if i is None:
+        groups.index[n] = i = len(groups)
+        groups.append((None, n))
+    return i, vals
 
 
 def group_label(group: tuple) -> str:
@@ -3606,8 +3622,10 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
                         if ch.topic not in found:
                             skip.add(ch.topic)        # not a joint channel (health, status, poses)
                         continue
-                    c = found.setdefault(ch.topic, {"groups": [], "rows": []})
+                    c = found.setdefault(ch.topic, {"groups": NameSets(), "rows": []})
                     i, row = name_group(c["groups"], _joint_names(m, len(row)), row)
+                    if i is None:
+                        continue                      # a channel of more name sets than an arm has: not read here
                     if i == len(c["rows"]):
                         c["rows"].append({"t": [], "pos": [], "fields": set()})
                     r = c["rows"][i]
@@ -3618,6 +3636,8 @@ def mcap_joint_streams(paths: list[Path]) -> dict:
                 pass                                  # a cut-off file: the messages before the cut are kept
     out = {}
     for topic, c in found.items():
+        if c["groups"].overflow:
+            continue                                  # mcap_signals names it as left out, with the reason
         groups = _join_gripper([{"t": np.asarray(r["t"]), "pos": np.asarray(r["pos"], dtype=np.float64),
                                  "names": c["groups"][i][0], "fields": r["fields"],
                                  "label": group_label(c["groups"][i])} for i, r in enumerate(c["rows"])])
@@ -3845,7 +3865,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     used, facs = used or {}, _decoders()
     q = np.asarray(q, dtype=np.float64)
     rows: dict[tuple, dict] = {}
-    sets: dict[tuple, list] = {}          # (topic, field): its name sets (name_group)
+    sets: dict[tuple, NameSets] = {}      # (topic, field): its name sets (name_group)
     for p in paths:
         chans = [t for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)
                  and not (t in used and used[t] is None)]
@@ -3872,7 +3892,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                         # keep the label that tells them from it
                         u = used.get(ch.topic) or ()
                         if field in u or (field, frozenset(names) if names else None) in u:
-                            name_group(sets.setdefault((ch.topic, field), []), names, vals)
+                            name_group(sets.setdefault((ch.topic, field), NameSets()), names, vals)
                             continue
                         # samples in time beside a sample rate (a contact microphone's 512 samples at 48 kHz): kept as
                         # their loudness, root mean square and peak, not as 512 channels
@@ -3885,7 +3905,9 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                             x = np.asarray(vals, dtype=np.float64)
                             vals, names, kind = [float(np.sqrt(np.mean(x ** 2))), float(np.max(np.abs(x)))], \
                                 ["root mean square", "peak"], {"kind": "samples", "sample_rate": float(rate)}
-                        i, vals = name_group(sets.setdefault((ch.topic, field), []), names, vals)
+                        i, vals = name_group(sets.setdefault((ch.topic, field), NameSets()), names, vals)
+                        if i is None:
+                            continue
                         r = rows.setdefault((ch.topic, field, i),
                                             {"t": [], "v": [], "d": len(vals), "set": False, "names": names,
                                              "shape": shape, "topic": ch.topic, "kind": kind})
@@ -3898,10 +3920,10 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     named = {}
     for (topic, field, i), r in rows.items():
         name, groups = f"{topic} {field}".strip(), sets[(topic, field)]
-        if len(groups) > NAME_SETS_MAX:
+        if groups.overflow:
             if name not in [x for x, _ in out.left_out]:
-                out.left_out.append((name, f"its messages name its values in {len(groups)} different ways, so no "
-                                           "value is one reading over time"))
+                out.left_out.append((name, f"its messages name its values in more than {NAME_SETS_MAX} different "
+                                           "ways, so no value is one reading over time"))
             continue
         named[name + (group_label(groups[i]) if len(groups) > 1 else "")] = r
     rows = named
