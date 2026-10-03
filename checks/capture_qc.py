@@ -5,8 +5,9 @@ deterministic stage.
 
 EPISODES are folders of prepared episode_* folders. For each episode this reads context.json, sources.json,
 state.npz, the real-times file and kmap_*.npy files the sources name, and every camera's video, and writes
-context["capture_qc"]. An episode that already has a result is skipped unless --force. `python -m board build`
-copies the result into the episode's dataset_checks on the board.
+context["capture_qc"]. An episode that already has a result is skipped unless --force, or unless its result was
+written because its worker stopped (needs_check). It exits EXIT_FAILED when some episode's checks could not run.
+`python -m board build` copies the result into the episode's dataset_checks on the board.
 
 The checks themselves are the vendored upstream functions (checks/vendor/public_dataset_adapter_qc.py).
 This module does three things around them:
@@ -62,6 +63,7 @@ import numpy as np
 from checks.vendor import public_dataset_adapter_qc as up
 from label import episode as me
 from label import frames as mf
+from label.harness import write_atomic
 
 SOURCE = up.SOURCE
 VERSION = 2          # the format version of context["capture_qc"]
@@ -1458,6 +1460,11 @@ def run_episode(ep_dir: Path | str) -> dict:
 
 # ------------------------------------------------------------------------------------------ CLI
 
+# the exit status when some episode's checks could not run because its worker stopped: every episode still has a
+# record (those with every check errored), so a caller goes on and reads the errored checks from the records
+EXIT_FAILED = 3
+
+
 def _one(d: str) -> tuple[str, dict, str | None, float]:
     """(episode, its record, the error when its worker stopped, seconds). A worker that stops outside run_episode still
     gives the episode a record, every check errored with the error, so it is never left with none."""
@@ -1468,7 +1475,45 @@ def _one(d: str) -> tuple[str, dict, str | None, float]:
         return d, errored_record(e), f"{type(e).__name__}: {e}"[:300], time.time() - t0
 
 
-def main():
+def _pool(eps: list[str], jobs: int, record) -> list[str]:
+    """Run each episode's _one on one pool of jobs worker processes and record each answer as it finishes. Returns the
+    episodes the pool never finished: a worker that dies (killed by a signal, out of memory) breaks the whole pool, so
+    the episode it was on and every one still waiting come back unfinished, not only the one that killed it."""
+    lost = []
+    with ProcessPoolExecutor(jobs) as ex:
+        futures = {ex.submit(_one, d): d for d in eps}
+        for fut in as_completed(futures):
+            try:
+                res = fut.result()
+            except Exception:  # noqa: BLE001 - the pool broke: retried alone (_alone)
+                lost.append(futures[fut])
+                continue
+            record(*res)
+    return sorted(lost)
+
+
+def _alone(d: str) -> tuple[str, dict, str | None, float]:
+    """_one for one episode in a worker process of its own, so a worker that dies costs that episode only: then it gets
+    a record with every check errored and the error."""
+    try:
+        with ProcessPoolExecutor(1) as ex:
+            return ex.submit(_one, d).result()
+    except Exception as e:  # noqa: BLE001 - its worker died again
+        return d, errored_record(e), f"{type(e).__name__}: {e}"[:300], 0.0
+
+
+def needs_check(ctx: dict) -> bool:
+    """Whether an episode is checked without --force: it has no record, or its record is one written because its
+    worker stopped (worker_stopped), which says nothing about the episode, so a rerun checks it again."""
+    cq = ctx.get("capture_qc")
+    return not isinstance(cq, dict) or bool(cq.get("worker_stopped"))
+
+
+def main() -> int:
+    """Check every episode and write its record into its context.json. Episodes run on a pool of --jobs worker
+    processes; the ones a worker's death left unfinished run again, each in a process of its own, so only an episode
+    whose worker dies on that retry too is recorded with every check errored, marked worker_stopped. Exits EXIT_FAILED
+    when some episode's checks could not run, else 0."""
     ap = argparse.ArgumentParser(prog="python -m checks.capture_qc", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("roots", nargs="+", type=Path, metavar="EPISODES", help="folders of prepared episode_* folders")
@@ -1480,33 +1525,38 @@ def main():
         for d in sorted(root.glob("episode_*")):
             if not (d / "context.json").exists():
                 continue
-            if args.force or "capture_qc" not in json.loads((d / "context.json").read_text()):
+            if args.force or needs_check(json.loads((d / "context.json").read_text())):
                 eps.append(str(d))
     print(f"episodes to check: {len(eps)}", flush=True)
     done = flagged = failed = 0
-    with ProcessPoolExecutor(args.jobs) as ex:
-        futures = {ex.submit(_one, d): d for d in eps}
-        for fut in as_completed(futures):
-            try:
-                d, r, err, secs = fut.result()
-            except Exception as e:  # the worker process itself died (killed, out of memory): recorded the same way
-                d, r, err, secs = futures[fut], errored_record(e), f"{type(e).__name__}: {e}"[:300], 0.0
-            done += 1
-            if err:
-                failed += 1
-                print(f"FAILED {Path(d).name}: {err}", flush=True)
-            p = Path(d) / "context.json"
-            ctx = json.loads(p.read_text())
-            ctx["capture_qc"] = r
-            p.write_text(json.dumps(ctx, indent=1))
-            if r["flags"]:
-                flagged += 1
-                print(f"FLAGGED {Path(d).name} " + "; ".join(f"{f['check']} {f['t_s']}" for f in r["flags"]),
-                      flush=True)
-            if done % 25 == 0:
-                print(f"progress {done}/{len(eps)} flagged={flagged} failed={failed} last={secs:.1f}s", flush=True)
+
+    def record(d: str, r: dict, err: str | None, secs: float) -> None:
+        nonlocal done, flagged, failed
+        done += 1
+        if err:
+            failed += 1
+            r = {**r, "worker_stopped": True}
+            print(f"FAILED {Path(d).name}: {err}", flush=True)
+        p = Path(d) / "context.json"
+        ctx = json.loads(p.read_text())
+        ctx["capture_qc"] = r
+        write_atomic(p, ctx, indent=1)
+        if r["flags"]:
+            flagged += 1
+            print(f"FLAGGED {Path(d).name} " + "; ".join(f"{f['check']} {f['t_s']}" for f in r["flags"]), flush=True)
+        if done % 25 == 0:
+            print(f"progress {done}/{len(eps)} flagged={flagged} failed={failed} last={secs:.1f}s", flush=True)
+
+    lost = _pool(eps, args.jobs, record)
+    if lost:
+        print(f"retrying {len(lost)} episodes a worker's death left unfinished, each in a process of its own",
+              flush=True)
+        with ThreadPoolExecutor(args.jobs) as ex:
+            for res in ex.map(_alone, lost):
+                record(*res)
     print(f"done {done} flagged={flagged} failed={failed}", flush=True)
+    return EXIT_FAILED if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -436,6 +436,92 @@ def test_an_episode_whose_capture_worker_stops_gets_a_record_with_every_check_er
         assert all(x["status"] == "errored" for x in r["checks"]) and "the worker process died" in r["checks"][0]["why"]
 
 
+# python -m checks.capture_qc with run_episode replaced: the episode named VICTIM kills its own worker process (as the
+# out of memory killer does), every time or, with DIE_ONCE naming a marker file, only the first time. The spawned
+# workers import this file as __mp_main__, so they carry the replacement too
+KILLER = '''
+import os
+import signal
+from pathlib import Path
+
+from checks import capture_qc
+
+
+def run_episode(ep_dir):
+    once = os.environ.get("DIE_ONCE")
+    if Path(ep_dir).name == os.environ["VICTIM"] and not (once and Path(once).exists()):
+        if once:
+            Path(once).touch()
+        os.kill(os.getpid(), signal.SIGKILL)
+    return capture_qc.format_result({"checks": {}, "cameras": {}, "actors": {}, "episode": {}})
+
+
+capture_qc.run_episode = run_episode
+if __name__ == "__main__":
+    raise SystemExit(capture_qc.main())
+'''
+
+
+def _killer_run(tmp_path, *args, **env):
+    import os
+    import subprocess
+    import sys
+    repo = Path(__file__).resolve().parent.parent
+    (tmp_path / "killer.py").write_text(KILLER)
+    return subprocess.run([sys.executable, str(tmp_path / "killer.py"), "--jobs", "2", *args, str(tmp_path / "eps")],
+                          cwd=repo, env={**os.environ, "PYTHONPATH": str(repo), **env}, capture_output=True,
+                          text=True, timeout=300)
+
+
+def test_a_worker_killed_by_a_signal_costs_only_its_own_episode_and_a_rerun_checks_it_again(tmp_path):
+    """One episode's worker process killed by a signal broke the whole process pool: every episode still waiting got a
+    record with every check errored (BrokenProcessPool), the step exited 0, and a rerun skipped them all for good. The
+    episodes the broken pool never finished run again on a fresh pool, so only the episode whose worker dies again on
+    its own retry is recorded errored, the step exits EXIT_FAILED, and a rerun without --force checks that episode
+    again."""
+    import json
+    names = [f"episode_{i:06d}" for i in range(6)]
+    for n in names:
+        (tmp_path / "eps" / n).mkdir(parents=True)
+        (tmp_path / "eps" / n / "context.json").write_text(json.dumps({"fps": 30}))
+
+    def records():
+        return {n: json.loads((tmp_path / "eps" / n / "context.json").read_text())["capture_qc"] for n in names}
+
+    r = _killer_run(tmp_path, "--force", VICTIM="episode_000002")
+    assert r.returncode == cq.EXIT_FAILED, r.stdout + r.stderr
+    rec = records()
+    for n in names:
+        errored = [x for x in rec[n]["checks"] if x["status"] == "errored"]
+        if n == "episode_000002":
+            assert len(errored) == len(rec[n]["checks"]) and rec[n]["worker_stopped"], rec[n]
+            assert "BrokenProcessPool" in errored[0]["why"], errored[0]
+        else:
+            assert not errored and "worker_stopped" not in rec[n], (n, rec[n])
+    assert "FAILED episode_000002" in r.stdout and "failed=1" in r.stdout, r.stdout
+
+    r = _killer_run(tmp_path, VICTIM="none")
+    assert r.returncode == 0 and "episodes to check: 1" in r.stdout, r.stdout + r.stderr
+    rec = records()
+    assert not any(x["status"] == "errored" for n in names for x in rec[n]["checks"]), rec
+    assert not any("worker_stopped" in rec[n] for n in names)
+
+
+def test_a_worker_that_dies_once_leaves_its_episode_checked_on_the_retry(tmp_path):
+    """A worker killed once (memory short while two large episodes decode together) costs nothing: its episode and
+    every other one the broken pool never finished are checked on the retry, and the step exits 0."""
+    import json
+    for i in range(4):
+        (tmp_path / "eps" / f"episode_{i:06d}").mkdir(parents=True)
+        (tmp_path / "eps" / f"episode_{i:06d}" / "context.json").write_text(json.dumps({"fps": 30}))
+    r = _killer_run(tmp_path, "--force", VICTIM="episode_000001", DIE_ONCE=str(tmp_path / "died"))
+    assert r.returncode == 0 and (tmp_path / "died").exists(), r.stdout + r.stderr
+    for d in (tmp_path / "eps").iterdir():
+        rec = json.loads((d / "context.json").read_text())["capture_qc"]
+        assert not any(x["status"] == "errored" for x in rec["checks"]) and "worker_stopped" not in rec, rec
+    assert "failed=0" in r.stdout, r.stdout
+
+
 def test_a_crash_reading_the_state_costs_only_the_checks_that_read_it(monkeypatch):
     """A crash reading the recorded state (canonical_states) errored all 38 capture checks of the episode. Only the
     checks that read the state are errored now, with the error: the structure, gripper and motion checks, and the frozen
