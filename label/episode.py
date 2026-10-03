@@ -120,10 +120,11 @@ def load(ep_dir: Path) -> dict:
         # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals), with
         # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz) and everything else its reader wrote,
         # so a field a reader adds reaches the checks without being listed here. Signals on the frames of a camera
-        # taken out of the episode, with nothing to place them on the others (state_unaligned), are not read
+        # taken out of the episode, with nothing to place them on the others (state_unaligned), are not read. One whose
+        # rows stop short of the episode's frames has no reading past them (label/signals.py pad_rows)
         from label import signals as sg
         z = np.load(ep_dir / "signals.npz")
-        ep["signals"] = {s["name"]: sg.columns(z[s["key"]]) for s in ctx["signals"]}
+        ep["signals"] = {s["name"]: sg.pad_rows(sg.columns(z[s["key"]]), len(state)) for s in ctx["signals"]}
         ep["signal_meta"] = {s["name"]: {k: v for k, v in s.items() if k not in ("name", "key")}
                              for s in ctx["signals"]}
     if ctx.get("real_times"):

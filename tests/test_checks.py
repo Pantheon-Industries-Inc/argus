@@ -684,6 +684,28 @@ def test_a_signal_that_stops_short_or_never_reads_is_counted_over_every_frame(tm
     assert "not_run_on" not in st["no_reading"]
 
 
+def test_a_signal_with_fewer_rows_than_the_episode_never_costs_the_request(tmp_path):
+    """A moving signal with rows for half the episode's frames crashed the whole request where the instants are chosen
+    by where the signals fall quiet (label/signals.py quiet_spans stacks every signal over the episode's frames). It is
+    read with no reading past its last row, so the request is built and the prompt names the frames it has no reading
+    at."""
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    t = np.linspace(0, 6, 150, dtype=np.float32)
+    z["s3"] = np.stack([np.sin(t), np.cos(t)], axis=1)                    # 150 rows of the episode's 300 frames
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe short", "key": "s3", "dims": 2}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    e = me.load(ep)
+    a = e["signals"]["probe short"]
+    assert a.shape == (300, 2) and np.isfinite(a[:150]).all() and np.isnan(a[150:]).all()
+    pl = me.plan(e)
+    line = next(x for x in me._signals_table(e, pl).splitlines() if x.strip().startswith("probe short"))
+    assert line.endswith("; no reading at 150 of 300 frames"), line
+
+
 def test_a_state_that_stops_short_is_told_by_the_readers_note_not_as_a_layout(tmp_path):
     """An arm sensor file cut at 17.6 s of 39.1 s leaves no state (its readings do not cover the footage), and the
     RECORDED STATE line said the episode has no arm state in the layout our checks read, which is false: the layout is

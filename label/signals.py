@@ -433,6 +433,18 @@ def columns(a) -> np.ndarray:
     return a.reshape(a.shape[0], int(np.prod(a.shape[1:])))
 
 
+def pad_rows(a: np.ndarray, n: int) -> np.ndarray:
+    """a (frames by values) with no reading (NaN) past its last row up to n frames, as a reader writes a signal that
+    ends inside the footage: a signal whose rows stop short of the episode is read over every frame, so the prompt
+    names the frames it has no reading at, and a step that lines every signal up frame by frame (quiet_spans) never
+    breaks on it. A signal with no rows (named as having none) or with at least n rows is kept as it is."""
+    if not 0 < len(a) < n:
+        return a
+    out = np.full((n, a.shape[1]), np.nan, dtype=a.dtype)
+    out[:len(a)] = a
+    return out
+
+
 def _range_and_step(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Per value of a (frames by values, any further axes flattened): its range, and its typical step, the median of
     its nonzero absolute steps between consecutive readings (a pair with a missing reading is no step). NaN where a
