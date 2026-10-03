@@ -5405,8 +5405,8 @@ def _h5_datasets(g, base: str = "") -> list[tuple[str, object]]:
 
 
 def h5_episodes(f) -> list[str]:
-    """The group paths of the file's episodes: the first level, from the root down, holding two or more sibling groups
-    with one layout (the same dataset paths under each); else [""], the whole file."""
+    """Episode groups share a sibling layout, or one numbered take contains every recorded stream. The whole file
+    stays one episode otherwise, so ordinary sensor groups and streams outside a named take remain in scope."""
     import h5py
 
     def layout(g):
@@ -5423,6 +5423,22 @@ def h5_episodes(f) -> list[str]:
         best = max(([k2 for k2, l2 in lays.items() if similar(l1, l2)] for l1 in lays.values()), key=len, default=[])
         if len(best) >= 2:
             return [f"{path}/{k}" if path else k for k in sorted(best, key=_natural)]
+        numbered = []
+        for k in lays:
+            parts = tokens(k)
+            m = TAKE_WORD.fullmatch(parts[0]) if parts else None
+            if m and ((len(parts) == 1 and m[2]) or
+                      (len(parts) == 2 and not m[2] and parts[1].isdigit())):
+                numbered.append(f"{path}/{k}" if path else k)
+        if len(numbered) == 1:
+            prefix = numbered[0] + "/"
+            whole = h5_streams(f, "")
+            streams = [s["path"] for kind in ("camera", "depth", "signal") for s in whole[kind]]
+            streams += list(whole["native_clock"])
+            outside_notes = [s for s in whole["text"] if not s["path"].startswith(prefix)]
+            if (whole["camera"] and all(p.startswith(prefix) for p in streams + whole["unused"])
+                    and all(f[s["path"]].size <= H5_CONSTANT_MAX for s in outside_notes)):
+                return numbered
         queue += [(f"{path}/{k}" if path else k, kg) for k, kg in kids]
     return [""]
 
