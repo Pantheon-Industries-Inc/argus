@@ -63,6 +63,9 @@ def motion(ep: dict) -> tuple[np.ndarray, np.ndarray]:
 
 
 def video_motion(ep: dict, n: int) -> np.ndarray:
+    """The anchor camera's grey-level change between consecutive frames, per frame. A stretch of the video that does
+    not decode has no change measured (0, as a still stretch); decoding goes on after it, seeking further ahead each
+    time the decoder fails again, so one damaged stretch never stops the recording from being cut."""
     import av
     from label import episode as me
     from label import frames as mf
@@ -79,21 +82,29 @@ def video_motion(ep: dict, n: int) -> np.ndarray:
             b0, step = mf.base_frame(s["base_s"], me.ep_fps(ep)), mf.frame_pts_step(st.time_base, me.ep_fps(ep))
             targets = [(b0 + k) * step for k in range(n)]
         index = {p: k for k, p in enumerate(targets)}
-        c.seek(targets[0], stream=st, backward=True, any_frame=False)
-        prev = None
-        for fr in c.decode(st):
-            k = index.get(fr.pts)
-            if k is None:
-                if fr.pts is not None and fr.pts > targets[-1]:
-                    break
-                continue
-            g = fr.reformat(width=64, height=max(2, int(round(fr.height * 64 / fr.width))), format="gray").to_ndarray()
-            g = g.astype(np.int16)
-            if prev is not None:
-                out[k] = np.abs(g - prev).mean()
-            prev = g
-            if k == n - 1:
+        start, seen, skip = 0, -1, 1
+        while start < n:
+            prev = None
+            try:
+                c.seek(targets[start], stream=st, backward=True, any_frame=False)
+                for fr in c.decode(st):
+                    k = index.get(fr.pts)
+                    if k is None:
+                        if fr.pts is not None and fr.pts > targets[-1]:
+                            break
+                        continue
+                    g = fr.reformat(width=64, height=max(2, int(round(fr.height * 64 / fr.width))),
+                                    format="gray").to_ndarray().astype(np.int16)
+                    if prev is not None and k > seen:
+                        out[k] = np.abs(g - prev).mean()
+                    prev, seen = g, max(seen, k)
+                    if k == n - 1:
+                        break
                 break
+            except av.error.FFmpegError as e:
+                if isinstance(e, OSError):      # a file that is gone or cannot be opened is our fault, never data's
+                    raise
+                start, skip = max(start, seen + 1) + skip, skip * 2
     return out
 
 

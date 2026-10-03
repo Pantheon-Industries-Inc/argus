@@ -422,7 +422,9 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
         futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks, failed[v]) for v in vs}
         got = {v: f.result() for v, f in futs.items()}
     ks = sorted(set(pl["ks"]))
-    keep = [k for k in ks if any(k in got[v] for v in vs)]
+    # an instant some camera can show: decoded there and inside its own recording (a camera paired by time that was
+    # not recording has only its nearest frame, from another time, which is never shown)
+    keep = [k for k in ks if any(k in got[v] and _in_span(ep, v, k) for v in vs)]
     if not keep:
         raise mf.FrameError(f"{ep.get('dir', '?')}: no camera has a frame at any instant")
     ep.pop("footage_end", None)
@@ -433,7 +435,7 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
             # again at full size, for the detail view): the latest any camera has takes the end's place
             for k in range(min(past) - 1, keep[-1] - 1, -1):
                 more = {v: _decode_view(ep, v, [k], gate) for v in vs}
-                if any(more.values()):
+                if any(k in more[v] and _in_span(ep, v, k) for v in vs):
                     for v in vs:
                         got[v].update(more[v])
                     keep = sorted(set(keep) | {k})
@@ -444,8 +446,9 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
             pl["contact"] = [k for k in pl["contact"] if k in keep]
     ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
     # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
-    # where its file ended); a camera with no frame at all that failed to decode does not decode anywhere
-    bad = {v: sorted(k for k in failed[v] if k in keep and (not got[v] or k < max(got[v]))) for v in vs}
+    # where its file ended); a camera with no frame at all that failed to decode does not decode anywhere. It is
+    # recorded whether or not another camera shows the instant, so an instant that left the request is still flagged
+    bad = {v: sorted(k for k in failed[v] if not got[v] or k < max(got[v])) for v in vs}
     ep["decode_failed"] = {v: ks_ for v, ks_ in bad.items() if ks_}
     ep["undecodable"] = {v for v in ep["decode_failed"] if not got[v]}
     return got
@@ -862,7 +865,8 @@ def _coverage_note(ep: dict, pl: dict) -> str:
         if not all(_in_span(ep, v, k) for k in pl["ks"]):
             t = ep["times"][v]
             gaps.append(f"{name} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
-        bad = set((ep.get("decode_failed") or {}).get(v) or ())
+        # the instants of the request it could not decode (one no camera could show has left the request)
+        bad = set((ep.get("decode_failed") or {}).get(v) or ()) & set(pl["ks"])
         if v in (ep.get("undecodable") or ()):
             never.append(f"{name}'s video could not be decoded at any instant")
         elif bad:

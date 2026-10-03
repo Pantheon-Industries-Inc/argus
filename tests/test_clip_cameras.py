@@ -371,3 +371,46 @@ def test_the_job_notes_list_every_reader_issue_once(tmp_path):
                             "take 1: the right wrist camera video could not be decoded, so this episode is shown and "
                             "labelled without it."]
     assert rep["episodes"][0]["cameras"] == {"exo": "top"}
+
+
+def test_one_damaged_stretch_never_stops_a_long_recording_from_being_cut(tmp_path):
+    """The motion a long recording is cut by (label/pieces.py video_motion) reads the main camera's image change: a
+    stretch that does not decode has no motion measured, and the frames after it are read as usual."""
+    from label import pieces
+    up = tmp_path / "up"
+    up.mkdir()
+    _damaged(up / "top.mp4", 300, range(130, 150))
+    rep = formats.convert(up, "teleop_arms", tmp_path / "eps", "mine", float("inf"), grouping={})
+    ep = me.load(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
+    n = int(ep["sources"]["exo"]["n_frames"])
+    m = pieces.video_motion(ep, n)
+    assert len(m) == n and m[100:125].sum() > 0 and m[200:290].sum() > 0     # before and after the damage
+
+
+def test_an_instant_no_camera_can_show_is_left_out_of_the_request(tmp_path, monkeypatch):
+    """The main camera does not decode for a stretch and the other camera was not recording there (outside its own
+    span): no camera can show those instants, so they leave the request, and the episode is labelled from the rest."""
+    up = tmp_path / "up"
+    up.mkdir()
+    _damaged(up / "top.mp4", 300, range(130, 150))
+    _damaged(up / "wrist_left.mp4", 300, range(0))
+    rep = formats.convert(up, "teleop_arms", tmp_path / "eps", "mine", float("inf"), grouping={})
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    span = me._in_span
+    monkeypatch.setattr(me, "_in_span", lambda e, v, k: span(e, v, k) and (v == "exo" or not 120 <= k <= 170))
+    req = me.build_request(ep)
+    (bad,) = [x for x in req["decode_failed"] if x["camera"] == "exo"]
+    assert 4.0 <= bad["t0_s"] <= bad["t1_s"] <= 5.5
+    assert req["timesteps"] and not [t for t in req["timesteps"] if bad["t0_s"] <= t <= bad["t1_s"]]
+
+
+def test_a_single_cameras_damaged_stretch_is_flagged(tmp_path):
+    """With one camera, the instants it cannot decode have no frame at all and leave the request, and the stretch is
+    still in the record the board flags it from."""
+    up = tmp_path / "up"
+    up.mkdir()
+    _damaged(up / "top.mp4", 300, range(130, 150))
+    rep = formats.convert(up, "teleop_arms", tmp_path / "eps", "mine", float("inf"), grouping={})
+    req = me.build_request(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
+    (bad,) = req["decode_failed"]
+    assert bad["camera"] == "exo" and 4.0 <= bad["t0_s"] <= bad["t1_s"] <= 5.5

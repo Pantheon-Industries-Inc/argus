@@ -827,3 +827,38 @@ def test_an_action_of_another_width_stays_a_signal(tmp_path):
     ctx, ep = _convert(tmp_path, {"observations/qpos": _aloha(), "action": np.zeros((40, 7))})
     assert ctx["state_kind"] == "joints" and "action" not in np.load(ep / "state.npz")
     assert "action" in {x["name"] for x in ctx["signals"]}
+
+
+def test_a_depth_frame_that_does_not_decode_is_left_out_and_the_rest_are_read(monkeypatch):
+    """A depth video damaged at one frame costs that frame alone: label/depth.py decode leaves it out, as it leaves
+    out a frame it does not find, and returns the others."""
+    class Frame:
+        def __init__(self, pts):
+            self.pts, self.format = pts, type("F", (), {"name": "gray16le"})()
+
+        def to_ndarray(self, format=None):
+            return np.full((2, 2), self.pts, np.uint16)
+
+    class Container:
+        def __init__(self):
+            self.streams = type("S", (), {"video": [type("V", (), {"codec_context": type("C", (), {})()})()]})()
+            self.at = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def seek(self, p, **kw):
+            self.at = p
+
+        def decode(self, s):
+            for p in range(self.at, 10):
+                if p == 5:
+                    raise av.error.InvalidDataError(1094995529, "Invalid data found when processing input")
+                yield Frame(p)
+
+    monkeypatch.setattr(av, "open", lambda *a, **kw: Container())
+    got = dp.decode({"packed": "depth.mkv"}, list(range(10)), [2, 5, 7])
+    assert sorted(got) == [2, 7] and int(got[7][0, 0]) == 7

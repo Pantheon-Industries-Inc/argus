@@ -50,7 +50,8 @@ def load(ep_dir: Path) -> dict:
 
 def decode(entry: dict, pts_all, idx: list[int]) -> dict:
     """{index: uint16 array} for the depth frames idx (indices into the stream), each found at its exact pts. A frame
-    that is not found is left out, never replaced by a neighbour."""
+    that is not found, or that the decoder fails on (a damaged stretch of the video), is left out, never replaced by
+    a neighbour, and the other frames are read as usual."""
     import av
     want = {int(pts_all[i]): int(i) for i in sorted(set(int(i) for i in idx)) if 0 <= int(i) < len(pts_all)}
     out = {}
@@ -62,14 +63,18 @@ def decode(entry: dict, pts_all, idx: list[int]) -> dict:
         for p in sorted(want):
             if want[p] in out:
                 continue
-            c.seek(p, stream=s, backward=True, any_frame=False)
-            for fr in c.decode(s):
-                if fr.pts is None:
-                    continue
-                if fr.pts in want and want[fr.pts] not in out:
-                    out[want[fr.pts]] = _array(fr)
-                if fr.pts >= p:
-                    break
+            try:
+                c.seek(p, stream=s, backward=True, any_frame=False)
+                for fr in c.decode(s):
+                    if fr.pts is None:
+                        continue
+                    if fr.pts in want and want[fr.pts] not in out:
+                        out[want[fr.pts]] = _array(fr)
+                    if fr.pts >= p:
+                        break
+            except av.error.FFmpegError as e:
+                if isinstance(e, OSError):      # a file that is gone or cannot be opened is our fault, never data's
+                    raise
     return out
 
 
