@@ -1,5 +1,5 @@
 {
- "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, reader_issues the kinds of problem an episode was kept and flagged with (context.json reader_issues) that raise it, completion the outcomes that raise it, and datasets limits a family to those datasets.",
+ "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, reader_issues the kinds of problem an episode was kept and flagged with (context.json reader_issues) that raise it, completion the outcomes that raise it, and datasets limits a family to those datasets. list is data for a fault in the recording, the scene or the label, mistake for an operator mistake, labelling for a model reply that gave no labels and handling for a limit of how we read or showed the recording; the last two are shown on the episode and never counted.",
  "families": [
   {
    "slug": "privacy-blur",
@@ -101,7 +101,7 @@
   },
   {
    "slug": "label-failed",
-   "list": "data",
+   "list": "labelling",
    "name": "Model reply gave no labels",
    "reader_issues": [
     "model_reply_unparsed",
@@ -109,6 +109,18 @@
     "part_not_labelled",
     "label_output_unreadable",
     "no_part_labelled"
+   ]
+  },
+  {
+   "slug": "read-with-a-limit",
+   "list": "handling",
+   "name": "Read or shown with a limit of ours",
+   "reader_issues": [
+    "table_downsampled",
+    "signal_summarised",
+    "camera_not_colour",
+    "depth_clip_failed",
+    "camera_offset"
    ]
   },
   {

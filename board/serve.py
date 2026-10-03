@@ -2828,7 +2828,9 @@ function datasetSourceHtml(s) {
 }
 // The problems the episode was kept and flagged with (board/build.py reader_issues, from context.json): a camera whose
 // video does not decode, which the episode is shown and labelled without, a camera whose clip has fewer frames than
-// the episode, and any other kind a reader records. Each is a row of the recording checks card, in the sentence the
+// the episode, and any other kind a reader records. One of a family that is no fault in the recording (a model reply
+// that gave no labels, a limit of how we read it; board/families.py COUNTED_LISTS) is marked as not counted, as the
+// filter and the counts leave it out. Each is a row of the recording checks card, in the sentence the
 // entry carries, under the family it raises (board/families.py reader_family), with its camera or signal and its time
 // when the entry has them. Nothing is drawn when the episode has none.
 function readerIssueRows(d) {
@@ -2837,8 +2839,10 @@ function readerIssueRows(d) {
   return (Array.isArray(ri) ? ri : []).filter(x => x && typeof x.what === 'string' && x.what.trim()).map(x => {
     const t = num(x.t0_s) ? parseFloat(x.t0_s) : null;
     const fam = x.family || ('d:' + String(x.kind || 'reader issue').replace(/_/g, ' '));
-    return `<div class="di-row high"${t != null ? ` data-t="${t}"` : ''}>
-      <span class="di-sev">check</span>
+    // a reply that gave no labels or a limit of how we read the recording is no fault in it, and is not counted
+    const counted = ['data', 'mistake'].includes(famList(fam));
+    return `<div class="di-row ${counted ? 'high' : 'low minor'}"${t != null ? ` data-t="${t}"` : ''}>
+      <span class="di-sev">${counted ? 'check' : 'not counted'}</span>
       <div class="di-body">
         <div class="di-issue">${esc(x.what)}</div>
         <div class="di-tags"><span class="di-cat">${esc(famName(fam))}</span>${t != null ? `<span class="di-t">@ `

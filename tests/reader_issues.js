@@ -1,6 +1,7 @@
 // The recording checks card's rows for the problems an episode was kept and flagged with (board/serve.py
 // readerIssueRows, from board/build.py reader_issues): one row per entry in the sentence it carries, escaped, under the
 // name of the family it raises, with its time and signal when it has them; an entry with no sentence draws nothing.
+// One whose family is not a fault in the recording (board/families.py COUNTED_LISTS) is marked as not counted.
 //
 //   node tests/reader_issues.js [PAGE_SOURCE]     (default board/serve.py)
 //
@@ -19,9 +20,10 @@ if (e0 < 0 || e1 < e0 || t0 < 0 || r0 < 0) {
 }
 const r1 = src.indexOf('\n}\n', r0) + 3;
 const NAMES = {'clip-frames': 'Camera video has fewer frames than the episode',
-               'camera-undecodable': 'Camera video does not decode'};
-const T = new Function('famName', src.slice(e0, e1) + src.slice(t0, t1) + src.slice(r0, r1)
-  + 'return {readerIssueRows};')(s => NAMES[s] || String(s).slice(2));
+               'camera-undecodable': 'Camera video does not decode', 'label-failed': 'Model reply gave no labels'};
+const LISTS = {'label-failed': 'labelling'};
+const T = new Function('famName', 'famList', src.slice(e0, e1) + src.slice(t0, t1) + src.slice(r0, r1)
+  + 'return {readerIssueRows};')(s => NAMES[s] || String(s).slice(2), s => LISTS[s] || 'data');
 
 let bad = 0;
 const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };
@@ -43,4 +45,11 @@ check(rows[1].includes('The left &lt;b&gt; video has 29 frames.') && rows[1].inc
 check(rows[2].includes('data-t="3.25"') && rows[2].includes('@ 3.3s') && rows[2].includes('>force</span>')
   && rows[2].includes('<span class="di-cat">signal gap</span>'), 'a kind with no family, its time and its signal');
 check(!rows[0].includes('data-t='), 'no time, no seek');
+// a problem of a family that is not a fault in the recording (a reply that gave no labels) is shown, marked as not
+// counted, never in the style of a counted fault
+const [lf] = T.readerIssueRows({dataset_checks: {reader_issues: [{kind: 'model_reply_unparsed', family: 'label-failed',
+  what: 'The model\'s reply did not parse as JSON.'}]}});
+check(lf && lf.includes('di-row low minor') && lf.includes('>not counted<') && lf.includes('Model reply gave no labels'),
+  'a problem that is not a fault in the recording is shown as not counted');
+check(rows[0].includes('di-row high') && rows[0].includes('>check<'), 'a fault in the recording is shown as before');
 process.exit(bad ? 1 : 0);

@@ -346,7 +346,7 @@ def test_a_run_whose_replies_all_failed_still_builds_a_board_of_its_episodes(tmp
         assert "stream_pairing" in d["dataset_checks"]
         issue = next(x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == kind)
         assert issue["family"] == "label-failed" and "did not parse" in issue["what"]
-        assert "label-failed" in fam.classify(d)["counted"]
+        assert "label-failed" in fam.classify(d)["not_counted"] and "label-failed" not in fam.classify(d)["counted"]
     d0 = json.loads((board / "qa" / "episode_000000.json").read_text())
     assert [x["kind"] for x in d0["dataset_checks"]["reader_issues"]] == ["model_reply_unparsed",
                                                                           "camera_decode_failed"]
@@ -922,6 +922,41 @@ def test_each_reader_issue_raises_its_family_at_any_severity(tmp_path):
     none = {}
     board_build.add_context(none, {"profile": "teleop_arms", "fps": 30}, tmp_path)
     assert "dataset_checks" not in none
+
+
+# every kind of problem a reader, board clips or the board build records (context.json reader_issues and
+# board/build.py reader_issues): a fault in the recording counts as a data issue; a model reply that gave no labels
+# and a limit of how we read or showed the recording are shown on the episode and never counted
+READER_ISSUE_KINDS = {
+    "data": ["camera_not_aligned", "camera_not_decodable", "camera_decode_failed", "clip_frame_count",
+             "unshown_camera_not_decodable", "depth_not_read", "depth_clip_partial", "depth_clip_timing",
+             "signal_bad_cells", "signal_gap", "signal_not_finite", "signal_partial_span", "signal_alignment_assumed",
+             "state_filled", "state_unaligned", "state_partial", "table_short", "table_long"],
+    "labelling": ["model_reply_unparsed", "model_reply_cut_off", "part_not_labelled", "label_output_unreadable",
+                  "no_part_labelled"],
+    "handling": ["table_downsampled", "signal_summarised", "camera_not_colour", "depth_clip_failed",
+                 "camera_offset"],
+}
+
+
+def test_only_a_fault_in_the_recording_counts_as_a_data_issue():
+    """A job whose replies all failed had every episode under Data issues as "Model reply gave no labels", and a table
+    read every so many rows or a signal kept as its lowest, mean and highest value counted as a fault in the
+    recording. Each kind lands in its list: a fault in the recording counts, a reply that gave no labels and a limit
+    of how we read the recording are kept on the episode (not_counted) and never in the data issue rates."""
+    fam = Families()
+    for lst, kinds in READER_ISSUE_KINDS.items():
+        for kind in kinds:
+            d = {"dataset_checks": {"reader_issues": [{"kind": kind, "what": "x",
+                                                       "family": fam.reader_family(kind)}]}}
+            c = fam.classify(d)
+            slug = fam.reader_family(kind)
+            assert fam.list_of(slug) == lst, (kind, slug)
+            if lst == "data":
+                assert slug in c["counted"] and not c["not_counted"], kind
+            else:
+                assert not c["counted"] and slug in c["not_counted"], kind
+    assert fam.catalog()["label-failed"]["list"] == "labelling"
 
 
 def test_a_reply_that_gave_no_labels_is_shown_on_its_episode():
