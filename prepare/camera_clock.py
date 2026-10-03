@@ -63,6 +63,24 @@ def load_times(ep_dir: Path, ctx: dict, recorded: bool = False) -> dict:
     return times
 
 
+def pairing_times(ep_dir: Path, ctx: dict) -> dict:
+    """Select both camera and depth clocks for frame pairing, preserving their exact encoded PTS.
+    A camera's presentation opt in applies independently of whether depth needs its own presentation array.
+    Unmarked episodes retain their recorded pairing clocks."""
+    times = load_times(ep_dir, ctx)
+    path = Path(ep_dir) / "depth_times.npz"
+    if path.exists():
+        with np.load(path) as source:
+            times.update({key: source[key] for key in source.files})
+    if ctx.get("depth_presentation_times"):
+        with np.load(Path(ep_dir) / ctx["depth_presentation_times"]) as presentation:
+            for key in presentation.files:
+                if key not in times or len(presentation[key]) != len(times[key]):
+                    raise ValueError(f"depth presentation times do not match the recorded frames of {key}")
+                times[key] = presentation[key]
+    return times
+
+
 def unshown_times(ep_dir: Path, entry: dict, zero_s: float = 0.0) -> tuple[np.ndarray, np.ndarray] | None:
     """An opted in side camera's presentation clock and original packets for its explicit frame span.
     Offsets move display placement onto a part or replacement anchor clock without changing the source sidecar."""

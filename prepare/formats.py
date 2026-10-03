@@ -2546,7 +2546,7 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
             td = (td - (zero if shared_clock and zero is not None else td[0])
                   + (times[v][0] if not shared_clock else 0.0))
         display_td, depth_note = presentation_clock(td, nominal_fps) if d.get("capture_clock") else (td, None)
-        display_ta = placed[anchor] if d.get("capture_clock") else ta
+        display_ta = placed[anchor]
         entry, tz = depth_entry(ep, v, Path(d["path"]), display_td, display_ta, pd_["pts"], d.get("scale_m"), d.get("source") or "",
                                 extra, files[v][0])
         tz[f"depth_{v}"] = td
@@ -5329,8 +5329,8 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
     readings, and left out only when it records nothing inside the footage), or, with no clock, one row per anchor
     frame when it has as many rows as the anchor has frames. A value that is not finite is NaN (not_finite)."""
     out = Signals()
-    q = np.asarray(q_abs, dtype=np.float64)
-    camera_note = presentation_clock(q, fps)[1]
+    recorded_q = np.asarray(q_abs, dtype=np.float64)
+    q, camera_note = presentation_clock(recorded_q, fps)
     span = float(q[-1] - q[0]) if len(q) > 1 else 0.0
     for s in streams["signal"]:
         ds = f[s["path"]]
@@ -5354,7 +5354,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
                 names = value_names(stated, a.shape[1])
                 break
         same_tied_rows = (s["clock"] and camera_note is not None and len(a) == len(q)
-                          and np.array_equal(streams["clock"][s["clock"]], q))
+                          and np.array_equal(streams["clock"][s["clock"]], recorded_q))
         if same_tied_rows:
             # Every retained row keeps its recorded value. Shared tied stamps only establish assumed row order.
             v, rate, far, var = not_finite(s["name"], a, q, q[0], out), fps, None, None
@@ -5654,20 +5654,21 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 depth[v] = {"path": ep / f"depth_{v}.mkv", "real": t if coarse else None,
                             "capture_clock": coarse, "scale_m": dw.scale_m, "source": source}
         signals = h5_signals(f, st, q_abs, fps, chosen[anchor]["n"])
+        q_selected = presentation_clock(q_abs, fps)[0]
         # sensor files of the episode's folder (assign_sensors): on the camera's clock when both are on a recorder's
         # clock, which may give the state; else from both starts, after the state is read, so an assumed alignment
         # is never the recorded state (split_sensors)
-        by_clock, assumed, unplaced = split_sensors(item, q_abs, chosen[anchor]["clock"] is not None)
+        by_clock, assumed, unplaced = split_sensors(item, q_selected, chosen[anchor]["clock"] is not None)
         sensor_h5s = [p for p in by_clock if p.suffix.lower() in H5_EXT]
         sensor_mcaps = [p for p in by_clock if p.suffix.lower() == ".mcap"]
         if sensor_h5s:
-            merge_signals(signals, h5_file_signals(sensor_h5s, q_abs, len(q_abs)))
+            merge_signals(signals, h5_file_signals(sensor_h5s, q_abs, len(q_abs), fps=fps))
         if sensor_mcaps:
-            merge_signals(signals, mcap_signals(sensor_mcaps, q_abs))
-        state, action, state_names, state_src, state_note = h5_state(signals, rig, q_abs)
+            merge_signals(signals, mcap_signals(sensor_mcaps, q_selected))
+        state, action, state_names, state_src, state_note = h5_state(signals, rig, q_selected)
         sensor_extra: dict = {}
         if assumed:
-            merge_signals(signals, sensors_from_start(assumed, q_abs - q_abs[0], sensor_extra))
+            merge_signals(signals, sensors_from_start(assumed, q_selected - q_selected[0], sensor_extra))
         instr, notes = h5_text(f, g, st["text"])
         native_meta = {}
         if st["native_clock"]:
@@ -5695,7 +5696,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["source"]["unused_arrays"] = st["unused"]
     for i in sensor_extra.get("reader_issues") or []:
         add_issue(extra, **i)
-    note_sensors(extra, signals, by_clock, assumed, unplaced, q=q_abs)
+    note_sensors(extra, signals, by_clock, assumed, unplaced, q=q_selected)
     if state_src:
         extra["source"]["state"] = state_src
     if state_note:
@@ -5749,7 +5750,7 @@ def h5_has_camera(path: Path) -> bool:
         return False
 
 
-def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Signals:
+def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: float | None = None) -> Signals:
     """Every signal of HDF5 files that hold no camera, placed on videos' frame times (q_abs, the recorder's clock):
     a glove's pressure and hand pose recorded beside a head camera. Only arrays with their own clock can be placed."""
     import h5py
@@ -5758,7 +5759,7 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Sign
         try:
             with h5py.File(p, "r") as f:
                 st = h5_streams(f, "")
-                got = h5_signals(f, {**st, "signal": [s for s in st["signal"] if s["clock"]]}, q_abs, None, n_anchor)
+                got = h5_signals(f, {**st, "signal": [s for s in st["signal"] if s["clock"]]}, q_abs, fps, n_anchor)
                 # with several files each array, kept or left out, carries its file's name first
                 named = (lambda k: f"{p.stem} {k}") if len(paths) > 1 else (lambda k: k)
                 for k, v in got.items():

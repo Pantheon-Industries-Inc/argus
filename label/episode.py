@@ -1838,7 +1838,27 @@ def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
         f"{precision}{qualification}Each grid cell is the camera frame "
         f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's {ends} are "
         f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
-        "small detail (lettering, a display, fine alignment).")
+        "small detail (lettering, a display, fine alignment)." + _excluded_camera_clock_notes(ep))
+
+
+def _excluded_camera_clock_notes(ep: dict) -> str:
+    """Keep an excluded stream's clock issue scoped to its actual source, without adding it to sampled views."""
+    ctx = ep["context"]
+    notes = []
+    for entry in ctx.get("unshown_cameras") or []:
+        clock = entry.get("camera_clock") or {}
+        name = entry.get("name")
+        if not name or not clock.get("what"):
+            continue
+        issues = [i["what"] for i in ctx.get("reader_issues") or []
+                  if i.get("kind") == "camera_timestamp_repeated" and i.get("camera") == name and i.get("what")]
+        reason = str(entry.get("why") or "")
+        suffix = ". " + clock["what"]
+        if reason.endswith(suffix):
+            reason = reason[:-len(suffix)]
+        omitted = f"{name} is not shown to the model" + (f" because {reason}" if reason else "") + ". "
+        notes.append(omitted + " ".join(dict.fromkeys(issues or [clock["what"]])))
+    return " " + " ".join(notes) if notes else ""
 
 
 def _instants_line(ep: dict) -> str:
