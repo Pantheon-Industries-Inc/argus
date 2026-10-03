@@ -132,6 +132,29 @@ def test_a_command_channel_does_not_disprove_absent_observed_state():
         {"n": 3, "ks": [0], "spans": [], "touch": frozenset()})
 
 
+@pytest.mark.parametrize("name", ["observation.commanded_joint_positions", "joint_commanded_position",
+    "commanded_gripper_state", "joint_positions_commanded", "jointCommandedPosition", "commanded1_joint_positions"])
+@pytest.mark.parametrize("width", [1, 2, 7, 64, 65])
+def test_commanded_values_never_disprove_absent_observed_state(name, width):
+    ep = _episode(np.tile([[1.], [3.], [2.]], (1, width)))
+    ep["signals"] = {name: ep["signals"]["qpos"]}
+    ep["context"]["state_why"] = "not_recorded"
+    text = me._no_state_text(ep, {"n": 3, "ks": [0, 1, 2], "spans": [], "touch": frozenset()})
+    assert "as the recording holds none" in text
+    assert "given value by value" not in text
+
+
+@pytest.mark.parametrize("name", ["observation.joint_positions", "observation.arm_state",
+                                  "observation.uncommanded_joint_positions", "joint_commandedness_position"])
+@pytest.mark.parametrize("width", [1, 7, 65])
+def test_command_words_do_not_hide_observations_with_unrelated_longer_words(name, width):
+    ep = _episode(np.tile([[1.], [3.], [2.]], (1, width)))
+    ep["signals"] = {name: ep["signals"]["qpos"]}
+    ep["context"]["state_why"] = "not_recorded"
+    assert "no arm state in the layout our checks read" in me._no_state_text(ep,
+        {"n": 3, "ks": [0, 1, 2], "spans": [], "touch": frozenset()})
+
+
 @pytest.mark.parametrize("name", ["observation.joint_positions", "qpos", "left_joint1", "observation.state",
                                  "observation.arm_state", "robot_state", "gripper_state"])
 def test_finite_scalar_observed_joint_or_state_disproves_old_absence(name):

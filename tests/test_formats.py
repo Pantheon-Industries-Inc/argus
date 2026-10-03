@@ -1719,8 +1719,14 @@ def test_a_hand_poses_finger_digits_are_not_touch():
 
 def test_a_command_is_never_touch():
     """A commanded force is not a measured one."""
-    for name in ("action.gripper_force", "gripper_force_cmd", "target_pressure", "desired_contact"):
+    for name in ("action.gripper_force", "gripper_force_cmd", "target_pressure", "desired_contact",
+                 "commanded_force", "force_commanded", "commandedPressure", "commanded1_contact"):
         assert not f.names_touch(name), name
+
+
+def test_a_longer_word_does_not_turn_a_touch_measurement_into_a_command():
+    for name in ("uncommanded_force", "pressure_commandedness"):
+        assert f.names_touch(name), name
 
 
 def test_tactile_camera_names_still_say_they_sense_touch():
