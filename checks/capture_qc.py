@@ -699,40 +699,46 @@ def assess(feats: dict) -> dict:
     anchor_pc: dict[str, np.ndarray] = {}
     cam_metrics = {}
     cam_err: dict[str, str] = {}      # camera -> the error its checks stopped with
-    with _guard(R, VIDEO_CHECKS):
-        R["missing_camera"] = _fired([] if cams else [_ev("the episode has no camera")])
-        av_all = actor_views(ep, names) if usable_state else []
-
-        def expected_motion(v: str, t0: float, t1: float) -> str:
-            """Why camera v's picture must change between t0 and t1, from the recorded state, or "" when the
-            recording gives no such reason (video-only rigs, or nothing recorded moving)."""
-            if not usable_state:
-                return ""
-            k = np.flatnonzero((ts >= t0) & (ts <= t1))
-            if len(k) < 2:
-                return ""
-            a, b = int(k[0]), int(k[-1])
-            mounted = [g for g, mv in enumerate(av_all) if mv == v]
-            movers = mounted if mounted else (list(range(len(names))) if v == "exo" and rig == "teleop_arms" else [])
-            s_raw = np.asarray(ep["state"], dtype=np.float64)
-            for g in movers:
-                o = 7 * g
-                if kind == "ee_pose":
-                    # summed over the steps with a reading (a missing row never hides a frozen camera)
-                    path = float(np.nansum(np.linalg.norm(np.diff(s_raw[a:b + 1, o:o + 3], axis=0), axis=1)))
-                    turn = float(np.linalg.norm(global_[a:b, o + 3:o + 6], axis=1).sum())
-                    if path >= 0.02 or turn >= 0.1:
-                        return (f"the recorded {names[g]} pose moves {path * 100:.0f} cm and turns "
-                                f"{np.degrees(turn):.0f} deg")
-                elif kind == "joints":
-                    jt = float(np.nansum(np.abs(np.diff(s_raw[a:b + 1, o:o + 6], axis=0))))
-                    if jt >= 0.1:
-                        return f"the recorded {names[g]} arm joints move {np.degrees(jt):.0f} deg in total"
-            return ""
-
-        align_ev, dec_ev, cnt_ev = [], [], []
-        exp_ev, low_ev, dup_ev, frz_ev = [], [], [], []
+    cam_unchecked: dict[str, set] = {}  # camera -> the video checks it crashed before finishing
+    align_ev, dec_ev, cnt_ev = [], [], []
+    exp_ev, low_ev, dup_ev, frz_ev = [], [], [], []
     lists = (align_ev, dec_ev, cnt_ev, exp_ev, low_ev, dup_ev, frz_ev)
+    list_checks = VIDEO_CHECKS[1:]    # the check each evidence list is for, in the same order
+    with _guard(R, ("missing_camera",)):
+        R["missing_camera"] = _fired([] if cams else [_ev("the episode has no camera")])
+    # of the video checks only the frozen picture needs the camera each actor is mounted on (to tell it from a still
+    # scene), so failing to work it out errors that check alone (None)
+    av_all = None
+    with _guard(R, ("video_frozen_run",)):
+        av_all = actor_views(ep, names) if usable_state and extra["frozen_needs_motion"] else []
+
+    def expected_motion(v: str, t0: float, t1: float) -> str:
+        """Why camera v's picture must change between t0 and t1, from the recorded state, or "" when the
+        recording gives no such reason (video-only rigs, or nothing recorded moving)."""
+        if not usable_state or av_all is None:    # None: video_frozen_run is errored already
+            return ""
+        k = np.flatnonzero((ts >= t0) & (ts <= t1))
+        if len(k) < 2:
+            return ""
+        a, b = int(k[0]), int(k[-1])
+        mounted = [g for g, mv in enumerate(av_all) if mv == v]
+        movers = mounted if mounted else (list(range(len(names))) if v == "exo" and rig == "teleop_arms" else [])
+        s_raw = np.asarray(ep["state"], dtype=np.float64)
+        for g in movers:
+            o = 7 * g
+            if kind == "ee_pose":
+                # summed over the steps with a reading (a missing row never hides a frozen camera)
+                path = float(np.nansum(np.linalg.norm(np.diff(s_raw[a:b + 1, o:o + 3], axis=0), axis=1)))
+                turn = float(np.linalg.norm(global_[a:b, o + 3:o + 6], axis=1).sum())
+                if path >= 0.02 or turn >= 0.1:
+                    return (f"the recorded {names[g]} pose moves {path * 100:.0f} cm and turns "
+                            f"{np.degrees(turn):.0f} deg")
+            elif kind == "joints":
+                jt = float(np.nansum(np.abs(np.diff(s_raw[a:b + 1, o:o + 6], axis=0))))
+                if jt >= 0.1:
+                    return f"the recorded {names[g]} arm joints move {np.degrees(jt):.0f} deg in total"
+        return ""
+
     for v, c in cams.items():
         # one camera's checks: a crash costs only its own evidence, never the other cameras' (cam_err)
         sizes = [len(x) for x in lists]
@@ -861,20 +867,18 @@ def assess(feats: dict) -> dict:
                 anchor_pair[v] = ap
                 anchor_pc[v] = np.concatenate([[0.0], pc])
         except Exception as e:  # noqa: BLE001 - recorded on the camera and on the checks that need it
-            for x, k in zip(lists, sizes):
-                del x[k:]
+            # a check's evidence is complete once appended, so a defect found on this camera before the crash stands
+            # and that check counts as run on it; every check that added nothing may not have run (cam_unchecked)
+            cam_unchecked[v] = {chk for chk, x, k in zip(list_checks, lists, sizes) if len(x) == k}
             for d_ in (anchor_pair, anchor_pc):
                 d_.pop(v, None)
             cam_err[v] = f"{type(e).__name__}: {e}"[:300]
-            cam_metrics[v] = {"error": cam_err[v]}
+            dec_err = c.get("error") if isinstance(c, dict) else None
+            cam_metrics[v] = {"error": cam_err[v], **({"decode_error": dec_err} if dec_err else {})}
     with _guard(R, VIDEO_CHECKS):
-        R["camera_state_alignment_mismatch"] = _fired(align_ev)
-        R["video_decode_failure"] = _fired(dec_ev)
-        R["video_decode_frame_count_mismatch"] = _fired(cnt_ev)
-        R["video_extreme_exposure"] = _fired(exp_ev)
-        R["video_low_contrast"] = _fired(low_ev)
-        R["video_duplicate_frames"] = _fired(dup_ev)
-        R["video_frozen_run"] = _fired(frz_ev)
+        for chk, x in zip(list_checks, lists):
+            if chk not in R:    # video_frozen_run is errored already when the actors' cameras were not worked out
+                R[chk] = _fired(x)
 
     # ---- motion (filtering.py:1654-1700, 1796-1861), end-effector pose only
     actor_metrics: dict[str, dict] = {}
@@ -1030,12 +1034,13 @@ def assess(feats: dict) -> dict:
         # and one that fired on another camera stays fired and names the camera that was not checked
         for c in VIDEO_CHECKS:
             r = R.get(c) or {}
-            if c == "missing_camera" or r.get("status") not in ("fired", "clear"):
+            err_c = "; ".join(f"camera {v}: {m}" for v, m in cam_err.items() if c in cam_unchecked[v])
+            if not err_c or r.get("status") not in ("fired", "clear"):
                 continue
             if r["status"] == "clear":
-                R[c] = {**_r("errored", f"the check stopped with an error ({err})"), "error": err}
+                R[c] = {**_r("errored", f"the check stopped with an error ({err_c})"), "error": err_c}
             else:
-                R[c] = {**r, "why": f"it was not run on every camera, as the check stopped with an error ({err})"}
+                R[c] = {**r, "why": f"it was not run on every camera, as the check stopped with an error ({err_c})"}
     if ctx.get("state_unaligned"):
         # the recorded state is not on these cameras' frames (the camera it was recorded on was taken out,
         # board/clips.py drop_cameras): every check that compares it with the video is not assessed; the checks on the
@@ -1345,8 +1350,10 @@ def refresh_notes(cq: dict) -> dict:
         ev = OLD_SPEED.sub(lambda m: f", over the limit of {m[1]} m/s or {m[2]} rad/s in {m[3]} "
                                      f"interval{'' if m[3] == '1' else 's'}", ev)
         notes.append({**n, **note_record(n["check"], ev, rig)})
-    rows = [{**r, "why": note_why(r["check"], rig)} if isinstance(r, dict) and r.get("shown_as") == "note"
-            and r.get("why") else r for r in cq.get("checks") or []]
+    # a note row's reason is note_why followed by the cameras it was not run on (unchecked), kept apart for this
+    rows = [{**r, "why": " ".join(x for x in (note_why(r["check"], rig), r.get("unchecked")) if x)}
+            if isinstance(r, dict) and r.get("shown_as") == "note" and r.get("why") else r
+            for r in cq.get("checks") or []]
     return {**cq, **({"notes": notes} if "notes" in cq else {}), **({"checks": rows} if "checks" in cq else {})}
 
 
@@ -1384,7 +1391,7 @@ def format_result(a: dict) -> dict:
         for e in r["events"]:
             notes.append(note_record(check, e["evidence"], rig))
         listing.append({**row, "status": "fired", "shown_as": "note", "events": len(r["events"]),
-                        **({"why": why} if why else {})})
+                        **({"why": why} if why else {}), **({"unchecked": r["why"]} if r.get("why") else {})})
     return {"source": SOURCE, "version": VERSION, "flags": flags, "notes": notes, "not_assessed": not_assessed,
             "checks": listing, "metrics": {"cameras": a["cameras"], "actors": a["actors"], "episode": a["episode"]}}
 

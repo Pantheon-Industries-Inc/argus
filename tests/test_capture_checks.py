@@ -303,6 +303,55 @@ def test_a_camera_that_crashes_costs_only_its_own_evidence():
     assert clean["visual_change_unexplained_by_action"]["status"] in ("fired", "clear")
 
 
+def test_a_note_names_the_camera_it_was_not_run_on_after_the_board_build():
+    """The left camera's picture is nearly uniform (a note on every setup) and the right camera's checks crash: the
+    note's row names the camera that was never checked, also after the board build words every note's reason again."""
+    from board.build import capture_names
+    f = _two_cameras(True)
+    f["cams"]["left"]["stds"] = np.full(f["T"], 1.0)
+    rec = cq.format_result(cq.assess(f))
+    board = capture_names(rec)
+    for r in (rec, board):
+        row = next(x for x in r["checks"] if x["check"] == "video_low_contrast")
+        assert row["status"] == "fired" and row["shown_as"] == "note", row
+        assert "camera right" in row["why"] and "TypeError" in row["why"], row
+    assert capture_names(board) == board
+
+
+def test_a_camera_that_crashes_keeps_the_defects_already_found_on_it():
+    """The right camera's file decodes 60 of its 120 frames with an error, then its record breaks a later check: the
+    decode failure and the short frame count found before the crash are still reported with the decoder's error, and
+    the camera keeps both errors."""
+    f = _two_cameras(True)
+    r = f["cams"]["right"]
+    r["error"], r["decoded"] = "moov atom not found", 60
+    r["means"][60:] = np.nan
+    a = cq.assess(f)
+    R = a["checks"]
+    dec, cnt = R["video_decode_failure"], R["video_decode_frame_count_mismatch"]
+    assert dec["status"] == "fired" and "moov atom not found" in dec["events"][0]["evidence"], dec
+    assert cnt["status"] == "fired" and "60 of its 120" in cnt["events"][0]["evidence"], cnt
+    # both ran to the end on both cameras, so neither says a camera went unchecked
+    assert not dec["why"] and not cnt["why"]
+    assert R["video_low_contrast"]["status"] == "errored" and "camera right" in R["video_low_contrast"]["why"]
+    assert "TypeError" in a["cameras"]["right"]["error"]
+    assert a["cameras"]["right"]["decode_error"] == "moov atom not found"
+
+
+def test_a_crash_finding_each_actor_s_camera_costs_only_the_checks_that_need_it(monkeypatch):
+    """Which camera each gripper is mounted on tells a frozen picture from a still scene and pairs each gripper's motion
+    with its own camera: when it cannot be worked out, those checks are errored with the error and every other check
+    of the episode still runs."""
+    def boom(*a, **k):
+        raise RuntimeError("the mounts do not read")
+    monkeypatch.setattr(cq, "actor_views", boom)
+    R = cq.assess(_two_cameras(False))["checks"]
+    need = ("video_frozen_run",) + cq.CAMERA_MOTION_CHECKS
+    for c in need:
+        assert R[c]["status"] == "errored" and "the mounts do not read" in R[c]["why"], (c, R[c])
+    assert not [c for c, r in R.items() if c not in need and r["status"] == "errored"]
+
+
 def test_a_missing_state_row_never_hides_a_frozen_camera():
     """The moving gripper's state has one row with no reading inside the frozen stretch: its motion is summed over the
     rows that have readings, so the frozen camera is still reported."""
