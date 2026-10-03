@@ -3504,6 +3504,8 @@ def _structured_recordings_read_owned_side_notes(tmp_path):
         (root / (own + '.json')).write_text(json.dumps({'task': 'owned outside task', 'note': 'lens glare'}))
         (root / 'session_meta.json').write_text(json.dumps({'task': 'shared outside task', 'operator': 'A'}))
         (root / 'Instruction.txt').write_text('outside text task')
+        if kind == 'mcap':
+            (root / 'info.json').write_text(json.dumps({'note': 'recording metadata'}))
         (root / 'ep99_meta.json').write_text(json.dumps({'task': 'absent task'}))
         (root / 'broken_meta.json').write_text('{broken')
         if kind == 'lerobot':
@@ -3520,6 +3522,8 @@ def _structured_recordings_read_owned_side_notes(tmp_path):
             assert notes[own + '.json']['note'] == 'lens glare', notes
             assert notes['session_meta.json']['operator'] == 'A', notes
             assert notes['Instruction.txt'] == 'outside text task', notes
+            if kind == 'mcap':
+                assert notes['info.json']['note'] == 'recording metadata'
             if kind == 'lerobot':
                 assert notes['meta/Session.JSON']['note'] == 'root metadata'
                 assert notes[cam_note]['note'] == 'camera lens glare'

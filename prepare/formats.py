@@ -6161,7 +6161,7 @@ def attach_structured_notes(items: list[dict]) -> None:
             camera_files = [Path(v[0] if isinstance(v, tuple) else v) for v in videos.values()]
             it["side_notes"] = {"files": [file], "camera_files": camera_files, "side_metadata": True,
                                 "metadata_dirs": [d / "meta"] if it["kind"] == "lerobot" else [],
-                                "metadata_reserved": {"info.json", "stats.json"},
+                                "metadata_reserved": {"info.json", "stats.json"} if it["kind"] == "lerobot" else set(),
                                 "note_folder": {"dir": d, "name": aliases[0], "aliases": aliases,
                                                 "episode": it["name"], "names": registry}}
 
