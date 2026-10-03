@@ -100,6 +100,14 @@
    ]
   },
   {
+   "slug": "task-files-disagree",
+   "list": "data",
+   "name": "Uploaded files name different tasks",
+   "reader_issues": [
+    "task_files_disagree"
+   ]
+  },
+  {
    "slug": "label-failed",
    "list": "labelling",
    "name": "Model reply gave no labels",

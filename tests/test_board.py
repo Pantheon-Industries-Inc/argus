@@ -931,7 +931,7 @@ READER_ISSUE_KINDS = {
     "data": ["camera_not_aligned", "camera_not_decodable", "camera_decode_failed", "clip_frame_count",
              "unshown_camera_not_decodable", "depth_not_read", "depth_not_decodable", "depth_clip_partial",
              "signal_bad_cells", "signal_gap", "signal_not_finite", "signal_partial_span", "signal_alignment_assumed",
-             "state_filled", "state_unaligned", "state_partial", "table_short", "table_long"],
+             "state_filled", "state_unaligned", "state_partial", "table_short", "table_long", "task_files_disagree"],
     "labelling": ["model_reply_unparsed", "model_reply_cut_off", "part_not_labelled", "label_output_unreadable",
                   "no_part_labelled"],
     "handling": ["table_downsampled", "signal_summarised", "camera_not_colour", "depth_clip_failed",
@@ -961,6 +961,9 @@ def test_only_a_fault_in_the_recording_counts_as_a_data_issue():
     # of ours
     nc = fam.reader_family("camera_not_colour")
     assert fam.list_of(nc) == "handling" and nc != fam.reader_family("table_downsampled"), nc
+    # recorder files that name different tasks: a fault in the upload, under the family families.json places it in
+    assert fam.reader_family("task_files_disagree") == "task-files-disagree"
+    assert fam.catalog()["task-files-disagree"]["list"] == "data"
 
 
 def test_a_reply_that_gave_no_labels_is_shown_on_its_episode():
