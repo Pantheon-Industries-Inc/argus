@@ -122,6 +122,8 @@ from pathlib import Path
 
 import numpy as np
 
+from prepare.state_notes import STATE_WHY
+
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 RIGS = ("teleop_arms", "handheld_gripper", "ego_head")
@@ -1009,19 +1011,6 @@ def state_words(name: str) -> list[str]:
     return words[:-1] if len(words) > 1 and words[-1] in STATE_UNIT_WORDS else words
 
 
-# Why an episode has no arm state, in one word, written to context.json "state_why" beside its state_note (no_state):
-# the note says it in full for a reviewer, and labelling chooses its one line on the recorded state from this word, so
-# that line is true for the episode.
-STATE_WHY = {
-    "layout": "a state is recorded, but not in a layout our checks read: its width, its value names, which arm is "
-              "which, or rows that cannot be lined up with the frames",
-    "not_recorded": "the recording holds no state at all",
-    "unreadable": "a file that holds the state, or may hold it, could not be read, or was damaged before any of its "
-                  "messages",
-    "short": "an arm's state does not cover the footage: it starts late, stops early or stops inside it",
-    "assumed_clock": "the state's channels are only on a clock placed on the footage from both starts, an alignment "
-                     "that is assumed",
-}
 
 
 class StateNote(str):
@@ -4649,7 +4638,7 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int) -> Sign
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "videos"}
+NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux", "state_notes", "videos"}
 
 
 def upload_adapters(kind: str) -> list:
