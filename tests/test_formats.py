@@ -4053,3 +4053,125 @@ def test_fractional_data_indices_keep_footage_without_borrowing_task_owners():
         rep, episodes = _converted_notes(root, Path(t) / 'v3_out')
         assert episodes and 'instruction' not in episodes[0][0]
         assert 'episode_index' in episodes[0][1] and '0.5' in episodes[0][1]
+
+
+def _episode_row_upload(root, version, changed):
+    """Two readable episodes, with a separate metadata file for each packed row."""
+    import json
+    import numpy as np
+    import pandas as pd
+    if version == 'v2':
+        _lerobot(root, {0: {'observation.state': [np.zeros(14)] * 10},
+                        1: {'observation.state': [np.zeros(14)] * 10}}, n_video=10)
+        p = root / 'meta/episodes.jsonl'
+        rows = [{'episode_index': 0, 'length': 10, 'tasks': ['first recorded task']},
+                {'episode_index': 1, 'length': 10, 'tasks': ['second recorded task'], **changed}]
+        p.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    else:
+        camera = 'observation.images.cam_high'
+        _lerobot_v3(root, {camera: 20}, {'episode_index': [0] * 10 + [1] * 10,
+                                      'frame_index': list(range(10)) * 2,
+                                      'observation.state': [np.zeros(3)] * 20})
+        for index in (0, 1):
+            p = root / f'meta/episodes/chunk-000/file-{index:03d}.parquet'
+            p.parent.mkdir(parents=True, exist_ok=True)
+            row = {'episode_index': index, 'length': 10,
+                   'tasks': [f'{"first" if index == 0 else "second"} recorded task'],
+                   'data/chunk_index': 0, 'data/file_index': 0,
+                   f'videos/{camera}/chunk_index': 0, f'videos/{camera}/file_index': 0,
+                   f'videos/{camera}/from_timestamp': index * 10 / 30,
+                   f'videos/{camera}/to_timestamp': (index + 1) * 10 / 30}
+            if index == 1:
+                row.update(changed)
+            pd.DataFrame([row]).to_parquet(p)
+    return p
+
+
+def test_bad_episode_lengths_keep_recorded_owners_and_readable_windows():
+    import json
+    with tempfile.TemporaryDirectory() as t:
+        for version in ('v2', 'v3'):
+            for n, length in enumerate(('bad', {'unknown': 'length'}, 0.5, True, -1, 0, [10, 20])):
+                root = Path(t) / version / str(n) / 'upload'
+                p = _episode_row_upload(root, version, {'length': length})
+                original = p.read_bytes()
+                det, items = f.plan(root)
+                assert [i['row']['eidx'] for i in items] == [0, 1]
+                assert items[0]['row']['length'] == 10
+                assert items[1]['row']['length'] is None
+                rep, episodes = _converted_notes(root, root.parent / 'out')
+                assert len(episodes) == 2 and not rep['failed']
+                ctx, prompt = episodes[1]
+                assert ctx['n_state_frames'] == 10
+                assert ctx['instruction'] == 'second recorded task'
+                assert ctx['stream_checks']['episode_length_meta'] is None
+                key = p.relative_to(root).as_posix()
+                assert ctx['uploader_notes'][key] == {'episode_index': 1, 'length': length}
+                assert key in ctx['source']['note_files']
+                assert key in prompt and 'length' in prompt
+                assert any(i['kind'] == 'metadata_unreadable' for i in ctx['reader_issues'])
+                assert p.read_bytes() == original
+
+
+def test_bad_episode_tasks_stay_claims_without_asserted_nontext_instructions():
+    with tempfile.TemporaryDirectory() as t:
+        for version in ('v2', 'v3'):
+            controls = [(123, None), ({'claim': 'invented'}, None), ([123], None),
+                        ('   ', None), (['second recorded task', ''], 'second recorded task')]
+            if version == 'v2':
+                controls.append((['second recorded task', 123], 'second recorded task'))
+            for n, (tasks, instruction) in enumerate(controls):
+                root = Path(t) / version / str(n) / 'upload'
+                p = _episode_row_upload(root, version, {'tasks': tasks})
+                original = p.read_bytes()
+                rep, episodes = _converted_notes(root, root.parent / 'out')
+                assert len(episodes) == 2 and not rep['failed']
+                ctx, prompt = episodes[1]
+                assert ctx.get('instruction') == instruction
+                assert ctx['task_label'] == ([instruction] if instruction else ['000001'])
+                key = p.relative_to(root).as_posix()
+                assert ctx['uploader_notes'][key] == {'episode_index': 1, 'tasks': tasks}
+                assert key in ctx['source']['note_files'] and key in prompt
+                assert any(i['kind'] == 'metadata_unreadable' for i in ctx['reader_issues'])
+                assert p.read_bytes() == original
+
+
+def test_invalid_episode_tasks_keep_valid_recorded_table_tasks_and_note_sources():
+    import json
+    import numpy as np
+    import pandas as pd
+    with tempfile.TemporaryDirectory() as t:
+        for version in ('v2', 'v3'):
+            root = Path(t) / version / 'upload'
+            p = _episode_row_upload(root, version, {'tasks': [123]})
+            data = (root / 'data/chunk-000/episode_000001.parquet' if version == 'v2' else
+                    root / 'data/chunk-000/file-000.parquet')
+            df = pd.read_parquet(data)
+            df['task_index'] = np.zeros(len(df), dtype=int)
+            df.to_parquet(data)
+            (root / 'meta/tasks.jsonl').write_text('{"task_index":0,"task":"recorded table task"}\n')
+            (root / 'operator_notes.json').write_text('{"note":"camera loose"}')
+            rep, episodes = _converted_notes(root, root.parent / 'out')
+            ctx, prompt = episodes[1]
+            assert ctx['instruction'] == 'recorded table task'
+            assert ctx['task_label'] == ['recorded table task']
+            assert set(ctx['source']['note_files']) == {p.relative_to(root).as_posix(), 'operator_notes.json'}
+            assert 'camera loose' in prompt and '123' in prompt
+
+
+def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
+    with tempfile.TemporaryDirectory() as t:
+        for version in ('v2', 'v3'):
+            for n, tasks in enumerate(('second recorded task', ['second recorded task'],
+                                       ['second recorded task', 'additional recorded task'])):
+                root = Path(t) / version / str(n) / 'upload'
+                _episode_row_upload(root, version, {'tasks': tasks})
+                det, items = f.plan(root)
+                assert [i['row']['length'] for i in items] == [10, 10]
+                rep, episodes = _converted_notes(root, root.parent / 'out')
+                ctx, prompt = episodes[1]
+                assert ctx['instruction'] == ('second recorded task' if n < 2 else
+                                              'second recorded task; additional recorded task')
+                assert ctx['stream_checks']['episode_length_meta'] == 10
+                assert not ctx.get('uploader_notes')
+                assert not any(i['kind'] == 'metadata_unreadable' for i in ctx.get('reader_issues', []))

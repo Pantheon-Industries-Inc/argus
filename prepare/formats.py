@@ -2913,6 +2913,39 @@ def recorded_index(v) -> int:
     raise ValueError(f"index must be a nonnegative integer, got {v!r}")
 
 
+def episode_row_fields(root: dict, p: Path, row: dict, eidx: int) -> dict:
+    """Keep a known episode owner while rejecting lengths and tasks that are not recorded facts.
+
+    Invalid fields stay attributed claims. A missing valid length leaves sizing to the readable episode
+    data and footage, including the recorded window of a packed video.
+    """
+    length, tasks, bad = None, [], {}
+    if row.get("length") is not None:
+        try:
+            length = recorded_index(row["length"])
+            if length == 0:
+                raise ValueError("an episode length must be positive")
+        except (TypeError, ValueError):
+            length = None
+            bad["length"] = row["length"]
+            metadata_failure(root, p, f"episode {eidx} length is not a positive integer; "
+                                     "its original claim is kept and its readable footage determines the window")
+    value = row.get("tasks")
+    if value is not None:
+        values = list(value) if isinstance(value, (list, tuple, np.ndarray)) else [value]
+        tasks = [t for t in values if isinstance(t, str) and t.strip()]
+        if len(tasks) != len(values):
+            bad["tasks"] = value
+            metadata_failure(root, p, f"episode {eidx} tasks include values that are not nonempty text; "
+                                     "valid task text and the original claims were kept")
+    out = {"length": length, "tasks": tasks}
+    if bad:
+        claims = json.loads(json.dumps({"episode_index": eidx, **bad},
+                            default=lambda v: v.tolist() if hasattr(v, "tolist") else str(v)))
+        out["metadata_notes"] = {p.relative_to(root["dir"]).as_posix(): claims}
+    return out
+
+
 def _read_json(p: Path, reads: dict | None = None) -> dict | None:
     try:
         d = json.loads(p.read_text(encoding="utf-8-sig"))
@@ -3115,10 +3148,8 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
             else:
                 absent += e in rows
             continue
-        tasks = row.get("tasks")
-        tasks = [str(t) for t in tasks] if isinstance(tasks, list) else ([str(tasks)] if tasks else [])
-        root["episodes"].append({"eidx": e, "length": int(scalar(row["length"])) if row.get("length") else None,
-                                 "tasks": tasks, "data": data, "videos": vids_e})
+        fields = episode_row_fields(root, episode_file, row, e)
+        root["episodes"].append({"eidx": e, **fields, "data": data, "videos": vids_e})
     if absent:
         root["used"].append(f"The metadata{where} lists {absent} more episodes than were uploaded; the uploaded ones were labelled.")
     no_video_note(root, rdir, no_video)
@@ -3156,7 +3187,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         for n, row in enumerate(rows, 1):
             try:
                 recorded_index(row["episode_index"])
-                eps.append(row)
+                eps.append((row, p))
             except (KeyError, TypeError, ValueError) as error:
                 metadata_failure(root, p, f"episode row {n}: {plain_error(error)}; other rows were kept")
     if eps:
@@ -3164,7 +3195,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         rel_tpl = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
         data_tpl = info.get("data_path", "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet")
         skipped, no_video = 0, []
-        for e in sorted(eps, key=lambda r: int(scalar(r["episode_index"]))):
+        for e, p in sorted(eps, key=lambda r: recorded_index(r[0]["episode_index"])):
             eidx = int(scalar(e["episode_index"]))
             vids_e = {}
             for key in root["cams"] + root["depth_cams"]:
@@ -3188,10 +3219,8 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
                 else:
                     skipped += 1
                 continue
-            tasks = e.get("tasks")
-            tasks = [str(t) for t in tasks] if hasattr(tasks, "__len__") and not isinstance(tasks, str) else ([str(tasks)] if tasks else [])
-            root["episodes"].append({"eidx": eidx, "length": int(scalar(e["length"])) if e.get("length") is not None else None,
-                                     "tasks": tasks, "data": data, "videos": vids_e})
+            fields = episode_row_fields(root, p, e, eidx)
+            root["episodes"].append({"eidx": eidx, **fields, "data": data, "videos": vids_e})
         if skipped:
             root["used"].append(f"The metadata{where} lists {skipped} more episodes than there is uploaded video for; the "
                                 "uploaded ones were labelled.")
@@ -3434,13 +3463,20 @@ def convert_lerobot_item(item: dict, rig: str, out: Path, dataset: str) -> dict:
     by upload_adapters), else the generic reading below. Returns its context."""
     mod = next((m for m in upload_adapters("lerobot") if m.recognizes(item["root"])), None)
     if mod is None:
-        return convert_lerobot(item, rig, out, dataset)
-    ctx = mod.convert_upload(item, rig, out, dataset)
-    ctx["dataset"] = dataset
-    ctx.setdefault("source", {})["adapter"] = mod.__name__.rsplit(".", 1)[-1]
-    if ctx.get("profile") != rig:
-        ctx["source"]["rig_note"] = f"the upload was marked {rig}; this dataset's layout is {ctx.get('profile')}"
-    (out / ctx["episode_id"] / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+        ctx = convert_lerobot(item, rig, out, dataset)
+    else:
+        ctx = mod.convert_upload(item, rig, out, dataset)
+        ctx["dataset"] = dataset
+        ctx.setdefault("source", {})["adapter"] = mod.__name__.rsplit(".", 1)[-1]
+        if ctx.get("profile") != rig:
+            ctx["source"]["rig_note"] = f"the upload was marked {rig}; this dataset's layout is {ctx.get('profile')}"
+    notes = item["row"].get("metadata_notes")
+    if notes:
+        previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
+        set_uploader_notes(ctx, {"recorded notes": previous, "metadata claims": notes} if previous else notes, files=True)
+        ctx.setdefault("source", {}).setdefault("note_files", []).extend(notes)
+    if mod is not None or notes:
+        (out / ctx["episode_id"] / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
     return ctx
 
 
@@ -6355,7 +6391,9 @@ def add_side_notes(ep: Path, ctx: dict, item: dict) -> dict:
         add_issue(ctx, "task_files_disagree", f"{_and_words(got['disagree'])} name different outside tasks, "
                                              f"so each stays an attributed note.{priority}")
     if got["read"]:
-        ctx.setdefault("source", {})["note_files"] = [str(p.relative_to(item["note_folder"]["dir"])) for p in got["read"]]
+        previous = ctx.setdefault("source", {}).get("note_files", [])
+        names = [str(p.relative_to(item["note_folder"]["dir"])) for p in got["read"]]
+        ctx["source"]["note_files"] = list(dict.fromkeys(previous + names))
     (ep / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
     return ctx
 
