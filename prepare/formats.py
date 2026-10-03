@@ -3141,7 +3141,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             return a, None
         rows, gap = fill_rows(q, q[ok], a[ok])
         return rows, (gap_words(gap, q[0]) if gap else None)
-    notes = []
+    notes, read = [], []
     for name in cands:
         if name not in signals and left_out[name] == NOT_FINITE:
             notes.append(f"Labelled from the video, because the recorded state {name} has values that are not all "
@@ -3171,14 +3171,33 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
                          if why == "has no reading on any frame" else
                          f"Labelled from the video, because the recorded state {name} {why}.")
             continue
-        act = next((k for k in signals if H5_ACTION_NAME.search(own(k)) and np.shape(signals[k]) == a.shape
-                    and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
-        action = filled(np.asarray(signals.pop(act), dtype=np.float64))[0] if act else None
+        read.append((name, a, names))
+    if not read:
+        return None, None, None, None, (notes[0] if notes else None)
+    # one arm's array whose name says its side (left.h5's qpos, observations/left/qpos), beside the other side's, is
+    # half of a two arm state, left first, as joint_state reads two sided arm channels
+    first = read[0]
+    other = next((r for r in read[1:] if side_of(first[0]) and side_of(r[0]) not in (None, side_of(first[0]))), None)
+    arms = sorted([first, other], key=lambda r: side_of(r[0]) != "left") \
+        if rig == "teleop_arms" and other and first[1].shape[1] == other[1].shape[1] == JOINT_DIMS else [first]
+
+    def command(name, shape):
+        # the array named as the action beside it: of its shape, of its side when it is one side's arm
+        side = side_of(name) if len(arms) > 1 else None
+        return next((k for k in signals if H5_ACTION_NAME.search(own(k)) and np.shape(signals[k]) == shape
+                     and (side is None or side_of(k) == side)
+                     and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
+    acts = [command(name, a.shape) for name, a, _ in arms]
+    action = None
+    if all(acts):
+        action = np.concatenate([filled(np.asarray(signals.pop(k), dtype=np.float64))[0] for k in acts], axis=1)
+    for name, _, _ in arms:
         signals.pop(name)
-        for k in (name, act):
-            meta.pop(k, None)
-        return a, action, names, name, None
-    return None, None, None, None, (notes[0] if notes else None)
+    for k in [name for name, _, _ in arms] + [k for k in acts if k and action is not None]:
+        meta.pop(k, None)
+    state = np.concatenate([a for _, a, _ in arms], axis=1)
+    names = [x for _, _, nm in arms for x in nm] if all(nm for _, _, nm in arms) else None
+    return state, action, names, " and ".join(name for name, _, _ in arms), None
 
 
 def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
@@ -4126,6 +4145,17 @@ def _topic(streams: dict, key: str) -> str:
     return streams[key].get("topic", key)
 
 
+def _side(streams: dict, key: str) -> str | None:
+    """left or right of an arm stream: the side its channel's topic names (side_of), or else the side every value name
+    of its name set says (left_joint1 .. left_gripper), so two arms in messages of their own on one /joint_states are
+    two arms, as two topics are. None when neither says one side."""
+    side = side_of(_topic(streams, key))
+    if side is None:
+        sides = {side_of(str(n)) for n in streams[key].get("names") or []}
+        side = sides.pop() if len(sides) == 1 else None
+    return side
+
+
 def _arm_rank(streams: dict, key: str) -> tuple:
     # six joints and a gripper first, then the widest; within a channel, the name set that fits the layout, a named one
     # over an unnamed one, and the one with the most readings, never the first label
@@ -4142,7 +4172,7 @@ def arm_streams(streams: dict, role: bool) -> dict:
     by_side = {}
     for t in sorted(streams, key=lambda t: _arm_rank(streams, t)):
         if bool(ACTION_TOPIC.search(_topic(streams, t))) == role:
-            by_side.setdefault(side_of(_topic(streams, t)) or "only", t)
+            by_side.setdefault(_side(streams, t) or "only", t)
     return by_side
 
 
@@ -4151,9 +4181,9 @@ def third_arms(streams: dict) -> list[str]:
     right arm (a third arm that carries the scene camera, as on a rig whose camera an operator moves). joint_state
     reads the two sided arms and leaves these out."""
     st = [t for t in streams if not ACTION_TOPIC.search(_topic(streams, t))]
-    if not {"left", "right"} <= {side_of(_topic(streams, t)) for t in st}:
+    if not {"left", "right"} <= {_side(streams, t) for t in st}:
         return []
-    return sorted(t for t in st if side_of(_topic(streams, t)) is None)
+    return sorted(t for t in st if _side(streams, t) is None)
 
 
 def state_fields(streams: dict, state, action) -> dict:

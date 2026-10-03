@@ -548,6 +548,59 @@ def test_names_that_name_a_position_a_velocity_or_an_effort_never_read_as_joints
     assert f.state_words("left_wrist.pos-x") == ["left", "wrist", "pos", "x"] and f.state_words("m") == ["m"]
 
 
+def _two_arms_in_their_own_files_or_messages(tmp_path):
+    """Two arms recorded apart, where only the value names or the file names say which arm is which: one
+    /joint_states with the left and the right arm in messages of their own, and a left.h5 and a right.h5 beside the
+    videos, each with one arm's qpos and action. Each side is that side's arm, through the same path two topics take,
+    so the state is both arms, left first; one arm had been read as the whole state."""
+    import json
+    import h5py
+    import numpy as np
+    t0 = 1_790_000_000.0
+    names = [f"joint{i}" for i in range(1, 7)] + ["gripper"]
+    tt = np.arange(-0.1, 3.1, 0.01)
+    q = np.arange(0, 3, 1 / 30)
+    left = np.stack([np.sin(tt + j) for j in range(7)], axis=1)
+    right = np.stack([np.cos(tt + j) for j in range(7)], axis=1)
+    path = tmp_path / "two_arms.mcap"
+    _json_mcap(path, {"/joint_states": [(s, {"name": [f"left_{n}" for n in names], "position": left[k].tolist()})
+                                        for k, s in enumerate(tt)]
+                      + [(s + 0.002, {"name": [f"right_{n}" for n in names], "position": right[k].tolist()})
+                         for k, s in enumerate(tt)]}, t0)
+    st = f.mcap_joint_streams([path], t0 + q)
+    state, _, note = f.joint_state(st, t0 + q)
+    ref = np.concatenate([np.stack([np.interp(q, tt, a[:, j]) for j in range(7)], axis=1) for a in (left, right)],
+                         axis=1)
+    assert note is None and state.shape == (len(q), 14) and np.abs(state - ref).max() < 5e-3
+    sig = f.mcap_signals([path], t0 + q, f.state_fields(st, state, None))
+    assert not list(sig) and not sig.left_out, (list(sig), sig.left_out)
+    root = tmp_path / "upload"
+    d = _videos_with_an_hdf5_arm_state(root)
+    (d / "robot.h5").unlink()
+    th = t0 - 0.1 + np.arange(60) / 100
+    for side, k in (("left", 0), ("right", 7)):
+        a = np.stack([0.3 * np.sin(th - t0 + k + j) for j in range(7)], axis=1)
+        with h5py.File(d / f"{side}.h5", "w") as h:
+            h["timestamps"] = (th * 1e9).astype(np.int64)
+            h["qpos"] = a
+            h["action"] = a + 0.01
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    ctx = json.loads((ep / "context.json").read_text())
+    assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == "left qpos and right qpos", ctx
+    z = np.load(ep / "state.npz")
+    assert z["state"].shape == (12, 14) and z["action"].shape == (12, 14)
+    assert np.allclose(z["action"], z["state"] + 0.01, atol=1e-4)
+    kept = {x["name"] for x in ctx.get("signals") or []}
+    assert not {"left qpos", "right qpos", "left action", "right action"} & kept, kept
+
+
+def test_two_arms_in_their_own_files_or_messages():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _two_arms_in_their_own_files_or_messages(Path(t))
+
+
 def test_joint_state_reads_only_the_layout_the_checks_read():
     import numpy as np
     q = np.linspace(0.0, 1.0, 11)
