@@ -133,8 +133,11 @@ def goal_times(d: dict) -> list:
     res = []
     for t in out:
         try:
-            res.append(float(t))
-        except (TypeError, ValueError):
+            value = float(t)
+            # Saved labels can predate finite JSON validation. Keep them, but a nonfinite time has no frame.
+            if math.isfinite(value):
+                res.append(value)
+        except (TypeError, ValueError, OverflowError):
             pass
     return res
 
