@@ -2607,6 +2607,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if not video_cams and r["image_cams"] and df is not None:
         return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes)
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
+    descs = colour_depth_views(r, row, vmap)
     # a camera the metadata lists whose video is not on disk (an adapter downloads only the cameras it uses) is unused
     # too, and one whose packed video could not be placed on this episode says why (_episodes_v3)
     unplaced = row.get("unplaced") or {}
@@ -2647,6 +2648,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
                 pr = _stream_facts(mp4)
                 w, h, codec = w or pr["width"], h or pr["height"], codec or pr["codec"]
             cameras[v] = describe({"key": key, "name": _short(key, v), "width": w, "height": h, "codec": codec}, v, key, rig)
+            if key in descs:
+                cameras[v]["desc"] = descs[key]
         n_frames = min(s["n_frames"] for s in sources.values())
         state, action, kind, note, fixes = state_on_frames(df, state, action, n_frames, fps, kind, note)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
@@ -2656,7 +2659,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
         for i in fixes:
             add_issue(ctx, **i)
-        write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused))
+        write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
         return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
                               signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
                                                        ctx["n_state_frames"], feats))
@@ -2677,6 +2680,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
                        np.array_equal(pr["pts"], np.arange(n) * int(step)))
         sources[v] = {"packed": str(Path(row["videos"][key]).resolve()), "base_s": 0.0, "n_frames": n, "camera_key": key}
         cameras[v] = camera_entry(v, key, pr, rig)
+        if key in descs:
+            cameras[v]["desc"] = descs[key]
     times = None
     if not all(grid.values()):
         times = {}
@@ -2693,41 +2698,81 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         ctx["state_note"] = " ".join([x for x in [note, *notes] if x])
     for i in fixes:
         add_issue(ctx, **i)
-    write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused))
+    write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
     return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
                           signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
                                                    ctx["n_state_frames"], feats))
 
 
-def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, unused: list) -> tuple[dict, dict]:
+def colour_depth_views(r: dict, row: dict, vmap: dict) -> dict:
+    """{depth feature: its camera line} for each of an episode's depth videos stored as an ordinary picture (an 8-bit
+    colour stream holds the recorder's shading of near and far, not distances), each added to vmap as a camera of its
+    own (extra1, extra2, ...), as convert_video shows such a video beside its colour camera. They had been skipped
+    without a word."""
+    out = {}
+    cams = dict(vmap)
+    if not cams:
+        return out
+    from label import episode as me
+    anchor = me.order_views(cams)[0]
+    for key in r.get("depth_cams") or []:
+        src = row["videos"].get(key)
+        if src is None:
+            continue
+        try:
+            pf = str(probe_depth(Path(src[0] if isinstance(src, tuple) else src))["pix_fmt"] or "")
+        except Exception:
+            continue                          # lerobot_depth lists it with the reason
+        if pf.startswith("gray"):
+            continue
+        v, _ = depth_camera(key, cams, anchor)
+        vmap[f"extra{1 + sum(1 for x in vmap if x.startswith('extra'))}"] = key
+        out[key] = (f"the depth of {cams[v]}, stored by the dataset as an ordinary picture, with its own shading of "
+                    "near and far")
+    return out
+
+
+def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, unused: list,
+                  ctx: dict | None = None) -> tuple[dict, dict]:
     """(depth.json entries, depth times) of a LeRobot episode's depth videos (features marked video.is_depth_map or
-    named depth), each with its camera as the HDF5 reader pairs them (depth_camera). A second depth stream for a camera
-    is added to unused (the episode's unused cameras), as convert_hdf5 lists it. Frames are timed as LeRobot defines
-    them, frame index over fps, from the episode's own window of a packed file."""
+    named depth), each with its camera as the HDF5 reader pairs them (depth_camera). A depth video that is not read
+    (a second stream for one camera, one that will not open, has no frame in the episode's window, or is stored in
+    colour and is not already a camera, colour_depth_views) is added to unused (the episode's unused cameras) with the
+    reason and is a data issue on ctx (depth_not_read), never skipped without a word. Frames are timed as LeRobot
+    defines them, frame index over fps, from the episode's own window of a packed file."""
     dep, tz = {}, {}
     if not r.get("depth_cams") or not vmap:
         return dep, tz
     from label import episode as me
-    anchor = me.order_views(vmap)[0]
+    cams = {v: k for v, k in vmap.items() if k not in r["depth_cams"]}
+    anchor = me.order_views(cams or vmap)[0]
     ta = np.arange(n) / float(fps or 30.0)
+
+    def leave(key, why):
+        unused.append(f"{key} ({why})")
+        if ctx is not None:
+            add_issue(ctx, "depth_not_read", f"The depth video {key} is not used: {why}.", camera=key)
     for key in r["depth_cams"]:
         src = row["videos"].get(key)
-        if src is None:
+        if src is None or key in vmap.values():
             continue
         path, base, to = (src if isinstance(src, tuple) else (src, None, None))
-        v, source = depth_camera(key, vmap, anchor)
+        v, source = depth_camera(key, cams or vmap, anchor)
         if v in dep:
-            unused.append(f"{key} (depth with no camera of its own)")
+            leave(key, "depth with no camera of its own")
             continue
         try:
             pr = probe_depth(Path(path))
         except Exception:
+            leave(key, "the depth video could not be opened")
             continue
         if not str(pr["pix_fmt"] or "").startswith("gray"):
-            continue                          # a depth feature stored in colour is a rendered picture, not distances
+            leave(key, "stored in colour, so it holds no distances")
+            continue
         t_all = pr["pts"].astype(np.float64) * float(pr["time_base"])
         sel = (t_all >= base - 1e-6) & (t_all < to - 1e-6) if base is not None else np.ones(len(t_all), dtype=bool)
         if not sel.any():
+            leave(key, "no depth frame falls inside this episode's window of its packed file")
             continue
         td = t_all[sel] - (base if base is not None else t_all[sel][0])
         info = (r["features"].get(key) or {}).get("info") or {}

@@ -2109,7 +2109,8 @@ def _lerobot_v3_without_its_episode_list_keeps_every_camera_it_can(tmp_path):
     root = tmp_path / "placed"
     _lerobot_v3(root, {top: 30, wrist: 25}, {
         "episode_index": np.repeat([0, 1, 2], lengths), "frame_index": np.concatenate([np.arange(m) for m in lengths]),
-        "timestamp": np.concatenate([np.arange(m) / 30 for m in lengths]), "observation.state": list(rng.random((30, 3)))})
+        "timestamp": np.concatenate([np.arange(m) / 30 for m in lengths]),
+        "observation.state": list(rng.random((30, 3)))})
     rep = f.convert(root, "teleop_arms", tmp_path / "eps_placed", "test", 900)
     assert not rep["failed"] and len(rep["episodes"]) == 3, rep
     for e in rep["episodes"]:
@@ -2132,3 +2133,32 @@ def test_lerobot_v3_without_its_episode_list_keeps_every_camera_it_can():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _lerobot_v3_without_its_episode_list_keeps_every_camera_it_can(Path(t))
+
+
+def _a_lerobot_depth_stream_is_never_silently_left_out(tmp_path):
+    """A LeRobot depth video that would not open, was stored in colour or had no frame in the episode's window had been
+    skipped without a word. A depth video stored as an ordinary picture is shown as a camera of its own, as the video
+    reader shows one, and one that cannot be read is listed with the reason and is a data issue."""
+    import numpy as np
+    root = tmp_path / "upload"
+    depth = {"dtype": "video", "shape": [36, 64, 3], "info": {"video.is_depth_map": True}}
+    _lerobot(root, {0: {"observation.state": [np.zeros(14)] * 30}},
+             feats={"observation.images.top_depth": depth, "observation.depth.top": depth})
+    d = root / "videos" / "chunk-000"
+    (d / "observation.images.top_depth").mkdir()
+    _clip(d / "observation.images.top_depth" / "episode_000000.mp4", 30)       # 8-bit colour, not distances
+    (d / "observation.depth.top").mkdir()
+    (d / "observation.depth.top" / "episode_000000.mp4").write_bytes(b"not a video")
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1, rep
+    ctx = _episode_ctx(tmp_path / "eps", rep, "000000")
+    shown = {c["key"]: c for c in ctx["cameras"].values()}
+    assert "ordinary picture" in (shown.get("observation.images.top_depth") or {}).get("desc", ""), shown
+    assert any(u.startswith("observation.depth.top (") for u in ctx["source"]["unused_cameras"]), ctx["source"]
+    assert [i["camera"] for i in _issues(ctx, "depth_not_read")] == ["observation.depth.top"], ctx.get("reader_issues")
+
+
+def test_a_lerobot_depth_stream_is_never_silently_left_out():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_lerobot_depth_stream_is_never_silently_left_out(Path(t))
