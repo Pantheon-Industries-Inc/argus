@@ -409,11 +409,14 @@ def actors(ep: dict) -> list[str]:
         return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
     if ep["state"].shape[1] == 14:
         return ["left", "right"]
+    ctx = ep["context"]
+    if (ctx.get("state_identity") or {}).get("status") == "conflict":
+        noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
+        return [f"recorded {noun} (side unknown)"]
     recorded = ep["context"].get("state_actors")
     if isinstance(recorded, list) and len(recorded) == 1 and isinstance(recorded[0], str) and recorded[0]:
         return recorded
     from prepare.formats import recorded_state_side
-    ctx = ep["context"]
     source = ctx.get("source") or {}
     side = ctx.get("state_side") if "state_side" in ctx else recorded_state_side(
         source.get("state") if source.get("format") == "hdf5" else None)
@@ -1049,7 +1052,8 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
               "as seen from their head. Which hand is which follows the person's body (the forearm it belongs to, "
               "the thumb side), not which half of the image it is in, because hands cross the midline and reach "
               "across.")
-    elif len([v for v in vs if v in MOUNTED]) == 1:
+    elif (state_kind(ep) != "none" and len(actors(ep)) == 1
+          and len([v for v in vs if v in MOUNTED]) == 1 and actor_views(ep)[0] is not None):
         s += f" In the output, the \"arm\" field always names the one {n['actor']}: \"{actors(ep)[0]}\"."
     return s
 
@@ -1757,6 +1761,12 @@ def _has_metadata_issues(ep: dict, pl: dict) -> bool:
                for i in ep["context"].get("reader_issues", []))
 
 
+def _state_identity_issues(ep: dict, pl: dict) -> str:
+    issues = [i["what"] for i in ep["context"].get("reader_issues", [])
+              if i.get("kind") == "state_identity_conflict"]
+    return "\nRECORDED ACTOR IDENTITY DISAGREES:\n" + "\n".join(issues) + "\n" if issues else ""
+
+
 def _table_number_notes(ep: dict) -> list[str]:
     """Numeric interpretation assumptions that qualify the table values shown to the model."""
     return [issue["what"].strip() for issue in ep["context"].get("reader_issues") or []
@@ -1789,6 +1799,8 @@ BLOCKS = (
           checks=("contact_checks",)),
     Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
     Block("metadata_issues", "after_task", _has_metadata_issues, _metadata_issues),
+    Block("state_identity_issues", "after_task", lambda ep, pl: bool(_state_identity_issues(ep, pl)),
+          _state_identity_issues),
 )
 
 
