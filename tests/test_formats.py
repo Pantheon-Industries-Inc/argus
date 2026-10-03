@@ -900,8 +900,8 @@ def _a_message_without_names_reads_with_the_named_set_of_its_width(tmp_path):
     message, had its unnamed rows made a group of their own, which sorted first by its label and lost the state or
     built it from the unnamed tenth. A message without names joins the only named set of its width, as the reader
     read it before name sets. The arm is the named set that fits the layout with the most readings, never the first
-    label. An unnamed field of varying width is read as before name sets, by its first message's width, and when that
-    leaves it out the reason says so."""
+    label. An unnamed field of varying width is one signal per width, labelled by it, so a message of another width
+    than the first is never dropped."""
     import numpy as np
     t0 = 1_790_000_000.0
     names = [f"joint{i}" for i in range(1, 7)] + ["gripper"]
@@ -929,18 +929,20 @@ def _a_message_without_names_reads_with_the_named_set_of_its_width(tmp_path):
     st = f.mcap_joint_streams([path])
     state, _, note = f.joint_state(st, t0 + q)
     assert note is None and np.abs(state - ref).max() < 1e-6
-    # an unnamed field of varying width keeps its first message's width, as before name sets
+    # an unnamed field of varying width is one signal per width, labelled by it
     path = tmp_path / "widths.mcap"
     _json_mcap(path, {"/contacts": [(s, {"pressures": [1.0 + np.sin(s)] * (5 if k % 7 == 3 else 3)})
                                     for k, s in enumerate(tt)]}, t0)
     sig = f.mcap_signals([path], t0 + q)
-    assert list(sig) == ["/contacts pressures"] and sig["/contacts pressures"].shape == (300, 3) and not sig.left_out
+    assert list(sig) == ["/contacts pressures (3 values)", "/contacts pressures (5 values)"] and not sig.left_out
+    assert sig["/contacts pressures (3 values)"].shape == (300, 3) and sig["/contacts pressures (5 values)"].shape == (
+        300, 5)
     path = tmp_path / "widths_rare.mcap"
     _json_mcap(path, {"/contacts": [(s, {"pressures": [1.0 + np.sin(s)] * (9 if k % 333 == 0 else 10)})
                                     for k, s in enumerate(tt)]}, t0)
     sig = f.mcap_signals([path], t0 + q)
-    assert not sig and sig.left_out == [("/contacts pressures", "only 4 of its 1000 messages carry the 9 values of "
-                                         "its first message, fewer than 1 a second")], sig.left_out
+    assert list(sig) == ["/contacts pressures (9 values)", "/contacts pressures (10 values)"], sig.left_out
+    assert sig.meta["/contacts pressures (9 values)"]["rate_hz"] < 1 and not sig.left_out
 
 
 def test_a_message_without_names_reads_with_the_named_set_of_its_width():
@@ -2195,3 +2197,59 @@ def test_a_table_over_the_size_limit_is_read():
     # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
     with tempfile.TemporaryDirectory() as t:
         _a_table_over_the_size_limit_is_read(Path(t))
+
+
+def _a_signal_is_never_dropped_for_its_width_its_rate_or_its_size(tmp_path):
+    """Messages of another width than a field's first had been dropped (counted only when the field was left out
+    anyway), a channel slower than 1 Hz was left out as a setting, and an array wider than SIGNAL_MAX_VALUES was left
+    out. Each width is now its own signal, a slow channel is kept with its rate, a single message is listed with its
+    values, and a wide array is kept as a map."""
+    import h5py
+    import numpy as np
+    import pandas as pd
+    t0 = 1_790_000_000.0
+    q = t0 + np.arange(150) / 30                                 # 5 s of footage
+    _json_mcap(tmp_path / "s.mcap", {
+        "/mixed": [(k / 30, {"v": [float(np.sin(k / 9))] * (5 if k % 10 == 0 else 3)}) for k in range(150)],
+        "/slow": [(s, {"battery": 12.0 - 0.1 * s}) for s in (0.2, 2.2, 4.2)],
+        "/once": [(1.0, {"gain": 3.5})]}, t0)
+    sig = f.mcap_signals([tmp_path / "s.mcap"], q)
+    assert "/mixed v (3 values)" in sig and "/mixed v (5 values)" in sig, (list(sig), sig.left_out)
+    assert "/slow" in sig and sig.meta["/slow"]["rate_hz"] < 1, (list(sig), sig.left_out)
+    assert any(k.startswith("/once") and "3.5" in k + why for k, why in sig.left_out), sig.left_out
+    n = 6
+    wide = f.recorded_signals(pd.DataFrame({"cloud": [np.arange(f.SIGNAL_MAX_VALUES + 4.0)] * n}), set(), n)
+    assert wide["cloud"].shape == (n, f.SIGNAL_MAX_VALUES + 4) and not wide.left_out
+    with h5py.File(tmp_path / "w.h5", "w") as h:
+        h["cloud"] = np.zeros((n, f.SIGNAL_MAX_VALUES + 4), np.float32)
+        assert f.h5_kind("cloud", h["cloud"]) == "signal"
+
+
+def _an_episode_longer_than_its_header_is_trimmed_to_the_cap(tmp_path):
+    """An episode whose measured length passed the footage cap, though its header said it fit, had been deleted. Its
+    first minutes up to the cap are labelled, as the first episode's are."""
+    root = tmp_path / "upload"
+    root.mkdir()
+    _clip(root / "a.mp4", 90)
+    _clip(root / "b.mp4", 90)
+    real = f._duration
+    f._duration = lambda p: 0.3 if Path(p).name == "b.mp4" else real(p)
+    try:
+        rep = f.convert(root, "ego_head", tmp_path / "eps", "test", 4.5)
+    finally:
+        f._duration = real
+    assert [e["name"] for e in rep["episodes"]] == ["a", "b"], rep
+    assert abs(rep["episodes"][1]["seconds"] - 1.5) < 0.1 and abs(rep["seconds"] - 4.5) < 0.1, rep["episodes"]
+    assert any(u.startswith("b is ") for u in rep["used"]), rep["used"]
+
+
+def test_a_signal_is_never_dropped_for_its_width_its_rate_or_its_size():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _a_signal_is_never_dropped_for_its_width_its_rate_or_its_size(Path(t))
+
+
+def test_an_episode_longer_than_its_header_is_trimmed_to_the_cap():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _an_episode_longer_than_its_header_is_trimmed_to_the_cap(Path(t))

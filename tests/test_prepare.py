@@ -420,11 +420,18 @@ def test_recorded_signals_skip_bookkeeping_and_what_an_adapter_holds_back():
                        "is_error_segment": [0, 1, 1, 0], "note": ["a"] * n,
                        "picture": [list(range(formats.SIGNAL_MAX_VALUES + 1))] * n})
     got = formats.recorded_signals(df, set(habit.PUBLISHER_COLUMNS), n)
-    assert list(got) == ["observation.velocity"] and got["observation.velocity"].shape == (n, 2)
+    assert list(got) == ["observation.velocity", "picture"] and got["observation.velocity"].shape == (n, 2)
     every = formats.recorded_signals(df, set(), n)
-    assert list(every) == ["observation.velocity", "is_error_segment"]
-    # a column too wide to be a signal is named with the reason, never dropped without a word
-    assert [k for k, _ in every.left_out] == ["picture"]
+    assert list(every) == ["observation.velocity", "is_error_segment", "picture"]
+    # a column wider than SIGNAL_MAX_VALUES is kept as a map; only one past SIGNAL_MAX_BYTES is named with the reason
+    assert every["picture"].shape == (n, formats.SIGNAL_MAX_VALUES + 1) and not every.left_out
+    saved = formats.SIGNAL_MAX_BYTES
+    formats.SIGNAL_MAX_BYTES = 1000
+    try:
+        small = formats.recorded_signals(df, set(), n)
+    finally:
+        formats.SIGNAL_MAX_BYTES = saved
+    assert [k for k, _ in small.left_out] == ["picture"]
     # a table shorter than the episode is kept, NaN past its last row, and says so
     longer = formats.recorded_signals(df, set(), n + 1)
     assert longer["observation.velocity"].shape == (n + 1, 2) and np.isnan(longer["observation.velocity"][n]).all()

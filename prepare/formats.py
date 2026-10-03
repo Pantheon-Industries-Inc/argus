@@ -990,6 +990,18 @@ SIGNAL_SKIP = re.compile(r"(^|\.)(index|timestamp)$|_index$")
 # model reads one by one; it is listed among the signals left out, never dropped without a word. A tactile pressure map
 # of 64 x 64 cells is still a signal.
 SIGNAL_MAX_VALUES = 4096
+# An array wider than SIGNAL_MAX_VALUES is still kept, as a map the prompt summarises (label/signals.py), up to
+# SIGNAL_MAX_BYTES as float32 over the episode's frames; only a larger one is left out, named with its size.
+SIGNAL_MAX_BYTES = 512_000_000
+
+
+def signal_fits(n: int, values: int) -> bool:
+    return int(n) * int(values) * 4 <= SIGNAL_MAX_BYTES
+
+
+def too_big_words(n: int, values: int) -> str:
+    return (f"{values:,} values per frame over {n:,} frames, more than the {SIGNAL_MAX_BYTES / 1e6:g} MB a signal "
+            "holds")
 
 
 class Signals(dict):
@@ -1146,9 +1158,8 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
             out.left_out.append((str(c), "no reading at any frame"))
             continue
         a = np.where(np.isfinite(a), a, np.nan)
-        if a.shape[1] > SIGNAL_MAX_VALUES:
-            out.left_out.append((str(c), f"{a.shape[1]} values per frame, more than the {SIGNAL_MAX_VALUES} a signal "
-                                         "holds"))
+        if not signal_fits(len(a), a.shape[1]):
+            out.left_out.append((str(c), too_big_words(len(a), a.shape[1])))
             continue
         if a.shape[1] == 1 and is_named_clock(c, a[:, 0]):
             # a clock: kept for the sync check, not shown
@@ -3172,7 +3183,8 @@ def h5_kind(name: str, ds) -> str | None:
             return "depth"
         if dt == np.uint8:
             return "camera"
-    if int(np.prod(per)) <= SIGNAL_MAX_VALUES:
+    # an array wider than SIGNAL_MAX_VALUES (a point cloud, a flattened picture) is a signal kept as a map, when it fits
+    if int(np.prod(per)) <= SIGNAL_MAX_VALUES or signal_fits(n, int(np.prod(per))):
         return "signal"
     return None
 
@@ -3349,8 +3361,9 @@ def h5_streams(f, group: str) -> dict:
             continue
         if k is None:
             if ds.shape and ds.shape[0] > 1 and ds.dtype.kind in "biuf":
-                out["unused"].append(f"{p} ({' x '.join(map(str, ds.shape[1:]))} values per sample, more than the "
-                                     f"{SIGNAL_MAX_VALUES} a signal holds)")
+                out["unused"].append(f"{p} ({' x '.join(map(str, ds.shape[1:]))} values per sample over "
+                                     f"{ds.shape[0]:,} samples, more than the {SIGNAL_MAX_BYTES / 1e6:g} MB a signal "
+                                     "holds)")
             continue
         n = int(ds.shape[0]) if ds.shape else 0
         if k == "signal" and not any(len(t) == n for t in clocks.values()) and ds.size <= H5_CONSTANT_MAX:
@@ -4085,13 +4098,15 @@ def name_group(groups: NameSets, names, vals: list) -> tuple[int | None, list]:
     return i, vals
 
 
-def merge_unnamed(groups: NameSets, rows: dict, lists: tuple) -> tuple[dict, int]:
+def merge_unnamed(groups: NameSets, rows: dict, lists: tuple, keep_all: bool = False) -> tuple[dict, int]:
     """({group index: row} of the name sets read, how many sets the channel or field has once its unnamed rows are
     placed). rows {group index: {"t": times, and each of lists: values}} come from name_group. A message without names
     is read as the reader read it before name sets: its rows join the only named set of their width when there is
     exactly one (a JointState with an empty name list for its first second), and are left with that set when the set
-    is read elsewhere (the state). Otherwise the unnamed rows of the first unnamed message's width are one set and
-    rows of any other width are dropped, counted in that set's "dropped" so a reason given for it can say so."""
+    is read elsewhere (the state). Otherwise the unnamed rows of the first unnamed message's width are one set, and
+    rows of any other width are each a set of their own when keep_all (mcap_signals, so a message of another width is
+    a signal labelled by its width, never dropped), else dropped and counted in that set's "dropped" (the joint
+    reader, which reads one arm's width)."""
     named: dict = {}
     for i, (gn, w) in enumerate(groups):
         if gn is not None:
@@ -4099,9 +4114,10 @@ def merge_unnamed(groups: NameSets, rows: dict, lists: tuple) -> tuple[dict, int
     home = lambda i: named[groups[i][1]][0] if len(named.get(groups[i][1], [])) == 1 else None
     rest = [i for i in rows if groups[i][0] is None and home(i) is None]
     keep = min(rest, key=lambda i: rows[i]["t"][0]) if rest else None
-    out = {i: r for i, r in rows.items() if groups[i][0] is not None or i == keep}
+    kept = set(rest) if keep_all else {keep}
+    out = {i: r for i, r in rows.items() if groups[i][0] is not None or i in kept}
     for i in sorted(rows):
-        if groups[i][0] is not None or i == keep:
+        if groups[i][0] is not None or i in kept:
             continue
         h, r = home(i), rows[i]
         if h is None:
@@ -4116,7 +4132,7 @@ def merge_unnamed(groups: NameSets, rows: dict, lists: tuple) -> tuple[dict, int
                 m["set"] = m["set"] or r["set"]
             if "fields" in m:
                 m["fields"] = m["fields"] | r["fields"]
-    return out, sum(1 for gn, _ in groups if gn is not None) + (keep is not None)
+    return out, sum(1 for gn, _ in groups if gn is not None) + (len(rest) if keep_all else keep is not None)
 
 
 def group_label(group: tuple) -> str:
@@ -4212,8 +4228,9 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
 
 # Every other number an MCAP records (a gripper's IMU, an arm's joint velocities and torques, a base's odometry), read
 # as recorded_signals reads a LeRobot table's other columns: per channel, each numeric field under the dataset's own
-# name, placed on the anchor camera's frames. A channel with fewer messages than SIGNAL_MIN_HZ per second (a
-# calibration, a process's CPU report) is not a per-frame record. One that starts or ends inside the footage is NaN
+# name, placed on the anchor camera's frames. A channel slower than SIGNAL_MIN_HZ (a battery report) is kept with its
+# rate (rate_hz), each frame its nearest message; one with a single message is a setting, listed with its values,
+# not a reading over time. One that starts or ends inside the footage is NaN
 # outside its messages, never held flat where nothing was recorded, and the span it misses is a data issue.
 SIGNAL_MIN_HZ = 1.0
 SIGNAL_SKIP_PARTS = {"header", "timestamp", "stamp"}      # a message's own time and sequence bookkeeping
@@ -4499,7 +4516,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             out.left_out.append((name, f"its messages name its values in more than {NAME_SETS_MAX} different "
                                        "ways, so no value is one reading over time"))
             continue
-        field_rows, n_sets = merge_unnamed(groups, field_rows, ("v",))
+        field_rows, n_sets = merge_unnamed(groups, field_rows, ("v",), keep_all=True)
         for i, r in sorted(field_rows.items()):
             named[name + (group_label(groups[i]) if n_sets > 1 else "")] = r
     rows = named
@@ -4547,18 +4564,14 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
         t = np.asarray(r["t"])
         if not r["set"] or not r["d"] or span <= 0:
             continue
-        # rows of another width than its first message's were dropped (merge_unnamed): a reason says so
-        some = (f"only {len(t)} of its {len(t) + r['dropped']} messages carry the {r['d']} values of its first "
-                "message, ") if r.get("dropped") else ""
-        if len(t) < 2 or len(t) / span < SIGNAL_MIN_HZ:
-            if some:
-                out.left_out.append((name, f"{some}fewer than {SIGNAL_MIN_HZ:g} a second"))
-            else:
-                sparse.append(name)           # a setting, a calibration or a status report, not a per-frame record
+        some = ""
+        if len(t) < 2:
+            # one message is a setting or a calibration, not a reading over time: listed with its values
+            vals = ", ".join(f"{x:g}" for x in r["v"][0][:8]) + (" and more" if r["d"] > 8 else "")
+            sparse.append(f"{name} ({vals})")
             continue
-        if r["d"] > SIGNAL_MAX_VALUES:
-            out.left_out.append((name, f"{r['d']} values per message, more than the {SIGNAL_MAX_VALUES} a signal "
-                                       "holds"))
+        if not signal_fits(len(q), r["d"]):
+            out.left_out.append((name, too_big_words(len(q), r["d"])))
             continue
         if not overlaps(t, q):
             out.left_out.append((name, some + outside_words(t, q)))
@@ -4583,8 +4596,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
             out.meta[vn].update(rate_hz=round(rate, 2), variation_of=name)
     if sparse:
         out.left_out.append((", ".join(sparse[:6]) + (f" and {len(sparse) - 6} more" if len(sparse) > 6 else ""),
-                             f"fewer than {SIGNAL_MIN_HZ:g} message per second, so settings or reports rather than a "
-                             "per-frame record"))
+                             "one message each, so settings or reports rather than a reading over time"))
     return out
 
 
@@ -5557,18 +5569,27 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
                                   "were labelled.")
             secs = float(ctx["duration_s"])
         if total + secs > max_seconds + 1:
-            # the measured length is longer than the file's header claimed: never label past the cap
-            import shutil
-            shutil.rmtree(out / ctx["episode_id"], ignore_errors=True)
-            for rest in items[i:]:
+            # the measured length is longer than the file's header claimed: never label past the cap, and never delete
+            # what fits under it; its first minutes up to the cap are labelled, as the first episode's are
+            room = max_seconds - total
+            if room >= TRIM_MIN_S:
+                ctx = trim_episode(out / ctx["episode_id"], room)
+                report["used"].append(f"{it['name']} is {secs / 60:.1f} minutes long, longer than its file's header "
+                                      f"says; its first {float(ctx['duration_s']):.1f} seconds were labelled, up to "
+                                      f"the {max_seconds / 60:g} minute limit.")
+                secs = float(ctx["duration_s"])
+                total += secs
+                report["episodes"].append(episode_row(it, ctx, secs))
+                rest_from = i + 1
+            else:
+                import shutil
+                shutil.rmtree(out / ctx["episode_id"], ignore_errors=True)
+                rest_from = i
+            for rest in items[rest_from:]:
                 report["skipped"].append({"name": rest["name"], "why": f"past the first {max_seconds / 60:g} minutes"})
             break
         total += secs
-        report["episodes"].append({"name": it["name"], "episode_id": ctx["episode_id"], "seconds": round(secs, 2),
-                                   "cameras": {v: c.get("name") for v, c in ctx["cameras"].items()},
-                                   "state_kind": ctx["state_kind"], "state_note": ctx.get("state_note"),
-                                   "instruction": ctx.get("instruction"), "fps": ctx.get("fps"),
-                                   "unsplit": bool(ctx.get("unsplit")), "packaging": ctx.get("packaging")})
+        report["episodes"].append(episode_row(it, ctx, secs))
     notes = sorted({e["state_note"] for e in report["episodes"] if e.get("state_note")})
     report["notes"] += notes
     report["seconds"] = round(total, 2)
@@ -5578,6 +5599,18 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     measure_signal_scales(out, ids)
     measure_contacts(out, ids)
     return report
+
+
+TRIM_MIN_S = 1.0       # an episode is trimmed to the room left under the cap only when at least this much is left
+
+
+def episode_row(it: dict, ctx: dict, secs: float) -> dict:
+    """An accepted episode's line in the conversion report."""
+    return {"name": it["name"], "episode_id": ctx["episode_id"], "seconds": round(secs, 2),
+            "cameras": {v: c.get("name") for v, c in ctx["cameras"].items()},
+            "state_kind": ctx["state_kind"], "state_note": ctx.get("state_note"),
+            "instruction": ctx.get("instruction"), "fps": ctx.get("fps"),
+            "unsplit": bool(ctx.get("unsplit")), "packaging": ctx.get("packaging")}
 
 
 def measure_contacts(out: Path, ids: list[str]) -> int:
