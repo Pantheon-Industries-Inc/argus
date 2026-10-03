@@ -71,4 +71,7 @@ check(words({status: 'fired', fired: 2, errored: 0, of: 38}).includes('2 of 38 f
 check(words({status: 'errored', fired: 1, errored: 3, of: 38}).includes('3 of 38 stopped with an error, 1 fired'),
   'a withheld set of checks says how many stopped with an error, and how many fired');
 check(words({status: 'clear', fired: 0, errored: 0, of: 30}).includes(', clear'), 'a withheld check that ran clear');
+check(!words({status: 'fired', fired: 0, errored: 0, of: 0}).includes('0 of 0')
+  && words({status: 'fired', fired: 0, errored: 0, of: 0}).includes('flagged'),
+  'a withheld result that fired only because it says it flagged says so, never "0 of 0 fired"');
 process.exit(bad ? 1 : 0);

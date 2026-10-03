@@ -2912,7 +2912,9 @@ function foundWords(c) {
   if (c.status === 'errored') return c.error ? `stopped with an error (${c.error})`
     : `${c.errored} of ${c.of} stopped with an error${c.fired ? `, ${c.fired} fired` : ''}`;
   if (c.status === 'not_assessed') return c.why ? `not assessed (${c.why})` : 'not assessed';
-  if (c.status === 'fired') return c.of != null ? `${c.fired} of ${c.of} fired` : 'fired';
+  // a result can say it flagged with none of its own checks listed as fired (board/serve.py withheld_status)
+  if (c.status === 'fired') return c.of == null ? 'fired' : c.fired ? `${c.fired} of ${c.of} fired`
+    : 'flagged, with none of its own checks listed as fired';
   return 'clear';
 }
 // What this dataset's rules set aside: each issue a rule moved to _excluded (board/build.py apply_rules, and the
