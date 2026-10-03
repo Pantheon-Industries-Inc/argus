@@ -136,17 +136,6 @@ def choose_cuts(t: np.ndarray, m: np.ndarray, max_s: float) -> list[dict]:
     return cuts
 
 
-def _seconds(x) -> float | None:
-    """A time as the dataset gives it, in seconds: a number or text that reads as one, else None (no time)."""
-    if isinstance(x, bool):
-        return None
-    try:
-        v = float(x)
-    except (TypeError, ValueError):
-        return None
-    return v if math.isfinite(v) else None
-
-
 def fmt_clock(s: float) -> str:
     s = max(0, int(round(s)))
     return f"{s // 60}:{s % 60:02d}"
@@ -264,7 +253,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             # the dataset's timed subtasks are on the recording's clock; the part is shown those that overlap it, on
             # its own clock and clipped to it (a step with no end time is a moment), and every part is shown those
             # with no time the board can read (none, or not a number), untimed, as a short episode's prompt names them
-            subs = [(x, _seconds(x.get("t0")), _seconds(x["t1"]) if x.get("t1") is not None else _seconds(x.get("t0")))
+            subs = [(x, me.number(x.get("t0")),
+                     me.number(x["t1"]) if x.get("t1") is not None else me.number(x.get("t0")))
                     for x in ctx["annotation_subtasks"] if isinstance(x, dict)]
             c2["annotation_subtasks"] = [
                 {**x, "t0": None, **({"t1": None} if "t1" in x else {})} if a is None else

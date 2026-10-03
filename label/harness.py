@@ -248,22 +248,6 @@ def parse_response(text: str) -> tuple[dict, bool]:
         return {"_raw": text, "_parse_error": f"{type(e).__name__}: {e}"[:300]}, False
 
 
-def _number(x):
-    """x as a number when it is a finite one or text that reads as one (a time written "12.5" or "12.5s"), else
-    None."""
-    if isinstance(x, bool):
-        return None
-    if isinstance(x, (int, float)):
-        return x if math.isfinite(x) else None
-    if isinstance(x, str):
-        try:
-            v = float(x.strip().removesuffix("s").strip())
-        except ValueError:
-            return None
-        return v if math.isfinite(v) else None
-    return None
-
-
 def _drop(labels: dict, field: str, row, why: str) -> None:
     """Records a field or a row of the reply left out because it breaks the output format."""
     labels.setdefault("_dropped", []).append({"field": field, **({"row": row} if row is not None else {}), "why": why})
@@ -297,7 +281,7 @@ def normalize_timeline(labels: dict) -> dict:
             if k == "progress" and seg.get(k) is None:
                 labels.setdefault("_schema_violations", []).append(f"timeline row {i}: progress null")
             elif k in seg and (isinstance(seg[k], bool) or not isinstance(seg[k], (int, float))):
-                v = _number(seg[k])
+                v = me.number(seg[k])
                 if v is None:
                     bad = f"its {k} is not a number ({seg[k]!r})"
                     break
@@ -331,7 +315,7 @@ def _times(x: dict, where: str, labels: dict) -> None:
         v = x.get(k)
         if v is None or (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)):
             continue
-        x[k] = _number(v)
+        x[k] = me.number(v)
         if x[k] is None:
             labels.setdefault("_schema_violations", []).append(f"{where}: {k} {v!r} is not a time, kept untimed")
 

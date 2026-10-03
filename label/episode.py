@@ -41,6 +41,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -141,6 +142,22 @@ def load(ep_dir: Path) -> dict:
 
 def ep_fps(ep: dict) -> float:
     return float(ep["context"].get("fps") or FPS)
+
+
+def number(x) -> float | None:
+    """A number as a dataset or the model writes it: a finite number, or text that reads as one ("12.5", or a time
+    "12.5s"). Anything else (none, a word, NaN, true or false) is no number, None, and a time that is none is shown
+    untimed. One rule, so the prompt, the parts of a long recording, the reply's parse and the board read every time
+    alike."""
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, str):
+        x = x.strip().removesuffix("s").strip()
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
 
 
 def order_views(keys) -> list[str]:
@@ -1265,8 +1282,7 @@ def ego_annotation_block(ctx: dict) -> str:
         return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
     def when(x):            # a step with no end time is a moment, one with no time is listed without one
-        t0, t1 = (x.get(k) if isinstance(x.get(k), (int, float)) and np.isfinite(x.get(k)) else None
-                  for k in ("t0", "t1"))
+        t0, t1 = number(x.get("t0")), number(x.get("t1"))
         return ("no time" if t0 is None else f"{t0:.1f}s" if t1 is None or t1 == t0 else f"{t0:.1f}-{t1:.1f}s")
     lines = [f"  {when(x)}  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
              for x in subs if isinstance(x, dict)]

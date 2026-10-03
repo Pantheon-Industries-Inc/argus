@@ -434,3 +434,24 @@ def test_a_dataset_label_with_a_time_that_is_no_number_never_stops_a_long_record
     assert second["times as text"]["t0"] == round(2.0 - t0, 3) and second["times as text"]["t1"] == round(2.5 - t0, 3)
     first = [x["label"] for x in me.load(parts[0])["context"]["annotation_subtasks"] if x["t0"] is not None]
     assert first == ["timed"] + (["times as text"] if t0 > 2.0 else [])
+
+
+def test_a_dataset_label_time_written_as_text_reads_the_same_in_the_prompt_the_parts_and_the_board(tmp_path):
+    """The parts of a long recording read a dataset label's time written as text ("2.0") as that number and the board
+    did too, but a short episode's prompt listed the same label with no time, and a time written "1.5s" read on no
+    path. One rule (label/episode.py number) now reads them alike: text that reads as a number is that time, and
+    anything else (a word, true or false) stays untimed everywhere."""
+    from board import build as board_build
+    from test_formats import _clip
+    (tmp_path / "v").mkdir()
+    _clip(tmp_path / "v" / "a.mp4", 90)
+    ep = tmp_path / "eps" / "episode_a"
+    subs = [{"t0": "2.0", "t1": "2.5", "label": "times as text"}, {"t0": "1.5s", "label": "time with its unit"},
+            {"t0": True, "t1": 2.0, "label": "a flag, no time"}, {"t0": 0.2, "t1": 1.0, "label": "timed"}]
+    f.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "ego_head", "mine",
+                          {"instruction": "clean up", "annotation_subtasks": subs})
+    block = me.build_request(ep)["prompt"].split("THE DATASET'S ANNOTATION FOR THIS EPISODE")[1]
+    assert "2.0-2.5s  times as text" in block and "1.5s  time with its unit" in block
+    assert "no time  a flag, no time" in block and "0.2-1.0s  timed" in block
+    board = [board_build.dataset_label(x) for x in subs]
+    assert [(x["t0"], x["t1"]) for x in board] == [(2.0, 2.5), (1.5, 1.5), (None, 2.0), (0.2, 1.0)]
