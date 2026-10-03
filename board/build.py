@@ -203,11 +203,12 @@ def reader_notes(ctx: dict) -> dict | None:
     return {**({"state_note": note} if note else {}), **({"left_out": left} if left else {})}
 
 
-def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
+def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) -> None:
     """What the episode's context.json adds to its label: the rig, the real length, the deterministic checks, the
     dataset's own labels (timed segments, as OpenAoE, Galaxea and Gen-HumanEgo ship them, and episode-level status
     and spans, as HABIT does), so a claim that they disagree with the footage can be judged on the board, and the
-    dataset's publisher and license, which travel with its labels into every download."""
+    dataset's publisher and license, which travel with its labels into every download. result is the labelling run's
+    own output, for the contacts it found when the context has none (add_contacts)."""
     d["_rig"] = ctx.get("profile")
     if ctx.get("dataset") in SOURCES:
         d["dataset_source"] = SOURCES[ctx["dataset"]]
@@ -240,7 +241,7 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
     rn = reader_notes(ctx)
     if rn:
         d["reader_notes"] = rn
-    add_contacts(d, ctx)
+    add_contacts(d, ctx, result)
 
 
 UPLOADER_LIST_MAX = 24       # a list of more numbers than this (a calibration matrix is 16) is summarised by its length
@@ -305,10 +306,12 @@ def uploader_groups(notes, start_s, dur_s) -> list[dict]:
     return groups
 
 
-def add_contacts(d: dict, ctx: dict) -> None:
+def add_contacts(d: dict, ctx: dict, result: dict | None = None) -> None:
     """The recording's contacts (context["contacts"], label/contacts.py), each with the model's answer when it was shown
-    ("seen"), and the check of one against the other (checks/contacts.py) in dataset_checks["contact_checks"]."""
-    recorded = ctx.get("contacts") or []
+    ("seen"), and the check of one against the other (checks/contacts.py) in dataset_checks["contact_checks"]. An
+    episode prepared before contacts were measured has none in its context; labelling found them on the recording
+    (label/episode.py build_request, label/pieces.py write_pieces) and its result holds them, so those are used."""
+    recorded = ctx.get("contacts") or (result or {}).get("contacts") or []
     if not recorded:
         for k in ("contacts_model", "contact_views"):
             d.pop(k, None)
@@ -570,7 +573,7 @@ def build(board: Path) -> dict:
             if manifest.get("labels_license"):
                 d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
             if ctx:
-                add_context(d, ctx, eps / name)
+                add_context(d, ctx, eps / name, r)
                 episodes[fname] = eps / name
             # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
             apply_rules(d, ctx, entry.get("rules") or [])

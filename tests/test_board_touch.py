@@ -100,6 +100,27 @@ def test_board_build_joins_each_contact_with_what_the_model_saw(tmp_path):
     assert "strength" in sn["signals"][0]
 
 
+def test_the_board_keeps_the_contacts_labelling_found_when_the_context_has_none(tmp_path):
+    """An episode prepared before contacts were measured has none in its context.json; labelling finds them on the
+    recording (label/contacts.py of_episode) and its result holds them, so the board joins those, not none."""
+    ep = _episode(tmp_path / "eps")
+    ctx = json.loads((ep / "context.json").read_text())
+    recorded = ctx.pop("contacts")
+    (ep / "context.json").write_text(json.dumps(ctx))
+    run = _run(tmp_path / "runs", ep, recorded)
+    out = run / "out" / f"{ep.name}.json"
+    out.write_text(json.dumps({**json.loads(out.read_text()), "contacts": recorded}))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "b", "datasets": [
+        {"dataset": "mine", "run": str(run), "episodes": str(ep.parent)}]}))
+    board_build.build(board)
+    d = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert [c["id"] for c in d["contacts"]] == [c["id"] for c in recorded] and d["contacts"][0]["shown"] is True
+    assert d["dataset_checks"]["contact_checks"]["contacts"] == len(recorded)
+    assert "contacts_model" not in d and "contact_views" not in d
+
+
 @pytest.mark.skipif(not shutil.which("node"), reason="no node")
 def test_the_touch_lane_and_contact_card_say_what_they_must():
     """tests/touch_lane.js on the page's touch block: a bar per hand, each contact styled by what the model found, the
