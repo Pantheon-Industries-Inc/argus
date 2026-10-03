@@ -79,13 +79,14 @@ def per_value(name: str, d: int, shape=None, names=None) -> bool:
 
 def names_joints_or_state(name: str) -> bool:
     """Whether a signal's name says it holds joints or a state, as the no state line names it (label/episode.py): a word
-    of it is joint or qpos (left_joint1, /left/joint_states, observations/qpos), or the last part of it, after its last
-    / or ., is state or states (observation.state), and no word of it says a command (prepare/formats.py
-    COMMAND_WORDS). A name that only ends in state is the state of something else (battery_state, /teleop/fsm_state),
-    and /left/joint_command is what the arm was told, not what it did."""
-    from prepare.formats import COMMAND_WORDS, _names_word
-    parts = [p.strip() for p in re.split(r"[/.]", name.lower()) if p.strip()]
-    return ((_names_word(name, ("joint", "qpos")) or bool(parts) and parts[-1] in ("state", "states"))
+    of it is joint or qpos (left_joint1, /left/joint_states, observations/qpos), or its last word is state or states
+    (observation.state, observation.leader_state), and no word of it says a command (prepare/formats.py
+    COMMAND_WORDS, so /left/joint_command and leader_cmd_state are not). Words are split as prepare/formats.py tokens
+    splits them (separators and camelCase). A one value battery_state or estop_state is left out by the line's own
+    rule that a named signal has more than one value."""
+    from prepare.formats import COMMAND_WORDS, _names_word, tokens
+    words = tokens(name)
+    return ((_names_word(name, ("joint", "qpos")) or bool(words) and words[-1] in ("state", "states"))
             and not _names_word(name, COMMAND_WORDS))
 
 

@@ -66,7 +66,7 @@ def test_a_bimanual_state_of_seven_joints_and_a_gripper_per_arm_is_shown_value_b
     assert ("observation.state (16 values (left_joint1, left_joint2, left_joint3, left_joint4, left_joint5, "
             "left_joint6, left_joint7, left_gripper, right_joint1") in prompt
     assert "    observation.state left_gripper: " in prompt
-    assert "The signal whose name says joints or a state (observation.state)" in prompt
+    assert "The signals whose names say joints or a state (observation.state, observation.leader_state)" in prompt
     assert "16 values per frame" in board["reader_notes"]["state_note"]
     assert any("cam_high_mask" in x for x in board["reader_notes"]["left_out"]["cameras"])
 
@@ -79,7 +79,7 @@ def test_the_same_bimanual_recording_without_its_depth_camera_lands_the_same_wit
     assert ("observation.state (16 values (left_joint1, left_joint2, left_joint3, left_joint4, left_joint5, "
             "left_joint6, left_joint7, left_gripper, right_joint1") in prompt
     assert "    observation.state left_gripper: " in prompt
-    assert "The signal whose name says joints or a state (observation.state)" in prompt
+    assert "The signals whose names say joints or a state (observation.state, observation.leader_state)" in prompt
     assert "\nDEPTH: " not in prompt and "\nDEPTH: cam_high records depth" in landed["lerobot_v21_bimanual_7dof"][1]
 
 

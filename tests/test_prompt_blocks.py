@@ -468,9 +468,10 @@ def test_a_humanoid_state_and_a_bases_odometry_are_shown_value_by_value_under_th
 
 
 def test_the_state_line_names_only_signals_of_several_values_whose_names_say_joints_or_a_state():
-    """A flag or a level whose name ends in state (battery_state, estop_state, gripper_state) is one value and no joint
-    reading; /teleop/fsm_state is the state of a teleop program, not of the robot; /left/joint_command is a command.
-    None is named. An unnamed 26 value observation.state is, without "under their own names", since its rows are
+    """A flag, a level or a program's step whose name ends in state (battery_state, estop_state, gripper_state,
+    /teleop/fsm_state) is one value and no joint reading; /left/joint_command and leader_cmd_state are commands. None is
+    named. A name says a state by its last word, split as prepare/formats.py splits words, so observation.leader_state
+    is named beside observation.state. An unnamed vector is named without "under their own names", since its rows are
     labelled only by position."""
     ep, pl = CASES["teleop_video_only"]()
     t = np.arange(450) / 30.0
@@ -478,11 +479,12 @@ def test_the_state_line_names_only_signals_of_several_values_whose_names_say_joi
     ep["signals"] = {"battery_state": (90 - 0.01 * np.arange(450))[:, None],
                      "estop_state": ((t > 5) & (t < 7)).astype(float)[:, None],
                      "gripper_state": (0.5 + 0.5 * np.sin(t))[:, None],
-                     "/teleop/fsm_state": np.stack([(t // 3) % 4, (t // 5) % 2], axis=1),
-                     "/left/joint_command position": sweep(6)}
+                     "/teleop/fsm_state": ((t // 3) % 4)[:, None],
+                     "/left/joint_command position": sweep(6),
+                     "observation.leader_cmd_state": sweep(6)}
     ep["signal_meta"] = {k: {} for k in ep["signals"]}
     episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
-    assert "    /left/joint_command position [0]: " in episode and "    /teleop/fsm_state [1]: " in episode
+    assert "    /left/joint_command position [0]: " in episode and "    observation.leader_cmd_state [5]: " in episode
     assert "RECORDED STATE: no arm state in the layout our checks read.\n" in episode
     assert "whose name" not in episode and "joint readings" not in episode
     ep["signals"]["observation.state"] = sweep(26)
@@ -490,12 +492,15 @@ def test_the_state_line_names_only_signals_of_several_values_whose_names_say_joi
     episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
     assert ("RECORDED STATE: no arm state in the layout our checks read. The signal whose name says joints or a state "
             "(observation.state) is given value by value among the other recorded signals below.\n") in episode
+    ep["signals"]["observation.leader_state"] = sweep(14)
+    ep["signal_meta"]["observation.leader_state"] = {}
+    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+    assert ("The signals whose names say joints or a state (observation.state, observation.leader_state) are given "
+            "value by value among the other recorded signals below.\n") in episode
+    for nm in ("observation.state", "observation.leader_state"):
+        del ep["signals"][nm]
     ep["signals"]["/left/joint_states position"] = sweep(6)
     ep["signal_meta"]["/left/joint_states position"] = {"names": [f"j{i}" for i in range(6)]}
-    episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
-    assert ("The signals whose names say joints or a state (observation.state, /left/joint_states position) are given "
-            "value by value among the other recorded signals below.\n") in episode
-    del ep["signals"]["observation.state"]
     episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
     assert ("The signal whose name says joints or a state (/left/joint_states position) is given value by value under "
             "their own names among the other recorded signals below.\n") in episode
