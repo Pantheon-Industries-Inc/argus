@@ -4939,7 +4939,7 @@ def fill_rows(q: np.ndarray, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray |
         lo, hi = np.maximum(t[:-1], q[0]), np.minimum(t[1:], q[-1])
         step = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
         longest, edge = max(STATE_GAP_S, STATE_STOP_STEPS * step), edge_slack(float(q[-1] - q[0]))
-        gaps = [(float(lo[i]), float(hi[i]), STATE_GAP_S) for i in np.flatnonzero(hi - lo > longest)]
+        gaps = [(float(lo[i]), float(hi[i]), longest) for i in np.flatnonzero(hi - lo > longest)]
         gaps += [(float(q[0]), float(t[0]), edge)] if t[0] > q[0] + edge else []
         gaps += [(float(t[-1]), float(q[-1]), edge)] if t[-1] < q[-1] - edge else []
         if gaps:

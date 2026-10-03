@@ -224,6 +224,14 @@ def test_an_indexed_mcap_damaged_inside_is_flagged_with_the_span_read(tmp_path):
     assert f"{hit[0]['t1_s']:.1f} s of the footage" in hit[0]["what"]
 
 
+def test_a_gap_inside_a_stream_is_given_with_the_limit_it_broke():
+    q = np.arange(120) / 30.0
+    t = np.concatenate([np.arange(0, 1.0, 0.25), np.arange(3.0, 4.01, 0.25)])     # 4 Hz, a 2 s hole
+    rows, gap = f.fill_rows(q, t, np.ones((len(t), 7)))
+    assert rows is None and gap[2] == pytest.approx(0.75)                       # three steps of 0.25 s
+    assert "a gap longer than the 0.75 s the reader fills" in f.gap_words(gap, 0.0)
+
+
 # ---------------------------------------------------------------- a damaged archive
 
 _RNG = np.random.default_rng(0)
