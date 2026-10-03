@@ -372,3 +372,29 @@ def test_with_no_arm_state_the_instants_where_the_signals_fall_quiet_and_move_ag
     ep.update(dir=None, action=None, times=None, kmap={})
     ep["sources"] = {v: {"n_frames": 900} for v in ep["sources"]}
     assert "quiet_spans" not in me.plan(ep)           # an arm state finds its own still spans
+
+
+def test_a_signal_is_quiet_by_its_own_step_so_the_length_of_the_recording_does_not_matter():
+    """A base that drives at a steady speed is never quiet, whether the recording is 30 s or 20 minutes; one that stops
+    for 10 s inside a 6 minute recording still gives that stop; values that only flicker (a flag on 5 percent of
+    frames, a pad count off by one) never block a quiet span; a dropped reading does not hide a base that moves."""
+    from label import signals as sg
+    for n in (900, 9000, 36000):
+        assert sg.quiet_spans({"odom": (np.arange(n) / 30.0)[:, None]}, 90) == []
+    n = 10800
+    t = np.arange(n) / 30.0
+    x = np.where(t < 100, t, np.where(t < 110, 100.0, 100 + (t - 110)))
+    (a, b), = sg.quiet_spans({"odom": x}, 90)
+    assert abs(a - 3000) <= 12 and abs(b - 3300) <= 12
+    flag = (np.random.default_rng(1).random(n) < 0.05).astype(float)
+    pad = np.where(np.random.default_rng(2).random(n) < 0.3, 1, 0)         # integer counts at rest, off by one
+    assert sg.movements(flag)[0] < sg.MOVING_MIN and sg.movements(pad)[0] < sg.MOVING_MIN
+    assert sg.quiet_spans({"odom": x, "flag": flag, "pad": pad.astype(np.int16)}, 90) == [(a, b)]
+    drop = x.copy()
+    drop[1000] = np.nan                                                    # one dropout while the base moves
+    assert sg.quiet_spans({"odom": drop}, 90) == [(a, b)]
+    assert sg.movements(np.zeros((0, 2))).tolist() == [0.0, 0.0]
+    assert sg.movements(np.full((50, 1), np.nan)).tolist() == [0.0]
+    late = x.copy()
+    late[:100] = np.nan
+    assert sg.quiet_spans({"odom": late}, 90) == [(a, b)]

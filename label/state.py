@@ -82,14 +82,15 @@ def _span_ok(seg: np.ndarray, tol: np.ndarray | None = None) -> bool:
 def spans_within(s: np.ndarray, tol: np.ndarray, need: int) -> list[tuple[int, int]]:
     """Maximal frame intervals [a, b] (inclusive) of at least need frames over which every column's range stays within
     tol. Greedy left to right: grow a span while the range test holds; a span that cannot reach need frames advances
-    the start by one frame. still_spans' search, shared with the quiet spans of signals (label/signals.py)."""
+    the start by one frame. A column with missing readings (NaN) is tested where it has readings. still_spans' search,
+    shared with the quiet spans of signals (label/signals.py)."""
     s = np.asarray(s, dtype=np.float64)
     T = len(s)
     if T < need:
         return []
-    # cheap necessary condition: frame-to-frame motion within tolerance on every channel
+    # cheap necessary condition: frame-to-frame motion within tolerance on every channel (a missing reading: none)
     d = np.abs(np.diff(s, axis=0))
-    calm = np.concatenate([[True], (d <= tol + 1e-12).all(1)])
+    calm = np.concatenate([[True], (~(d > tol + 1e-12)).all(1)])
     spans, i = [], 0
     while i + need <= T:
         if not calm[i]:
@@ -98,7 +99,7 @@ def spans_within(s: np.ndarray, tol: np.ndarray, need: int) -> list[tuple[int, i
         lo, hi = s[i].copy(), s[i].copy()
         j = i + 1
         while j < T:
-            lo2, hi2 = np.minimum(lo, s[j]), np.maximum(hi, s[j])
+            lo2, hi2 = np.fmin(lo, s[j]), np.fmax(hi, s[j])  # fmin and fmax skip a missing reading
             if ((hi2 - lo2) > tol + 1e-12).any():
                 break
             lo, hi = lo2, hi2
@@ -118,8 +119,6 @@ def still_spans(state: np.ndarray, min_s: float = MIN_STILL_S, fps: float = FPS,
     still_tolerance), found by spans_within."""
     s = np.asarray(state, dtype=np.float64)
     need = int(round(min_s * fps))
-    if len(s) < need:
-        return []
     tol = still_tolerance(kind, s.shape[1], grip_range)
     spans = spans_within(s, tol, need)
     for a, b in spans:  # invariant, so a caller can state it as fact
