@@ -271,9 +271,9 @@ def test_a_contact_timed_only_by_a_signal_that_does_not_measure_touch_is_not_sho
     episode = me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
     assert "contacts" not in [b.name for b in me.present_blocks(ep, pl)] and me.requested_schema(ep, pl) == ()
     assert "CONTACTS:" not in episode and '"contacts"' not in episode
-    assert me.touch_contacts(ep, ep["contacts"], pl["n"]) == []
+    assert me.touch_contacts(ep, pl, ep["contacts"]) == []
     _add_contact(ep, pl)                             # a contact the glove's pressure times is shown
-    assert [c["id"] for c in me.touch_contacts(ep, ep["contacts"], pl["n"])] == ["c1"]
+    assert [c["id"] for c in me.touch_contacts(ep, pl, ep["contacts"])] == ["c1"]
     assert "contacts" in [b.name for b in me.present_blocks(ep, pl)]
 
 

@@ -245,7 +245,7 @@ def plan(ep: dict) -> dict:
         sample_spans = quiet
     ks = ms.sample_frames(n, sample_spans, fps=fps, moving_every_s=every, still_every_s=every)
     pl = {"n": n, "ks": ks, "spans": spans, "checks": checks,
-          "state_usable": checks["camera_windows_match_state"]}
+          "state_usable": checks["camera_windows_match_state"], "touch": touch_verdicts(ep, n)}
     if quiet is not None:
         pl["quiet_spans"] = quiet
     pl["contact"] = contact_instants(ep, pl)
@@ -790,37 +790,46 @@ def _contact_line(c: dict) -> str:
                if c.get("dips_s") else ""))
 
 
-def _touch_signal(ep: dict, name: str, n: int) -> bool:
-    """Whether one of the episode's signals measures touch, the one rule labelling uses for it (the contacts shown and
-    the per-instant readout). A part of a long recording carries the whole recording's verdict in its signal entry
-    ("touch", label/pieces.py write_pieces), because touch is judged once, on the whole recording: a part that falls
-    inside a long press has no rest of its own, and its slice alone would not read as touch. Any other episode is
-    judged by label/signals.py is_touch (its name says so and its numbers behave like touch, on the upload's scale)
-    over its first n frames, the frames the prompt covers (plan()["n"])."""
-    m = (ep.get("signal_meta") or {}).get(name) or {}
-    if "touch" in m:
-        return bool(m["touch"])
-    a = (ep.get("signals") or {}).get(name)
-    if a is None:
-        return False
+def touch_verdicts(ep: dict, n: int) -> frozenset:
+    """The names of the episode's signals that measure touch, the one rule labelling uses for it (the contacts shown
+    and the per-instant readout), judged once per plan (plan()["touch"]): one judgement of a 16 x 16 glove takes over a
+    second, and judging again at every presence test cost a 450 s episode about two minutes per request. A part of a
+    long recording carries the whole recording's verdict in its signal entry ("touch", label/pieces.py write_pieces),
+    because touch is judged once, on the whole recording: a part that falls inside a long press has no rest of its
+    own, and its slice alone would not read as touch. Any other signal is judged by label/signals.py is_touch (its name
+    says so and its numbers behave like touch, on the upload's scale) over its first n frames, the frames the prompt
+    covers (plan()["n"])."""
     from label import signals as sg
-    return bool(sg.is_touch(name, np.asarray(a[:n], dtype=np.float64), m.get("rest"), m.get("swing")))
+    meta = ep.get("signal_meta") or {}
+    out = set()
+    for name, a in (ep.get("signals") or {}).items():
+        m = meta.get(name) or {}
+        if m["touch"] if "touch" in m else sg.is_touch(name, np.asarray(a[:n], dtype=np.float64), m.get("rest"),
+                                                      m.get("swing")):
+            out.add(name)
+    return frozenset(out)
 
 
-def touch_contacts(ep: dict, contacts, n: int) -> list[dict]:
-    """The contacts timed by at least one touch signal of the episode (_touch_signal over its first n frames). A
-    context.json prepared before is_touch can hold a contact found from a signal that only behaved like touch (an
-    intervention flag, odometry); it is not shown."""
-    return [c for c in contacts or [] if any(_touch_signal(ep, nm, n) for nm in c.get("signals") or [])]
+def _touch(ep: dict, pl: dict) -> frozenset:
+    """plan()["touch"], or for a plan made by hand without it, the verdicts made now."""
+    return pl["touch"] if "touch" in pl else touch_verdicts(ep, pl["n"])
+
+
+def touch_contacts(ep: dict, pl: dict, contacts) -> list[dict]:
+    """The contacts timed by at least one touch signal of the episode (touch_verdicts). A context.json prepared before
+    is_touch can hold a contact found from a signal that only behaved like touch (an intervention flag, odometry); it
+    is not shown."""
+    touch = _touch(ep, pl)
+    return [c for c in contacts or [] if any(nm in touch for nm in c.get("signals") or [])]
 
 
 def contacts_block(ep: dict, pl: dict) -> str:
     """The episode's contacts as the recording gives them (label/contacts.py), what each contact picture shows, and
     what to return for them. Empty when no contact is timed by a touch signal (touch_contacts)."""
-    shown = touch_contacts(ep, ep.get("contacts_shown"), pl["n"])
+    shown = touch_contacts(ep, pl, ep.get("contacts_shown"))
     if not shown:
         return ""
-    rest = [c for c in touch_contacts(ep, ep.get("contacts"), pl["n"]) if c["id"] not in {x["id"] for x in shown}]
+    rest = [c for c in touch_contacts(ep, pl, ep.get("contacts")) if c["id"] not in {x["id"] for x in shown}]
     depth = any(_contact_views(ep, c)[2] for c in shown)
     return ("\nCONTACTS: the recording's touch signals say a hand is touching something in these spans. They are the "
             "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
@@ -898,7 +907,7 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     """(lines, whole): the values of the signals at every sampled instant, and the signals every row of which is in
     them. A touch signal has no rows (its timing is given once as the episode's contacts, contacts_block, so the frames
     are read on their own first and the contacts are checked against them; touch is the rule the contacts shown follow,
-    _touch_signal), nor has a signal that never changes or has no reading. The rows are ranked by how much their
+    touch_verdicts), nor has a signal that never changes or has no reading. The rows are ranked by how much their
     values move over the episode (label/signals.py movements) and added in that order until the first that does not
     fit SIGNAL_TABLE_MAX_CHARS, then printed in the signals' own order, so the rows shown are always the ones that move
     most; every signal left out, whole or in part, is named in one line with its size and rate. Until the 2026-10-02
@@ -909,7 +918,7 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
     arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
-    touch = {nm for nm in arrs if _touch_signal(ep, nm, n)}
+    touch = _touch(ep, pl)
     ks = pl["ks"]
     rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)
     for i, (name, a) in enumerate(arrs.items()):
@@ -1092,7 +1101,7 @@ def _state_unaligned(ep: dict, pl: dict) -> bool:
 
 
 def _has_contacts(ep: dict, pl: dict) -> bool:
-    return bool(touch_contacts(ep, ep.get("contacts_shown"), pl["n"]))
+    return bool(touch_contacts(ep, pl, ep.get("contacts_shown")))
 
 
 def _no_state(ep: dict, pl: dict) -> bool:
@@ -1229,18 +1238,19 @@ def present_blocks(ep: dict, pl: dict) -> list[Block]:
     return [b for b in BLOCKS if b.present(ep, pl)]
 
 
-def is_recorded(ep: dict, pl: dict) -> bool:
-    return any(b.name in RECORDED_BLOCKS for b in present_blocks(ep, pl))
+def is_recorded(ep: dict, pl: dict, blocks: list[Block] | None = None) -> bool:
+    """Whether the episode is a recording rather than video only, from its present blocks (given, or found now)."""
+    return any(b.name in RECORDED_BLOCKS for b in (present_blocks(ep, pl) if blocks is None else blocks))
 
 
-def requested_schema(ep: dict, pl: dict) -> tuple:
+def requested_schema(ep: dict, pl: dict, blocks: list[Block] | None = None) -> tuple:
     """The output fields this episode's blocks ask for beyond the rig's shared schema."""
-    return tuple(f for b in present_blocks(ep, pl) for f in b.schema_fields)
+    return tuple(f for b in (present_blocks(ep, pl) if blocks is None else blocks) for f in b.schema_fields)
 
 
-def implied_checks(ep: dict, pl: dict) -> tuple:
+def implied_checks(ep: dict, pl: dict, blocks: list[Block] | None = None) -> tuple:
     """The deterministic checks the data of this episode's blocks feeds."""
-    return tuple(c for b in present_blocks(ep, pl) for c in b.checks)
+    return tuple(c for b in (present_blocks(ep, pl) if blocks is None else blocks) for c in b.checks)
 
 
 def _intro_head(ep: dict) -> str:
@@ -1303,32 +1313,37 @@ def task_block(ep: dict) -> str:
     return s
 
 
-def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -> str:
-    """The episode's part of the prompt: the base, with each present block's text in its slot."""
+def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple,
+                 blocks: list[Block] | None = None) -> str:
+    """The episode's part of the prompt: the base, with each present block (given, or found now) in its slot."""
     got = dict.fromkeys(PROMPT_SLOTS, "")
+    blocks = present_blocks(ep, pl) if blocks is None else blocks
     if _has_signals(ep, pl):
         # the readout of the signals is made once: the signals block prints it and the state line names only the
         # joint readings it shows whole
         pl = {**pl, "readout": _signal_readout(ep, pl)}
-    for b in present_blocks(ep, pl):
+    for b in blocks:
         got[b.slot] += b.text(ep, pl)
-    return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep, is_recorded(ep, pl)) + "\n"
+    return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep, is_recorded(ep, pl, blocks))
+            + "\n"
             + _frames_head(ep, cell_w, cell_h, native) + got["frames_detail"] + "\n" + _instants_line(ep)
             + got["frames"] + got["state"] + got["signals"] + BETWEEN_INSTANTS + got["after_frames"] + "\n"
             + task_block(ep) + got["after_task"])
 
 
-def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None) -> tuple[str, str]:
+def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None,
+                 blocks: list[Block] | None = None) -> tuple[str, str]:
     """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
     identical for every episode of the same rig, instruction presence and recorded or video only variant (is_recorded),
-    then the facts about THIS episode (episode_text)."""
+    then the facts about THIS episode (episode_text). The present blocks are found once, unless the caller has them."""
     ctx = ep["context"]
     r = rig(ep)
     c0 = (ctx.get("cameras") or {}).get(anchor(ep), {})
     native = (c0.get("width") or "native", c0.get("height") or "resolution")
     given = (ctx.get("instruction") or "").strip()
-    fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl))
-    return fixed + prompts.example_block(r, example_dir), episode_text(ep, pl, cell_w, cell_h, native)
+    blocks = present_blocks(ep, pl) if blocks is None else blocks
+    fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl, blocks))
+    return fixed + prompts.example_block(r, example_dir), episode_text(ep, pl, cell_w, cell_h, native, blocks)
 
 
 EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
@@ -1342,7 +1357,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     ep = load(ep_dir)
     pl = plan(ep)
     from label import contacts as lc
-    ep["contacts"] = touch_contacts(ep, lc.of_episode(ep), pl["n"])
+    ep["contacts"] = touch_contacts(ep, pl, lc.of_episode(ep))
     ep["contacts_shown"] = chosen_contacts(ep, ep["contacts"])
     if ep["contacts_shown"]:
         pl["contact"] = []   # the touch signals' own contacts replace the views chosen from the gripper's value
@@ -1367,10 +1382,13 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                for k, vs in ((k, [v for v in vs if recording_at(ep, v, k)]) for k, vs in contact_views(ep, pl)) if vs]
     budget = (IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION - DETAIL_VIEW_BYTES_MAX
               - sum(len(j) for _, _, j in contact))
+    # the blocks follow from the episode and its plan, never from the cell width: found once, for every width and the
+    # record
+    blocks = present_blocks(ep, pl)
     for cell_w in widths:
         steps = timesteps(ep, pl, imgs, cell_w)
         cell_h = int(round(any_img.height * cell_w / any_img.width / 2)) * 2
-        fixed, episode = build_prompt(ep, pl, cell_w=cell_w, cell_h=cell_h, example_dir=example_dir)
+        fixed, episode = build_prompt(ep, pl, cell_w=cell_w, cell_h=cell_h, example_dir=example_dir, blocks=blocks)
         content, n_grids, grid_bytes = mf.build_content(fixed, episode, steps, cam_labels, grid_cols, detail,
                                                         grid_quality, gutter=GRID_GUTTER, header=GRID_HEADER)
         if grid_bytes <= budget:
@@ -1428,9 +1446,9 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
             "grid_cols": grid_cols,
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
             "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s",
-            "blocks": [b.name for b in present_blocks(ep, pl)],
-            "schema_fields": list(requested_schema(ep, pl)),
-            "checks_implied": list(implied_checks(ep, pl)),
+            "blocks": [b.name for b in blocks],
+            "schema_fields": list(requested_schema(ep, pl, blocks)),
+            "checks_implied": list(implied_checks(ep, pl, blocks)),
             **({"depth_s": depth_sent, "depth_views": order_views(depth_at)} if depth_sent else {}),
             **({"contact_views": {"shown": contacts_sent, "strips": strips}, "contacts": ep.get("contacts")}
                if contacts_sent else {})}

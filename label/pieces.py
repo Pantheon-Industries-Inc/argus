@@ -150,7 +150,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     touch = {}
     if zs is not None:
         # touch is judged once, on the whole recording, and each part's signal entries carry the verdict
-        # (label/episode.py _touch_signal): a part that falls inside a long press has no rest of its own, so its slice
+        # (label/episode.py touch_verdicts): a part that falls inside a long press has no rest of its own, so its slice
         # alone would not read as touch and the part would lose the contact the recording shows
         from label import signals as sg
         touch = {s["name"]: bool(sg.is_touch(s["name"], np.asarray(zs[s["key"]][:n], dtype=np.float64), s.get("rest"),

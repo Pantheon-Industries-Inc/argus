@@ -294,6 +294,25 @@ def test_an_episode_with_a_contact_shows_it_and_one_without_is_labelled_as_befor
     assert "CONTACTS:" not in r["prompt"] and "contact_views" not in r
 
 
+def test_one_request_judges_each_signal_touch_at_most_once(tmp_path, monkeypatch):
+    """Touch is judged once per plan (label/episode.py plan, pl["touch"]): a 450 s episode with a 16 x 16 glove and 60
+    contacts spent about two minutes per request when every presence test and every contact judged it again."""
+    root = tmp_path / "up"
+    root.mkdir()
+    _hdf5(root / "kitchen_p1.hdf5", demos=1)
+    rep = formats.convert(root, "ego_head", tmp_path / "eps", "touchset", 900)
+    calls = {}
+    judge = sg.is_touch
+
+    def counted(name, *a, **k):
+        calls[name] = calls.get(name, 0) + 1
+        return judge(name, *a, **k)
+    monkeypatch.setattr(sg, "is_touch", counted)
+    r = me.build_request(tmp_path / "eps" / rep["episodes"][0]["episode_id"])
+    assert r["contact_views"]["shown"] == ["c1"]
+    assert calls and max(calls.values()) == 1, calls
+
+
 def test_a_depth_video_beside_its_colour_video_goes_with_that_camera(tmp_path):
     d = tmp_path / "up" / "ep1"
     d.mkdir(parents=True)
