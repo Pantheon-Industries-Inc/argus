@@ -395,3 +395,42 @@ def test_a_missing_state_row_never_hides_a_frozen_camera():
     rows that have readings, so the frozen camera is still reported."""
     R = cq.assess(_two_cameras(False, nan_row=True))["checks"]
     assert R["video_frozen_run"]["status"] == "fired"
+
+
+def test_an_episode_whose_capture_worker_stops_gets_a_record_with_every_check_errored(tmp_path, monkeypatch, capsys):
+    """python -m checks.capture_qc printed FAILED for an episode whose worker stopped outside run_episode and wrote no
+    record, so the board showed no capture checks for it and the caller saw a clean step. The episode now gets a record
+    with every check errored and the error, as one whose checks could not run at all, and the others keep theirs. A
+    worker process that dies (killed, out of memory) is recorded the same way."""
+    import json
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+    eps = tmp_path / "eps"
+    for name in ("episode_000000", "episode_000001"):
+        (eps / name).mkdir(parents=True)
+        (eps / name / "context.json").write_text(json.dumps({"fps": 30}))
+    good = cq.format_result({"checks": {}, "cameras": {}, "actors": {}, "episode": {}})
+
+    def run(d):
+        if d.name == "episode_000001":
+            raise RuntimeError("the worker stopped")
+        return good
+    monkeypatch.setattr(cq, "ProcessPoolExecutor", ThreadPoolExecutor)
+    monkeypatch.setattr(cq, "run_episode", run)
+    monkeypatch.setattr(sys, "argv", ["python -m checks.capture_qc", "--force", str(eps)])
+    cq.main()
+    rec = {n: json.loads((eps / n / "context.json").read_text())["capture_qc"] for n in ("episode_000000",
+                                                                                      "episode_000001")}
+    assert rec["episode_000000"] == good
+    assert rec["episode_000001"]["checks"] and all(r["status"] == "errored" for r in rec["episode_000001"]["checks"])
+    assert "RuntimeError: the worker stopped" in rec["episode_000001"]["checks"][0]["why"]
+    out = capsys.readouterr().out
+    assert "FAILED episode_000001: RuntimeError: the worker stopped" in out and "failed=1" in out
+
+    def died(d):
+        raise OSError("the worker process died")
+    monkeypatch.setattr(cq, "_one", died)
+    cq.main()
+    for n in ("episode_000000", "episode_000001"):
+        r = json.loads((eps / n / "context.json").read_text())["capture_qc"]
+        assert all(x["status"] == "errored" for x in r["checks"]) and "the worker process died" in r["checks"][0]["why"]

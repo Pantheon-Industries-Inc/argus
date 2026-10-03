@@ -54,7 +54,7 @@ import os
 import re
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -1411,24 +1411,31 @@ def format_result(a: dict) -> dict:
             "checks": listing, "metrics": {"cameras": a["cameras"], "actors": a["actors"], "episode": a["episode"]}}
 
 
+def errored_record(e: Exception) -> dict:
+    """The context["capture_qc"] record of an episode whose checks could not run at all: every check errored, with
+    the error."""
+    return format_result({"checks": {c: _errored(e) for c in CHECKS}, "cameras": {}, "actors": {}, "episode": {}})
+
+
 def run_episode(ep_dir: Path | str) -> dict:
     """Decode, assess and format one episode: its context["capture_qc"] record. An episode that cannot be read or
     decoded at all still gets one, with every check errored and the error, never no record."""
     try:
-        a = assess(extract(Path(ep_dir)))
+        return format_result(assess(extract(Path(ep_dir))))
     except Exception as e:  # noqa: BLE001 - recorded on every check, the episode keeps a record
-        a = {"checks": {c: _errored(e) for c in CHECKS}, "cameras": {}, "actors": {}, "episode": {}}
-    return format_result(a)
+        return errored_record(e)
 
 
 # ------------------------------------------------------------------------------------------ CLI
 
-def _one(d: str) -> tuple[str, dict | None, str | None, float]:
+def _one(d: str) -> tuple[str, dict, str | None, float]:
+    """(episode, its record, the error when its worker stopped, seconds). A worker that stops outside run_episode still
+    gives the episode a record, every check errored with the error, so it is never left with none."""
     t0 = time.time()
     try:
         return d, run_episode(Path(d)), None, time.time() - t0
-    except Exception as e:  # reported per episode, never silently skipped
-        return d, None, f"{type(e).__name__}: {e}"[:300], time.time() - t0
+    except Exception as e:  # reported per episode and recorded on every check, never silently skipped
+        return d, errored_record(e), f"{type(e).__name__}: {e}"[:300], time.time() - t0
 
 
 def main():
@@ -1448,12 +1455,16 @@ def main():
     print(f"episodes to check: {len(eps)}", flush=True)
     done = flagged = failed = 0
     with ProcessPoolExecutor(args.jobs) as ex:
-        for d, r, err, secs in ex.map(_one, eps, chunksize=1):
+        futures = {ex.submit(_one, d): d for d in eps}
+        for fut in as_completed(futures):
+            try:
+                d, r, err, secs = fut.result()
+            except Exception as e:  # the worker process itself died (killed, out of memory): recorded the same way
+                d, r, err, secs = futures[fut], errored_record(e), f"{type(e).__name__}: {e}"[:300], 0.0
             done += 1
             if err:
                 failed += 1
                 print(f"FAILED {Path(d).name}: {err}", flush=True)
-                continue
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx["capture_qc"] = r
