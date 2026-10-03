@@ -617,10 +617,11 @@ def test_a_one_dimensional_or_empty_signal_never_costs_the_others(tmp_path):
     r = sc.run_episode(ep)
     st = {c["check"]: c for c in r["checks"]}
     assert not any(c["status"] == "errored" for c in r["checks"])
-    assert any(n["check"] == "no_reading" and n["signal"] == "probe empty" and "no rows" in n["evidence"]
-               for n in r["notes"])
+    assert any(n["check"] == "no_reading" and n["signal"] == "probe empty"
+               and n["evidence"] == "probe empty has no reading at 300 of 300 frames" for n in r["notes"])
     assert st["no_reading"]["status"] == "fired" and "not_run_on" not in st["no_reading"]
-    assert st["pinned"]["status"] == "clear" and st["pinned"]["not_run_on"] == "probe empty (it has no rows)"
+    assert st["pinned"]["status"] == "clear"
+    assert st["pinned"]["not_run_on"] == "probe empty (it has no reading at any frame)"
     e = me.load(ep)
     assert e["signals"]["probe vector"].shape == (300, 1)
     pl = me.plan(e)
@@ -634,3 +635,27 @@ def test_a_one_dimensional_or_empty_signal_never_costs_the_others(tmp_path):
     st = {c["check"]: c for c in sc.run_episode(only)["checks"]}
     assert st["constant"]["status"] == "na" and st["constant"]["why"].startswith("no signal could be checked")
     assert st["no_reading"]["status"] == "fired"
+
+
+def test_a_signal_that_stops_short_or_never_reads_is_counted_over_every_frame(tmp_path):
+    """A signal with rows for half the episode's frames was judged on its own rows, so it read as having a reading
+    throughout, and a signal with no reading at any frame was left out of the other checks without a word. Every
+    signal is judged over all the episode's frames: past its last row it has no reading, and one with no reading at
+    any frame is named by the other checks as not run on it."""
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.linspace(0, 1, 150).astype(np.float32).reshape(-1, 1)      # 150 rows of the episode's 300 frames
+    z["s4"] = np.full((300, 2), np.nan, np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe short", "key": "s3", "dims": 1}, {"name": "probe unread", "key": "s4", "dims": 2}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    r = sc.run_episode(ep)
+    ev = {n["signal"]: n["evidence"] for n in r["notes"] if n["check"] == "no_reading"}
+    assert ev == {"probe short": "probe short has no reading at 150 of 300 frames",
+                  "probe unread": "probe unread has no reading at 300 of 300 frames"}
+    st = {c["check"]: c for c in r["checks"]}
+    assert st["pinned"]["not_run_on"] == "probe unread (it has no reading at any frame)"
+    assert "not_run_on" not in st["no_reading"]

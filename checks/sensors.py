@@ -71,9 +71,10 @@ def _cell(i: int, shape) -> str:
 
 
 def signal_findings(ep: dict, skipped: dict | None = None) -> list[dict]:
-    """The signal checks' findings. Each signal is checked on its own: one with no rows has no reading at any frame
-    (no_reading) and no other check is run on it, and one whose checks stop with an error has that error; both are
-    named in skipped ({signal: why}), and the other signals are checked as usual."""
+    """The signal checks' findings. Each signal is checked on its own, over every frame of the episode: one whose rows
+    stop short has no reading past them, so one with no rows has no reading at any frame (no_reading). One with no
+    reading at any frame has no other check run on it, and one whose checks stop with an error has that error; both
+    are named in skipped ({signal: why}), and the other signals are checked as usual."""
     sig = ep.get("signals") or {}
     skipped = {} if skipped is None else skipped
     out = []
@@ -91,17 +92,17 @@ def _signal_findings(ep: dict, name: str, a, skipped: dict) -> list[dict]:
     fps = me.ep_fps(ep)
     out = []
     a = np.asarray(a, dtype=np.float64)
-    if not len(a):
-        skipped[name] = "it has no rows"
-        return [{"check": "no_reading", "signal": name,
-                 "evidence": f"{name} has no rows, so no reading at any of the {len(ep['state'])} frames"}]
+    # every frame of the episode: a signal whose rows stop short of it (none at all, at the least) has no reading past
+    # its last row
+    n = max(len(ep["state"]), len(a))
     m = meta.get(name) or {}
     gone = np.isnan(a).all(axis=1)
-    if gone.mean() > NO_READING_SHARE:
-        out.append({"check": "no_reading", "signal": name,
-                    "evidence": f"{name} has no reading at {int(gone.sum())} of {len(a)} frames"})
+    unread = int(gone.sum()) + n - len(a)
+    if n and unread / n > NO_READING_SHARE:
+        out.append({"check": "no_reading", "signal": name, "evidence": f"{name} has no reading at {unread} of {n} frames"})
     ok = a[~gone]
     if not len(ok):
+        skipped[name] = "it has no reading at any frame"
         return out
     with np.errstate(all="ignore"):
         span = np.nanmax(ok, axis=0) - np.nanmin(ok, axis=0)
