@@ -2933,15 +2933,15 @@ function unshownNote(d) {
   return `<p class="unshown-note">The model was not shown ${us.length === 1 ? 'the camera' : 'the cameras'} ${list}. `
     + `${us.length === 1 ? 'It plays' : 'They play'} here so every camera of the upload can be watched.</p>`;
 }
-// The outcome a list card shows. A session of tasks (head cameras) has no single verdict: the per-task success ratio
-// ("8/9 tasks") instead of a misleading "unrated"; a single task shows its completion verdict. A long recording with a
-// part the model gave no labels for (parts_missing, label/pieces.py stitch_run) never reads complete, and an episode
-// whose own reply gave no labels says so.
 // next to a session's success count: how many parts of a long recording have no labels (label/pieces.py stitch_run)
 function partsGapHtml(d) {
   const st = d && d._stitched, k = st && Array.isArray(st.missing) ? st.missing.length : 0;
   return k ? ` / <span class="ts-fail">${k} of ${st.parts} parts not labelled</span>` : '';
 }
+// The outcome a list card shows. A session of tasks (head cameras) has no single verdict: the per-task success ratio
+// ("8/9 tasks") instead of a misleading "unrated"; a single task shows its completion verdict. A long recording with a
+// part the model gave no labels for (parts_missing, label/pieces.py stitch_run) never reads complete, and an episode
+// whose own reply gave no labels says so.
 function cardOutcomeHtml(ep) {
   if (ep.label_failed && !ep.cmp_status) {
     // the board's own reply gave no labels: no outcome to rate, which "unrated" would hide
