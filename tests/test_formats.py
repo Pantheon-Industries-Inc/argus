@@ -490,6 +490,48 @@ def test_an_hdf5_arm_state_beside_videos_is_the_episodes_state():
             assert np.allclose(z["action"], z["state"] + 0.01, atol=1e-4)
 
 
+def test_names_that_name_a_position_a_velocity_or_an_effort_never_read_as_joints():
+    """state_layout read names it could not parse by the width rule, so a pose in metres with units after its axes
+    (x_m, roll_rad), a camelCase pose (eefPosX), a cartesian position numbered 0 to 5, UMI's eef position on an arm
+    rig, and joint velocities or efforts all read as six joints and a gripper in radians. Each name is read as words
+    (separators and camelCase, a trailing unit dropped): an axis as the last word makes a pose, a velocity or an
+    effort is not a state the checks read, and a pose without axes the rule reads is not joints. HABIT's
+    position_0 to position_13, a position word alone with its index, keeps the width rule."""
+    seven = lambda fmt, last: [fmt.format(i) for i in range(6)] + [last]
+    umi = [f"robot0_eef_pos_{i}" for i in range(3)] + [f"robot0_eef_rot_axis_angle_{i}" for i in range(3)] + [
+        "robot0_gripper_width"]
+    cases = [
+        ("teleop_arms", ["x_m", "y_m", "z_m", "roll_rad", "pitch_rad", "yaw_rad", "gripper_width"], "ee_pose"),
+        ("teleop_arms", ["ee_x_m", "ee_y_m", "ee_z_m", "ee_roll_deg", "ee_pitch_deg", "ee_yaw_deg", "gripper_mm"],
+         "ee_pose"),
+        ("teleop_arms", ["eefPosX", "eefPosY", "eefPosZ", "eefRoll", "eefPitch", "eefYaw", "gripperWidth"], "ee_pose"),
+        ("teleop_arms", seven("cartesian_position_{}", "gripper_position"), "none"),
+        ("teleop_arms", umi, "none"),
+        ("handheld_gripper", umi, "ee_pose"),            # a pose on a rig whose state is a pose, as before
+        ("teleop_arms", ["pos_0", "pos_1", "pos_2", "rot_6d_0", "rot_6d_1", "rot_6d_2", "gripper"], "none"),
+        ("teleop_arms", [f"joint{i}_vel" for i in range(1, 7)] + ["gripper_vel"], "none"),
+        ("teleop_arms", [f"joint{i}_effort" for i in range(1, 7)] + ["gripper_effort"], "none"),
+        ("handheld_gripper", [f"joint{i}_velocity" for i in range(1, 7)] + ["gripper"], "none"),
+        ("teleop_arms", ["force_x", "force_y", "force_z", "torque_x", "torque_y", "torque_z", "gripper"], "none"),
+        ("teleop_arms", [f"jointTorque{i}" for i in range(1, 7)] + ["gripper"], "none"),
+        # names that say neither keep the width rule
+        ("teleop_arms", [f"position_{i}" for i in range(14)], "joints"),
+        ("teleop_arms", [f"motor_{i}" for i in range(7)], "joints"),
+        ("teleop_arms", [f"j{i}_deg" for i in range(1, 7)] + ["gripper_pct"], "joints"),
+        ("teleop_arms", [f"left_joint_{i}.pos" for i in range(6)] + ["left_gripper.pos"], "joints"),
+    ]
+    for rig, names, want in cases:
+        kind, note = f.state_layout(len(names), rig, names)
+        assert kind == want, (rig, names, kind, note)
+        assert (note is None) == (want != "none"), (names, note)
+    note = f.state_layout(7, "teleop_arms", [f"joint{i}_vel" for i in range(1, 7)] + ["gripper_vel"])[1]
+    assert "joint1_vel" in note and "not a position" in note, note
+    note = f.state_layout(7, "teleop_arms", seven("cartesian_position_{}", "gripper_position"))[1]
+    assert "cartesian_position_0" in note and "without the axes" in note, note
+    assert f.state_words("eefPosX") == ["eef", "pos", "x"] and f.state_words("roll_rad") == ["roll"]
+    assert f.state_words("left_wrist.pos-x") == ["left", "wrist", "pos", "x"] and f.state_words("m") == ["m"]
+
+
 def test_joint_state_reads_only_the_layout_the_checks_read():
     import numpy as np
     q = np.linspace(0.0, 1.0, 11)

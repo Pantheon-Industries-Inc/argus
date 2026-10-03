@@ -820,22 +820,43 @@ def read_annotation(paths: list[Path]):
 # for a gripper (left_gripper.pos, gripper) is six values and a gripper, and six named for a position and an
 # orientation (x, y, z, roll, pitch, yaw) make that a pose whatever the rig; seven joints and no gripper (a Franka arm,
 # fr3_left_joint1..7, read as six joints and a gripper until the 2026-10-02 audit) or a quaternion are not the layout
-# the checks read. Names that say none of these (position_0, motor_3) leave the width rule.
+# the checks read. Each name is read as words (state_words), split at its separators and camelCase, lowercased, and
+# a unit after the last word dropped, so x_m, eefPosX and roll_rad end in their axis. A name with a word for a
+# quantity other than a position (joint1_vel, joint3_effort, force_x) is never a state the checks read, and a name of
+# a frame or an orientation (cartesian_position_0, robot0_eef_pos_0, rot_6d_0) whose axes the rule cannot read is a
+# pose, never joints by width. A position word alone with its index (HABIT's position_0 to position_13) says no frame,
+# so names that say none of these (position_0, motor_3) leave the width rule.
 STATE_GRIPPER_NAME = re.compile(r"grip|finger|jaw|claw|opening", re.I)
 STATE_JOINT_NAME = re.compile(r"joint|(^|[^a-z])j\d|waist|shoulder|elbow|forearm|wrist", re.I)
-STATE_POSE_NAME = re.compile(r"(^|[._/ -])(x|y|z|roll|pitch|yaw|rx|ry|rz)$", re.I)
-STATE_POSITION_NAME = re.compile(r"(^|[._/ -])[xyz]$", re.I)
 STATE_QUAT_NAME = re.compile(r"(^|[._/ -])q[._/ -]?[wxyz]$|(^|[^a-z])quat", re.I)
+STATE_WORD_SPLIT = re.compile(r"[._/ -]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Za-z])(?=[0-9])")
+STATE_UNIT_WORDS = {"m", "mm", "cm", "rad", "deg", "degree", "degrees"}
+STATE_AXIS_WORDS = {"x", "y", "z", "roll", "pitch", "yaw", "rx", "ry", "rz"}
+STATE_POSITION_AXES = {"x", "y", "z"}
+STATE_POSITION_WORDS = {"pos", "position"}
+STATE_NOT_POSITION_WORDS = {"vel", "velocity", "velocities", "speed", "effort", "efforts", "torque", "torques",
+                            "current", "currents", "force", "forces", "acc", "accel", "acceleration"}
+STATE_FRAME_WORDS = {"cartesian", "eef", "ee", "tcp", "pose", "effector", "flange", "tool", "rot", "rotation",
+                     "orientation"}
+
+
+def state_words(name: str) -> list[str]:
+    """The words of a state value's name for state_layout: split at . _ / space and hyphen, at a camelCase boundary
+    and before a number, lowercased, with a unit word after the last word dropped (x_m is x, eefPosX is eef pos x)."""
+    words = [w.lower() for w in STATE_WORD_SPLIT.split(str(name)) if w]
+    return words[:-1] if len(words) > 1 and words[-1] in STATE_UNIT_WORDS else words
 
 
 def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[str, str | None]:
     """(state_kind, note). 7 or 14 values per frame are 1 or 2 actors of 6 + gripper; anything else is labelled from
     video. names, one per value when the dataset gives them, settle the layout (STATE_GRIPPER_NAME above); names that
-    say neither a gripper, joints nor a pose keep the width rule. Six names are a pose when every one ends in an axis
-    (STATE_POSE_NAME) and at least one names a position, its last word exactly x, y or z (wrist_x, ee.pos.x, x; not rx).
-    Joints are named for the axis they turn about and never for a position, so an arm's shoulder_yaw, elbow_pitch and
-    wrist_roll (or a humanoid's waist_yaw), joint angles in radians, stay joints rather than be read as metres, while
-    a pose of the wrist frame (wrist_x .. wrist_yaw) stays a pose."""
+    say neither a gripper, joints nor a pose keep the width rule. Six names are a pose when every one's last word
+    (state_words) is an axis and at least one names a position, its last word exactly x, y or z (wrist_x, ee.pos.x,
+    x_m, eefPosX; not rx). Joints are named for the axis they turn about and never for a position, so an arm's
+    shoulder_yaw, elbow_pitch and wrist_roll (or a humanoid's waist_yaw), joint angles in radians, stay joints rather
+    than be read as metres, while a pose of the wrist frame (wrist_x .. wrist_yaw) stays a pose. A name of a velocity,
+    an effort or a force is not a position on any rig, and a name of a frame without axes the rule reads
+    (cartesian_position_0) is a pose: never joints on an arm rig, and the pose it already is on a gripper rig."""
     if rig == "ego_head":
         return "none", None
     per = "arm (six joints and a gripper)." if rig == "teleop_arms" else "gripper (a 6D pose and an opening)."
@@ -846,25 +867,38 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
     if not names or len(names) != dims:
         return kind, None
     names = [str(x) for x in names]
+    words = {x: state_words(x) for x in names}
     groups = [names[i:i + 7] for i in range(0, dims, 7)]
     if any(STATE_QUAT_NAME.search(x) for x in names):
         return "none", ("Labelled from the video: the recorded state's value names give a quaternion, and our checks "
                         "read a position, a roll, pitch and yaw and an opening per gripper.")
+    # a word for a present position (current_pos) is not a current
+    other = next((x for x in names if set(words[x]) & STATE_NOT_POSITION_WORDS
+                  and not set(words[x]) & STATE_POSITION_WORDS), None)
+    if other:
+        return "none", (f"Labelled from the video: the recorded state's value names ({other}) give a velocity, an "
+                        "effort or another quantity that is not a position, and our checks read the positions of each "
+                        + per)
+    framed = next((x for x in names if set(words[x]) & STATE_FRAME_WORDS and not STATE_JOINT_NAME.search(x)
+                   and not STATE_GRIPPER_NAME.search(x)), None)
+    by_width = ("none", f"Labelled from the video: the recorded state's value names give a position or a pose without "
+                        f"the axes our checks read ({framed}), not six joints and a gripper per arm.") \
+        if framed and kind != "ee_pose" else (kind, None)
     seventh = all(STATE_GRIPPER_NAME.search(g[6]) for g in groups)
     if seventh and not any(STATE_GRIPPER_NAME.search(x) for g in groups for x in g[:6]):
-        if all(STATE_POSE_NAME.search(x) for g in groups for x in g[:6]) and \
-                all(any(STATE_POSITION_NAME.search(x) for x in g[:6]) for g in groups):
+        if all(words[x][-1] in STATE_AXIS_WORDS for g in groups for x in g[:6]) and \
+                all(any(words[x][-1] in STATE_POSITION_AXES for x in g[:6]) for g in groups):
             return "ee_pose", None
         if all(STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
             return "joints", None
-        return kind, None
+        return by_width
     if any(STATE_GRIPPER_NAME.search(x) for x in names):
         return "none", ("Labelled from the video: the recorded state's value names put a gripper elsewhere than "
                         "seventh in each group of seven, and our checks read six values and then the gripper.")
     if all(STATE_JOINT_NAME.search(x) for x in names):
         return "none", (f"Labelled from the video: the recorded state's value names give {dims} joints and no gripper, "
                         "and our checks read six joints and a gripper per arm.")
-    return kind, None
+    return by_width
 
 
 def state_value_names(feats: dict, state) -> list[str] | None:
