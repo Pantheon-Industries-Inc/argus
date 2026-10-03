@@ -92,10 +92,10 @@ def _signal_findings(ep: dict, name: str, a, skipped: dict) -> list[dict]:
     meta = ep.get("signal_meta") or {}
     fps = me.ep_fps(ep)
     out = []
-    a = np.asarray(a, dtype=np.float64)
-    # every frame of the episode: a signal whose rows stop short of it (none at all, at the least) has no reading past
-    # its last row
-    n = max(len(ep["state"]), len(a))
+    # every frame of the episode and only those: a signal whose rows stop short of it (none at all, at the least) has no
+    # reading past its last row, and rows past the episode's last frame are not the episode's
+    n = len(ep["state"])
+    a = np.asarray(a, dtype=np.float64)[:n]
     m = meta.get(name) or {}
     gone = np.isnan(a).all(axis=1)
     unread = int(gone.sum()) + n - len(a)

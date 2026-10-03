@@ -684,6 +684,23 @@ def test_a_signal_that_stops_short_or_never_reads_is_counted_over_every_frame(tm
     assert "not_run_on" not in st["no_reading"]
 
 
+def test_a_signal_longer_than_the_episode_is_judged_over_the_episode_alone(tmp_path):
+    """A signal with rows past the episode's last frame was judged over all its rows: 150 rows with no reading after
+    the footage ends read as "no reading at 150 of 450 frames" for a signal that reads at every frame of the episode.
+    It is judged over the episode's frames only."""
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.concatenate([np.linspace(0, 1, 300), np.full(150, np.nan)]).astype(np.float32).reshape(-1, 1)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe long", "key": "s3", "dims": 1}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    r = sc.run_episode(ep)
+    assert not [n for n in r["notes"] if n.get("signal") == "probe long"], r["notes"]
+
+
 def test_a_signal_with_fewer_rows_than_the_episode_never_costs_the_request(tmp_path):
     """A moving signal with rows for half the episode's frames crashed the whole request where the instants are chosen
     by where the signals fall quiet (label/signals.py quiet_spans stacks every signal over the episode's frames). It is
