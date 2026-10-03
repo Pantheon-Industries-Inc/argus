@@ -989,3 +989,15 @@ def test_hand_keypoints_of_another_length_are_skipped_with_the_reason(tmp_path):
     (tmp_path / "hands").mkdir()
     res = hands.build(tmp_path / "run", qa, clips, tmp_path / "hands", jobs=1)
     assert res["written"] == 0 and "keypoints cover 30 frames" in res["skipped"][0]["skip"]
+
+
+def test_an_output_with_no_parse_flag_is_read_as_the_labels_it_holds():
+    """An output written without parse_ok (by hand, or by an older harness) is its labels, never a failed reply; only
+    parse_ok false, or a cut-off reply with no labels, is one."""
+    out = _output("episode_000020")
+    del out["parse_ok"]
+    d = to_board.convert(out, "demo")
+    assert "_label_failed" not in d and d["completion"]["task_completed"] == "success"
+    assert to_board.label_failed({"labels": {}}) is None
+    assert to_board.label_failed({"parse_ok": False, "labels": {"_raw": "{"}})["status"] == "unparsed"
+    assert to_board.label_failed({"finish_reason": "length"})["status"] == "cut_off"

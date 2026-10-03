@@ -36,12 +36,13 @@ TAIL = 1500           # characters of the end of a cut-off reply kept on the boa
 def label_failed(result: dict) -> dict | None:
     """How a reply that gave no labels came back, for the page (board/serve.py cmpFailHtml): cut off at the output limit
     (the harness's failed_<episode>.json, with the tokens it ran to and the end of the reply), or not parsing (the
-    parser's error, the start of the reply and its length). None for a reply that parsed."""
-    if result.get("parse_ok"):
-        return None
+    parser's error, the start of the reply and its length). None for any other output, a reply that parsed or one
+    written without parse_ok (by hand, or by an older harness), which is its labels."""
     if result.get("finish_reason") == "length" and "labels" not in result:
         return {"status": "cut_off", "out_tokens": (result.get("usage") or {}).get("completion_tokens"),
                 "tail": (result.get("content_tail") or "")[-TAIL:]}
+    if result.get("parse_ok") is not False:
+        return None
     lab = result.get("labels") if isinstance(result.get("labels"), dict) else {}
     raw = str(lab.get("_raw") or "")
     return {"status": "unparsed", "parse_error": lab.get("_parse_error"), "raw_head": raw[:RAW_HEAD],

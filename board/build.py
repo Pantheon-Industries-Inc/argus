@@ -94,7 +94,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from board.to_board import convert, label_outputs
+from board.to_board import convert, label_failed, label_outputs
 from checks import label_consistency
 
 SEVERITIES = ["low", "medium", "high"]
@@ -215,7 +215,6 @@ def label_failure(result: dict | None) -> list[dict]:
     board with its footage, checks and sensors and the filter finds it. A long recording stitched from the parts that
     parsed (label/pieces.py stitch_run) has one entry of kind part_not_labelled per part that gave none, at its span.
     Nothing for a reply that parsed whole."""
-    from board.to_board import label_failed
     if not isinstance(result, dict):
         return []
     st = result.get("stitched") if isinstance(result.get("stitched"), dict) else {}
@@ -224,7 +223,7 @@ def label_failure(result: dict | None) -> list[dict]:
                      f"to {float(g['t1_s']):.1f} s, has no labels, as {g.get('why') or 'its reply gave none'}; the "
                      "labels come from the other parts."}
             for g in st.get("missing") or [] if isinstance(g, dict) and g.get("t0_s") is not None
-            and g.get("t1_s") is not None] if result.get("parse_ok") else []
+            and g.get("t1_s") is not None] if label_failed(result) is None else []
     lf = label_failed(result)
     if lf is None:
         return gaps
@@ -613,7 +612,7 @@ def entry_labels(entry: dict, here: Path) -> tuple[Path, dict]:
                 if folder not in own:
                     continue
                 # a rerun's reply that gave no labels never replaces a label that parsed
-                if r.get("parse_ok") or not (by_name.get(own[folder]) or (None, {}))[1].get("parse_ok"):
+                if label_failed(r) is None or label_failed((by_name.get(own[folder]) or (None, {}))[1]) is not None:
                     by_name[own[folder]] = (f, r, rrun)
     return run, {(name.replace("episode_", f"episode_{pre}", 1) if pre else name) + ".json": (name, f, r, src)
                  for name, (f, r, src) in by_name.items()}
