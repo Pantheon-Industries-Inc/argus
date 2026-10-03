@@ -211,7 +211,7 @@ def add_issue(ctx: dict, kind: str, what: str, camera: str | None = None, signal
 
 # ---------------------------------------------------------------- archives
 
-ARCHIVE_RE = re.compile(r"\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz)$", re.I)
+ARCHIVE_RE = re.compile(r"\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2?|tar\.xz|txz)$", re.I)
 UNPACK_MAX_BYTES = int(float(os.environ.get("UPLOAD_UNPACK_MAX_GB", 40)) * 1e9)
 UNPACK_MAX_FILES = int(os.environ.get("UPLOAD_MAX_FILES", 20000))
 
@@ -3182,7 +3182,8 @@ def episode_note_name(e: dict) -> str | None:
     return episode_home(e).rsplit("/", 1)[-1] or None
 
 
-def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path) -> dict[str, FolderNames]:
+def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path,
+                      original_rels: list[str] | None = None) -> dict[str, FolderNames]:
     """{folder: FolderNames} for each folder an episode sits in (episode_home): what a .json there can be named for
     (named_for). Each episode there by its note name (episode_note_name) and its videos' names; each camera name by
     the episodes that have it, matched only as a file's whole name when every episode there has it (top, or the camera
@@ -3231,8 +3232,10 @@ def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path
         for sub, who, episode_folder in subs.get(d, []):
             if episode_folder or any(x.isdigit() for x in name_words(sub, takes)):
                 names[name_words(sub, takes)].add(who)
-        for p in (root / d).iterdir():
-            if p.is_file() and not hidden_part(p.name) and p.suffix.lower() in VIDEO_EXT:
+        files = ((root / d).iterdir() if original_rels is None else
+                 (root / r for r in original_rels if (root / r).parent == root / d))
+        for p in files:
+            if (original_rels is not None or p.is_file()) and not hidden_part(p.name) and p.suffix.lower() in VIDEO_EXT:
                 names[name_words(p.stem, takes)].add(owner.get(p.relative_to(root).as_posix()))
         bare = frozenset(len(x) for e in here if (x := episode_note_name(e) or "").isdigit())
         out[d] = FolderNames(frozenset(takes), {w: frozenset(who) for w, who in names.items() if w},
@@ -3241,7 +3244,8 @@ def note_folder_names(eps: list[dict], homes: list[str], pairs: dict, root: Path
     return out
 
 
-def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict]:
+def plan_video(det: dict, root: Path, grouping: dict | None = None,
+               declared_lengths: dict | None = None) -> list[dict]:
     """One item per episode, grouped as group_videos says. Files are never split. Fixed-length packaging (a
     recorder that cuts continuous footage into files of one length) is found here and recorded on every item it
     applies to. MCAP files of recorded state (det["state"]) go with the episode of their folder, when the folder
@@ -3260,10 +3264,13 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
 
     def length_of(r):
         if r not in durations:
-            try:
-                durations[r] = _duration(root / r)
-            except Exception:
-                durations[r] = None
+            if declared_lengths is not None:
+                durations[r] = declared_lengths.get(r)
+            else:
+                try:
+                    durations[r] = _duration(root / r)
+                except Exception:
+                    durations[r] = None
         return durations[r]
     eps, unsettled = group_videos(rels, length_of, grouping)
     for u in unsettled:
@@ -3279,7 +3286,7 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
     # are what a file there can be named for, so one named for another episode is never this one's task (episode_notes)
     homes = [episode_home(e) for e in eps]
     held = collections.Counter(homes)
-    names = note_folder_names(eps, homes, pairs, root)
+    names = note_folder_names(eps, homes, pairs, root, all_rels if declared_lengths is not None else None)
     items = []
     for e, d in zip(eps, homes):
         files = [root / r for _, r in e["cams"]]
@@ -3330,7 +3337,9 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
                 it["note_folder"]["camera_names"] = registry
     for it in items:
         try:
-            it["seconds"] = max((durations.get(Path(f).relative_to(root).as_posix()) or _duration(f)) for f in it["files"])
+            it["seconds"] = (max(length_of(Path(f).relative_to(root).as_posix()) for f in it["files"])
+                             if declared_lengths is not None else
+                             max((durations.get(Path(f).relative_to(root).as_posix()) or _duration(f)) for f in it["files"]))
         except Exception:
             it["seconds"] = None          # unreadable header: measured on conversion, or reported as unreadable
     # a table of numbers beside an episode's videos (FreeTacMan's Hold_10_traj.csv beside Hold_10_camera1.mp4): the CSVs
@@ -3544,7 +3553,7 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                                              "video, not the colour picture the model reads", start_s=start_of(q)))
                 for q in item.get("unshown") or []]
     set_unshown(extra, unshown)
-    ep = unique_dir(out, episode_name(item["name"]))
+    ep = unique_dir(out, item.get("output_name") or episode_name(item["name"]))
     return video_views_episode(ep, files, rig, dataset, extra, prs=prs, real=real, state=state, action=action,
                                descs=descs, signals=signals, depth=depth, state_names=state_names)
 
@@ -4225,7 +4234,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     r, row = item["root"], item["row"]
     eidx = row["eidx"]
     feats = r["features"]
-    ep = out / episode_name(item["name"])
+    ep = out / (item.get("output_name") or episode_name(item["name"]))
     notes = []
     df = None
     if row.get("data") is not None:
@@ -4682,7 +4691,7 @@ def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
             else:
                 signals.left_out.append((Path(item["data"]).name, f"{len(df)} rows while the video has {n} frames, so "
                                                                   "its rows cannot be placed on the frames"))
-    return video_views_episode(unique_dir(out, episode_name(item["name"])), files, rig, dataset, extra,
+    return video_views_episode(unique_dir(out, item.get("output_name") or episode_name(item["name"])), files, rig, dataset, extra,
                                signals=signals)
 
 
@@ -5459,7 +5468,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
     from PIL import Image
     if item.get("error"):
         raise ValueError(item["error"])
-    ep = unique_dir(out, episode_name(item["name"]))
+    ep = unique_dir(out, item.get("output_name") or episode_name(item["name"]))
     ep.mkdir(parents=True, exist_ok=True)
     with h5py.File(item["file"], "r") as f:
         g = item["group"]
@@ -5700,7 +5709,7 @@ def convert_mcap(item: dict, rig: str, out: Path, dataset: str) -> dict:
         # no summary section (a recording cut off before its footer): read it as a stream of messages
         item["topics"] = _mcap_topics_by_scan(item["file"])
     layout = mcap_layout(item["topics"])
-    ep = out / episode_name(item["name"])
+    ep = out / (item.get("output_name") or episode_name(item["name"]))
     if layout != "generic" and item["seconds"] is None:
         layout = "generic"          # a cut-off file: the full adapters need its summary; its cameras are still read
         item.setdefault("notes", []).append("The file ends early, before its index, so it was read from its cameras.")
@@ -7484,7 +7493,7 @@ def trim_episode(ep: Path, max_s: float) -> dict:
 
 # ---------------------------------------------------------------- entry point
 
-def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
+def plan(root: Path, grouping: dict | None = None, ownership_context: dict | None = None) -> tuple[dict, list[dict]]:
     """(what was detected, one item per episode) for every format the upload holds (detect), each planned by its own
     reader, then the sensor files no episode took and the files no reader opened named in det["missing"], so nothing
     in the upload goes unmentioned."""
@@ -7500,7 +7509,7 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
     for part in parts:
         part.setdefault("used", [])
         part.setdefault("missing", [])
-        items += _plan_part(part, root, grouping)
+        items += _plan_part(part, root, grouping, packaging=ownership_context is None)
         if part is not det:
             det["used"] += part["used"]
             det["missing"] += part["missing"]
@@ -7508,7 +7517,24 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
                 det["version"] = part["version"]
     table_reads = {"dir": root, "missing": det["missing"], "metadata_read": set(), "metadata_issues": []}
     det["annotation_tables"] = annotation_tables(root, table_reads)
-    attach_structured_notes(items)
+    original_items = ownership_items(root, items, ownership_context)
+    if ownership_context is None:
+        loose = [p for part in parts if part["format"] == "video" for p in part["files"]]
+        original_items = items + unassigned_video_names(items, loose)
+    root_name = ownership_root_name(root, ownership_context)
+    assign_episode_names(items, original_items, root, ownership_context, root_name=root_name)
+    if ownership_context is not None:
+        selected = {id(it) for it in items}
+        for kind in dict.fromkeys(it["kind"] for it in original_items):
+            group = [it for it in original_items if it["kind"] == kind]
+            if not any(id(it) in selected for it in group):
+                continue
+            packaging = {"used": []}
+            _mark_packaging(packaging, group)
+            det["used"] += packaging["used"]
+            if len(parts) == 1 and packaging.get("packaging"):
+                det["packaging"] = packaging["packaging"]
+    attach_structured_notes(items, original_items, root=root, root_name=root_name)
     note_issues = {issue["text"] for it in items
                    for view in ([it] if it["kind"] == "video" else [it["side_notes"]] if it.get("side_notes") else [])
                    for issue in episode_notes(view)["issues"]}
@@ -7553,11 +7579,196 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
     return det, items
 
 
-def attach_structured_notes(items: list[dict]) -> None:
+def ownership_root_name(root: Path, context: dict | None) -> str:
+    """The original root folder is a separate filename fact, absent from relative manifest paths."""
+    name = context.get("root_name", root.name) if context is not None else root.name
+    if not isinstance(name, str) or not name or name in {".", ".."} or any(c in name for c in ("/", "\\", "\0")):
+        raise ValueError("the original upload root name is not a folder name")
+    return name
+
+
+def assign_episode_names(items: list[dict], original_items: list[dict], root: Path, context: dict | None,
+                         *, root_name: str) -> None:
+    """Allocate output identities from the original plan, so omitted sources never change collision suffixes.
+
+    The same episode_dirs rule handles full and selected uploads. MCAP names that normalize alike must also keep
+    separate directories rather than overwrite the first recording.
+    """
+    episodes = [it for it in original_items if it["kind"] != "video_alias"]
+    original_files = None
+    if context is not None and "original_files" in context:
+        rels = context["original_files"]
+        if (not isinstance(rels, list) or any(not isinstance(rel, str) or not rel or "\\" in rel
+                or Path(rel).is_absolute() or any(part in {"", ".", ".."} for part in rel.split("/")) for rel in rels)
+                or len(rels) != len(set(rels))):
+            raise ValueError("the original upload file manifest is not a list of relative filenames")
+        original_files = {root / rel for rel in rels if not hidden(root / rel, root)}
+    if context is not None and original_files is None and any(
+            it["kind"] == "video" and any(Path(p).name == "raw_video.mp4" for p in it["files"]) for it in episodes):
+        raise ValueError("original adapter identity requires the original upload file manifest")
+    if original_files is not None and any(
+            Path(p) not in original_files for it in original_items
+            for p in it.get("files", [it["file"]] if "file" in it else [])):
+        raise ValueError("an original source is absent from the original upload file manifest")
+    selected = {id(it) for it in items}
+    names = []
+    for it in episodes:
+        name = it["name"]
+        if it["kind"] == "video":
+            for mod in upload_adapters("video"):
+                naming = getattr(mod, "upload_episode_name", None)
+                if naming and original_files is not None and id(it) in selected:
+                    if naming(it) != naming(it, original_files=original_files):
+                        raise ValueError("a selected adapter no longer matches its original annotation filenames")
+                if naming and (adapted := naming(it, original_files=original_files, root=root, root_name=root_name)) is not None:
+                    if context is not None and "root_name" not in context and Path(it["files"][0]).parent == root:
+                        raise ValueError("original root adapter identity requires the original upload root name")
+                    name = adapted
+                    if id(it) in selected:
+                        it["adapter_episode_name"] = adapted
+                    break
+        names.append(name)
+    for it, path in zip(episodes, episode_dirs(Path("."), names)):
+        if id(it) in selected:
+            it["output_name"] = path.name
+
+
+def ownership_items(root: Path, items: list[dict], context: dict | None) -> list[dict]:
+    """Keep outside note ownership from a trusted original upload registry when only a subset is read.
+
+    Container groups come from server inspection, never filename guesses. These descriptors supply names only;
+    absent containers are not opened and never become converted episodes. Every selected container must match its
+    inspected groups exactly, so stale context cannot silently assign another episode's notes.
+    """
+    if context is None:
+        return items
+    if not isinstance(context, dict) or type(context.get("version")) is not int or context["version"] != 1:
+        raise ValueError("the original upload ownership context has an unsupported version")
+    rows = context.get("episodes")
+    if not isinstance(rows, list):
+        raise ValueError("the original upload ownership context has no episode list")
+    descriptors = {}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("kind") not in {"hdf5", "mcap", "video_alias"}:
+            raise ValueError("the original upload ownership context has an unsupported episode")
+        rel = row.get("file")
+        if (not isinstance(rel, str) or not rel or "\\" in rel or Path(rel).is_absolute()
+                or any(part in {"", ".", ".."} for part in rel.split("/"))):
+            raise ValueError("an original upload ownership path is not a relative file path")
+        if hidden(root / rel, root):
+            continue
+        kind = row["kind"]
+        suffixes = H5_EXT if kind == "hdf5" else {".mcap"} if kind == "mcap" else VIDEO_EXT
+        if Path(rel).suffix.lower() not in suffixes:
+            raise ValueError("an original upload ownership file has the wrong container type")
+        if kind == "video_alias":
+            key = kind, rel, ""
+            if key in descriptors:
+                raise ValueError("the original upload ownership context repeats a video filename")
+            descriptors[key] = {"kind": kind, "file": root / rel}
+            continue
+        group = row.get("group", "")
+        if (not isinstance(group, str) or "\\" in group
+                or group and any(part in {"", ".", ".."} for part in group.split("/"))
+                or kind == "mcap" and group):
+            raise ValueError("an original upload ownership group is not a container group path")
+        name = Path(rel).with_suffix("").as_posix() + ("/" + group.rsplit("/", 1)[-1] if group else "")
+        if row.get("name") != name:
+            raise ValueError("an original upload ownership name disagrees with its container and group")
+        key = kind, rel, group
+        if key in descriptors:
+            raise ValueError("the original upload ownership context repeats a container group")
+        seconds = row.get("seconds")
+        if seconds is not None and (type(seconds) not in {int, float} or not np.isfinite(seconds) or seconds < 0):
+            raise ValueError("an original inspected container length is not finite nonnegative seconds")
+        descriptors[key] = {"kind": kind, "name": name, "file": root / rel, "group": group, "seconds": seconds}
+    selected = {(it["kind"], Path(it["file"]).relative_to(root).as_posix(), it.get("group", "")): it
+                for it in items if it["kind"] in {"hdf5", "mcap"}}
+    # HDF5 inspection covers every group in a selected file, rather than only a guessed selected episode.
+    for key in selected:
+        if key not in descriptors:
+            raise ValueError("a selected container group is absent from the original upload ownership context")
+    files = {(kind, rel) for kind, rel, _ in selected}
+    if any(key[:2] in files and key not in selected for key in descriptors):
+        raise ValueError("a selected container no longer matches its original inspected groups")
+    registry_videos = original_video_items(root, items, context, descriptors)
+    structured = [selected.get(key, descriptor) for key, descriptor in descriptors.items() if key[0] != "video_alias"]
+    # Detection plans LeRobot first, then MCAP, HDF5 and loose video. Preserve inspected group order within a file.
+    structured.sort(key=lambda it: (0 if it["kind"] == "mcap" else 1, str(it["file"])))
+    return [it for it in items if it["kind"] not in {"hdf5", "mcap", "video"}] + structured + registry_videos
+
+
+def original_video_items(root: Path, items: list[dict], context: dict, descriptors: dict) -> list[dict]:
+    """Rebuild original filename groups and note registries, retaining identities for complete selected groups.
+
+    Declared original lengths settle filename grouping only. Selected source headers override those declarations;
+    missing media are never opened or converted. An unmatched camera set is stale or incomplete grouping context,
+    rather than evidence that the selected footage belongs to another original episode.
+    """
+    rels = sorted(key[1] for key in descriptors if key[0] == "video_alias")
+    selected = [it for it in items if it["kind"] == "video"]
+    if not rels and not selected:
+        return []
+    lengths = context.get("declared_video_seconds", {})
+    if not isinstance(lengths, dict) or any(r not in rels for r in lengths):
+        raise ValueError("original video length declarations do not match the original filenames")
+    if any(v is not None and (type(v) not in {int, float} or not np.isfinite(v) or v <= 0) for v in lengths.values()):
+        raise ValueError("original video length declarations must be positive finite seconds or unknown")
+    lengths = dict(lengths)
+    choices = context.get("grouping", {})
+    if (not isinstance(choices, dict) or any(not isinstance(d, str) or Path(d).is_absolute()
+            or "\\" in d or d and any(p in {"", ".", ".."} for p in d.split("/"))
+            or choice not in {"takes", "cameras"} for d, choice in choices.items())):
+        raise ValueError("original video grouping declarations are not folder choices")
+    actual = {}
+    for it in selected:
+        files = frozenset(Path(p) for p in it["files"])
+        actual[files] = it
+        for file in files:
+            rel = file.relative_to(root).as_posix()
+            if rel not in rels:
+                raise ValueError("a selected video is absent from the original filename registry")
+            try:
+                lengths[rel] = _duration(file)
+            except Exception:
+                lengths[rel] = None
+    original = plan_video({"files": [root / r for r in rels]}, root, choices, declared_lengths=lengths)
+    found = set()
+    registry = []
+    for it in original:
+        files = frozenset(it["files"])
+        if files in actual:
+            current = actual[files]
+            # Reuse the complete original grouping rule for names, views and outside note owners.
+            for field in ("name", "dir", "cams", "note_folder", "series"):
+                current[field] = it[field]
+            # Removing another colour source cannot make an originally unmatched depth file into paired footage.
+            current["depth"] = {color: depth for color, depth in it["depth"].items() if depth.is_file()}
+            current["unshown"] = [path for path in it["unshown"] if path.is_file()]
+            registry.append(current)
+            found.add(files)
+        else:
+            registry.append(it)
+    if found != set(actual):
+        raise ValueError("selected cameras do not match the original video grouping")
+    return registry + unassigned_video_names(original, [root / rel for rel in rels])
+
+
+def unassigned_video_names(items: list[dict], files: list[Path]) -> list[dict]:
+    """Unassigned sensor videos still own their filenames and never become another episode's shared task."""
+    owned = {Path(p) for it in items if it["kind"] == "video"
+             for p in list(it["files"]) + list(it.get("unshown") or []) + list(it.get("depth", {}).values())}
+    return [{"kind": "video_alias", "file": Path(p)} for p in files if Path(p) not in owned]
+
+
+def attach_structured_notes(items: list[dict], registry_items: list[dict] | None = None,
+                            *, root: Path | None = None, root_name: str | None = None) -> None:
     """Outside notes use the same filename ownership and task ranks as video notes. A container name identifies
     every episode inside that container; a LeRobot episode uses its recorded index, never a camera number."""
+    registry_items = items if registry_items is None else registry_items
+    selected = {id(it) for it in items}
     by_folder = collections.defaultdict(list)
-    for it in items:
+    for it in registry_items:
         if it["kind"] in ("mcap", "hdf5"):
             d, file = Path(it["file"]).parent, Path(it["file"])
             aliases = [file.stem] + ([it["group"].rsplit("/", 1)[-1]] if it.get("group") else [])
@@ -7570,28 +7781,48 @@ def attach_structured_notes(items: list[dict]) -> None:
         by_folder[d].append((it, file, aliases))
     for d, entries in by_folder.items():
         takes = set(TAKE_NUMBER_WORDS)
-        for _, _, aliases in entries:
-            for alias in aliases:
-                ws = tokens(alias)
-                for i, word in enumerate(ws):
-                    if (m := TAKE_WORD.match(word)) and (m[2] or (i + 1 < len(ws) and ws[i + 1].isdigit())):
-                        takes.add(m[1])
+        videos_here = [it for it in registry_items if it["kind"] == "video" and item_folder(it) == d]
+        for it in videos_here:
+            if it.get("note_folder"):
+                takes.update(it["note_folder"]["names"].takes)
+        aliases_in_folder = [alias for _, _, aliases in entries for alias in aliases]
+        for alias in aliases_in_folder:
+            ws = tokens(alias)
+            for i, word in enumerate(ws):
+                if (m := TAKE_WORD.match(word)) and (m[2] or (i + 1 < len(ws) and ws[i + 1].isdigit())):
+                    takes.add(m[1])
         names = collections.defaultdict(set)
         for it, _, aliases in entries:
             for alias in aliases:
                 names[name_words(alias, takes)].add(it["name"])
-        for it in items:
-            if it["kind"] == "video" and item_folder(it) == d:
+        for it in registry_items:
+            if it["kind"] == "video_alias" and it["file"].parent == d:
+                names[name_words(it["file"].stem, takes)].add(None)
+            elif it["kind"] == "video" and item_folder(it) == d:
                 nf = it.get("note_folder")
                 if nf:
                     for words, owners in nf["names"].names.items():
-                        names[words] |= owners
+                        names[name_words(" ".join(words), takes)] |= owners
                 else:
                     for file in it["files"]:
                         names[name_words(Path(file).stem, takes)].add(it["name"])
         registry = FolderNames(frozenset(takes), {w: frozenset(v) for w, v in names.items() if w}, {},
-                               name_words(d.name, takes), frozenset({6}) if any(it["kind"] == "lerobot" for it, _, _ in entries) else frozenset())
+                               name_words(root_name if d == root and root_name is not None else d.name, takes), frozenset({6}) if any(it["kind"] == "lerobot" for it, _, _ in entries) else frozenset())
+        for it in videos_here:
+            if id(it) not in selected:
+                continue
+            nf = it.get("note_folder")
+            if nf is None:
+                nf = {"dir": d, "name": Path(it["files"][0]).stem, "episode": it["name"]}
+                it["note_folder"] = nf
+            previous = nf.get("names")
+            # Known container groups also exclude unrelated video tasks. Camera whole-name rules keep their scope.
+            nf["names"] = FolderNames(registry.takes, registry.names,
+                previous.whole if previous else {}, registry.own,
+                registry.bare_digits | (previous.bare_digits if previous else frozenset()))
         for it, file, aliases in entries:
+            if id(it) not in selected:
+                continue
             videos = (it.get("row") or {}).get("videos") or {}
             camera_files = [Path(v[0] if isinstance(v, tuple) else v) for v in videos.values()]
             it["side_notes"] = {"files": [file], "camera_files": camera_files, "side_metadata": True,
@@ -7765,7 +7996,7 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     return out
 
 
-def _plan_part(det: dict, root: Path, grouping: dict | None) -> list[dict]:
+def _plan_part(det: dict, root: Path, grouping: dict | None, *, packaging: bool = True) -> list[dict]:
     """The items of one format of the upload (detect), with its notes added to det."""
     if det["format"] == "lerobot":
         items, used, missing, roots = plan_lerobot(det, root)
@@ -7787,7 +8018,8 @@ def _plan_part(det: dict, root: Path, grouping: dict | None) -> list[dict]:
         items = plan_video(det, root, grouping)
         det["used"].append(f"{len(items)} video episodes." if len(items) != 1
                            else "1 video episode.")
-    _mark_packaging(det, items)
+    if packaging:
+        _mark_packaging(det, items)
     return items
 
 
@@ -8289,7 +8521,8 @@ def plain_error(e: Exception) -> str:
     return "it could not be opened (" + type(e).__name__ + ")"
 
 
-def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, grouping: dict | None = None) -> dict:
+def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, grouping: dict | None = None,
+            ownership_context: dict | None = None) -> dict:
     """Convert an upload into episode sidecars under out/, taking episodes in order until max_seconds of
     footage. Returns a report of what was accepted, skipped and why, and what was read and what was not."""
     if rig not in RIGS:
@@ -8297,7 +8530,7 @@ def convert(root: Path, rig: str, out: Path, dataset: str, max_seconds: float, g
     root, out = Path(root), Path(out)
     root, opened = open_archives(root, out.parent / "upload_unpacked")
     try:
-        det, items = plan(root, grouping)
+        det, items = plan(root, grouping, ownership_context)
     except ValueError as e:
         if not opened:
             raise
