@@ -2117,13 +2117,12 @@ DEPTH_WORDS = {"depth", "disparity"}
 
 
 def colour_videos(rels: list[str]) -> tuple[list[str], list[str]]:
-    """(kept, left out): a folder's depth, infrared and mask videos are not cameras of their own when a colour video
-    is beside them (exo_cam-images-depth.mkv beside exo_cam-images-rgb.mp4): a depth video goes with its colour camera
-    (depth_videos), and the rest are left out. read.js colourVideos, the same rule."""
-    dirs = lambda r: r.rsplit("/", 1)[0] if "/" in r else ""
+    """(kept, left out): depth, infrared and mask videos are not cameras of their own when the upload holds a colour
+    video, beside them (exo_cam-images-depth.mkv beside exo_cam-images-rgb.mp4) or in another folder: a depth video
+    goes with its colour camera (depth_videos), and the rest are left out, to the board (plan_video). Only an upload
+    with no colour video at all is labelled from them. read.js colourVideos, the same rule."""
     non = lambda r: bool(set(tokens(r.rsplit("/", 1)[-1].rsplit(".", 1)[0])) & NON_COLOUR)
-    colour_dirs = {dirs(r) for r in rels if not non(r)}
-    out = [r for r in rels if non(r) and dirs(r) in colour_dirs]
+    out = [r for r in rels if non(r)] if any(not non(r) for r in rels) else []
     return [r for r in rels if r not in out], out
 
 
@@ -2294,11 +2293,6 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
             f"{len(with_colour)} depth video{'s were' if len(with_colour) != 1 else ' was'} read with the colour "
             f"camera {'they belong' if len(with_colour) != 1 else 'it belongs'} to.")
     left_out = [r for r in left_out if r not in with_colour]
-    if left_out:
-        one = len(left_out) == 1
-        det.setdefault("used", []).append(
-            f"{len(left_out)} infrared, mask or unmatched depth video{' is' if one else 's are'} shown on the board, "
-            "and not to the model, since the labeller reads the colour video of each camera.")
     durations = {}
 
     def length_of(r):
@@ -2324,15 +2318,27 @@ def plan_video(det: dict, root: Path, grouping: dict | None = None) -> list[dict
                       "dir": (root / e["dir"]) if e["dir"] is not None else None,
                       "cams": {c: root / r for c, r in e["cams"]},
                       "depth": {str(root / r): root / pairs[r] for _, r in e["cams"] if r in pairs}, "unshown": []})
-    # an infrared, mask or unmatched depth video goes to the board with the episode of its folder (the one there, the
-    # ones whose take its name gives, or, when its name gives none of their takes, every episode of the folder, as a
-    # sensor file shared by the folder is), never to the model; it had gone with none
+    # an infrared, thermal, mask or unmatched depth video goes to the board with the episodes of its folder, never to
+    # the model: the ones whose take its name gives, or every episode there when its name gives no take, as a sensor
+    # file shared by the folder does; one whose name gives a take that no episode there has goes with none and is
+    # named. A folder with no episode of its own takes the episodes of the nearest folder above it that holds any.
+    # Data Review's upload page sends it by the same rule (read.js inspectVideos)
+    shown, takeless = 0, []
     for r in left_out:
-        here = [it for it in items if item_folder(it) == (root / r).parent]
+        near = episodes_near(items, (root / r).parent, root)
         take = name_parts(Path(r).stem)["take"]
-        mine = [it for it in here if take and item_take(it) == take]
-        for it in mine or here:
+        mine = [it for it in near if item_take(it) == take] if take else near
+        if take and not mine:
+            takeless.append(f"{r} (its name gives take {take}, which no episode of its folder has)")
+        for it in mine:
             it["unshown"].append(root / r)
+        shown += bool(mine)
+    if shown:
+        det.setdefault("used", []).append(
+            f"{shown} infrared, mask or unmatched depth video{' is' if shown == 1 else 's are'} shown on the board, "
+            "and not to the model, since the labeller reads the colour video of each camera.")
+    if takeless:
+        det.setdefault("missing", []).append("Not read: " + "; ".join(takeless) + ".")
     for it in items:
         try:
             it["seconds"] = max((durations.get(Path(f).relative_to(root).as_posix()) or _duration(f)) for f in it["files"])
@@ -6115,6 +6121,21 @@ def _plan_part(det: dict, root: Path, grouping: dict | None) -> list[dict]:
 def item_folder(it: dict) -> Path:
     """The folder an episode's files sit in: a video episode's first video's, an MCAP's or an HDF5 file's own."""
     return Path(it["files"][0]).parent if it.get("files") else Path(it["file"]).parent
+
+
+def episodes_near(items: list[dict], folder: Path, root: Path) -> list[dict]:
+    """The episodes of a folder (item_folder), or, when it holds none, those in and below the nearest folder above it,
+    up to the upload's root, that holds any."""
+    here = [it for it in items if item_folder(it) == folder]
+    if here:
+        return here
+    for up in folder.parents:
+        if up != root and root not in up.parents:
+            break
+        below = [it for it in items if item_folder(it) == up or up in item_folder(it).parents]
+        if below:
+            return below
+    return []
 
 
 def item_take(it: dict) -> str:

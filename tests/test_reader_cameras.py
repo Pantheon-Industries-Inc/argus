@@ -575,6 +575,37 @@ def test_an_infrared_video_with_no_take_goes_with_every_episode_of_its_folder(tm
         assert [u["name"] for u in _ctx(tmp_path / "eps", rep, i)["unshown_cameras"]] == ["infrared"]
 
 
+def test_an_infrared_video_naming_a_take_no_episode_has_goes_with_none_and_is_named(tmp_path):
+    """An infrared video whose name gives take 3 beside the episodes of takes 1 and 2 had gone with both of them, and
+    one whose name gives take 2 beside a folder's one episode, whose own videos give no take, with that one. Its
+    take says it belongs to no episode there: it goes with none, and the report names it with the reason."""
+    for files, ir in (({"top_ep1", "wrist_left_ep1", "top_ep2", "wrist_left_ep2"}, "infrared_ep3"),
+                      ({"top", "wrist_left"}, "ir_2")):
+        root = tmp_path / ir / "up"
+        for k, stem in enumerate(sorted(files)):
+            _mp4(root / f"{stem}.mp4", 30, 40 * k)
+        _mp4(root / f"{ir}.mp4", 30)
+        det, items = f.plan(root)
+        assert items and not any(it["unshown"] for it in items), [(it["name"], it["unshown"]) for it in items]
+        assert any(f"{ir}.mp4" in m and "no episode" in m for m in det["missing"]), det["missing"]
+        assert not any("infrared" in u and "board" in u for u in det["used"]), det["used"]
+
+
+def test_a_lone_infrared_video_beside_colour_episodes_is_shown_on_their_board_not_labelled(tmp_path):
+    """An infrared video alone in a folder of its own, in an upload whose episodes are colour, had become an episode
+    the model was shown as footage. It goes to the board with the episodes of the nearest folder above it, named as
+    not shown to the model; an upload with no colour video at all is still labelled from its infrared one."""
+    root = tmp_path / "up"
+    for k, cam in enumerate(("top", "wrist_left")):
+        _mp4(root / "ep1" / f"{cam}.mp4", 30, 40 * k)
+    _mp4(root / "extras" / "cam_infrared.mp4", 30)
+    det, items = f.plan(root)
+    assert [(it["name"], [p.name for p in it["unshown"]]) for it in items] == [("ep1", ["cam_infrared.mp4"])]
+    only = tmp_path / "ir_only"
+    _mp4(only / "ep1" / "cam_infrared.mp4", 30)
+    assert [list(it["cams"].values()) for it in f.plan(only)[1]] == [[only / "ep1" / "cam_infrared.mp4"]]
+
+
 def test_the_report_says_infrared_and_mask_videos_are_on_the_board(tmp_path):
     root = tmp_path / "up"
     for k, cam in enumerate(("top", "wrist_left", "cam_mask")):
