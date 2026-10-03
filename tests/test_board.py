@@ -813,3 +813,31 @@ def test_the_provenance_line_says_what_the_model_was_not_shown():
     r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "reader_notes.js"),
                         str(REPO / "board" / "serve.py")], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="no node")
+def test_the_problems_an_episode_was_kept_with_are_drawn_as_recording_checks():
+    r = subprocess.run([shutil.which("node"), str(REPO / "tests" / "reader_issues.js"),
+                        str(REPO / "board" / "serve.py")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_each_reader_issue_raises_its_family_at_any_severity(tmp_path):
+    """A problem an episode was kept and flagged with (context.json reader_issues) reaches the board's data issues: a
+    kind families.json names raises that family, any other kind a data family named after it, and an entry with no
+    sentence is left out."""
+    ctx = {"profile": "teleop_arms", "fps": 30, "reader_issues": [
+        {"kind": "clip_frame_count", "camera": "left", "what": "The left wrist camera video has 29 frames."},
+        {"kind": "signal_gap", "signal": "force", "what": "The force signal stops.", "t0_s": 1.0},
+        {"kind": "no_sentence", "what": ""}, "not a dict"]}
+    d = {}
+    board_build.add_context(d, ctx, tmp_path)
+    assert [(x["kind"], x["family"]) for x in d["dataset_checks"]["reader_issues"]] == [
+        ("clip_frame_count", "clip-frames"), ("signal_gap", "d:Signal gap")]
+    fam = Families()
+    assert set(fam.classify(d)["counted"]) == {"clip-frames", "d:Signal gap"}
+    assert fam.catalog()["camera-undecodable"] == {"name": "Camera video does not decode", "list": "data",
+                                                   "check": True}
+    none = {}
+    board_build.add_context(none, {"profile": "teleop_arms", "fps": 30}, tmp_path)
+    assert "dataset_checks" not in none

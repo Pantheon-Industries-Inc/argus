@@ -52,13 +52,15 @@ def base_frame(base_s: float, fps: float = FPS) -> int:
 
 
 def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[int], pts=None,
-                   fps: float = FPS, keep=None):
+                   fps: float = FPS, keep=None, tail_ok: bool = False):
     """Decode episode frames ks (indices into the episode, 0..n_frames-1) from a packed mp4.
     Returns {k: PIL.Image (RGB, native size)}. Raises FrameError unless every k is found at its
     exact pts. `pts` (one integer per episode frame) gives each frame's exact pts for files whose
     frames are not on a fixed grid (ABC-130k keeps real capture times); otherwise frame k sits at
     (base_s * fps + k) * step on the fixed frame grid. keep(k, image), when given, is what is kept of each frame
-    as soon as it is decoded (episode.py keeps most frames only at their cell widths)."""
+    as soon as it is decoded (episode.py keeps most frames only at their cell widths). tail_ok leaves out the frames
+    after the last one the file has (a camera whose file ends a frame before the episode does) instead of raising;
+    a frame missing before that, or a file with none of ks, still raises."""
     import av
     ks = sorted(set(int(k) for k in ks))
     if not ks:
@@ -102,7 +104,7 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
                 seek_cost.append(n)
             last_k = k
     missing = [k for k in ks if k not in out]
-    if missing:
+    if missing and not (tail_ok and out and min(missing) > max(out)):
         raise FrameError(f"frames {missing[:5]} not decoded from {packed}")
     return out
 

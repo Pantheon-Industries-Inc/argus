@@ -2792,6 +2792,26 @@ function datasetSourceHtml(s) {
   return `Footage: ${link(s.hub, s.name)}${s.publisher ? ` (${esc(s.publisher)})` : ''}, ${link(s.license_url,
     s.license)}`;
 }
+// The problems the episode was kept and flagged with (board/build.py reader_issues, from context.json): a camera whose
+// video does not decode, which the episode is shown and labelled without, a camera whose clip has fewer frames than
+// the episode, and any other kind a reader records. Each is a row of the recording checks card, in the sentence the
+// entry carries, under the family it raises (board/families.py reader_family), with its camera or signal and its time
+// when the entry has them. Nothing is drawn when the episode has none.
+function readerIssueRows(d) {
+  const ri = (d && d.dataset_checks || {}).reader_issues;
+  const num = v => v != null && v !== '' && !isNaN(parseFloat(v));
+  return (Array.isArray(ri) ? ri : []).filter(x => x && typeof x.what === 'string' && x.what.trim()).map(x => {
+    const t = num(x.t0_s) ? parseFloat(x.t0_s) : null;
+    const fam = x.family || ('d:' + String(x.kind || 'reader issue').replace(/_/g, ' '));
+    return `<div class="di-row high"${t != null ? ` data-t="${t}"` : ''}>
+      <span class="di-sev">check</span>
+      <div class="di-body">
+        <div class="di-issue">${esc(x.what)}</div>
+        <div class="di-tags"><span class="di-cat">${esc(famName(fam))}</span>${t != null ? `<span class="di-t">@ `
+          + `${esc(fmtT(t))}</span>` : ''}${x.signal ? `<span class="di-cat">${esc(x.signal)}</span>` : ''}</div>
+      </div></div>`;
+  });
+}
 // What the model was not shown of the upload, from board/build.py reader_notes. It draws the reader's note on the
 // recorded state as text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it
 // gave, in the same fold as the notes in the files. The fold is closed until opened, since an upload can leave out
@@ -5091,9 +5111,11 @@ function renderEp(d, opts) {
       <p class="ip-sub">${sub}</p>
       <div class="ip-body">${body}</div>
     </section>`;
-  const nChecks = [tbHtml, spHtml, rjHtml, gcHtml].filter(Boolean).length + cqFlags.length;
+  const riRows = readerIssueRows(d);
+  const riHtml = riRows.length ? `<div class="info-block di-block">${riRows.join('')}</div>` : '';
+  const nChecks = [tbHtml, spHtml, rjHtml, gcHtml].filter(Boolean).length + cqFlags.length + riRows.length;
   const checksPanel = nChecks ? panel('checks', 'Recording checks', 'Deterministic checks on the recorded data, run on '
-    + 'every episode.', nChecks, `${tbHtml}${spHtml}${rjHtml}${gcHtml}${cqHtml}`) : '';
+    + 'every episode.', nChecks, `${riHtml}${tbHtml}${spHtml}${rjHtml}${gcHtml}${cqHtml}`) : '';
   const nData = dataIssues.filter(countsIssue).length;
   const nOp = opMistakes.filter(countsIssue).length;
   const diHtml = dataIssues.length ? panel('data', 'Data issues', 'Faults in the recording, the scene or the label, '

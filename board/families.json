@@ -1,5 +1,5 @@
 {
- "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, completion the outcomes that raise it, and datasets limits a family to those datasets.",
+ "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, reader_issues the kinds of problem an episode was kept and flagged with (context.json reader_issues) that raise it, completion the outcomes that raise it, and datasets limits a family to those datasets.",
  "families": [
   {
    "slug": "privacy-blur",
@@ -81,6 +81,22 @@
     "realomin"
    ],
    "why": "counted only where flagged episodes were confirmed on the frames as grippers that moved without recording"
+  },
+  {
+   "slug": "camera-undecodable",
+   "list": "data",
+   "name": "Camera video does not decode",
+   "reader_issues": [
+    "camera_not_decodable"
+   ]
+  },
+  {
+   "slug": "clip-frames",
+   "list": "data",
+   "name": "Camera video has fewer frames than the episode",
+   "reader_issues": [
+    "clip_frame_count"
+   ]
   },
   {
    "slug": "out-of-view",

@@ -3,10 +3,12 @@
 families.json lists the families. Every flagged issue (a data issue or an operator mistake) belongs to exactly one
 family: the first listed family whose tags, plain names (tag_names.json) or text it matches, else a family named
 after its tag's plain name ("d:<name>" or "m:<name>"). A family can also be raised by one of the deterministic
-checks or by the episode's outcome, and then counts at any severity. A family limited to some datasets
-("datasets") is only matched on those. A family with "among" matches its text only on issues whose tag reads as
-one of those plain names, which is how one tag the model uses for several distinct problems (camera_fault: a
-camera turned away, a frozen image, glare) is split by what the issue says.
+checks or by the episode's outcome, and then counts at any severity. So does each problem an episode was kept and
+flagged with (context.json reader_issues, copied into dataset_checks by board/build.py): the listed family whose
+"reader_issues" names its kind, else a data family named after the kind ("d:<words of the kind>"). A family limited
+to some datasets ("datasets") is only matched on those. A family with "among" matches its text only on issues whose
+tag reads as one of those plain names, which is how one tag the model uses for several distinct problems
+(camera_fault: a camera turned away, a frozen image, glare) is split by what the issue says.
 
 What counts (Families.counts, the one statement of the rule):
   - a data issue at medium or high severity;
@@ -72,8 +74,18 @@ class Families:
     def catalog(self) -> dict:
         """The listed families, in order, for a page: slug -> name, list, and whether only a check raises it."""
         return {f["slug"]: {"name": f["name"], "list": f["list"],
-                            "check": bool(f.get("checks")) and not (f.get("names") or f.get("tags") or f.get("text"))}
+                            "check": bool(f.get("checks") or f.get("reader_issues"))
+                            and not (f.get("names") or f.get("tags") or f.get("text"))}
                 for f in self.defs}
+
+    def reader_family(self, kind: str) -> str:
+        """The family a reader issue of this kind raises: the listed family that names the kind, else "d:" and the
+        kind's words."""
+        for f in self.defs:
+            if kind in (f.get("reader_issues") or []):
+                return f["slug"]
+        w = str(kind or "reader issue").replace("_", " ")
+        return "d:" + w[:1].upper() + w[1:]
 
     def counts(self, key: str, i: dict) -> bool:
         """Whether an issue of this list ("data_issues" or "operator_mistakes") counts (the module docstring)."""
@@ -117,6 +129,9 @@ class Families:
             if (any(check_hit(d, k) for k in f.get("checks") or [])
                     or outcomes & set(f.get("completion") or [])):
                 counted.setdefault(f["slug"], [])
+        for x in (d.get("dataset_checks") or {}).get("reader_issues") or []:
+            if isinstance(x, dict) and x.get("kind"):
+                counted.setdefault(self.reader_family(str(x["kind"])), [])
         return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted}}
 
     def hands_hidden_seconds(self, d: dict) -> float | None:

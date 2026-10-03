@@ -136,8 +136,9 @@ def main() -> int:
                      [PY, "-m", "checks.stream_pairing", *flag, "--jobs", jobs, str(eps)], env)
         timebase.measure_folder(eps)
     run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env)
-    # exit 1 is board clips saying no episode came out whole (clips/failed.json lists why), told below as the upload's
-    # own reason; any other failure of the step is still an error
+    # exit 1 is board clips saying no episode came out at all (clips/failed.json lists why), told below as the upload's
+    # own reason; any other failure of the step is still an error. An episode with a camera that decodes is kept, and
+    # what was wrong with its other cameras goes into the report's notes
     rc = run_step(job, "clips", [PY, "-m", "board", "clips", "--episodes", str(eps), "--out", str(job / "clips"),
                                  "--jobs", jobs, "--clip-threads", "1"], env, ok_codes=(0, 1))
     left_out = board_clips.set_aside_failed(eps, job / "clips")
@@ -145,8 +146,9 @@ def main() -> int:
         board_clips.drop_from_report(rep, left_out)
         if not rep["episodes"]:
             raise SystemExit("no episode could be put on the board: " + "; ".join(f["why"] for f in left_out[:3]))
-        (job / "report.json").write_text(json.dumps(rep, indent=1))
-        print(f"left out, a camera file does not decode: {', '.join(f['name'] for f in left_out)}", flush=True)
+        print(f"left out, no camera file decodes: {', '.join(f['name'] for f in left_out)}", flush=True)
+    board_clips.note_camera_problems(rep, eps)
+    (job / "report.json").write_text(json.dumps(rep, indent=1))
     if rc != 0:
         raise SystemExit(f"clips exited {rc} with episodes still to put on the board (log {job / 'logs' / 'clips.log'})")
 

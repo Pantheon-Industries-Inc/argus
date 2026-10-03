@@ -337,13 +337,16 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
         keep = lambda j, im: im if (j in full or im.width <= top) else mf.Shrunk(im, widths)
 
     def run():
-        return mf.extract_frames(s["packed"], s["base_s"], int(s["n_frames"]), own, pts=pts, fps=ep_fps(ep), keep=keep)
+        # a camera whose file ends before the episode does has no frame at the instants after its last one
+        # (recording_at); a frame missing anywhere else still raises
+        return mf.extract_frames(s["packed"], s["base_s"], int(s["n_frames"]), own, pts=pts, fps=ep_fps(ep), keep=keep,
+                                 tail_ok=True)
     if gate is not None:
         with gate:
             got = run()
     else:
         got = run()
-    return {k: got[j] for k, j in zip(ks, own)}
+    return {k: got[j] for k, j in zip(ks, own) if j in got}
 
 
 def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
@@ -352,13 +355,19 @@ def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
     vs = views(ep)
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
         futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks) for v in vs}
-        return {v: f.result() for v, f in futs.items()}
+        got = {v: f.result() for v, f in futs.items()}
+    # the instants after a camera's file ended (an upload's camera one frame short of its episode), which
+    # recording_at then reports as not recording, so every grid and view leaves that camera out there
+    ep["no_frame"] = {v: {k for k in pl["ks"] if k not in im} for v, im in got.items() if len(im) < len(set(pl["ks"]))}
+    return got
 
 
 def recording_at(ep: dict, v: str, k: int) -> bool:
     """Whether camera v was recording at anchor instant k (within PAIRED_SPAN_SLACK_S of its own first and last frame).
     A camera paired to the anchor by real time (kmap) that started later or stopped earlier was not: its nearest frame
     there is its first or last, taken at another time, so it is not shown under this instant's time."""
+    if k in (ep.get("no_frame") or {}).get(v, ()):
+        return False
     km = (ep.get("kmap") or {}).get(v)
     t = ep["times"] if ep.get("times") is not None else None
     if km is None or t is None or v not in t:
@@ -514,7 +523,7 @@ def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
             cells = []
             for i, t in enumerate(ts):
                 k = _frame_at(ep, t)
-                if not recording_at(ep, v, k):
+                if not recording_at(ep, v, k) or k not in got[v]:
                     continue
                 im = got[v][k]
                 im = im.resize((STRIP_CELL_W, int(round(im.height * STRIP_CELL_W / im.width))))
@@ -723,18 +732,28 @@ def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
 
 def _coverage_note(ep: dict, pl: dict) -> str:
     """A camera that has no frame at some instants (recording_at): when it records, so its empty cells are read as
-    what they are."""
-    gaps = []
+    what they are. A camera whose file ends before the episode does (frames) is said apart, with the instants it has
+    no frame at."""
+    gaps, ended = [], []
     for v in views(ep):
         if all(recording_at(ep, v, k) for k in pl["ks"]):
             continue
+        ends = (ep.get("no_frame") or {}).get(v)
+        if ends:
+            at = ", ".join(f"{frame_time(ep, k):.2f} s" for k in sorted(ends))
+            ended.append(f"{cam_name(ep, v)}'s video ends before the episode does, so it has no frame at {at}")
+            continue
         t = ep["times"][v]
         gaps.append(f"{cam_name(ep, v)} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
-    if not gaps:
-        return ""
-    s = "; ".join(gaps)
-    return (" " + s[0].upper() + s[1:] + ", so its cells are empty at the instants outside that time, and it is "
-            "left out of a detail view there.")
+    out = ""
+    if gaps:
+        s = "; ".join(gaps)
+        out += (" " + s[0].upper() + s[1:] + ", so its cells are empty at the instants outside that time, and it is "
+                "left out of a detail view there.")
+    if ended:
+        s = "; ".join(ended)
+        out += " " + s[0].upper() + s[1:] + ". Its cells there are empty, and it is left out of a detail view there."
+    return out
 
 
 def _num(x: float) -> str:

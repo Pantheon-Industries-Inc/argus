@@ -146,8 +146,8 @@ def depth_findings(ep: dict) -> list[dict]:
         if same:
             if imgs is None:
                 imgs = me.frames(ep, {"ks": pick})
-            moved = [(a, b) for a, b in same
-                     if float(np.abs(np.asarray(imgs[v][a].convert("L"), dtype=np.float32)
+            moved = [(a, b) for a, b in same if a in imgs[v] and b in imgs[v]
+                     and float(np.abs(np.asarray(imgs[v][a].convert("L"), dtype=np.float32)
                                      - np.asarray(imgs[v][b].convert("L"), dtype=np.float32)).mean()) > 2.0]
             if moved:
                 out.append({"check": "depth_frozen", "camera": name, "t_s": round(me.frame_time(ep, moved[0][0]), 2),

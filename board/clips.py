@@ -15,8 +15,15 @@ which browsers do not all play. This cuts each episode's own frames out of its s
 file, the episode's offset and its exact frame count) into a browser-native H.264 clip, once, sized for where the
 page shows that camera (the recipe below) and timed on the episode's clock: every frame keeps its source time, and a
 camera that started recording after the main one starts that much later. It is a viewing copy only: labelling
-decodes the source files directly and never re-encodes. Idempotent and parallel. An episode with a camera file
-that does not decode is listed in CLIPS/failed.json and left out by set_aside_failed; the rest go on.
+decodes the source files directly and never re-encodes. Idempotent and parallel.
+
+An episode with any camera that decodes is always kept, labelled and put on the board from the cameras that work. A
+camera whose clip comes out with fewer frames than the episode keeps its clip as cut, and the board plays it; a
+camera whose video does not decode is taken out of the episode (drop_cameras). Either is recorded in the episode's
+context.json, as an entry of reader_issues (record_cameras), which board/build.py copies into the episode's
+dataset_checks, where it raises a data issue (board/families.py), and which note_camera_problems puts into an
+upload's report notes. Only an episode none of whose cameras can be cut is listed in CLIPS/failed.json and left out
+by set_aside_failed; the rest go on.
 
 A depth clip is cut after its camera's colour clip and timed exactly like it: it has the colour clip's frames at the
 colour clip's timestamps, each showing the depth frame recorded nearest that colour frame (depth_times.npz
@@ -30,7 +37,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -166,7 +172,7 @@ def start_offsets(ep_dir: Path, sources: dict, fps: float = 30.0) -> dict:
 
 def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
                 ffmpeg: str, threads: int, fps: float = 30.0, main: bool = True, offset_s: float = 0.0,
-                skip: int = 0) -> None:
+                skip: int = 0) -> dict | None:
     """Exactly the episode's n_frames, starting at its first frame. Packed files are on an exact frame grid,
     so seeking half a frame before the episode's offset lands on its first frame whichever way the decimal
     rounds, and -frames:v stops after the last one (never a frame of the next episode). Per-episode files
@@ -177,7 +183,11 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
 
     The clip is cut from the file's first video stream alone, and its first frame is put at 0 (then offset_s), so
     neither another stream that starts first (an audio track) nor the seek's half-frame lead shifts it off the
-    episode's clock; the frames after it keep their own spacing, so a variable-rate recording plays as recorded."""
+    episode's clock; the frames after it keep their own spacing, so a variable-rate recording plays as recorded.
+
+    Returns None when the clip has the episode's frames. A clip with fewer (the camera's file ends before the
+    episode does) is kept as cut and its counts returned, {"clip_frames", "episode_frames"}, for record_cameras; a
+    video that gives no frame at all raises, as one that does not decode does."""
     out_mp4.parent.mkdir(parents=True, exist_ok=True)
     # a per-process temp name, so two builders on the same clip can never write one file at once
     tmp = out_mp4.with_suffix(f".{os.getpid()}.tmp.mp4")
@@ -191,11 +201,11 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
     subprocess.run(cmd, check=True, capture_output=True)
     frame_lengths(tmp)
     got = clip_frames(tmp)
-    if got != want:
+    if not got:
         tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"{out_mp4.name}: clip has {got} frames, episode has {want}"
-                           + (f" after the {skip} before the main camera's first" if skip else ""))
+        raise RuntimeError(f"{out_mp4.name}: no frame of {packed} decodes")
     os.replace(tmp, out_mp4)
+    return None if got == want else {"clip_frames": got, "episode_frames": want}
 
 
 def depth_frame_map(colour_t, depth_t) -> list:
@@ -413,14 +423,16 @@ def depth_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = "") -> li
     return jobs
 
 
-FAILED = "failed.json"      # in the clips folder: {episode folder: {camera: why its clip could not be cut}}
+FAILED = "failed.json"      # in the clips folder: {episode folder: {camera: why its clip could not be cut}}, for the
+                            # episodes none of whose cameras could be cut
 
 
 def set_aside_failed(eps: Path, clips_dir: Path) -> list[dict]:
-    """Move the episodes whose clips could not be cut (a camera file that does not decode) out of the episode
-    folder, into <eps>_unclipped next to it, so the rest of the upload is labelled and put on the board without them.
-    Returns them as the reader reports an episode it could not open, {"name", "why"}, with a plain reason. An
-    episode moved on an earlier run is not reported again."""
+    """Move the episodes none of whose cameras could be cut (no camera file decodes) out of the episode folder, into
+    <eps>_unclipped next to it, so the rest of the upload is labelled and put on the board without them. An episode
+    with a camera that decodes is never here: board clips kept it with its other cameras (record_cameras). Returns
+    them as the reader reports an episode it could not open, {"name", "why"}, with a plain reason. An episode moved on
+    an earlier run is not reported again."""
     fp = clips_dir / FAILED
     failed = json.loads(fp.read_text()) if fp.exists() else {}
     out = []
@@ -436,9 +448,6 @@ def set_aside_failed(eps: Path, clips_dir: Path) -> list[dict]:
     return out
 
 
-SHORT_CLIP = re.compile(r"clip has (\d+) frames, episode has (\d+)")
-
-
 def camera_label(view: str, ctx: dict) -> str:
     """A camera as the board names it: the main (or head) camera, the left or right wrist (or gripper), and any other
     camera by the dataset's own name for it."""
@@ -451,31 +460,102 @@ def camera_label(view: str, ctx: dict) -> str:
     return str(cam.get("name") or cam.get("key") or "other") + " camera"
 
 
-def failed_reason(cams: dict, ep_dir: Path) -> str:
-    """Why an episode's clips could not be cut, in one plain sentence: {camera view: the error extract_one raised}. A
-    video that ends before the episode's last frame says so with its counts; anything else is a video that does not
-    decode. When every camera failed the same way, it is said once for all of them."""
-    ctx_p = ep_dir / "context.json"
+def _context(ep_dir: Path) -> dict:
     try:
-        ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
-    except ValueError:
-        ctx = {}
-    all_views = set(json.loads((ep_dir / "sources.json").read_text())) if (ep_dir / "sources.json").exists() else set()
-    by_why: dict[str, list] = {}
-    for view in sorted(cams, key=lambda v: (CAMS + (v,)).index(v)):
-        m = SHORT_CLIP.search(cams[view])
-        why = f"has {m.group(1)} frames where the episode has {m.group(2)}" if m else "could not be decoded"
-        by_why.setdefault(why, []).append(view)
-    parts = []
-    for why, views in by_why.items():
-        if len(by_why) == 1 and len(views) > 1 and set(views) >= all_views:
-            parts.append(f"every camera's video {why}")
-            continue
-        names = [camera_label(v, ctx) for v in views]
-        joined = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-        verb = why if len(names) == 1 else why.replace("has ", "have ", 1)
-        parts.append(f"the {joined} video{'s' if len(names) > 1 else ''} {verb}")
-    return "; ".join(parts) + ", so this episode was left out"
+        return json.loads((ep_dir / "context.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def failed_reason(cams: dict, ep_dir: Path) -> str:
+    """Why an episode was left out, in one plain sentence: {camera view: the error extract_one raised} for every
+    camera it has, since an episode with one camera that decodes is kept. One camera is named as the board names
+    it; several are said once."""
+    if len(cams) > 1:
+        return "every camera's video could not be decoded, so this episode was left out"
+    view = next(iter(cams))
+    return f"the {camera_label(view, _context(ep_dir))} video could not be decoded, so this episode was left out"
+
+
+def drop_cameras(ep_dir: Path, views) -> None:
+    """Take cameras out of a prepared episode, out of sources.json, context.json's cameras and depth.json, so labelling
+    and the board never decode them. When the main camera goes, the camera first in row order is the main one, and
+    every camera the reader paired to the old one by capture time (its kmap) is paired to the new one, from times.npz,
+    as the reader pairs them (prepare/formats.py nearest)."""
+    import numpy as np
+
+    from prepare.formats import nearest
+    views = set(views)
+    src = json.loads((ep_dir / "sources.json").read_text())
+    ctx = _context(ep_dir)
+    old_main = cams_of(src)[0] if src else None
+    for v in views:
+        src.pop(v, None)
+        (ctx.get("cameras") or {}).pop(v, None)
+    dj = ep_dir / "depth.json"
+    if dj.exists():
+        depth = json.loads(dj.read_text())
+        if views & set(depth):
+            dj.write_text(json.dumps({v: e for v, e in depth.items() if v not in views}, indent=1))
+    if src and old_main in views and any(s.get("kmap") for s in src.values()):
+        main = cams_of(src)[0]
+        tp = ep_dir / (ctx.get("real_times") or "times.npz")
+        t = {}
+        if tp.exists():
+            with np.load(tp) as z:
+                t = {v: np.asarray(z[v], dtype=np.float64) for v in src if v in z.files}
+        for v, s in src.items():
+            s.pop("kmap", None)
+            if v == main or v not in t or main not in t:
+                continue
+            km = nearest(t[v], t[main])
+            if not (len(t[v]) == len(t[main]) and np.array_equal(km, np.arange(len(km)))):
+                np.save(ep_dir / f"kmap_{v}.npy", km)
+                s["kmap"] = f"kmap_{v}.npy"
+    (ep_dir / "sources.json").write_text(json.dumps(src, indent=1))
+    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
+
+
+# the kinds of reader issue (context.json reader_issues) board clips records
+CLIP_FRAME_COUNT = "clip_frame_count"            # a camera's clip has fewer frames than the episode
+CAMERA_NOT_DECODABLE = "camera_not_decodable"    # a camera's video does not decode; the episode goes on without it
+CLIP_KINDS = (CLIP_FRAME_COUNT, CAMERA_NOT_DECODABLE)
+
+
+def record_cameras(ep_dir: Path, short: dict, broken: dict, cut) -> None:
+    """Record what board clips found wrong with an episode's cameras in its context.json, in reader_issues, the list
+    of problems an episode was kept and flagged with ({"kind", "what", "camera"}: a short tag, one plain sentence a
+    reviewer reads on the board, the camera's view). short is {camera: extract_one's counts} for the clips that came
+    out with fewer frames than the episode (kind clip_frame_count), broken {camera: why} for the cameras whose video
+    does not decode (kind camera_not_decodable), which are taken out of the episode (drop_cameras), and cut the
+    cameras cut on this run. Other entries are never touched; a camera cut again on a later run is recorded as it came
+    out then, and one not cut again keeps its entry. board/build.py copies the list into the episode's dataset_checks,
+    where each entry raises a data issue (board/families.py), so every board build shows it."""
+    ctx = _context(ep_dir)
+    redo = set(cut) | set(broken)
+    issues = [x for x in ctx.get("reader_issues") or []
+              if not (isinstance(x, dict) and (x.get("kind") == CLIP_FRAME_COUNT and x.get("camera") in redo
+                                               or x.get("kind") == CAMERA_NOT_DECODABLE and x.get("camera") in broken))]
+    order = lambda v: (CAMS + (v,)).index(v)
+    for v in sorted(broken, key=order):
+        issues.append({"kind": CAMERA_NOT_DECODABLE, "camera": v, "what": f"The {camera_label(v, ctx)} video could not "
+                                                                          "be decoded, so this episode is shown and "
+                                                                          "labelled without it."})
+    for v in sorted(short, key=order):
+        n = short[v]
+        issues.append({"kind": CLIP_FRAME_COUNT, "camera": v, "what": f"The {camera_label(v, ctx)} video has "
+                                                                      f"{n['clip_frames']} frames where the episode "
+                                                                      f"has {n['episode_frames']}."})
+    if broken:
+        drop_cameras(ep_dir, broken)
+        ctx = _context(ep_dir)
+    if issues == (ctx.get("reader_issues") or []):
+        return
+    if issues:
+        ctx["reader_issues"] = issues
+    else:
+        ctx.pop("reader_issues", None)
+    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1))
 
 
 def drop_from_report(rep: dict, left_out: list[dict]) -> None:
@@ -486,6 +566,22 @@ def drop_from_report(rep: dict, left_out: list[dict]) -> None:
         rep["episodes"].remove(e)
         rep["failed"].append({"name": e["name"], "why": gone[e["episode_id"]]})
     rep["seconds"] = round(sum(e["seconds"] for e in rep["episodes"]), 2)
+
+
+def note_camera_problems(rep: dict, eps: Path) -> None:
+    """Put each kept episode's camera problems (record_cameras) into the reader's report: one note per problem in its
+    notes, "<episode>: the <camera> video ...", which the job page lists, and a camera taken out of the episode out of
+    the episode's cameras. Only the clip step's own kinds, since the reader reports its own."""
+    for e in rep["episodes"]:
+        for x in _context(eps / e["episode_id"]).get("reader_issues") or []:
+            if not (isinstance(x, dict) and x.get("kind") in CLIP_KINDS and x.get("what")):
+                continue
+            t = str(x["what"])
+            note = f"{e['name']}: {t[:1].lower()}{t[1:]}"
+            if note not in rep["notes"]:
+                rep["notes"].append(note)
+            if x["kind"] == CAMERA_NOT_DECODABLE:
+                (e.get("cameras") or {}).pop(x.get("camera"), None)
 
 
 def main() -> int:
@@ -513,19 +609,37 @@ def main() -> int:
     print(f"clips: {len(ep_dirs)} episodes, {len(jobs)} cam-clips to extract "
           f"(jobs={args.jobs}, threads={args.clip_threads}) -> {args.out}")
     ok = fail = 0
-    failed: dict[str, dict[str, str]] = {}
+    broken: dict[str, dict[str, str]] = {}      # episode folder -> {camera: why its video did not decode}
+    short: dict[str, dict[str, dict]] = {}      # episode folder -> {camera: its clip's and the episode's frames}
+    cut: dict[str, set] = {}                    # episode folder -> the cameras cut on this run
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip): (o, ep, cam)
                 for (pk, b, du, o, fps, is_main, off, skip, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
             try:
-                f.result()
+                counts = f.result()
                 ok += 1
+                cut.setdefault(ep, set()).add(cam)
+                if counts:
+                    short.setdefault(ep, {})[cam] = counts
+                    sys.stderr.write(f"clip SHORT {o}: {counts['clip_frames']} frames, episode has "
+                                     f"{counts['episode_frames']}\n")
             except Exception as e:
                 fail += 1
-                failed.setdefault(ep, {})[cam] = str(e)[:400]
+                broken.setdefault(ep, {})[cam] = str(e)[:400]
                 sys.stderr.write(f"clip FAIL {o}: {str(e)[:160]}\n")
+    # an episode is left out only when none of its cameras can be cut; one with a camera that works keeps it, the
+    # cameras that do not decode are taken out of it, and both kinds of problem are recorded in its context.json
+    failed: dict[str, dict[str, str]] = {}
+    for d in ep_dirs:
+        if d.name not in cut and d.name not in broken:
+            continue
+        cams = set(json.loads((d / "sources.json").read_text()))
+        if cams and cams <= set(broken.get(d.name, {})):
+            failed[d.name] = broken[d.name]
+            continue
+        record_cameras(d, short.get(d.name, {}), broken.get(d.name, {}), cut.get(d.name, set()))
     # the depth clips, after the colour clips they are timed against; one that cannot be cut is reported and left
     # out (the page then offers no depth for that camera), never costing the episode
     djobs = [j for d in ep_dirs if d.name not in failed for j in depth_jobs(d, args.out, args.force, args.name_prefix)]
@@ -542,11 +656,14 @@ def main() -> int:
                 except Exception as e:
                     sys.stderr.write(f"depth clip FAIL {futs[f]}: {str(e)[:160]}\n")
         print(f"clips: depth ok={dok} fail={len(djobs) - dok}")
-    # a camera file that does not decode costs its own episode, never the rest (set_aside_failed); the step
-    # fails only when no episode came out whole
+    # an episode none of whose cameras decodes costs only itself, never the rest (set_aside_failed); the step fails
+    # only when no episode came out at all
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / FAILED).write_text(json.dumps(failed, indent=1))
-    print(f"clips: ok={ok} fail={fail}" + (f", {len(failed)} episode(s) left out" if failed else ""))
+    kept = len(set(broken) - set(failed))
+    print(f"clips: ok={ok} fail={fail}" + (f", {len(short)} episode(s) with a short clip" if short else "")
+          + (f", {kept} episode(s) kept without a camera that does not decode" if kept else "")
+          + (f", {len(failed)} episode(s) left out" if failed else ""))
     return 1 if failed and len(failed) >= len(ep_dirs) else 0
 
 
