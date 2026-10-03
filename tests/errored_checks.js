@@ -47,6 +47,7 @@ const rowOf = name => {
 check(rowOf('recorded-jump').includes('ck-row err') && rowOf('recorded-jump').includes('>error<')
   && h.includes('ValueError: boom'), 'our check that crashed is an error with its reason');
 check(rowOf('streams-crossed').includes('ck-row clear'), 'the other check stays as it came out');
+check(/0 of 2 fired, 1 error/.test(h), 'our checks\' line counts the check that stopped with an error');
 const theirs = h.slice(h.indexOf('ck-theirs'), h.indexOf('ck-all'));
 check(theirs.includes('Gripper sensor bug') && theirs.includes('>error<') && theirs.includes('stopped with an error'),
   'a capture check that crashed is shown before the full list, as an error with its reason');

@@ -55,4 +55,8 @@ check(h.includes('Recorded gripper opening never changes') && h.includes('One-ar
   'a withheld check shows its name, whether it fired and the reason');
 check(h.includes('pub-fold') && h.includes('aria-expanded="false"') && h.includes('3 set aside'),
   'a fold, closed, that says how many are inside');
+const e = T.setAsideHtml({set_aside_checks: [{check: 'gripper_channels', reason: 'r', flagged: false,
+                                               error: 'ValueError: boom'}]});
+check(e.includes('stopped with an error') && e.includes('ValueError: boom') && !e.includes('clear'),
+  'a withheld check that crashed reads errored, never clear');
 process.exit(bad ? 1 : 0);

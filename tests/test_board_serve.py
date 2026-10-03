@@ -98,6 +98,11 @@ def test_the_page_is_given_the_checks_a_rule_withheld_with_the_reason():
     assert view["set_aside_checks"] == [{"check": "gripper_channels", "reason": "one-armed tasks", "flagged": True}]
     assert "_withheld_checks" not in view
     assert "set_aside_checks" not in serve.episode_view({"_withheld_checks": [3]})
+    # a withheld check that stopped with an error says so, never clear
+    err = serve.episode_view({"_withheld_checks": {"recorded_jumps": {"reason": "r", "result": {
+        "error": "ValueError: boom", "flagged": False}}}})
+    assert err["set_aside_checks"] == [{"check": "recorded_jumps", "reason": "r", "flagged": False,
+                                        "error": "ValueError: boom"}]
 
 
 def test_render_index_fills_every_placeholder():

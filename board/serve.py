@@ -484,8 +484,10 @@ def episode_view(d: dict) -> dict:
     lists them as set aside, never hides them. The label file itself is not changed."""
     held = d.get("_withheld_checks") if isinstance(d.get("_withheld_checks"), dict) else {}
     d = public_label(d)
+    # a withheld check that stopped with an error (checks/stream_pairing.py _safe) carries the error
     aside = [{"check": k, "reason": v.get("reason") or "",
-              "flagged": any(bool(r.get(f)) for f in ("flagged", "crossed", "sped_up_recording"))}
+              "flagged": any(bool(r.get(f)) for f in ("flagged", "crossed", "sped_up_recording")),
+              **({"error": str(r["error"])} if r.get("error") else {})}
              for k, v in held.items() if isinstance(v, dict) for r in [v.get("result") or {}] if isinstance(r, dict)]
     if aside:
         d["set_aside_checks"] = aside
@@ -2892,7 +2894,8 @@ function setAsideHtml(d) {
       <span class="di-sev">check</span>
       <div class="di-body">
         <div class="di-issue">${esc(fam[c.check] ? famName(fam[c.check]) : tagName(c.check, 'data_issues'))}, ${
-          c.flagged ? 'fired' : 'clear'}, not counted on this dataset</div>
+          c.error ? `stopped with an error (${esc(c.error)})` : c.flagged ? 'fired' : 'clear'}, not counted on this `
+          + `dataset</div>
         ${c.reason ? `<div class="di-ev">${esc(why(c.reason))}</div>` : ''}
       </div></div>`));
   const closed = `Show the ${n} set aside by this dataset's rules`;
@@ -3136,7 +3139,9 @@ function checksSection(d) {
   const row = r => `<div class="ck-row ${r.st}">${dot(r.st)}<span class="ck-name">${esc(r.name)}</span><span `
     + `class="ck-st">${word[r.st]}</span>${r.text ? `<div class="ck-text">${esc(r.text)}</div>` : ''}</div>`;
   const ours = rows.length ? `<div class="ck-block"><div class="ck-head"><span class="ck-title">Our checks</span><span `
-    + `class="ck-sum">${rows.filter(r => r.st === 'issue').length} of ${rows.length} fired</span>`
+    + `class="ck-sum">${rows.filter(r => r.st === 'issue').length} of ${rows.length} fired${rows.some(r => r.st
+      === 'err') ? `, ${rows.filter(r => r.st === 'err').length} ${rows.filter(r => r.st === 'err').length === 1
+      ? 'error' : 'errors'}` : ''}</span>`
     + `</div>${rows.map(row).join('')}</div>` : '';
   let theirs = '';
   if (cq) {
