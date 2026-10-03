@@ -1716,6 +1716,24 @@ def signal_gaps(name: str, a: np.ndarray, t: np.ndarray) -> list[dict]:
     return out
 
 
+# These field names identify process diagnostics rather than observations of the robot or its surroundings.
+PROCESS_FIELDS = frozenset({"pid", "process_id", "processid", "rss", "rss_kb", "rss_bytes", "memory_kb",
+                            "memory_bytes", "memory_percent", "cpu_percent", "cpu_usage", "io_read_bytes_per_sec",
+                            "io_write_bytes_per_sec"})
+LOG_CHANNELS = frozenset({"rosout", "rosout_agg"})       # standard ROS log channels, not sensor names containing log
+
+
+def bookkeeping_columns(name: str, meta: dict, width: int) -> tuple[list[int], str]:
+    """Columns whose names identify process diagnostics or a standard log channel. A mixed record keeps its other
+    sensor columns. A system or status topic alone is not proof that its readings are process diagnostics."""
+    topic = name.split(" ", 1)[0].lower().rstrip("/").rsplit("/", 1)[-1]
+    if topic in LOG_CHANNELS:
+        return list(range(width)), "bookkeeping log fields, retained with the recording"
+    fields = meta.get("names") or ([name.rsplit("/", 1)[-1].rsplit(" ", 1)[-1]] if width == 1 else [])
+    cols = [i for i, field in enumerate(fields) if "_".join(tokens(str(field))) in PROCESS_FIELDS]
+    return cols, "bookkeeping process diagnostics, retained with the recording"
+
+
 def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | None = None) -> None:
     """signals.npz beside the state (keys s0, s1, ...) and ctx["signals"], [{name, key, dims, shape, names, source}],
     trimmed to the episode's n_state_frames; nothing when there are none. What a reader read but did not keep
@@ -1764,12 +1782,36 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         m.pop("shape", None)
         m.update(names=list(SUMMARY_NAMES), summary_of=width)
         add_issue(ctx, **summary_issue(k, width))
-    for k, v in keep.items():
-        for i in signal_gaps(k, np.asarray(v[:n]).reshape(n, -1), t):
-            add_issue(ctx, **i)
-    np.savez(ep / "signals.npz", **{f"s{i}": np.asarray(v[:n], dtype=np.float32) for i, v in enumerate(keep.values())})
-    ctx["signals"] = [{"name": k, "key": f"s{i}", "dims": int(v.shape[1]), **(meta.get(k) or {})}
-                      for i, (k, v) in enumerate(keep.items())]
+    arrays, readings, bookkeeping = {}, [], []
+    for i, (k, v) in enumerate(keep.items()):
+        key, a, m = f"s{i}", np.asarray(v[:n], dtype=np.float32), dict(meta.get(k) or {})
+        arrays[key] = a                    # every original array keeps its key and values, including bookkeeping
+        cols, why = bookkeeping_columns(k, m, a.shape[1])
+        if cols:
+            names = m.get("names")
+            bookkeeping.append({"name": k, "key": key, "file": "signals.npz", "columns": cols, "why": why,
+                                **({"names": [names[c] for c in cols]} if names else {}),
+                                **({"source": m["source"]} if m.get("source") else {})})
+            selected = [c for c in range(a.shape[1]) if c not in cols]
+            if not selected:
+                continue
+            key += "_readings"
+            a = a[:, selected]
+            arrays[key] = a
+            m.pop("shape", None)
+            if names:
+                m["names"] = [names[c] for c in selected]
+        readings.append({"name": k, "key": key, "dims": int(a.shape[1]), **m})
+        for issue in signal_gaps(k, a, t):
+            add_issue(ctx, **issue)
+    np.savez(ep / "signals.npz", **arrays)
+    if readings:
+        ctx["signals"] = readings
+    else:
+        ctx.pop("signals", None)
+    if bookkeeping:
+        ctx.setdefault("source", {})["bookkeeping"] = bookkeeping
+        ctx["source"].setdefault("unused_signals", []).extend(f"{s['name']} ({s['why']})" for s in bookkeeping)
 
 
 # ---------------------------------------------------------------- depth

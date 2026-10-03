@@ -3100,6 +3100,42 @@ def test_one_uploaded_take_keeps_its_positive_take_alias():
         _one_uploaded_take_keeps_its_positive_take_alias(Path(t))
 
 
+def _process_diagnostics_and_logs_stay_bookkeeping_with_their_values(tmp_path):
+    """Process diagnostics and numeric log fields had been stated as sensor observations. Their recorded arrays
+    stay available as bookkeeping, while sensor columns in a mixed record still reach the model."""
+    from label import episode as me
+    import numpy as np
+    video = tmp_path / "top.mp4"
+    _clip(video, 10)
+    values = np.arange(30, dtype=np.float32).reshape(10, 3) / 7
+    sig = f.Signals()
+    sig.add("/worker/status", values, names=["pid", "rss_kb", "cpu_percent"], source="MCAP channel /worker/status")
+    sig.add("/logger/rosout", values[:, :1], names=["level"], source="MCAP channel /logger/rosout")
+    sig.add("/device/system_info", values[:, :2], names=["pid", "temperature"], source="column status")
+    sig.add("/sensor/log_force", values[:, :1], names=["force"])
+    sig.add("/sensor/environment", values[:, :2], names=["temperature", "humidity"])
+    ctx = f.video_views_episode(tmp_path / "ep", {"exo": ("top", video)}, "teleop_arms", "test", {}, signals=sig)
+    assert {s["name"] for s in ctx["signals"]} == {"/device/system_info", "/sensor/log_force",
+                                                   "/sensor/environment"}, ctx
+    mixed = next(s for s in ctx["signals"] if s["name"] == "/device/system_info")
+    assert mixed["names"] == ["temperature"] and mixed["dims"] == 1, mixed
+    bookkeeping = ctx["source"]["bookkeeping"]
+    assert {s["name"] for s in bookkeeping} == {"/worker/status", "/logger/rosout", "/device/system_info"}, ctx
+    with np.load(tmp_path / "ep" / "signals.npz") as stored:
+        for i, a in enumerate(sig.values()):
+            assert np.array_equal(stored[f"s{i}"], a), i
+        assert np.array_equal(stored[mixed["key"]], values[:, 1:2])
+    assert all("bookkeeping" in s["why"] and s["file"] == "signals.npz" for s in bookkeeping), bookkeeping
+    prompt = me.build_request(tmp_path / "ep")["prompt"]
+    assert "/worker/status" not in prompt and "/logger/rosout" not in prompt and "rss_kb" not in prompt, prompt
+    assert "/sensor/environment" in prompt and "/sensor/log_force" in prompt and "temperature" in prompt, prompt
+
+
+def test_process_diagnostics_and_logs_stay_bookkeeping_with_their_values():
+    with tempfile.TemporaryDirectory() as t:
+        _process_diagnostics_and_logs_stay_bookkeeping_with_their_values(Path(t))
+
+
 def _a_folder_json_named_for_a_take_not_in_the_upload_gives_no_task(tmp_path):
     """ep3.json, ep3_meta.json or take3.json beside the takes ep1 and ep2, 3.json beside the takes 1 and 2, and
     ep2.json in the folder of the one episode ep1 named no episode there, so every take was given the task of a take
