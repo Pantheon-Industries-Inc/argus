@@ -12,7 +12,8 @@ uploaded to Data Review get the same requests and the same board:
               a report of what was read, used and left out (JOB/report.json)
   2. checks   crossed camera streams, recorded jumps and flat gripper channels where the data has arm state
               (checks.stream_pairing), sped-up recordings measured against their neighbours in the same folder
-              (checks.timebase measure_folder), and the capture checks (checks.capture_qc)
+              (checks.timebase measure_folder), the capture checks (checks.capture_qc), and the checks on the
+              other signals and depth streams where the data has them (checks.sensors)
   3. clips    browser-playable copies of each camera for the board (python -m board clips)
   4. dry run  every request built exactly as it would be sent, free. A recording longer than label/pieces.py's
               PIECE_MAX_S is labelled in parts cut at still moments
@@ -136,6 +137,9 @@ def main() -> int:
                      [PY, "-m", "checks.stream_pairing", *flag, "--jobs", jobs, str(eps)], env)
         timebase.measure_folder(eps)
     run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env)
+    if any((eps / e["episode_id"] / "signals.npz").exists() or (eps / e["episode_id"] / "depth.json").exists()
+           for e in rep["episodes"]):
+        run_step(job, "checks_sensors", [PY, "-m", "checks.sensors", "--jobs", jobs, str(eps)], env)
     # exit 1 is board clips saying no episode came out at all (clips/failed.json lists why), told below as the upload's
     # own reason; any other failure of the step is still an error. An episode with a camera that decodes is kept, and
     # what was wrong with its other cameras goes into the report's notes

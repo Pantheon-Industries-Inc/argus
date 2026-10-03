@@ -290,6 +290,32 @@ def test_an_episode_none_of_whose_cameras_decodes_is_set_aside_with_its_reason(t
     assert rep["episodes"] == [] and rep["failed"] == [{"name": "episode_1", "why": left[0]["why"]}]
 
 
+def test_review_runs_the_sensor_checks_as_data_review_does(tmp_path, monkeypatch):
+    """python -m review never ran checks.sensors, which Data Review runs after the capture checks on an upload whose
+    episodes have other signals or depth, so a folder reviewed here had no sensor checks on its board."""
+    import pytest
+    import review.__main__ as rv
+    root = tmp_path / "upload"
+    recorder_folder(root, n=30)
+    steps = []
+
+    def record(job, step, cmd, env, ok_codes=(0,)):
+        steps.append((step, cmd[2] if len(cmd) > 2 else None))
+        if step == "clips":
+            raise SystemExit("stop after the checks")
+        return 0
+    monkeypatch.setattr(rv, "run_step", record)
+    monkeypatch.setattr(sys, "argv", ["python -m review", "--data", str(root), "--rig", "teleop_arms", "--out",
+                                      str(tmp_path / "job"), "--dataset", "mine", "--free"])
+    with pytest.raises(SystemExit, match="stop after the checks"):
+        rv.main()
+    ep = next((tmp_path / "job" / "episodes").glob("episode_*"))
+    assert (ep / "depth.json").exists() or (ep / "signals.npz").exists()
+    names = [s for s, _ in steps]
+    assert ("checks_sensors", "checks.sensors") in steps
+    assert names.index("checks_capture") < names.index("checks_sensors") < names.index("clips")
+
+
 def test_review_says_why_when_no_episode_can_be_put_on_the_board(tmp_path, monkeypatch):
     """board clips exits 1 when no episode came out whole: review says which camera file did not decode, the
     upload's own reason, instead of reporting the clips step as a crash."""
