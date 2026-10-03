@@ -167,3 +167,18 @@ def test_actual_lerobot_state_value_names_keep_actor_identity(tmp_path, images, 
     want = side or "recorded arm (side unknown)"
     assert me.actors(ep) == [want]
     assert ep["context"]["state_actors"] == [want]
+
+
+def test_legacy_known_mounted_actor_survives_camera_removal(tmp_path):
+    from board import clips
+    from test_camera_timing import recording
+    ep_dir = recording(tmp_path, np.arange(90) / 30, np.arange(90) / 30)
+    ep = me.load(ep_dir)
+    ctx = ep["context"]
+    ctx["state_kind"] = "joints"
+    formats.finish_episode(ep_dir, ctx, ep["sources"], state=np.zeros((90, 7)), times=ep["times"])
+    ctx.pop("state_actors")
+    (ep_dir / "context.json").write_text(json.dumps(ctx))
+    assert me.actors(me.load(ep_dir)) == ["left"]
+    clips.drop_cameras(ep_dir, ["left"])
+    assert me.actors(me.load(ep_dir)) == ["left"]

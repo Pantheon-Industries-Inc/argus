@@ -848,6 +848,12 @@ def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | N
     views = set(views)
     src = json.loads((ep_dir / "sources.json").read_text())
     ctx = _context(ep_dir)
+    if "state_actors" not in ctx and ctx.get("state_kind") in ("joints", "ee_pose") \
+            and (ep_dir / "state.npz").exists():
+        from label import episode as me
+        # Older prepared episodes have no saved actor identity. Keep the identity available before its camera
+        # leaves, without changing recorded arrays or opting the episode into another camera clock.
+        ctx["state_actors"] = me.actors(me.load(ep_dir))
     old_main = cams_of(src)[0] if src else None
     old_name = camera_label(old_main, ctx) if old_main else ""
     rest = {v: s for v, s in src.items() if v not in views}
