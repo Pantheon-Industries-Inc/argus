@@ -144,7 +144,7 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     """Write one sidecar folder per part under pieces_root (named <episode>__pNN) and record the cuts in the
     episode's context (context["pieces"]). Returns the part folders."""
     from label import episode as me
-    from prepare.formats import shift_context_times
+    from prepare.formats import CLOCK_TIME_KEYS, shift_context_times
     ep_dir = Path(ep_dir)
     stored = json.loads((ep_dir / "context.json").read_text())
     ep = me.load(ep_dir)
@@ -224,8 +224,19 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
         c2 = shift_context_times(c2, -t0)
+        parent_notes = []
+        if t0:
+            for issue in c2.get("reader_issues") or []:
+                if (isinstance(issue, dict) and isinstance(issue.get("what"), str) and issue["what"]
+                        and any(isinstance(issue.get(key), (int, float)) and not isinstance(issue.get(key), bool)
+                                for key in CLOCK_TIME_KEYS["reader_issues"])):
+                    # The typed markers move to the part clock. Copied prose remains the recording's evidence.
+                    issue["what"] = "Full recording clock note. " + issue["what"]
+                    parent_notes.append(issue["what"])
+        interval = (f"{fmt_clock(t0)} to {fmt_clock(t1)} on the full recording clock" if float(t[0]) else
+                    f"{fmt_clock(t0)} to {fmt_clock(t1)} of it")
         note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total - float(t[0]))} recording, from "
-                f"{fmt_clock(t0)} to {fmt_clock(t1)} of it. The labelling pipeline cut the recording into parts at "
+                f"{interval}. The labelling pipeline cut the recording into parts at "
                 "moments of little motion to label it; activity that carries across a cut is expected, and a part "
                 "that starts or ends in the middle of an activity is how we cut it, not a truncated or cut-off "
                 "recording.")
@@ -234,6 +245,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                      f"\"{ctx['instruction'].strip()}\". This part may show only some of it.")
         if ctx.get("collection_note"):
             note += " " + ctx["collection_note"].strip()
+        if parent_notes:
+            note += " " + " ".join(parent_notes)
         c2["collection_note"] = note
         if new_times:
             np.savez(d / "times.npz", **new_times)

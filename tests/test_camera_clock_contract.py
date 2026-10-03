@@ -51,7 +51,7 @@ def test_parts_place_every_typed_contributor_on_their_own_capture_clock(tmp_path
         assert "clock_zero_s" not in ctx and episode.frame_time(loaded, 0) == 0
         assert ctx["reader_issues"][0]["t0_s"] == pytest.approx(1.2 - t0, abs=0.001)
         assert ctx["reader_issues"][0]["t1_s"] == pytest.approx(1.3 - t0, abs=0.001)
-        assert ctx["reader_issues"][0]["what"] == raw["reader_issues"][0]["what"]
+        assert ctx["reader_issues"][0]["what"] == ("Full recording clock note. " if t0 else "") + raw["reader_issues"][0]["what"]
         assert ctx["reader_issues"][0]["extra"] == {"t0_s": 37}
         assert ctx["unshown_cameras"][0]["start_s"] == pytest.approx(0.6 - t0, abs=0.001)
         assert ctx["arbitrary"] == raw["arbitrary"]
@@ -247,3 +247,38 @@ def test_depth_decode_issues_round_trip_with_the_actual_colour_capture_times(tmp
         assert "from 1.00 s to 1.00 s" in issue["what"]
         assert raw["reader_issues"][0] == original["reader_issues"][0]
         assert probe_pts(tmp_path / "depth.mp4")[3] == probe_pts(job[3])[3]
+
+
+@pytest.mark.parametrize("first", [0.0, 0.5])
+def test_part_request_and_board_attribute_shifted_reader_notes_to_the_full_recording(tmp_path, monkeypatch, first):
+    ep, raw = clock_recording(tmp_path, first)
+    raw["clock_zero_s"] = 0.0
+    raw["reader_issues"].extend([
+        {"kind": "signal_gap", "what": "An untimed uploader note says 37 s"},
+        {"kind": "signal_gap", "t0_s": "unknown", "what": "An unknown clock says 37 s"}])
+    (ep / "context.json").write_text(json.dumps(raw))
+    parent_request = episode.build_request(ep)["prompt"]
+    monkeypatch.setattr(pieces, "piece_max", lambda ctx: 1.0)
+    for part in pieces.write_pieces(ep, tmp_path / "parts"):
+        ctx = json.loads((part / "context.json").read_text())
+        t0 = ctx["piece"]["t0_s"]
+        request = episode.build_request(part)
+        board = {}
+        build.add_context(board, ctx, part, {})
+        issue = board["dataset_checks"]["reader_issues"][0]
+        expected = ("Full recording clock note. " if t0 else "") + raw["reader_issues"][0]["what"]
+        assert issue["what"] == expected
+        assert issue["t0_s"] == pytest.approx(first + 1.2 - t0, abs=0.001)
+        if t0:
+            assert expected in request["prompt"]
+        assert ctx["reader_issues"][1:] == raw["reader_issues"][1:]
+        assert raw["reader_issues"][1]["what"] not in ctx["collection_note"]
+        assert raw["reader_issues"][2]["what"] not in ctx["collection_note"]
+        if first:
+            assert "on the full recording clock" in request["prompt"]
+            assert f"continuous {pieces.fmt_clock(3.0)} recording" in request["prompt"]
+        else:
+            assert "of it. The labelling pipeline" in ctx["collection_note"]
+    saved = json.loads((ep / "context.json").read_text())
+    assert {k: v for k, v in saved.items() if k != "pieces"} == raw
+    assert episode.build_request(ep)["prompt"] == parent_request
