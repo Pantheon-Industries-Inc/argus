@@ -111,6 +111,7 @@ board plays it named as not shown to the model; an MCAP or HDF5 camera is writte
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -2461,13 +2462,23 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 extra["state_note"] = note
             elif state is not None:
                 extra["source"]["state"] = [Path(p).name for p in mcap_files]
+                notes = []
+                # a sensor file that could not be read at all may hold an arm the state therefore lacks: said
+                unread = [Path(p).name for p, _ in unplaced if Path(p).suffix.lower() == ".mcap"
+                          and sensor_times(p) is None]
+                if unread:
+                    notes.append(f"The recorded state is read from {_and_words(extra['source']['state'])}; "
+                                 f"{_and_words(unread)} could not be read, so an arm "
+                                 f"{'they record is' if len(unread) > 1 else 'it records is'} not in it.")
                 third = third_arms(streams)
                 if third:
-                    extra["state_note"] = (f"The recording has a third arm ({', '.join(third)}) beside the left and "
-                                           "right arms; it is read as neither working arm.")
+                    notes.append(f"The recording has a third arm ({', '.join(third)}) beside the left and right "
+                                 "arms; it is read as neither working arm.")
                     # a scene camera whose name says it is on an arm, beside a third arm, is carried by that arm
                     if "exo" in files and is_mount_named(files["exo"][0]):
                         descs["exo"] = third_arm_camera_desc(third)
+                if notes:
+                    extra["state_note"] = " ".join(notes)
         if h5_files:
             more = h5_file_signals(h5_files, real[anchor], len(real[anchor]))
             if state is None and rig != "ego_head":
@@ -4493,6 +4504,22 @@ def _mcap_stream(path: Path, topics: set | None = None):
             return                  # the cut: everything before it has been yielded
 
 
+def mcap_messages(fh, path: Path, topics):
+    """(schema, channel, message) of these topics in an open MCAP file fh (at path): by its index in log time order
+    when it has a summary that can be read, and record by record otherwise (_mcap_stream), a file cut short, whose
+    messages before the cut are then all it holds: its index had made every reader of it throw, so its arms and
+    signals were lost."""
+    from mcap.reader import make_reader
+    try:
+        indexed = make_reader(fh).get_summary() is not None
+    except Exception:
+        indexed = False
+    fh.seek(0)
+    if indexed:
+        return make_reader(fh).iter_messages(topics=sorted(topics), log_time_order=True)
+    return _mcap_stream(path, set(topics))
+
+
 def _mcap_channels_by_scan(path: Path) -> list[tuple[str, str]]:
     from mcap.records import Channel, Schema
     from mcap.stream_reader import StreamReader
@@ -4733,16 +4760,15 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
     order; a channel of one group (or of an arm and its gripper, _join_gripper, judged on the footage's frame times q
     when given) is keyed by its topic, and one of several by its topic and each group's label (group_label), with
     the fields its messages fill ("fields", _joint_fields) so that only the group joint_state reads leaves the
-    signals."""
-    from mcap.reader import make_reader
+    signals. A file cut short is read up to its cut (mcap_messages), its rows put in time order, so an arm in it is
+    read as far as it was recorded and joint_state judges whether that covers the footage."""
     found, facs = {}, _decoders()
     for p in paths:
         chans = [(t, s) for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)]
         decs, skip = {}, set()
         with open(p, "rb") as fh:
             try:
-                msgs = make_reader(fh).iter_messages(topics=[t for t, _ in chans], log_time_order=True)
-                for schema, ch, msg in msgs:
+                for schema, ch, msg in mcap_messages(fh, p, [t for t, _ in chans]):
                     if ch.topic in skip:
                         continue
                     if ch.id not in decs:
@@ -4773,10 +4799,12 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None) -> dict:
         if c["groups"].overflow:
             continue                                  # mcap_signals names it as left out, with the reason
         rows, n_sets = merge_unnamed(c["groups"], dict(enumerate(c["rows"])), ("pos",))
-        read = [{"t": np.asarray(r["t"]), "pos": np.asarray(r["pos"], dtype=np.float64),
-                 "names": c["groups"][i][0], "fields": r["fields"], "label": group_label(c["groups"][i]),
-                 "dropped": r.get("dropped", 0), "dropped_widths": r.get("dropped_widths") or set()}
-                for i, r in sorted(rows.items())]
+        read = []
+        for i, r in sorted(rows.items()):
+            order = np.argsort(np.asarray(r["t"]), kind="stable")    # file order, for a file read record by record
+            read.append({"t": np.asarray(r["t"])[order], "pos": np.asarray(r["pos"], dtype=np.float64)[order],
+                         "names": c["groups"][i][0], "fields": r["fields"], "label": group_label(c["groups"][i]),
+                         "dropped": r.get("dropped", 0), "dropped_widths": r.get("dropped_widths") or set()})
         groups = _join_gripper(read, q)
         apart = len(groups) == len(read) and n_sets > 1
         for g in groups:
@@ -5036,7 +5064,6 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     (name_group), each put in its group's order, and a field of several groups is one signal per group, its name
     followed by the group's label (group_label). used names a field, or a (field, its value names) pair for a field
     of that name set only (state_fields)."""
-    from mcap.reader import make_reader
     used, facs = used or {}, _decoders()
     q = np.asarray(q, dtype=np.float64)
     rows: dict[tuple, dict] = {}
@@ -5052,15 +5079,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
         decs = {}
         with open(p, "rb") as fh:
             try:
-                try:
-                    has_summary = make_reader(fh).get_summary() is not None
-                except Exception:
-                    has_summary = False
-                fh.seek(0)
-                # a recording cut off before its index is read message by message (_mcap_stream)
-                msgs = make_reader(fh).iter_messages(topics=chans, log_time_order=True) if has_summary \
-                    else _mcap_stream(p, set(chans))
-                for schema, ch, msg in msgs:
+                for schema, ch, msg in mcap_messages(fh, p, chans):
                     if ch.id not in decs:
                         decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
                     try:
@@ -5223,8 +5242,15 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
         # sample's value, so the state would seem to record an arm standing still where nothing was recorded
         t = streams[topic]["t"]
         return span > 0 and t[0] <= q[0] + STATE_EDGE_SLACK_S and t[-1] >= q[-1] - STATE_EDGE_SLACK_S
-    if not all(covers(st[s]) for s in order):
-        return None, None, "Labelled from the cameras, because the recorded arm state does not cover the footage's time."
+    short = [st[s] for s in order if not covers(st[s])]
+    if short:
+        # each arm that falls short is named with the span of the footage it covers, so an arm whose file was cut
+        # short says so
+        def covered(k):
+            t0, t1 = (max(float(x) - float(q[0]), 0.0) for x in (streams[k]["t"][0], streams[k]["t"][-1]))
+            return f"{k} has readings from {t0:.1f} s to {t1:.1f} s of the footage's {span:.1f} s"
+        return None, None, ("Labelled from the cameras, because the recorded arm state does not cover the footage's "
+                            "time: " + "; ".join(covered(k) for k in short) + ".")
 
     def fill(topic):
         # the arm's readings on the frames, across no gap longer than the slack (fill_rows)
@@ -5637,8 +5663,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     elif note:
         extra["state_note"] = note
     elif item["seconds"] is None and mcap_layout(item["topics"]) != "generic":
-        extra["state_note"] = ("Labelled from the cameras, because the file ends before the index its robot state is read "
-                               "from.")
+        # cut short (no summary), and its messages before the cut hold no arm (mcap_joint_streams reads up to the cut)
+        extra["state_note"] = "Labelled from the cameras, because the file is cut short before any of its robot state."
     elif motion and rig == "ego_head":
         shown = ", ".join(motion[:4]) + (f" and {len(motion) - 4} more" if len(motion) > 4 else "")
         extra["state_note"] = (f"Labelled from the camera. The hand, body and camera tracks the file records ({shown}) are "
@@ -6090,10 +6116,33 @@ def assign_sensors(items: list[dict], sensors: list[Path]) -> None:
                 it["state_shared"].append(p)
 
 
+SENSOR_TIMES_KEPT = 8       # the sensor files whose times are kept once read: an episode's own and shared ones
+
+
 def sensor_times(p: Path) -> np.ndarray | None:
     """A sensor file's own times in seconds, sorted: an MCAP's message log times (from its summary's first and last
     time and count, or scanned when it has no summary or its summary cannot be read, a file cut short, whose
-    messages before the cut are then its times), an HDF5 file's longest clock (h5_streams); None when it has none."""
+    messages before the cut are then its times), an HDF5 file's longest clock (h5_streams); None when it has none.
+    The times of a file are read once while it is unchanged (_file_times, by its size and modification time), since
+    placing it, flagging its cut and placing it from both starts each ask for them, and a cut file is scanned whole;
+    they come read only, so no caller changes them for the next."""
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    return _file_times(str(Path(p).resolve()), st.st_size, st.st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=SENSOR_TIMES_KEPT)
+def _file_times(p: str, size: int, mtime_ns: int) -> np.ndarray | None:
+    """sensor_times of the file at p, which has this size and modification time."""
+    t = _read_file_times(Path(p))
+    if t is not None:
+        t.setflags(write=False)
+    return t
+
+
+def _read_file_times(p: Path) -> np.ndarray | None:
     try:
         if Path(p).suffix.lower() == ".mcap":
             from mcap.reader import make_reader
@@ -6117,12 +6166,15 @@ def sensor_times(p: Path) -> np.ndarray | None:
 
 
 def no_time_why(p: Path) -> str:
-    """Why a sensor file gave no times (sensor_times): it could not be opened at all, or it opened and holds none."""
+    """Why a sensor file gave no times (sensor_times): it could not be opened at all, it is cut short before its first
+    message (sensor_cut), or it opened and holds none."""
     try:
         if Path(p).suffix.lower() == ".mcap":
             with open(p, "rb") as fh:
                 if fh.read(len(MCAP_MAGIC)) != MCAP_MAGIC:
                     raise ValueError("not an MCAP file")
+            if sensor_cut(p):
+                return "it is cut short before its first message, so nothing in it could be read"
         else:
             import h5py
             with h5py.File(p, "r"):
@@ -6202,12 +6254,15 @@ def note_sensors(extra: dict, signals: Signals, by_clock: list, assumed: list, u
         if not sensor_cut(p):
             continue
         t = sensor_times(p)
-        zero = float(q[0]) if p in by_clock and q is not None and len(q) else (float(t[0]) if t is not None else 0.0)
-        span = (f"; its messages cover {round(t[0] - zero, 1) + 0.0:.1f} s to {t[-1] - zero:.1f} s of the footage"
-                if t is not None else "")
-        signals.issues.append({"kind": "sensor_file_cut", "what": f"{Path(p).name} is cut short, so only the "
-                                                                  f"messages written before the cut were read{span}",
-                               **({"t0_s": float(t[0] - zero), "t1_s": float(t[-1] - zero)} if t is not None else {})})
+        issue = {"kind": "sensor_file_cut", "what": f"{Path(p).name} is cut short, so only the messages written "
+                                                    "before the cut were read"}
+        if t is not None:
+            # the span its messages cover, in seconds of the footage: a message before the first frame starts it at 0
+            zero = float(q[0]) if p in by_clock and q is not None and len(q) else float(t[0])
+            t0, t1 = max(float(t[0]) - zero, 0.0), max(float(t[-1]) - zero, 0.0)
+            issue.update(t0_s=t0, t1_s=t1, what=issue["what"] + f"; its messages cover {t0:.1f} s to {t1:.1f} s of "
+                                                                 "the footage")
+        signals.issues.append(issue)
     extra.setdefault("source", {})["sensors"] = [Path(p).name for p in files]
     how = {Path(p).name: "placed by its own clock" for p in by_clock}
     how.update({Path(p).name: "placed from both starts" for p in assumed})

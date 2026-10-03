@@ -46,13 +46,13 @@ def _issues(x, kind: str) -> list[dict]:
 
 # ---------------------------------------------------------------- a sensor MCAP cut short
 
-def _arm_mcap(path: Path, seconds: float = 4.0, hz: float = 100.0) -> None:
+def _arm_mcap(path: Path, seconds: float = 4.0, hz: float = 100.0, topic: str = "/yam_left/joint_state") -> None:
     from mcap.writer import Writer
     with open(path, "wb") as fh:
         w = Writer(fh, chunk_size=2048)
         w.start()
         sid = w.register_schema(name="arm", encoding="jsonschema", data=b"{}")
-        ch = w.register_channel(topic="/yam_left/joint_state", message_encoding="json", schema_id=sid)
+        ch = w.register_channel(topic=topic, message_encoding="json", schema_id=sid)
         for i in range(int(seconds * hz)):
             t = int((T0 + i / hz) * 1e9)
             msg = {"joint_pos": [0.01 * i] * 6, "gripper_pos": [0.5]}
@@ -92,6 +92,83 @@ def test_a_sensor_file_that_cannot_be_opened_is_not_said_to_have_no_time(tmp_pat
     p.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\0" * 64)
     _, _, unplaced = f.split_sensors({"state": [p], "state_shared": []}, T0 + np.arange(30) / 30.0, True)
     assert unplaced and "could not be opened" in unplaced[0][1]
+
+
+def test_a_cut_sensor_files_span_reads_the_same_in_its_numbers_and_its_words(tmp_path):
+    p = tmp_path / "yam_left.mcap"
+    _arm_mcap(p)
+    b = p.read_bytes()
+    p.write_bytes(b[: len(b) // 2])
+    q = T0 + 0.007 + np.arange(120) / 30.0          # the footage starts 7 ms after the file's first message
+    by_clock, assumed, unplaced = f.split_sensors({"state": [p], "state_shared": []}, q, True)
+    sig = f.Signals()
+    f.note_sensors({}, sig, by_clock, assumed, unplaced, q=q)
+    cut = _issues(sig, "sensor_file_cut")[0]
+    assert cut["t0_s"] == 0.0
+    assert f"cover {cut['t0_s']:.1f} s to {cut['t1_s']:.1f} s" in cut["what"]
+
+
+def test_a_cut_sensor_file_is_scanned_once(tmp_path, monkeypatch):
+    p = tmp_path / "yam_left.mcap"
+    _arm_mcap(p)
+    b = p.read_bytes()
+    p.write_bytes(b[: len(b) // 2])
+    scans, scan = [], f._mcap_stream
+    monkeypatch.setattr(f, "_mcap_stream", lambda path, topics=None: scans.append(path) or scan(path, topics))
+    q = T0 + np.arange(120) / 30.0
+    by_clock, assumed, unplaced = f.split_sensors({"state": [p], "state_shared": []}, q, True)
+    f.note_sensors({}, f.Signals(), by_clock, assumed, unplaced, q=q)
+    assert len(scans) == 1
+
+
+def _two_arms(folder: Path, cut_left: float) -> list[Path]:
+    """yam_left.mcap and yam_right.mcap, 4 s of each arm's six joints and gripper at 100 Hz, the left file cut to
+    cut_left of its bytes."""
+    out = []
+    for side in ("left", "right"):
+        p = folder / f"yam_{side}.mcap"
+        _arm_mcap(p, topic=f"/yam_{side}/joint_state")
+        out.append(p)
+    b = out[0].read_bytes()
+    out[0].write_bytes(b[: int(len(b) * cut_left)])
+    return out
+
+
+def test_an_arm_in_a_cut_sensor_file_is_read_up_to_its_cut(tmp_path):
+    q = T0 + np.arange(60) / 30.0                   # 2 s of footage, inside what the cut left file still holds
+    streams = f.mcap_joint_streams(_two_arms(tmp_path, 0.75), q)
+    assert {"/yam_left/joint_state", "/yam_right/joint_state"} <= set(streams)
+    state, _, note = f.joint_state(streams, q)
+    assert state is not None and state.shape == (60, 14) and note is None
+
+
+def test_an_arm_cut_short_inside_the_footage_is_named_in_the_state_note(tmp_path):
+    q = T0 + np.arange(120) / 30.0                  # 4 s of footage, the left arm's file cut about half way
+    state, _, note = f.joint_state(f.mcap_joint_streams(_two_arms(tmp_path, 0.5), q), q)
+    assert state is None and "/yam_left/joint_state" in note and "does not cover" in note
+
+
+def test_an_arm_file_that_cannot_be_read_is_named_in_the_state_note(tmp_path):
+    import json
+    from test_formats import recorder_folder
+    d = recorder_folder(tmp_path / "upload")
+    left = d / "yam_left.mcap"
+    left.write_bytes(left.read_bytes()[:64])        # cut before its first message
+    rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
+    ctx = json.loads((tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert "yam_left.mcap" in (ctx.get("state_note") or "")
+
+
+def test_a_third_arm_file_that_cannot_be_read_puts_no_camera_on_a_third_arm(tmp_path):
+    import json
+    from test_formats import recorder_folder
+    d = recorder_folder(tmp_path / "upload", third_arm=True)
+    arm = d / "yam_camera.mcap"
+    arm.write_bytes(arm.read_bytes()[:64])
+    rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "out" / "eps", "t", 900)
+    ctx = json.loads((tmp_path / "out" / "eps" / rep["episodes"][0]["episode_id"] / "context.json").read_text())
+    assert "yam_camera.mcap" in ctx["state_note"] and "third arm" not in ctx["state_note"]
+    assert "third arm" not in (ctx["cameras"]["exo"].get("desc") or "")
 
 
 # ---------------------------------------------------------------- a damaged archive
