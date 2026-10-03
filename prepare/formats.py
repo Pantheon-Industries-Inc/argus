@@ -1065,9 +1065,13 @@ def episode_notes(item: dict) -> dict:
     got = {p: o for p, (_, o) in zip(files, notes)}
 
     def task_of(p: Path | None) -> str | None:
-        ext, o = (p.suffix.lower() if p else ""), got.get(p)
-        return instruction_from(o) if ext == ".json" and isinstance(o, dict) or ext == ".txt" and isinstance(o, str) \
-            else None
+        # a JSON object's task keys, or a plain text file's one line
+        if p is None:
+            return None
+        o, ext = got.get(p), p.suffix.lower()
+        if (ext == ".json" and isinstance(o, dict)) or (ext == ".txt" and isinstance(o, str)):
+            return instruction_from(o)
+        return None
 
     def own_note(f: Path, ext: str) -> Path | None:
         return next((p for p in files if p.parent == f.parent and p.name.lower() == (f.stem + ext).lower()), None)
@@ -1076,13 +1080,15 @@ def episode_notes(item: dict) -> dict:
     for i, p in enumerate(files):
         if p in owned:
             continue                      # a video's own note, weighed below
-        rank = task_rank(p, p in named)
+        rank = task_rank(p, named=p in named)
         if rank is not None and (x := task_of(p)):
             sources.append((rank, i, x))
     if one_name:
         # a video's own note gives the episode's task when every video's own note gives the same one
-        owns = [next(((rank, t) for x, rank in ((".json", 0), (".txt", 3))
-                      if (t := task_of(own_note(f, x)))), None) for f in fs]
+        owns = []
+        for f in fs:
+            own = [q for q in (own_note(f, ".json"), own_note(f, ".txt")) if task_of(q)]
+            owns.append((task_rank(own[0], own=True), task_of(own[0])) if own else None)
         if all(owns) and len({t for _, t in owns}) == 1:
             sources.append((max(rank for rank, _ in owns), len(files), owns[0][1]))
     instr = min(sources)[2] if sources else None
@@ -1185,13 +1191,17 @@ def task_key(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-def task_rank(p: Path, named_for_episode: bool) -> int | None:
+def task_rank(p: Path, named: bool = False, own: bool = False) -> int | None:
     """Where a note file of an episode stands among the sources of its task (episode_notes, the lower the first): a
-    JSON note's task keys 0, a task file (TASK_NOTE_NAMES) 1, the text file named for the episode 2; a video's own .txt
-    is 3, weighed apart. None for a note that never gives the task (notes.txt, a .jsonl or .md)."""
-    if p.suffix.lower() == ".json":
+    JSON note's task keys 0 (a video's own .json too), a task file (TASK_NOTE_NAMES) 1, the text file named for the
+    episode (named) 2, and a video's own .txt (own) 3. None for a note that never gives the task (notes.txt, a .jsonl
+    or .md)."""
+    ext = p.suffix.lower()
+    if ext == ".json":
         return 0
-    if named_for_episode:
+    if own:
+        return 3 if ext == ".txt" else None
+    if named:
         return 2
     return 1 if p.name.lower() in TASK_NOTE_NAMES else None
 
