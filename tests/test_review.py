@@ -230,7 +230,8 @@ def test_a_camera_clip_a_frame_short_keeps_the_episode_and_is_a_data_issue(tmp_p
     texts = [c["text"] for c in req["content"] if c.get("type") == "text"]
     last = [t for t in texts if t.startswith("=== detail view, last frame")]
     assert len(last) == 1 and "| camera top ===" in last[0], last
-    assert ("Left's video ends before the episode does, so it has no frame at 0.97 s. Its cells there are empty"
+    assert ("Left's video ends before the episode does, so it has no frame at 0.97 s. Its cells at those times are "
+            "empty"
             in req["prompt"])
     # a rerun keeps the clip as cut and the record as it was
     assert _clips(eps, out).returncode == 0

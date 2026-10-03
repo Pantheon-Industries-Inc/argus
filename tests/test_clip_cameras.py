@@ -130,7 +130,9 @@ def test_a_main_camera_taken_out_moves_the_state_and_signals_onto_the_new_main_c
     # missing values by the capture checks
     assert ctx["state_span"] == [0, 45]
     partial = [x for x in ctx["reader_issues"] if x["kind"] == "state_partial"]
-    assert len(partial) == 1 and "0.50 s to 1.97 s" in partial[0]["what"]
+    assert len(partial) == 1 and partial[0]["what"] == (
+        "The robot state was recorded with the main camera, which could not be decoded. The cameras left overlap it "
+        "only from 0.50 s to 1.97 s, so the state is used for that part of the episode only.")
     assert not [f for f in ctx["capture_qc"]["flags"] if f["check"] == "nonfinite_signal"]
     e = me.load(ep)
     pl = me.plan(e)
@@ -215,12 +217,19 @@ def test_a_main_camera_taken_out_of_a_shared_frame_index_keeps_the_state(tmp_pat
 def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_frame(tmp_path):
     """The left wrist camera started 0.5 s before the top camera, which does not decode. The episode's clock now
     starts at the left camera's first frame, the earliest of the cameras left: frame times, clips and the length
-    agree, no instant before 0 is sampled, and the state covers the stretch the top camera filmed."""
+    agree, no instant before 0 is sampled, and the state covers the stretch the top camera filmed. A reader issue
+    already recorded on the old clock moves with it."""
     eps, ep = _recording(tmp_path, left_start=-0.5)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["reader_issues"] = [{"kind": "signal_gap", "signal": "force", "what": "The force signal stops.",
+                             "t0_s": 1.0, "t1_s": 1.2}]
+    (ep / "context.json").write_text(json.dumps(ctx))
     (eps.parent / "up" / "top.mp4").write_bytes(b"not a video at all" * 50)
     out = tmp_path / "clips"
     assert _clips(eps, out).returncode == 0
     ctx = json.loads((ep / "context.json").read_text())
+    gap = [x for x in ctx["reader_issues"] if x["kind"] == "signal_gap"]
+    assert len(gap) == 1 and (gap[0]["t0_s"], gap[0]["t1_s"]) == (1.5, 1.7)
     assert ctx["clock_zero_s"] == 0.0 and ctx["clock_start_s"] == pytest.approx(-0.5)
     assert ctx["duration_s"] == 2.0 and ctx["state_span"] == [15, 60]
     with np.load(ep / "times.npz") as z:
@@ -232,6 +241,26 @@ def test_a_new_main_camera_that_started_earlier_moves_the_clock_to_its_first_fra
     assert _clip_timing(out / "wrist_left" / f"{ep.name}.mp4")[1] == pytest.approx(0.0, abs=0.02)
     assert _clip_timing(out / "wrist_right" / f"{ep.name}.mp4")[1] == pytest.approx(0.5, abs=0.02)
     assert clips.clip_frames(out / "wrist_left" / f"{ep.name}.mp4") == 60
+
+
+def test_a_labelled_episode_keeps_its_clock_and_says_the_camera_starts_before_it(tmp_path):
+    """The same episode, already labelled (its run's record is in run/out beside the episodes folder, as python -m
+    review and Data Review lay a job out): the labels are on the episode's clock, so the clock does not move. The
+    camera that started before it is cut from the clock's start, and a reader issue says how much of it is not
+    shown."""
+    eps, ep = _recording(tmp_path, left_start=-0.5)
+    (tmp_path / "run" / "out").mkdir(parents=True)
+    (tmp_path / "run" / "out" / f"{ep.name}.json").write_text("{}")
+    (eps.parent / "up" / "top.mp4").write_bytes(b"not a video at all" * 50)
+    out = tmp_path / "clips"
+    assert _clips(eps, out).returncode == 0
+    ctx = json.loads((ep / "context.json").read_text())
+    with np.load(ep / "times.npz") as z:
+        assert z["left"][0] == pytest.approx(-0.5) and z["right"][0] == pytest.approx(0.0)
+    assert ctx["clock_start_s"] == pytest.approx(0.0) and ctx["state_span"] == [15, 60]
+    (off,) = [x for x in ctx["reader_issues"] if x["kind"] == "camera_offset"]
+    assert off["camera"] == "left" and "0.50 s before" in off["what"]
+    assert clips.clip_frames(out / "wrist_left" / f"{ep.name}.mp4") == 45
 
 
 def test_every_camera_a_frame_short_is_labelled_to_the_last_frame_any_camera_has(tmp_path):
@@ -257,7 +286,7 @@ def test_two_cameras_short_are_named_together(tmp_path):
         _video(Path(src[v]["packed"]), 29)
     prompt = me.build_request(ep)["prompt"]
     assert "Left's video ends before the episode does, so it has no frame at 0.97 s; right's video ends" in prompt
-    assert "Their cells there are empty, and they are left out of a detail view there." in prompt
+    assert "Their cells at those times are empty, and they are left out of a detail view there." in prompt
 
 
 def test_a_camera_damaged_partway_leaves_only_its_own_cells_empty(tmp_path):
@@ -308,7 +337,8 @@ def test_a_missing_camera_file_raises_and_a_garbage_one_is_named_not_decodable(t
     left = Path(json.loads((ep / "sources.json").read_text())["left"]["packed"])
     left.write_bytes(b"not a video at all" * 50)
     req = me.build_request(ep)
-    assert "Left's video could not be decoded at any instant" in req["prompt"]
+    assert "Left's video could not be decoded at any instant. Its cells are all empty, and it is left out of "\
+        "every detail view." in req["prompt"]
     assert "ends before the episode" not in req["prompt"]
     assert [x["camera"] for x in req["decode_failed"]] == ["left"]
     left.unlink()

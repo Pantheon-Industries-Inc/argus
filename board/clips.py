@@ -482,7 +482,7 @@ def failed_reason(cams: dict, ep_dir: Path) -> str:
     return f"the {camera_label(view, _context(ep_dir))} video could not be decoded, so this episode was left out"
 
 
-def drop_cameras(ep_dir: Path, views) -> tuple[str | None, list[dict]]:
+def drop_cameras(ep_dir: Path, views, keep_clock: bool = False) -> tuple[str | None, list[dict]]:
     """Take cameras out of a prepared episode, out of sources.json, context.json's cameras and depth.json, so labelling
     and the board never decode them. Returns (the new main camera when the main camera went, else None; the reader
     issues the drop leaves).
@@ -496,7 +496,8 @@ def drop_cameras(ep_dir: Path, views) -> tuple[str | None, list[dict]]:
       - paired by time, with both cameras' capture times in times.npz: everything is moved onto its frames (reanchor);
       - paired by time, with no capture times left: nothing places the arrays on its frames, so the state and signals
         are marked unaligned (context.json state_unaligned, which label/episode.py never treats as aligned and the
-        checks that compare the state with the video do not assess) and a reader issue says why."""
+        checks that compare the state with the video do not assess) and a reader issue says why.
+    keep_clock: the episode is labelled already, so its clock never moves (reanchor)."""
     views = set(views)
     src = json.loads((ep_dir / "sources.json").read_text())
     ctx = _context(ep_dir)
@@ -524,7 +525,7 @@ def drop_cameras(ep_dir: Path, views) -> tuple[str | None, list[dict]]:
         if not paired:
             pass
         elif old_main in t and main in t and len(t[old_main]) and len(t[main]):
-            issues += reanchor(ep_dir, ctx, src, t, old_main, main, old_name)
+            issues += reanchor(ep_dir, ctx, src, t, old_main, main, old_name, keep_clock)
         else:
             for s in src.values():
                 s.pop("kmap", None)
@@ -539,11 +540,8 @@ def drop_cameras(ep_dir: Path, views) -> tuple[str | None, list[dict]]:
     return main, issues
 
 
-# the fields of context.json that hold times on the episode's clock, moved with it when it moves (reanchor)
-CLOCK_TIME_KEYS = {"annotation_subtasks": ("t0", "t1"), "contacts": ("start_s", "end_s", "peak_s")}
-
-
-def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, old_name: str) -> list[dict]:
+def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, old_name: str,
+             keep_clock: bool = False) -> list[dict]:
     """Move an episode from the frames of its main camera old onto those of new, by capture time (t, times.npz), and
     return the reader issues it leaves.
 
@@ -554,12 +552,14 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
     each depth stream is paired to new by nearest time, as the reader pairs them (prepare/formats.py nearest).
 
     The episode's clock then starts at the earliest first frame of the cameras left (a camera that started before the
-    old main one would otherwise sit at negative times): times.npz and depth_times.npz, clock_start_s and the
-    context's own times (CLOCK_TIME_KEYS) move with it, clock_zero_s is 0, from which start_offsets times every clip,
-    and the frame count, rate and length are new's."""
+    old main one would otherwise sit at negative times): times.npz and depth_times.npz, clock_start_s and every timed
+    field of the context (prepare/formats.py CLOCK_TIME_KEYS) move with it, clock_zero_s holds the times.npz value of
+    the clock's start, from which start_offsets times every clip, and the frame count, rate and length are new's. An
+    episode labelled already (keep_clock) keeps its clock, since its labels are on it: a camera that started before it
+    is cut from the clock's start, and a reader issue says how much of it is not shown."""
     import numpy as np
 
-    from prepare.formats import nearest
+    from prepare.formats import CLOCK_TIME_KEYS, nearest
     t_old, t_new = t[old], t[new]
     step_old = float(np.median(np.diff(t_old))) if len(t_old) > 1 else 1.0 / float(ctx.get("fps") or 30.0)
     idx = nearest(t_old, t_new)
@@ -599,8 +599,12 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
                 np.save(kp, nearest(np.asarray(td, dtype=np.float64), t_new))
             elif kp.exists():
                 np.save(kp, np.load(kp)[idx])            # no depth times: the depth frame of the nearest old frame
-    # the clock: zero at the earliest first frame of the cameras left
-    shift = min(float(t[v][0]) for v in src if v in t and len(t[v]))
+    # the clock: its start is the times.npz value zero (clock_zero_s, else the old main camera's first frame), moved
+    # to the earliest first frame of the cameras left unless the episode is labelled already
+    zero = float(ctx.get("clock_zero_s", t_old[0]))
+    first = {v: float(t[v][0]) for v in src if v in t and len(t[v])}
+    issues = []
+    shift = 0.0 if keep_clock else min(first.values()) - zero
     if shift:
         moved = {k: (a if k.endswith("_pts") else a - shift) for k, a in t.items()}
         np.savez(ep_dir / (ctx.get("real_times") or "times.npz"), **moved)
@@ -614,12 +618,17 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
                 for f in fields:
                     if isinstance(x, dict) and isinstance(x.get(f), (int, float)):
                         x[f] = round(float(x[f]) - shift, 3)
-    t_new = t_new - shift
-    ctx["clock_zero_s"] = 0.0
+        t_new = t_new - shift
+    half = step_old / 2
+    for v, f0 in first.items():
+        if keep_clock and f0 < zero - half:
+            issues.append({"kind": "camera_offset", "camera": v, "what": f"The {camera_label(v, ctx)} video starts "
+                           f"{zero - f0:.2f} s before the episode's clock, which its labels were made on, so that part "
+                           "of it is not shown."})
+    ctx["clock_zero_s"] = zero
     step = float(np.median(np.diff(t_new))) if len(t_new) > 1 else step_old
     ctx.update(n_state_frames=int(len(t_new)), fps=round(1.0 / step, 3),
-               duration_s=round(float(t_new[-1]) + step, 3))
-    issues = []
+               duration_s=round(float(t_new[-1]) - zero + step, 3))
     if ctx.get("state_kind") in (None, "none") and not ctx.get("signals"):
         return issues                            # nothing recorded on the frames to place
     if not near.any():
@@ -632,9 +641,9 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
     a, b = int(np.flatnonzero(near)[0]), int(np.flatnonzero(near)[-1]) + 1
     if (a, b) != (0, len(t_new)):
         ctx["state_span"] = [a, b]
-        issues.append({"kind": "state_partial", "what": f"The recorded state covers only {t_new[a]:.2f} s to "
-                       f"{t_new[b - 1]:.2f} s of the episode, the stretch the {old_name} it was recorded on, which "
-                       "could not be decoded, filmed with the cameras left."})
+        issues.append({"kind": "state_partial", "what": f"The robot state was recorded with the {old_name}, which "
+                       f"could not be decoded. The cameras left overlap it only from {t_new[a] - zero:.2f} s to "
+                       f"{t_new[b - 1] - zero:.2f} s, so the state is used for that part of the episode only."})
     return issues
 
 
@@ -676,7 +685,7 @@ CLIP_FRAME_COUNT = "clip_frame_count"            # a camera's clip has fewer fra
 CAMERA_NOT_DECODABLE = "camera_not_decodable"    # a camera's video does not decode; the episode goes on without it
 
 
-def record_cameras(ep_dir: Path, short: dict, broken: dict, cut) -> str | None:
+def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: bool = False) -> str | None:
     """Record what board clips found wrong with an episode's cameras in its context.json, in reader_issues, the list
     of problems an episode was kept and flagged with ({"kind", "what", "camera"}: a short tag, one plain sentence a
     reviewer reads on the board, the camera's view). short is {camera: extract_one's counts} for the clips that came
@@ -685,28 +694,32 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut) -> str | None:
     are added), and cut the cameras cut on this run. Other entries are never touched; a camera cut again on a later
     run is recorded as it came out then, and one not cut again keeps its entry. board/build.py copies the list into
     the episode's dataset_checks, where each entry raises a data issue (board/families.py), so every board build shows
-    it. Returns the new main camera when the main camera was taken out, else None."""
+    it. The cameras are taken out first, which can move the episode's clock and every time in the context with it,
+    and the context's reader issues are read again after that. keep_clock: the episode is labelled already
+    (drop_cameras). Returns the new main camera when the main camera was taken out, else None."""
     ctx = _context(ep_dir)
     redo = set(cut) | set(broken)
-    issues = [x for x in ctx.get("reader_issues") or []
-              if not (isinstance(x, dict) and (x.get("kind") == CLIP_FRAME_COUNT and x.get("camera") in redo
-                                               or x.get("kind") == CAMERA_NOT_DECODABLE and x.get("camera") in broken))]
     order = lambda v: (CAMS + (v,)).index(v)
+    own = []                                   # named before a camera's entry leaves the context
     for v in sorted(broken, key=order):
-        issues.append({"kind": CAMERA_NOT_DECODABLE, "camera": v, "what": f"The {camera_label(v, ctx)} video could not "
+        own.append({"kind": CAMERA_NOT_DECODABLE, "camera": v, "what": f"The {camera_label(v, ctx)} video could not "
                                                                           "be decoded, so this episode is shown and "
                                                                           "labelled without it."})
     for v in sorted(short, key=order):
         n = short[v]
-        issues.append({"kind": CLIP_FRAME_COUNT, "camera": v, "what": f"The {camera_label(v, ctx)} video has "
+        own.append({"kind": CLIP_FRAME_COUNT, "camera": v, "what": f"The {camera_label(v, ctx)} video has "
                                                                       f"{n['clip_frames']} frames where the episode "
                                                                       f"has {n['episode_frames']}."})
-    main = None
+    main, more = None, []
     if broken:
-        main, more = drop_cameras(ep_dir, broken)
-        kinds = {x.get("kind") for x in issues if isinstance(x, dict)}
-        issues += [x for x in more if x["kind"] not in kinds]
+        main, more = drop_cameras(ep_dir, broken, keep_clock)
         ctx = _context(ep_dir)
+    issues = [x for x in ctx.get("reader_issues") or []
+              if not (isinstance(x, dict) and (x.get("kind") == CLIP_FRAME_COUNT and x.get("camera") in redo
+                                               or x.get("kind") == CAMERA_NOT_DECODABLE and x.get("camera") in broken))]
+    issues += own
+    have = {(x.get("kind"), x.get("camera")) for x in issues if isinstance(x, dict)}
+    issues += [x for x in more if (x["kind"], x.get("camera")) not in have]
     if issues != (ctx.get("reader_issues") or []):
         if issues:
             ctx["reader_issues"] = issues
@@ -745,6 +758,12 @@ def note_camera_problems(rep: dict, eps: Path) -> None:
                 (e.get("cameras") or {}).pop(x.get("camera"), None)
 
 
+def labelled(ep_dir: Path, labels: Path) -> bool:
+    """Whether a labelling run has a label of this episode (its record, or a part's of a long recording), whose times
+    are on the episode's clock."""
+    return (labels / f"{ep_dir.name}.json").exists() or any(labels.glob(f"{ep_dir.name}__p*.json"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="python -m board clips", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -755,9 +774,13 @@ def main() -> int:
     ap.add_argument("--clip-threads", type=int, default=2, help="ffmpeg threads per clip")
     ap.add_argument("--force", action="store_true", help="re-cut clips that already exist")
     ap.add_argument("--name-prefix", default="", help="the dataset's file_prefix in the board manifest, if any")
+    ap.add_argument("--labels", type=Path, default=None,
+                    help="a labelling run's out folder; an episode with a label there keeps its clock (default: "
+                         "run/out beside the episodes folder, as python -m review and Data Review lay a job out)")
     args = ap.parse_args()
 
     ffmpeg = find_ffmpeg()
+    labels = args.labels or args.episodes.parent / "run" / "out"
     if args.only:
         want = {x.strip() for x in args.only.split(",") if x.strip()}
         ep_dirs = [args.episodes / e for e in sorted(want) if (args.episodes / e).is_dir()]
@@ -800,7 +823,8 @@ def main() -> int:
         if cams and cams <= set(broken.get(d.name, {})):
             failed[d.name] = broken[d.name]
             continue
-        main = record_cameras(d, short.get(d.name, {}), broken.get(d.name, {}), cut.get(d.name, set()))
+        main = record_cameras(d, short.get(d.name, {}), broken.get(d.name, {}), cut.get(d.name, set()),
+                              keep_clock=labelled(d, labels))
         if main:
             # every camera left is cut again: the camera that is main now was cut as a side camera and is cut at the
             # main camera's size, and the episode's clock may have moved to the earliest camera left (reanchor), so

@@ -846,7 +846,7 @@ def _coverage_note(ep: dict, pl: dict) -> str:
     decoded at (all of them for a file none of whose frames decodes). One camera can have more than one of these, and
     each is said. When every camera's file ends before the episode does, the last instant is the last frame they have
     (frames, ep["footage_end"]), which is said too."""
-    gaps, ended, broken = [], [], []
+    gaps, ended, broken, never = [], [], [], []
     at = lambda ks: ", ".join(f"{frame_time(ep, k):.2f} s" for k in sorted(ks))
     for v in views(ep):
         if all(recording_at(ep, v, k) for k in pl["ks"]):
@@ -857,7 +857,7 @@ def _coverage_note(ep: dict, pl: dict) -> str:
             gaps.append(f"{name} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
         bad = set((ep.get("decode_failed") or {}).get(v) or ())
         if v in (ep.get("undecodable") or ()):
-            broken.append(f"{name}'s video could not be decoded at any instant")
+            never.append(f"{name}'s video could not be decoded at any instant")
         elif bad:
             broken.append(f"{name}'s video could not be decoded at {at(bad)}")
         ends = {k for k in (ep.get("no_frame") or {}).get(v, ()) if k not in bad and _in_span(ep, v, k)}
@@ -866,8 +866,9 @@ def _coverage_note(ep: dict, pl: dict) -> str:
     out = ""
     span_tail = ("so {its} cells are empty at the instants outside that time, and {it} {is_} left out of a detail view "
                  "there.")
-    gone_tail = "{Its} cells there are empty, and {it} {is_} left out of a detail view there."
-    for parts, tail in ((gaps, span_tail), (ended + broken, gone_tail)):
+    gone_tail = "{Its} cells at those times are empty, and {it} {is_} left out of a detail view there."
+    never_tail = "{Its} cells are all empty, and {it} {is_} left out of every detail view."
+    for parts, tail in ((gaps, span_tail), (ended + broken, gone_tail), (never, never_tail)):
         if not parts:
             continue
         one = len(parts) == 1
