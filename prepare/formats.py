@@ -5404,11 +5404,20 @@ def plan(root: Path, grouping: dict | None = None) -> tuple[dict, list[dict]]:
                 det["version"] = part["version"]
     sensors = [Path(p) for p in det.get("state") or []]
     if sensors:
-        taken = {Path(p) for it in items for p in (it.get("state") or []) + (it.get("state_shared") or [])}
-        n = sum(1 for p in sensors if p in taken)
+        own = {Path(p) for it in items for p in it.get("state") or []}
+        shared = {Path(p) for it in items for p in it.get("state_shared") or []} - own
+        taken = own | shared
+        n = sum(1 for p in sensors if p in own)
         if n:
             det["used"].append(f"{n} sensor file{'s' if n != 1 else ''} with no camera (MCAP or HDF5), read with the "
-                               f"episodes of {'their' if n != 1 else 'its'} folder.")
+                               f"episode of {'their' if n != 1 else 'its'} folder or of the take "
+                               f"{'their names give' if n != 1 else 'its name gives'}.")
+        if shared:
+            det["used"].append(f"{_and_words(sorted(p.relative_to(root).as_posix() for p in shared))} "
+                               f"{'sit' if len(shared) != 1 else 'sits'} in a folder of several episodes and "
+                               f"{'name' if len(shared) != 1 else 'names'} none of their takes, so "
+                               f"{'each is' if len(shared) != 1 else 'it is'} placed by its own clock on the episodes "
+                               "whose videos carry capture times, and listed on the others.")
         lost = [p for p in sensors if p not in taken]
         if lost:
             det["missing"].append(f"{_and_words([p.relative_to(root).as_posix() for p in lost])} "
