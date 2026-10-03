@@ -479,3 +479,34 @@ def test_a_camera_the_model_is_not_shown_moves_with_the_clock(tmp_path):
     (d / "context.json").write_text(json.dumps(ctx))
     (job,) = [j for j in clips.episode_jobs(d, tmp_path / "clips", True) if j[-1] == "unshown1"]
     assert job[6] == 3.0
+
+
+def test_board_clips_cuts_a_camera_the_model_is_not_shown_again_when_the_main_camera_goes(tmp_path):
+    """board clips on an episode whose main camera does not decode: the clock moves to the left camera, which started
+    2 s later, so a camera the model is not shown that started 5 s in starts 3 s in on the new clock, and its clip,
+    cut first at 5 s, is cut again at 3 s."""
+    from board.hands import probe_pts
+    eps = tmp_path / "episodes"
+    ep = eps / "episode_000000"
+    ep.mkdir(parents=True)
+    (ep / "top.mp4").write_bytes(b"not a video" * 50)
+    _video(ep / "left.mp4", 60)
+    _video(ep / "ir.mp4", 45)
+    np.savez(ep / "times.npz", exo=np.arange(60) / 30.0, left=2.0 + np.arange(60) / 30.0)
+    np.save(ep / "kmap_left.npy", np.zeros(60, dtype=np.int64))     # paired by time: its frame nearest each top frame
+    (ep / "sources.json").write_text(json.dumps({
+        "exo": {"packed": str(ep / "top.mp4"), "base_s": 0.0, "n_frames": 60},
+        "left": {"packed": str(ep / "left.mp4"), "base_s": 0.0, "n_frames": 60, "kmap": "kmap_left.npy"}}))
+    (ep / "context.json").write_text(json.dumps({
+        "profile": "teleop_arms", "state_kind": "none", "fps": 30, "n_state_frames": 60, "real_times": "times.npz",
+        "cameras": {"exo": {"name": "top"}, "left": {"name": "wrist_left"}},
+        "unshown_cameras": [{"name": "cam_ir", "why": "an infrared video", "packed": str(ep / "ir.mp4"),
+                             "base_s": 0.0, "n_frames": 45, "start_s": 5.0, "fps": 30.0}]}))
+    r = _clips(eps, tmp_path / "clips")
+    assert r.returncode == 0, r.stderr
+    ctx = json.loads((ep / "context.json").read_text())
+    assert list(json.loads((ep / "sources.json").read_text())) == ["left"]          # the main camera is out
+    assert ctx["unshown_cameras"][0]["start_s"] == 3.0
+    _, _, tb, pts = probe_pts(tmp_path / "clips" / "unshown1" / "episode_000000.mp4")
+    assert len(pts) == 45 and abs(float(pts[0] * tb) - 3.0) < 0.02
+    assert not [x for x in ctx.get("reader_issues") or [] if x.get("kind") == "unshown_camera_not_decodable"]
