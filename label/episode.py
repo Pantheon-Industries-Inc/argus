@@ -1435,14 +1435,14 @@ UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
 #   unreadable     a file that holds the state, or may hold it, could not be read, or was damaged before any of its
 #                  messages; its content may be unknown, so the line says the file may hold it
 #   short          an arm's state does not cover the footage: it starts late, stops early or stops inside it
-#   assumed_clock  the state's channels are only on a clock placed on the footage from both starts, an alignment that
-#                  is assumed
+#   assumed_clock  a contributing state channel uses a clock placed on the footage from both starts; other channels
+#                  may share the cameras' clock
 STATE_WHY = {
     "layout": None,
     "not_recorded": "as the recording holds none",
     "unreadable": "as a sensor file that may hold it could not be read",
     "short": "as it does not cover the footage",
-    "assumed_clock": "as it is recorded only on a clock placed from both starts, not shared with the cameras",
+    "assumed_clock": "as a contributing state channel uses a clock placed from both starts, not shared with the cameras",
 }
 
 
@@ -1481,6 +1481,12 @@ def _no_state_text(ep: dict, pl: dict) -> str:
                  and np.isnan(np.asarray(a[:pl["n"]], dtype=np.float64)).all(axis=1).any()]
         note = (ctx.get("state_note") or "").strip()
         why = ctx.get("state_why")
+        # An absent designated state field does not prove absence in another recorded observation layout. Inspect
+        # preserved values even when their readout is constant or outside the table budget; commands are not state.
+        if why == "not_recorded" and any(np.shape(a)[1] > 1 and sg.names_joints_or_state(nm)
+                                          and np.isfinite(a[:pl["n"]]).any()
+                                          for nm, a in ep["signals"].items()):
+            why = "layout"
         if why == "layout" or why is None and not (short and note):
             head = f"no {n['actor']} state in the layout our checks read."
         else:

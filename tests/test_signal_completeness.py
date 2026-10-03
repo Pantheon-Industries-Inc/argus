@@ -82,3 +82,30 @@ def test_board_signals_use_anchor_frames_even_when_the_only_signal_has_another_l
     sig = doc["signals"][0]
     assert sig["constant"] and sig["value"] == [1.]
     assert sig.get("no_reading_frames", 0) == (1 if rows == 2 else 0)
+
+
+@pytest.mark.parametrize("rows", [np.ones((3, 6)), np.arange(18).reshape(3, 6)])
+def test_missing_designated_state_does_not_deny_preserved_joint_observations(rows):
+    ep = _episode(rows)
+    ep["signals"] = {"observation.joint_positions": rows}
+    ep["context"].update(state_why="not_recorded", state_note="no observation.state field was recorded")
+    pl = {"n": 3, "ks": [0, 1, 2], "spans": [], "touch": frozenset()}
+    text = me._no_state_text(ep, pl)
+    assert "the recording holds none" not in text
+    assert "no arm state in the layout our checks read" in text
+
+
+def test_a_command_channel_does_not_disprove_absent_observed_state():
+    ep = _episode(np.ones((3, 6)))
+    ep["signals"] = {"observation.joint_command": ep["signals"]["qpos"]}
+    ep["context"].update(state_why="not_recorded")
+    assert "as the recording holds none" in me._no_state_text(ep,
+        {"n": 3, "ks": [0], "spans": [], "touch": frozenset()})
+
+
+def test_an_assumed_contributor_clock_does_not_claim_all_state_has_that_clock():
+    ep = _episode(np.arange(18).reshape(3, 6))
+    ep["context"].update(state_why="assumed_clock", state_note="the left follower uses an assumed start")
+    text = me._no_state_text(ep, {"n": 3, "ks": [0], "spans": [], "touch": frozenset()})
+    assert "recorded only on a clock" not in text
+    assert "a contributing state channel" in text and "left follower uses an assumed start" in text
