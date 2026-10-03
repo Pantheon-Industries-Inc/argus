@@ -199,6 +199,20 @@ def test_state_value_names_settle_six_joints_and_a_gripper_against_seven_joints_
         (7, "teleop_arms", None, "joints"), (14, "teleop_arms", None, "joints"),
         (7, "handheld_gripper", None, "ee_pose"),
         (16, "teleop_arms", [f"j{i}" for i in range(16)], "none"), (14, "ego_head", j("left") + j("right"), "none"),
+        # joints named for the axis they turn about are joints, never a pose
+        (7, "teleop_arms", ["shoulder_yaw", "shoulder_pitch", "elbow_pitch", "forearm_roll", "wrist_pitch",
+                            "wrist_roll", "gripper"], "joints"),
+        (7, "teleop_arms", ["waist_yaw", "waist_pitch", "waist_roll", "shoulder_pitch", "shoulder_roll",
+                            "elbow_pitch", "gripper"], "joints"),
+        (14, "teleop_arms", [f"{s}_{n}" for s in ("left", "right") for n in ("shoulder_pitch", "shoulder_roll",
+                             "shoulder_yaw", "elbow_pitch", "wrist_roll", "wrist_pitch", "gripper")], "joints"),
+        (7, "handheld_gripper", ["ee_x", "ee_y", "ee_z", "rx", "ry", "rz", "gripper"], "ee_pose"),
+        (7, "handheld_gripper", ["ee.pos.x", "ee.pos.y", "ee.pos.z", "ee.rot.x", "ee.rot.y", "ee.rot.z", "jaw"],
+         "ee_pose"),
+        # a quaternion under any separator, and quat only as a word of its own
+        (7, "handheld_gripper", ["x", "y", "z", "ee-qx", "ee-qy", "ee-qz", "ee-qw"], "none"),
+        (7, "handheld_gripper", ["x", "y", "z", "q_x", "q_y", "q_z", "q_w"], "none"),
+        (7, "teleop_arms", [f"squat_motor_{i}" for i in range(6)] + ["gripper"], "joints"),
     ]
     for dims, rig, names, want in cases:
         kind, note = formats.state_layout(dims, rig, names)
@@ -215,6 +229,36 @@ def test_a_state_without_informative_names_reads_as_it_always_did():
             want = formats.state_layout(dims, rig)
             assert formats.state_layout(dims, rig, None) == want
             assert formats.state_layout(dims, rig, [f"motor_{i}" for i in range(dims)]) == want
+
+
+POSE_NAMES = ["x", "y", "z", "roll", "pitch", "yaw", "gripper"]
+
+
+def test_a_lerobot_state_named_as_a_pose_is_read_as_a_pose_on_an_arm_rig(tmp_path):
+    """A teleop dataset that stores its arm's end effector as x, y, z, roll, pitch, yaw and a gripper in
+    observation.state (lerobot_franka_finger_tactile) had it read as six joints; its names make it a pose, and seven
+    joints named with no gripper make no state at all."""
+    for names, want in ((POSE_NAMES, "ee_pose"), ([f"fr3_joint{i}" for i in range(1, 8)], "none")):
+        root = tmp_path / want / "named"
+        _lerobot_v21(root, dims=7)
+        info = json.loads((root / "meta" / "info.json").read_text())
+        info["features"]["observation.state"]["names"] = names
+        (root / "meta" / "info.json").write_text(json.dumps(info))
+        out = tmp_path / want / "episodes"
+        rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
+        ctx = json.loads((out / "episode_000000" / "context.json").read_text())
+        assert rc == 0 and ctx["state_kind"] == want, (names, ctx["state_kind"])
+        assert (out / "episode_000000" / "state.npz").exists() == (want != "none")
+
+
+def test_video_views_episode_reads_the_state_by_its_value_names(tmp_path):
+    _mp4(tmp_path / "v" / "a.mp4", 6)
+    state = np.zeros((6, 7))
+    for names, want in ((POSE_NAMES, "ee_pose"), (None, "joints"), ([f"motor_{i}" for i in range(7)], "joints")):
+        ep = tmp_path / "out" / f"episode_{want}_{names is None}"
+        ctx = formats.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "teleop_arms", "mine",
+                                          {"instruction": None}, state=state, state_names=names)
+        assert ctx["state_kind"] == want, (names, ctx["state_kind"])
 
 
 # ---- the sidecar writer on a real mp4 ----

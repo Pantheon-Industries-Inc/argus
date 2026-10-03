@@ -824,13 +824,15 @@ def read_annotation(paths: list[Path]):
 STATE_GRIPPER_NAME = re.compile(r"grip|finger|jaw|claw|opening", re.I)
 STATE_JOINT_NAME = re.compile(r"joint|(^|[^a-z])j\d|waist|shoulder|elbow|forearm|wrist", re.I)
 STATE_POSE_NAME = re.compile(r"(^|[._/ -])(x|y|z|roll|pitch|yaw|rx|ry|rz)$", re.I)
-STATE_QUAT_NAME = re.compile(r"(^|[._/ ])q[wxyz]$|quat", re.I)
+STATE_QUAT_NAME = re.compile(r"(^|[._/ -])q[._/ -]?[wxyz]$|(^|[^a-z])quat", re.I)
 
 
 def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[str, str | None]:
     """(state_kind, note). 7 or 14 values per frame are 1 or 2 actors of 6 + gripper; anything else is labelled from
     video. names, one per value when the dataset gives them, settle the layout (STATE_GRIPPER_NAME above); names that
-    say neither a gripper, joints nor a pose keep the width rule."""
+    say neither a gripper, joints nor a pose keep the width rule. A name that names a joint is never a pose name, even
+    when it ends in an axis: an arm's shoulder_yaw, elbow_pitch and wrist_roll (or a humanoid's waist_yaw) are joint
+    angles in radians, and read as a pose their checks would take them for metres."""
     if rig == "ego_head":
         return "none", None
     per = "arm (six joints and a gripper)." if rig == "teleop_arms" else "gripper (a 6D pose and an opening)."
@@ -847,7 +849,7 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
                         "read a position, a roll, pitch and yaw and an opening per gripper.")
     seventh = all(STATE_GRIPPER_NAME.search(g[6]) for g in groups)
     if seventh and not any(STATE_GRIPPER_NAME.search(x) for g in groups for x in g[:6]):
-        if all(STATE_POSE_NAME.search(x) for g in groups for x in g[:6]):
+        if all(STATE_POSE_NAME.search(x) and not STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
             return "ee_pose", None
         if all(STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
             return "joints", None
@@ -3328,11 +3330,14 @@ def _joint_row(msg) -> list[float] | None:
 
 def _joint_names(msg, n: int) -> list[str] | None:
     """The names a joint message gives the values of its row (sensor_msgs/JointState's name), with "gripper" for a
-    gripper reading _joint_row appended from its own field; None when the message names none, or not one per value."""
+    gripper reading _joint_row appended from its own field; None when the message names none, or not one per value.
+    Any sequence of names is read, as _vector reads values, so a Protobuf repeated field keeps its names."""
     v = _field(msg, "name")
-    if not isinstance(v, (list, tuple)) or not v or not all(isinstance(x, str) and x for x in v):
+    if v is None or isinstance(v, (str, bytes, dict)) or not hasattr(v, "__len__"):
         return None
-    v = [str(x) for x in v]
+    v = list(v)
+    if not v or not all(isinstance(x, str) and x for x in v):
+        return None
     if len(v) == n:
         return v
     if len(v) == n - 1 and next((g for g in (_vector(_field(msg, k)) for k in GRIPPER_KEYS) if g), None):

@@ -478,6 +478,64 @@ def test_an_arm_channel_that_names_seven_joints_and_no_gripper_is_not_read_as_si
     assert formats._joint_names(msg, 3) == ["j1", "j2", "gripper"] and formats._joint_names(msg, 2) == ["j1", "j2"]
     assert formats._joint_names({"name": [], "position": [0.0]}, 1) is None
 
+    class Repeated:
+        """A Protobuf repeated field: a sequence, but not a list."""
+        def __init__(self, xs):
+            self.xs = list(xs)
+
+        def __len__(self):
+            return len(self.xs)
+
+        def __iter__(self):
+            return iter(self.xs)
+
+    class Msg:
+        name = Repeated(["a", "b"])
+        position = Repeated([0.0, 1.0])
+    assert formats._joint_names(Msg(), 2) == ["a", "b"] and formats._joint_names({"name": "ab"}, 2) is None
+
+
+def _an_mcap_joint_channel_keeps_the_names_its_messages_give(tmp_path):
+    """The names reach joint_state from the file itself: a JointState style JSON channel naming seven Franka joints,
+    and one naming six joints beside its gripper reading, are read with their names, and the Franka arm is left as
+    signals."""
+    import json
+    import numpy as np
+    from mcap.writer import Writer
+    from prepare import formats
+    t0 = 1_790_000_000.0
+    path = tmp_path / "arms.mcap"
+    with open(path, "wb") as fh:
+        w = Writer(fh)
+        w.start()
+        sid = w.register_schema(name="joints", encoding="jsonschema", data=b"{}")
+        franka = w.register_channel(topic="/left/joint_states", message_encoding="json", schema_id=sid)
+        yam = w.register_channel(topic="/right/joint_state", message_encoding="json", schema_id=sid)
+        health = w.register_channel(topic="/left/health", message_encoding="json", schema_id=sid)
+        for i in range(330):
+            ts = int((t0 - 0.1 + i / 100) * 1e9)
+            w.add_message(franka, log_time=ts, publish_time=ts, data=json.dumps(
+                {"name": [f"fr3_left_joint{j}" for j in range(1, 8)], "position": [0.01 * i + j for j in range(7)],
+                 "velocity": [0.0] * 7}).encode())
+            w.add_message(yam, log_time=ts, publish_time=ts, data=json.dumps(
+                {"name": [f"joint{j}" for j in range(1, 7)], "position": [0.01 * i] * 6,
+                 "gripper_pos": [0.5]}).encode())
+            w.add_message(health, log_time=ts, publish_time=ts, data=b'{"ok": true}')
+        w.finish()
+    streams = formats.mcap_joint_streams([path])
+    assert sorted(streams) == ["/left/joint_states", "/right/joint_state"]
+    assert streams["/left/joint_states"]["names"] == [f"fr3_left_joint{j}" for j in range(1, 8)]
+    assert streams["/right/joint_state"]["names"] == [f"joint{j}" for j in range(1, 7)] + ["gripper"]
+    assert streams["/right/joint_state"]["pos"].shape == (330, 7)
+    state, action, note = formats.joint_state(streams, t0 + np.arange(90) / 30)
+    assert state is None and action is None and "7 joints and no gripper" in note
+
+
+def test_an_mcap_joint_channel_keeps_the_names_its_messages_give():
+    # no pytest fixture: Data Review runs this file's tests as plain functions (upload/test_formats.py)
+    with tempfile.TemporaryDirectory() as t:
+        _an_mcap_joint_channel_keeps_the_names_its_messages_give(Path(t))
+
 
 def test_an_accented_name_keeps_its_letters_in_the_episode_id():
     assert f.episode_name("Día 1 – cocina/toma 1 瓶子 🍶") == "episode_Dia_1_cocina_toma_1"
