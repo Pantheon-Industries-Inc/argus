@@ -1100,7 +1100,9 @@ class Block:
     """One part of the episode prompt that exists only when the episode holds its data. present(ep, pl) tests the
     loaded episode folder and the plan made from it, never the rig or the dataset's name; text(ep, pl) is what the
     model is told; schema_fields are the output fields the text asks for beyond the rig's shared schema
-    (label/prompts.py); checks are the deterministic checks the same data feeds (reported, never told to the model).
+    (label/prompts.py); checks are the deterministic checks the same data feeds (reported, never told to the model),
+    under their keys in the episode's dataset_checks (plan's own, and those board/build.py add_context copies from
+    context.json and add_contacts writes).
     An episode without the data gets neither the text nor the fields."""
     name: str
     slot: str
@@ -1246,12 +1248,12 @@ BLOCKS = (
     Block("collection_note", "intro", _has_collection_note, _collection_text),
     Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
     Block("coverage", "frames", _has_coverage, _coverage_note),
-    Block("depth", "frames", _has_depth, lambda ep, pl: _depth_note(ep)),
+    Block("depth", "frames", _has_depth, lambda ep, pl: _depth_note(ep), checks=("sensor_checks",)),
     Block("state", "state", _has_state, _state_text,
-          checks=("still_spans", "timebase", "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")),
+          checks=("timebase", "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")),
     Block("state_unaligned", "state", _state_unaligned, _state_unaligned_text, checks=("camera_windows_match_state",)),
     Block("no_state", "state", _no_state, _no_state_text),
-    Block("signals", "signals", _has_signals, _signals_table, checks=("sensors",)),
+    Block("signals", "signals", _has_signals, _signals_table, checks=("sensor_checks",)),
     Block("contacts", "after_frames", _has_contacts, contacts_block,
           schema_fields=("contacts", "contacts_missing"),
           checks=("contact_checks",)),
@@ -1280,8 +1282,9 @@ def requested_schema(ep: dict, pl: dict, blocks: list[Block] | None = None) -> t
 
 
 def implied_checks(ep: dict, pl: dict, blocks: list[Block] | None = None) -> tuple:
-    """The deterministic checks the data of this episode's blocks feeds."""
-    return tuple(c for b in (present_blocks(ep, pl) if blocks is None else blocks) for c in b.checks)
+    """The deterministic checks the data of this episode's blocks feeds, each named once (depth and the signals both
+    feed sensor_checks)."""
+    return tuple(dict.fromkeys(c for b in (present_blocks(ep, pl) if blocks is None else blocks) for c in b.checks))
 
 
 def _intro_head(ep: dict) -> str:

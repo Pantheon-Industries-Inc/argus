@@ -260,6 +260,27 @@ def test_contacts_ask_for_their_fields_and_imply_the_contact_check():
     assert "contact_checks" in me.implied_checks(ep, pl)
 
 
+def test_every_blocks_checks_are_keys_of_a_real_dataset_checks_dict(tmp_path):
+    """A block's checks name the keys its data feeds in the episode's dataset_checks: the plan's own (label/episode.py
+    plan, a two arm teleop state with its action for the timebase check), the results board/build.py add_context
+    copies from context.json, and the contact check add_contacts writes."""
+    from board import build as bb
+    ep, given = CASES["teleop_joints"]()
+    ep.update(dir=None, action=ep["state"].copy(), times=None, kmap={})
+    ep["sources"] = {v: {"n_frames": 900} for v in ep["sources"]}
+    d = {"dataset_checks": me.plan(ep)["checks"]}
+    ctx = {"profile": "teleop_arms", "fps": 30, "contacts": [dict(CONTACT)], "capture_qc": {"checks": []},
+           **{k: {"flagged": False} for k in bb.CONTEXT_CHECKS if k != "capture_qc"}}
+    bb.add_context(d, ctx, tmp_path)
+    keys = set(d["dataset_checks"])
+    assert {"timebase", "contact_checks", "sensor_checks"} <= keys
+    for b in me.BLOCKS:
+        assert set(b.checks) <= keys, (b.name, set(b.checks) - keys)
+    _add_signals(ep, given)
+    _add_depth(ep, given)
+    assert me.implied_checks(ep, me.plan(ep)).count("sensor_checks") == 1    # two blocks feed it, named once
+
+
 def test_a_contact_timed_only_by_a_signal_that_does_not_measure_touch_is_not_shown():
     """A context.json prepared before is_touch can hold a contact found from an intervention flag, which rests and
     rises like a pad but whose name says nothing of touch: it is neither told to the model nor asked about."""

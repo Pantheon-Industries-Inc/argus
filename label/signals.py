@@ -25,11 +25,12 @@ A signal is read by how its numbers behave, and only whether it measures touch a
   gripper's effort. For such a signal the spans it is away from rest are reported with their exact start and end, from
   every recorded frame rather than only the sampled instants, because that is when a hand or a gripper touches
   something.
-- An array of more than SMALL values per frame is shown as numbers that summarise it. One that has a rest and whose
-  activity is local
-  (at a typical frame fewer than half its values are active: a pressure map under a grasp, whether or not it ever
-  rests) gets its total activity, how many values are active and, for a 2-D array, where its strongest value is; any
-  other (hand landmarks, whose values all move together) gets how much its values changed since the instant before.
+- At each sampled instant a signal gets one row per value when per_value says so (SMALL values or fewer, a flat vector
+  whose values the dataset names, or one whose own name says joints or a state), and otherwise rows of numbers that
+  summarise it (summary_rows). One that has a rest and whose activity is local (at a typical frame fewer than half
+  its values are active: a pressure map under a grasp, whether or not it ever rests) gets its total activity, how
+  many values are active and, for a 2-D array, where its strongest value is; any other (hand landmarks, whose values
+  all move together) gets how much its values changed since the instant before.
 """
 from __future__ import annotations
 

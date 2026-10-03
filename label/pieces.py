@@ -451,8 +451,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     cfg["resolution_route"] = {**(routes[0] or {}), "parts": routes,
                                "cost_usd": round(sum(float(x.get("cost_usd") or 0) for x in routes), 6)}
     # each part's prompt had its own blocks (a contact or depth only some parts hold); the recording's record names
-    # every block and output field any part had, in the order they first appear
-    for k in ("prompt_blocks", "schema_fields"):
+    # every block, output field and implied check any part had, in the order they first appear
+    for k in ("prompt_blocks", "schema_fields", "checks_implied"):
         got = [x for _, r in parts for x in (r.get("config") or {}).get(k) or []]
         if got or k in cfg:
             cfg[k] = list(dict.fromkeys(got))

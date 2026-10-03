@@ -192,7 +192,7 @@ def test_a_part_inside_a_long_press_keeps_the_contact_the_whole_recording_shows(
 
 def test_a_stitched_record_keeps_the_contacts_its_parts_showed_and_every_parts_blocks(tmp_path, monkeypatch):
     """The stitched record lists the recording's contacts some part showed, not the ones no part was asked about, and
-    its config names every block and output field any part had, in the order they first appear."""
+    its config names every block, output field and check any part had, in the order they first appear."""
     src, parts = _long_press(tmp_path, monkeypatch)
     ctx = json.loads((src / "context.json").read_text())
     ctx["contacts"].append({**ctx["contacts"][0], "id": "c9", "signals": ["right_hand_landmarks"]})
@@ -204,7 +204,8 @@ def test_a_stitched_record_keeps_the_contacts_its_parts_showed_and_every_parts_b
         blocks = ["collection_note", "no_state", "signals"] + (["contacts"] if shown else [])
         return {"episode_dir": str(parts[i]), "parse_ok": True, "model": "m", "usage": {},
                 "config": {"timesteps_s": [0.0], "prompt_blocks": blocks,
-                           "schema_fields": ["contacts", "contacts_missing"] if shown else []},
+                           "schema_fields": ["contacts", "contacts_missing"] if shown else [],
+                           "checks_implied": ["sensor_checks"] + (["contact_checks"] if shown else [])},
                 "labels": {"task_summary": f"part {i + 1}"},
                 **({"contacts": [ctx["contacts"][0]], "contact_views": {"shown": ["c1"], "strips": {}}}
                    if shown else {})}
@@ -212,6 +213,7 @@ def test_a_stitched_record_keeps_the_contacts_its_parts_showed_and_every_parts_b
     assert [c["id"] for c in out["contacts"]] == ["c1"]
     assert out["config"]["prompt_blocks"] == ["collection_note", "no_state", "signals", "contacts"]
     assert out["config"]["schema_fields"] == ["contacts", "contacts_missing"]
+    assert out["config"]["checks_implied"] == ["sensor_checks", "contact_checks"]
 
 
 def test_a_contact_cut_by_our_cuts_asks_each_part_only_for_the_strips_it_shows_and_stitches_them_back(tmp_path,

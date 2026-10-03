@@ -9,7 +9,6 @@ import base64
 import io
 import json
 import shutil
-from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
