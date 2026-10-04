@@ -478,7 +478,7 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
         s += (f" In the output, \"left\", \"right\" and \"both\" name the streams: an action is \"left\" when "
               "the left stream's own gripper makes the contact, \"right\" likewise, "
               f"\"both\" when the two act together. The other {n['actor']} often appears inside a view, and an "
-              "object lying between open fingers is not yet held, so neither is a contact of that camera's own. "
+              "object lying between open " + ("jaws" if r == "handheld_gripper" else "fingers") + " is not yet held, so neither is a contact of that camera's own. "
               "This naming is bookkeeping only; it does not settle whether the names are right. Whether each "
               "stream really sits on the side its name says is a separate question for the pixels: where the "
               f"other {n['actor']} and the scene appear in it once you have worked out from the frame how that camera "

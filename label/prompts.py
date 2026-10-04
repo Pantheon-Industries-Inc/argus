@@ -468,15 +468,15 @@ def what_this_is(r: str) -> str:
                 "  around the workspace (walls, furniture, people further away) is sometimes visible, for\n"
                 "  example when a gripper camera points up; that is the surroundings, not a problem by itself.\n")
     return ("- WHAT THIS EPISODE IS: a person holds the handheld gripper(s) and performs the task with them;\n"
-            "  the recording is a demonstration collected to train robots. The gripper's own body and fingers,\n"
+            "  the recording is a demonstration collected to train robots. The gripper's own body and jaws,\n"
             "  and the demonstrator's own hands, arms and body (including the hand holding the other gripper),\n"
             "  can appear in its camera; that is the demonstrator, not another person. A rig with two grippers\n"
             "  often shows the other gripper in one gripper's camera, held in the demonstrator's other hand, even\n"
-            "  when only one gripper's footage was sent: a housing like this gripper's, with its own fingers and\n"
+            "  when only one gripper's footage was sent: a housing like this gripper's, with its own jaws and\n"
             "  handle or strap, that moves through the frame while this camera's own gripper stays fixed in it,\n"
             "  often holding an object of its own. It is the rig's other gripper, never a task object, and what it\n"
             "  does is part of the demonstration. The robot trained on this\n"
-            "  has only the gripper's fingers, so a task object moved by the demonstrator's bare hand, arm or the\n"
+            "  has only the gripper's jaws, so a task object moved by the demonstrator's bare hand, arm or the\n"
             "  gripper's housing teaches a change the robot cannot make and is worth reporting; anyone else\n"
             "  touching the scene is reported as usual. The room around the task is sometimes visible; that is\n"
             "  the surroundings, not a problem by itself.\n")

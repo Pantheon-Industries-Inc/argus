@@ -640,9 +640,9 @@ def describe(cam: dict, view: str, name: str, rig: str) -> dict:
         cam.update(name="head", desc=EGO_DESC)
     elif rig == "handheld_gripper" and view in ("left", "right"):
         if view == "right" and not re.search("right", name, re.I):
-            cam.update(name="gripper", desc="the camera carried on the handheld gripper, looking along its fingers")
+            cam.update(name="gripper", desc="the camera carried on the handheld gripper, looking along its jaws")
         else:
-            cam.update(desc=f"the camera carried on the {view.upper()}-hand gripper, looking along its fingers")
+            cam.update(desc=f"the camera carried on the {view.upper()}-hand gripper, looking along its jaws")
     return cam
 
 
