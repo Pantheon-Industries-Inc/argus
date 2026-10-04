@@ -1706,8 +1706,8 @@ def task_rank(p: Path, named: bool = False, own: bool = False) -> int | None:
 # quantity other than a position (joint1_vel, joint3_effort, force_x) is never a state the checks read, and a name
 # whose frame or orientation word is followed by a number (cartesian_position_0, robot0_eef_pos_0, wrist_rot_0) is a
 # pose whose axes the rule cannot read, never joints by width. A frame word with no number after it names a joint as
-# often (base_rotation, tool_roll, flange, end_effector), and a position word alone with its index (HABIT's position_0
-# to position_13) says no frame, so names that say none of these (position_0, motor_3) leave the width rule.
+# often (base_rotation, tool_roll, flange, end_effector). Indexed position names declare neither joints nor Cartesian
+# axes and stay unsupported; otherwise names such as motor_3 that say none of these leave the width rule.
 STATE_GRIPPER_NAME = re.compile(r"grip|finger|jaw|claw|opening", re.I)
 STATE_JOINT_NAME = re.compile(r"joint|(^|[^a-z])j\d|waist|shoulder|elbow|forearm|wrist", re.I)
 STATE_QUAT_NAME = re.compile(r"(^|[._/ -])q[._/ -]?[wxyz]$|(^|[^a-z])quat", re.I)
@@ -1760,7 +1760,7 @@ def drop_no_state(ctx: dict) -> None:
     ctx.pop("state_why", None)
 
 
-def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[str, str | None]:
+def state_layout(dims: int, rig: str, names: list[str] | None = None, *, value_roles=None) -> tuple[str, str | None]:
     """(state_kind, note). 7 or 14 values per frame are 1 or 2 actors of 6 + gripper; anything else is labelled from
     video. names, one per value when the dataset gives them, settle the layout (STATE_GRIPPER_NAME above); names that
     say neither a gripper, joints nor a pose keep the width rule. Six names are a pose when every one's last word
@@ -1781,6 +1781,9 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
     if not names or len(names) != dims:
         return kind, None
     names = [str(x) for x in names]
+    if any(re.search(r"[\u3400-\u9fff]", name) for name in names):
+        return "none", ("Labelled from the video because the recorded Chinese value names are outside the joint "
+                        "and Cartesian vocabulary our checks read. Original names and values remain signals.")
     if all(re.fullmatch(r"position[_./-]\d+", name, re.I) for name in names):
         return "none", ("Labelled from the video because indexed position names declare neither joint meanings nor "
                         "Cartesian axes. Every original value is retained as a signal.")
@@ -1788,6 +1791,13 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
     # a name with no words ("" or "_") has no last word, so it says neither an axis, a joint nor a gripper
     last = {x: words[x][-1] if words[x] else "" for x in names}
     groups = [names[i:i + 7] for i in range(0, dims, 7)]
+    roles = value_roles if isinstance(value_roles, list) and len(value_roles) == dims else [None] * dims
+    grippers = {name for name, role in zip(names, roles) if role == "gripper"}
+    joints = {name for name, role in zip(names, roles) if role == "joint"}
+    grip = lambda name: bool(STATE_GRIPPER_NAME.search(name)) or name in grippers
+    if any(last[x] in STATE_POSITION_AXES and (x in joints or "base" in words[x]) for x in names):
+        return "none", ("Labelled from the video because recorded joint positions or base axes do not establish "
+                        "an end effector Cartesian pose. Original names and values remain signals.")
     if any(STATE_QUAT_NAME.search(x) for x in names):
         return "none", ("Labelled from the video: the recorded state's value names give a quaternion, and our checks "
                         "read a position, a roll, pitch and yaw and an opening per gripper.")
@@ -1802,8 +1812,8 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
     framed = next((x for x in names if set(words[x]) & STATE_FRAME_WORDS and last[x].isdigit()
                    and not STATE_GRIPPER_NAME.search(x)), None)
     unaxed = framed is not None and kind != "ee_pose"
-    seventh = all(STATE_GRIPPER_NAME.search(g[6]) for g in groups)
-    if seventh and not any(STATE_GRIPPER_NAME.search(x) for g in groups for x in g[:6]):
+    seventh = all(grip(g[6]) for g in groups)
+    if seventh and not any(grip(x) for g in groups for x in g[:6]):
         if all(last[x] in STATE_AXIS_WORDS for g in groups for x in g[:6]) and \
                 all(any(last[x] in STATE_POSITION_AXES for x in g[:6]) for g in groups):
             return "ee_pose", None
@@ -1811,12 +1821,15 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
             return "none", STATE_UNAXED_NOTE.format(framed)
         if all(STATE_JOINT_NAME.search(x) for g in groups for x in g[:6]):
             return "joints", None
+        if any(g[6] in grippers and not STATE_GRIPPER_NAME.search(g[6]) for g in groups):
+            return "none", ("Recorded scalar gripper columns do not establish six named arm joints or a "
+                            "complete Cartesian pose; every original value remains a signal.")
         # a name of a position axis (x, y or z) in a group that is no full pose is never read by width
         placed = next((x for g in groups for x in g[:6] if last[x] in STATE_POSITION_AXES), None)
         if placed:
             return "none", STATE_PART_POSE_NOTE.format(placed)
         return kind, None
-    if any(STATE_GRIPPER_NAME.search(x) for x in names):
+    if any(grip(x) for x in names):
         return "none", ("Labelled from the video: the recorded state's value names put a gripper elsewhere than "
                         "seventh in each group of seven, and our checks read six values and then the gripper.")
     if unaxed:
@@ -1836,6 +1849,30 @@ def state_value_names(feats: dict, state) -> list[str] | None:
     if state is None:
         return None
     return value_names((feats.get("observation.state") or {}).get("names"), state.shape[1])
+
+
+def recorded_value_roles(features, names, columns):
+    """Only literal joint_names membership and selected scalar gripper columns establish value roles."""
+    if not names or len(set(names)) != len(names):
+        return [], []
+    roles, sources = [None] * len(names), [None] * len(names)
+    for column in columns or ["observation.state"]:
+        feature = features.get(column) or {}
+        named = value_names(feature.get("names"), int(np.prod(feature.get("shape") or [])))
+        if named is None or any(name not in names for name in named):
+            continue
+        joint_names = feature.get("joint_names")
+        declared = joint_names if isinstance(joint_names, list) and all(isinstance(name, str) for name in joint_names) \
+            and len(set(joint_names)) == len(joint_names) \
+            and all(name in named for name in joint_names) else []
+        for name in declared:
+            roles[names.index(name)], sources[names.index(name)] = "joint", column + " joint_names"
+        if re.fullmatch(r"observation\.state\.(left|right)_gripper", column) and len(named) == 1:
+            index = names.index(named[0])
+            if roles[index] == "joint":
+                continue
+            roles[index], sources[index] = "gripper", column
+    return roles, sources
 
 
 # Per-frame columns that are the table's bookkeeping, not a recording: never kept as a signal
@@ -2802,7 +2839,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
     if held:
         ctx["placeholder_frames"] = held
     if state is not None:
-        ctx["state_kind"] = state_layout(state.shape[1], rig, state_names)[0]
+        ctx["state_kind"] = state_layout(state.shape[1], rig, state_names,
+                                         value_roles=ctx.get("state_value_roles"))[0]
         if state.shape[1] in (JOINT_DIMS, 2 * JOINT_DIMS) and "state_identities" not in ctx:
             record_state_identity(ctx, (ctx.get("source") or {}).get("state"), state_names, state.shape[1])
     write_depth(ep, ctx, dep, dtimes)
@@ -4860,6 +4898,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             action, action_columns, _, _ = split_lerobot_columns(df, feats, "action")
     state_names = [name for _, names, _ in state_groups for name in names] \
         if state_groups and all(names for _, names, _ in state_groups) else state_value_names(feats, state)
+    value_roles, role_sources = recorded_value_roles(feats, state_names, state_columns)
     tasks = list(row.get("tasks") or [])
     task_column = "coarse_task_index" if df is not None and "coarse_task_index" in df else "task_index"
     if not tasks and df is not None and task_column in df.columns and len(df):
@@ -4870,6 +4909,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     annotated = r["annotated"].get(eidx)
     extra = {"task_label": tasks or [item["name"]], "episode_index": eidx, "robot_type": r["robot_type"],
              "source": {"format": f"lerobot {r['version']}", "episode_index": eidx, "dataset_folder": r["rel"] or None}}
+    if any(value_roles):
+        extra.update(state_value_roles=value_roles, state_value_role_sources=role_sources)
     if state_groups:
         record_state_groups(extra, state_groups)
         extra["source"]["state_columns"] = state_columns
@@ -4903,7 +4944,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if r["image_cams"]:
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
-    kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_names)
+    kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_names, value_roles=value_roles)
     if state is not None and kind != "none" and not state_groups:
         record_state_identity(extra, "observation.state", state_value_names(feats, state), state.shape[1])
     note = StateNote(note, "layout") if note else None
@@ -5261,7 +5302,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         keep_container_clocks(ep, extra, {"timestamp": native}, {v: "timestamp" for v in files},
                               {"timestamp": {"source": "parquet timestamp column", "units": None}})
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig,
-                              state_names if state_names is not None else state_value_names(r["features"], state))
+                              state_names if state_names is not None else state_value_names(r["features"], state),
+                              value_roles=extra.get("state_value_roles"))
     if state is not None and kind != "none" and not state_columns:
         record_state_identity(extra, "observation.state", state_value_names(r["features"], state), state.shape[1])
     note = StateNote(note, "layout") if note else None
@@ -6039,6 +6081,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
 # videos, the arrays of several HDF5 files carry their file's name first ("robot qpos", h5_file_signals); h5_state
 # reads the name after that file name, so a space inside an array's own name ("gripper state") is never a separator.
 H5_STATE_NAME = re.compile(r"(^|/)(qpos|state|states|robot_state|joint_positions?|joint_pos)$", re.I)
+H5_JOINT_ACTION = re.compile(r"(^|/)joint_action(?:/vector)?$", re.I)
 H5_JOINT_ARRAY = re.compile(r"(^|/)joint_pos(itions?)?$", re.I)
 H5_ACTION_NAME = re.compile(r"(^|/)actions?$", re.I)
 H5_ACTION_GROUP = re.compile(r"(^|/)actions?/", re.I)
@@ -6066,7 +6109,16 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         # an array's own name, after the HDF5 file's name that h5_file_signals puts first
         stem = next((f for f in files or () if k.startswith(f"{f} ")), None)
         return k[len(stem) + 1:] if stem else k
-    named = lambda k: H5_STATE_NAME.search(own(k)) and not H5_ACTION_GROUP.search(own(k))
+    def physical(k):
+        source = (meta.get(k) or {}).get("source")
+        return source.removeprefix("HDF5 dataset ") if isinstance(source, str) and source.startswith("HDF5 dataset ") else own(k)
+    def named(k):
+        paths = (own(k), physical(k))
+        if any((match := H5_JOINT_ACTION.search(path)) and _names_word(path[:match.start()], COMMAND_WORDS)
+               for path in paths):
+            return False
+        return (any(H5_STATE_NAME.search(path) or H5_JOINT_ACTION.search(path) for path in paths)
+                and not any(H5_ACTION_GROUP.search(path) for path in paths))
     cands = sorted({k for k in [*signals, *left_out] if named(k)}, key=lambda k: (len(k), k))
 
     q = np.asarray(q, dtype=np.float64)
@@ -6082,6 +6134,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         rows, gap = fill_rows(q, q[ok], a[ok])
         return rows, (gap_words(gap, q[0]) if gap else None)
     notes, read, failed, filled_at = [], [], {}, {}
+    source_claims = {name: physical(name) if H5_JOINT_ACTION.search(physical(name)) else name for name in cands}
 
     def unsided(name):
         # an array's own name without its side words, so left/qpos and right/qpos in one file, like left.h5's and
@@ -6116,6 +6169,14 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         a = np.asarray(signals[name], dtype=np.float64)
         names = (meta.get(name) or {}).get("names")
         dims = a.shape[1]
+        if H5_JOINT_ACTION.search(physical(name)) and not (
+                names and len(names) == dims and dims in (7, 14)
+                and all(STATE_GRIPPER_NAME.search(names[i + 6]) for i in range(0, dims, 7))
+                and all(STATE_JOINT_NAME.search(names[i + j]) and not STATE_GRIPPER_NAME.search(names[i + j])
+                        for i in range(0, dims, 7) for j in range(6))):
+            fail(name, f"The recorded array {physical(name)} has an ambiguous action or state meaning without "
+                       "six named joints and a gripper per arm; its original values remain a signal.", "layout")
+            continue
         if names is None and H5_JOINT_ARRAY.search(own(name)) and dims in (7, 14):
             # the file names no value, but the array's name says every value is a joint, so there is no gripper
             fail(name, f"Labelled from the video: the array's name says every value is a joint, so its {dims} values "
@@ -6163,7 +6224,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
                      and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
     acts = [command(name, a.shape) for name, a, _ in arms]
     if identity_ctx is not None:
-        record_state_groups(identity_ctx, [(name, nm, a.shape[1]) for name, a, nm in arms])
+        record_state_groups(identity_ctx, [(source_claims[name], nm, a.shape[1]) for name, a, nm in arms])
     action = None
     if all(acts):
         action = np.concatenate([filled(np.asarray(signals.pop(k), dtype=np.float64))[0] for k in acts], axis=1)
@@ -6175,7 +6236,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         meta.pop(k, None)
     state = np.concatenate([a for _, a, _ in arms], axis=1)
     names = [x for _, _, nm in arms for x in nm] if all(nm for _, _, nm in arms) else None
-    return state, action, names, " and ".join(name for name, _, _ in arms), None
+    return state, action, names, " and ".join(source_claims[name] for name, _, _ in arms), None
 
 
 def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:

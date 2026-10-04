@@ -496,7 +496,7 @@ def test_names_that_name_a_position_a_velocity_or_an_effort_never_read_as_joints
     rig, and joint velocities or efforts all read as six joints and a gripper in radians. Each name is read as words
     (separators and camelCase, a trailing unit dropped): an axis as the last word makes a pose, a velocity or an
     effort is not a state the checks read, and a pose without axes the rule reads is not joints. HABIT's
-    position_0 to position_13, a position word alone with its index, keeps the width rule."""
+    position_0 to position_13 declares neither joint meanings nor Cartesian axes and stays unsupported."""
     seven = lambda fmt, last: [fmt.format(i) for i in range(6)] + [last]
     umi = [f"robot0_eef_pos_{i}" for i in range(3)] + [f"robot0_eef_rot_axis_angle_{i}" for i in range(3)] + [
         "robot0_gripper_width"]
@@ -530,8 +530,8 @@ def test_names_that_name_a_position_a_velocity_or_an_effort_never_read_as_joints
         ("teleop_arms", [f"actual_TCP_pose_{i}" for i in range(6)] + ["gripper_position"], "none"),
         # a plural position word cancels a quantity word as the singular does (current, the present position)
         ("teleop_arms", [f"current_joint_positions_{i}" for i in range(6)] + ["gripper"], "joints"),
-        # names that say neither keep the width rule
-        ("teleop_arms", [f"position_{i}" for i in range(14)], "joints"),
+        # Indexed positions are retained without guessed joint or Cartesian meanings.
+        ("teleop_arms", [f"position_{i}" for i in range(14)], "none"),
         ("teleop_arms", [f"motor_{i}" for i in range(7)], "joints"),
         ("teleop_arms", [f"j{i}_deg" for i in range(1, 7)] + ["gripper_pct"], "joints"),
         ("teleop_arms", [f"left_joint_{i}.pos" for i in range(6)] + ["left_gripper.pos"], "joints"),
