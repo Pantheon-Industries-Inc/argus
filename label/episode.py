@@ -37,6 +37,8 @@ Layout (fixed, not flags):
 from __future__ import annotations
 
 import base64
+import fcntl
+import hashlib
 import io
 import json
 import os
@@ -90,6 +92,8 @@ CONTACT_MIN_GAP_S = 2.0
 # are listed in the episode's facts, one line each. It adds no frame, and nothing at all when there is no such stretch.
 JAW_RIGS = ("handheld_gripper",)
 JAW_VERSION = 2              # bump when prepare/jaws.py changes what it measures, so cached results are redone
+# one measurement per wrist video, shared by every part of a long recording (they all point at the same video)
+JAW_CACHE = Path(os.environ.get("ARGUS_JAW_CACHE") or Path.home() / ".cache" / "argus" / "jaws")
 PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
 GRID_GUTTER = 84
 GRID_HEADER = 30
@@ -147,7 +151,7 @@ def jaw_moves(ep_dir: Path, src: dict) -> dict:
             return got["moves"]
     moves = {}
     for v, path in want.items():
-        r = pj.analyse(path)
+        r = video_jaws(path)
         if r is None:
             moves[v] = None
             continue
@@ -158,6 +162,34 @@ def jaw_moves(ep_dir: Path, src: dict) -> dict:
     tmp.write_text(json.dumps({"version": JAW_VERSION, "videos": want, "moves": moves}))
     os.replace(tmp, cache)
     return moves
+
+
+def video_jaws(path: str) -> dict | None:
+    """prepare/jaws.py's {"fps", "events"} for one wrist video, measured once. The parts of a long recording all point
+    at the recording's whole video with their own offsets, so measuring it per part measured a 25 minute take four
+    times; each part now takes its window from this one result. Kept under JAW_CACHE (never beside the video, which is
+    the uploader's file), keyed by the video's path, size, modification time and JAW_VERSION, so a changed video or
+    measurement is measured again. A lock makes the other parts of a recording wait for the one measurement."""
+    from prepare import jaws as pj
+    st = Path(path).stat()
+    key = f"{Path(path).resolve()}|{st.st_size}|{st.st_mtime_ns}|{JAW_VERSION}"
+    JAW_CACHE.mkdir(parents=True, exist_ok=True)
+    cache = JAW_CACHE / (hashlib.sha1(key.encode()).hexdigest() + ".json")
+    with open(cache.with_suffix(".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if cache.exists():
+            try:
+                got = json.loads(cache.read_text())
+                if got.get("key") == key:
+                    return got["result"]
+            except (OSError, ValueError):
+                pass                        # a damaged cache file is measured again
+        r = pj.analyse(path)
+        r = None if r is None else {"fps": r["fps"], "events": r["events"]}
+        tmp = cache.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"key": key, "result": r}))
+        os.replace(tmp, cache)
+    return r
 
 
 def ep_fps(ep: dict) -> float:

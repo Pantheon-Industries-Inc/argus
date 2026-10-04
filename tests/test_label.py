@@ -994,3 +994,18 @@ def test_the_camera_line_names_the_fisheye_only_where_the_check_fired():
 def test_circular_image_with_no_frames_is_not_circular():
     from label import lens
     assert lens.circular_image({}) == {"circular": False, "frames": 0}
+
+
+def test_a_wrist_video_is_measured_once_for_all_parts_of_its_recording(tmp_path, monkeypatch):
+    """The parts of a long recording point at one video; its jaws are measured once, and again only when it changes."""
+    from prepare import jaws as pj
+    calls = []
+    monkeypatch.setattr(pj, "analyse", lambda v: calls.append(v) or {"fps": 30.0, "events": [{"t": 1.0}], "rows": 1})
+    monkeypatch.setattr(me, "JAW_CACHE", tmp_path / "cache")
+    video = tmp_path / "left.mp4"
+    video.write_bytes(b"x" * 10)
+    assert me.video_jaws(str(video)) == me.video_jaws(str(video)) == {"fps": 30.0, "events": [{"t": 1.0}]}
+    assert len(calls) == 1
+    video.write_bytes(b"y" * 20)                        # a changed video is measured again
+    me.video_jaws(str(video))
+    assert len(calls) == 2
