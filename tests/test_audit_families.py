@@ -9,6 +9,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytest.importorskip("h5py")
@@ -26,10 +27,15 @@ rec = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rec)
 
 
+class Landed(dict):
+    """Prepared audit contexts and the paths holding their original readings."""
+
+
 @pytest.fixture(scope="module")
 def landed(tmp_path_factory):
     root = tmp_path_factory.mktemp("audit")
-    out = {}
+    out = Landed()
+    out.episodes = {}
     for name in rec.CASES:
         up, rig = rec.build(root / "fixtures", name)
         rep = formats.convert(up, rig, root / "eps" / name, name, 900)
@@ -42,6 +48,7 @@ def landed(tmp_path_factory):
         # the request stands in for the labelling result: it holds the contacts it found when the context has none
         add_context(board, ctx, ep, req)
         out[name] = (ctx, prompt, board)
+        out.episodes[name] = ep
     return out
 
 
@@ -118,10 +125,24 @@ def test_robomimics_joint_positions_stay_a_signal_and_its_rate_is_kept(landed):
     assert "45 values per frame" in board["reader_notes"]["state_note"]
 
 
-def test_an_mcap_arm_with_its_gripper_field_is_the_state_and_named_messages_go_value_by_value(landed):
-    ctx, prompt, _ = landed["mcap_json_mobile_manip"]
-    assert ctx["state_kind"] == "joints" and "RECORDED MOTION" in prompt
-    assert "    /rl/step reward: " in prompt and "/rl/step total activity" not in prompt
+def test_mixed_mcap_camera_clocks_keep_arm_readings_without_inferred_alignment(landed):
+    ctx, prompt, board = landed["mcap_json_mobile_manip"]
+    assert ctx["state_kind"] == "none" and ctx["state_why"] == "assumed_clock"
+    assert ctx["source"]["camera_clock"] == "mixed capture and arrival stamps"
+    assert "RECORDED MOTION" not in prompt
+    assert "Precise arm alignment was not inferred" in ctx["state_note"]
+    assert board["reader_notes"]["state_note"] == ctx["state_note"]
+    ep = landed.episodes["mcap_json_mobile_manip"]
+    records = {r["topic"]: r for r in ctx["mcap_field_inventory"]}
+    with np.load(ep / ctx["recorded_mcap_fields"]) as arrays:
+        arm = records["/right_arm/joint_state"]["fields"]
+        assert arrays[arm["joint_pos"]].shape == (305, 6)
+        assert arrays[arm["gripper_pos"]].shape == (305, 1)
+        assert arrays[arm["joint_pos"]].dtype == np.float64
+        assert np.isfinite(arrays[arm["joint_pos"]]).all()
+        assert arrays[records["/rl/step"]["fields"][""]].shape == (92, 6)
+    with np.load(ep / ctx["recorded_camera_ns"]) as clocks:
+        assert np.array_equal(clocks["exo"], np.zeros(90, dtype=np.int64))
 
 
 def test_a_franka_of_seven_named_joints_is_no_state_and_its_gripper_is_no_longer_dropped(landed):
@@ -153,10 +174,16 @@ def test_a_head_camera_with_tracks_is_never_told_it_has_no_tracking(landed):
     assert "from right_glove_pressure" in contacts
 
 
-def test_an_intervention_flag_is_never_a_contact_and_keeps_its_row(landed):
+def test_an_intervention_flag_is_never_a_contact_and_keeps_its_original_rows(landed):
     """An intervention flag rests and rises like a pad, but its name says nothing of touch (label/signals.py
     is_touch), so it times no contact and its values stay in the readout at each instant."""
     for name, (ctx, _, _) in landed.items():
         assert not any("intervention" in s for c in ctx.get("contacts") or [] for s in c["signals"]), name
-    _, prompt, _ = landed["mcap_json_mobile_manip"]
-    assert "    /teleop/intervention active: " in prompt
+    ctx, prompt, _ = landed["mcap_json_mobile_manip"]
+    ep = landed.episodes["mcap_json_mobile_manip"]
+    record = next(r for r in ctx["mcap_field_inventory"] if r["topic"] == "/teleop/intervention")
+    with np.load(ep / ctx["recorded_mcap_fields"]) as arrays:
+        original = arrays[record["fields"][""]]
+        assert original.shape == (92, 1) and set(np.unique(original)) == {0.0, 1.0}
+    assert "    /teleop/intervention active: " not in prompt
+    assert ctx["state_why"] == "assumed_clock"
