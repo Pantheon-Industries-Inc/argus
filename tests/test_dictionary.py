@@ -342,10 +342,13 @@ def test_inventory_digest_ignores_generated_interpretation_and_checks(tmp_path):
     assert any(f["name"] == "annotation_subtasks" for f in resumed["fields"])
 
 
-def test_external_sources_with_the_same_basename_keep_distinct_identities(tmp_path):
+@pytest.mark.parametrize("sources", [("/Users/private_a/sensor.h5", "/Users/private_b/sensor.h5"),
+                                     ("/mnt/private_a/sensor.h5", "/mnt/private_b/sensor.h5"),
+                                     ("C:\\private_a\\sensor.h5", "C:\\private_b\\sensor.h5")])
+def test_external_sources_with_the_same_basename_keep_distinct_identities(tmp_path, sources):
     from label import dictionary as dd
-    one = episode(tmp_path, "one", [("pad", np.ones((2, 1)), {"source": "/Users/private_a/sensor.h5"})])
-    two = episode(tmp_path, "two", [("pad", np.ones((2, 1)), {"source": "/Users/private_b/sensor.h5"})])
+    one = episode(tmp_path, "one", [("pad", np.ones((2, 1)), {"source": sources[0]})])
+    two = episode(tmp_path, "two", [("pad", np.ones((2, 1)), {"source": sources[1]})])
     inventory = dd.inventory([one, two])
     pads = [field for field in inventory["fields"] if field["name"] == "pad"]
     assert len(pads) == 2

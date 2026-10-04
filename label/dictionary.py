@@ -10,7 +10,7 @@ import os
 import socket
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 
@@ -102,9 +102,12 @@ def _relative(value, ep):
     if isinstance(value, str):
         for root in (str(ep.parent), str(ep.parent.resolve())):
             value = value.replace(root + "/", "")
-        if value.startswith(("/Users/", "/private/", "/tmp/", "/home/", "/data/", "/app/", "/var/")):
-            identity = hashlib.sha256(os.path.normpath(value).encode()).hexdigest()
-            value = Path(value).name + " (external source " + identity + ")"
+        windows = PureWindowsPath(value)
+        if Path(value).is_absolute() or windows.is_absolute():
+            original = str(windows) if windows.is_absolute() else os.path.normpath(value)
+            identity = hashlib.sha256(original.encode()).hexdigest()
+            name = windows.name if windows.is_absolute() else Path(value).name
+            value = name + " (external source " + identity + ")"
     elif isinstance(value, dict):
         value = {k: _relative(v, ep) for k, v in value.items()}
     elif isinstance(value, list):
