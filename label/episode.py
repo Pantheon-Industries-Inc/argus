@@ -86,8 +86,8 @@ CONTACT_MIN_CHANGE = 0.25    # of the channel's own range over the episode, betw
 CONTACT_MIN_GAP_S = 2.0
 # Jaw moves (prepare/jaws.py): a handheld gripper records no gripper value, and its grasps, misses and retries can all
 # happen within a second, between two of the once-a-second instants. Its jaws are measured from its own wrist camera on
-# every frame instead, and every close (shut, or stopped on something) and open is listed in the episode's facts. It
-# costs a few lines of text and adds no frame: the frames sent are the same with or without it.
+# every frame instead, and only the stretches that look like a missed grasp and its retry (prepare/jaws.py retries)
+# are listed in the episode's facts, one line each. It adds no frame, and nothing at all when there is no such stretch.
 JAW_RIGS = ("handheld_gripper",)
 JAW_VERSION = 2              # bump when prepare/jaws.py changes what it measures, so cached results are redone
 PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
@@ -265,24 +265,22 @@ def plan(ep: dict) -> dict:
 
 
 def jaw_block(ep: dict) -> str:
-    """The measured jaw moves of each gripper (jaw_moves), for the episode's facts."""
-    moves = {v: m for v, m in (ep.get("jaws") or {}).items() if m}
-    if not moves:
-        return ""
+    """One line per stretch where a gripper's jaws shut, reopened and closed again within a couple of seconds
+    (prepare/jaws.py retries), for the episode's facts; nothing when there is none."""
+    from prepare import jaws as pj
     lines = []
-    for v, m in moves.items():
-        closes = ", ".join(f"{e['t']:.2f}" + (" shut" if e.get("shut") else " on something")
-                           for e in m if e["kind"] == "close") or "none"
-        opens = ", ".join(f"{e['t']:.2f}" for e in m if e["kind"] == "open") or "none"
-        lines.append(f"  {cam_name(ep, v)} gripper: closes at {closes}; opens at {opens} (seconds)")
-    return ("\nJAW MOVES, measured on every frame of each gripper's own camera from the dots on its jaws; the gripper "
-            "itself records nothing. A close is \"shut\" when the jaws met, so nothing was between them or only "
-            "something thin (cloth, a band, paper), and \"on something\" when they stopped apart on an object.\n"
-            + "\n".join(lines) + "\n"
-            "Grasps, misses and retries with a handheld gripper often take less than a second, so they can fall between "
-            "two once-a-second instants; these times tell you when each happened. Read every close against the "
-            "instants around it: what the jaws closed on, whether it came away with the gripper, and whether the same "
-            "object was grasped again.\n")
+    for v, m in (ep.get("jaws") or {}).items():
+        for st in pj.retries(m or []):
+            lines.append(f"  {cam_name(ep, v)} gripper: " + ", ".join(
+                (f"closed {e['t']:.2f}s" + (" shut" if e.get("shut") else " on something")) if e["kind"] == "close"
+                else f"opened {e['t']:.2f}s" for e in st))
+    if not lines:
+        return ""
+    return ("\nPOSSIBLE MISSED GRASPS, from each gripper's jaws measured on every frame of its own camera (the gripper "
+            "records nothing). In each stretch below the jaws closed all the way (\"shut\": nothing between them, or "
+            "only something thin like cloth or a band), opened again and closed again within a couple of seconds, "
+            "which is how a missed grasp and its retry look. It is quick enough to fall between two once-a-second "
+            "instants.\n" + "\n".join(lines) + "\n")
 
 
 def contact_instants(ep: dict, pl: dict) -> list[int]:

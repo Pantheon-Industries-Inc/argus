@@ -3,7 +3,8 @@ closes and opens.
 
 A UMI gripper records no gripper signal, so a grasp that misses and is retried within a second falls between two of
 the harness's once-a-second instants. This measures the jaws on every frame of the wrist video instead, and the
-harness lists each close and open in the episode's facts (label/episode.py jaw_block); it adds no frame.
+harness lists only the stretches that look like a missed grasp and its retry (retries) in the episode's facts, one
+line each (label/episode.py jaw_block); it adds no frame, and no text when there is no such stretch.
 
 The method is umi-action-deltas' grip6 (Pantheon-Industries-Inc/umi-action-deltas, umi/gripper/grip6.py), applied to
 the flat 640x480 view the UMI release renders from the wrist fisheye. Each jaw carries two orange dots, one above the
@@ -46,6 +47,12 @@ EVENT_MIN = 0.08                         # a close or open moves the spacing by 
 EVENT_WITHIN_S = 0.7                     # ... within this long
 SHUT_TOL = 0.06                          # a close ending within this share of the clip's shut spacing has nothing
                                          # between the jaws, or only something thin (cloth, a band, paper)
+RETRY_WITHIN_S = 2.0                     # a shut close, a reopen and the next close within this long look like a missed
+                                         # grasp and its retry
+RETRY_REOPEN = 0.4                       # ... when the reopen climbs at least this share of the way from the shut close
+                                         # back to the clip's widest open
+RETRY_SHUT_S = 1.3                       # ... and comes this soon after the shut close: jaws that stay shut longer were
+                                         # carrying something thin, and opening them is a release
 
 def read_frames(video: str):
     """Every frame of the video as BGR at W x H, with the video's frame rate."""
@@ -210,6 +217,29 @@ def mark_shut(evs: list[dict], o: np.ndarray) -> float:
         if e["kind"] == "close":
             e["shut"] = bool(e["to_px"] <= shut * (1 + SHUT_TOL))
     return shut
+
+
+def retries(evs: list[dict]) -> list[list[dict]]:
+    """The stretches that look like a missed grasp and its retry: a close where the jaws met (nothing between them),
+    a reopen within RETRY_SHUT_S of at least RETRY_REOPEN of the way back to the widest open, and the next close, all
+    within RETRY_WITHIN_S. Retries that follow one another are one stretch. Each stretch is its events in order."""
+    full = max((e["to_px"] for e in evs if e["kind"] == "open"), default=None)
+    closes = [i for i, e in enumerate(evs) if e["kind"] == "close"]
+    out, cur = [], None
+    for a, b in zip(closes, closes[1:]):
+        c1, c2 = evs[a], evs[b]
+        opens = [e for e in evs[a + 1:b] if e["kind"] == "open"]
+        hit = (c1.get("shut") and opens and full is not None and c2["t"] - c1["t"] <= RETRY_WITHIN_S
+               and opens[0]["t"] - c1["t"] <= RETRY_SHUT_S
+               and max(e["to_px"] for e in opens) - c1["to_px"] >= RETRY_REOPEN * (full - c1["to_px"]))
+        if not hit:
+            cur = None
+            continue
+        if cur is None:
+            cur = [c1]
+            out.append(cur)
+        cur += evs[a + 1:b + 1]
+    return out
 
 
 def analyse(video: str) -> dict | None:

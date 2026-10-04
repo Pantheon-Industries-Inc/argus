@@ -97,21 +97,27 @@ def test_follow_puts_a_long_recording_on_the_board_once_its_last_part_is_in(tmp_
     assert follow.follow_once(board, {}) == 0                        # restarted: nothing is rewritten
 
 
-def test_jaw_closes_are_shut_or_on_something_and_reach_the_facts_as_text():
-    """A close that ends where the jaws meet is shut; one that stops wider is on something. The episode's facts list
-    every close and open per gripper, and no frame is added for them."""
+def test_only_a_quick_shut_reopen_reclose_reaches_the_facts():
+    """A close where the jaws met, reopened soon and closed again is sent as a possible missed grasp; a carry of
+    something thin that is then released and the jaws shut, and a close on an object, are not. An episode with no
+    such stretch gets no text at all, and no frame is added either way."""
     import numpy as np
     from label import episode as me
     from prepare import jaws
     fps = 30.0
-    o = np.full(300, 160.0)                              # shut at rest
-    o[30:60] = 205.0                                      # open, then shut on nothing at 2s
-    o[90:120] = 205.0                                     # open, then close on an object at 4s
-    o[120:200] = 185.0
+    o = np.full(600, 160.0)                              # shut at rest
+    o[30:60] = 205.0                                      # open, shut on nothing at 2s ...
+    o[75:100] = 205.0                                     # ... reopen at 2.5s, close again at 3.33s: a miss and retry
+    o[150:180] = 205.0                                    # open, close on an object at 6s, hold it, release at 9s
+    o[180:270] = 185.0
+    o[270:280] = 205.0                                    # release, then shut the empty jaws at 9.33s
+    o[330:360] = 205.0                                    # open, shut on something thin at 12s, carried 2s,
+    o[420:430] = 205.0                                    # released at 14s and shut again at 14.33s
     evs = jaws.events(o, fps)
     jaws.mark_shut(evs, o)
-    closes = [(round(e["t"]), e["shut"]) for e in evs if e["kind"] == "close"]
-    assert closes == [(2, True), (4, False), (7, True)]
+    got = [[(round(e["t"], 1), e["kind"]) for e in st] for st in jaws.retries(evs)]
+    assert got == [[(2.0, "close"), (2.5, "open"), (3.3, "close")]]
     ep = {"jaws": {"left": evs, "right": None}, "context": {"cameras": {"left": {"name": "left"}}}}
     text = me.jaw_block(ep)
-    assert "left gripper: closes at 2.00 shut, 4.00 on something" in text and "right" not in text
+    assert "left gripper: closed 2.00s shut, opened 2.50s, closed 3.33s shut" in text and "6.00" not in text
+    assert me.jaw_block({"jaws": {"left": evs[3:], "right": None}}) == ""
