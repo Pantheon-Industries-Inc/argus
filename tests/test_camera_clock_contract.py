@@ -12,6 +12,67 @@ from prepare import formats
 from test_camera_timing import recording, video
 
 
+@pytest.mark.parametrize("encoding", ["jpeg", "rgb8"])
+@pytest.mark.parametrize("clock", ["zero", "absent", "partial"])
+def test_native_image_frames_keep_original_clocks_when_capture_stamps_repeat_or_are_missing(tmp_path, encoding, clock):
+    import base64
+    import hashlib
+    import io
+    from mcap.writer import Writer
+    from PIL import Image
+
+    path = tmp_path / "images.mcap"
+    n = 90 if clock == "zero" else 6
+    arrival = 1_700_000_000_000_000_000 + np.arange(n, dtype=np.int64) * 33_000_000
+    publish = arrival - 7_000_000
+    valid = np.asarray([clock == "zero" or clock == "partial" and i % 2 == 0 for i in range(n)])
+    capture = np.zeros(n, dtype=np.int64) if clock == "zero" else arrival - 700_000_000
+    stamps = np.where(valid, capture, arrival)
+    with path.open("wb") as fh:
+        writer = Writer(fh)
+        writer.start()
+        schema = writer.register_schema("foxglove.RawImage" if encoding == "rgb8" else "foxglove.CompressedImage",
+                                        "jsonschema", b"{}")
+        channel = writer.register_channel("/camera/front/image", "json", schema)
+        for i in range(n):
+            image = Image.new("RGB", (128, 96), (60,) * 3)
+            x = int(10 + 98 * i / max(n - 1, 1))
+            image.paste((220, 40, 40), (x, 30, x + 20, 50))
+            if encoding == "jpeg":
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG")
+                body = {"format": "jpeg", "data": base64.b64encode(buffer.getvalue()).decode()}
+            else:
+                body = {"encoding": "rgb8", "width": 128, "height": 96, "step": 384,
+                        "data": base64.b64encode(image.tobytes()).decode()}
+            if valid[i]:
+                body["timestamp"] = {"sec": int(capture[i] // 1_000_000_000),
+                                     "nsec": int(capture[i] % 1_000_000_000)}
+            writer.add_message(channel, int(arrival[i]), json.dumps(body).encode(), int(publish[i]))
+        writer.finish()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    ep = tmp_path / "prepared"
+    ctx = formats.convert_mcap_generic({"file": path, "name": "images", "seconds": 3 if clock == "zero" else .2,
+                                       "topics": ["/camera/front/image"]}, "ego_head", ep, "native image clocks")
+    with av.open(str(ep / "exo.mp4")) as src:
+        pixels = [frame.to_ndarray(format="rgb24") for frame in src.decode(video=0)]
+    assert len(pixels) == n
+    for i, pixels_i in enumerate(pixels):
+        x = int(10 + 98 * i / max(n - 1, 1))
+        assert pixels_i[35:45, x + 5:x + 15].mean(axis=(0, 1)) == pytest.approx([220, 40, 40], abs=8)
+    assert ctx["source"]["camera_clock"] == ("capture" if clock == "zero" else "arrival" if clock == "absent"
+                                               else "mixed capture and arrival stamps")
+    with np.load(ep / ctx["recorded_camera_ns"]) as recorded:
+        assert recorded["exo"].tobytes() == stamps.tobytes()
+    row = next(row for row in ctx["mcap_field_inventory"] if row["topic"] == "/camera/front/image")
+    with np.load(ep / ctx["recorded_mcap_fields"]) as archive:
+        assert archive[row["log_ns"]].tobytes() == arrival.tobytes()
+        assert archive[row["publish_ns"]].tobytes() == publish.tobytes()
+        assert np.array_equal(archive[row["capture_valid"]], valid)
+        assert np.array_equal(archive[row["capture_ns"]], np.where(valid, capture, np.iinfo(np.int64).min))
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
 def clock_recording(tmp_path, zero=0.5):
     ep = recording(tmp_path, zero + np.arange(90) / 30)
     ctx = json.loads((ep / "context.json").read_text())

@@ -8083,7 +8083,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         out_mp4 = ep / (f"{view_of_topic[ch.topic]}.mp4" if ch.topic in view_of_topic
                                         else unshown_of[ch.topic])
                         w = writers[ch.topic] = FrameWriter(out_mp4, "raw" if ch.topic in raw_topics | pictured
-                                                            else str(_field(dec, "format") or "").lower())
+                                                            else str(_field(dec, "format") or "").lower(),
+                                                            fine_clock=True)
                     before = len(w.pts)
                     if ch.topic in pictured:
                         w.add_image((stamp - t0) / 1e9, depth_picture(depth_image(dec), ch.topic,
