@@ -173,8 +173,9 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         # (label/episode.py touch_verdicts): a part that falls inside a long press has no rest of its own, so its slice
         # alone would not read as touch and the part would lose the contact the recording shows
         from label import signals as sg
+        from label.dictionary_context import field_interpretation
         touch = {s["name"]: bool(sg.is_touch(s["name"], np.asarray(zs[s["key"]][:n], dtype=np.float64), s.get("rest"),
-                                             s.get("swing")))
+                                             s.get("swing"), role=field_interpretation(ctx, s["name"]).get("role")))
                  for s in ctx["signals"] if s["key"] in zs.files}
     # the recording's contacts, found once on the whole recording when its context has none (prepared before contacts
     # were measured, or measuring them failed), so no part's labelling finds contacts on its own slice; the recording's
@@ -300,7 +301,10 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if zs is not None:          # the context lists the recording's other signals, so the part carries its rows
             np.savez(d / "signals.npz", **{kk: zs[kk][k0:k1] for kk in zs.files})
             # copies, so the recording's own context.json keeps its entries as prepare wrote them
-            c2["signals"] = [{**s, "touch": touch[s["name"]]} if s["name"] in touch else s for s in ctx["signals"]]
+            c2["signals"] = [{**s, "touch": touch[s["name"]],
+                              **({"touch_role": "touch"} if sg.touch_permission(
+                                  s["name"], field_interpretation(ctx, s["name"]).get("role")) is True else {})}
+                             if s["name"] in touch else s for s in ctx["signals"]]
         if ctx.get("annotation_subtasks"):
             # the dataset's timed subtasks are on the recording's clock; the part is shown those that overlap it, on
             # its own clock and clipped to it (a step with no end time is a moment), and every part is shown those

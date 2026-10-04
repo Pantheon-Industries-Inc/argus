@@ -65,6 +65,9 @@ RATE_SLOWER = 0.9
 # to this many values: a humanoid's 26 joints do, an unnamed 21 x 3 hand array named hand_joints (63 values, rows
 # labelled only by index) does not. A vector whose values the dataset names keeps the PER_VALUE_MAX limit.
 JOINT_NAME_MAX = 32
+MOVEMENT_ROLES = frozenset(("joint_state", "actuator_command", "end_effector_pose", "base_motion", "pose",
+                            "landmarks", "hand_pose", "imu", "odometry", "action", "state"))
+NON_TOUCH_ROLES = MOVEMENT_ROLES | frozenset(("event_flag", "annotation", "calibration", "bookkeeping"))
 MERGE_GAP_S = 0.15
 HOLD_BAND = 0.02
 SETTING_STATES = 3        # a signal of several values with this many distinct readings or fewer is a setting
@@ -157,12 +160,14 @@ def finite_range(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return lo, hi
 
 
-def per_value(name: str, d: int, shape=None, names=None) -> bool:
+def per_value(name: str, d: int, shape=None, names=None, role=None) -> bool:
     """Whether a signal of d values per frame gets one row per value at each instant (JOINT_LIKE above)."""
     if d <= SMALL:
         return True
     if d > PER_VALUE_MAX or (shape and len(shape) > 1):
         return False
+    if _role(role) == "force_torque":
+        return True
     if names and len(names) == d:
         return True
     return d <= JOINT_NAME_MAX and bool(JOINT_LIKE.search(name))
@@ -439,14 +444,27 @@ def _few_rows(a: np.ndarray, most: int) -> bool:
     return True
 
 
-def is_touch(name: str, a: np.ndarray, rest=None, swing=None) -> bool:
+def _role(role):
+    return role.strip().casefold() if isinstance(role, str) else ""
+
+
+def touch_permission(name: str, role=None):
+    """Commands and known noncontact roles veto stored verdicts before any numeric reuse."""
+    from prepare.formats import COMMAND_WORDS, _names_word
+    if _names_word(name, COMMAND_WORDS) or _role(role) in NON_TOUCH_ROLES:
+        return False
+    return True if _role(role) == "touch" else None
+
+
+def is_touch(name: str, a: np.ndarray, rest=None, swing=None, role=None) -> bool:
     """Whether a signal measures touch: its own name says so (prepare/formats.py names_touch: tactile, pressure,
     contact, force, and never a command) and its numbers behave like touch (touch_like). Numbers alone cannot
     decide it: a humanoid's torso joint that holds still and then moves one way, a mobile base's odometry, an action
     or a pose rest and rise like a pressure pad, and only the name says which one measures touch. A touch signal
     whose name says nothing (ch0) is not read as touch until a data dictionary can say it is."""
     from prepare.formats import names_touch
-    return names_touch(name) and touch_like(a, rest, swing)
+    permission = touch_permission(name, role)
+    return permission is not False and (permission is True or names_touch(name)) and touch_like(a, rest, swing)
 
 
 def active_spans(a: np.ndarray, t: np.ndarray, rest=None, swing=None) -> list[tuple[float, float]]:
@@ -556,16 +574,16 @@ def quiet_spans(arrs: dict, need: int) -> list[tuple[int, int]]:
 
 
 def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None, rest=None,
-                 swing=None) -> list[tuple[str, list[str]]]:
+                 swing=None, role=None) -> list[tuple[str, list[str]]]:
     """[(row label, one value per sampled instant)] for one signal: its values when it gets one row per value
     (per_value), else the numbers that summarise the array (module docstring). "-" is no reading at that instant."""
     a = _float(a)
     d = a.shape[1]
-    if per_value(name, d, shape, names):
+    if per_value(name, d, shape, names, role):
         labels = names if names and len(names) == d else ([""] if d == 1 else [f"[{i}]" for i in range(d)])
         return [(f"{name}{(' ' + lb) if lb else ''}", [_num(a[k, i]) for k in ks]) for i, lb in enumerate(labels)]
     rows = []
-    if localized(a, rest, swing):
+    if _role(role) not in MOVEMENT_ROLES and localized(a, rest, swing):
         # the distances, the active values and the activity at the sampled instants alone, as the whole would give them
         level = resting_level(a, rest)
         sw = _swing(a, level, swing)

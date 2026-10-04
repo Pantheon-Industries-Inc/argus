@@ -66,8 +66,11 @@ def find(signals: dict, meta: dict, t: np.ndarray, verdicts=None) -> list[dict]:
         m = meta.get(name) or {}
         if m.get("variation_of") or name.endswith(VARIATION_SUFFIX):
             continue
+        role = (m.get("dictionary") or {}).get("role")
+        if sg.touch_permission(name, role) is False:
+            continue
         if len(a) == n and (name in verdicts if verdicts is not None
-                            else sg.is_touch(name, a, m.get("rest"), m.get("swing"))):
+                            else sg.is_touch(name, a, m.get("rest"), m.get("swing"), role=role)):
             touch[name] = (a, m)
     if not touch:
         return []
@@ -168,11 +171,20 @@ def _regions(touch: dict, names: set, k: int) -> dict:
 def of_episode(ep: dict, verdicts=None) -> list[dict]:
     """The episode's contacts: the ones prepare wrote (context["contacts"], found with the upload's scales), else found
     now from its signals, with the caller's touch verdicts when it has them (find)."""
+    from label.dictionary_context import field_interpretation
+    meta = {name: dict(value) for name, value in (ep.get("signal_meta") or {}).items()}
+    for name in ep.get("signals") or {}:
+        entry = field_interpretation(ep["context"], name)
+        if entry:
+            meta.setdefault(name, {})["dictionary"] = entry
     if "contacts" in ep["context"]:
-        return mark_aligned(ep["context"]["contacts"] or [], ep.get("signal_meta") or {})
+        contacts = [{**contact, "signals": [name for name in contact.get("signals") or []
+                     if sg.touch_permission(name, (meta.get(name, {}).get("dictionary") or {}).get("role")) is not False]}
+                    for contact in ep["context"]["contacts"] or []]
+        return mark_aligned([contact for contact in contacts if contact["signals"]], meta)
     from label import episode as me
     sig = ep.get("signals") or {}
     if not sig:
         return []
     n = len(next(iter(sig.values())))
-    return find(sig, ep.get("signal_meta") or {}, np.array([me.frame_time(ep, k) for k in range(n)]), verdicts)
+    return find(sig, meta, np.array([me.frame_time(ep, k) for k in range(n)]), verdicts)

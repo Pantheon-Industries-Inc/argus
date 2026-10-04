@@ -134,6 +134,11 @@ def load(ep_dir: Path) -> dict:
         ep["signals"] = {s["name"]: sg.pad_rows(sg.columns(z[s["key"]]), len(state)) for s in ctx["signals"]}
         ep["signal_meta"] = {s["name"]: {k: v for k, v in s.items() if k not in ("name", "key")}
                              for s in ctx["signals"]}
+        from label.dictionary_context import field_interpretation
+        for name, meta in ep["signal_meta"].items():
+            interpretation = field_interpretation(ctx, name)
+            if interpretation:
+                meta["dictionary"] = interpretation
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
@@ -1285,19 +1290,30 @@ def touch_verdicts(ep: dict, n: int) -> frozenset:
     says so and its numbers behave like touch, on the upload's scale) over its first n frames, the frames the prompt
     covers (plan()["n"])."""
     from label import signals as sg
+    from label.dictionary_context import field_interpretation
     meta = ep.get("signal_meta") or {}
     out = set()
     for name, a in (ep.get("signals") or {}).items():
         m = meta.get(name) or {}
+        role = field_interpretation(ep["context"], name).get("role")
+        permission = sg.touch_permission(name, role)
+        if permission is False:
+            continue
         # read as stored (a float32 skin is never copied whole as float64, label/signals.py CHUNK_VALUES)
-        if m["touch"] if "touch" in m else sg.is_touch(name, a[:n], m.get("rest"), m.get("swing")):
+        stored = "touch" in m and (permission is None or m.get("touch_role") == "touch")
+        if m["touch"] if stored else sg.is_touch(name, a[:n], m.get("rest"), m.get("swing"), role=role):
             out.add(name)
     return frozenset(out)
 
 
 def _touch(ep: dict, pl: dict) -> frozenset:
     """plan()["touch"], or for a plan made by hand without it, the verdicts made now."""
-    return pl["touch"] if "touch" in pl else touch_verdicts(ep, pl["n"])
+    if "touch" not in pl:
+        return touch_verdicts(ep, pl["n"])
+    from label import signals as sg
+    from label.dictionary_context import field_interpretation
+    return frozenset(name for name in pl["touch"] if sg.touch_permission(
+        name, field_interpretation(ep["context"], name).get("role")) is not False)
 
 
 def touch_contacts(ep: dict, pl: dict, contacts) -> list[dict]:
@@ -1371,6 +1387,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
     the episode's contacts (contacts_block). They are shown, not interpreted: the model reads what each is from its
     name and the robot's description."""
     from label import signals as sg
+    from label.dictionary_context import field_interpretation
     sig = ep.get("signals") or {}
     if not sig:
         return ""
@@ -1381,9 +1398,11 @@ def _signals_table(ep: dict, pl: dict) -> str:
     arrs = {k: a[:n] for k, a in sig.items()}
     lines, still, wherever = [], [], []
     for name, a in arrs.items():
+        interpretation = field_interpretation(ep["context"], name)
+        wording = _interpretation_words(interpretation)
         try:
             if not len(a):
-                lines.append(f"  {name}: no rows, so no reading at any frame")
+                lines.append(f"  {name}: no rows, so no reading at any frame" + wording)
                 continue
             if _constant(a):
                 # a value repeated wherever it reads (a setting, a calibration, or a sensor that sent nothing new):
@@ -1392,6 +1411,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
                 v = a[complete][0] if complete.any() else sg.finite_range(a)[0]
                 said = name + (f" {_num(v[0])}" if len(v) == 1 else
                                " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else "")
+                said += wording
                 gaps = sg.gap_words(a)
                 if gaps:
                     wherever.append(f"{said} ({gaps})")
@@ -1403,7 +1423,7 @@ def _signals_table(ep: dict, pl: dict) -> str:
                                      fps=ep_fps(ep), aligned_by=m.get("aligned_by"),
                                      camera_aligned_by=m.get("camera_aligned_by"),
                                      clock_problem=m.get("clock_problem"), source_rows=m.get("source_rows"),
-                                     camera_frames=m.get("camera_frames")))
+                                     camera_frames=m.get("camera_frames")) + wording)
         except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
             lines.append(f"  {name}: could not be read ({type(e).__name__})")
     if still:
@@ -1424,10 +1444,12 @@ def _signals_table(ep: dict, pl: dict) -> str:
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
                          + ("; ".join(ch) if ch else "none changed"))
     lines += _readout_of(ep, pl)[0]
+    interpretation_note = ("Dictionary meanings and roles are attributed interpretations, not recorded facts. "
+                           if any(field_interpretation(ep["context"], name) for name in arrs) else
+                           "They are not interpreted for you: read what each is from its name and the robot's description above. ")
     return ("\nOTHER RECORDED SIGNALS: every other number the dataset records per frame, under the dataset's own "
             "name, with the range each of its values takes over the episode (one that never changes is given as its "
-            "value). They are not interpreted for you: read what each is from its name and the robot's description "
-            "above. Like the rest of the recording they are claims to check against the video; a camera carried by "
+            "value). " + interpretation_note + "Like the rest of the recording they are claims to check against the video; a camera carried by "
             "something they show moving (a mobile base, a torso) moves with it.\n" + "\n".join(lines))
 
 
@@ -1441,6 +1463,7 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     Every signal left out, whole or in part, is named with its size and rate; original value names remain in metadata.
     """
     from label import signals as sg
+    from label.dictionary_context import field_interpretation
     sig = ep.get("signals") or {}
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
@@ -1453,9 +1476,10 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
             if name in touch or not len(a) or not np.isfinite(a).any() or _constant(a):
                 continue
             m = meta.get(name) or {}
-            got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"))
+            role = field_interpretation(ep["context"], name).get("role")
+            got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"), role=role)
             mv = sg.movements(a)
-            by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"))
+            by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"), role=role)
         except Exception:  # noqa: BLE001 - named as not read in the signals' list (_signals_table), the rest are given
             continue
         for j, (lb, v) in enumerate(got):
@@ -1718,12 +1742,12 @@ def _state_text(ep: dict, pl: dict) -> str:
              "say what you see.")
     else:
         s = f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
-    return s + _motion_table(ep, pl)
+    return s + _motion_table(ep, pl) + _dictionary_text(ep, pl)
 
 
 def _state_unaligned_text(ep: dict, pl: dict) -> str:
     return ("\nRECORDED STATE: not given. This episode's cameras do not cover the same frames "
-            "as its recorded state, so the state cannot be aligned to the video.")
+            "as its recorded state, so the state cannot be aligned to the video." + _dictionary_text(ep, pl))
 
 
 # What in context["source"] says the reader found sensor data it did not read (prepare/formats.py write_signals,
@@ -1744,7 +1768,7 @@ STATE_WORDING = {
 }
 
 
-def _no_state_text(ep: dict, pl: dict) -> str:
+def _no_state_base_text(ep: dict, pl: dict) -> str:
     """No arm state. With other signals the line says why, as the reader recorded it (state_why, STATE_WHY): "layout"
     says none is in the layout our checks read, and every other reason that no state was read, why, and the reader's
     note on it (not for "not_recorded", whose note only says the same). A context written before the reader recorded
@@ -1812,6 +1836,15 @@ def _no_state_text(ep: dict, pl: dict) -> str:
     return f"\nRECORDED STATE: none; this dataset records {what}, so {all_there_is}"
 
 
+def _no_state_text(ep: dict, pl: dict) -> str:
+    interpretation = _dictionary_text(ep, pl)
+    if interpretation and not _has_signals(ep, pl) and any(field.get("kind") == "state" for field in
+            (ep["context"].get("data_dictionary") or {}).get("fields", [])):
+        actor = _rig_nouns(rig(ep))["actor"]
+        return f"\nRECORDED STATE: no {actor} state in the layout our checks read." + interpretation
+    return _no_state_base_text(ep, pl) + interpretation
+
+
 def _uploader_text(ep: dict, pl: dict) -> str:
     # notes the person who uploaded the episode sent with it (a note file beside a video, an annotation channel in an
     # MCAP), in whatever form they came
@@ -1874,6 +1907,32 @@ def _signal_clocks_text(ep: dict, pl: dict) -> str:
 
 def _has_signal_clock_notes(ep: dict, pl: dict) -> bool:
     return bool(_signal_clock_notes(ep))
+
+
+def _interpretation_words(entry):
+    if not entry:
+        return ""
+    role = "role " + entry["role"] if entry.get("role") else "role cleared"
+    meaning = entry.get("meaning") or ""
+    return f" [{entry.get('provenance', 'machine')} interpretation, {role}] {meaning}".rstrip()
+
+
+def _dictionary_text(ep: dict, pl: dict) -> str:
+    from label.dictionary_context import field_interpretation
+    lines = []
+    for field in (ep["context"].get("data_dictionary") or {}).get("fields", []):
+        if field.get("kind") not in ("state", "action"):
+            continue
+        entry = field_interpretation(ep["context"], field["name"], field["kind"])
+        if not entry:
+            continue
+        line = "  " + field["name"] + _interpretation_words(entry)
+        groups = [f"{group['name']} columns {group['start']} to {group['start'] + group['count'] - 1}"
+                  for group in entry.get("layout") or []]
+        if groups:
+            line += ". Proposed layout " + "; ".join(groups) + "."
+        lines.append(line)
+    return "\nDATA DICTIONARY INTERPRETATIONS\n" + "\n".join(lines) if lines else ""
 
 
 BLOCKS = (
