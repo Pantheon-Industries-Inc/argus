@@ -258,12 +258,12 @@ def test_no_rig_borrows_another_rigs_hardware():
 # The shared instructions each rig is sent, pinned so that no prompt text changes by accident. A deliberate prompt
 # change updates these in the same commit.
 PINNED = {
-    ("teleop_arms", True): "45be2ec1957385db96d806debbf16921834b2ad889ba7fd7103081a4b51b2ca7",
-    ("teleop_arms", False): "4646c084ab85b6b83dfd6170fa9f3fa7cf37066a9c09f88715969e4da4f22c26",
-    ("handheld_gripper", True): "4c90555c9ee9c5f16f4ce1d8eecc185c01ceca8e6dc870a159058f02e5bac41a",
-    ("handheld_gripper", False): "e58720060c331c51bd4cff372162843c518bc5a568184b4c063a0a53d588c975",
-    ("ego_head", True): "8a7b3f585ecbc8e1cdae015e0f20f8ad0dc3e6f8bc0bb64e501a39cd708fb9bb",
-    ("ego_head", False): "8a7b3f585ecbc8e1cdae015e0f20f8ad0dc3e6f8bc0bb64e501a39cd708fb9bb",
+    ("teleop_arms", True): "36e1a57cc99c755beaaa7b9da7d2109c7681cad56bc627ac48d85adcbe8d5564",
+    ("teleop_arms", False): "93f0fab4e3b6e52df442bb8022591737cd37ec07f471dbbe18b288d4091ba730",
+    ("handheld_gripper", True): "6984833a4651461cfaae0cfcf6f934708e0848cea7dfa9daf4b5f9db6cd51cc1",
+    ("handheld_gripper", False): "7fd4ee953c5e409446e36652ec97bac5bfc3f503581e3f28beba905542724f88",
+    ("ego_head", True): "9989b6d3428ecdee76b2af33cb531d917063c767895e564a6d0b5e2d4981e0db",
+    ("ego_head", False): "9989b6d3428ecdee76b2af33cb531d917063c767895e564a6d0b5e2d4981e0db",
 }
 
 
