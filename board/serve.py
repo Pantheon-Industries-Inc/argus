@@ -4813,9 +4813,9 @@ function sensorProfileAt(p, t) {
 function sensorProfileHtml(p, t) {
   const value = sensorProfileAt(p, t);
   const hand = p.hand === 'left' ? 'Left' : p.hand === 'right' ? 'Right' : '';
-  return `<span class="se-headline">${hand ? hand + ' ' : ''}tactile intensity${p.label ? ' (' + esc(p.label) + ')' : ''}</span>`
+  return `<span class="se-headline">${hand ? hand + ' ' : ''}sensor signal${p.label ? ' (' + esc(p.label) + ')' : ''}</span>`
     + (p.assumed ? '<span class="se-action">Assumed timing</span>' : '')
-    + (value ? `<span class="se-measure">${p.full && value.sustained != null ? value.sustained : value.percent}% <small>${p.full ? (value.sustained == null ? 'Raw sample' : '0.2s median') : 'of episode peak'}</small></span>
+    + (value ? `<span class="se-measure">${p.full && value.sustained != null ? value.sustained : value.percent}% <small>of episode peak</small></span>${p.full ? '<span class="se-action">' + (value.sustained == null ? 'Raw sample' : '0.2s median') + '</span>' : ''}
       <span class="se-meter"><span style="width:${p.full && value.sustained != null ? value.sustained : value.percent}%"></span></span>`
       : '<span class="se-action">No reading at this sample</span>');
 }
@@ -4848,30 +4848,30 @@ function sensorDistributionHtml(p, t) {
   return `<div class="se-distribution"><div><span>Sensor grid ${rows} x ${cols}</span>
     <svg viewBox="0 0 ${cols} ${rows}" role="img" aria-label="Tactile sensor grid, darker cells deviate further from rest">${rects}
     ${Number.isFinite(row) && Number.isFinite(col) ? `<circle cx="${col + .5}" cy="${row + .5}" r=".45" fill="none" stroke="#b3263c" stroke-width=".18"/>` : ''}</svg>
-    <span>Rest <span class="se-grid-scale"></span>Higher</span></div>
-    <div><strong>${Math.round(a.active[v.index])} / ${n}</strong><span>active cells</span>
+    <span>Estimated reference <span class="se-grid-scale"></span>Larger deviation</span></div>
+    <div><strong>${Math.round(a.active[v.index])} / ${n}</strong><span>cells above the deviation threshold</span>
       <strong>${Number.isFinite(focus) ? Math.round(100 * focus) + '%' : '-'}</strong>
       <span>of signal in the strongest ${a.top_cells} cells</span><span>Ring marks the signal centre</span></div></div>`;
 }
 function sensorPhasesHtml(profiles) {
   return profiles.filter(p => p.full || p.phases.length).map(p => `<div class="se-phases">
-    <span>${p.phases.length ? 'Median intensity by action' : 'Recorded tactile intensity'}${p.hand ? ' for the ' + esc(p.hand) + ' hand' : ''}${p.label ? ' (' + esc(p.label) + ')' : ''}</span>
+    <span>${p.phases.length ? 'Sensor signal by action' : 'Recorded sensor signal'}${p.hand ? ' for the ' + esc(p.hand) + ' hand' : ''}${p.label ? ' (' + esc(p.label) + ')' : ''}</span>
     ${p.assumed ? '<span>Assumed timing</span>' : ''}
     ${p.phases.map(e => `<button type="button" data-phase-t="${e.start}" title="${e.samples} of ${e.total} retained samples">
       <span>${esc(e.label)}</span><strong>${e.percent}%</strong><span>${e.samples} / ${e.total} samples</span>
       <span class="se-meter"><span style="width:${e.percent}%"></span></span></button>`).join('')}
     ${sensorTraceHtml(p)}
     <details class="se-method"><summary>How this is measured</summary>
-      <p>${p.full ? 'Intensity sums directional changes from rest across every cell, with no activity threshold. The overlay uses a trailing median up to 0.2 seconds, with shorter initial windows and at least three readings. Gaps remain blank.' : 'Intensity uses the saved thresholded activity samples.'} Percentages use this episode's raw peak. Action cards use raw sample medians.</p>
-      ${p.full ? '<p>Active cells exceed 10% of the dataset swing. Concentration is the share in the strongest 10% of cells. Grid colours use that same dataset scale, capped at one swing. The ring is the intensity-weighted centre in sensor coordinates.</p>' : ''}
-      <p>These are relative sensor measurements without force calibration. Sensor coordinates do not identify fingers or physical contact area.</p></details>
+      <p>${p.full ? 'Intensity sums directional changes from rest across every cell, with no activity threshold. The displayed median uses a trailing window up to 0.2 seconds, with shorter initial windows and at least three readings. Gaps remain blank.' : 'Intensity uses the saved thresholded activity samples.'} Percentages use this episode's raw peak. Action cards use raw sample medians.</p>
+      ${p.full ? '<p>The cell count uses deviations exceeding 10% of the dataset swing. Concentration is the share in the strongest 10% of cells. Grid colours use that same dataset scale, capped at one swing. The ring is the intensity-weighted centre in sensor coordinates.</p>' : ''}
+      <p>The reference is estimated from recording statistics, not a verified unloaded glove measurement. Nonzero signal does not establish object contact. These are relative sensor measurements without force calibration. Sensor coordinates do not identify fingers or physical contact area.</p></details>
   </div>`).join('');
 }
 function sensorEvidenceHtml(E, depth) {
   if (!E.contacts.length && !E.moments.length && !depth.length) return '';
   return `<div class="sensor-evidence" id="sensor-evidence">
-    ${E.contacts.length || E.moments.length ? `<div class="se-summary"><strong>Tactile measurements</strong>
-      <span>Relative intensity</span></div>
+    ${E.contacts.length || E.moments.length ? `<div class="se-summary"><strong>Tactile recording</strong>
+      <span>Unloaded baseline unverified</span></div>
       <div id="sensor-evidence-now" class="se-current"></div>
       <div id="sensor-phase-profile"></div>
       ${E.moments.some(m => ['dip', 'missing'].includes(m.kind)) ? `<div class="se-moments" aria-label="Contact changes">${E.moments.filter(m => ['dip', 'missing'].includes(m.kind)).map(m =>
@@ -4917,13 +4917,14 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
       line.setAttribute('x1', x); line.setAttribute('x2', x);
     }
     const measurements = profiles.map(p => sensorProfileHtml(p, t)).join('');
-    const html = measurements + (e && e.priority >= 3 ? sensorEvidenceOverlayHtml(e) : '');
+    const findings = e && e.priority >= 3 ? sensorEvidenceOverlayHtml(e) : '';
+    const html = measurements + findings;
     current = e;
     currentTime = t;
     const distribution = profiles.map(p => sensorDistributionHtml(p, t)).join('');
     if (html + distribution === signature) return;
     signature = html + distribution;
-    if (overlay) { overlay.innerHTML = html; overlay.classList.toggle('active', !!html); }
+    if (overlay) { overlay.innerHTML = findings; overlay.classList.toggle('active', !!findings); }
     if (now) now.innerHTML = (html + distribution) || `<span>${loaded ? 'No retained tactile intensity samples' : 'Loading tactile measurements'}</span>`;
   }};
   if (d && file && E.contacts.length) loadSensors(file).then(D => {

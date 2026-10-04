@@ -39,6 +39,7 @@ assert.equal(d.moments.length, 1);
 assert.equal(E.activeSensorEvidence(d,3).headline, 'Visible grasp has no recorded contact');
 const depth = E.sensorEvidenceHtml(E.sensorEvidence({}), ['exo']);
 assert(depth.includes('No depth-specific finding in the saved annotation'));
+assert(E.sensorEvidenceHtml(E.sensorEvidence({contacts:[c]}),[]).includes('Unloaded baseline unverified'));
 assert(depth.includes('Compare RGB and depth'));
 assert.equal(E.sensorEvidenceHtml(E.sensorEvidence({}), []), '', 'ordinary video-only pages remain unchanged');
 d = E.sensorEvidence({contacts:[{...c, seen:{...c.seen, object:'<img src=x>', action:'<script>alert(1)</script>'}}]});
@@ -135,6 +136,8 @@ assert(!/finger|newton|kilogram|stable grasp/.test(E.sensorDistributionHtml(full
   await Promise.resolve();
   live.sync(2/30); const before = panel.now.innerHTML;
   live.sync(3/30); const after = panel.now.innerHTML;
+  assert(!panel.overlay.innerHTML.includes('%'),'unverified sensor baseline cannot support a touch percentage on footage');
+  assert(panel.now.innerHTML.includes('episode peak'),'inspectable raw signal retains an explicit denominator');
   assert(before.includes('4 / 4') && after.includes('1 / 4'),'distribution must refresh when rounded intensity is unchanged');
   delete global.document; delete global._activeFile; delete global.loadSensors;
   console.log('Sensor evidence controls passed');
