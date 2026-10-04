@@ -2040,22 +2040,25 @@ body.view-home #home-view { display: block; }
 body.view-fade #home-view { opacity: 0; }
 .cv-all.home-link { cursor: pointer; position: relative; transition: background 140ms; }
 .cv-all.home-link:hover { background: color-mix(in srgb, var(--surface) 94%, var(--fg)); }
-.hv { max-width: 1440px; margin: 0 auto; padding: 28px 32px 56px; display: grid; gap: 20px; }
-.hv-sec { margin: 22px 0 -4px; font: 700 18px/1.2 var(--sans); letter-spacing: -0.01em; color: var(--fg); }
+.hv { max-width: 1440px; margin: 0 auto; padding: 28px 32px 56px; display: grid; gap: 20px;
+  font-variant-numeric: tabular-nums; }
+.hv-sec { margin: 30px 0 2px; padding-bottom: 12px; border-bottom: 1px solid var(--border-strong);
+  font: 700 20px/1.2 var(--sans); letter-spacing: -0.01em; color: var(--fg); }
 .hv-tile { min-width: 0; padding: 20px 24px; background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; }
-.hv-tt { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px;
-  font: 600 15px/1.3 var(--sans); color: var(--fg); }
+.hv-tt { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px;
+  margin: -20px -24px 18px; padding: 10px 24px; border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0;
+  background: color-mix(in srgb, var(--bg) 70%, var(--surface)); font: 600 15px/1.3 var(--sans); color: var(--fg); }
 .hv-tt small { font: 500 13px/1.3 var(--sans); color: var(--fg-3); }
 .hv .if-sev-seg button { font-size: 13px; }
 /* the headline numbers */
 .hv-kpis { display: grid; grid-template-columns: 1.8fr repeat(4, minmax(0, 1fr)); gap: 16px; }
 .hv-kpi .k { display: flex; align-items: center; gap: 8px; font: 500 13px/1 var(--sans); color: var(--fg-3); }
-.hv-kpi .v { margin-top: 12px; font: 600 32px/1 var(--mono); letter-spacing: -0.03em; color: var(--fg); white-space: nowrap; }
+.hv-kpi .v { margin-top: 12px; font: 600 32px/1 var(--sans); letter-spacing: -0.03em; color: var(--fg); white-space: nowrap; }
 .hv-kpi .v small { font: 500 15px/1 var(--sans); letter-spacing: 0; color: var(--fg-3); margin-left: 4px; }
 .hv-kpi .s { margin-top: 10px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
 .hv-kpi .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
-.hv-kpi .pct { font: 600 18px/1 var(--mono); color: var(--fg); }
+.hv-kpi .pct { font: 600 18px/1 var(--sans); color: var(--fg); }
 .hv-kpi .bar { margin-top: 14px; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(28,28,26,0.08); }
 .hv-kpi .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg);
   transition: width 900ms cubic-bezier(.2,.7,.2,1); }
@@ -2068,41 +2071,44 @@ body.view-fade #home-view { opacity: 0; }
 @media (max-width: 1500px) { .hv-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .hv-card { cursor: pointer; transition: box-shadow 160ms ease, border-color 160ms ease; }
 .hv-card:hover { border-color: var(--border-strong); box-shadow: 0 6px 22px rgba(0,0,0,0.08); }
-.hv-card .hd { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.hv-card .hd { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px;
+  min-height: 52px; margin: -20px -24px 0; padding: 10px 24px; border-bottom: 1px solid var(--border);
+  border-radius: 10px 10px 0 0; background: color-mix(in srgb, var(--bg) 70%, var(--surface)); }
 .hv-nm { font: 600 15px/1.2 var(--sans); color: var(--fg); white-space: nowrap; }
 .hv-nm i { display: inline-block; width: 10px; height: 10px; margin-right: 10px; border-radius: 3px; vertical-align: -1px; }
-.hv-card .h { font: 600 15px/1 var(--mono); color: var(--fg); white-space: nowrap; }
+.hv-card .h { font: 600 15px/1 var(--sans); color: var(--fg); white-space: nowrap; }
 .hv-card .h small { font-weight: 500; color: var(--fg-3); }
-.hv-card .bar { height: 4px; margin: 14px 0 18px; border-radius: 2px; overflow: hidden; background: rgba(28,28,26,0.08); }
+.hv-card .bar { height: 6px; margin: 18px 0 18px; border-radius: 2px; overflow: hidden; background: rgba(28,28,26,0.08); }
 .hv-card .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg-2);
   transition: width 900ms cubic-bezier(.2,.7,.2,1); }
 .hv-trio { display: grid; grid-template-columns: repeat(3, auto); justify-content: space-between; gap: 12px; }
-.hv-trio b { display: block; font: 600 24px/1 var(--mono); letter-spacing: -0.02em; color: var(--fg); white-space: nowrap; }
-.hv-trio b small { font: 500 13px/1 var(--mono); letter-spacing: 0; color: var(--fg-3); }
+.hv-trio b { display: block; font: 600 24px/1 var(--sans); letter-spacing: -0.02em; color: var(--fg); white-space: nowrap; }
+.hv-trio b small { font: 500 13px/1 var(--sans); letter-spacing: 0; color: var(--fg-3); }
 .hv-trio span { display: block; margin-top: 8px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
 /* two tiles side by side, and three */
 .hv-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .hv-three { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr)); gap: 16px; }
-.hv-sub { margin: 22px 0 10px; padding-top: 18px; border-top: 1px solid var(--border);
-  font: 500 13px/1.2 var(--sans); color: var(--fg-3); }
-/* bar lists: each name inside a bar as long as its count, the count in its own right-aligned column */
+.hv-sub { margin: 24px -24px 12px; padding: 12px 24px; border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--row-divider); font: 600 13.5px/1.2 var(--sans); color: var(--fg-2); }
+/* bar lists are tables of fixed columns: the name, the type where there is one, a bar track that starts at the
+   same x on every row, and the number right-aligned */
 .hv-bl { display: grid; }
-.hv-bl .r { display: grid; grid-template-columns: minmax(0, 1fr) 92px 64px; align-items: center; column-gap: 16px;
-  height: 36px; }
-.hv-bl.two .r { grid-template-columns: minmax(0, 1fr) 64px; }
-.hv-bl .hd { display: grid; grid-template-columns: minmax(0, 1fr) 92px 64px; column-gap: 16px; padding-bottom: 10px;
-  margin-bottom: 4px; border-bottom: 1px solid var(--border); font: 500 13px/1.2 var(--sans); color: var(--fg-3); }
-.hv-bl.two .hd { grid-template-columns: minmax(0, 1fr) 64px; }
+.hv-bl .r, .hv-bl .hd { display: grid; grid-template-columns: minmax(150px, 38%) minmax(0, 1fr) 56px; align-items: center;
+  column-gap: 16px; }
+.hv-bl.typed .r, .hv-bl.typed .hd { grid-template-columns: minmax(90px, 28%) 88px minmax(0, 1fr) 56px; }
+.hv-bl .r { height: 36px; border-bottom: 1px solid var(--row-divider); }
+.hv-bl .r:last-child { border-bottom: 0; }
+.hv-bl .hd { padding-bottom: 10px; border-bottom: 1px solid var(--border); font: 500 13px/1.2 var(--sans);
+  color: var(--fg-3); }
 .hv-bl .hd span:last-child, .hv-bl .r .n { text-align: right; }
-.hv-bl .hv-lb { position: relative; height: 28px; display: flex; align-items: center; min-width: 0; }
-.hv-bl .hv-lb > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; background: rgba(28,28,26,0.10);
+.hv-bl .lab { min-width: 0; font: 500 14px/1.25 var(--sans); color: var(--fg); overflow-wrap: anywhere; }
+.hv-bl .lab i { display: inline-block; width: 9px; height: 9px; margin-right: 10px; border-radius: 3px; }
+.hv-bl .trk { height: 10px; border-radius: 5px; overflow: hidden; background: rgba(28,28,26,0.07); }
+.hv-bl .trk i { display: block; height: 100%; border-radius: 5px; background: var(--fg-2);
   transition: width 700ms cubic-bezier(.2,.7,.2,1); }
-.hv-bl .hv-lb span { position: relative; padding-left: 10px; font: 500 14px/1 var(--sans); color: var(--fg);
-  white-space: nowrap; overflow: visible; }
-.hv-bl .hv-lb span i { display: inline-block; width: 9px; height: 9px; margin-right: 9px; border-radius: 3px; }
 .hv-bl .ty { font: 500 13px/1 var(--sans); color: var(--fg-3); }
 .hv-bl .ty.d { color: var(--fg); font-weight: 600; }
-.hv-bl .n { font: 600 14px/1 var(--mono); color: var(--fg); }
+.hv-bl .n { font: 600 14px/1 var(--sans); color: var(--fg); }
 /* kinds found as hours are labelled: the chart, and its key as a table beside it */
 .hv-growth { display: grid; grid-template-columns: minmax(0, 1fr) 206px; gap: 24px; height: 300px; }
 .hv-plot { position: relative; min-height: 0; }
@@ -2113,7 +2119,7 @@ body.view-fade #home-view { opacity: 0; }
 .hv-area .ax { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .hv-area .ln { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round;
   vector-effect: non-scaling-stroke; }
-.hv-area .yt, .hv-area .xt { position: absolute; font: 500 12.5px/1 var(--mono); color: var(--fg-3); white-space: nowrap; }
+.hv-area .yt, .hv-area .xt { position: absolute; font: 500 12.5px/1 var(--sans); color: var(--fg-3); white-space: nowrap; }
 .hv-area .yt { right: calc(100% + 8px); transform: translateY(-50%); }
 .hv-area .xt { top: calc(100% + 9px); transform: translateX(-50%); }
 .hv-area .dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); }
@@ -2123,7 +2129,7 @@ body.view-fade #home-view { opacity: 0; }
 .hv-key div:last-child { border-bottom: 0; }
 .hv-key i { height: 3px; border-radius: 2px; }
 .hv-key span { font: 500 13.5px/1.2 var(--sans); color: var(--fg-2); }
-.hv-key b { font: 600 14.5px/1 var(--mono); color: var(--fg); }
+.hv-key b { font: 600 14.5px/1 var(--sans); color: var(--fg); }
 .hv-empty { font-size: 14px; color: var(--fg-3); }
 @media (max-width: 1180px) {
   .hv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -5666,7 +5672,7 @@ function buildHome() {
       <div class="hv-sub">Most common, times each happened</div><div class="hv-bl two" id="hv-mistake-top"></div></div>
   </section>
   <h3 class="hv-sec">What the footage holds</h3>
-  <section class="hv-three">
+  <section class="hv-three hv-stretch">
     <div class="hv-tile">
       <div class="hv-tt"><span id="hv-ch-title"></span>
         <div class="if-sev-seg" id="hv-kind" role="radiogroup" aria-label="What the chart counts">
@@ -5676,7 +5682,7 @@ function buildHome() {
       <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
     </div>
     <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
-      <div class="hv-bl" id="hv-top-objects"></div></div>
+      <div class="hv-bl typed" id="hv-top-objects"></div></div>
     <div class="hv-tile"><div class="hv-tt">Top motions<small>events with each</small></div>
       <div class="hv-bl two" id="hv-top-motions"></div></div>
   </section>
@@ -5784,9 +5790,10 @@ function renderBars(el, rows, opts) {
   const o = opts || {};
   const max = o.max || Math.max(1e-9, ...rows.map(r => r.v));
   el.innerHTML = (o.head ? `<div class="hd">${o.head.map(h => `<span>${h}</span>`).join('')}</div>` : '')
-    + (rows.length ? rows.map(r => `<div class="r"${r.title ? ` title="${esc(r.title)}"` : ''}><div class="hv-lb">`
-      + `<i style="width:${(100 * Math.min(1, r.v / max)).toFixed(1)}%"></i><span>${r.label}</span></div>`
-      + (r.type != null ? r.type : '') + `<span class="n">${r.text}</span></div>`).join('')
+    + (rows.length ? rows.map(r => `<div class="r"${r.title ? ` title="${esc(r.title)}"` : ''}>`
+      + `<span class="lab">${r.label}</span>${r.type != null ? r.type : ''}`
+      + `<div class="trk"><i style="width:${(100 * Math.min(1, r.v / max)).toFixed(1)}%"></i></div>`
+      + `<span class="n">${r.text}</span></div>`).join('')
       : `<div class="hv-empty">${o.empty || 'Nothing labelled yet.'}</div>`);
 }
 const dsLabelHtml = d => `<i style="background:${hueOf(d.dataset)}"></i>${esc(homeName(d.dataset))}`;
@@ -5811,7 +5818,7 @@ function renderTops() {
   renderBars(document.getElementById('hv-top-objects'), t.top_objects.map(([k, n, by, tag]) => ({label: esc(k), v: n,
     text: n.toLocaleString(), title: split(by),
     type: tag === true ? '<span class="ty d">Deformable</span>' : tag === false ? '<span class="ty">Rigid</span>'
-      : '<span class="ty"></span>'})), {head: ['Object', 'Type', 'Subtasks']});
+      : '<span class="ty"></span>'})), {head: ['Object', 'Type', '', 'Subtasks']});
   renderBars(document.getElementById('hv-top-motions'), t.top_motions.map(([k, n, by]) => ({label: esc(k), v: n,
     text: n.toLocaleString(), title: split(by)})));
   const ds = homeDs().filter(d => d.episodes);
