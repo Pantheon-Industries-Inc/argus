@@ -115,6 +115,7 @@ def test_structured_source_goal_nested_steps_and_false_success_match_legacy(tmp_
     old_ep, old = converted(root, tmp_path / 'old', monkeypatch, legacy=True)
     new_ep, new = converted(root, tmp_path / 'generic', monkeypatch, legacy=False)
     assert new['instruction'] == old['instruction'] == 'fold the cloth'
+    assert new['task_label'] == old['task_label'] == ['folding']
     assert new['annotation_subtasks'] == old['annotation_subtasks']
     assert new['annotation_subtasks'][0]['ok'] is False
     assert new['n_state_frames'] == old['n_state_frames'] == 6
@@ -356,3 +357,17 @@ def test_early_unshown_camera_does_not_extend_selected_step_claim_end(tmp_path, 
         controls.append(ctx['annotation_subtasks'])
     assert controls[0] == [{'t0': .033, 't1': .215, 'label': 'recorded final step'}]
     assert controls[1] == controls[0]
+
+
+def test_recorded_task_class_replaces_only_filename_placeholder():
+    from prepare.mcap_claims import apply_claims
+    records = [{'topic': '/annotation', 'fields': {'segments_info': [], 'sst': 'source class'}}]
+    placeholder = {'task_label': ['recording'], 'source': {'file': 'recording'}}
+    apply_claims(placeholder, records)
+    assert placeholder['task_label'] == ['source class']
+    explicit = {'task_label': ['direct task class'], 'source': {'file': 'recording'}}
+    apply_claims(explicit, records)
+    assert explicit['task_label'] == ['direct task class']
+    conflicting = {'task_label': ['recording'], 'source': {'file': 'recording'}}
+    apply_claims(conflicting, records + [{'topic': '/other', 'fields': {'segments_info': [], 'sst': 'other class'}}])
+    assert conflicting['task_label'] == ['recording']

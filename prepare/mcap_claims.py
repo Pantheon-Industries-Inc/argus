@@ -120,6 +120,11 @@ def apply_claims(ctx, records):
              if isinstance(record['fields'].get('bold_mark'), str) and record['fields']['bold_mark'].strip()}
     if not ctx.get('instruction') and len(goals) == 1:
         ctx.update(instruction=goals.pop(), instruction_note='The recorded structured annotation supplies this task claim.')
+    labels = {record['fields']['sst'].strip() for record in annotations
+              if isinstance(record['fields'].get('sst'), str) and record['fields']['sst'].strip()}
+    placeholder = [(ctx.get('source') or {}).get('file')]
+    if len(labels) == 1 and (not ctx.get('task_label') or ctx['task_label'] == placeholder):
+        ctx['task_label'] = [labels.pop()]
     tasks = []
     for record in annotations:
         segments = record['fields'].get('segments_info')
