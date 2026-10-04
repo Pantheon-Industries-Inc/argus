@@ -189,3 +189,35 @@ def test_human_clear_or_unknown_role_cannot_reuse_machine_piece_qualification(ro
 def test_original_piece_without_dictionary_qualification_keeps_stored_verdict():
     ep, _ = fixture(name='channel0', array=RISE[-10:], stored=True)
     assert me.touch_verdicts(ep, 10) == frozenset({'channel0'})
+
+
+@pytest.mark.parametrize('signals', [[], None, 'absent'])
+def test_saved_contact_without_named_signals_keeps_timing_and_unknown_fields(tmp_path, signals):
+    path = tmp_path / 'episode_one'
+    path.mkdir()
+    contact = {'id': 'c1', 'start_s': .6, 'end_s': 2.7, 'peak_s': 1.5, 'dips_s': [1.6],
+               'from_start': False, 'to_end': False, 'unknown': {'original': [None, 37]}}
+    if signals != 'absent':
+        contact['signals'] = signals
+    context = {'episode_id': 'episode_one', 'fps': 30, 'profile': 'teleop_arms',
+               'state_kind': 'none', 'n_state_frames': 90, 'contacts': [contact]}
+    (path / 'context.json').write_text(json.dumps(context))
+    (path / 'sources.json').write_text(json.dumps({'exo': {'n_frames': 90, 'packed': 'unused.mp4'}}))
+    before = (path / 'context.json').read_bytes()
+    loaded = me.load(path)
+    original = copy.deepcopy(loaded['context'])
+    assert lc.of_episode(loaded) == [contact]
+    assert loaded['context'] == original
+    assert (path / 'context.json').read_bytes() == before
+
+
+def test_saved_contact_veto_filters_named_signals_without_removing_unattributed_contact():
+    ep, record = fixture(name='channel0', role='touch', stored=True)
+    ep['signal_meta']['channel0']['touch_role'] = 'touch'
+    unbound = {'id': 'unbound', 'signals': [], 'start_s': .6, 'unknown': {'saved': True}}
+    mixed = {'id': 'mixed', 'signals': ['channel0', 'left_pressure', 'actuator_command'], 'end_s': 2.7}
+    ep['context']['contacts'] = [unbound, mixed]
+    reviewed = bind(ep, record, {'field0': {'role': ''}})
+    before = copy.deepcopy(reviewed['context'])
+    assert lc.of_episode(reviewed) == [unbound, {**mixed, 'signals': ['left_pressure']}]
+    assert reviewed['context'] == before

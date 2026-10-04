@@ -178,11 +178,18 @@ def of_episode(ep: dict, verdicts=None) -> list[dict]:
         if entry:
             meta.setdefault(name, {})["dictionary"] = entry
     if "contacts" in ep["context"]:
-        contacts = [{**contact, "signals": [name for name in contact.get("signals") or []
-                     if sg.touch_cache_permission(name, (meta.get(name, {}).get("dictionary") or {}).get("role"),
-                        meta.get(name, {}).get("touch_role")) is not False]}
-                    for contact in ep["context"]["contacts"] or []]
-        return mark_aligned([contact for contact in contacts if contact["signals"]], meta)
+        contacts = []
+        for contact in ep["context"]["contacts"] or []:
+            names = contact.get("signals") or []
+            if not names:
+                contacts.append(contact)
+                continue
+            permitted = [name for name in names if sg.touch_cache_permission(
+                name, (meta.get(name, {}).get("dictionary") or {}).get("role"),
+                meta.get(name, {}).get("touch_role")) is not False]
+            if permitted:
+                contacts.append({**contact, "signals": permitted})
+        return mark_aligned(contacts, meta)
     from label import episode as me
     sig = ep.get("signals") or {}
     if not sig:
