@@ -98,26 +98,30 @@ def test_follow_puts_a_long_recording_on_the_board_once_its_last_part_is_in(tmp_
 
 
 def test_only_a_quick_shut_reopen_reclose_reaches_the_facts():
-    """A close where the jaws met, reopened soon and closed again is sent as a possible missed grasp; a carry of
-    something thin that is then released and the jaws shut, and a close on an object, are not. An episode with no
-    such stretch gets no text at all, and no frame is added either way."""
+    """A close where the jaws met, reopened soon and closed again on something is sent as a possible missed grasp; a
+    clap that shuts, opens and shuts again in the air, a carry of something thin that is then released and the jaws
+    shut, and a close on an object, are not. An episode with no such stretch gets no text at all, and no frame is
+    added either way."""
     import numpy as np
     from label import episode as me
     from prepare import jaws
     fps = 30.0
     o = np.full(600, 160.0)                              # shut at rest
     o[30:60] = 205.0                                      # open, shut on nothing at 2s ...
-    o[75:100] = 205.0                                     # ... reopen at 2.5s, close again at 3.33s: a miss and retry
-    o[150:180] = 205.0                                    # open, close on an object at 6s, hold it, release at 9s
+    o[75:100] = 205.0                                     # ... reopen at 2.5s, close on something at 3.33s: a miss
+    o[100:120] = 185.0                                    #     and its retry; held, released at 4s and kept open,
+    o[120:180] = 205.0                                    # then a close on an object at 6s, held, released at 9s
     o[180:270] = 185.0
     o[270:280] = 205.0                                    # release, then shut the empty jaws at 9.33s
     o[330:360] = 205.0                                    # open, shut on something thin at 12s, carried 2s,
     o[420:430] = 205.0                                    # released at 14s and shut again at 14.33s
+    o[450:470] = 205.0                                    # a clap: shut at 15.67s, open at 16s, shut again at 16.5s
+    o[480:495] = 205.0
     evs = jaws.events(o, fps)
     jaws.mark_shut(evs, o)
     got = [[(round(e["t"], 1), e["kind"]) for e in st] for st in jaws.retries(evs)]
     assert got == [[(2.0, "close"), (2.5, "open"), (3.3, "close")]]
     ep = {"jaws": {"left": evs, "right": None}, "context": {"cameras": {"left": {"name": "left"}}}}
     text = me.jaw_block(ep)
-    assert "left gripper: closed 2.00s shut, opened 2.50s, closed 3.33s shut" in text and "6.00" not in text
+    assert "left gripper: closed 2.00s shut, opened 2.50s, closed 3.33s on something" in text and "6.00" not in text
     assert me.jaw_block({"jaws": {"left": evs[3:], "right": None}}) == ""

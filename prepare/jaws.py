@@ -241,7 +241,9 @@ def mark_shut(evs: list[dict], o: np.ndarray) -> float:
 def retries(evs: list[dict]) -> list[list[dict]]:
     """The stretches that look like a missed grasp and its retry: a close where the jaws met (nothing between them),
     a reopen within RETRY_SHUT_S of at least RETRY_REOPEN of the way back to the widest open, and the next close, all
-    within RETRY_WITHIN_S. Retries that follow one another are one stretch. Each stretch is its events in order."""
+    within RETRY_WITHIN_S. Retries that follow one another are one stretch, and a stretch counts only when its last
+    close stopped on something (the retry took hold); jaws that only clap shut and open again in the air are left out.
+    Each stretch is its events in order."""
     full = max((e["to_px"] for e in evs if e["kind"] == "open"), default=None)
     closes = [i for i, e in enumerate(evs) if e["kind"] == "close"]
     out, cur = [], None
@@ -258,7 +260,7 @@ def retries(evs: list[dict]) -> list[list[dict]]:
             cur = [c1]
             out.append(cur)
         cur += evs[a + 1:b + 1]
-    return out
+    return [st for st in out if not st[-1].get("shut")]
 
 
 def analyse(video: str) -> dict | None:
