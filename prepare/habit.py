@@ -32,9 +32,7 @@ from prepare import cli
 from prepare import hub
 from prepare import formats
 
-# an uploaded LeRobot dataset with HABIT's own columns (its error, intervention and person's-subtask marks) is read
-# by this adapter, so its end-effector state, instruction, person's parts and publisher labels come along
-UPLOAD = "lerobot"
+UPLOAD = None
 
 REPO = "configinc/HABIT"
 META_FILES = ("info.json", "episodes.jsonl", "tasks.jsonl", "subtasks.jsonl", "human_subtasks.jsonl")
