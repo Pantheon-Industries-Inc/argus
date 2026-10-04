@@ -1,31 +1,39 @@
-"""The board's home page numbers: how far a labelling run has got and what the labelled footage holds.
+"""The numbers on the dashboard's home view: how far a labelling run has got and what the labelled footage holds.
 
     GET /api/home      (board/serve.py)
 
+Units. A subtask is one task of a session (an entry of the label's tasks list), or a whole episode where the episode
+is one task, as a scripted clip is. An object counts for a subtask when the subtask handles it, meaning the subtask's
+task names it or one of the subtask's events acts on it; the episode's own object list, which holds everything on
+the table, is never counted. Success and operator mistakes are counted per subtask, each mistake going to the
+subtask its time falls in (a mistake with no time counts for one subtask). Data issues describe the recording, such
+as swapped cameras or an instruction that names the wrong object, so they are counted per episode.
+
 For the whole board and for each dataset the page shows
-- progress: the episodes and footage hours labelled against the run's plan (BOARD/plan.json), the pace over the
-  last hour, the time left at that pace, and what the labels have cost (each label's _usage.est_cost_usd);
-- diversity: how many different objects, motions and tasks the labels name, and how evenly they are spread (the
+- progress: episodes and footage hours labelled against the run's plan (BOARD/plan.json);
+- pace: footage hours labelled per hour of labelling, over the last hour of labelling, and the time left at that
+  pace (the plan's hours not yet labelled, divided by the pace);
+- cost: the labels' billed cost so far (each label's _usage.est_cost_usd), the cost per footage hour, and that rate
+  times the plan's hours as the cost of the whole run;
+- subtasks, subtasks per minute of footage, the share of subtasks that succeeded, the share of episodes with a data
+  issue and the share of subtasks with an operator mistake (the issues the episode list counts, Families.counts);
+- diversity: how many kinds of object are handled, of motion and of task, and how evenly they are spread (the
   effective number, e to the Shannon entropy of the counts: the number of equally common kinds that would give the
   same spread, so 40 kinds where one fills nine tenths of the footage counts as far fewer than 40);
-- whether new kinds still turn up: distinct object and task kinds against labelled hours, in labelling order;
-- the five commonest kinds of object and of motion, split by dataset;
-- how much of what the episodes show is deformable rather than rigid (each kind's tag, board/materials.py).
-
-Objects are the ones each subtask handles (the objects its task names and the ones its events act on; a scripted
-episode is one subtask), counted once per subtask, never the episode's full list of what is on the table. Operator
-mistakes are counted per subtask too; data issues describe the recording and are counted per episode.
+- whether new kinds still turn up: distinct kinds against labelled hours, in the order the episodes were labelled;
+- the five commonest kinds of object (subtasks that handle each) and of motion (events with each verb), each split
+  by dataset, and the share of handled objects that are deformable (each kind's tag, board/materials.py).
 
 Kinds come from the labels' own words, never from a fixed list. An object's kind is the head noun of its name
-("pebble container" is a container, "clear test tubes" a tube); a motion is each verb of an event's verb_class ("lift
-and carry inward" is lift and carry); a task is its verb and the kind of the first object it names ("Place the closed
-pebble container upright on the tray" is place container). The rules are simple and the same for every dataset, so
-the datasets compare with each other even where a rule misreads a name.
+("pebble container" is a container, "clear test tubes" a tube, "10 of diamonds" a card); a motion is each verb of an
+event's verb_class ("lift and carry inward" is lift and carry); a task is its verb and the kind of the first object it
+names ("Place the closed pebble container upright on the tray" is place container). The rules are simple and the same
+for every dataset, so the datasets compare with each other even where a rule misreads a name.
 
 plan.json, written when a run starts:
     {"datasets": {"umi_scripted": {"name": "Scripted", "episodes": 6224, "seconds": 88474.8}, ...}}
 Its order is the page's order and its names are the page's names. Without it the page shows what is labelled and
-no progress bar.
+no progress bar, time left or whole-run cost.
 
 Each episode file is read once and its summary kept until the file changes, so a board that gains a label every
 few seconds reads one new file, not thousands.

@@ -12,9 +12,9 @@ Every five minutes it also tags the kinds of object not tagged yet as rigid or d
 a cent for a whole run; it needs the labelling keys in the environment and skips the step without them).
 
 A long recording is labelled in parts (label/pieces.py); follow puts it on the board once its last part is in,
-stitched exactly as the finished review job stitches it. A manifest entry's "run" must name the run folder itself
-(a review job's run/) while it labels: RUNS/<dataset>/latest means the newest
-finished run. An entry may also name "clips", the clips folder of its review job: follow hard-links each new
+stitched exactly as the finished review job stitches it. While a run labels, a manifest entry's "run" must name the
+run folder itself (a review job's run/), because RUNS/<dataset>/latest resolves only to finished runs. An entry may
+also name "clips", the clips folder of its review job: follow hard-links each new
 episode's clips into BOARD/clips, so one board serves the clips of several jobs.
 
 Each label is written to a temporary name and moved into place, so the server never reads half a file. A run

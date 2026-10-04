@@ -36,17 +36,17 @@ You also need `ffmpeg` 5.1 or newer. With only an OpenAI key the pipeline still 
 The quickstart labels one episode from each setup for about $1 in total. The MolmoAct2 episode first downloads about 1.4 GB of camera video.
 
 ```bash
-# teleop: MolmoAct2, two arms push four blocks into a row, then push it apart (37 s)
+# teleop: MolmoAct2, two arms push four blocks into a row, then push it apart (37s)
 uv run python -m prepare molmo prepare --episodes configs/quickstart/teleop.txt --out data/episodes/molmo/quickstart
 uv run python -m checks data/episodes/molmo/quickstart
 uv run python -m label --dataset molmo --episodes data/episodes/molmo/quickstart --kind smoke --cap 2
 
-# UMI: FastUMI, a gripper opens a toilet lid (11.5 s)
+# UMI: FastUMI, a gripper opens a toilet lid (11.5s)
 uv run python -m prepare fastumi prepare --episodes configs/quickstart/handheld.txt --out data/episodes/fastumi/quickstart
 uv run python -m checks data/episodes/fastumi/quickstart
 uv run python -m label --dataset fastumi --episodes data/episodes/fastumi/quickstart --kind smoke --cap 2
 
-# human ego: OpenAoE, a head-mounted phone (34 s)
+# human ego: OpenAoE, a head-mounted phone (34s)
 uv run python -m prepare openaoe prepare --episodes configs/quickstart/head_camera.txt --out data/episodes/openaoe/quickstart
 uv run python -m checks data/episodes/openaoe/quickstart
 uv run python -m label --dataset openaoe --episodes data/episodes/openaoe/quickstart --kind smoke --cap 2
@@ -58,7 +58,7 @@ for ds in molmo fastumi openaoe; do uv run python -m board clips --episodes data
 uv run python -m board serve --board data/boards/quickstart --clips data/clips
 ```
 
-Expect the MolmoAct2 episode to come out as a success then undone, with the row complete near 18 s and pushed apart near 30 s, the FastUMI episode as a success with the lid open near 7 s, and the OpenAoE clip as a few activities, each a success. A bare video works the same way through `prepare videos --rig RIG` with no instructions file, and the model then names the task itself.
+Expect the MolmoAct2 episode to come out as a success then undone, with the row complete near 18s and pushed apart near 30s, the FastUMI episode as a success with the lid open near 7s, and the OpenAoE clip as a few activities, each a success. A bare video works the same way through `prepare videos --rig RIG` with no instructions file, and the model then names the task itself.
 
 ## What a run writes
 
@@ -81,7 +81,9 @@ uv run python -m review --data path/to/data --rig teleop_arms --out data/review/
 uv run python -m board serve --board data/review/mine --clips data/review/mine/clips
 ```
 
-`--data` is a folder, a file or an archive in any format Data Review accepts, or an http(s) URL of one. The command runs the same stages as [Data Review](https://data.pantheon.inc/review), in its order and with its settings, so a folder reviewed here and the same folder uploaded there get the same requests and the same board. It reads the data, runs the checks, measures sped-up recordings against their neighbours in the same folder, labels, and builds the board. A recording longer than 450 s, the longest request the published board sends, is labelled in parts cut at moments of little motion (`label/pieces.py`) and stitched back into one timeline, so it stays one episode. Each part is told it is one part of a longer recording, and a cut-off issue the model reports at one of those cuts is set aside, because it describes the cut and not the recording.
+`--data` is a folder, a file or an archive in any format Data Review accepts, or an http(s) URL of one. The command runs the same stages as [Data Review](https://data.pantheon.inc/review), in its order and with its settings, so a folder reviewed here and the same folder uploaded there get the same requests and the same board. It reads the data, runs the checks, measures sped-up recordings against their neighbours in the same folder, labels, and builds the board. A recording longer than 450s, the longest request the published board sends, is labelled in parts cut at moments of little motion (`label/pieces.py`) and stitched back into one timeline, so it stays one episode. Each part is told it is one part of a longer recording, and a cut-off issue the model reports at one of those cuts is set aside, because it describes the cut and not the recording. A task that runs across a cut is reported by both parts, one entry ending at the cut and one starting there, and the stitch joins the two into one task when they handle the same object.
+
+`--model` and `--reasoning` set the model and its reasoning effort for the run, and `--timeout` raises the per-request timeout, which the reply to a long part can need. `--sessions` labels each episode that comes without an instruction as a session of several tasks, so the model returns a `tasks` list with each task's span, objects and outcome instead of naming a single task. `--dataset-note` adds one line about the dataset to every request, for context the files do not carry, such as how the recordings were trimmed. A robot episode recorded as video alone, with no arm or gripper signals, gets a prompt that never mentions recorded motion.
 
 ## Layout
 
@@ -91,7 +93,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | `checks/` | Deterministic checks, and the label consistency check | `python -m checks` |
 | `label/` | The harness, with frame selection, exact decoding, resolution routing, per-setup prompts, the model call, runs, and long recordings labelled in parts | `python -m label` |
 | `review/` | The whole path for your own data, the one Data Review runs | `python -m review` |
-| `board/` | The dashboard, served live or written as static files, and the hand pose overlay | `python -m board` |
+| `board/` | The dashboard, served live or written as static files, with its home view, labels followed in while a run labels, and the hand pose overlay | `python -m board` |
 | `compare/` | Other models on the same episodes and harness, with and without in-context learning from an Astra trace | `python -m compare` |
 | `gate/` | The regression suite, frame-verified cases and a cost sample per setup | `python -m gate` |
 | `configs/` | Episode lists, the quickstart, model settings, example annotations | |
@@ -117,15 +119,15 @@ Each public adapter downloads exactly the episodes in its list. `configs/slices/
 
 | Dataset | Setup | Adapter | `configs/slices` |
 |---|---|---|---|
-| allenai/MolmoAct2-BimanualYAM-Dataset | teleop | `molmo` | 1,284 episodes, 25.1 h, all 34 tasks |
-| XDOF/ABC-130k | teleop | `abc130k` | 183 episodes, 5.5 h, one per task |
-| RogersPyke/Galaxea-Open-World-Dataset_10K_20260123 | teleop | `galaxea` | 222 episodes, 5.7 h, 111 collections |
-| configinc/HABIT | teleop | `habit` | 315 episodes, 5.0 h, 5 per task |
-| IPEC-COMMUNITY/FastUMI_100k_lerobot | UMI | `fastumi` | 964 episodes, 4.8 h, 32 per task |
-| genrobot2025/10Kh-RealOmin-OpenData | UMI | `realomin` | 280 episodes, 5.5 h, round robin over task folders |
-| builddotai/Egocentric-100K | human ego | `egocentric100k` | 112 clips, 5.6 h, one per worker |
-| genrobot2025/Gen-HumanEgo | human ego | `genhumanego` | 79 episodes, 3.5 h, uniform random |
-| inclusionAI/OpenAoE-2000h | human ego | `openaoe` | 107 clips, 5.7 h, one per recording |
+| allenai/MolmoAct2-BimanualYAM-Dataset | teleop | `molmo` | 1,284 episodes, 25.1h, all 34 tasks |
+| XDOF/ABC-130k | teleop | `abc130k` | 183 episodes, 5.5h, one per task |
+| RogersPyke/Galaxea-Open-World-Dataset_10K_20260123 | teleop | `galaxea` | 222 episodes, 5.7h, 111 collections |
+| configinc/HABIT | teleop | `habit` | 315 episodes, 5.0h, 5 per task |
+| IPEC-COMMUNITY/FastUMI_100k_lerobot | UMI | `fastumi` | 964 episodes, 4.8h, 32 per task |
+| genrobot2025/10Kh-RealOmin-OpenData | UMI | `realomin` | 280 episodes, 5.5h, round robin over task folders |
+| builddotai/Egocentric-100K | human ego | `egocentric100k` | 112 clips, 5.6h, one per worker |
+| genrobot2025/Gen-HumanEgo | human ego | `genhumanego` | 79 episodes, 3.5h, uniform random |
+| inclusionAI/OpenAoE-2000h | human ego | `openaoe` | 107 clips, 5.7h, one per recording |
 
 ## Checks
 
@@ -152,11 +154,11 @@ uv run python -m label --dataset molmo --episodes data/episodes/molmo/slice --ki
 
 `--kind dry` builds every request without sending it, and `smoke` is a small paid run to inspect before a full one. Paid runs refuse a dirty checkout so that every label traces to a commit, and stop starting episodes once `--cap` dollars are spent. Arguments after `--` go to the harness, for example `-- --model anthropic/claude-opus-5.5`. Each run writes `data/runs/<dataset>/<time>_<kind>_<commit>/`, with `run.json` (command, settings, cost per footage hour) and one `out/<episode>.json` per episode holding the labels, exactly what was sent, the checks, what served the request and the billed usage. A reply that does not parse is kept verbatim and never retried. `--resume RUN --why "..."` finishes a killed run, and `python -m label.reparse RUN` re-parses stored replies with the current parser.
 
-The harness samples one instant every 1.5 s on teleop arms, every 1 s on UMI grippers and every 0.5 s on human ego video, plus the first and last frames, and tiles four instants per grid image with one row per camera and each column headed with its exact time. UMI cells are 320 px wide and human ego cells 256 px. On teleop, GPT-6 Sol reads only the task text and decides whether the task needs fine detail, such as lettering, which face of an object is up, or small similar objects. Those episodes get 448 px cells on every camera, and the rest get 224 px cells plus contact views, which show the scene camera and the acting arm's camera at detail size just after each sharp change in the recorded gripper value. A request over the provider's image-size limit steps down to narrower cells until it fits.
+The harness samples one instant every 1.5s on teleop arms, every 1s on UMI grippers and every 0.5s on human ego video, plus the first and last frames, and tiles four instants per grid image with one row per camera and each column headed with its exact time. UMI cells are 320px wide and human ego cells 256px. On teleop, GPT-6 Sol reads only the task text and decides whether the task needs fine detail, such as lettering, which face of an object is up, or small similar objects. Those episodes get 448px cells on every camera, and the rest get 224px cells plus contact views, which show the scene camera and the acting arm's camera at detail size just after each sharp change in the recorded gripper value. A request over the provider's image-size limit steps down to narrower cells until it fits.
 
-The prompt opens with the shared instructions and the episode's facts (cameras, recorded still spans and motion, every other signal the recording has under its own name with its range and how much it changed over each still span, the instruction and the objects it names), each framed as a claim to check, followed by the grids and then the first and last instants at up to 768 px. A camera whose frames show a circular image with black corners, the image circle of a fisheye lens, is said to have a fisheye lens on which straight lines curve near the edge (`label/lens.py`). Without an instruction, the model names the task as the most specific end state the demonstrator worked toward. The shared instructions are pinned by hash in `tests/test_label.py`. Measured on the gate's cost samples as first sends, labelling costs about $26 per footage hour on teleop, $30 on UMI and $19 on human ego video, with median episodes of 71 s, 21 s and 3 min.
+The prompt opens with the shared instructions and the episode's facts (cameras, recorded still spans and motion, every other signal the recording has under its own name with its range and how much it changed over each still span, the instruction and the objects it names), each framed as a claim to check, followed by the grids and then the first and last instants at up to 768px. A camera whose frames show a circular image with black corners, the image circle of a fisheye lens, is said to have a fisheye lens on which straight lines curve near the edge (`label/lens.py`). Without an instruction, the model names the task as the most specific end state the demonstrator worked toward. The shared instructions are pinned by hash in `tests/test_label.py`. Measured on the gate's cost samples as first sends, labelling costs about $26 per footage hour on teleop, $30 on UMI and $19 on human ego video, with median episodes of 71s, 21s and 3min.
 
-Everything up to the model call is deterministic, down to byte-identical requests at a given cell width, since episode lists are fixed files, packages are pinned in `uv.lock`, frames are decoded at exact timestamps and the grid font ships in `label/fonts/` and is laid out with Pillow's basic engine on every machine. On a teleop rig the cell width is itself chosen by a small model call from the task text (`label/route.py`), so another run can send a task at the other width; the width each episode got is recorded in its output (`config.resolution_route`). The calls send no temperature, top_p, seed or provider pin, and each output records `provider_name`, `model_served`, `system_fingerprint` and `generation_id`, because model ids are not dated snapshots. Labels are not bit-reproducible, so compare runs by their fields. Labelled three times each, the quickstart episodes got the same outcome every time, with goal and undo times within 5 s.
+Everything up to the model call is deterministic, down to byte-identical requests at a given cell width, since episode lists are fixed files, packages are pinned in `uv.lock`, frames are decoded at exact timestamps and the grid font ships in `label/fonts/` and is laid out with Pillow's basic engine on every machine. On a teleop rig the cell width is itself chosen by a small model call from the task text (`label/route.py`), so another run can send a task at the other width; the width each episode got is recorded in its output (`config.resolution_route`). The calls send no temperature, top_p, seed or provider pin, and each output records `provider_name`, `model_served`, `system_fingerprint` and `generation_id`, because model ids are not dated snapshots. Labels are not bit-reproducible, so compare runs by their fields. Labelled three times each, the quickstart episodes got the same outcome every time, with goal and undo times within 5s.
 
 ## Dashboard
 
@@ -170,6 +172,10 @@ uv run python -m board static site --board data/boards/mine --clips data/clips  
 ```
 
 A dashboard shows the runs named in its `manifest.json`, one `{"dataset", "run", "episodes", "rules"}` entry per dataset, and `board/build.py` documents every key and rule. An issue counts as a problem when it is a data issue or an outcome-changing operator mistake of medium or high severity, or any issue of high severity. The rest stay visible as minor, and each problem belongs to one family in `board/families.json`. A partial outcome is shown as a failure, partly done, and success then undone keeps its own outcome, since the goal it reached no longer holds at the end. Episodes download as JSON and filtered lists as JSON Lines, and `board/publish.sh` uploads a static build.
+
+The dashboard opens on a home view that fits on one screen. It reads the run's totals from `plan.json` in the board folder, `{"datasets": {"<dataset>": {"name", "episodes", "seconds"}}}`, and shows the footage hours and episodes labelled against them, the time left at the last hour's pace, and the cost so far and for the whole run. One card per dataset gives its subtasks and subtasks per minute of footage, the share of subtasks that succeeded, the share of episodes with a data issue, the share of subtasks with an operator mistake, the kinds of object handled and the share of those that are deformable. Below the cards, a chart plots how many kinds of object, motion and task have turned up against labelled hours, and two lists rank the five most common objects and motions. A subtask is one task of a session, or a whole episode when the episode is one task, and an object counts for a subtask only when the subtask's task names it or one of its events acts on it, so objects that merely sit on the table are never counted. `board/home.py` defines every number.
+
+During a long run, `python -m board follow BOARD` adds each label to the board within 30s of the run writing it, through the same code as `board build`, and every open home view fetches the new numbers every 20s without reloading. It stitches a long recording once its last part is labelled, and every five minutes it runs `python -m board materials BOARD`, which tags each new kind of object as rigid or deformable with one small model call per batch of kinds, about a cent for a 100 hour run. While a run labels, the manifest's `run` must name the run folder itself, because a `latest` path resolves only to finished runs.
 
 Human ego episodes can also show 2D hand keypoints from [ACE-Ego-Hand](https://github.com/ggxxii/ACE-Ego-Hand), computed on Modal GPUs by `board/hand_pose/modal_app.py` (you register for and download MANO yourself) and added through the manifest's `hands` key. The keypoints are for non-commercial use only.
 
