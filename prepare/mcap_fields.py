@@ -1,6 +1,7 @@
 """Retain typed native numeric leaves separately from judgment signal projections."""
 from __future__ import annotations
 
+import json
 import numpy as np
 
 
@@ -29,7 +30,16 @@ def native_fields(message):
                     add(key, list(cell) if field.is_repeated else cell,
                         PROTO_DTYPES[field.type], field.name in present, 'protobuf declaration')
                 elif field.message_type is not None and field.name in present:
-                    if field.is_repeated:
+                    if field.message_type.GetOptions().map_entry:
+                        value_field = field.message_type.fields_by_name['value']
+                        for map_key, item in sorted(cell.items()):
+                            entry_path = key + '[' + json.dumps(map_key, ensure_ascii=True) + ']'
+                            if value_field.type in PROTO_DTYPES:
+                                add(entry_path, item, PROTO_DTYPES[value_field.type],
+                                    True, 'protobuf declaration')
+                            elif value_field.message_type is not None:
+                                walk(item, entry_path)
+                    elif field.is_repeated:
                         for index, item in enumerate(cell):
                             walk(item, f'{key}[{index}]')
                     else:

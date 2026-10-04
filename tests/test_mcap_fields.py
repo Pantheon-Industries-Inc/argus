@@ -52,6 +52,41 @@ def test_json_mixed_numeric_types_do_not_round_large_integer():
     assert 'text' not in result
 
 
+def test_protobuf_maps_keep_declared_numeric_and_nested_values():
+    fd = descriptor_pb2.FileDescriptorProto(name='numeric_maps.proto', package='numeric_maps', syntax='proto3')
+    detail = fd.message_type.add(name='Detail')
+    detail.field.add(name='gain', number=1, type=2, label=1)
+    detail.field.add(name='valid', number=2, type=8, label=1)
+    record = fd.message_type.add(name='Record')
+    for number, name, value_type, type_name in (
+        (1, 'counters', 3, ''), (2, 'details', 11, '.numeric_maps.Detail'), (3, 'notes', 9, ''),
+    ):
+        entry = record.nested_type.add(name=name.title() + 'Entry')
+        entry.options.map_entry = True
+        entry.field.add(name='key', number=1, type=9, label=1)
+        value = entry.field.add(name='value', number=2, type=value_type, label=1)
+        if type_name:
+            value.type_name = type_name
+        record.field.add(name=name, number=number, type=11,
+                         type_name='.numeric_maps.Record.' + entry.name, label=3)
+    pool = descriptor_pool.DescriptorPool()
+    pool.Add(fd)
+    message = message_factory.GetMessageClass(pool.FindMessageTypeByName('numeric_maps.Record'))()
+    message.counters['motor'] = 2**53 + 17
+    message.counters['motor"]'] = 0
+    message.details['sensor'].gain = 0.1
+    message.notes['text'] = 'not numeric'
+    result = native_fields(message)
+    assert result['counters["motor"]']['values'].item() == 2**53 + 17
+    assert result['counters["motor"]']['dtype'] == 'int64'
+    assert result['counters["motor"]']['dtype_source'] == 'protobuf declaration'
+    assert result['counters["motor\\\"]"]']['values'].item() == 0
+    assert result['details["sensor"].gain']['values'].tobytes() == np.float32(message.details['sensor'].gain).tobytes()
+    assert result['details["sensor"].valid']['values'].item() is False
+    assert result['details["sensor"].valid']['present'] is False
+    assert not any(path.startswith('notes') for path in result)
+
+
 def test_one_frame_secondary_camera_remains_a_usable_recording(tmp_path, monkeypatch):
     from mcap_protobuf.writer import Writer
     from prepare import formats
