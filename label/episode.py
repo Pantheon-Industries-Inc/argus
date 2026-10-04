@@ -279,9 +279,8 @@ def jaw_block(ep: dict) -> str:
     return ("\nPOSSIBLE MISSED GRASPS, from each gripper's jaws measured on every frame of its own camera (the gripper "
             "records nothing). In each stretch below the jaws closed all the way (\"shut\": nothing between them, or "
             "only something thin like cloth or a band), opened again and then closed on something, within a couple "
-            "of seconds. A missed grasp and its retry look like this, and it is quick enough to fall between two "
-            "once-a-second instants. These times say only when the jaws moved: whether a stretch was a miss, and "
-            "everything else about the episode, is judged from the frames as before.\n" + "\n".join(lines) + "\n")
+            "of seconds, which is how a missed grasp and its retry look. It is quick enough to fall between two "
+            "once-a-second instants.\n" + "\n".join(lines) + "\n")
 
 
 def contact_instants(ep: dict, pl: dict) -> list[int]:
