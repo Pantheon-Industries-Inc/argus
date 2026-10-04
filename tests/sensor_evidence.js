@@ -111,6 +111,7 @@ assert.equal(full.sustained[3],1,'a median distinguishes a transient from sustai
 assert(Number.isNaN(full.sustained[7]),'smoothing cannot fill a gap');
 assert(Number.isNaN(full.sustained[8]),'a new segment needs its own window');
 assert(E.sensorProfileHtml(full,.1).includes('0.2s median'));
+assert(E.sensorProfileHtml(full,0).includes('Raw sample'),'a paused first frame already has a reading');
 assert(E.sensorPhasesHtml([full]).includes('samples'));
 assert(E.sensorTraceHtml(full).includes('Raw') && E.sensorTraceHtml(full).includes('0.2s median'));
 assert(E.sensorDistributionHtml(full,.1).includes('Sensor grid'));

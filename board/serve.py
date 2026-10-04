@@ -4815,8 +4815,8 @@ function sensorProfileHtml(p, t) {
   const hand = p.hand === 'left' ? 'Left' : p.hand === 'right' ? 'Right' : '';
   return `<span class="se-headline">${hand ? hand + ' ' : ''}tactile intensity${p.label ? ' (' + esc(p.label) + ')' : ''}</span>`
     + (p.assumed ? '<span class="se-action">Assumed timing</span>' : '')
-    + (value ? `<span class="se-measure">${p.full && value.sustained == null ? 'Collecting readings' : (p.full ? value.sustained : value.percent) + '%'} <small>${p.full ? '0.2s median' : 'of episode peak'}</small></span>
-      <span class="se-meter"><span style="width:${p.full ? value.sustained || 0 : value.percent}%"></span></span>`
+    + (value ? `<span class="se-measure">${p.full && value.sustained != null ? value.sustained : value.percent}% <small>${p.full ? (value.sustained == null ? 'Raw sample' : '0.2s median') : 'of episode peak'}</small></span>
+      <span class="se-meter"><span style="width:${p.full && value.sustained != null ? value.sustained : value.percent}%"></span></span>`
       : '<span class="se-action">No reading at this sample</span>');
 }
 function sensorTraceHtml(p) {
