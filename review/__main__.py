@@ -1,7 +1,8 @@
 """Review your own robot data in one command: read it, check it, label it and build its board.
 
     python -m review --data PATH_OR_URL --rig teleop_arms|handheld_gripper|ego_head --out JOB \\
-        [--dataset NAME] [--free] [--cap 20] [--concurrency 8] [--max-minutes M] [--grouping JSON]
+        [--dataset NAME] [--free] [--cap 20] [--concurrency 8] [--max-minutes M] [--grouping JSON] \\
+        [--model ID] [--reasoning EFFORT] [--sessions] [--dataset-note TEXT]
 
 PATH_OR_URL is a folder, a file or an archive, or an http(s) URL of a file or an archive, which is downloaded into
 JOB/upload first. Everything else is written under JOB, and the data itself is never edited. These are the stages
@@ -103,6 +104,12 @@ def main() -> int:
     ap.add_argument("--max-minutes", type=float, default=0, help="read at most this much footage (default: all)")
     ap.add_argument("--grouping", type=json.loads, default={},
                     help='JSON {folder: "takes" | "cameras"} for folders whose files cannot tell takes from cameras')
+    ap.add_argument("--model", default=None, help="OpenRouter model id (default: label/harness.py's)")
+    ap.add_argument("--reasoning", default=None, help="reasoning effort (default: label/harness.py's)")
+    ap.add_argument("--sessions", action="store_true",
+                    help="each recording is a session of several activities with no instruction: label it with a "
+                         "tasks list (label/prompts.py SESSION_RULES)")
+    ap.add_argument("--dataset-note", default="", help="one line about the dataset, told to the model with each episode")
     a = ap.parse_args()
 
     from board import build as build_board
@@ -129,6 +136,13 @@ def main() -> int:
     if not rep["episodes"]:
         why = "; ".join(f"{f['name']}: {f['why']}" for f in rep["failed"][:3])
         raise SystemExit("no episode could be read" + (f" ({why})" if why else ""))
+    if a.sessions or a.dataset_note:
+        # what the uploader says of the whole dataset, kept in each episode's context so its parts inherit it
+        for c in sorted(eps.glob("episode_*/context.json")):
+            ctx = json.loads(c.read_text())
+            ctx.update({k: v for k, v in (("sessions", a.sessions), ("dataset_note", a.dataset_note.strip())) if v})
+            c.write_text(json.dumps(ctx, indent=1))
+    model_args = [*(["--model", a.model] if a.model else []), *(["--reasoning", a.reasoning] if a.reasoning else [])]
 
     if any(e["state_kind"] != "none" for e in rep["episodes"]):
         for flag in ([], ["--jumps"], ["--grippers"]):
@@ -153,7 +167,7 @@ def main() -> int:
     long_eps = pieces.write_units(job, eps)
     env = repo_env(RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)))
     run_step(job, "dry_run", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
-                              str(job / "dry"), "--concurrency", jobs, "--dry-run"], env)
+                              str(job / "dry"), "--concurrency", jobs, "--dry-run", *model_args], env)
     if a.free:
         print(f"free run: requests built in {job / 'dry'}, model not called", flush=True)
         return 0
@@ -164,7 +178,8 @@ def main() -> int:
             "code": f"argus@{commit()}", "started_at": now(), "cap_usd": a.cap, "status": "running"}
     (run_dir / "run.json").write_text(json.dumps(info, indent=1))
     run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
-                            str(run_dir / "out"), "--concurrency", str(a.concurrency), "--max-spend", str(a.cap)],
+                            str(run_dir / "out"), "--concurrency", str(a.concurrency), "--max-spend", str(a.cap),
+                            *model_args],
              env, ok_codes=(0, 1))
     info.update(status="done", finished_at=now())
     (run_dir / "run.json").write_text(json.dumps(info, indent=1))

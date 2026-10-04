@@ -428,7 +428,13 @@ def _camera_facts(ep: dict, v: str) -> str:
             "the rest of the image moves whenever the gripper moves.")
 
 
-def camera_desc(ep: dict) -> str:
+def is_recorded(ep: dict, pl: dict) -> bool:
+    """Whether the episode carries a recorded motion beside its video: an arm or gripper state, or another signal our
+    checks read. A video only episode is told nothing of a recorded motion (label/prompts.py VIDEO_ONLY_*)."""
+    return state_kind(ep) != "none" or bool(_signals_table(ep, pl))
+
+
+def camera_desc(ep: dict, recorded: bool = True) -> str:
     vs, r = views(ep), rig(ep)
     n = _rig_nouns(r)
     cams = ep["context"].get("cameras") or {}
@@ -476,7 +482,7 @@ def camera_desc(ep: dict) -> str:
               "This naming is bookkeeping only; it does not settle whether the names are right. Whether each "
               "stream really sits on the side its name says is a separate question for the pixels: where the "
               f"other {n['actor']} and the scene appear in it once you have worked out from the frame how that camera "
-              "is turned at that instant, and which recorded motion its view follows.")
+              "is turned at that instant" + (", and which recorded motion its view follows." if recorded else "."))
     elif r == "ego_head":
         s += (" In the output, \"left\", \"right\" and \"both\" name the person's own left and right hands, "
               "as seen from their head. Which hand is which follows the person's body (the forearm it belongs to, "
@@ -718,6 +724,7 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
     robot = ctx.get("robot_type")
     what = f" ({robot})" if robot else ""
     k = len(actors(ep))
+    recorded = is_recorded(ep, pl)
     who = n["who"] if r in ("teleop_arms", "ego_head") else (
         # one camera says nothing about how many grippers the rig has: a two-gripper rig's upload can carry one
         # gripper's footage, and its other gripper then appears in that camera, held in the other hand
@@ -731,7 +738,8 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
         "the dataset ships it, from its first recorded frame to its last; nothing was trimmed, cleaned or edited.\n"
         + (f"How the dataset cuts its recordings into episodes: {ctx['collection_note'].strip()}\n"
            if ctx.get("collection_note") else "")
-        + "\n" + camera_desc(ep) + "\n")
+        + (f"About this dataset: {ctx['dataset_note'].strip()}\n" if ctx.get("dataset_note") else "")
+        + "\n" + camera_desc(ep, recorded) + "\n")
     cams = ctx.get("cameras") or {}
     c0 = cams.get(anchor(ep), {})
     native = (c0.get("width") or "native", c0.get("height") or "resolution")
@@ -757,7 +765,9 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
         given_block += ("\nTHE UPLOADER'S OWN NOTES FOR THIS EPISODE, as sent. They are claims to check against the "
                         "video, not ground truth; where the video contradicts them, record it as a data issue:\n"
                         + ctx["uploader_annotation"].strip() + "\n")
-    return (prompts.fixed_instructions(r, has_instruction=bool(given)) + prompts.example_block(r, example_dir),
+    fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=recorded,
+                                       sessions=bool(ctx.get("sessions")) and not given)
+    return (fixed + prompts.example_block(r, example_dir),
             EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + "\n" + given_block)
 
 

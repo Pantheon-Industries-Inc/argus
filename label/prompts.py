@@ -19,6 +19,21 @@ from pathlib import Path
 FIXED_HEADER = ("HOW TO LABEL. These instructions are the same for every episode; the episode itself "
                 "(its dataset, cameras, frames, recorded motion and instruction) follows after them.\n\n")
 
+# An episode with no recorded state and no other signal is video only (label/episode.py is_recorded), and its shared
+# instructions say nothing of a recorded motion it does not have. These are the words taken out, from the header, the
+# robot rigs' tag list and the data contract; the variant is derived from the recorded text, so that text and its
+# pinned hashes are unchanged (ported from eric/tactile-depth 9fc8cc0).
+VIDEO_ONLY_HEADER = ("frames, recorded motion and instruction", "frames and instruction")
+VIDEO_ONLY_TAG = ("state_video_mismatch, ", "")
+VIDEO_ONLY_CONTRACT_WORDING = [
+    (" from\n  the recorded motion)", ")"),
+    ("; the recorded motion\n  disagreeing with the video)", ")"),
+    ("(what the cameras show, what the recorded motion says, what the instruction\n  says, and how the task is done)",
+     "(what the cameras show, what the instruction\n  says, and how the task is done)"),
+    ("and breaks the link\n  between what is seen, what is recorded and what is asked",
+     "and breaks the link\n  between what is seen and what is asked"),
+]
+
 # The output schema of the robot rigs. Tags are offered for reuse, so one kind of problem gets one tag across
 # episodes; they are never a closed list. Each timeline segment is a positional row, so its keys are not
 # repeated hundreds of times.
@@ -229,9 +244,11 @@ OPERATOR_MISTAKE_TAGS = ("failed_grasp, dropped_object, knocked_object, collisio
                          "hesitation, unnecessary_motion, goal_undone, incomplete_task")
 
 
-def schema(r: str) -> str:
-    """The output schema for a robot rig (the head camera has its own, EGO_SCHEMA)."""
-    s = SCHEMA.replace("<<ISSUE_TAGS>>", DATA_ISSUE_TAGS).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
+def schema(r: str, recorded: bool = True) -> str:
+    """The output schema for a robot rig (the head camera has its own, EGO_SCHEMA). A video only episode is offered no
+    tag for a state it does not have."""
+    tags = DATA_ISSUE_TAGS if recorded else _replace_once(DATA_ISSUE_TAGS, *VIDEO_ONLY_TAG)
+    s = SCHEMA.replace("<<ISSUE_TAGS>>", tags).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
     if r == "handheld_gripper":
         for old, new in HANDHELD_WORDING:
             s = _replace_once(s, old, new)
@@ -587,10 +604,11 @@ EGO_CONTRACT_WORDING = [
 ]
 
 
-def data_contract(r: str) -> str:
+def data_contract(r: str, recorded: bool = True) -> str:
     """Why the episode is labelled and what counts as a problem, in the words of this rig. The purpose, the two
     lists and the severity scale are shared; what the cameras are, what a mistake looks like and what normal
-    slack is are the rig's own."""
+    slack is are the rig's own. A video only robot episode (recorded False) has the words about a recorded motion
+    taken out (VIDEO_ONLY_CONTRACT_WORDING)."""
     robot = r != "ego_head"
     c = _DATA_CONTRACT_BASE
     c = _replace_once(c, "<<WHY>>", _WHY["robot" if robot else "ego_head"])
@@ -598,6 +616,9 @@ def data_contract(r: str) -> str:
     c = _replace_once(c, "<<VISIBILITY>>", _VISIBILITY[r])
     c = _replace_once(c, "<<MAP>>", _MAP["robot" if robot else "ego_head"])
     c = _replace_once(c, "<<MISTAKES>>", _MISTAKES[r])
+    if robot and not recorded:
+        for old, new in VIDEO_ONLY_CONTRACT_WORDING:
+            c = _replace_once(c, old, new)
     if not robot:
         slack = c[c.index("- NORMAL DEMONSTRATION SLACK"):c.index("- SEVERITY IS TRAINING IMPACT")]
         c = _replace_once(c, slack, _SLACK_EGO + "\n")
@@ -793,13 +814,16 @@ def lean(r: str) -> str:
     return LEAN_NOTE
 
 
-def fixed_instructions(r: str, *, has_instruction: bool = True) -> str:
+def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True, sessions: bool = False) -> str:
     """Everything before the episode's own facts. A head-camera dataset has one variant whether or not it is
-    annotated, so every episode of it shares the cached prefix."""
+    annotated, so every episode of it shares the cached prefix. A robot episode with no recorded state is told
+    nothing of a recorded motion (recorded False), and a robot dataset of sessions (several activities and no
+    instruction per recording) is labelled with a tasks list instead of one task (SESSION_RULES)."""
     if r == "ego_head":
         return FIXED_HEADER + what_this_is(r) + EGO_SCHEMA + data_contract(r) + EGO_ANNOTATION_RULES + lean(r)
-    return (FIXED_HEADER + what_this_is(r) + schema(r) + data_contract(r)
-            + (INSTRUCTION_RULES if has_instruction else NO_INSTRUCTION_RULES) + lean(r))
+    head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
+    rules = session_rules(r) if sessions else INSTRUCTION_RULES if has_instruction else NO_INSTRUCTION_RULES
+    return head + what_this_is(r) + schema(r, recorded) + data_contract(r, recorded) + rules + lean(r)
 
 
 # An episode with no instruction (a bare video, or a dataset that ships none) still needs a task to grade the
@@ -814,6 +838,55 @@ and success_predicate state that end state. When it was reached and later taken 
 the outcome is success_then_undone. When the actions fit no single end state, name the one that fits best and
 say in completion.reason what leaves it uncertain.
 """
+
+
+# A robot dataset of sessions: each recording is one sitting in which the demonstrator does several activities of
+# their own choosing, with no instruction (a free-play dataset). It is labelled the way head-camera clips are, with a
+# tasks list of the distinct activities, each with its own span, success condition, outcome and goal frame; the task
+# wording below is the head-camera schema's (EGO_SCHEMA), so a task means the same thing on every rig. The rest of the
+# schema is unchanged; completion is left empty because no single goal exists, as a long recording stitched from parts
+# leaves it (label/pieces.py). The tasks' spans are what a later split into one episode per task cuts on.
+SESSION_RULES = """
+ABOUT THE TASKS. This recording is a session: the demonstrator was given no task, and over the recording does a
+SEQUENCE of distinct activities of their own choosing (stacking some blocks, then sorting cups, then putting a lid
+on a box). There is no single goal, so do not force one. Segment the recording into its distinct activities and
+emit them as a top-level "tasks" list, in time order:
+  "tasks": [
+    {"start_s": <float>, "end_s": <float>,
+     "task": "<the unit of work the demonstrator set out to do, open-vocab, as an imperative, e.g. 'stack the three red blocks', 'put the lid on the box'>",
+     "objects": ["<the objects this task acts on>"],
+     "outcome": "success" | "partial" | "failure",
+     "success_predicate": "<the end-state that means THIS unit of work is done>",
+     "completed_at_s": <float or null>,
+     "note": "<why, if partial/failure or unclear>"}
+  ]
+- A task is a coherent unit of intent, COARSER than key_events (milestones within a task) and coarser than the
+  timeline. A new task begins when the demonstrator turns to a different objective. Name each task as the most
+  specific end state its actions converge on, never as a description any motion satisfies (moving, repositioning
+  or rearranging the objects). Stretches with no evident objective (idling, looking around, tidying between
+  activities) belong to no task; tasks need not cover the whole recording.
+- Each task's outcome is judged on BALANCE OF EVIDENCE, per task independently: success = its end-state is clearly
+  reached; partial = a real observable part of it is left undone; failure = it is demonstrably not accomplished
+  (dropped, abandoned, undone). An abandoned attempt is a failure (or partial) for that task and does not taint
+  the others. A task already under way at the first frame, or still under way at the last, is judged only on what
+  the recording shows; say in its note that the recording cuts it.
+- Each task's completed_at_s (its goal frame) is the FIRST frame its success_predicate holds AND keeps holding for
+  the rest of that task's span: the last action that puts the task's objects into their final state, not when the
+  grippers move on. null if the end-state is never reached.
+- progress in the timeline is toward the CURRENT task, not the whole session: 0 when a task starts, 1.0 when its
+  end-state is reached, then it resets for the next task. contribution is judged against the task the
+  demonstrator is working on at that step.
+- task_summary is one sentence summarising the session's activities. instruction_variants rephrase the activity
+  that fills most of the recording.
+- completion: there is no single goal, so set task_completed, success_predicate, completed_at_s,
+  goal_reached_at_s, undone_at_s and undone_by to null, and reason to "a session of several tasks; each task's
+  outcome is under tasks".
+"""
+
+
+def session_rules(r: str) -> str:
+    """SESSION_RULES in the rig's words: a handheld rig's acting part is a gripper, a teleoperated rig's an arm."""
+    return SESSION_RULES if r == "handheld_gripper" else SESSION_RULES.replace("grippers move on", "arms move on")
 
 
 def example_block(r: str, example_dir: str | Path | None) -> str:
