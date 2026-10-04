@@ -580,9 +580,9 @@ INDEX_HTML = r"""<!doctype html>
   --fg-faint: var(--fg-3);
 
   /* one meaning per colour: crimson, something wrong with the data or the outcome; green, the task done; indigo, the
-     operator's performance; teal, interactive; blue and purple, the left and right arm; ink and greys, everything
-     else. Severity is never a hue: stronger fill is higher severity. On the dark video panels the crimson is #e58c9a
-     and the indigo #a3aee0. No orange or amber anywhere. */
+     operator's performance; yellow, a wasteful step; teal, interactive; blue and purple, the left and right arm; ink
+     and greys, everything else. Severity is never a hue: stronger fill is higher severity. On the dark video panels the crimson is #e58c9a
+     the indigo #a3aee0 and the yellow #f2d42a. No orange or amber anywhere. */
   --accent:    #45818e;   /* interactive: links, selection, the playhead */
   --success:   #2f7d52;   /* the task done */
   --warning:   #4d5aa0;   /* the operator's performance */
@@ -1153,8 +1153,8 @@ aside.left .cam-cell.cam-exo .cam-label { top: calc(var(--fx-top, 0px) + 8px); l
 }
 .video-overlay.active { opacity: 1; transform: translateX(-50%) translateY(0); }
 .video-overlay.adv   { border-left: 3px solid rgba(255,255,255,0.55); box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
-.video-overlay.waste { border-left: 3px solid #a3aee0; box-shadow: 0 4px 18px rgba(0,0,0,0.45),
-  inset 3px 0 12px -4px rgba(163,174,224,0.3); }
+.video-overlay.waste { border-left: 3px solid #f2d42a; box-shadow: 0 4px 18px rgba(0,0,0,0.45),
+  inset 3px 0 12px -4px rgba(242,212,42,0.3); }
 .video-overlay.idle  { border-left: 3px solid #8a8a94; box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
 .video-overlay.none  { border-left: 3px solid #8a8a94; box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
 .video-overlay .vo-time {
@@ -1185,7 +1185,7 @@ aside.left .cam-cell.cam-exo .cam-label { top: calc(var(--fx-top, 0px) + 8px); l
   padding: 1px 8px; border-radius: var(--r-pill); vertical-align: 1px;
 }
 .video-overlay .vo-contrib.adv   { background: rgba(255, 255, 255, 0.14); color: #e6e8df; }
-.video-overlay .vo-contrib.waste { background: rgba(163, 174, 224, 0.18); color: #bcc2e0; }
+.video-overlay .vo-contrib.waste { background: rgba(242, 212, 42, 0.18); color: #f5df6a; }
 .video-overlay .vo-contrib.idle  { background: rgba(255,255,255,0.12); color: #cfcfd6; }
 .video-overlay .vo-contrib.none  { background: rgba(255,255,255,0.10); color: #cfcfd6; }
 /* head camera, hands out of view: a pulsing ring on the cell and a pill in the status strip below it, so a viewer
@@ -1363,7 +1363,7 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   border-radius: 1px; cursor: pointer; transition: width 100ms;
 }
 .timeline .marker.seg.adv   { background: var(--fg-2); }
-.timeline .marker.seg.waste { background: #4d5aa0; }
+.timeline .marker.seg.waste { background: #e6c700; }
 .timeline .marker.seg.idle  { background: var(--fg-disabled); }
 .timeline .marker.seg.none  { background: var(--fg-disabled); }
 .timeline .marker.key {
@@ -1573,8 +1573,8 @@ h3.section .count {
   border: 1px solid transparent; font-weight: 600;
 }
 .dense-stats .ds-chip.adv   { background: rgba(28,28,26,0.070); color: var(--fg); border-color: var(--border-strong); }
-.dense-stats .ds-chip.waste { background: rgba(77,90,160,0.12); color: var(--warning);
-  border-color: rgba(77,90,160,0.30); }
+.dense-stats .ds-chip.waste { background: rgba(230,199,0,0.18); color: #6b5a00;
+  border-color: rgba(230,199,0,0.55); }
 .dense-stats .ds-chip.idle  { background: rgba(28,28,26,0.050); color: var(--fg-3); border-color: var(--border); }
 
 .feed { display: flex; flex-direction: column; gap: 0; }
@@ -1645,8 +1645,8 @@ h3.section .count {
   border-color: rgba(179,38,60, 0.22); }
 .feed .ev .outcome.none    { background: transparent; color: var(--fg-faint); border-color: var(--border); }
 .feed .ev .contrib.adv   { background: rgba(28,28,26,0.070); color: var(--fg); border-color: var(--border-strong); }
-.feed .ev .contrib.waste { background: rgba(77,90,160,0.12); color: var(--warning);
-  border-color: rgba(77,90,160,0.30); }
+.feed .ev .contrib.waste { background: rgba(230,199,0,0.18); color: #6b5a00;
+  border-color: rgba(230,199,0,0.55); }
 .feed .ev .contrib.idle  { background: rgba(28,28,26,0.050); color: var(--fg-3); border-color: var(--border); }
 .feed .ev .contrib.none  { background: transparent; color: var(--fg-faint); border-color: var(--border); }
 
