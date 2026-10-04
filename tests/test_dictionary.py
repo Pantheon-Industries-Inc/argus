@@ -430,3 +430,23 @@ def test_pointer_escaping_keeps_slash_tilde_and_ordinary_metadata_keys_exact(tmp
     ordinary = fields['calibration/ordinary']
     assert field_interpretation(reviewed, ordinary['name'], 'calibration')['meaning'] == 'Original metadata'
     assert context['calibration/sensor~0']['a/b']['tilde~field'] == [11, 13]
+
+
+@pytest.mark.parametrize('value', [10 ** 400, [10 ** 400, 7]])
+def test_unrepresentable_metadata_stays_qualified_without_aborting_dictionary(tmp_path, value):
+    from label import dictionary as dd
+    ep = episode(tmp_path, 'one', [], extra={'recorded_metadata': {'counter': value, 'gain': [1, 3]}})
+    original = (ep / 'context.json').read_bytes()
+    inv = dd.inventory([ep])
+    fields = {field['name']: field for field in inv['fields']}
+    counter = fields['recorded_metadata.counter']
+    assert counter['limitations'] and 'summary range' in counter['limitations'][0]
+    assert fields['recorded_metadata.gain']['summary']['mean'] == 2
+    assert (ep / 'context.json').read_bytes() == original
+    assert str(10 ** 400) not in dd.request(inv)[0]['text']
+    calls = []
+    def fake(*args, **kwargs):
+        calls.append(args)
+        return {'choices': [{'message': {'content': '{"entries": []}'}}], 'usage': {'cost': 0.001}}
+    result = dd.prepare_upload(tmp_path / 'job', [ep], 'injected key', fake)
+    assert len(calls) == 1 and result['status'] == 'success'

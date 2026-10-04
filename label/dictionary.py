@@ -203,7 +203,7 @@ def inventory(episodes: list[Path]) -> dict:
                 retained(ep, child, name + "." + public_key, path + "/" + _pointer_key(key), kind,
                          public_path + "/" + _pointer_key(public_key))
             return
-        numbers = None
+        numbers, limitation = None, None
         if isinstance(value, (int, float, bool, list)):
             try:
                 numeric = _metadata_numbers(value)
@@ -211,11 +211,14 @@ def inventory(episodes: list[Path]) -> dict:
                     shape, dtype, numbers = numeric
                 else:
                     shape, dtype = [len(value)] if isinstance(value, list) else [], "metadata"
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError) as error:
                 shape, dtype = [len(value)] if isinstance(value, list) else [], "metadata"
+                if isinstance(error, OverflowError):
+                    limitation = "numeric metadata exceeds the float64 summary range; original values are retained"
         else:
             shape, dtype = [], "text" if isinstance(value, str) else "metadata"
-        add(ep, name, kind, shape, dtype, {"source": "context.json#" + public_path}, path, numbers=numbers)
+        add(ep, name, kind, shape, dtype, {"source": "context.json#" + public_path}, path,
+            numbers=numbers, limitation=limitation)
 
     for ep in sorted(map(Path, episodes), key=lambda p: p.name):
         ctx = json.loads((ep / "context.json").read_text())
