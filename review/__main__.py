@@ -2,7 +2,7 @@
 
     python -m review --data PATH_OR_URL --rig teleop_arms|handheld_gripper|ego_head --out JOB \\
         [--dataset NAME] [--free] [--cap 20] [--concurrency 8] [--max-minutes M] [--grouping JSON] \\
-        [--model ID] [--reasoning EFFORT] [--sessions] [--dataset-note TEXT]
+        [--model ID] [--reasoning EFFORT] [--timeout S] [--sessions] [--dataset-note TEXT]
 
 PATH_OR_URL is a folder, a file or an archive, or an http(s) URL of a file or an archive, which is downloaded into
 JOB/upload first. Everything else is written under JOB, and the data itself is never edited. These are the stages
@@ -106,6 +106,8 @@ def main() -> int:
                     help='JSON {folder: "takes" | "cameras"} for folders whose files cannot tell takes from cameras')
     ap.add_argument("--model", default=None, help="OpenRouter model id (default: label/harness.py's)")
     ap.add_argument("--reasoning", default=None, help="reasoning effort (default: label/harness.py's)")
+    ap.add_argument("--timeout", type=int, default=None,
+                    help="seconds per request (default: label/harness.py's); a long part can need more")
     ap.add_argument("--sessions", action="store_true",
                     help="each recording is a session of several activities with no instruction: label it with a "
                          "tasks list (label/prompts.py SESSION_RULES)")
@@ -142,7 +144,8 @@ def main() -> int:
             ctx = json.loads(c.read_text())
             ctx.update({k: v for k, v in (("sessions", a.sessions), ("dataset_note", a.dataset_note.strip())) if v})
             c.write_text(json.dumps(ctx, indent=1))
-    model_args = [*(["--model", a.model] if a.model else []), *(["--reasoning", a.reasoning] if a.reasoning else [])]
+    model_args = [*(["--model", a.model] if a.model else []), *(["--reasoning", a.reasoning] if a.reasoning else []),
+                  *(["--timeout", str(a.timeout)] if a.timeout else [])]
 
     if any(e["state_kind"] != "none" for e in rep["episodes"]):
         for flag in ([], ["--jumps"], ["--grippers"]):
