@@ -17,17 +17,17 @@ For the whole board and for each dataset the page shows
   times the plan's hours as the cost of the whole run;
 - subtasks, subtasks per minute of footage, the share of subtasks that succeeded, the share of episodes with a data
   issue and the share of subtasks with an operator mistake (the issues the episode list counts, Families.counts);
-- diversity: how many kinds of object are handled, of motion and of task, and how evenly they are spread (the
+- diversity: how many kinds of object are handled, of verb and of task, and how evenly they are spread (the
   effective number, e to the Shannon entropy of the counts: the number of equally common kinds that would give the
   same spread, so 40 kinds where one fills nine tenths of the footage counts as far fewer than 40);
 - whether new kinds still turn up: distinct kinds against labelled hours, in the order the episodes were labelled;
-- the five commonest kinds of object (subtasks that handle each) and of motion (events with each verb), each split
+- the five commonest kinds of object (subtasks that handle each) and task verbs (subtasks with each), each split
   by dataset, and the share of handled objects that are deformable (each kind's tag, board/materials.py).
 
 Kinds come from the labels' own words, never from a fixed list. An object's kind is the head noun of its name
-("pebble container" is a container, "clear test tubes" a tube, "10 of diamonds" a card); a motion is each verb of an
-event's verb_class ("lift and carry inward" is lift and carry); a task is its verb and the kind of the first object it
-names ("Place the closed pebble container upright on the tray" is place container). The rules are simple and the same
+("pebble container" is a container, "clear test tubes" a tube, "10 of diamonds" a card); a task is its verb and the
+kind of the first object it names ("Place the closed pebble container upright on the tray" is place container), and
+its verb alone is place. The rules are simple and the same
 for every dataset, so the datasets compare with each other even where a rule misreads a name.
 
 plan.json, written when a run starts:
@@ -100,16 +100,6 @@ def object_kind(name: str) -> str | None:
     return singular(words[-1]) if words else None
 
 
-def motion_verbs(verb_class: str) -> list:
-    """Each verb of an event's verb_class: "lift and carry inward" -> [lift, carry]."""
-    out = []
-    for part in re.split(r"\s+and\s+|,|;|/", str(verb_class or "").lower()):
-        words = _TOKEN.findall(part)
-        if words and not words[0].isdigit():
-            out.append(words[0])
-    return out
-
-
 def task_kind(sentence: str, names: list) -> str | None:
     """A task's verb and the kind of the first object it names: reading on from the verb, the first place where one
     of the episode's object names starts, or the first word that is one of their kinds ("Lift clear tubes from the
@@ -143,7 +133,6 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
         (lambda key, i: str(i.get("category") or i.get("issue"))[:60])
     names = [str(o.get("name") or "") for o in (d.get("objects") or []) if isinstance(o, dict) and o.get("name")]
     events = [e for e in (d.get("event_labels") or []) if isinstance(e, dict)]
-    verbs = Counter(v for e in events for v in motion_verbs(e.get("verb_class")))
     tasks = [t for t in (d.get("tasks") or []) if isinstance(t, dict) and t.get("task")]
     # the objects each subtask handles: the ones the task names and the ones its events act on. The episode's own
     # object list holds everything on the table, distractors included, so it is not counted.
@@ -165,6 +154,9 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
     else:
         task_rows = [(task_kind(d.get("episode_prompt") or "", names),
                       ((d.get("completion") or {}).get("task_completed") or "").lower())]
+    # the verb of each subtask's task, "place container" is place: what the operator was asked to do. The events'
+    # own verbs (approach, grasp, lower, release) are the steps of nearly every task, so they tell tasks apart poorly.
+    verbs = Counter(k.split()[0] for k, _ in task_rows if k)
     issues = [i for i in (d.get("data_issues") or []) if isinstance(i, dict) and i.get("issue")
               and counts("data_issues", i)]
     mistakes = [i for i in (d.get("operator_mistakes") or []) if isinstance(i, dict) and i.get("issue")
@@ -220,14 +212,14 @@ def _diversity(rows: list) -> dict:
     tasks = Counter(k for r in rows for k, _ in r["tasks"] if k)
     return {
         "objects": {"distinct": len(objs), "names": len(names), "effective": effective_number(objs), "top": _top(objs)},
-        "motions": {"distinct": len(verbs), "effective": effective_number(verbs), "top": _top(verbs)},
+        "verbs": {"distinct": len(verbs), "effective": effective_number(verbs), "top": _top(verbs)},
         "tasks": {"distinct": len(tasks), "effective": effective_number(tasks), "top": _top(tasks)},
     }
 
 
 def _curve(rows: list) -> dict:
-    """Distinct object, task and motion kinds against labelled hours, in the order the episodes were labelled:
-    points are [hours, objects, tasks, motions]."""
+    """Distinct object kinds, tasks and task verbs against labelled hours, in the order the episodes were labelled:
+    points are [hours, objects, tasks, verbs]."""
     rows = sorted(rows, key=lambda r: (r["at"], r["file"]))
     seen_o, seen_t, seen_m, h, pts = set(), set(), set(), 0.0, []
     for r in rows:
@@ -373,9 +365,9 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
             "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rows),
             "top_issues": _top(Counter(t for r in rows for t in set(r["issue_tags"])), 5),
             "top_mistakes": _top(Counter(t for r in rows for t in r["mistake_tags"]), 5),
-            # the five commonest kinds of object (with their tag) and motions, split by dataset
+            # the five commonest kinds of object (with their tag) and task verbs, split by dataset
             "top_objects": [[k, n, by, tags.get(k)] for k, n, by in _top_split(objs)],
-            "top_motions": _top_split(verbs),
+            "top_verbs": _top_split(verbs),
         },
         "datasets": datasets,
         "latest": [{"file": r["file"], "dataset": r["dataset"], "prompt": r["prompt"], "at": r["at"],

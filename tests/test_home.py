@@ -11,7 +11,6 @@ def test_kinds_come_from_the_labels_own_words():
     assert [home.object_kind(n) for n in ["pebble container", "clear test tubes", "can of tuna", "pair of scissors",
                                           "10 of diamonds", "cloth and blue plastic piece", "black cherries"]] == \
         ["container", "tube", "can", "scissors", "card", "cloth", "cherry"]
-    assert home.motion_verbs("lift and carry inward") == ["lift", "carry"]
     names = ["clear test tubes", "handled comb"]
     assert home.task_kind("Lift clear tubes from the rack and reseat them.", names) == "lift tube"
     assert home.task_kind("Try to stand the handled comb upright.", names) == "stand comb"
@@ -56,6 +55,8 @@ def test_objects_and_mistakes_count_per_subtask(tmp_path):
     assert [k for k, *_ in s["total"]["top_objects"]] == ["container", "cup", "towel"]
     assert s["total"]["deformable"] == {"rigid": 2, "deformable": 1}
     assert by["freeform"]["outcomes"]["success"] == 1 and by["freeform"]["outcomes"]["failure"] == 1
+    # verbs are the tasks' own (place, fold, stack), one per subtask, never the events' grasp or lift
+    assert sorted(k for k, *_ in s["total"]["top_verbs"]) == ["fold", "place", "stack"]
 
 
 def test_the_numbers_keep_their_version_until_a_label_changes(tmp_path):
