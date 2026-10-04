@@ -243,3 +243,54 @@ def test_structural_split_columns_work_on_other_lerobot_camera_storage(tmp_path,
     with np.load(ep / 'state.npz') as arrays:
         assert arrays['state'].dtype == expected.dtype and arrays['state'].tobytes() == expected.tobytes()
     assert not any(row['name'].endswith(('_arm', '_gripper')) for row in ctx['signals'])
+
+
+@pytest.mark.parametrize('mode', ['video', 'image', 'packed'])
+@pytest.mark.parametrize('quantity, want', [('pose', 'ee_pose'), ('effort', 'none')])
+def test_split_value_names_set_the_recorded_layout_on_every_storage(tmp_path, monkeypatch, mode, quantity, want):
+    from test_annotations import _native_case
+    root = tmp_path / 'names'
+    if mode == 'video':
+        native(root)
+    else:
+        expected = _native_case(root, mode)
+        path = next(root.glob('data/chunk-*/*.parquet'))
+        df = pd.read_parquet(path)
+        for side, start in [('left', 0), ('right', 7)]:
+            df[f'observation.state.{side}_arm'] = list(expected[:, start:start + 6])
+            df[f'observation.state.{side}_gripper'] = expected[:, start + 6]
+        df.drop(columns=['observation.state']).to_parquet(path)
+    path = next(root.glob('data/chunk-*/*.parquet'))
+    original = pd.read_parquet(path)
+    info = json.loads((root / 'meta/info.json').read_text())
+    for side in ['left', 'right']:
+        names = ['x', 'y', 'z', 'roll', 'pitch', 'yaw'] if quantity == 'pose' else [f'joint{i}_effort' for i in range(6)]
+        info['features'][f'observation.state.{side}_arm'] = {'dtype': 'float32', 'shape': [6], 'names': names}
+        info['features'][f'observation.state.{side}_gripper'] = {'dtype': 'float32', 'shape': [1]}
+    (root / 'meta/info.json').write_text(json.dumps(info))
+    ep, ctx = convert(root, tmp_path / 'out', monkeypatch)
+    assert ctx['state_kind'] == want
+    assert ctx['recorded_metadata'][str(root / 'meta/info.json')] == info
+    if want == 'none':
+        assert not (ep / 'state.npz').exists()
+        with np.load(ep / 'signals.npz') as arrays:
+            for signal in ctx['signals']:
+                if signal['name'].startswith('observation.state.'):
+                    values = np.asarray(list(original[signal['name']]))
+                    assert arrays[signal['key']].tobytes() == values.astype(np.float32).reshape(len(values), -1).tobytes()
+    else:
+        assert ctx['state_identities'][0]['names'][-1] == 'observation.state.left_gripper'
+
+
+@pytest.mark.parametrize('names', [['x', 'y'], ['x', 'y', 'z', 'joint3', 'joint4', 'joint5']])
+def test_partial_or_contradictory_split_names_never_promote_width_to_joints(tmp_path, monkeypatch, names):
+    root = tmp_path / 'uncertain'
+    native(root)
+    info = json.loads((root / 'meta/info.json').read_text())
+    for side in ['left', 'right']:
+        info['features'][f'observation.state.{side}_arm']['names'] = names
+    (root / 'meta/info.json').write_text(json.dumps(info))
+    ep, ctx = convert(root, tmp_path / 'out', monkeypatch)
+    assert ctx['state_kind'] == 'none'
+    assert not (ep / 'state.npz').exists()
+    assert {'observation.state.left_arm', 'observation.state.right_arm'} <= {s['name'] for s in ctx['signals']}
