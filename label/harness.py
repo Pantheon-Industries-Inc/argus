@@ -115,9 +115,10 @@ def openai_list_cost(model: str, usage: dict) -> float | None:
     return (n_in - cached) * p_in + cached * p_cached + usage.get("completion_tokens", 0) * p_out
 
 
-def call_model(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int) -> dict:
+def call_model(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
+               *, attempts: int = 6) -> dict:
     if not is_openrouter_key(api_key):
-        return _call_openai(content, model, reasoning, api_key, max_tokens, timeout)
+        return _call_openai(content, model, reasoning, api_key, max_tokens, timeout, attempts=attempts)
     if content and content[0].get("type") == "text" and len(content[0].get("text", "")) > 4000:
         # mark the end of the shared instructions as a cache breakpoint: the provider caches whole prompts up to
         # a breakpoint, so without one, episodes that share only the instructions never hit the cache (measured:
@@ -133,10 +134,16 @@ def call_model(content: list, model: str, reasoning: str, api_key: str, max_toke
         # recorded cost and spend cap uses what was actually charged
         "usage": {"include": True},
     }
-    return _post(OPENROUTER_URL, body, api_key, timeout)
+    return _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts)
 
 
-def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int) -> dict:
+def call_model_once(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int) -> dict:
+    """One HTTP attempt for an upload dictionary. A failed dispatch may already have been billed."""
+    return call_model(content, model, reasoning, api_key, max_tokens, timeout, attempts=1)
+
+
+def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
+                 *, attempts: int = 6) -> dict:
     """The same request straight to OpenAI. The response is recorded as OpenRouter's is: its provider is OpenAI
     and its usage carries list_cost, the list-price cost, where OpenRouter's carries the billed cost."""
     if not model.startswith("openai/"):
@@ -144,18 +151,20 @@ def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_to
     body = {"model": model.split("/", 1)[1], "messages": [{"role": "user", "content": content}],
             "max_completion_tokens": max_tokens, "reasoning_effort": reasoning,
             "response_format": {"type": "json_object"}}
-    resp = _post(OPENAI_URL, body, api_key, timeout)
+    resp = _post(OPENAI_URL, body, api_key, timeout, attempts=attempts)
     resp.setdefault("provider", "OpenAI")
     if isinstance(resp.get("usage"), dict):
         resp["usage"]["list_cost"] = openai_list_cost(model, resp["usage"])
     return resp
 
 
-def _post(url: str, body: dict, api_key: str, timeout: int) -> dict:
+def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6) -> dict:
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+        raise ValueError("HTTP attempts must be a positive integer")
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
     last = None
-    for attempt in range(6):
+    for attempt in range(attempts):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 resp = json.loads(r.read().decode())
@@ -173,13 +182,17 @@ def _post(url: str, body: dict, api_key: str, timeout: int) -> dict:
             if is_key_exhausted(e.code, text):
                 raise KeyExhausted(last)
             if e.code in (429, 500, 502, 503, 504, 529):
+                if attempt + 1 == attempts:
+                    break
                 time.sleep(min(60, 4 * 2 ** attempt))
                 continue
             raise RuntimeError(last)
         except (urllib.error.URLError, TimeoutError) as e:
             last = str(e)
+            if attempt + 1 == attempts:
+                break
             time.sleep(2 ** attempt)
-    raise RuntimeError(f"model call failed after retries: {last}")
+    raise RuntimeError(f"model call failed after {attempts} HTTP attempts: {last}")
 
 
 def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, api_key: str, max_tokens: int,
