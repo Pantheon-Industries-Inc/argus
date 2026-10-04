@@ -1468,6 +1468,36 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .lane-seg.pub.alt { background: rgba(69,129,142,0.28); }
 .lane-seg.pub.now { background: #45818e; }
 .lane-ph { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--fg); pointer-events: none; }
+.sensor-evidence { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-md); background: var(--raised); }
+.se-summary, .se-depth { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 12px; }
+.se-summary > span, .se-depth > span { color: var(--fg-3); }
+.se-current { margin: 10px 0; }
+.se-headline { display: block; font-size: 14px; font-weight: 600; line-height: 1.35; }
+.se-sources { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10px; margin-top: 5px; opacity: .85; }
+.se-action, .se-timing { display: block; margin-top: 5px; font-size: 11px; line-height: 1.4; }
+.se-timing { opacity: .8; }
+.sensor-evidence button { color: var(--fg); background: transparent; border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm); padding: 6px 9px; font: 500 11px var(--sans); cursor: pointer; }
+.sensor-evidence button:hover { border-color: var(--fg-2); }
+.se-moments { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; }
+.se-moments button { display: grid; gap: 3px; white-space: nowrap; text-align: left; }
+.se-depth { padding-bottom: 10px; }
+.sensor-evidence-details { margin: 12px 0; }
+.sensor-evidence-details > summary { cursor: pointer; font-size: 12px; color: var(--fg-2); padding: 8px 0; }
+.sensor-overlay { display: none; position: absolute; z-index: 5; left: calc(var(--fx-left, 0px) + 12px); top: 8px; text-align: left;
+  max-width: min(440px, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 24px)); padding: 9px 12px;
+  border: 1px solid rgba(255,255,255,.28);
+  border-left: 3px solid #a9c6cb; border-radius: 7px; background: rgba(12,18,22,.87); color: #fff;
+  font-family: var(--sans); cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+.sensor-overlay.active { display: block; }
+.sensor-overlay .se-headline { font-size: 13px; }
+aside.left .grip-strip .sensor-overlay { position: static; order: 2; max-width: 92%; margin-top: 6px; }
+@media (max-width: 600px) {
+  aside.left .cam-cell > .sensor-overlay { position: static; order: 5; flex: 1 0 100%; max-width: none;
+    box-sizing: border-box; margin: 6px 0 0; }
+}
+
 /* ---------- sensors: the recording's other signals and depth (board/sensors.py) ----------
    Under the timeline and on its time scale. Each signal that changes is a lane as wide as the timeline, so its playhead
    stands under the timeline's: its name and the value at the playhead over a strip of its samples, the stretches it
@@ -1545,6 +1575,7 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   mask-image: linear-gradient(to top, rgba(0,0,0,var(--dp-band)) var(--dp-bar, 0px),
     #000 calc(var(--dp-bar, 0px) + 12px)); }
 .dp-vid.on { opacity: 1; }
+.cam-cell.dp-compare .dp-vid.on { clip-path: inset(0 0 0 50%); }
 .dp-vid.ctl { --dp-band: 0.18; }
 @media (prefers-reduced-motion: reduce) { .dp-vid, .sn-peak, .sn-hv { transition: none; } }
 #sn-slot { transition: opacity 220ms ease; }
@@ -4599,6 +4630,114 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
   if (_snData.has(file)) fill(_snData.get(file), false);
   else loadSensors(file).then(D => fill(D, true));
 }
+// ================= sensor evidence: present saved observations without adding model conclusions =================
+function sensorEvidence(d) {
+  const text = v => v != null && String(v).trim() && String(v).toLowerCase() !== 'null'
+    ? String(v).replace(/[\u2013\u2014]/g, '-') : '';
+  const finite = v => typeof v === 'number' && Number.isFinite(v);
+  const contacts = [], moments = [];
+  for (const [i, c] of (d.contacts || []).entries()) {
+    if (!finite(c.start_s) || !finite(c.end_s) || c.end_s < c.start_s) continue;
+    const s = c.shown && c.seen ? c.seen : {};
+    const visual = !c.shown ? 'Not visually checked' : !c.seen ? 'No visual verdict'
+      : s.touch_seen === 'yes' ? 'Touch seen in sampled frames'
+      : s.touch_seen === 'no' ? 'Touch not seen in sampled frames' : 'Visual touch unclear';
+    const hand = c.hand === 'left' ? 'Left hand' : c.hand === 'right' ? 'Right hand' : 'Hand';
+    const object = s.touch_seen === 'yes' ? text(s.object) : '';
+    let headline = `${hand} contact${object ? ' with ' + object : ''}`, priority = 0;
+    if (s.touch_seen === 'unclear') headline = 'Contact signal, visual touch unclear';
+    if (s.touch_seen === 'no' && !c.aligned_by) {
+      headline = 'Contact signal without visible touch'; priority = 3;
+    }
+    if (['left', 'right'].includes(s.hand) && ['left', 'right'].includes(c.hand) && s.hand !== c.hand) {
+      headline = 'Hand attribution disagrees'; priority = 4;
+    }
+    if (s.slip === 'yes') { headline = 'Slip reported in this contact'; priority = 5; }
+    const entry = {start: c.start_s, end: c.end_s, index: i, headline, visual, priority,
+      reading: c.aligned_by ? 'Assumed timing' : 'Recorded signal', detail: text(s.action),
+      timing: c.aligned_by ? 'Contact placement is assumed. Inspect evidence for the clock qualification.' : '',
+      id: text(c.id)};
+    contacts.push(entry);
+    const add = (t, headline, kind) => moments.push({...entry, t, headline, kind});
+    if (!c.from_start) add(c.start_s, 'Contact signal begins', 'begin');
+    for (const t of c.dips_s || []) if (finite(t) && t >= c.start_s && t <= c.end_s)
+      add(t, 'Contact signal weakens and returns', 'dip');
+    if (!c.to_end) add(c.end_s, 'Contact signal ends', 'end');
+  }
+  for (const m of d.contacts_missing || []) if (finite(m.t_s)) moments.push({t: m.t_s, kind: 'missing',
+    headline: 'Visible grasp has no recorded contact', reading: 'No covering contact', visual: 'Reported from video',
+    detail: [text(m.hand), text(m.object)].filter(Boolean).join(' '), priority: 6, index: -1, timing: ''});
+  moments.sort((a, b) => a.t - b.t || b.priority - a.priority);
+  return {contacts, moments};
+}
+function activeSensorEvidence(E, t) {
+  const active = E.contacts.filter(c => t >= c.start && t <= c.end)
+    .sort((a, b) => b.priority - a.priority || b.start - a.start);
+  const moments = E.moments.filter(m => t >= m.t && t < m.t + (m.kind === 'missing' ? 1.5 : 0.65)
+    && (m.kind === 'end' || m.kind === 'missing' || t <= m.end))
+    .sort((a, b) => b.priority - a.priority || b.t - a.t);
+  const moment = moments[0], contact = active[0];
+  if (moment && (!contact || moment.priority >= contact.priority)) return moment;
+  return contact || null;
+}
+function sensorEvidenceOverlayHtml(e) {
+  if (!e) return '';
+  return `<span class="se-headline">${esc(e.headline)}</span><span class="se-sources"><span>${esc(e.reading)}</span>`
+    + `<span>${esc(e.visual)}</span></span>${e.detail ? `<span class="se-action">${esc(e.detail)}</span>` : ''}`
+    + (e.timing ? `<span class="se-timing">${esc(e.timing)}</span>` : '');
+}
+function sensorEvidenceHtml(E, depth) {
+  if (!E.contacts.length && !E.moments.length && !depth.length) return '';
+  const checked = E.contacts.filter(c => !['Not visually checked', 'No visual verdict'].includes(c.visual)).length;
+  return `<div class="sensor-evidence" id="sensor-evidence">
+    ${E.contacts.length || E.moments.length ? `<div class="se-summary"><strong>Tactile evidence</strong>
+      <span>${checked} of ${E.contacts.length} contacts checked against video</span></div>
+      <div id="sensor-evidence-now" class="se-current"></div>
+      ${E.moments.length ? `<div class="se-moments" aria-label="Contact changes">${E.moments.map(m =>
+        `<button type="button" data-evidence-t="${m.t}" title="${esc(m.headline)}"><span>${fmtT(m.t)}</span>`
+        + `<span>${esc(m.kind === 'dip' ? 'Signal dip' : m.kind === 'begin' ? 'Contact begins'
+          : m.kind === 'end' ? 'Contact ends' : 'Unrecorded grasp')}</span></button>`).join('')}</div>` : ''}` : ''}
+    ${depth.length ? `<div class="se-depth"><strong>Depth evidence</strong>
+      <span>No depth-specific finding in the saved annotation</span>
+      <button type="button" id="sensor-depth-compare">Compare RGB and depth</button>
+      <span id="sensor-depth-mode" hidden>RGB on the left Depth on the right</span></div>` : ''}
+    <button type="button" id="sensor-evidence-inspect">Inspect evidence</button>
+  </div>`;
+}
+function setupSensorEvidence(E, seek, on, inspectContact) {
+  const overlay = document.getElementById('sensor-overlay'), now = document.getElementById('sensor-evidence-now');
+  const details = document.getElementById('sensor-evidence-details');
+  let current = null, currentTime = 0;
+  const inspect = () => {
+    if (current && current.index >= 0) inspectContact(current.index, currentTime);
+    if (details) { details.open = true; details.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
+  };
+  for (const el of document.querySelectorAll('#sensor-evidence-inspect, #sensor-overlay')) on(el, 'click', inspect);
+  for (const el of document.querySelectorAll('[data-evidence-t]')) on(el, 'click', () => seek(+el.dataset.evidenceT));
+  const compare = document.getElementById('sensor-depth-compare');
+  if (compare) on(compare, 'click', () => {
+    const switches = [...document.querySelectorAll('.cam-dp:not([hidden])')];
+    const showing = switches.length && switches.every(b => b.getAttribute('aria-pressed') === 'true'
+      && b.closest('.cam-cell').classList.contains('dp-compare'));
+    for (const b of switches) {
+      b.closest('.cam-cell').classList.toggle('dp-compare', !showing);
+      if ((b.getAttribute('aria-pressed') === 'true') !== !showing) b.click();
+    }
+    compare.textContent = showing ? 'Compare RGB and depth' : 'Return to RGB';
+    document.getElementById('sensor-depth-mode').hidden = !!showing;
+  });
+  let signature = null;
+  return {sync(t) {
+    const e = activeSensorEvidence(E, t), html = sensorEvidenceOverlayHtml(e);
+    current = e;
+    currentTime = t;
+    if (html === signature) return;
+    signature = html;
+    if (overlay) { overlay.innerHTML = html; overlay.classList.toggle('active', !!e); }
+    if (now) now.innerHTML = html || '<span>No contact signal at the playhead</span>';
+  }};
+}
+
 // ================= touch: the recording's contacts and what the model saw at each (board/build.py add_contacts) =========
 // d.contacts are the spans in which a hand's touch signals say it touches something (label/contacts.py), each with the
 // model's answer when it was shown frames around it; d.contacts_missing the moments the model saw a hand take hold of
@@ -4763,17 +4902,18 @@ function tcCurve(c, D, top) {
 }
 // wire the lane and the cards renderEp drew: which contact the playhead is in, the stepper, clicks, the strength curves
 // and the heatmaps of the shown card once the sensors file is in. Returns {sync(t)}.
-function setupTouch(T, file, duration, seek, on, vid) {
+function setupTouch(T, file, duration, seek, on, vid, evidenceSync = null) {
   const lane = document.getElementById('lane-touch'), box = document.getElementById('tc-cards');
   if (!lane || !box) return null;
   const C = T.contacts, n = C.length;
   const segs = [...lane.querySelectorAll('.tc-seg')], cards = [...box.querySelectorAll('.tc-card')];
   const pos = document.getElementById('lane-touch-pos');
-  let pinned = -1, shown = -2, D = null, ink = null, maps = [], lastI = -2;
+  let pinned = -1, inspected = -1, shown = -2, D = null, ink = null, maps = [], lastI = -2;
   const inside = (c, t) => c.start_s <= t + 0.05 && t <= c.end_s + 0.05;
   // the contact shown: the one clicked while the playhead is in it, else the latest begun of those it is in, else the
   // one clicked
   function current(t) {
+    if (inspected >= 0) return inspected;
     if (pinned >= 0 && inside(C[pinned], t)) return pinned;
     let k = -1;
     for (let i = 0; i < n; i++) if (inside(C[i], t)) k = i;
@@ -4809,8 +4949,10 @@ function setupTouch(T, file, duration, seek, on, vid) {
       const i = snIndexAt(D.t, t);
       if (i !== lastI) { lastI = i; for (const m of maps) snMapDraw(m, i, ink); }
     }
+    if (evidenceSync) evidenceSync(t);
   }
-  const go = (k, t) => { pinned = k; shown = -2; seek(t != null ? t : (C[k].from_start ? 0 : C[k].start_s)); };
+  const go = (k, t) => { inspected = -1; pinned = k; shown = -2;
+    seek(t != null ? t : (C[k].from_start ? 0 : C[k].start_s)); };
   segs.forEach(g => g.addEventListener('click', e => { e.stopPropagation(); go(+g.dataset.c); }));
   lane.querySelectorAll('.tc-miss').forEach(m => m.addEventListener('click', e => { e.stopPropagation();
     pinned = -1; seek(m.dataset.t); }));
@@ -4836,7 +4978,10 @@ function setupTouch(T, file, duration, seek, on, vid) {
     if (vid.requestVideoFrameCallback) { if (!rv) rv = vid.requestVideoFrameCallback(onVF); }
     else if (!raf) raf = requestAnimationFrame(onRaf);
   }
-  if (vid) on(vid, 'play', watch);
+  if (vid) {
+    on(vid, 'play', () => { inspected = -1; watch(); });
+    on(vid, 'seeking', () => { inspected = -1; });
+  }
   window._epCleanup.push(() => {
     if (rv && vid && vid.cancelVideoFrameCallback) vid.cancelVideoFrameCallback(rv);
     if (raf) cancelAnimationFrame(raf);
@@ -4859,7 +5004,9 @@ function setupTouch(T, file, duration, seek, on, vid) {
     sync(vid ? vid.currentTime : 0);
   });
   watch();
-  return {sync};
+  return {sync, inspect(k, t) {
+    if (k >= 0 && k < n) { inspected = k; pinned = k; shown = -2; sync(t); }
+  }};
 }
 
 // each camera with depth: its switch, and its depth clip laid over its colour clip and played in step with it
@@ -5334,10 +5481,14 @@ function renderEp(d, opts) {
   const sideId = v => v === 'left' ? 'video-wl' : v === 'right' ? 'video-wr' : `video-${v}`;
   const videoUrl = videoSrc(eidEnc, mainCam);
   const dpViews = depthViews(_activeFile);     // the cameras with a depth clip, each with its switch
+  const evidence = sensorEvidence({...d, contacts: touch.contacts});
   // under the lanes: the contact card, and the slot the sensors panel fills, only on an episode that has them, so every
   // other episode's page is what it was
-  const belowLanes = [tcCardsHtml(touch), BOARD.sensors && SN_INDEX && SN_INDEX[_activeFile] ? '<div id="sn-slot"></div>'
+  const rawEvidence = [tcCardsHtml(touch), BOARD.sensors && SN_INDEX && SN_INDEX[_activeFile] ? '<div id="sn-slot"></div>'
     : ''].filter(Boolean).map(x => '\n    ' + x).join('');
+  const evidencePanel = sensorEvidenceHtml(evidence, dpViews);
+  const belowLanes = evidencePanel ? `<details class="sensor-evidence-details" id="sensor-evidence-details">
+    <summary>Contact and sensor details</summary>${rawEvidence}</details>` : rawEvidence;
   const videoUrlWL = videoSrc(eidEnc, 'left');
   const videoUrlWR = videoSrc(eidEnc, 'right');
 
@@ -5622,6 +5773,7 @@ function renderEp(d, opts) {
   const notesHtml = `
           <div class="state-toast" id="state-toast"></div>
           <div class="recovery-overlay" id="recovery-overlay"></div>
+          ${evidence.contacts.length || evidence.moments.length ? '<button type="button" class="sensor-overlay" id="sensor-overlay" aria-label="Inspect current tactile evidence"></button>' : ''}
           <div class="video-overlay" id="video-overlay"></div>
   `;
   leftCol.innerHTML = `
@@ -5666,7 +5818,7 @@ function renderEp(d, opts) {
         + `class="tip">task done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
-    ${laneHtml}${belowLanes}
+    ${evidencePanel}${laneHtml}${belowLanes}
     ${failed ? '' : noLabels ? `${noLabelsHtml(d._label_failed)}
 
     ${problemsAndNotes}
@@ -6061,6 +6213,7 @@ function renderEp(d, opts) {
   const recOverlay = document.getElementById('recovery-overlay');
   const progOverlay = document.getElementById('prog-overlay');
   const topHud = document.getElementById('top-hud');
+  const sensorOverlay = document.getElementById('sensor-overlay');
   // The notes that come and go at the top of the image stack under what is always there, so none covers another at
   // any width or text length: a state change goes under the progress chip (on a head camera, under the top row it
   // sits in), which a narrow image leaves no room beside; the recovery banner goes under both.
@@ -6082,6 +6235,11 @@ function renderEp(d, opts) {
       if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
     }
     recOverlay.style.top = top + 'px';
+    if (sensorOverlay) {
+      for (const c of [topHud, recOverlay]) if (c && (c === topHud || c.classList.contains('active')))
+        top = Math.max(top, below(c));
+      sensorOverlay.style.top = top + 'px';
+    }
   }
   let _recSig = null;
   function renderRecovery(t) {
@@ -6245,6 +6403,11 @@ function renderEp(d, opts) {
       Number(el.dataset.i) === idx));
   }
   let tcWire = null;            // the Touch lane and its card (setupTouch), on an episode with contacts
+  const evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); });
+  const syncEvidence = t => {
+    evidenceWire.sync(t);
+    if (sensorOverlay && sensorOverlay.classList.contains('active')) placeTop();
+  };
   function syncAll(t) {
     if (duration > 0 && ph) ph.style.left = (100 * t / duration) + '%';
     // progress + state first so the recovery banner can place itself below the
@@ -6252,8 +6415,10 @@ function renderEp(d, opts) {
     renderProgress(t); renderState(t); renderRecovery(t);
     renderOverlay(t); renderHands(t); renderTaskGoal(t); syncFeed(t); syncKeyEvents(t); renderSceneGraph(t);
       syncLanes(t);
-    if (window._sn) window._sn.sync(t);
-    if (tcWire) tcWire.sync(t);
+    const sensorTime = vid && !vid.paused ? snPlaybackTime(_snData.get(_activeFile), t) : t;
+    if (window._sn) window._sn.sync(sensorTime);
+    if (tcWire) tcWire.sync(sensorTime);
+    else syncEvidence(sensorTime);
   }
   if (vid) {
     on(vid, 'timeupdate', () => syncAll(vid.currentTime));
@@ -6261,7 +6426,7 @@ function renderEp(d, opts) {
   }
   setupSensors(_activeFile, duration, seek, on, vid, v => v === mainCam && isEgo ? 'head' : camLabel(v), camViews,
     touch.contacts.length > 0);
-  if (touch.contacts.length) tcWire = setupTouch(touch, _activeFile, duration, seek, on, vid);
+  if (touch.contacts.length) tcWire = setupTouch(touch, _activeFile, duration, seek, on, vid, syncEvidence);
   setupDepth(_activeFile, eidEnc, on);
   syncAll(vid && keep ? vid.currentTime : 0);
   setupHandPose(vid, exoCell, isEgo, on, _activeFile);
