@@ -2104,8 +2104,9 @@ body.view-fade #home-view { opacity: 0; }
 .hv-trio b { display: block; font: 600 24px/1 var(--sans); letter-spacing: -0.02em; color: var(--fg); white-space: nowrap; }
 .hv-trio b.none { font: 500 15px/24px var(--sans); letter-spacing: 0; color: var(--fg-3); }
 .hv-trio span { display: block; margin-top: 8px; font: 500 13px/1.35 var(--sans); color: var(--fg-3); }
-/* tiles two by two */
+/* tiles two by two, or three to a row where three lists of one shape sit side by side */
 .hv-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.hv-three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .hv-sub { margin: 24px -24px 8px; padding: 12px 24px; border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--row-divider); font: 600 13px/1.3 var(--sans); color: var(--fg-2); }
 /* bar lists are tables of fixed columns: the name, the type where there is one, a bar track that starts at the
@@ -2154,7 +2155,7 @@ body.view-fade #home-view { opacity: 0; }
   .hv { padding: 24px 24px 48px; }
   .hv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hv-kpis > :first-child { grid-column: 1 / -1; }
-  .hv-two { grid-template-columns: 1fr; }
+  .hv-two, .hv-three { grid-template-columns: 1fr; }
   .hv-growth { grid-template-columns: 1fr; height: auto; }
   .hv-plot { height: 260px; }
 }
@@ -5706,21 +5707,19 @@ function buildHome() {
         <button type="button" role="radio" data-v="tasks">Tasks</button></div></div>
     <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
   </section>
-  <section class="hv-two">
+  <section class="hv-three">
     <div class="hv-tile"><div class="hv-tt">Top skills<small>subtasks with each</small></div>
       <div class="hv-bl two" id="hv-top-skills"></div></div>
     <div class="hv-tile"><div class="hv-tt">Actions inside tasks<small>subtasks with each</small></div>
       <div class="hv-bl two" id="hv-top-actions"></div></div>
-  </section>
-  <section class="hv-two">
     <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
       <div class="hv-bl typed" id="hv-top-objects"></div></div>
+  </section>
+  <section class="hv-three">
+    <div class="hv-tile"><div class="hv-tt">Kinds of skill</div><div class="hv-bl two" id="hv-skills-by"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Kinds of object handled</div><div class="hv-bl two" id="hv-kinds-by"></div></div>
     <div class="hv-tile"><div class="hv-tt">Deformable<small>share of the objects handled</small></div>
       <div class="hv-bl two" id="hv-def-by"></div></div>
-  </section>
-  <section class="hv-two">
-    <div class="hv-tile"><div class="hv-tt">Kinds of object handled</div><div class="hv-bl two" id="hv-kinds-by"></div></div>
-    <div class="hv-tile"><div class="hv-tt">Kinds of skill</div><div class="hv-bl two" id="hv-skills-by"></div></div>
   </section></div>`;
   _homeBuilt = true;
   document.getElementById('hv-kind').addEventListener('click', e => {
@@ -5743,7 +5742,8 @@ function renderKpis() {
       + `<div class="bar"${plan ? '' : ' hidden'}><i style="width:${prevW}"></i></div></div>`,
     tile('Episodes', t.episodes.toLocaleString(), t.plan_episodes ? `of ${t.plan_episodes.toLocaleString()}` : ''),
     tile('Time left', t.eta_s ? fmtLeft(t.eta_s) : plan && t.seconds >= plan ? 'Done' : 'Not known',
-      p ? `at ${p.footage_h_per_h.toFixed(1)} footage hours per hour` : 'after 5min of labelling'),
+      p ? `at ${p.footage_h_per_h.toFixed(1)} footage hours per hour`
+        : t.last_at && homeNow() - t.last_at > 3600 ? 'no label in the last hour' : 'known after 5min of labelling'),
     tile('Spent so far', fmtUsd(t.cost), t.projected_cost != null
       ? `about ${fmtUsd(t.projected_cost)} to label all ${fmtHrs(plan)}h` : ''),
     `<div class="hv-tile hv-kpi"><div class="k"><i class="hv-dot" id="hv-dot"></i>Last label</div>`
