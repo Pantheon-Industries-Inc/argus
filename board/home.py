@@ -12,6 +12,10 @@ For the whole board and for each dataset the page shows
 - the five commonest kinds of object and of motion, split by dataset;
 - how much of what the episodes show is deformable rather than rigid (each kind's tag, board/materials.py).
 
+Objects are the ones each subtask handles (the objects its task names and the ones its events act on; a scripted
+episode is one subtask), counted once per subtask, never the episode's full list of what is on the table. Operator
+mistakes are counted per subtask too; data issues describe the recording and are counted per episode.
+
 Kinds come from the labels' own words, never from a fixed list. An object's kind is the head noun of its name
 ("pebble container" is a container, "clear test tubes" a tube); a motion is each verb of an event's verb_class ("lift
 and carry inward" is lift and carry); a task is its verb and the kind of the first object it names ("Place the closed
@@ -52,6 +56,7 @@ _PAREN = re.compile(r"\([^)]*\)")
 _TOKEN = re.compile(r"[a-z0-9][a-z0-9'-]*")
 # "pair of scissors" is scissors, but "can of tuna" is a can: the words that name an amount of the thing after "of"
 _AMOUNT = {"pair", "set", "piece", "pieces", "bunch", "cluster", "stack", "pile", "sheet", "strip", "handful", "slice"}
+_SUITS = {"heart", "diamond", "club", "spade"}
 _SKIP_VERB = {"try", "attempt", "begin", "start", "continue"}   # "Try to stand the comb upright" is stand
 
 
@@ -77,6 +82,8 @@ def object_kind(name: str) -> str | None:
     if " of " in s:
         head, rest = s.split(" of ", 1)
         words = _TOKEN.findall(head)
+        if _TOKEN.findall(rest)[-1:] and singular(_TOKEN.findall(rest)[-1]) in _SUITS:
+            return "card"                   # "10 of diamonds", "queen of spades": a playing card
         if not words or words[-1].isdigit() or words[-1] in _AMOUNT:
             s = rest
         else:
@@ -124,10 +131,23 @@ def summarize(p: Path, d: dict, counts) -> dict:
     """What the home page needs from one episode file. counts(list_key, issue) is Families.counts: whether an issue
     counts, the same rule as the rail and the issue filter."""
     names = [str(o.get("name") or "") for o in (d.get("objects") or []) if isinstance(o, dict) and o.get("name")]
-    kinds = sorted({k for k in (object_kind(n) for n in names) if k})
-    verbs = Counter(v for e in (d.get("event_labels") or []) if isinstance(e, dict)
-                    for v in motion_verbs(e.get("verb_class")))
+    events = [e for e in (d.get("event_labels") or []) if isinstance(e, dict)]
+    verbs = Counter(v for e in events for v in motion_verbs(e.get("verb_class")))
     tasks = [t for t in (d.get("tasks") or []) if isinstance(t, dict) and t.get("task")]
+    # the objects each subtask handles: the ones the task names and the ones its events act on. The episode's own
+    # object list holds everything on the table, distractors included, so it is not counted.
+    def ev_names(lo, hi):
+        return [str(e["object"]) for e in events if e.get("object") and isinstance(e.get("t_s"), (int, float))
+                and lo - 0.5 <= e["t_s"] <= hi + 0.5]
+    if tasks:
+        spans = [(float(t.get("start_s") or 0), float(t.get("end_s") or 0)) for t in tasks]
+        handled = [[*(o.get("name") if isinstance(o, dict) else o for o in (t.get("objects") or [])), *ev_names(*sp)]
+                   for t, sp in zip(tasks, spans)]
+    else:
+        spans = [(float("-inf"), float("inf"))]
+        handled = [ev_names(*spans[0])]
+    sub_kinds = [sorted({k for k in (object_kind(n) for n in hs if n) if k}) for hs in handled]
+    handled_names = sorted({str(n).strip().lower() for hs in handled for n in hs if n and str(n).strip()})
     if tasks:
         task_rows = [(task_kind(t["task"], [*(t.get("objects") or []), *names]), (t.get("outcome") or "").lower())
                      for t in tasks]
@@ -138,6 +158,11 @@ def summarize(p: Path, d: dict, counts) -> dict:
               and counts("data_issues", i)]
     mistakes = [i for i in (d.get("operator_mistakes") or []) if isinstance(i, dict) and i.get("issue")
                 and counts("operator_mistakes", i)]
+    # each mistake goes to the subtask its time falls in; one with no time counts for one subtask
+    hit = {next((j for j, (lo, hi) in enumerate(spans) if lo - 0.5 <= m["t_s"] <= hi + 0.5), None)
+           for m in mistakes if isinstance(m.get("t_s"), (int, float))} - {None}
+    untimed = sum(1 for m in mistakes if not isinstance(m.get("t_s"), (int, float)))
+    mistake_subtasks = min(len(spans), len(hit) + untimed)
     usage = d.get("_usage") or {}
     st = p.stat()
     return {
@@ -150,8 +175,10 @@ def summarize(p: Path, d: dict, counts) -> dict:
         "prompt": d.get("episode_prompt") or "",
         "sessions": bool(tasks),
         "outcome": ((d.get("completion") or {}).get("task_completed") or "").lower() or None,
-        "object_names": sorted({n.lower() for n in names}),
-        "object_kinds": kinds,
+        "object_names": handled_names,
+        "object_kinds": sorted({k for ks in sub_kinds for k in ks}),
+        "subtask_objects": sub_kinds,
+        "mistake_subtasks": mistake_subtasks,
         "verbs": dict(verbs),
         "tasks": task_rows,
         "issue_tags": [str(i.get("category") or i.get("issue"))[:60] for i in issues],
@@ -174,7 +201,7 @@ def _top(c: Counter, n: int = TOP_N) -> list:
 
 
 def _diversity(rows: list) -> dict:
-    objs = Counter(k for r in rows for k in r["object_kinds"])          # episodes that hold each kind
+    objs = Counter(k for r in rows for ks in r["subtask_objects"] for k in ks)   # subtasks that handle each kind
     names = {n for r in rows for n in r["object_names"]}
     verbs = Counter()
     for r in rows:
@@ -239,11 +266,11 @@ def _top_split(counts: dict, n: int = 5) -> list:
 
 
 def _deformable(rows: list, tags: dict) -> dict:
-    """Of the objects the episodes show (one count per kind per episode), how many are deformable, how many rigid, and
-    how many have no tag yet (board/materials.py)."""
+    """Of the objects the subtasks handle (one count per kind per subtask), how many are deformable, how many rigid,
+    and how many have no tag yet (board/materials.py)."""
     c = Counter()
     for r in rows:
-        for k in r["object_kinds"]:
+        for k in (k for ks in r["subtask_objects"] for k in ks):
             t = tags.get(k)
             c["deformable" if t is True else "rigid" if t is False else "untagged"] += 1
     return dict(c)
@@ -280,6 +307,7 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
             "n_tasks": sum(len(r["tasks"]) for r in rs),
             "eps_with_issue": sum(1 for r in rs if r["issue_tags"]),
             "eps_with_mistake": sum(1 for r in rs if r["mistake_tags"]),
+            "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rs),
             "top_issues": _top(Counter(t for r in rs for t in r["issue_tags"]), 6),
             "top_mistakes": _top(Counter(t for r in rs for t in r["mistake_tags"]), 6),
         })
@@ -292,7 +320,7 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
     latest = sorted(rows, key=lambda r: (r["at"], r["file"]), reverse=True)[:FEED_N]
     objs, verbs = defaultdict(Counter), defaultdict(Counter)
     for r in rows:
-        for k in r["object_kinds"]:
+        for k in (k for ks in r["subtask_objects"] for k in ks):
             objs[k][r["dataset"]] += 1
         for v, n in r["verbs"].items():
             verbs[v][r["dataset"]] += n
@@ -312,6 +340,7 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
             "n_tasks": sum(len(r["tasks"]) for r in rows),
             "eps_with_issue": sum(1 for r in rows if r["issue_tags"]),
             "eps_with_mistake": sum(1 for r in rows if r["mistake_tags"]),
+            "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rows),
             "top_issues": _top(Counter(t for r in rows for t in r["issue_tags"]), 6),
             "top_mistakes": _top(Counter(t for r in rows for t in r["mistake_tags"]), 6),
             # the five commonest kinds of object (with their tag) and motions, split by dataset

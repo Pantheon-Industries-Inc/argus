@@ -5710,9 +5710,9 @@ function renderCards() {
         'A session&rsquo;s tasks, or one per episode where an episode is one task')
       + row('Success', pct(o.success || 0, n), 'Share of tasks that succeeded')
       + row('Data issues', pct(d.eps_with_issue || 0, d.episodes), `Episodes with a data issue. ${tags(d.top_issues)}`)
-      + row('Operator mistakes', pct(d.eps_with_mistake || 0, d.episodes), `Episodes with an operator mistake. ${tags(d.top_mistakes)}`)
-      + row('Kinds of object', d.diversity.objects.distinct.toLocaleString())
-      + row('Deformable', dn ? pct(df.deformable || 0, dn) : '', 'Share of the objects seen that are deformable')
+      + row('Operator mistakes', pct(d.subtasks_with_mistake || 0, d.n_tasks), `Subtasks with an operator mistake. ${tags(d.top_mistakes)}`)
+      + row('Kinds of object', d.diversity.objects.distinct.toLocaleString(), 'Kinds of object handled in a subtask')
+      + row('Deformable', dn ? pct(df.deformable || 0, dn) : '', 'Share of the objects handled that are deformable')
       + '</div></div>';
   }).join('');
   requestAnimationFrame(() => box.querySelectorAll('.hv-card').forEach((c, i) => {
@@ -5772,7 +5772,7 @@ function renderList(el, head, rows, type) {
 }
 function renderTops() {
   const t = HOME.total;
-  renderList(document.getElementById('hv-top-objects'), ['Object', 'Type', 'Episodes'], t.top_objects,
+  renderList(document.getElementById('hv-top-objects'), ['Object', 'Type', 'Subtasks'], t.top_objects,
     r => r[3] === true ? '<span class="ty d">Deformable</span>' : r[3] === false ? '<span class="ty">Rigid</span>'
       : '<span class="ty"></span>');
   renderList(document.getElementById('hv-top-motions'), ['Motion', 'Events'], t.top_motions);

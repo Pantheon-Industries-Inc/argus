@@ -40,8 +40,14 @@ def kinds_seen(qa: Path) -> dict:
             d = json.loads(p.read_text())
         except (OSError, ValueError):
             continue
-        for o in (d.get("objects") or []) if isinstance(d, dict) else []:
-            name = str((o or {}).get("name") or "").strip().lower() if isinstance(o, dict) else ""
+        if not isinstance(d, dict):
+            continue
+        named = [o.get("name") if isinstance(o, dict) else None for o in d.get("objects") or []]
+        named += [o.get("name") if isinstance(o, dict) else o for t in d.get("tasks") or [] if isinstance(t, dict)
+                  for o in t.get("objects") or []]
+        named += [e.get("object") for e in d.get("event_labels") or [] if isinstance(e, dict)]
+        for raw in named:
+            name = str(raw or "").strip().lower()
             k = object_kind(name)
             if k and name and len(out[k]) < EXAMPLES and name not in out[k]:
                 out[k].append(name)
