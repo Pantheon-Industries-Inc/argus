@@ -7942,6 +7942,12 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         raise ValueError("the file has no camera channel"
                          + (f" (its channels: {', '.join(item['topics'][:12])})" if item["topics"] else ""))
     all_topics = [t for t, _ in chan_topics]
+    claim_records, camera_selection = [], None
+    if rig == "ego_head":
+        from prepare.mcap_claims import inspect, select_primary
+        claim_records, claim_metadata = inspect(item["file"], cam_topics)
+        primary, camera_selection = select_primary(claim_records, claim_metadata,
+                                                   [t for t in video_topics if not not_rgb(t)] or video_topics)
     aliases, camera_role_proof = {}, {}
     if rig == "handheld_gripper":
         from prepare.mcap_pose import camera_roles
@@ -7950,6 +7956,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     vmap, unused = pick_cameras(list(native_topics), rig, all_topics)
     vmap = {view: native_topics[topic] for view, topic in vmap.items()}
     unused = [native_topics.get(topic, topic) for topic in unused]
+    if rig == "ego_head" and primary is not None:
+        vmap, unused = {"exo": primary}, [t for t in video_topics if t != primary]
     not_colour = [t for t in vmap.values() if not_rgb(t)]
     text_topics = sorted({t for t in all_topics if TEXT_TOPIC.search(t) and t not in video_topics})
     # depth image channels, each with the camera whose topic it shares the most of (depth_partner), one per camera
@@ -8007,11 +8015,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                             dw = dwriters[ch.topic] = DepthWriter(ep / f"depth_{depth_of[ch.topic]}.mkv")
                         dw.add((stamp - t0) / 1e9, got[0], got[1])
                     continue
-                if ch.topic in unshown_of and t0 is None:
-                    continue                      # before the first frame the model is shown: no clock to place it on
                 if ch.topic in view_of_topic or ch.topic in unshown_of:
-                    if ch.topic in view_of_topic:
-                        t0 = stamp if t0 is None else t0
+                    t0 = stamp if t0 is None else t0
                     w = writers.get(ch.topic)
                     if w is None:
                         out_mp4 = ep / (f"{view_of_topic[ch.topic]}.mp4" if ch.topic in view_of_topic
@@ -8061,6 +8066,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if rig == "handheld_gripper":
         extra["source"]["camera_selection"] = camera_role_proof or {
             "limitation": "No recorded actor map establishes camera sides; selected slots are presentation roles."}
+    elif rig == "ego_head":
+        extra["source"]["camera_selection"] = camera_selection
     camera_clocks = {kind for topic in vmap.values() for kind in clock_kinds.get(topic, [])}
     camera_clock = next(iter(camera_clocks)) if len(camera_clocks) == 1 else None
     extra["source"]["camera_clock"] = camera_clock or "mixed capture and arrival stamps"
@@ -8086,11 +8093,12 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 origin_ns = capture_ns[anchor_topic][0]
                 recorded = (stamps - int(origin_ns)) / 1e9
                 shown, note = presentation_clock(recorded)
+                clock_file = Path(name).stem + "_times.npz"
+                np.savez(ep / clock_file, capture_ns=stamps, capture=recorded,
+                         pts=np.asarray(w.pts, dtype=np.int64), presentation=shown)
+                entry.update(camera_times=clock_file, start_s=float(shown[0]))
                 if note:
-                    clock_file = Path(name).stem + "_times.npz"
-                    np.savez(ep / clock_file, capture_ns=stamps, capture=recorded,
-                             pts=np.asarray(w.pts, dtype=np.int64), presentation=shown)
-                    entry.update(camera_times=clock_file, camera_clock=note,
+                    entry.update(camera_clock=note,
                                  fps=round(float(1 / np.median(np.diff(shown))), 3), start_s=float(shown[0]),
                                  why=entry["why"] + ". " + note["what"])
                     add_camera_clock_issue(extra, note, f"{t} frames. {note['what']}", camera=t)
@@ -8109,15 +8117,17 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     for t, w in writers.items():
         if w.pts:
             bad_frames_issues(extra, t, w, zero)
-    instr, notes = mcap_task_texts(texts, n_text, t0)
+    anchor_origin_ns = capture_ns[files[me.order_views(files)[0]][0]][0]
+    instr, notes = mcap_task_texts(texts, n_text, anchor_origin_ns)
     if instr:
         extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the MCAP.")
     if rig == "ego_head":
         # a head camera's timed steps are the dataset's subtasks (claims to check, as Gen-HumanEgo's are), shown to
         # the model once, as its annotation, not again among the notes
-        end_s = max(((w.pts[-1] + (w.pts[-1] - w.pts[-2] if len(w.pts) > 1 else 0)) / TIME_BASE_DEN
-                     for w in writers.values() if w.pts), default=None)
-        st, subs = mcap_step_subtasks(texts, t0, end_s)
+        anchor_pts = writers[files[me.order_views(files)[0]][0]].pts
+        end_s = (anchor_pts[-1] + (anchor_pts[-1] - anchor_pts[-2] if len(anchor_pts) > 1 else 0)) / TIME_BASE_DEN
+        end_s -= (anchor_origin_ns - t0) / 1e9
+        st, subs = mcap_step_subtasks(texts, anchor_origin_ns, end_s)
         if subs:
             notes.pop(st, None)
             extra["annotation_subtasks"] = subs
@@ -8136,14 +8146,16 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     real = None
     paired = all(len(capture_ns.get(topic, [])) == len(prs[v]["pts"]) for v, (topic, _) in files.items())
     if paired:
-        real = {v: (np.asarray(capture_ns[topic], dtype=np.int64) - t0) / 1e9 for v, (topic, _) in files.items()}
+        real = {v: (np.asarray(capture_ns[topic], dtype=np.int64) - anchor_origin_ns) / 1e9
+                for v, (topic, _) in files.items()}
         extra["recorded_camera_ns"] = "recorded_camera_ns.npz"
         np.savez(ep / extra["recorded_camera_ns"],
                  **{v: np.asarray(capture_ns[topic], dtype=np.int64) for v, (topic, _) in files.items()})
         q = np.asarray(capture_ns[files[me.order_views(files)[0]][0]], dtype=np.float64) / 1e9
         for d in depth.values():
             dp = probe_depth(Path(d["path"]))
-            d["real"] = dp["pts"].astype(np.float64) * float(dp["time_base"])
+            d["real"] = (dp["pts"].astype(np.float64) * float(dp["time_base"])
+                         - (anchor_origin_ns - t0) / 1e9)
     if repeated:
         for v in repeated:
             add_issue(extra, "camera_timestamp_repeated", f"{files[v][0]} has distinct frames sharing a recorded "
@@ -8229,6 +8241,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
     retain_mcap_fields(item["file"], ep, extra)
+    if rig == "ego_head":
+        from prepare.mcap_claims import apply_claims
+        apply_claims(extra, claim_records)
     if camera_clock and not clock_errors:
         anchor_stamps = np.asarray(capture_ns[files[me.order_views(files)[0]][0]], dtype=np.int64)
         for view, (topic, _) in files.items():
@@ -8243,8 +8258,10 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         retain_mcap_fields(path, ep, retained, archive_name=f"recorded_sensor_mcap{i}.npz")
         extra.setdefault("recorded_sensor_fields", []).append({"source": str(path), **retained})
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, real=real,
-                               real_origin_s=t0 / 1e9 if real else None,
+                               real_origin_s=anchor_origin_ns / 1e9 if real else None,
                                state=state, action=action,
+                               descs={v: "Recorded camera channel " + topic + ". " + camera_selection
+                                      for v, (topic, _) in files.items()} if rig == "ego_head" else None,
                                signals=signals, depth={v: d for v, d in depth.items() if v in files})
 
 

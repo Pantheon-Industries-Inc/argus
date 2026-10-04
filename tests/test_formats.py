@@ -242,13 +242,12 @@ def test_an_mcap_task_is_its_task_topic_and_its_steps_are_timed():
     assert mcap_task_text_checks() == 0
 
 
-def test_a_gen_humanego_recording_goes_to_its_adapter():
-    """A DAS-Ego headset MCAP (its forward camera and its annotation) is read by prepare/genhumanego.py, which gives its
-    goal and timed steps; the same cameras without the annotation are an MCAP of cameras only."""
+def test_a_gen_humanego_recording_uses_generic_upload_dispatch():
+    """Recorded cameras and annotations use generic upload reading while published sampling stays available."""
     from prepare import genhumanego as gh
     cams = [f"/robot0/sensor/camera{i}/compressed" for i in range(6)]
     hands = ["/robot0/handtracking/left", "/robot0/handtracking/right"]
-    assert f.mcap_layout(cams + hands + [gh.ANNOTATION_TOPIC]) == "genhumanego"
+    assert f.mcap_layout(cams + hands + [gh.ANNOTATION_TOPIC]) == "generic"
     assert f.mcap_layout(cams + hands) == "generic"
 
 
@@ -266,7 +265,7 @@ def test_every_adapter_says_whether_it_reads_uploads():
         if mod.UPLOAD is not None:
             assert callable(getattr(mod, "recognizes", None)) and callable(getattr(mod, "convert_upload", None)), m.name
     names = [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("mcap")]
-    assert names == ["genhumanego"], names
+    assert names == [], names
 
 
 def test_each_mcap_adapter_recognizes_its_own_layout_and_no_other():
@@ -275,7 +274,7 @@ def test_each_mcap_adapter_recognizes_its_own_layout_and_no_other():
                "realomin": [*realomin.CAMERA_TOPICS, *realomin.POSE_TOPICS],
                "genhumanego": [genhumanego.CAMERA_TOPIC, genhumanego.ANNOTATION_TOPIC]}
     for name, topics in layouts.items():
-        assert f.mcap_layout(topics) == (name if name == "genhumanego" else "generic"), name
+        assert f.mcap_layout(topics) == "generic", name
     assert f.mcap_layout(["/camera/color/0/image", "/task", "/task/subtask"]) == "generic"
 
 
