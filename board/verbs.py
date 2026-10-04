@@ -5,7 +5,9 @@
 The labeler names each task's predominant action in one or two words (label/prompts.py: an episode's task_verb, a
 session task's verb). Freeform tasks are named in the labeler's own words, so the same action can come back as
 "pick" and "pick up", or "flip" and "turn over". A small model is given the list of distinct verbs, never the tasks,
-and gives each the name its action is counted under, choosing among names already in use where one fits. A verb once
+and gives each the name its action is counted under, choosing among names already in use where one fits. Only
+different words for one action are merged, never a specific action into a general one (laying an object flat is not
+placing it), so the counts keep the detail the labeler gave. A verb once
 merged is never asked again, so the names stay fixed as labels land; the answers are kept in BOARD/verbs.json, and
 merging every verb of a 100 hour run costs about a cent. A verb the model leaves out, or a failed call, counts under
 its own words until the next run.
@@ -33,7 +35,8 @@ PROMPT = (
     '{"verbs": {"<line>": "<name>"}}, every line spelled exactly as given.\n\n')
 
 
-NO_VERB = {"none", "null", "n/a", "na", "no action", "nothing", "idle"}   # what a labeler writes when no action happened
+# what a labeler writes when no action happened
+NO_VERB = {"none", "null", "n/a", "na", "no action", "nothing", "idle"}
 
 
 def verb_of(raw) -> str | None:

@@ -21,7 +21,7 @@ For the whole board and for each dataset the page shows
   effective number, e to the Shannon entropy of the counts: the number of equally common kinds that would give the
   same spread, so 40 kinds where one fills nine tenths of the footage counts as far fewer than 40);
 - whether new kinds still turn up: distinct kinds against labelled hours, in the order the episodes were labelled;
-- the five commonest kinds of object (subtasks that handle each) and main verbs (subtasks with each), each split
+- the five commonest kinds of object (subtasks that handle each) and task verbs (subtasks with each), each split
   by dataset, and the share of handled objects that are deformable (each kind's tag, board/materials.py).
 
 Kinds come from the labels' own words, never from a fixed list. An object's kind is the head noun of its name
@@ -161,7 +161,7 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
     else:
         task_rows = [(task_kind(d.get("episode_prompt") or "", names),
                       ((d.get("completion") or {}).get("task_completed") or "").lower())]
-    # each subtask's main verb: the labeler's (label/prompts.py), or the task sentence's first verb in a label written
+    # each subtask's verb: the labeler's (label/prompts.py), or the task sentence's first verb in a label written
     # before it named one. The events' own verbs (approach, grasp, lower, release) are the steps of nearly every task,
     # so they tell tasks apart poorly and are not counted.
     # a label with the field counts the labeler's verb, or none where it says no action happened

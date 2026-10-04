@@ -107,7 +107,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         tasks.append({
             "start_s": t.get("start_s"), "end_s": t.get("end_s"),
             "task": t.get("task") or "",
-            # the labeler's main verb for the task (label/prompts.py), which the home page counts
+            # the labeler's verb for the task, its predominant action (label/prompts.py), which the home page counts
             "verb": t.get("verb"),
             "objects": t.get("objects") or [],
             # a task partly done is a failure of that task, of the kind partial (as the episode's outcome above)
@@ -133,7 +133,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
     return {
         "dataset": dataset,
         "episode_prompt": labels.get("task_summary") or "",
-        "task_verb": labels.get("task_verb"),   # the labeler's main verb for the whole task, where it is one task
+        "task_verb": labels.get("task_verb"),   # the labeler's verb for the whole task, where it is one task
         "viewpoint": labels.get("viewpoint"),  # ego: first_person | third_person
         "objects": objects,
         "event_labels": event_labels,
