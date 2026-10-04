@@ -25,9 +25,8 @@ from prepare import cli
 from prepare import hub
 from prepare import formats
 
-# Data Review and python -m prepare folder hand an upload to an adapter that recognizes it (prepare/formats.py
-# upload_adapters): a clip folder in this dataset's own layout is read here, with its action segments and device
-UPLOAD = "video"
+# Uploads use the generic structured note reader. Published dataset preparation stays available here.
+UPLOAD = None
 
 REPO = "inclusionAI/OpenAoE-2000h"
 COLLECTION_NOTE = ("crowd contributors record their own activities on a phone worn at the head; each clip is one "

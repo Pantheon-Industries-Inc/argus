@@ -295,9 +295,8 @@ def test_a_lerobot_upload_goes_to_the_adapter_of_its_dataset():
     assert [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("lerobot")] == ["galaxea", "habit"]
 
 
-def test_a_video_folder_in_a_datasets_own_layout_goes_to_its_adapter():
-    """OpenAoE's clip folder (raw_video.mp4 with ego_annotation/ego_action_annotation.json beside it) is read by its
-    adapter, with its action segments; a video folder without that annotation, or with another file, stays generic."""
+def test_a_video_folder_keeps_published_helpers_after_upload_retirement():
+    """Published preparation still recognizes its clips; upload conversion reads structured notes generically."""
     with tempfile.TemporaryDirectory() as t:
         _video_folder_adapter(Path(t))
 
@@ -310,7 +309,7 @@ def _video_folder_adapter(tmp_path: Path):
     (clip / "ego_annotation" / "ego_action_annotation.json").write_text(
         '[{"start_ts": "0.00", "end_ts": "3.00", "atomic_action": [{"verb": "align", "object": "fabric", "hand": "both"}]}]')
     item = {"dir": clip, "files": [clip / "raw_video.mp4"], "name": "raw_x_seg_1"}
-    assert [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("video")] == ["openaoe"]
+    assert f.upload_adapters("video") == []
     assert openaoe.recognizes(item)
     assert openaoe.clip_extra(clip, clip.name)["annotation_subtasks"] == [
         {"t0": 0.0, "t1": 3.0, "label": "align fabric (both hands)", "ok": True}]
@@ -1194,7 +1193,7 @@ def test_a_ros2_joint_state_keeps_its_joint_names_as_signals():
 
 
 def test_an_accented_name_keeps_its_letters_in_the_episode_id():
-    assert f.episode_name("Día 1 – cocina/toma 1 瓶子 🍶") == "episode_Dia_1_cocina_toma_1"
+    assert f.episode_name("Día 1 \u2013 cocina/toma 1 瓶子 🍶") == "episode_Dia_1_cocina_toma_1"
     assert f.episode_name("Überprüfung_Greifer-3") == "episode_Uberprufung_Greifer_3"
     assert f.episode_name("run-1") == "episode_run_1" and f.episode_name("瓶子") == "episode_0"
 
@@ -3387,8 +3386,7 @@ def test_an_mcap_beside_videos_of_the_same_length_is_noted_as_a_possible_duplica
 
 
 def _a_folder_read_by_a_dataset_adapter_is_not_called_unread(tmp_path):
-    """OpenAoE's clip folder holds its annotation and a video_info.json, which its adapter reads; they are not files
-    no reader opened."""
+    """Structured annotations are read; an empty file with no metadata structure stays listed."""
     clip = tmp_path / "upload" / "raw_x_seg_1"
     (clip / "ego_annotation").mkdir(parents=True)
     _clip(clip / "raw_video.mp4", 10)
@@ -3397,7 +3395,8 @@ def _a_folder_read_by_a_dataset_adapter_is_not_called_unread(tmp_path):
         '[{"start_ts": "0.00", "end_ts": "0.30", "atomic_action": [' + action + ']}]')
     (clip / "video_info.json").write_text("{}")
     det, _ = f.plan(tmp_path / "upload")
-    assert not any("no reader opens" in m for m in det["missing"]), det["missing"]
+    assert [m for m in det["missing"] if "no reader opens" in m] == [
+        "1 file that no reader opens: raw_x_seg_1/video_info.json."]
 
 
 def test_a_folder_read_by_a_dataset_adapter_is_not_called_unread():

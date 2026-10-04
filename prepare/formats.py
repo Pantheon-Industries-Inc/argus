@@ -38,9 +38,8 @@ Accepted uploads, in the order they are recognised:
    (depth_videos); an infrared or mask video is left out. A file is never split: an unsplit recording is one episode,
    and the pipeline labels a long one in pieces and stitches the labels back into one timeline. When
    many files share one length, the recorder cut continuous footage into fixed-length files; the episodes
-   say so, so a file that starts or ends mid-activity is read as packaging, not a truncated episode. A folder
-   in a layout a dataset adapter recognizes goes through that adapter (the prepare/*.py that declare
-   UPLOAD = "video": OpenAoE's clip, with its action segments and device).
+   say so, so a file that starts or ends mid-activity is read as packaging, not a truncated episode. Owned JSON
+   atomic action spans and device metadata are read structurally with their original fields and boundaries.
 
 An upload that holds several of these (plain videos beside an HDF5 file with a camera, a LeRobot dataset beside loose
 MCAP recordings) is read in every one of them (detect), and the files no reader opens are named in the report. MCAP and
@@ -1332,6 +1331,118 @@ def note_files(item: dict) -> list[Path]:
             if p.resolve() not in seen:
                 seen.add(p.resolve())
                 out.append(p)
+    return out
+
+
+def video_annotation_paths(item: dict, original_files: set[Path] | None = None) -> list[Path]:
+    """Nested annotation folders belong to a sole video, including an original omitted source."""
+    files = [Path(p) for p in item.get("files", [])]
+    if len(files) != 1:
+        return []
+    home = files[0].parent
+    candidates = original_files if original_files is not None else {
+        p for p in home.rglob("*") if p.is_file() and not hidden(p, home)}
+    videos = [p for p in candidates if p.parent == home and p.suffix.lower() in VIDEO_EXT]
+    if len(videos) != 1:
+        return []
+    return sorted(p for p in candidates if home in p.parents and p.suffix.lower() == ".json"
+                  and len(p.relative_to(home).parts) > 1
+                  and set(tokens(p.relative_to(home).parts[0])) & {"annotation", "annotations"})
+
+
+def recorded_video_notes(item: dict) -> dict:
+    """Read owned atomic action spans and device objects by structure, retaining every source field."""
+    files = [Path(p) for p in item.get("files", [])]
+    out = {"notes": {}, "read": [], "spans": [], "unresolved": [], "issues": [], "source": {}}
+    if len(files) != 1:
+        return out
+    home = files[0].parent
+    annotation_paths = video_annotation_paths(item)
+    candidates = sorted(set(annotation_paths + folder_json(home)))
+    for path in candidates:
+        key = path.relative_to(home).as_posix()
+        nf = item.get("note_folder")
+        if nf and path.parent == home:
+            owners, gone = named_for(path, nf["names"])
+            if (gone or owners) and nf["episode"] not in owners:
+                continue
+        if path.stat().st_size > NOTE_JSON_MAX_BYTES:
+            if path in annotation_paths:
+                out["issues"].append({"kind": "metadata_limit", "text": f"{key} exceeds the "
+                                      f"{NOTE_JSON_MAX_BYTES} byte note limit."})
+            continue
+        obj, error = read_note(path)
+        if error:
+            if path in annotation_paths:
+                out["notes"][key] = obj
+                out["read"].append(path)
+                out["issues"].append({"kind": "metadata_unreadable", "text": f"{key} could not be parsed: "
+                                      f"{error}. Its original text stays an attributed note."})
+            continue
+        rows = obj if isinstance(obj, list) else None
+        atomic = rows is not None and (path in annotation_paths or any(
+            isinstance(row, dict) and "atomic_action" in row for row in rows))
+        device = isinstance(obj, dict) and isinstance(obj.get("deviceInfo"), dict)
+        if not atomic and not device:
+            continue
+        out["notes"][key] = obj
+        out["read"].append(path)
+        if device:
+            dev = obj["deviceInfo"]
+            claim = {"source": key, "device": " ".join(
+                dev[k] for k in ("brand", "model") if isinstance(dev.get(k), str) and dev[k])}
+            params = obj.get("cameraParams")
+            if isinstance(params, dict) and "resolution" in params:
+                claim["resolution"] = params["resolution"]
+            out["source"].setdefault("device_claims", []).append(claim)
+        if not atomic:
+            continue
+        out["source"]["annotation_segments"] = out["source"].get("annotation_segments", 0) + len(rows)
+        for index, row in enumerate(rows):
+            claim = {"source": key, "row": index, "notes": row}
+            if not isinstance(row, dict):
+                out["unresolved"].append({**claim, "timing_reason": "annotation row is not an object"})
+                continue
+            raw = [row.get("start_ts"), row.get("end_ts")]
+            claim["raw_times"] = raw
+            try:
+                if any(isinstance(t, bool) or not isinstance(t, (str, int, float)) for t in raw):
+                    raise ValueError
+                start, end = map(float, raw)
+                if not np.isfinite([start, end]).all() or end < start:
+                    raise ValueError
+            except (ValueError, TypeError, OverflowError):
+                out["unresolved"].append({**claim, "timing_reason": "missing or invalid recorded boundaries"})
+                continue
+            actions = row.get("atomic_action") or []
+            if not isinstance(actions, list) or any(not isinstance(a, dict) for a in actions):
+                out["unresolved"].append({**claim, "timing_reason": "atomic action fields are malformed"})
+                continue
+            labels = []
+            for action in actions:
+                text = " ".join(action[k] for k in ("verb", "object")
+                                if isinstance(action.get(k), str) and action[k])
+                hand = action.get("hand")
+                if isinstance(hand, str) and hand:
+                    text += " (" + ("both hands" if hand == "both" else hand + " hand") + ")"
+                if text:
+                    labels.append(text)
+            scene = row.get("scene")
+            label = "; ".join(labels) or (scene if isinstance(scene, str) and scene else "segment")
+            step = {**claim, "t0": start, "t1": end, "label": label,
+                    "timing_reason": "recorded start_ts and end_ts; no separate clock relation or precision claim"}
+            if isinstance(row.get("success"), bool):
+                step["ok"] = row["success"]
+            out["spans"].append(step)
+    claims = out["source"].get("device_claims", [])
+    for key in ("device", "resolution"):
+        values = [row[key] for row in claims if key in row]
+        if values and all(value == values[0] for value in values):
+            out["source"][key] = values[0]
+        elif values:
+            out["issues"].append({"kind": "device_metadata_disagree", "text":
+                                  f"Recorded {key} claims disagree; each source remains attributed without "
+                                  "choosing one claim."})
     return out
 
 
@@ -3558,12 +3669,32 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         by = item.get("cams") or {f.stem: f for f in fs}
         vmap, unused = pick_cameras(list(by), rig, list(by))
         files = {v: (nm, by[nm]) for v, nm in vmap.items()}
-    extra = {"task_label": [item["name"]], "source": {"format": "video files", "upload": item["name"]}}
+    extra = {"task_label": [item.get("recorded_episode_name") or item["name"]],
+             "source": {"format": "video files", "upload": item["name"]}}
+    if item.get("recorded_episode_name"):
+        extra["source"]["clip"] = item["recorded_episode_name"]
     if item["dir"] is not None:
         extra["source"]["unused_cameras"] = list(unused)
     # every note file of the episode (episode_notes): one is given as sent, several each under its file name, and a
     # note whose whole text is the task is given once, as the instruction
     got = episode_notes(item)
+    structured = recorded_video_notes(item)
+    got["read"] = list(dict.fromkeys(got["read"] + structured["read"]))
+    got["issues"] += structured["issues"]
+    if structured["notes"]:
+        got["notes"] = list({**dict(got["notes"]), **structured["notes"]}.items())
+        got["attributed_notes"] += list(structured["notes"])
+    extra["source"].update(structured["source"])
+    if structured["spans"]:
+        extra["annotation_subtasks"] = structured["spans"]
+        extra["annotation_note"] = ("These are recorded atomic action claims. start_ts and end_ts are "
+                                    "displayed as seconds from the video start; their unit, clock relation and "
+                                    "accuracy were not separately recorded. Original fields and boundaries "
+                                    "remain in the attributed notes.")
+    if structured["unresolved"]:
+        extra["annotation_unresolved"] = structured["unresolved"]
+        add_issue(extra, "annotation_unresolved", "Some recorded action claims have invalid boundaries or "
+                  "structure; they remain attributed notes without a precise span.")
     for issue in got["issues"]:
         add_issue(extra, issue["kind"], issue["text"])
     if got["read"]:
@@ -6224,7 +6355,10 @@ def upload_adapters(kind: str) -> list:
     """The dataset adapters in prepare/ that read an upload of this kind ("mcap", "lerobot" or "video"), found rather
     than listed: an adapter
     declares UPLOAD = kind with recognizes() and convert_upload(), or UPLOAD = None when it reads only its published
-    dataset (tests/test_formats.py holds every adapter to one or the other). Adding a dataset is adding its adapter."""
+    dataset (tests/test_formats.py holds every adapter to one or the other). Videos use structural generic notes
+    without importing dataset adapters."""
+    if kind == "video":
+        return []
     import importlib
     import pkgutil
     import prepare
@@ -8176,7 +8310,7 @@ def assign_episode_names(items: list[dict], original_items: list[dict], root: Pa
         original_files = {root / rel for rel in rels if not hidden(root / rel, root)}
     if context is not None and original_files is None and any(
             it["kind"] == "video" and any(Path(p).name == "raw_video.mp4" for p in it["files"]) for it in episodes):
-        raise ValueError("original adapter identity requires the original upload file manifest")
+        raise ValueError("original video identity requires the original upload file manifest")
     if original_files is not None and any(
             Path(p) not in original_files for it in original_items
             for p in it.get("files", [it["file"]] if "file" in it else [])):
@@ -8186,18 +8320,16 @@ def assign_episode_names(items: list[dict], original_items: list[dict], root: Pa
     for it in episodes:
         name = it["name"]
         if it["kind"] == "video":
-            for mod in upload_adapters("video"):
-                naming = getattr(mod, "upload_episode_name", None)
-                if naming and original_files is not None and id(it) in selected:
-                    if naming(it) != naming(it, original_files=original_files):
-                        raise ValueError("a selected adapter no longer matches its original annotation filenames")
-                if naming and (adapted := naming(it, original_files=original_files, root=root, root_name=root_name)) is not None:
-                    if context is not None and "root_name" not in context and Path(it["files"][0]).parent == root:
-                        raise ValueError("original root adapter identity requires the original upload root name")
-                    name = adapted
-                    if id(it) in selected:
-                        it["adapter_episode_name"] = adapted
-                    break
+            annotations = video_annotation_paths(it, original_files)
+            if original_files is not None and id(it) in selected and annotations != video_annotation_paths(it):
+                raise ValueError("a selected video no longer matches its original annotation filenames")
+            if annotations:
+                folder = Path(it["files"][0]).parent
+                if context is not None and "root_name" not in context and folder == root:
+                    raise ValueError("original annotated video identity requires the original upload root name")
+                name = root_name if folder == root else folder.name
+                if id(it) in selected:
+                    it["recorded_episode_name"] = name
         names.append(name)
     for it, path in zip(episodes, episode_dirs(Path("."), names)):
         if id(it) in selected:
@@ -8459,20 +8591,16 @@ def _and_words(xs: list[str]) -> str:
 def opened_notes(items: list[dict]) -> set[Path]:
     """The notes convert_video reads beside an episode's videos, exactly: every note file (episode_notes, note_files),
     the .json of the episode folder that gave its task, and each .json beside a depth video that gives a depth scale
-    (depth_scales). A .json that gives neither is not read and so is listed (unread_files). Every file of a folder a
-    dataset adapter reads (upload_adapters, OpenAoE's clip) is its adapter's."""
+    (depth_scales). Owned structured action and device notes are read by recorded_video_notes. Unrelated files
+    remain listed by unread_files."""
     out = set()
-    adapters = upload_adapters("video")
     for it in items:
         if it.get("side_notes"):
             out |= set(episode_notes(it["side_notes"])["read"])
         if it.get("kind") != "video":
             continue
-        if any(m.recognizes(it) for m in adapters):
-            # a folder in a dataset's own layout is read by its adapter (OpenAoE's annotation and video_info.json)
-            out |= {p for p in item_folder(it).rglob("*") if p.is_file()}
-            continue
         out |= set(episode_notes(it)["read"])
+        out |= set(recorded_video_notes(it)["read"])
         for dp in (it.get("depth") or {}).values():
             out |= set(depth_scales(Path(dp).parent))
     return out
