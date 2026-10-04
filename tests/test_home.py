@@ -95,3 +95,23 @@ def test_follow_puts_a_long_recording_on_the_board_once_its_last_part_is_in(tmp_
     assert follow.follow_once(board, seen) == 1
     assert json.loads((board / "qa" / "episode_long.json").read_text())["stitched_parts"] == 2
     assert follow.follow_once(board, {}) == 0                        # restarted: nothing is rewritten
+
+
+def test_jaw_closes_are_shut_or_on_something_and_reach_the_facts_as_text():
+    """A close that ends where the jaws meet is shut; one that stops wider is on something. The episode's facts list
+    every close and open per gripper, and no frame is added for them."""
+    import numpy as np
+    from label import episode as me
+    from prepare import jaws
+    fps = 30.0
+    o = np.full(300, 160.0)                              # shut at rest
+    o[30:60] = 205.0                                      # open, then shut on nothing at 2s
+    o[90:120] = 205.0                                     # open, then close on an object at 4s
+    o[120:200] = 185.0
+    evs = jaws.events(o, fps)
+    jaws.mark_shut(evs, o)
+    closes = [(round(e["t"]), e["shut"]) for e in evs if e["kind"] == "close"]
+    assert closes == [(2, True), (4, False), (7, True)]
+    ep = {"jaws": {"left": evs, "right": None}, "context": {"cameras": {"left": {"name": "left"}}}}
+    text = me.jaw_block(ep)
+    assert "left gripper: closes at 2.00 shut, 4.00 on something" in text and "right" not in text

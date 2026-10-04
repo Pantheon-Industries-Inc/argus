@@ -39,6 +39,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -83,6 +84,12 @@ CONTACT_EVERY_S = 4.0
 CONTACT_MAX = 8
 CONTACT_MIN_CHANGE = 0.25    # of the channel's own range over the episode, between consecutive instants
 CONTACT_MIN_GAP_S = 2.0
+# Jaw moves (prepare/jaws.py): a handheld gripper records no gripper value, and its grasps, misses and retries can all
+# happen within a second, between two of the once-a-second instants. Its jaws are measured from its own wrist camera on
+# every frame instead, and every close (shut, or stopped on something) and open is listed in the episode's facts. It
+# costs a few lines of text and adds no frame: the frames sent are the same with or without it.
+JAW_RIGS = ("handheld_gripper",)
+JAW_VERSION = 2              # bump when prepare/jaws.py changes what it measures, so cached results are redone
 PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
 GRID_GUTTER = 84
 GRID_HEADER = 30
@@ -123,7 +130,34 @@ def load(ep_dir: Path) -> dict:
     for v, d in src.items():
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
+    if rig(ep) in JAW_RIGS and state_kind(ep) == "none":
+        ep["jaws"] = jaw_moves(ep_dir, src)
     return ep
+
+
+def jaw_moves(ep_dir: Path, src: dict) -> dict:
+    """{mounted camera: [jaw moves] or None} for each wrist camera, measured by prepare/jaws.py (None where it finds no
+    jaw dots), on the camera's own clip times, cached in the episode folder as jaws.json."""
+    from prepare import jaws as pj
+    cache = ep_dir / "jaws.json"
+    want = {v: str(src[v]["packed"]) for v in MOUNTED if v in src and src[v].get("packed")}
+    if cache.exists():
+        got = json.loads(cache.read_text())
+        if got.get("version") == JAW_VERSION and got.get("videos") == want:
+            return got["moves"]
+    moves = {}
+    for v, path in want.items():
+        r = pj.analyse(path)
+        if r is None:
+            moves[v] = None
+            continue
+        base, dur = float(src[v].get("base_s") or 0.0), int(src[v]["n_frames"]) / r["fps"]
+        inside = lambda t: 0 <= t - base <= dur
+        moves[v] = [{**e, "t": round(e["t"] - base, 3)} for e in r["events"] if inside(e["t"])]
+    tmp = cache.with_name(".jaws.json.tmp")
+    tmp.write_text(json.dumps({"version": JAW_VERSION, "videos": want, "moves": moves}))
+    os.replace(tmp, cache)
+    return moves
 
 
 def ep_fps(ep: dict) -> float:
@@ -228,6 +262,27 @@ def plan(ep: dict) -> dict:
           "state_usable": checks["camera_windows_match_state"]}
     pl["contact"] = contact_instants(ep, pl)
     return pl
+
+
+def jaw_block(ep: dict) -> str:
+    """The measured jaw moves of each gripper (jaw_moves), for the episode's facts."""
+    moves = {v: m for v, m in (ep.get("jaws") or {}).items() if m}
+    if not moves:
+        return ""
+    lines = []
+    for v, m in moves.items():
+        closes = ", ".join(f"{e['t']:.2f}" + (" shut" if e.get("shut") else " on something")
+                           for e in m if e["kind"] == "close") or "none"
+        opens = ", ".join(f"{e['t']:.2f}" for e in m if e["kind"] == "open") or "none"
+        lines.append(f"  {cam_name(ep, v)} gripper: closes at {closes}; opens at {opens} (seconds)")
+    return ("\nJAW MOVES, measured on every frame of each gripper's own camera from the dots on its jaws; the gripper "
+            "itself records nothing. A close is \"shut\" when the jaws met, so nothing was between them or only "
+            "something thin (cloth, a band, paper), and \"on something\" when they stopped apart on an object.\n"
+            + "\n".join(lines) + "\n"
+            "Grasps, misses and retries with a handheld gripper often take less than a second, so they can fall between "
+            "two once-a-second instants; these times tell you when each happened. Read every close against the "
+            "instants around it: what the jaws closed on, whether it came away with the gripper, and whether the same "
+            "object was grasped again.\n")
 
 
 def contact_instants(ep: dict, pl: dict) -> list[int]:
@@ -522,7 +577,7 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
            "the frames." if pl.get("contact") else "")
         + "\n"
         f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
-        "frame." + _coverage_note(ep, pl))
+        "frame." + _coverage_note(ep, pl) + jaw_block(ep))
     sig = _signals_table(ep, pl)
     if kind == "none":
         what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
