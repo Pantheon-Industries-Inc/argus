@@ -405,6 +405,36 @@ def _swap(board: Path, name: str, keep: bool) -> None:
         new.rename(old)
 
 
+def board_label(entry: dict, manifest: dict, fname: str, name: str, src: Path, r: dict, info: dict,
+                eps: Path) -> tuple[dict, Path | None]:
+    """One run output as the board's episode file `fname`, and its prepared episode folder (None when it has no
+    context.json). build() writes every label of a board through this, and board/follow.py each label of a run
+    still in progress, so a label added while a run labels is the same file a build writes."""
+    d = convert(r, entry["dataset"])
+    d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"], "slice": info.get("slice")}
+    # when the run wrote this label: the home page's pace and its latest labels read it (board/home.py)
+    d["_labelled_at"] = round(src.stat().st_mtime, 3)
+    ctx_p = eps / name / "context.json"
+    ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
+    if manifest.get("labels_license"):
+        d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
+    if ctx:
+        add_context(d, ctx, eps / name)
+    # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
+    apply_rules(d, ctx, entry.get("rules") or [])
+    d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))
+    if "duration_s" not in d and d.get("timesteps_s"):
+        # no context: the last sampled time plus one sampling step, marked as an estimate
+        ts = [float(t) for t in d["timesteps_s"]]
+        step = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 0.0
+        d["duration_s"], d["duration_estimated"] = round(ts[-1] + step, 3), True
+    if fname != name + ".json":
+        # the board finds clips by episode_id; the run's own name stays for the hand pose keypoints
+        d["_meta"] = {**(d.get("_meta") or {}), "episode_id": Path(fname).stem, "run_episode": name}
+    carry_pieces(d, r, ctx)
+    return normalize_enums(d), (eps / name if ctx else None)
+
+
 def build(board: Path) -> dict:
     manifest = json.loads((board / "manifest.json").read_text())
     here = board.resolve()
@@ -421,33 +451,13 @@ def build(board: Path) -> dict:
         eps = _path(entry["episodes"], here)
         for fname, (name, src, r, from_run) in sorted(labels.items()):
             info = infos.get(from_run) or infos.setdefault(from_run, json.loads((from_run / "run.json").read_text()))
-            d = convert(r, entry["dataset"])
-            d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"],
-                         "slice": info.get("slice")}
-            ctx_p = eps / name / "context.json"
-            ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
-            if manifest.get("labels_license"):
-                d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
-            if ctx:
-                add_context(d, ctx, eps / name)
-                episodes[fname] = eps / name
-            # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
-            apply_rules(d, ctx, entry.get("rules") or [])
-            d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))
-            if "duration_s" not in d and d.get("timesteps_s"):
-                # no context: the last sampled time plus one sampling step, marked as an estimate
-                ts = [float(t) for t in d["timesteps_s"]]
-                step = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 0.0
-                d["duration_s"], d["duration_estimated"] = round(ts[-1] + step, 3), True
+            d, ep_dir = board_label(entry, manifest, fname, name, src, r, info, eps)
+            if ep_dir:
+                episodes[fname] = ep_dir
             dest = new / fname
-            if fname != name + ".json":
-                # the board finds clips by episode_id; the run's own name stays for the hand pose keypoints
-                d["_meta"] = {**(d.get("_meta") or {}), "episode_id": dest.stem, "run_episode": name}
             if dest.exists():
                 raise RuntimeError(f"{dest.name} comes from two manifest entries; a board holds one label per "
                                    "episode (file_prefix separates datasets whose episode names repeat)")
-            carry_pieces(d, r, ctx)
-            d = normalize_enums(d)
             dest.write_text(json.dumps(d))
             board_src[fname] = src
         counts[entry["dataset"]] = {"run_id": json.loads((run / "run.json").read_text())["run_id"],

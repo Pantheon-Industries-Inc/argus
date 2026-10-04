@@ -1,0 +1,406 @@
+"""The board's home page numbers: how far a labelling run has got and what the labelled footage holds.
+
+    GET /api/home      (board/serve.py)
+
+For the whole board and for each dataset the page shows
+- progress: the episodes and footage hours labelled against the run's plan (BOARD/plan.json), the pace over the
+  last hour, the time left at that pace, and what the labels have cost (each label's _usage.est_cost_usd);
+- diversity: how many different objects, motions and tasks the labels name, and how evenly they are spread (the
+  effective number, e to the Shannon entropy of the counts: the number of equally common kinds that would give the
+  same spread, so 40 kinds where one fills nine tenths of the footage counts as far fewer than 40);
+- whether new kinds still turn up: distinct object and task kinds against labelled hours, in labelling order;
+- the five commonest kinds of object and of motion, split by dataset;
+- how much of what the episodes show is deformable rather than rigid (each kind's tag, board/materials.py).
+
+Kinds come from the labels' own words, never from a fixed list. An object's kind is the head noun of its name
+("pebble container" is a container, "clear test tubes" a tube); a motion is each verb of an event's verb_class ("lift
+and carry inward" is lift and carry); a task is its verb and the kind of the first object it names ("Place the closed
+pebble container upright on the tray" is place container). The rules are simple and the same for every dataset, so
+the datasets compare with each other even where a rule misreads a name.
+
+plan.json, written when a run starts:
+    {"datasets": {"umi_scripted": {"name": "Scripted", "episodes": 6224, "seconds": 88474.8}, ...}}
+Its order is the page's order and its names are the page's names. Without it the page shows what is labelled and
+no progress bar.
+
+Each episode file is read once and its summary kept until the file changes, so a board that gains a label every
+few seconds reads one new file, not thousands.
+"""
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+import math
+import re
+import threading
+import time
+from collections import Counter, defaultdict
+from pathlib import Path
+
+PACE_WINDOW_S = 3600        # the pace is the footage labelled in the last hour of labelling
+PACE_MIN_LABELS = 3         # fewer labels than this in the window give no pace and no time left
+TOP_N = 12                  # bars per chart
+CURVE_POINTS = 48           # points per line on the "new kinds" chart
+FEED_N = 14                 # latest labels shown
+LENGTH_BINS = [(0, 15, "under 15s"), (15, 30, "15 to 30s"), (30, 60, "30 to 60s"), (60, 120, "1 to 2 min"),
+               (120, 300, "2 to 5 min"), (300, 600, "5 to 10 min"), (600, None, "over 10 min")]
+
+# ---- kinds from the labels' own words ----
+
+_PAREN = re.compile(r"\([^)]*\)")
+_TOKEN = re.compile(r"[a-z0-9][a-z0-9'-]*")
+# "pair of scissors" is scissors, but "can of tuna" is a can: the words that name an amount of the thing after "of"
+_AMOUNT = {"pair", "set", "piece", "pieces", "bunch", "cluster", "stack", "pile", "sheet", "strip", "handful", "slice"}
+_SKIP_VERB = {"try", "attempt", "begin", "start", "continue"}   # "Try to stand the comb upright" is stand
+
+
+# nouns that are plural in form only
+_PLURAL_ONLY = {"scissors", "glasses", "sunglasses", "goggles", "tongs", "pliers", "tweezers", "pants", "jeans",
+                "shorts", "trousers", "headphones", "earphones", "binoculars", "clothes"}
+
+
+def singular(w: str) -> str:
+    if len(w) <= 3 or w.endswith(("ss", "us", "is")) or w in _PLURAL_ONLY:
+        return w
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    if w.endswith(("ches", "shes", "xes", "sses", "zes")):
+        return w[:-2]
+    return w[:-1] if w.endswith("s") else w
+
+
+def object_kind(name: str) -> str | None:
+    """The head noun of an object's name, singular: "clear test tubes" -> tube, "can of tuna" -> can."""
+    s = _PAREN.sub(" ", str(name or "").lower())
+    s = re.split(r"\s+(?:and|with|or)\s+|,", s)[0]          # "cloth and blue plastic piece" is a cloth
+    if " of " in s:
+        head, rest = s.split(" of ", 1)
+        words = _TOKEN.findall(head)
+        if not words or words[-1].isdigit() or words[-1] in _AMOUNT:
+            s = rest
+        else:
+            s = head
+    words = [w for w in _TOKEN.findall(s) if not w.isdigit()]
+    return singular(words[-1]) if words else None
+
+
+def motion_verbs(verb_class: str) -> list:
+    """Each verb of an event's verb_class: "lift and carry inward" -> [lift, carry]."""
+    out = []
+    for part in re.split(r"\s+and\s+|,|;|/", str(verb_class or "").lower()):
+        words = _TOKEN.findall(part)
+        if words and not words[0].isdigit():
+            out.append(words[0])
+    return out
+
+
+def task_kind(sentence: str, names: list) -> str | None:
+    """A task's verb and the kind of the first object it names: reading on from the verb, the first place where one
+    of the episode's object names starts, or the first word that is one of their kinds ("Lift clear tubes from the
+    rack" with an object "clear test tubes" is lift tube). Only the verb when it names none of them."""
+    words = _TOKEN.findall(str(sentence or "").lower())
+    while len(words) > 1 and (words[0] in _SKIP_VERB or words[0] == "to"):
+        words = words[1:]
+    if not words:
+        return None
+    verb = words[0]
+    full = sorted({tuple(_TOKEN.findall(str(n).lower())): n for n in names if str(n).strip()}.items(),
+                  key=lambda kv: -len(kv[0]))
+    kinds = {k for k in (object_kind(n) for n in names) if k}
+    for i in range(1, len(words)):
+        for toks, n in full:
+            if toks and tuple(words[i:i + len(toks)]) == toks:
+                k = object_kind(n)
+                return f"{verb} {k}" if k else verb
+        if singular(words[i]) in kinds:
+            return f"{verb} {singular(words[i])}"
+    return verb
+
+
+# ---- one episode file, summarised ----
+
+def summarize(p: Path, d: dict, counts) -> dict:
+    """What the home page needs from one episode file. counts(list_key, issue) is Families.counts: whether an issue
+    counts, the same rule as the rail and the issue filter."""
+    names = [str(o.get("name") or "") for o in (d.get("objects") or []) if isinstance(o, dict) and o.get("name")]
+    kinds = sorted({k for k in (object_kind(n) for n in names) if k})
+    verbs = Counter(v for e in (d.get("event_labels") or []) if isinstance(e, dict)
+                    for v in motion_verbs(e.get("verb_class")))
+    tasks = [t for t in (d.get("tasks") or []) if isinstance(t, dict) and t.get("task")]
+    if tasks:
+        task_rows = [(task_kind(t["task"], [*(t.get("objects") or []), *names]), (t.get("outcome") or "").lower())
+                     for t in tasks]
+    else:
+        task_rows = [(task_kind(d.get("episode_prompt") or "", names),
+                      ((d.get("completion") or {}).get("task_completed") or "").lower())]
+    issues = [i for i in (d.get("data_issues") or []) if isinstance(i, dict) and i.get("issue")
+              and counts("data_issues", i)]
+    mistakes = [i for i in (d.get("operator_mistakes") or []) if isinstance(i, dict) and i.get("issue")
+                and counts("operator_mistakes", i)]
+    usage = d.get("_usage") or {}
+    st = p.stat()
+    return {
+        "file": p.name,
+        "dataset": d.get("dataset") or "",
+        "seconds": float(d.get("duration_s") or 0.0),
+        "cost": float(usage.get("est_cost_usd") or 0.0),
+        # when the label was written: board/follow.py stamps the run output's time; a built board has the file's
+        "at": float(d.get("_labelled_at") or st.st_mtime),
+        "prompt": d.get("episode_prompt") or "",
+        "sessions": bool(tasks),
+        "outcome": ((d.get("completion") or {}).get("task_completed") or "").lower() or None,
+        "object_names": sorted({n.lower() for n in names}),
+        "object_kinds": kinds,
+        "verbs": dict(verbs),
+        "tasks": task_rows,
+        "issue_tags": [str(i.get("category") or i.get("issue"))[:60] for i in issues],
+        "mistake_tags": [str(i.get("category") or i.get("issue"))[:60] for i in mistakes],
+    }
+
+
+# ---- the numbers ----
+
+def effective_number(c: Counter) -> float:
+    n = sum(c.values())
+    if not n:
+        return 0.0
+    h = -sum((v / n) * math.log(v / n) for v in c.values() if v)
+    return round(math.exp(h), 1)
+
+
+def _top(c: Counter, n: int = TOP_N) -> list:
+    return [[k, v] for k, v in c.most_common(n)]
+
+
+def _diversity(rows: list) -> dict:
+    objs = Counter(k for r in rows for k in r["object_kinds"])          # episodes that hold each kind
+    names = {n for r in rows for n in r["object_names"]}
+    verbs = Counter()
+    for r in rows:
+        verbs.update(r["verbs"])
+    tasks = Counter(k for r in rows for k, _ in r["tasks"] if k)
+    return {
+        "objects": {"distinct": len(objs), "names": len(names), "effective": effective_number(objs), "top": _top(objs)},
+        "motions": {"distinct": len(verbs), "effective": effective_number(verbs), "top": _top(verbs)},
+        "tasks": {"distinct": len(tasks), "effective": effective_number(tasks), "top": _top(tasks)},
+    }
+
+
+def _curve(rows: list) -> dict:
+    """Distinct object, task and motion kinds against labelled hours, in the order the episodes were labelled:
+    points are [hours, objects, tasks, motions]."""
+    rows = sorted(rows, key=lambda r: (r["at"], r["file"]))
+    seen_o, seen_t, seen_m, h, pts = set(), set(), set(), 0.0, []
+    for r in rows:
+        h += r["seconds"] / 3600
+        seen_o.update(r["object_kinds"])
+        seen_t.update(k for k, _ in r["tasks"] if k)
+        seen_m.update(r["verbs"])
+        pts.append([round(h, 3), len(seen_o), len(seen_t), len(seen_m)])
+    if len(pts) > CURVE_POINTS:
+        step = (len(pts) - 1) / (CURVE_POINTS - 1)
+        pts = [pts[round(i * step)] for i in range(CURVE_POINTS)]
+    return {"points": pts}
+
+
+def _outcomes(rows: list) -> dict:
+    """Success and failure: per episode where an episode is one task, per task where it is a session."""
+    c = Counter()
+    for r in rows:
+        for _, o in (r["tasks"] if r["sessions"] else [(None, r["outcome"] or "")]):
+            c[o if o in ("success", "failure") else "other"] += 1
+    return {"unit": "tasks" if any(r["sessions"] for r in rows) else "episodes", **c}
+
+
+def _lengths(rows: list) -> list:
+    out = []
+    for lo, hi, name in LENGTH_BINS:
+        out.append([name, sum(1 for r in rows if r["seconds"] >= lo and (hi is None or r["seconds"] < hi))])
+    return out
+
+
+def _pace(rows: list, now: float) -> dict | None:
+    """Footage hours labelled per hour of labelling, over the last hour (or since the first label, if later)."""
+    recent = [r for r in rows if r["at"] >= now - PACE_WINDOW_S]
+    if len(recent) < PACE_MIN_LABELS:
+        return None
+    span = now - min(r["at"] for r in recent)
+    if span < 300:                          # under five minutes of labelling says little about the next hours
+        return None
+    return {"footage_h_per_h": round(sum(r["seconds"] for r in recent) / span, 3),
+            "labels_per_h": round(len(recent) * 3600 / span, 1), "window_s": round(span)}
+
+
+def _top_split(counts: dict, n: int = 5) -> list:
+    """The n commonest kinds over every dataset, each with its count per dataset: [[kind, total, {dataset: n}]]."""
+    tot = sorted(counts.items(), key=lambda kv: (-sum(kv[1].values()), kv[0]))[:n]
+    return [[k, sum(c.values()), dict(c)] for k, c in tot]
+
+
+def _deformable(rows: list, tags: dict) -> dict:
+    """Of the objects the episodes show (one count per kind per episode), how many are deformable, how many rigid, and
+    how many have no tag yet (board/materials.py)."""
+    c = Counter()
+    for r in rows:
+        for k in r["object_kinds"]:
+            t = tags.get(k)
+            c["deformable" if t is True else "rigid" if t is False else "untagged"] += 1
+    return dict(c)
+
+
+def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
+    tags = tags or {}
+    pds = (plan or {}).get("datasets") or {}
+    by_ds = defaultdict(list)
+    for r in rows:
+        by_ds[r["dataset"]].append(r)
+    order = list(pds) + sorted(d for d in by_ds if d not in pds)
+    datasets = []
+    for ds in order:
+        rs = by_ds.get(ds, [])
+        p = pds.get(ds) or {}
+        sec = sum(r["seconds"] for r in rs)
+        cost = sum(r["cost"] for r in rs)
+        pace = _pace(rs, now)
+        left_s = (p.get("seconds") or 0) - sec if p.get("seconds") else None
+        datasets.append({
+            "dataset": ds, "name": p.get("name") or ds,
+            "episodes": len(rs), "seconds": round(sec, 1),
+            "plan_episodes": p.get("episodes"), "plan_seconds": p.get("seconds"),
+            "cost": round(cost, 2), "cost_per_footage_h": round(cost / (sec / 3600), 2) if sec else None,
+            "pace": pace,
+            "eta_s": round(left_s / pace["footage_h_per_h"]) if pace and left_s and left_s > 0 else None,
+            "diversity": _diversity(rs), "curve": _curve(rs), "outcomes": _outcomes(rs), "lengths": _lengths(rs),
+            "issues_per_h": round(sum(len(r["issue_tags"]) for r in rs) / (sec / 3600), 2) if sec else None,
+            "mistakes_per_h": round(sum(len(r["mistake_tags"]) for r in rs) / (sec / 3600), 2) if sec else None,
+            "deformable": _deformable(rs, tags),
+            # episodes with at least one data issue, and with at least one operator mistake, that the episode list counts
+            # subtasks: a session's tasks, or one per episode where an episode is one task
+            "n_tasks": sum(len(r["tasks"]) for r in rs),
+            "eps_with_issue": sum(1 for r in rs if r["issue_tags"]),
+            "eps_with_mistake": sum(1 for r in rs if r["mistake_tags"]),
+            "top_issues": _top(Counter(t for r in rs for t in r["issue_tags"]), 6),
+            "top_mistakes": _top(Counter(t for r in rs for t in r["mistake_tags"]), 6),
+        })
+    sec = sum(r["seconds"] for r in rows)
+    cost = sum(r["cost"] for r in rows)
+    plan_sec = sum((p.get("seconds") or 0) for p in pds.values()) or None
+    plan_eps = sum((p.get("episodes") or 0) for p in pds.values()) or None
+    pace = _pace(rows, now)
+    left_s = plan_sec - sec if plan_sec else None
+    latest = sorted(rows, key=lambda r: (r["at"], r["file"]), reverse=True)[:FEED_N]
+    objs, verbs = defaultdict(Counter), defaultdict(Counter)
+    for r in rows:
+        for k in r["object_kinds"]:
+            objs[k][r["dataset"]] += 1
+        for v, n in r["verbs"].items():
+            verbs[v][r["dataset"]] += n
+    return {
+        "now": now,
+        "has_plan": bool(pds),
+        "total": {
+            "episodes": len(rows), "seconds": round(sec, 1), "plan_episodes": plan_eps, "plan_seconds": plan_sec,
+            "cost": round(cost, 2), "cost_per_footage_h": round(cost / (sec / 3600), 2) if sec else None,
+            "projected_cost": round(cost / sec * plan_sec, 0) if sec and plan_sec else None,
+            "pace": pace,
+            "eta_s": round(left_s / pace["footage_h_per_h"]) if pace and left_s and left_s > 0 else None,
+            "last_at": max((r["at"] for r in rows), default=None),
+            "diversity": _diversity(rows),
+            "deformable": _deformable(rows, tags),
+            "outcomes": _outcomes(rows),
+            "n_tasks": sum(len(r["tasks"]) for r in rows),
+            "eps_with_issue": sum(1 for r in rows if r["issue_tags"]),
+            "eps_with_mistake": sum(1 for r in rows if r["mistake_tags"]),
+            "top_issues": _top(Counter(t for r in rows for t in r["issue_tags"]), 6),
+            "top_mistakes": _top(Counter(t for r in rows for t in r["mistake_tags"]), 6),
+            # the five commonest kinds of object (with their tag) and motions, split by dataset
+            "top_objects": [[k, n, by, tags.get(k)] for k, n, by in _top_split(objs)],
+            "top_motions": _top_split(verbs),
+        },
+        "datasets": datasets,
+        "latest": [{"file": r["file"], "dataset": r["dataset"], "prompt": r["prompt"], "at": r["at"],
+                    "seconds": r["seconds"], "outcome": r["outcome"],
+                    "tasks": len(r["tasks"]) if r["sessions"] else None,
+                    "tasks_done": sum(1 for _, o in r["tasks"] if o == "success") if r["sessions"] else None}
+                   for r in latest],
+    }
+
+
+# ---- cached per folder ----
+
+_LOCK = threading.Lock()
+_SUMMARIES: dict = {}       # folder -> {file name: (mtime_ns, size, summary)}
+_BODY: dict = {}            # folder -> (signature, raw JSON, gzipped JSON, etag, built at)
+REBUILD_EVERY_S = 15        # the pace and the times on the page move with the clock even when no label lands
+
+
+def _summaries(here: Path, counts) -> list:
+    with _LOCK:
+        known = dict(_SUMMARIES.get(str(here)) or {})
+    fresh = {}
+    for p in here.glob("*.json"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        hit = known.get(p.name)
+        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            fresh[p.name] = hit
+            continue
+        try:
+            d = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue                        # half-written or not an episode file: read again next time
+        if isinstance(d, dict) and "episode_prompt" in d:
+            fresh[p.name] = (st.st_mtime_ns, st.st_size, summarize(p, d, counts))
+    with _LOCK:
+        _SUMMARIES[str(here)] = fresh
+    return [v[2] for v in fresh.values()]
+
+
+def load_tags(path: Path) -> dict:
+    """{kind: True if deformable, False if rigid} from BOARD/materials.json (board/materials.py)."""
+    try:
+        kinds = json.loads(path.read_text()).get("kinds") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {k: v.get("deformable") for k, v in kinds.items() if isinstance(v, dict)}
+
+
+def home_json(here: Path, plan_path: Path, counts) -> tuple:
+    """(JSON, gzipped JSON, ETag) of the home page's numbers. Rebuilt when a label lands, the plan changes or
+    REBUILD_EVERY_S passes; between those every visitor gets the same bytes, and a visitor whose copy is current
+    gets 304 from serve.py."""
+    try:
+        sig_files = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in here.glob("*.json")))
+    except OSError:
+        sig_files = ()
+    tags_path = plan_path.with_name("materials.json")
+    plan_m = tuple(p.stat().st_mtime_ns if p.exists() else None for p in (plan_path, tags_path))
+    sig = (hashlib.sha1(repr(sig_files).encode()).hexdigest(), plan_m)
+    now = time.time()
+    with _LOCK:
+        hit = _BODY.get(str(here))
+    if hit and hit[0] == sig and now - hit[4] < REBUILD_EVERY_S:
+        return hit[1], hit[2], hit[3]
+    try:
+        plan = json.loads(plan_path.read_text())
+    except (OSError, ValueError):
+        plan = {}
+    raw = json.dumps(stats(_summaries(here, counts), plan, now, load_tags(tags_path)),
+                     separators=(",", ":")).encode()
+    gz = gzip.compress(raw, compresslevel=5)
+    etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'
+    with _LOCK:
+        _BODY[str(here)] = (sig, raw, gz, etag, now)
+    return raw, gz, etag
+
+
+def plan_names(plan_path: Path) -> dict:
+    """{dataset: {"name", "order"}} from plan.json, so the dataset tabs use the plan's names and order."""
+    try:
+        pds = json.loads(plan_path.read_text()).get("datasets") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {ds: {"name": (v or {}).get("name") or ds, "order": i} for i, (ds, v) in enumerate(pds.items())}

@@ -15,7 +15,12 @@ them, are drawn over the head-camera footage, and BOARD/hand_keypoints holds the
 their own. The header shows the page title and the board's name from BOARD/manifest.json, or, for a board that is part
 of a site, the site's own header (--header, an HTML file).
 
-Endpoints (all GET but the export): / (the page), /api/episodes (one rail record per episode),
+The page opens on its home view: how far a labelling run has got against BOARD/plan.json, what the labelled footage
+holds (its objects, motions and tasks, per dataset), and the latest labels (board/home.py). While a run labels,
+board/follow.py adds each label to BOARD/qa as the run writes it, and the open page picks it up.
+
+Endpoints (all GET but the export): / (the page), /api/home (the home view's numbers, with an ETag),
+/api/episodes (one rail record per episode),
 /api/episode?file=F[&download=1], /api/compare/index, /api/compare/metrics, /api/compare/list?key=K (one model's
 rail records), /api/compare/episode?key=K&file=F, /api/hands?file=F, /api/keypoints?file=F[&download=1] (F is a
 label file, or index.json for the list), /api/video?id=EPISODE&cam=exo|left|right[&download=1] (byte ranges),
@@ -52,6 +57,7 @@ import urllib.parse
 from collections import OrderedDict
 from pathlib import Path
 
+from board import home
 from board.families import Families
 from compare.metrics import model_names, reasoning_effort
 
@@ -357,6 +363,7 @@ BOARD_NAME = ""                     # the manifest's "board" (set by main)
 HEADER = None                         # a site header in place of the title bar (--header)
 
 _LIST_CACHE = {}         # folder -> (signature, rail records)
+_REC_CACHE = {}          # folder -> {file name: ((mtime_ns, size), its rail record)}
 _LIST_LOCK = threading.Lock()
 
 # Plain display names for the issue tags (board/families.py reads the same file). A tag with no entry shows as its
@@ -405,9 +412,29 @@ def list_episodes(here: Path | None = None) -> list:
         hit = _LIST_CACHE.get(str(here))
         if sig is not None and hit and hit[0] == sig:
             return hit[1]
-    out = rail_records(here)
+        known = dict(_REC_CACHE.get(str(here)) or {})
+    # only the files that changed are read again: while a run labels (board/follow.py) a label lands every few
+    # seconds, and re-reading thousands of files for each one would hold the server's one interpreter
+    recs = {}
+    for p in sorted(here.glob("*.json")):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        k = known.get(p.name)
+        if k and k[0] == (st.st_mtime_ns, st.st_size):
+            recs[p.name] = k
+            continue
+        try:
+            d = json.loads(p.read_text())
+            if isinstance(d, dict) and "episode_prompt" in d:
+                recs[p.name] = ((st.st_mtime_ns, st.st_size), _rail_record(p, d))
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue                  # not an episode file, or one too malformed to list
+    out = [v[1] for v in recs.values()]
     with _LIST_LOCK:
         _LIST_CACHE[str(here)] = (sig, out)
+        _REC_CACHE[str(here)] = recs
     return out
 
 
@@ -1988,6 +2015,110 @@ main.src-fade.ep-fade #left-col > .video-wrap, main.src-fade.ep-fade .ep-head { 
 .goal-frame.nofr img { display: none; }
 .cmp-fail .cf-k { font: 600 11px/1.3 var(--sans); color: var(--fg-3); margin: 12px 0 6px; }
 
+/* ---------- the home view: the labelling run on one screen, no scrolling, in modules on one grid. Row one: the
+   headline numbers, each in a tile of the same build (label, value, one line under it). Row two: one table with a
+   row per dataset. Row three: kinds found as hours are labelled, the commonest objects, the commonest motions.
+   Text is never smaller than 12.5px; numbers sit right-aligned in their own columns. Each dataset has a hue (in the
+   plan's order: violet, rose, moss, navy, slate) only where it tells the datasets apart: the swatch by its name and
+   its line on the chart. Everything else is ink. ---------- */
+#home-view { display: none; height: calc(100vh - var(--header-h)); overflow: hidden; background: var(--bg);
+  transition: opacity 180ms ease; }
+body.view-home main, body.view-home #cmp-view, body.view-home .coverage { display: none; }
+body.view-home #home-view { display: block; }
+body.view-fade #home-view { opacity: 0; }
+.cv-all.home-link { cursor: pointer; position: relative; transition: background 140ms; }
+.cv-all.home-link:hover { background: color-mix(in srgb, var(--surface) 94%, var(--fg)); }
+.hv { height: 100%; box-sizing: border-box; max-width: 1600px; margin: 0 auto; padding: 20px 32px;
+  display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 16px; }
+.hv-tile { min-width: 0; min-height: 0; padding: 16px 22px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; }
+.hv-tt { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 30px; margin-bottom: 12px;
+  font: 600 15px/1 var(--sans); color: var(--fg); }
+/* the headline numbers */
+.hv-kpis { display: grid; grid-template-columns: 1.8fr repeat(4, minmax(0, 1fr)); gap: 16px; }
+.hv-kpi .k { display: flex; align-items: center; gap: 8px; font: 500 13px/1 var(--sans); color: var(--fg-3); }
+.hv-kpi .v { margin-top: 10px; font: 600 32px/1 var(--mono); letter-spacing: -0.03em; color: var(--fg);
+  white-space: nowrap; }
+.hv-kpi .v small { font: 500 15px/1 var(--sans); letter-spacing: 0; color: var(--fg-3); margin-left: 4px; }
+.hv-kpi .s { margin-top: 10px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
+.hv-kpi .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.hv-kpi .pct { font: 600 18px/1 var(--mono); color: var(--fg); }
+.hv-kpi .bar { margin-top: 14px; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(28,28,26,0.08); }
+.hv-kpi .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg);
+  transition: width 900ms cubic-bezier(.2,.7,.2,1); }
+.hv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-disabled); }
+.hv-dot.on { background: var(--success); animation: hv-pulse 2.4s ease-in-out infinite; }
+@keyframes hv-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* one card per tranche */
+.hv-cards { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 16px; }
+.hv-card { cursor: pointer; padding: 18px 22px 14px; transition: box-shadow 160ms ease, border-color 160ms ease; }
+.hv-card:hover { border-color: var(--border-strong); box-shadow: 0 6px 22px rgba(0,0,0,0.08); }
+.hv-card .hd { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.hv-card .nm { font: 600 15px/1.2 var(--sans); color: var(--fg); white-space: nowrap; }
+.hv-card .nm i { display: inline-block; width: 10px; height: 10px; margin-right: 10px; border-radius: 3px; vertical-align: -1px; }
+.hv-card .h { font: 600 15px/1 var(--mono); color: var(--fg); white-space: nowrap; }
+.hv-card .h small, .hv-card .hv-kv small { font-weight: 500; color: var(--fg-3); }
+.hv-card .bar { height: 4px; margin: 12px 0 10px; border-radius: 2px; overflow: hidden; background: rgba(28,28,26,0.08); }
+.hv-card .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg-2);
+  transition: width 900ms cubic-bezier(.2,.7,.2,1); }
+.hv-card .hv-kv { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; height: 28px; }
+.hv-card .hv-kv span { font: 500 13.5px/1 var(--sans); color: var(--fg-3); }
+.hv-card .hv-kv b { font: 600 14.5px/1 var(--mono); color: var(--fg); white-space: nowrap; }
+/* row three */
+.hv-low { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px;
+  min-height: 0; }
+.hv-low .hv-tile { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.hv-growth { display: grid; grid-template-columns: minmax(0, 1fr) 206px; grid-template-rows: minmax(0, 1fr); gap: 24px;
+  min-height: 0; }
+.hv-plot { position: relative; min-height: 0; }
+/* the chart stretches to its box: lines in an SVG scaled to the area, labels and end dots placed in percentages, so
+   nothing is measured and nothing can spill out of the tile */
+.hv-area { position: absolute; left: 34px; right: 8px; top: 8px; bottom: 24px; }
+.hv-area svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.hv-area .grid { stroke: var(--row-divider); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.hv-area .ax { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.hv-area .ln { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round;
+  vector-effect: non-scaling-stroke; }
+.hv-area .yt, .hv-area .xt { position: absolute; font: 500 12px/1 var(--mono); color: var(--fg-3); white-space: nowrap; }
+.hv-area .yt { right: calc(100% + 8px); transform: translateY(-50%); }
+.hv-area .xt { top: calc(100% + 9px); transform: translateX(-50%); }
+.hv-area .dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); }
+.hv-key { align-self: start; }
+.hv-key div { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  height: 36px; border-bottom: 1px solid var(--row-divider); }
+.hv-key div:last-child { border-bottom: 0; }
+.hv-key i { height: 3px; border-radius: 2px; }
+.hv-key span { font: 500 13.5px/1.2 var(--sans); color: var(--fg-2); }
+.hv-key b { font: 600 14.5px/1 var(--mono); color: var(--fg); }
+/* the commonest kinds: a list of bars, each name inside its bar, the count in its own right-aligned column */
+.hv-bl .hd, .hv-bl .r { display: grid; grid-template-columns: minmax(0, 1fr) 92px 52px; align-items: center;
+  column-gap: 16px; }
+.hv-bl.two .hd, .hv-bl.two .r { grid-template-columns: minmax(0, 1fr) 52px; }
+.hv-bl .hd { padding-bottom: 10px; margin-bottom: 6px; border-bottom: 1px solid var(--border);
+  font: 500 12.5px/1.2 var(--sans); color: var(--fg-3); }
+.hv-bl .hd span:last-child, .hv-bl .r .n { text-align: right; }
+.hv-bl .r { height: 34px; }
+.hv-bl .hv-lb { position: relative; height: 28px; display: flex; align-items: center; min-width: 0; }
+.hv-bl .hv-lb i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; background: rgba(28,28,26,0.10);
+  transition: width 700ms cubic-bezier(.2,.7,.2,1); }
+.hv-bl .hv-lb span { position: relative; padding-left: 10px; font: 500 14px/1 var(--sans); color: var(--fg);
+  white-space: nowrap; }
+.hv-bl .ty { font: 500 13px/1 var(--sans); color: var(--fg-3); }
+.hv-bl .ty.d { color: var(--fg); font-weight: 600; }
+.hv-bl .n { font: 600 14px/1 var(--mono); color: var(--fg); }
+.hv-empty { font-size: 14px; color: var(--fg-3); }
+/* a short or narrow window scrolls rather than squeezing the modules */
+@media (max-height: 740px), (max-width: 1180px) {
+  #home-view { overflow-y: auto; }
+  .hv { height: auto; grid-template-rows: none; }
+  .hv-low { grid-template-columns: 1fr; }
+  .hv-low .hv-tile { height: 360px; }
+}
+@media (max-width: 1180px) {
+  .hv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hv-kpis > :first-child { grid-column: 1 / -1; }
+}
+
 /* ---------- the comparison view ---------- */
 #cmp-view { display: none; height: calc(100vh - var(--top-h)); overflow-y: auto; background: var(--bg); }
 body.view-cmp main { display: none; }
@@ -2264,12 +2395,13 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   <section class="right" id="right-col"></section>
 </main>
 <section id="cmp-view" aria-label="Model comparison"></section>
+<section id="home-view" aria-label="Labelling progress and what the footage holds"></section>
 <div class="cmp-tip" id="cmp-tip" role="tooltip"></div>
 <script>
 const currentEp = document.getElementById('current-ep');
 
 function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
-function fmtDur(s) { return s == null ? '' : (s >= 60 ? (s / 60).toFixed(1) + ' min' : Math.round(s) + 's'); }
+function fmtDur(s) { return s == null ? '' : (s >= 60 ? (s / 60).toFixed(1) + 'min' : Math.round(s) + 's'); }
 // what "both" means on the open episode's rig: a head camera films a person's hands, a handheld rig two grippers
 let ARM_NOUN = 'arms';
 function armLabel(a) { return a === 'both' ? `both ${ARM_NOUN}` : (a || '?'); }
@@ -2984,6 +3116,7 @@ async function loadEpisodes() {
   if (by) await applyLabeller(by);
   renderLabelsBy();
   if (CMP && q.get('view') === 'compare') { showCompare(true); return; }
+  if (BOARD.home && !wantEp && !q.get('ds')) { await showHome(true); prefetchWhenIdle(); return; }
   const ds = wantEp ? null : firstDataset(q.get('ds'));
   if (wantEp) await setDataset(datasetOf(wantEp), wantEp.file);
   else if (ds) await setDataset(ds);
@@ -3035,6 +3168,11 @@ function prefetchWhenIdle() {
 // Back and forward between episodes (and labellers) update the view.
 window.addEventListener('popstate', async () => {
   const q = new URLSearchParams(location.search);
+  if (BOARD.home && !q.get('ep') && !q.get('ds') && !q.get('view')) { showHome(true); return; }
+  if (document.body.classList.contains('view-home')) {
+    await setHomeView(false);
+    if (q.get('ds') && !q.get('ep')) { setDataset(firstDataset(q.get('ds'))); return; }
+  }
   if (CMP && q.get('view') === 'compare') { showCompare(true); return; }
   const by = urlLabeller(q);
   if (document.body.classList.contains('view-cmp')) {
@@ -3076,29 +3214,36 @@ function renderCoverage(ds, shown) {
   const cur = per.find(p => p.d === ds) || { n: 0, sec: 0 };
   const narrowed = shown.length !== cur.n;
   const tabs = per.map(p => {
-    const on = p.d === ds && !document.body.classList.contains('view-cmp');
+    const on = p.d === ds && !document.body.classList.contains('view-cmp')
+      && !document.body.classList.contains('view-home');
     // the open dataset's tab also says how much of it the current filter or search keeps
     const num = on && narrowed
       ? `<em>${shown.length.toLocaleString()}</em> of ${p.n.toLocaleString()} &middot; <em>${fmtSpan(shownSec)[0]}`
-        + `</em> ${fmtSpan(shownSec)[1]}`
-      : `${p.n.toLocaleString()}<span class="u"> ${p.n === 1 ? 'ep' : 'eps'}</span> &middot; ${fmtSpan(p.sec)[0]} ${fmtSpan(p.sec)[1]}`;
+        + `</em>${fmtSpan(shownSec)[1]}`
+      : `${p.n.toLocaleString()}<span class="u"> ${p.n === 1 ? 'ep' : 'eps'}</span> &middot; ${fmtSpan(p.sec)[0]}${fmtSpan(p.sec)[1]}`;
     return `<div class="cv-cell${on ? ' on' : ''}${p.n ? '' : ' none'}" role="tab" aria-selected="${on}" `
       + `aria-disabled="${!p.n}" aria-label="${esc(dsLabel(p.d))}" data-ds="${esc(p.d)}">`
       + `<span class="cv-name">${esc(DS_SHORT[p.d] || dsLabel(p.d))}</span><span class="cv-num">${num}</span>`
       + '</div>';
   }).join('');
-  coverageEl.innerHTML = `<div class="cv-all"><span class="cv-k">All datasets</span>`
+  // with a home view (board/home.py), the totals open it
+  const home = BOARD.home ? ` home-link${document.body.classList.contains('view-home') ? ' on' : ''}" role="tab" `
+    + `title="Labelling progress and what the footage holds` : '';
+  coverageEl.innerHTML = `<div class="cv-all${home}"><span class="cv-k">All datasets</span>`
     + `<span class="cv-fig"><span><b>${src.length.toLocaleString()}</b><small>${src.length === 1 ? 'episode' : 'episodes'}</small></span>`
     + `<span><b>${fmtSpan(sumDur(src), true)[0]}</b><small>${fmtSpan(sumDur(src), true)[1]}</small></span></span>`
     + `</div><div class="cv-cells" role="tablist">${tabs}</div>`;
   coverageEl.querySelectorAll('.cv-cell').forEach(el => {
     el.addEventListener('click', () => {
       if (el.classList.contains('none')) return;
+      if (document.body.classList.contains('view-home')) { leaveHome(el.dataset.ds); return; }
       if (document.body.classList.contains('view-cmp')) { leaveCompare(el.dataset.ds); return; }
       if (el.dataset.ds !== currentDataset) setDataset(el.dataset.ds);
     });
     if (!el.classList.contains('none')) el.addEventListener('pointerenter', () => prefetchDataset(el.dataset.ds));
   });
+  const allEl = coverageEl.querySelector('.cv-all.home-link');
+  if (allEl) allEl.addEventListener('click', () => { if (!document.body.classList.contains('view-home')) showHome(); });
   // when the tabs scroll, the open dataset's tab is always in view (a deep link to the last dataset included)
   const onTab = coverageEl.querySelector('.cv-cell.on'), strip = coverageEl.querySelector('.cv-cells');
   if (onTab && strip && strip.scrollWidth > strip.clientWidth) {
@@ -5134,7 +5279,7 @@ function tween(el, to, fmt) {
 const fPct = v => (100 * v).toFixed(v >= 0.995 || v === 0 ? 0 : 1) + '%';
 const fNum = v => v >= 10 ? v.toFixed(1) : v.toFixed(2);
 const fUsd = v => '$' + (v >= 1 ? v.toFixed(2) : v.toFixed(3));
-const fSec = v => v >= 120 ? (v / 60).toFixed(1) + ' min' : Math.round(v) + ' s';
+const fSec = v => v >= 120 ? (v / 60).toFixed(1) + 'min' : Math.round(v) + 's';
 const fMin = m => m >= 90 ? (m / 60).toFixed(1) + ' hours'
   : Math.round(m) + (Math.round(m) === 1 ? ' minute' : ' minutes');
 // models in the order every chart uses: the reference, then each model followed by its in-context run
@@ -5449,6 +5594,240 @@ async function renderEpisodeTable(order, first) {
 // empty categories. Force a fresh load in that case.
 window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
 
+// ---- the home view: the labelling run on one screen ----
+// board/home.py computes the numbers. The page asks again every 20 seconds while the home view is open and the tab is
+// visible; the server answers 304 while nothing has changed, so a handful of open pages cost next to nothing. Each
+// dataset has its own hue here, in the plan's order (BOARD/plan.json names the datasets and orders them).
+const homeView = document.getElementById('home-view');
+const HOME_POLL_MS = 20000;
+const HUES = ['#7a4fa0', '#c0577f', '#5f7a2a', '#2d5b8c', '#5d6470', '#6b6f3a'];
+let HOME = null, HOME_ETAG = null, HOME_SKEW = 0, _homeBuilt = false, _homeTimer = null;
+let HOME_KIND = 'objects';
+if (BOARD.names) {
+  const named = Object.entries(BOARD.names).sort((a, b) => a[1].order - b[1].order);
+  for (const [d, v] of named) { DS_SHORT[d] = v.name; DS_LABELS[d] = v.name; }
+  DS_ORDER.unshift(...named.map(x => x[0]).filter(d => !DS_ORDER.includes(d)));
+}
+const homeNow = () => Date.now() / 1000 + HOME_SKEW;
+function fmtAgo(s) {
+  s = Math.max(0, Math.round(s));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}min` : `${(s / 3600).toFixed(1)}h`;
+}
+function fmtLeft(s) { return s < 3600 ? `${Math.max(1, Math.round(s / 60))}min` : `${(s / 3600).toFixed(1)}h`; }
+function fmtHrs(sec) { const h = (sec || 0) / 3600; return h >= 10 ? h.toFixed(1) : h.toFixed(2); }
+function fmtUsd(v) { return v == null ? '' : '$' + Number(v).toLocaleString(undefined,
+  {minimumFractionDigits: v < 100 ? 2 : 0, maximumFractionDigits: v < 100 ? 2 : 0}); }
+function homeName(ds) { return DS_SHORT[ds] || dsLabel(ds); }
+const homeDs = () => HOME.datasets.filter(d => d.episodes || d.plan_seconds);
+function hueOf(ds) {
+  const i = HOME ? HOME.datasets.findIndex(d => d.dataset === ds) : -1;
+  return HUES[(i < 0 ? 4 : i) % HUES.length];
+}
+const KIND = {objects: ['object', 1], motions: ['motion', 3], tasks: ['task', 2]};
+
+async function fetchHome() {
+  try {
+    const r = await fetch('api/home', {cache: 'no-cache'});
+    if (!r.ok) return false;
+    const tag = r.headers.get('ETag');
+    if (HOME && tag && tag === HOME_ETAG) return false;
+    HOME = await r.json();
+    HOME_ETAG = tag;
+    HOME_SKEW = HOME.now - Date.now() / 1000;
+    return true;
+  } catch (e) { return false; }
+}
+
+function buildHome() {
+  homeView.innerHTML = `<div class="hv">
+  <section class="hv-kpis" id="hv-kpis"></section>
+  <section class="hv-cards" id="hv-cards"></section>
+  <section class="hv-low">
+    <div class="hv-tile">
+      <div class="hv-tt"><span id="hv-ch-title"></span>
+        <div class="if-sev-seg" id="hv-kind" role="radiogroup" aria-label="What the chart counts">
+          <button type="button" role="radio" data-v="objects">Objects</button>
+          <button type="button" role="radio" data-v="motions">Motions</button>
+          <button type="button" role="radio" data-v="tasks">Tasks</button></div></div>
+      <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
+    </div>
+    <div class="hv-tile"><div class="hv-tt">Top objects</div>
+      <div class="hv-bl" id="hv-top-objects"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Top motions</div>
+      <div class="hv-bl two" id="hv-top-motions"></div></div>
+  </section></div>`;
+  _homeBuilt = true;
+  document.getElementById('hv-kind').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (b) { HOME_KIND = b.dataset.v; renderPlot(); } });
+  document.getElementById('hv-cards').addEventListener('click', e => {
+    const c = e.target.closest('.hv-card'); if (c) leaveHome(c.dataset.ds); });
+}
+
+function renderKpis() {
+  const t = HOME.total, plan = t.plan_seconds, p = t.pace;
+  const tile = (k, v, s, extra) => `<div class="hv-tile hv-kpi"><div class="k">${k}</div>${extra || ''}`
+    + `<div class="v">${v}</div><div class="s">${s}</div></div>`;
+  const box = document.getElementById('hv-kpis');
+  const pct = plan ? 100 * t.seconds / plan : 0;
+  const prevBar = box.querySelector('.bar i');
+  const prevW = prevBar ? prevBar.style.width : '0%';
+  box.innerHTML = [
+    `<div class="hv-tile hv-kpi"><div class="k">Hours labelled</div><div class="row"><div class="v">${fmtHrs(t.seconds)}`
+      + `<small>of ${fmtHrs(plan)}h</small></div><span class="pct">${plan ? pct.toFixed(1) + '%' : ''}</span></div>`
+      + `<div class="bar"${plan ? '' : ' hidden'}><i style="width:${prevW}"></i></div></div>`,
+    tile('Episodes', t.episodes.toLocaleString(), t.plan_episodes ? `of ${t.plan_episodes.toLocaleString()}` : ''),
+    tile('Time left', t.eta_s ? fmtLeft(t.eta_s) : plan && t.seconds >= plan ? 'Done' : 'Not known',
+      p ? `at ${p.footage_h_per_h.toFixed(1)} footage hours per hour` : 'after 5min of labelling'),
+    tile('Cost', fmtUsd(t.cost), t.projected_cost != null ? `${fmtUsd(t.projected_cost)} for the whole run` : ''),
+    `<div class="hv-tile hv-kpi"><div class="k"><i class="hv-dot" id="hv-dot"></i>Last label</div>`
+      + `<div class="v" id="hv-last"></div><div class="s" id="hv-last-at"></div></div>`,
+  ].join('');
+  requestAnimationFrame(() => { const b = box.querySelector('.bar i'); if (b) b.style.width = pct.toFixed(2) + '%'; });
+  renderLive();
+}
+
+// one card per tranche: its hours against the plan, then a short list of label and value, one fact per line
+function renderCards() {
+  const box = document.getElementById('hv-cards'), ds = homeDs();
+  box.style.setProperty('--n', ds.length);
+  const pct = (n, of) => of ? Math.round(100 * n / of) + '%' : '';
+  const tags = list => esc((list || []).map(([k, n]) => `${k.replace(/_/g, ' ')} ${n}`).join(', '));
+  const prev = new Map([...box.querySelectorAll('.hv-card')].map(c => [c.dataset.ds, c.querySelector('.bar i').style.width]));
+  box.innerHTML = ds.map(d => {
+    const o = d.outcomes || {}, n = (o.success || 0) + (o.failure || 0) + (o.other || 0);
+    const df = d.deformable || {}, dn = (df.deformable || 0) + (df.rigid || 0);
+    const row = (k, v, title) => `<div class="hv-kv"${title ? ` title="${title}"` : ''}><span>${k}</span><b>${v}</b></div>`;
+    return `<div class="hv-tile hv-card" data-ds="${esc(d.dataset)}"><div class="hd"><span class="nm"><i style="background:`
+      + `${hueOf(d.dataset)}"></i>${esc(homeName(d.dataset))}</span><span class="h">${fmtHrs(d.seconds)}`
+      + `${d.plan_seconds ? `<small> / ${fmtHrs(d.plan_seconds)}h</small>` : '<small>h</small>'}</span></div>`
+      + `<div class="bar"><i style="width:${prev.get(d.dataset) || '0%'}"></i></div><div>`
+      + row('Episodes', `${d.episodes.toLocaleString()}${d.plan_episodes ? `<small> / ${d.plan_episodes.toLocaleString()}</small>` : ''}`)
+      + row('Subtasks', `${(d.n_tasks || 0).toLocaleString()}<small> &middot; ${d.seconds ? (d.n_tasks / (d.seconds / 60)).toFixed(1) : '0'} per min</small>`,
+        'A session&rsquo;s tasks, or one per episode where an episode is one task')
+      + row('Success', pct(o.success || 0, n), 'Share of tasks that succeeded')
+      + row('Data issues', pct(d.eps_with_issue || 0, d.episodes), `Episodes with a data issue. ${tags(d.top_issues)}`)
+      + row('Operator mistakes', pct(d.eps_with_mistake || 0, d.episodes), `Episodes with an operator mistake. ${tags(d.top_mistakes)}`)
+      + row('Kinds of object', d.diversity.objects.distinct.toLocaleString())
+      + row('Deformable', dn ? pct(df.deformable || 0, dn) : '', 'Share of the objects seen that are deformable')
+      + '</div></div>';
+  }).join('');
+  requestAnimationFrame(() => box.querySelectorAll('.hv-card').forEach((c, i) => {
+    const d = ds[i];
+    c.querySelector('.bar i').style.width = (d.plan_seconds ? Math.min(100, 100 * d.seconds / d.plan_seconds) : 0)
+      .toFixed(2) + '%';
+  }));
+}
+
+function niceStep(max, n) {
+  const raw = max / n, p = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || p * 10;
+}
+// distinct kinds against labelled hours, one line per dataset; the key beside it lists the datasets in table order
+function renderPlot() {
+  document.querySelectorAll('#hv-kind button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.v === HOME_KIND)));
+  const [one, idx] = KIND[HOME_KIND];
+  document.getElementById('hv-ch-title').textContent = `Kinds of ${one} found as footage is labelled`;
+  const el = document.getElementById('hv-plot'), ds = homeDs().filter(d => d.episodes);
+  document.getElementById('hv-key').innerHTML = ds.map(d => `<div><i style="background:${hueOf(d.dataset)}"></i>`
+    + `<span>${esc(homeName(d.dataset))}</span><b>${d.curve.points.length ? d.curve.points[d.curve.points.length - 1][idx] : 0}`
+    + '</b></div>').join('');
+  if (!ds.length) { el.innerHTML = '<div class="hv-empty">Nothing labelled yet.</div>'; return; }
+  const series = ds.map(d => ({pts: d.curve.points, c: hueOf(d.dataset)}));
+  const xMax = Math.max(...series.map(s => s.pts[s.pts.length - 1][0]), 1e-6);
+  const yMax = Math.max(...series.map(s => s.pts[s.pts.length - 1][idx]), 1);
+  const xs = niceStep(xMax, 4), ys = niceStep(yMax, 4);
+  const xTop = Math.ceil(xMax / xs) * xs, yTop = Math.ceil(yMax / ys) * ys;
+  // positions in percent of the chart area, x to the right and y down
+  const X = h => 100 * h / xTop, Y = v => 100 * (1 - v / yTop);
+  let g = '', html = '';
+  for (let v = 0; v <= yTop + 1e-9; v += ys) {
+    g += `<line class="${v ? 'grid' : 'ax'}" x1="0" x2="100" y1="${Y(v)}" y2="${Y(v)}"/>`;
+    html += `<span class="yt" style="top:${Y(v)}%">${Math.round(v)}</span>`;
+  }
+  for (let h = 0; h <= xTop + 1e-9; h += xs) html += `<span class="xt" style="left:${X(h)}%">${+h.toFixed(2)}h</span>`;
+  for (const s of series) {
+    const d = [[0, 0, 0, 0], ...s.pts].map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(2)},${Y(p[idx]).toFixed(2)}`).join('');
+    const last = s.pts[s.pts.length - 1];
+    g += `<path class="ln" d="${d}" stroke="${s.c}"/>`;
+    html += `<span class="dot" style="left:${X(last[0])}%;top:${Y(last[idx])}%;background:${s.c}"></span>`;
+  }
+  el.innerHTML = `<div class="hv-area"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" `
+    + `aria-label="Kinds found against labelled hours">${g}</svg>${html}</div>`;
+}
+
+// the five commonest kinds over every dataset: each name inside a bar as long as its count, the count in its own column
+// (the bar's tooltip splits the count by dataset)
+function renderList(el, head, rows, type) {
+  const max = Math.max(1, ...rows.map(r => r[1]));
+  const order = homeDs().map(d => d.dataset);
+  el.innerHTML = `<div class="hd">${head.map(h => `<span>${h}</span>`).join('')}</div>` + (rows.length ? rows.map(r =>
+    `<div class="r"><div class="hv-lb" title="${esc(order.filter(d => r[2][d]).map(d => `${homeName(d)} ${r[2][d]}`).join(', '))}">`
+    + `<i style="width:${(100 * r[1] / max).toFixed(1)}%"></i><span>${esc(r[0])}</span></div>`
+    + (type ? type(r) : '') + `<span class="n">${r[1].toLocaleString()}</span></div>`).join('')
+    : '<div class="hv-empty">Nothing labelled yet.</div>');
+}
+function renderTops() {
+  const t = HOME.total;
+  renderList(document.getElementById('hv-top-objects'), ['Object', 'Type', 'Episodes'], t.top_objects,
+    r => r[3] === true ? '<span class="ty d">Deformable</span>' : r[3] === false ? '<span class="ty">Rigid</span>'
+      : '<span class="ty"></span>');
+  renderList(document.getElementById('hv-top-motions'), ['Motion', 'Events'], t.top_motions);
+}
+
+function renderLive() {
+  if (!HOME) return;
+  const last = HOME.total.last_at, age = last ? homeNow() - last : null;
+  const dot = document.getElementById('hv-dot'), v = document.getElementById('hv-last'), at = document.getElementById('hv-last-at');
+  if (dot) dot.classList.toggle('on', age != null && age < 600);
+  if (v) v.innerHTML = age == null ? 'None yet' : `${fmtAgo(age)}<small>ago</small>`;
+  if (at) at.textContent = last ? 'at ' + new Date((last - HOME_SKEW) * 1000).toLocaleTimeString([], {hour: '2-digit',
+    minute: '2-digit'}) : '';
+}
+setInterval(() => { if (document.body.classList.contains('view-home')) renderLive(); }, 5000);
+
+function renderHome() {
+  if (!HOME) { homeView.innerHTML = '<div class="hv"><div class="hv-empty">The progress numbers did not load. '
+    + 'Reload the page to try again.</div></div>'; _homeBuilt = false; return; }
+  if (!_homeBuilt) buildHome();
+  renderKpis(); renderCards(); renderPlot(); renderTops();
+}
+
+function startHomePoll() {
+  clearInterval(_homeTimer);
+  _homeTimer = setInterval(async () => {
+    if (document.visibilityState === 'visible' && await fetchHome()) renderHome();
+  }, HOME_POLL_MS);
+}
+async function setHomeView(on) {
+  if (document.body.classList.contains('view-home') === on) return;
+  document.body.classList.add('view-fade');
+  await sleep(180);
+  document.body.classList.toggle('view-home', on);
+  if (on) document.body.classList.remove('view-cmp');
+  renderCoverage(currentDataset, currentDataset ? railEps().filter(e => datasetOf(e) === currentDataset) : []);
+  void document.body.offsetHeight;
+  requestAnimationFrame(() => document.body.classList.remove('view-fade'));
+  if (on) startHomePoll(); else clearInterval(_homeTimer);
+}
+async function showHome(fromPop) {
+  if (!fromPop) { try { history.pushState(null, '', location.pathname); } catch (_) {} }
+  if (!HOME || !fromPop) await fetchHome();
+  renderHome();
+  await setHomeView(true);
+}
+// from the home view to the episodes: an episode (file), a dataset (ds), or the first dataset. The episode list was
+// loaded with the page; labels that landed since are fetched first, so a just-labelled episode opens too.
+async function leaveHome(ds, file) {
+  if (HOME && HOME.total.episodes !== ALL_EPS.length) ALL_EPS = await loadAllEpisodes();
+  const ep = file && ALL_EPS.find(e => e.file === file);
+  const target = ep ? datasetOf(ep) : (ds || firstDataset(null));
+  const u = new URLSearchParams();
+  if (ep) u.set('ep', ep.file); else if (target) u.set('ds', target);
+  try { history.pushState(null, '', '?' + u.toString()); } catch (_) {}
+  await setHomeView(false);
+  if (target) await setDataset(target, ep ? ep.file : undefined);
+}
+
 loadEpisodes();
 </script>
 </body></html>
@@ -5498,8 +5877,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a, **kw):
         pass
 
-    def _send(self, code, body, ctype="application/json", gzipped: bytes | None = None):
-        """gzipped: the body already compressed (list_json), sent instead of compressing it again."""
+    def _send(self, code, body, ctype="application/json", gzipped: bytes | None = None, etag: str | None = None):
+        """gzipped: the body already compressed (list_json), sent instead of compressing it again. etag: the body's
+        version, which the browser sends back as If-None-Match (the home page's numbers)."""
         if isinstance(body, (dict, list)):
             body = json.dumps(body)
         if isinstance(body, str):
@@ -5515,7 +5895,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Encoding", "gzip")
             self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        if etag:
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+        else:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.end_headers()
         self.wfile.write(body)
 
@@ -5630,6 +6014,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # the page asks for other models' labels, hand pose files and keypoint downloads only when this board has
             # them (no request that can only fail)
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
+                   "home": True, "names": home.plan_names(HERE.parent / "plan.json"),
                    "footage": FFMPEG is not None,
                    "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
@@ -5637,6 +6022,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if parsed.path == "/api/episodes":
             raw, gz = list_json()
             self._send(200, raw, gzipped=gz)
+            return
+        if parsed.path == "/api/home":
+            # the home page asks every 20 seconds; a visitor whose copy is current gets 304 and no body
+            raw, gz, etag = home.home_json(HERE, HERE.parent / "plan.json", FAMILIES.counts)
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send(200, raw, gzipped=gz, etag=etag)
             return
         if parsed.path == "/api/episode":
             q = urllib.parse.parse_qs(parsed.query)

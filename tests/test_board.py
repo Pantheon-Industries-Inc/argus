@@ -573,7 +573,8 @@ def test_a_new_episode_stops_the_old_episodes_videos():
 
 def test_the_dashboard_draws_no_issue_in_orange():
     """A problem is crimson and the operator's performance indigo, as on the blog; no literal colour in the page is an
-    orange or orange-red hue (0 to 55 degrees, saturated, not near white)."""
+    orange or orange-red hue (0 to 45 degrees, saturated, not near white). The yellow of a wasteful step (about 51
+    degrees) is not orange."""
     import colorsys
     import re
     src = (Path(__file__).resolve().parent.parent / "board" / "serve.py").read_text()
@@ -582,7 +583,7 @@ def test_the_dashboard_draws_no_issue_in_orange():
         t = m.group(0)
         r, g, b = (int(t[i:i + 2], 16) for i in (1, 3, 5)) if t.startswith("#") else map(int, re.findall(r"\d+", t)[:3])
         h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-        if s > 0.3 and h * 360 <= 55 and l < 0.93:
+        if s > 0.3 and h * 360 <= 45 and l < 0.93:
             found.append(t)
     assert not found, found
 
