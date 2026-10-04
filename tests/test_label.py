@@ -260,8 +260,8 @@ def test_no_rig_borrows_another_rigs_hardware():
 PINNED = {
     ("teleop_arms", True): "79456a4ab69aea8202fe215d606484dfc38fcbc242da768b9a911c115c887f4e",
     ("teleop_arms", False): "93b9200f2bb18f4ca3f8eda72fb8a502d2c4829277251193bbd6696508ad80ae",
-    ("handheld_gripper", True): "a5e6e4a85671a8e099356c91bb10c7dfa074ebbadf07f846d8253fd8ca443ba0 2fd11b391bb7ec4df400c7ca904e08d03026ef531cc1570add8ce9dd4d491314",
-    ("handheld_gripper", False): "",
+    ("handheld_gripper", True): "a5e6e4a85671a8e099356c91bb10c7dfa074ebbadf07f846d8253fd8ca443ba0",
+    ("handheld_gripper", False): "2fd11b391bb7ec4df400c7ca904e08d03026ef531cc1570add8ce9dd4d491314",
     ("ego_head", True): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
     ("ego_head", False): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
 }
