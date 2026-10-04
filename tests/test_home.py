@@ -56,20 +56,23 @@ def test_objects_and_mistakes_count_per_subtask(tmp_path):
     assert [k for k, *_ in s["total"]["top_objects"]] == ["container", "cup", "towel"]
     assert s["total"]["deformable"] == {"rigid": 2, "deformable": 1}
     assert by["freeform"]["outcomes"]["success"] == 1 and by["freeform"]["outcomes"]["failure"] == 1
-    # verbs are the tasks' own (place, fold, stack), one per subtask, never the events' grasp or lift
-    assert sorted(k for k, *_ in s["total"]["top_verbs"]) == ["fold", "place", "stack"]
-    # the labeler's own verb for a task wins over the sentence's first word
+    # without the labeler's skill a subtask counts its task's first verb, and no actions
+    assert sorted(k for k, *_ in s["total"]["top_skills"]) == ["fold", "place", "stack"]
+    assert s["total"]["top_actions"] == []
+    # the labeler's skill wins over the sentence's first word; each action counts once per subtask
     d = json.loads((qa / "session.json").read_text())
-    d["tasks"][0]["verb"] = "Fold in half"
-    d["tasks"][1]["verb"] = "stack"
+    d["tasks"][0].update(skill="Fold", actions=["flip", "Flip", "smooth"])
+    d["tasks"][1].update(skill="stack", actions=["hand over"])
     named = home.summarize(qa / "session.json", d, _counts_all)
-    assert named["verbs"] == {"fold in half": 1, "stack": 1}
-    d["tasks"][1]["verb"] = "None"                      # the labeler saying no action happened counts no verb
-    assert home.summarize(qa / "session.json", d, _counts_all)["verbs"] == {"fold in half": 1}
-    # verbs naming one action count under the one name board/verbs.py gave them
-    merged = home.stats([named, {**named, "file": "b.json", "verbs": {"stack up": 2}}], {}, time.time(),
-                        names={"stack up": "stack", "fold in half": "fold"})
-    assert dict((k, n) for k, n, _ in merged["total"]["top_verbs"]) == {"stack": 3, "fold": 1}
+    assert named["skills"] == {"fold": 1, "stack": 1}
+    assert named["actions"] == {"flip": 1, "smooth": 1, "hand over": 1}
+    d["tasks"][1]["skill"] = "None"                     # the labeler saying no action happened counts no skill
+    assert home.summarize(qa / "session.json", d, _counts_all)["skills"] == {"fold": 1}
+    # names for one action count under the one name board/skills.py gave them
+    merged = home.stats([named, {**named, "file": "b.json", "skills": {"stack up": 2}, "actions": {"pass": 1}}], {},
+                        time.time(), names={"stack up": "stack", "pass": "hand over"})
+    assert dict((k, n) for k, n, _ in merged["total"]["top_skills"]) == {"stack": 3, "fold": 1}
+    assert dict((k, n) for k, n, _ in merged["total"]["top_actions"]) == {"hand over": 2, "flip": 1, "smooth": 1}
 
 
 def test_the_numbers_keep_their_version_until_a_label_changes(tmp_path):

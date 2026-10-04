@@ -309,7 +309,8 @@ def normalize_timeline(labels: dict) -> dict:
 LIST_FIELDS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues", "operator_mistakes",
                "tasks", "contacts", "contacts_missing")
 DICT_FIELDS = ("scene", "completion", "goal_alignment")
-TEXT_FIELDS = ("task_summary", "task_verb", "performance_review", "viewpoint")
+TEXT_FIELDS = ("task_summary", "task_skill", "performance_review", "viewpoint")
+TEXT_LISTS = ("instruction_variants", "task_actions")   # lists of plain text
 TIME_FIELDS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
                "recovered_at_s")
 
@@ -339,19 +340,19 @@ def _rows(labels: dict, field: str, rows: list, kind=dict, what: str = "an objec
 def typed_labels(labels: dict) -> dict:
     """The reply with every field of the type the output format gives it. A list field that is not a list, an object
     field that is not an object or a text field that is not text is left out, and so is a row of a list that is not
-    an object (a key event written as a plain string), an instruction variant that is not text and an entry of
-    scene.objects that is not an object; each is recorded in _dropped ({"field", "row", "why"}), which the board counts
-    and shows, and the rest of the reply is kept. Times are read as numbers (_times). A reply that keeps to the format
+    an object (a key event written as a plain string), an instruction variant or task action that is not text and an
+    entry of scene.objects that is not an object; each is recorded in _dropped ({"field", "row", "why"}), which the
+    board counts and shows, and the rest of the reply is kept. Times are read as numbers (_times). A reply that keeps to the format
     comes back unchanged, and running this again on its output changes nothing."""
-    for fields, kind, what in ((LIST_FIELDS + ("instruction_variants",), list, "a list"),
+    for fields, kind, what in ((LIST_FIELDS + TEXT_LISTS, list, "a list"),
                                (DICT_FIELDS, dict, "an object"), (TEXT_FIELDS, str, "text")):
         for k in fields:
             if k in labels and labels[k] is not None and not isinstance(labels[k], kind):
                 _drop(labels, k, None, f"a {type(labels[k]).__name__}, not {what}")
                 labels.pop(k)
-    if isinstance(labels.get("instruction_variants"), list):
-        labels["instruction_variants"] = _rows(labels, "instruction_variants", labels["instruction_variants"], str,
-                                               "text")
+    for k in TEXT_LISTS:
+        if isinstance(labels.get(k), list):
+            labels[k] = _rows(labels, k, labels[k], str, "text")
     for k in LIST_FIELDS:
         if isinstance(labels.get(k), list):
             labels[k] = _rows(labels, k, labels[k])

@@ -17,21 +17,23 @@ For the whole board and for each dataset the page shows
   times the plan's hours as the cost of the whole run;
 - subtasks, subtasks per minute of footage, the share of subtasks that succeeded, the share of episodes with a data
   issue and the share of subtasks with an operator mistake (the issues the episode list counts, Families.counts);
-- diversity: how many kinds of object are handled, of verb and of task, and how evenly they are spread (the
+- diversity: how many kinds of object are handled, of skill and of task, and how evenly they are spread (the
   effective number, e to the Shannon entropy of the counts: the number of equally common kinds that would give the
   same spread, so 40 kinds where one fills nine tenths of the footage counts as far fewer than 40);
 - whether new kinds still turn up: distinct kinds against labelled hours, in the order the episodes were labelled;
-- the five commonest kinds of object (subtasks that handle each) and task verbs (subtasks with each), each split
+- the five commonest kinds of object (subtasks that handle each), skills and actions inside tasks (subtasks with
+  each), each split
   by dataset, and the share of handled objects that are deformable (each kind's tag, board/materials.py).
 
 Kinds come from the labels' own words, never from a fixed list. An object's kind is the head noun of its name
 ("pebble container" is a container, "clear test tubes" a tube, "10 of diamonds" a card); a task is its verb and the
 kind of the first object it names ("Place the closed pebble container upright on the tray" is place container). The
 rules are simple and the same for every dataset, so the datasets compare with each other even where a rule misreads a
-name. A task's verb is the one the labeler names for it (an episode's task_verb, a session task's verb,
-label/prompts.py): its predominant action in one or two words, never move. Verbs naming the same action ("pick" and
-"pick up") are counted under one name that a small model gives each distinct verb (board/verbs.py). A label written
-before the labeler named verbs counts the task sentence's first verb.
+name. Skills and actions are the labeler's own (label/prompts.py): each subtask exercises one skill ("pick and
+place", "flip", "stand up"; an episode's task_skill, a session task's skill), and the other actions inside it ("hand
+over", "rotate"; task_actions, actions) each count once per subtask. Names for the same action ("pick" and "pick up")
+are counted under one name that a small model gives each distinct name (board/skills.py). A label written before the
+labeler gave skills counts its task sentence's first verb as the skill, and no actions.
 
 plan.json, written when a run starts:
     {"datasets": {"umi_scripted": {"name": "Scripted", "episodes": 6224, "seconds": 88474.8}, ...}}
@@ -53,7 +55,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from board.verbs import load_names, verb_of
+from board.skills import load_names, name_of, task_fields
 
 PACE_WINDOW_S = 3600        # the pace is the footage labelled in the last hour of labelling
 PACE_MIN_LABELS = 3         # fewer labels than this in the window give no pace and no time left
@@ -161,14 +163,16 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
     else:
         task_rows = [(task_kind(d.get("episode_prompt") or "", names),
                       ((d.get("completion") or {}).get("task_completed") or "").lower())]
-    # each subtask's verb: the labeler's (label/prompts.py), or the task sentence's first verb in a label written
-    # before it named one. The events' own verbs (approach, grasp, lower, release) are the steps of nearly every task,
+    # each subtask's skill and the other actions inside it, the labeler's (label/prompts.py). A label written before
+    # the labeler gave skills (the field missing) counts its task sentence's first verb; one whose skill says no action
+    # happened counts none. The events' own verbs (approach, grasp, lower, release) are the steps of nearly every task,
     # so they tell tasks apart poorly and are not counted.
-    # a label with the field counts the labeler's verb, or none where it says no action happened
-    named = [t.get("verb") for t in tasks] if tasks else [d.get("task_verb")]
-    verbs = Counter(verb_of(v) if isinstance(v, str) else (k.split()[0] if k else None)
-                    for v, (k, _) in zip(named, task_rows))
-    verbs.pop(None, None)
+    skills, actions = Counter(), Counter()
+    for (skill, acts), (k, _) in zip(task_fields(d), task_rows):
+        sk = (k.split()[0] if k else None) if skill is ... else name_of(skill)
+        if sk:
+            skills[sk] += 1
+        actions.update({a for a in (name_of(x) for x in acts) if a})
     issues = [i for i in (d.get("data_issues") or []) if isinstance(i, dict) and i.get("issue")
               and counts("data_issues", i)]
     mistakes = [i for i in (d.get("operator_mistakes") or []) if isinstance(i, dict) and i.get("issue")
@@ -194,7 +198,8 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
         "object_kinds": sorted({k for ks in sub_kinds for k in ks}),
         "subtask_objects": sub_kinds,
         "mistake_subtasks": mistake_subtasks,
-        "verbs": dict(verbs),
+        "skills": dict(skills),
+        "actions": dict(actions),
         "tasks": task_rows,
         "issue_tags": [tag("data_issues", i) for i in issues],
         "mistake_tags": [tag("operator_mistakes", i) for i in mistakes],
@@ -218,27 +223,29 @@ def _top(c: Counter, n: int = TOP_N) -> list:
 def _diversity(rows: list) -> dict:
     objs = Counter(k for r in rows for ks in r["subtask_objects"] for k in ks)   # subtasks that handle each kind
     names = {n for r in rows for n in r["object_names"]}
-    verbs = Counter()
+    skills, actions = Counter(), Counter()
     for r in rows:
-        verbs.update(r["verbs"])
+        skills.update(r["skills"])
+        actions.update(r["actions"])
     tasks = Counter(k for r in rows for k, _ in r["tasks"] if k)
     return {
         "objects": {"distinct": len(objs), "names": len(names), "effective": effective_number(objs), "top": _top(objs)},
-        "verbs": {"distinct": len(verbs), "effective": effective_number(verbs), "top": _top(verbs)},
+        "skills": {"distinct": len(skills), "effective": effective_number(skills), "top": _top(skills)},
+        "actions": {"distinct": len(actions), "effective": effective_number(actions), "top": _top(actions)},
         "tasks": {"distinct": len(tasks), "effective": effective_number(tasks), "top": _top(tasks)},
     }
 
 
 def _curve(rows: list) -> dict:
-    """Distinct object kinds, tasks and task verbs against labelled hours, in the order the episodes were labelled:
-    points are [hours, objects, tasks, verbs]."""
+    """Distinct object kinds, tasks and skills against labelled hours, in the order the episodes were labelled:
+    points are [hours, objects, tasks, skills]."""
     rows = sorted(rows, key=lambda r: (r["at"], r["file"]))
     seen_o, seen_t, seen_m, h, pts = set(), set(), set(), 0.0, []
     for r in rows:
         h += r["seconds"] / 3600
         seen_o.update(r["object_kinds"])
         seen_t.update(k for k, _ in r["tasks"] if k)
-        seen_m.update(r["verbs"])
+        seen_m.update(r["skills"])
         pts.append([round(h, 3), len(seen_o), len(seen_t), len(seen_m)])
     if len(pts) > CURVE_POINTS:
         step = (len(pts) - 1) / (CURVE_POINTS - 1)
@@ -307,13 +314,14 @@ def _projected(datasets: list, pds: dict) -> float | None:
 
 
 def _named(rows: list, names: dict) -> list:
-    """Each row with its verbs counted under the names board/verbs.py gave them; a verb not merged yet keeps its own."""
+    """Each row with its skills and actions counted under the names board/skills.py gave them; a name not merged yet
+    keeps its own. Two actions of one subtask merged into one name count once."""
     out = []
     for r in rows:
-        c = Counter()
-        for v, n in r["verbs"].items():
-            c[names.get(v) or v] += n
-        out.append({**r, "verbs": dict(c)})
+        sk = Counter()
+        for v, n in r["skills"].items():
+            sk[names.get(v) or v] += n
+        out.append({**r, "skills": dict(sk), "actions": {names.get(a) or a: 1 for a in r["actions"]}})
     return out
 
 
@@ -361,12 +369,14 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None, names: d
     pace = _pace(rows, now)
     left_s = plan_sec - sec if plan_sec else None
     latest = sorted(rows, key=lambda r: (r["at"], r["file"]), reverse=True)[:FEED_N]
-    objs, verbs = defaultdict(Counter), defaultdict(Counter)
+    objs, skills, actions = defaultdict(Counter), defaultdict(Counter), defaultdict(Counter)
     for r in rows:
         for k in (k for ks in r["subtask_objects"] for k in ks):
             objs[k][r["dataset"]] += 1
-        for v, n in r["verbs"].items():
-            verbs[v][r["dataset"]] += n
+        for v, n in r["skills"].items():
+            skills[v][r["dataset"]] += n
+        for v, n in r["actions"].items():
+            actions[v][r["dataset"]] += n
     return {
         "now": now,
         "has_plan": bool(pds),
@@ -389,9 +399,10 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None, names: d
             "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rows),
             "top_issues": _top(Counter(t for r in rows for t in set(r["issue_tags"])), 5),
             "top_mistakes": _top(Counter(t for r in rows for t in r["mistake_tags"]), 5),
-            # the five commonest kinds of object (with their tag) and task verbs, split by dataset
+            # the five commonest kinds of object (with their tag), skills and actions inside tasks, split by dataset
             "top_objects": [[k, n, by, tags.get(k)] for k, n, by in _top_split(objs)],
-            "top_verbs": _top_split(verbs),
+            "top_skills": _top_split(skills),
+            "top_actions": _top_split(actions),
         },
         "datasets": datasets,
         "latest": [{"file": r["file"], "dataset": r["dataset"], "prompt": r["prompt"], "at": r["at"],
@@ -451,7 +462,7 @@ def home_json(here: Path, plan_path: Path, counts, name=None) -> tuple:
         sig_files = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in here.glob("*.json")))
     except OSError:
         sig_files = ()
-    tags_path, names_path = plan_path.with_name("materials.json"), plan_path.with_name("verbs.json")
+    tags_path, names_path = plan_path.with_name("materials.json"), plan_path.with_name("skills.json")
     plan_m = tuple(p.stat().st_mtime_ns if p.exists() else None for p in (plan_path, tags_path, names_path))
     sig = (hashlib.sha1(repr(sig_files).encode()).hexdigest(), plan_m)
     now = time.time()

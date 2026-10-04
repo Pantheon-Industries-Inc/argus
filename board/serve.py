@@ -16,7 +16,7 @@ their own. The header shows the page title and the board's name from BOARD/manif
 of a site, the site's own header (--header, an HTML file).
 
 The page opens on its home view: how far a labelling run has got against BOARD/plan.json, what the labelled footage
-holds (its objects, task verbs and tasks, per dataset), and the latest labels (board/home.py). While a run labels,
+holds (its objects, skills and tasks, per dataset), and the latest labels (board/home.py). While a run labels,
 board/follow.py adds each label to BOARD/qa as the run writes it, and the open page picks it up.
 
 Endpoints (all GET but the export): / (the page), /api/home (the home view's numbers, with an ETag),
@@ -5668,7 +5668,7 @@ function hueOf(ds) {
   const i = HOME ? HOME.datasets.findIndex(d => d.dataset === ds) : -1;
   return HUES[(i < 0 ? 4 : i) % HUES.length];
 }
-const KIND = {objects: ['object', 1], verbs: ['verb', 3], tasks: ['task', 2]};
+const KIND = {objects: ['object', 1], skills: ['skill', 3], tasks: ['task', 2]};
 
 async function fetchHome() {
   try {
@@ -5702,20 +5702,25 @@ function buildHome() {
     <div class="hv-tt"><span id="hv-ch-title"></span>
       <div class="if-sev-seg" id="hv-kind" role="radiogroup" aria-label="What the chart counts">
         <button type="button" role="radio" data-v="objects">Objects</button>
-        <button type="button" role="radio" data-v="verbs">Verbs</button>
+        <button type="button" role="radio" data-v="skills">Skills</button>
         <button type="button" role="radio" data-v="tasks">Tasks</button></div></div>
     <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
   </section>
   <section class="hv-two">
+    <div class="hv-tile"><div class="hv-tt">Top skills<small>subtasks with each</small></div>
+      <div class="hv-bl two" id="hv-top-skills"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Actions inside tasks<small>subtasks with each</small></div>
+      <div class="hv-bl two" id="hv-top-actions"></div></div>
+  </section>
+  <section class="hv-two">
     <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
       <div class="hv-bl typed" id="hv-top-objects"></div></div>
-    <div class="hv-tile"><div class="hv-tt">Top verbs<small>subtasks with each</small></div>
-      <div class="hv-bl two" id="hv-top-verbs"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Deformable<small>share of the objects handled</small></div>
+      <div class="hv-bl two" id="hv-def-by"></div></div>
   </section>
   <section class="hv-two">
     <div class="hv-tile"><div class="hv-tt">Kinds of object handled</div><div class="hv-bl two" id="hv-kinds-by"></div></div>
-    <div class="hv-tile"><div class="hv-tt">Deformable<small>share of the objects handled</small></div>
-      <div class="hv-bl two" id="hv-def-by"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Kinds of skill</div><div class="hv-bl two" id="hv-skills-by"></div></div>
   </section></div>`;
   _homeBuilt = true;
   document.getElementById('hv-kind').addEventListener('click', e => {
@@ -5857,11 +5862,14 @@ function renderTops() {
     text: n.toLocaleString(), title: split(by),
     type: tag === true ? '<span class="ty d">Deformable</span>' : tag === false ? '<span class="ty">Rigid</span>'
       : '<span class="ty"></span>'})), {head: ['Object', 'Type', '', 'Subtasks']});
-  renderBars(document.getElementById('hv-top-verbs'), t.top_verbs.map(([k, n, by]) => ({label: esc(k), v: n,
-    text: n.toLocaleString(), title: split(by)})));
+  const tops = list => (list || []).map(([k, n, by]) => ({label: esc(k), v: n, text: n.toLocaleString(), title: split(by)}));
+  renderBars(document.getElementById('hv-top-skills'), tops(t.top_skills));
+  renderBars(document.getElementById('hv-top-actions'), tops(t.top_actions), {empty: 'No action inside a task yet.'});
   const ds = homeDs().filter(d => d.episodes);
   renderBars(document.getElementById('hv-kinds-by'), ds.map(d => ({label: dsLabelHtml(d),
     v: d.diversity.objects.distinct, text: d.diversity.objects.distinct.toLocaleString()})));
+  renderBars(document.getElementById('hv-skills-by'), ds.map(d => ({label: dsLabelHtml(d),
+    v: d.diversity.skills.distinct, text: d.diversity.skills.distinct.toLocaleString()})));
   renderBars(document.getElementById('hv-def-by'), ds.map(d => {
     const df = d.deformable || {}, n = (df.deformable || 0) + (df.rigid || 0);
     return {label: dsLabelHtml(d), v: n ? (df.deformable || 0) / n : 0, text: pctText(df.deformable || 0, n)};
