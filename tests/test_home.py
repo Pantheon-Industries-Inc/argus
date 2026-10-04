@@ -4,6 +4,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from board import follow, home
 
 
@@ -152,3 +154,14 @@ def test_the_whole_run_cost_takes_each_tranche_at_its_own_rate_and_the_plan_rate
           {"dataset": "b", "plan_seconds": 3600, "seconds": 0, "cost": 0.0}]
     assert home._projected(ds, {"a": {}, "b": {"cost_per_footage_h": 4.0}}) == 24
     assert home._projected(ds, {"a": {}, "b": {}}) is None
+
+
+def test_time_left_needs_labelling_under_way():
+    """A pace comes from the last hour's labels, first to last; none while labelling is paused or has barely begun."""
+    now = 100_000.0
+    row = lambda at: {"at": at, "seconds": 60.0}
+    steady = [row(now - 1800 + 60 * i) for i in range(30)]          # one minute of footage a minute, last one now
+    assert home._pace(steady, now)["footage_h_per_h"] == pytest.approx(60 * 30 / (29 * 60), rel=1e-3)
+    burst = [row(now - 900 + i) for i in range(10)]                 # ten retries in ten seconds, then quiet
+    assert home._pace(burst, now) is None
+    assert home._pace(steady, now + 700) is None                    # nothing labelled for over ten minutes

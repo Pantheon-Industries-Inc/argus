@@ -59,6 +59,8 @@ from board.skills import load_names, name_of, task_fields
 
 PACE_WINDOW_S = 3600        # the pace is the footage labelled in the last hour of labelling
 PACE_MIN_LABELS = 3         # fewer labels than this in the window give no pace and no time left
+PACE_MIN_SPAN_S = 300       # labels spread over less than this say little about the next hours
+PACE_IDLE_S = 600           # no label for this long: labelling is paused, and its old pace says nothing about the rest
 TOP_N = 12                  # bars per chart
 CURVE_POINTS = 48           # points per line on the "new kinds" chart
 FEED_N = 14                 # latest labels shown
@@ -270,12 +272,17 @@ def _lengths(rows: list) -> list:
 
 
 def _pace(rows: list, now: float) -> dict | None:
-    """Footage hours labelled per hour of labelling, over the last hour (or since the first label, if later)."""
+    """Footage hours labelled per hour of labelling, over the labels of the last hour, from the first of them to the
+    last. None while labelling is paused (no label for PACE_IDLE_S) or has run for under PACE_MIN_SPAN_S: a burst of a
+    few retried labels followed by quiet would otherwise read as a crawl and put the end days away."""
     recent = [r for r in rows if r["at"] >= now - PACE_WINDOW_S]
     if len(recent) < PACE_MIN_LABELS:
         return None
-    span = now - min(r["at"] for r in recent)
-    if span < 300:                          # under five minutes of labelling says little about the next hours
+    first, last = min(r["at"] for r in recent), max(r["at"] for r in recent)
+    if now - last > PACE_IDLE_S:
+        return None
+    span = last - first
+    if span < PACE_MIN_SPAN_S:
         return None
     return {"footage_h_per_h": round(sum(r["seconds"] for r in recent) / span, 3),
             "labels_per_h": round(len(recent) * 3600 / span, 1), "window_s": round(span)}
