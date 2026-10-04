@@ -280,7 +280,7 @@ def test_each_mcap_adapter_recognizes_its_own_layout_and_no_other():
 
 
 def test_a_lerobot_upload_goes_to_the_adapter_of_its_dataset():
-    """HABIT remains registered; retired split state layouts and other LeRobot datasets use the generic reader."""
+    """Retired dataset layouts and other LeRobot datasets use the generic reader."""
     habit = ["action", "episode_index", "frame_index", "human_role_subtask_index", "is_error_segment",
              "is_high_jerk_segment", "is_intervention_segment", "low_level_task_index", "observation.state",
              "observation.images.exo_view", "observation.images.left_wrist_view"]
@@ -290,8 +290,8 @@ def test_a_lerobot_upload_goes_to_the_adapter_of_its_dataset():
     yam = ["action", "observation.state", "observation.images.top", "observation.images.left", "episode_index"]
     pick = lambda feats: next((m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("lerobot")
                                if m.recognizes({"features": {k: {} for k in feats}})), "generic")
-    assert [pick(habit), pick(galaxea), pick(yam)] == ["habit", "generic", "generic"]
-    assert [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("lerobot")] == ["habit"]
+    assert [pick(habit), pick(galaxea), pick(yam)] == ["generic", "generic", "generic"]
+    assert [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("lerobot")] == []
 
 
 def test_a_video_folder_keeps_published_helpers_after_upload_retirement():

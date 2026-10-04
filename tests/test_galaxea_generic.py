@@ -224,7 +224,7 @@ def test_generic_upload_discovery_does_not_import_a_retired_adapter(monkeypatch)
             pytest.fail('retired adapter imported on the generic path')
         return load(name, *args, **kwargs)
     monkeypatch.setattr(importlib, 'import_module', declared_only)
-    assert [module.__name__ for module in formats.upload_adapters('lerobot')] == ['prepare.habit']
+    assert 'prepare.galaxea' not in [module.__name__ for module in formats.upload_adapters('lerobot')]
 
 
 @pytest.mark.parametrize('mode', ['image', 'packed'])

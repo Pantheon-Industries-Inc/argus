@@ -15,8 +15,8 @@ Accepted uploads, in the order they are recognised:
        only if their frame counts add up exactly to every packed video's frame count; otherwise each
        packed video is kept whole, as one recording;
      - no data parquet: the episode is labelled from video.
-   Cameras stored as images inside the parquet are written to H.264 at their frame times. A dataset an adapter
-   recognizes by its columns goes through that adapter (the prepare/*.py that declare UPLOAD = "lerobot": HABIT).
+   Cameras stored as images inside the parquet are written to H.264 at their frame times.
+   LeRobot episodes use the generic reader with recorded task tables and publisher claims kept under their sources.
    Complete named arm and scalar gripper columns are joined structurally by the generic reader.
 2. MCAP, one file per episode. A layout a dataset adapter recognizes goes through that adapter (the
    prepare/*.py that declare UPLOAD = "mcap", found by upload_adapters: RealOmin with its
@@ -74,7 +74,8 @@ arrays and source bookkeeping, while only sensor readings are given to the model
 
 Recorded state is used when it has 7 values per arm or gripper (6 joints plus gripper for teleop
 arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
-it (state_layout): seven named joints and no gripper stay signals. Every other number the recording keeps is a signal
+it (state_layout): seven named joints and no gripper stay signals. Unsupported homogeneous LeRobot state rows retain
+their native dtype in a raw state.npz archive with state_kind none and an explicit qualification. Every other number is a signal
 (Signals), under its own name, with its shape (a 16 x 16 pressure map stays 16 x 16) and its values' names: counters
 and clocks are bookkeeping, a topic that names its sensor per message is split, a sensor faster than the camera is
 summarised per frame (place_on_frames), and a frame with no reading near it is NaN. Anything read but not kept is
@@ -1780,6 +1781,9 @@ def state_layout(dims: int, rig: str, names: list[str] | None = None) -> tuple[s
     if not names or len(names) != dims:
         return kind, None
     names = [str(x) for x in names]
+    if all(re.fullmatch(r"position[_./-]\d+", name, re.I) for name in names):
+        return "none", ("Labelled from the video because indexed position names declare neither joint meanings nor "
+                        "Cartesian axes. Every original value is retained as a signal.")
     words = {x: state_words(x) for x in names}
     # a name with no words ("" or "_") has no last word, so it says neither an axis, a joint nor a gripper
     last = {x: words[x][-1] if words[x] else "" for x in names}
@@ -4088,8 +4092,9 @@ def read_root(rdir: Path, rel: str) -> dict:
                 missing.append(f"meta/info.json{where} lists no video cameras, so the cameras in its videos folder were used.")
             cams = on_disk
     fps = float(info["fps"]) if info and info.get("fps") else None
-    from prepare.annotations import index_tables, resolved_labels
-    task_tables = index_tables(rdir / "meta", ["task_index"], lambda p: read_jsonl(p, reads)
+    from prepare.annotations import resolved_labels
+    from prepare.lerobot_labels import scoped_index_tables
+    task_tables = scoped_index_tables(rdir / "meta", ["task_index"], lambda p: read_jsonl(p, reads)
                                if p.name == "tasks.jsonl" else read_jsonl(p))
     for (column, path), table in task_tables.items():
         if column is not None:
@@ -4516,10 +4521,12 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
     frame_index only when each index identifies a frame of this episode. Raw times and source claims stay intact.
     """
     lerobot_metadata(ctx, root)
+    from prepare.lerobot_labels import retain_metadata, scoped_index_tables
+    retain_metadata(ctx, root, df, data_path)
     if df is None or not len(df):
         return
-    from prepare.annotations import BOOKKEEPING_COLUMNS, annotation_spans, index_tables, language_spans, original, resolved_labels
-    tables = index_tables(Path(root["dir"]) / "meta", df.columns, read_jsonl)
+    from prepare.annotations import BOOKKEEPING_COLUMNS, annotation_spans, language_spans, original, resolved_labels
+    tables = scoped_index_tables(Path(root["dir"]) / "meta", df.columns, read_jsonl)
     failures = {path: original(table) for (column, path), table in tables.items() if column is None}
     owned = {column for column, _ in tables if column is not None}
     columns = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and (c in owned or c.endswith("_index"))]
@@ -4645,6 +4652,7 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
     if len(json.dumps(notes, ensure_ascii=False)) > ANNOTATION_MAX_CHARS:
         add_issue(ctx, "metadata_limit", f"{data_path} and its recorded metadata exceed the prompt note limit; "
                   "complete original rows and source claims remain in the episode context and uploader notes.")
+    retain_metadata(ctx, root, df, data_path)
 
 
 def _cells_rows(col) -> tuple[np.ndarray | None, int]:
@@ -4792,6 +4800,29 @@ def split_lerobot_columns(df, features, prefix):
     return np.concatenate(arrays, axis=1), used, groups, None
 
 
+def archive_lerobot_state(ep: Path, ctx: dict, df, data_path) -> None:
+    """Keep unsupported native state arrays for published preparation without enabling motion checks."""
+    if ctx.get("state_kind") != "none" or df is None or "observation.state" not in df:
+        return
+    arrays = {}
+    for column, key in [("observation.state", "state"), ("action", "action")]:
+        if column not in df:
+            continue
+        try:
+            rows = [np.asarray(value) for value in df[column]]
+            if rows and len({(row.shape, str(row.dtype)) for row in rows}) == 1 and rows[0].dtype.kind in "buif":
+                arrays[key] = np.stack(rows)
+        except (TypeError, ValueError):
+            continue
+    if "state" in arrays:
+        np.savez(ep / "state.npz", **arrays)
+        ctx["recorded_state_archive"] = {"file": "state.npz", "source_column": "observation.state",
+                                          "source": str(data_path), "shape": list(arrays["state"].shape),
+                                          "row_count": len(df), "dtype": str(arrays["state"].dtype),
+                                          "meaning": "Unsupported native rows retained without an inferred layout or camera alignment."}
+        write_atomic(ep / "context.json", ctx, indent=1, default=str)
+
+
 def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=()) -> dict:
     """hold_back: columns an adapter keeps out of the prompt (a publisher's own labels, kept to score against)."""
     r, row = item["root"], item["row"]
@@ -4813,6 +4844,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             notes.append("Labelled from the video: the episode's data file could not be opened.")
             df = None
     fps = r["fps"]
+    from prepare.lerobot_labels import publisher_columns
+    hold_back = set(hold_back) | publisher_columns(df.columns if df is not None else [])
     if fps is None and df is not None and "timestamp" in df.columns and len(df) > 2:
         fps = measured_fps(np.sort(df["timestamp"].to_numpy(dtype=np.float64)))
     # every row as it is, NaN where a cell cannot be read; a frame with no reading is filled or the state is left a
@@ -4854,7 +4887,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     if not video_cams and r["image_cams"] and df is not None:
         return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes,
                                       state_columns=state_columns, action_columns=action_columns,
-                                      state_names=state_names, split_note=split_note)
+                                      state_names=state_names, split_note=split_note, hold_back=hold_back)
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
     unshown_keys = list(unused)
     descs = colour_depth_views(r, row, vmap)
@@ -4932,10 +4965,12 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
             add_issue(ctx, **i)
         lerobot_annotations(ctx, r, df, row.get("data"))
         write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
-        return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
+        ctx = finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
                               signals=recorded_signals(df, _used_columns(kind, state, action, state_columns,
                                                        action_columns) | set(hold_back),
                                                        ctx["n_state_frames"], feats))
+        archive_lerobot_state(ep, ctx, df, row.get("data"))
+        return ctx
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
     # frames, so frames on the exact k/fps grid need no times; frames off it are decoded by their own pts and
     # timed by frame index, as the dataset defines them
@@ -4983,10 +5018,12 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         add_issue(ctx, **i)
     lerobot_annotations(ctx, r, df, row.get("data"))
     write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
-    return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
+    ctx = finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
                           signals=recorded_signals(df, _used_columns(kind, state, action, state_columns,
                                                    action_columns) | set(hold_back),
                                                    ctx["n_state_frames"], feats))
+    archive_lerobot_state(ep, ctx, df, row.get("data"))
+    return ctx
 
 
 def colour_depth_views(r: dict, row: dict, vmap: dict) -> dict:
@@ -5162,7 +5199,7 @@ def _shown_size(p: Path) -> tuple[int, int]:
 
 
 def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra, notes,
-                           *, state_columns=(), action_columns=(), state_names=None, split_note=None) -> dict:
+                           *, state_columns=(), action_columns=(), state_names=None, split_note=None, hold_back=()) -> dict:
     """Cameras stored as encoded images inside the data file: each written to H.264 at its frame time."""
     r = item["root"]
     # a camera meta/info.json lists whose column is not in this episode's data file is listed, never a failure
@@ -5238,7 +5275,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         add_issue(extra, **i)
     # the table's other numbers go with the frames as they do beside videos (recorded_signals)
     signals = recorded_signals(df, _used_columns(kind, state, action, state_columns, action_columns)
-                               | set(r["image_cams"]), 0, r["features"])
+                               | set(r["image_cams"]) | set(hold_back), 0, r["features"])
     ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals,
                               real={v: t for v in files} if coarse else None, nominal_fps=fps,
                               placeholders={v: written[key].placeholders() for v, (key, _) in files.items()})
@@ -5252,6 +5289,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         # no observation.state at all is a state not recorded, whatever the layout note says of its width
         no_state(ctx, note if note else StateNote(
             "Labelled from the video: the recorded state and the image frames cannot be lined up.", "layout"))
+        archive_lerobot_state(ep, ctx, df, item["row"].get("data"))
         write_atomic(ep / "context.json", ctx, indent=1, default=str)
     return ctx
 

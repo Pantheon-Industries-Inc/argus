@@ -195,7 +195,7 @@ def test_state_value_names_settle_six_joints_and_a_gripper_against_seven_joints_
         (14, "teleop_arms", j("left") + j("right"), "joints"),                        # MolmoAct2 bi_yam
         (7, "teleop_arms", pose, "ee_pose"),                                           # lerobot_franka_finger_tactile
         (7, "handheld_gripper", pose, "ee_pose"),                                       # FastUMI
-        (14, "teleop_arms", [f"position_{i}" for i in range(14)], "joints"),           # HABIT, names say neither
+        (14, "teleop_arms", [f"position_{i}" for i in range(14)], "none"),             # Indexed positions
         (7, "teleop_arms", [f"fr3_left_joint{i}" for i in range(1, 8)], "none"),       # a Franka arm, no gripper
         (7, "handheld_gripper", ["x", "y", "z", "qx", "qy", "qz", "qw"], "none"),       # a quaternion and no opening
         (7, "teleop_arms", ["gripper"] + [f"joint{i}" for i in range(1, 7)], "none"),  # the gripper first
@@ -246,7 +246,7 @@ def test_a_lerobot_state_named_as_a_pose_is_read_as_a_pose_on_an_arm_rig(tmp_pat
     joints named with no gripper make no state at all."""
     for names, want in ((POSE_NAMES, "ee_pose"), ([f"fr3_joint{i}" for i in range(1, 8)], "none")):
         root = tmp_path / want / "named"
-        _lerobot_v21(root, dims=7)
+        expected = _lerobot_v21(root, dims=7)
         info = json.loads((root / "meta" / "info.json").read_text())
         info["features"]["observation.state"]["names"] = names
         (root / "meta" / "info.json").write_text(json.dumps(info))
@@ -254,7 +254,10 @@ def test_a_lerobot_state_named_as_a_pose_is_read_as_a_pose_on_an_arm_rig(tmp_pat
         rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
         ctx = json.loads((out / "episode_000000" / "context.json").read_text())
         assert rc == 0 and ctx["state_kind"] == want, (names, ctx["state_kind"])
-        assert (out / "episode_000000" / "state.npz").exists() == (want != "none")
+        with np.load(out / "episode_000000" / "state.npz") as arrays:
+            assert arrays["state"].dtype == expected.dtype and arrays["state"].tobytes() == expected.tobytes()
+        if want == "none":
+            assert ctx["recorded_state_archive"]["meaning"].startswith("Unsupported native rows")
 
 
 def test_video_views_episode_reads_the_state_by_its_value_names(tmp_path):
