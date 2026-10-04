@@ -4202,7 +4202,7 @@ def test_invalid_episode_tasks_keep_valid_recorded_table_tasks_and_note_sources(
             assert 'camera loose' in prompt and '123' in prompt
 
 
-def test_projected_task_notes_keep_recorder_fields_and_timing_without_duplicate_task_text(tmp_path):
+def _projected_task_notes_keep_recorder_fields_and_timing_without_duplicate_task_text(tmp_path):
     import copy
     import json
     from prepare.lerobot_labels import retain_metadata
@@ -4228,6 +4228,12 @@ def test_projected_task_notes_keep_recorder_fields_and_timing_without_duplicate_
     assert 'camera loose' in ctx['uploader_annotation'] and 'operator held the camera' in ctx['uploader_annotation']
     assert 'publisher verdict sentinel' not in ctx['uploader_annotation']
     assert 'publisher verdict sentinel' in json.dumps(ctx['recorded_uploader_notes'])
+
+
+def test_projected_task_notes_keep_recorder_fields_and_timing_without_duplicate_task_text():
+    # Data Review invokes reader tests as plain functions.
+    with tempfile.TemporaryDirectory() as t:
+        _projected_task_notes_keep_recorder_fields_and_timing_without_duplicate_task_text(Path(t))
 
 
 def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
