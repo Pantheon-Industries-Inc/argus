@@ -9,8 +9,8 @@ stop it when the runs are done; a final `board build` then applies what follow l
 hand pose).
 
 Every five minutes it also tags the kinds of object not tagged yet as rigid or deformable (board/materials.py, about
-a cent for a whole run) and names the main verb of each task sentence not named yet (board/verbs.py, about a dollar
-for a 100 hour run); both need the labelling keys in the environment and skip the step without them.
+a cent for a whole run) and gives each new task verb the name it is counted under (board/verbs.py, also about a
+cent); both need the labelling keys in the environment and skip the step without them.
 
 A long recording is labelled in parts (label/pieces.py); follow puts it on the board once its last part is in,
 stitched exactly as the finished review job stitches it. While a run labels, a manifest entry's "run" must name the
@@ -166,9 +166,9 @@ def main() -> int:
             tagged_at = time.time()
             if k:
                 print(f"{time.strftime('%H:%M:%S')} tagged {k} kinds of object for ${usd:.4f}", flush=True)
-            n, usd = verbs.name(a.board)
+            n, usd = verbs.merge(a.board)
             if n:
-                print(f"{time.strftime('%H:%M:%S')} named the verb of {n} tasks for ${usd:.4f}", flush=True)
+                print(f"{time.strftime('%H:%M:%S')} merged {n} task verbs for ${usd:.4f}", flush=True)
         if a.once:
             return 0
         time.sleep(a.every)

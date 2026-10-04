@@ -1,41 +1,44 @@
-"""The main verb of each task: one verb for what the hands do to the object, for the home page.
+"""One name for each task verb, for the home page's verb counts and diversity chart.
 
-    python -m board verbs BOARD              names the verb of every task sentence not named yet (board/follow.py runs it)
+    python -m board verbs BOARD              merges every verb not merged yet (board/follow.py runs it as labels land)
 
-A task's first word is often a word that fits any relocation ("Move the bracelet beside the book", "Pick up the block,
-pass it to the left gripper, and place it beside the cup"), and the events' own verbs (approach, grasp, lower,
-release) are the steps of nearly every task. Which verb a sentence is about is a reading of the whole sentence, so a
-small model is asked once per distinct task sentence, never per episode, with no frames: the block above is handed
-over, "Use the sponge to push the orange" is push, and a task that only takes an object from one place to another is
-move. Sentences go in batches; the answers are kept in BOARD/verbs.json and a sentence once named is never asked again.
-A sentence the model leaves out, or a failed call, stays unnamed and is asked on the next run; until then the home page
-counts its first verb (board/home.py task_kind).
+The labeler names each task's predominant action in one or two words (label/prompts.py: an episode's task_verb, a
+session task's verb). Freeform tasks are named in the labeler's own words, so the same action can come back as
+"pick" and "pick up", or "flip" and "turn over". A small model is given the list of distinct verbs, never the tasks,
+and gives each the name its action is counted under, choosing among names already in use where one fits. A verb once
+merged is never asked again, so the names stay fixed as labels land; the answers are kept in BOARD/verbs.json, and
+merging every verb of a 100 hour run costs about a cent. A verb the model leaves out, or a failed call, counts under
+its own words until the next run.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 
 MODEL = "openai/gpt-6-sol"
 REASONING = "low"
-MAX_TOKENS = 32000
-BATCH = 300                 # sentences per call
+MAX_TOKENS = 16000
+BATCH = 300                 # verbs per call
 PROMPT = (
-    "Each numbered line below is one task a person did with two hand-held grippers at a table, as its label wrote "
-    "it. Give the verb that names most specifically what the hands do to the object in that task, in its base form "
-    'and lower case, one or two words (for example "hand over", "stand", "flip", "fold", "stack", "insert", "push", '
-    '"slide", "squeeze", "pour", "wipe", "open", "lay"). Choose the action the task is about, not its first step '
-    'or how it ends: in "Pick up the block, pass it to the left gripper, and place it beside the cup" the block is '
-    'handed over, in "Use the sponge to push the orange left" the hands push, and in "Turn the card face down and '
-    'set it on the table" they flip it. When the task only takes an object from one place to another, with nothing '
-    'more said about how, the verb is "move". Reply with JSON only: {"verbs": {"<line number>": "<verb>"}}.\n\n')
+    "Each line below is a verb a labeler used to name the main action of a task in tabletop and household "
+    "manipulation footage. Several lines can name the same action in different words ('pick' and 'pick up', 'stand' "
+    "and 'stand up', 'turn over' and 'flip'). Give each line the one name, in one or two words, that its action "
+    "should be counted under, so that lines naming the same action get the same name and lines naming different "
+    "actions keep different names. Choose among the lines' own words, and use a name already in use (listed first) "
+    "whenever it names the same action. Reply with JSON only: "
+    '{"verbs": {"<line>": "<name>"}}, every line spelled exactly as given.\n\n')
 
 
-def task_sentences(qa: Path) -> set:
-    """Every task sentence in BOARD/qa: a session's tasks, or the episode's prompt where an episode is one task."""
+def verb_of(raw) -> str | None:
+    """A verb as the labeler wrote it, lower case and single spaced; None when it wrote none."""
+    v = " ".join(str(raw).lower().split()) if isinstance(raw, str) else ""
+    return v or None
+
+
+def verbs_seen(qa: Path) -> set:
+    """Every verb the labeler wrote in BOARD/qa: each session task's verb, or the episode's task_verb."""
     out = set()
     for p in qa.glob("*.json"):
         try:
@@ -44,11 +47,11 @@ def task_sentences(qa: Path) -> set:
             continue
         if not isinstance(d, dict):
             continue
-        tasks = [t for t in d.get("tasks") or [] if isinstance(t, dict) and t.get("task")]
-        for s in ([t["task"] for t in tasks] if tasks else [d.get("episode_prompt")]):
-            s = " ".join(str(s or "").split())
-            if s:
-                out.add(s)
+        tasks = [t for t in d.get("tasks") or [] if isinstance(t, dict)]
+        for raw in ([t.get("verb") for t in tasks] if tasks else [d.get("task_verb")]):
+            v = verb_of(raw)
+            if v:
+                out.add(v)
     return out
 
 
@@ -60,62 +63,54 @@ def load(path: Path) -> dict:
     return {"verbs": d.get("verbs") or {}, "cost_usd": float(d.get("cost_usd") or 0.0)}
 
 
-def load_verbs(path: Path) -> dict:
-    """{task sentence: verb} from BOARD/verbs.json."""
+def load_names(path: Path) -> dict:
+    """{verb as written: the name it is counted under} from BOARD/verbs.json."""
     return load(path)["verbs"]
 
 
-def _clean(v) -> str | None:
-    words = re.findall(r"[a-z][a-z'-]*", str(v or "").lower())
-    return " ".join(words) if 1 <= len(words) <= 2 else None
-
-
-def name(board: Path, timeout: int = 300, limit: int | None = None) -> tuple[int, float]:
-    """Names the verb of the task sentences in BOARD/qa that BOARD/verbs.json lacks, at most LIMIT of them.
-    Returns (sentences named, dollars spent)."""
+def merge(board: Path, timeout: int = 180) -> tuple[int, float]:
+    """Gives a name to each verb in BOARD/qa that BOARD/verbs.json lacks. Returns (verbs merged, dollars spent)."""
     from label.harness import _cost, call_model, get_keys
     path = board / "verbs.json"
     have = load(path)
-    todo = sorted(s for s in task_sentences(board / "qa") if s not in have["verbs"])[:limit]
+    todo = sorted(verbs_seen(board / "qa") - set(have["verbs"]))
     keys = get_keys()
     if not todo or not keys:
         return 0, 0.0
-    named, spent = 0, 0.0
+    merged, spent = 0, 0.0
     for i in range(0, len(todo), BATCH):
         part = todo[i:i + BATCH]
-        text = PROMPT + "\n".join(f"{j + 1}. {s}" for j, s in enumerate(part))
+        in_use = sorted(set(have["verbs"].values()))
+        text = PROMPT + (f"Names already in use: {', '.join(in_use)}\n\n" if in_use else "") + "\n".join(part)
         try:
             resp = call_model([{"type": "text", "text": text}], MODEL, REASONING, keys[0], max_tokens=MAX_TOKENS,
                               timeout=timeout)
             msg = resp["choices"][0]["message"]["content"]
             ans = json.loads(msg[msg.find("{"):msg.rfind("}") + 1]).get("verbs") or {}
-            usd = _cost(resp.get("usage") or {})
-        except Exception as e:      # unnamed sentences are asked again next time
-            print(f"verbs: a call failed ({str(e)[:160]}); its sentences stay unnamed")
+            spent += _cost(resp.get("usage") or {})
+        except Exception as e:      # verbs left unmerged are asked again next time
+            print(f"verbs: a call failed ({str(e)[:160]}); its verbs stay unmerged")
             continue
-        for j, s in enumerate(part):
-            v = _clean(ans.get(str(j + 1)))
-            if v:
-                have["verbs"][s] = v
-                named += 1
-        # saved after every batch, so a stopped run keeps what it paid for
-        spent += usd
-        have["cost_usd"] = round(have["cost_usd"] + usd, 6)
-        have["model"] = MODEL
-        tmp = path.with_name(".verbs.json.tmp")
-        tmp.write_text(json.dumps(have, indent=1, sort_keys=True))
-        os.replace(tmp, path)
-    return named, spent
+        for v in part:
+            name = verb_of(ans.get(v))
+            if name and len(name.split()) <= 2:
+                have["verbs"][v] = name
+                merged += 1
+    have["cost_usd"] = round(have["cost_usd"] + spent, 6)
+    have["model"] = MODEL
+    tmp = path.with_name(".verbs.json.tmp")
+    tmp.write_text(json.dumps(have, indent=1, sort_keys=True))
+    os.replace(tmp, path)
+    return merged, spent
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(prog="python -m board verbs", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("board", type=Path, help="the board folder")
-    ap.add_argument("--limit", type=int, help="name at most this many sentences (to measure the cost first)")
     a = ap.parse_args()
-    n, usd = name(a.board, limit=a.limit)
-    print(f"named the verb of {n} task sentences for ${usd:.4f}")
+    n, usd = merge(a.board)
+    print(f"merged {n} verbs for ${usd:.4f}")
     return 0
 
 

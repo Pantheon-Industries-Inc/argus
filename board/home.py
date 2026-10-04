@@ -28,8 +28,10 @@ Kinds come from the labels' own words, never from a fixed list. An object's kind
 ("pebble container" is a container, "clear test tubes" a tube, "10 of diamonds" a card); a task is its verb and the
 kind of the first object it names ("Place the closed pebble container upright on the tray" is place container). The
 rules are simple and the same for every dataset, so the datasets compare with each other even where a rule misreads a
-name. A task's main verb is the one exception: which verb a sentence is about takes reading the whole sentence, so a
-small model names it once per sentence (board/verbs.py), and until it has, the sentence's first verb counts.
+name. A task's verb is the one the labeler names for it (an episode's task_verb, a session task's verb,
+label/prompts.py): its predominant action in one or two words, never move. Verbs naming the same action ("pick" and
+"pick up") are counted under one name that a small model gives each distinct verb (board/verbs.py). A label written
+before the labeler named verbs counts the task sentence's first verb.
 
 plan.json, written when a run starts:
     {"datasets": {"umi_scripted": {"name": "Scripted", "episodes": 6224, "seconds": 88474.8}, ...}}
@@ -51,7 +53,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from board.verbs import load_verbs
+from board.verbs import load_names, verb_of
 
 PACE_WINDOW_S = 3600        # the pace is the footage labelled in the last hour of labelling
 PACE_MIN_LABELS = 3         # fewer labels than this in the window give no pace and no time left
@@ -159,9 +161,12 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
     else:
         task_rows = [(task_kind(d.get("episode_prompt") or "", names),
                       ((d.get("completion") or {}).get("task_completed") or "").lower())]
-    # each subtask's sentence, spaced as board/verbs.py keys it, for the task's main verb
-    sentences = [" ".join(str(t["task"]).split()) for t in tasks] if tasks else \
-        [" ".join(str(d.get("episode_prompt") or "").split())]
+    # each subtask's main verb: the labeler's (label/prompts.py), or the task sentence's first verb in a label written
+    # before it named one. The events' own verbs (approach, grasp, lower, release) are the steps of nearly every task,
+    # so they tell tasks apart poorly and are not counted.
+    named = [t.get("verb") for t in tasks] if tasks else [d.get("task_verb")]
+    verbs = Counter(verb_of(v) or (k.split()[0] if k else None) for v, (k, _) in zip(named, task_rows))
+    verbs.pop(None, None)
     issues = [i for i in (d.get("data_issues") or []) if isinstance(i, dict) and i.get("issue")
               and counts("data_issues", i)]
     mistakes = [i for i in (d.get("operator_mistakes") or []) if isinstance(i, dict) and i.get("issue")
@@ -187,7 +192,7 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
         "object_kinds": sorted({k for ks in sub_kinds for k in ks}),
         "subtask_objects": sub_kinds,
         "mistake_subtasks": mistake_subtasks,
-        "sentences": sentences,
+        "verbs": dict(verbs),
         "tasks": task_rows,
         "issue_tags": [tag("data_issues", i) for i in issues],
         "mistake_tags": [tag("operator_mistakes", i) for i in mistakes],
@@ -299,24 +304,20 @@ def _projected(datasets: list, pds: dict) -> float | None:
     return round(total, 0)
 
 
-def with_verbs(rows: list, verbs: dict) -> list:
-    """Each row with its subtasks' main verbs counted: the verb board/verbs.py named for the task sentence, or the
-    sentence's first verb until it is named. The events' own verbs (approach, grasp, lower, release) are the steps of
-    nearly every task, so they tell tasks apart poorly and are not counted."""
+def _named(rows: list, names: dict) -> list:
+    """Each row with its verbs counted under the names board/verbs.py gave them; a verb not merged yet keeps its own."""
     out = []
     for r in rows:
         c = Counter()
-        for s, (k, _) in zip(r["sentences"], r["tasks"]):
-            v = verbs.get(s) or (k.split()[0] if k else None)
-            if v:
-                c[v] += 1
+        for v, n in r["verbs"].items():
+            c[names.get(v) or v] += n
         out.append({**r, "verbs": dict(c)})
     return out
 
 
-def stats(rows: list, plan: dict, now: float, tags: dict | None = None, verbs: dict | None = None) -> dict:
+def stats(rows: list, plan: dict, now: float, tags: dict | None = None, names: dict | None = None) -> dict:
     tags = tags or {}
-    rows = with_verbs(rows, verbs or {})
+    rows = _named(rows, names or {})
     pds = (plan or {}).get("datasets") or {}
     by_ds = defaultdict(list)
     for r in rows:
@@ -448,8 +449,8 @@ def home_json(here: Path, plan_path: Path, counts, name=None) -> tuple:
         sig_files = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in here.glob("*.json")))
     except OSError:
         sig_files = ()
-    tags_path, verbs_path = plan_path.with_name("materials.json"), plan_path.with_name("verbs.json")
-    plan_m = tuple(p.stat().st_mtime_ns if p.exists() else None for p in (plan_path, tags_path, verbs_path))
+    tags_path, names_path = plan_path.with_name("materials.json"), plan_path.with_name("verbs.json")
+    plan_m = tuple(p.stat().st_mtime_ns if p.exists() else None for p in (plan_path, tags_path, names_path))
     sig = (hashlib.sha1(repr(sig_files).encode()).hexdigest(), plan_m)
     now = time.time()
     with _LOCK:
@@ -460,7 +461,7 @@ def home_json(here: Path, plan_path: Path, counts, name=None) -> tuple:
         plan = json.loads(plan_path.read_text())
     except (OSError, ValueError):
         plan = {}
-    raw = json.dumps(stats(_summaries(here, counts, name), plan, now, load_tags(tags_path), load_verbs(verbs_path)),
+    raw = json.dumps(stats(_summaries(here, counts, name), plan, now, load_tags(tags_path), load_names(names_path)),
                      separators=(",", ":")).encode()
     gz = gzip.compress(raw, compresslevel=5)
     etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'

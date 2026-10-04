@@ -309,7 +309,7 @@ def normalize_timeline(labels: dict) -> dict:
 LIST_FIELDS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues", "operator_mistakes",
                "tasks", "contacts", "contacts_missing")
 DICT_FIELDS = ("scene", "completion", "goal_alignment")
-TEXT_FIELDS = ("task_summary", "performance_review", "viewpoint")
+TEXT_FIELDS = ("task_summary", "task_verb", "performance_review", "viewpoint")
 TIME_FIELDS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
                "recovered_at_s")
 

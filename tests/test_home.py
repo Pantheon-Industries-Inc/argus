@@ -58,9 +58,16 @@ def test_objects_and_mistakes_count_per_subtask(tmp_path):
     assert by["freeform"]["outcomes"]["success"] == 1 and by["freeform"]["outcomes"]["failure"] == 1
     # verbs are the tasks' own (place, fold, stack), one per subtask, never the events' grasp or lift
     assert sorted(k for k, *_ in s["total"]["top_verbs"]) == ["fold", "place", "stack"]
-    # a verb board/verbs.py named for a sentence wins over its first word
-    named = home.stats(rows, {}, time.time(), verbs={"Place the pebble container on the tray.": "move"})
-    assert sorted(k for k, *_ in named["total"]["top_verbs"]) == ["fold", "move", "stack"]
+    # the labeler's own verb for a task wins over the sentence's first word
+    d = json.loads((qa / "session.json").read_text())
+    d["tasks"][0]["verb"] = "Fold in half"
+    d["tasks"][1]["verb"] = "stack"
+    named = home.summarize(qa / "session.json", d, _counts_all)
+    assert named["verbs"] == {"fold in half": 1, "stack": 1}
+    # verbs naming one action count under the one name board/verbs.py gave them
+    merged = home.stats([named, {**named, "file": "b.json", "verbs": {"stack up": 2}}], {}, time.time(),
+                        names={"stack up": "stack", "fold in half": "fold"})
+    assert dict((k, n) for k, n, _ in merged["total"]["top_verbs"]) == {"stack": 3, "fold": 1}
 
 
 def test_the_numbers_keep_their_version_until_a_label_changes(tmp_path):
