@@ -105,7 +105,9 @@ def task_kind(sentence: str, names: list) -> str | None:
     of the episode's object names starts, or the first word that is one of their kinds ("Lift clear tubes from the
     rack" with an object "clear test tubes" is lift tube). Only the verb when it names none of them."""
     words = _TOKEN.findall(str(sentence or "").lower())
-    while len(words) > 1 and (words[0] in _SKIP_VERB or words[0] == "to"):
+    # "Gently place the cup" is place: a leading adverb (a word of six letters or more ending in ly) is skipped
+    while len(words) > 1 and (words[0] in _SKIP_VERB or words[0] == "to"
+                              or (len(words[0]) > 5 and words[0].endswith("ly"))):
         words = words[1:]
     if not words:
         return None

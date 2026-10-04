@@ -14,6 +14,7 @@ def test_kinds_come_from_the_labels_own_words():
     names = ["clear test tubes", "handled comb"]
     assert home.task_kind("Lift clear tubes from the rack and reseat them.", names) == "lift tube"
     assert home.task_kind("Try to stand the handled comb upright.", names) == "stand comb"
+    assert home.task_kind("Gently lift the clear test tubes.", names) == "lift tube"
 
 
 def _episode(qa: Path, name: str, **d):
