@@ -61,7 +61,7 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
      "advancing" | "wasteful" | "idle", <progress float 0..1>, "<notes, e.g. what makes this uncertain, or null>"]
   ],
   "task_summary": "<one imperative sentence describing the whole task>",
-  "task_verb": "<the predominant action of the whole task in one or two words, e.g. 'fold', 'stack', 'flip', 'stand up', 'hand over', 'insert', 'pour', 'wipe', 'place'. Name the action itself: never a word any motion satisfies ('move', 'reposition', 'manipulate', 'handle') and never a fine detail or a phrase ('adjust grip', 'nudge left'). A task that only takes an object somewhere else is 'place' when the object is lifted and set down, 'slide' or 'push' when it stays on the surface>",
+  "task_verb": "<the predominant action of the whole task in one or two words, e.g. 'fold', 'stack', 'flip', 'stand up', 'lean', 'rotate', 'tighten', 'hand over', 'insert', 'pour', 'wipe'. Name the action itself: never a word any motion satisfies ('move', 'reposition', 'manipulate', 'handle') and never a fine detail or a phrase ('adjust grip', 'nudge left'). When the task names its action ('tap the marble', 'lean the sponge', 'tighten the clip'), that is usually the verb. 'place' is the verb only when nothing is done to the object but lifting it and setting it down somewhere else, and 'slide' or 'push' when it is taken somewhere else without being lifted>",
   "key_events": [
     {"t_s": <float>,
      "label": "<the task-critical milestone in plain words>",
@@ -299,7 +299,7 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
   "tasks": [
     {"start_s": <float>, "end_s": <float>,
      "task": "<the unit of work the person set out to do, open-vocab, e.g. 'pour water into the kettle', 'chop the onion'>",
-     "verb": "<the predominant action of this task in one or two words, e.g. 'fold', 'stack', 'flip', 'stand up', 'hand over', 'insert', 'pour', 'wipe', 'place'. Name the action itself: never a word any motion satisfies ('move', 'reposition', 'manipulate', 'handle') and never a fine detail or a phrase ('adjust grip', 'nudge left'). A task that only takes an object somewhere else is 'place' when the object is lifted and set down, 'slide' or 'push' when it stays on the surface>",
+     "verb": "<the predominant action of this task in one or two words, e.g. 'fold', 'stack', 'flip', 'stand up', 'lean', 'rotate', 'tighten', 'hand over', 'insert', 'pour', 'wipe'. Name the action itself: never a word any motion satisfies ('move', 'reposition', 'manipulate', 'handle') and never a fine detail or a phrase ('adjust grip', 'nudge left'). When the task names its action ('tap the marble', 'lean the sponge', 'tighten the clip'), that is usually the verb. 'place' is the verb only when nothing is done to the object but lifting it and setting it down somewhere else, and 'slide' or 'push' when it is taken somewhere else without being lifted>",
      "objects": ["<the objects this task acts on>"],
      "outcome": "success" | "partial" | "failure",
      "success_predicate": "<the end-state that means THIS unit of work is done>",
@@ -856,7 +856,7 @@ emit them as a top-level "tasks" list, in time order:
   "tasks": [
     {"start_s": <float>, "end_s": <float>,
      "task": "<the unit of work the demonstrator set out to do, open-vocab, as an imperative, e.g. 'stack the three red blocks', 'put the lid on the box'>",
-     "verb": "<the predominant action of this task in one or two words, e.g. 'fold', 'stack', 'flip', 'stand up', 'hand over', 'insert', 'pour', 'wipe', 'place'. Name the action itself: never a word any motion satisfies ('move', 'reposition', 'manipulate', 'handle') and never a fine detail or a phrase ('adjust grip', 'nudge left'). A task that only takes an object somewhere else is 'place' when the object is lifted and set down, 'slide' or 'push' when it stays on the surface>",
+     "verb": "<the predominant action of this task in one or two words, e.g. 'fold', 'stack', 'flip', 'stand up', 'lean', 'rotate', 'tighten', 'hand over', 'insert', 'pour', 'wipe'. Name the action itself: never a word any motion satisfies ('move', 'reposition', 'manipulate', 'handle') and never a fine detail or a phrase ('adjust grip', 'nudge left'). When the task names its action ('tap the marble', 'lean the sponge', 'tighten the clip'), that is usually the verb. 'place' is the verb only when nothing is done to the object but lifting it and setting it down somewhere else, and 'slide' or 'push' when it is taken somewhere else without being lifted>",
      "objects": ["<the objects this task acts on>"],
      "outcome": "success" | "partial" | "failure",
      "success_predicate": "<the end-state that means THIS unit of work is done>",

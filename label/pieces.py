@@ -401,7 +401,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
         else:
             comp = lab.get("completion") or {}
             L["tasks"].append({"start_s": round(t0, 3), "end_s": round(t1, 3), "task": summ or f"Part {i}",
-                               "verb": lab.get("task_verb"), "objects": [], "outcome": (comp.get("task_completed") or "unclear"),
+                               "verb": lab.get("task_verb"), "objects": [],
+                               "outcome": (comp.get("task_completed") or "unclear"),
                                "success_predicate": comp.get("success_predicate") or "",
                                "completed_at_s": comp.get("completed_at_s"), "note": comp.get("reason") or ""})
         u = r.get("usage") or {}
