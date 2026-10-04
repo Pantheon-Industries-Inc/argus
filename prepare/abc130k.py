@@ -145,8 +145,8 @@ def prepare_one(ep_path: str, raw_root: Path, out_root: Path, force: bool, keep_
     return "ok"
 
 
-# an uploaded MCAP in this layout (a scene camera, both wrist cameras, both arms) is read by this adapter
-UPLOAD = "mcap"
+# Uploads use structural MCAP fields. Published preparation and sampling stay available here.
+UPLOAD = None
 
 
 def recognizes(topics: list[str]) -> bool:

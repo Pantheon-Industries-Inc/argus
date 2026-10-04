@@ -19,7 +19,7 @@ Accepted uploads, in the order they are recognised:
    recognizes by its columns goes through that adapter (the prepare/*.py that declare UPLOAD = "lerobot": HABIT).
    Complete named arm and scalar gripper columns are joined structurally by the generic reader.
 2. MCAP, one file per episode. A layout a dataset adapter recognizes goes through that adapter (the
-   prepare/*.py that declare UPLOAD = "mcap", found by upload_adapters: ABC-130k and RealOmin with their
+   prepare/*.py that declare UPLOAD = "mcap", found by upload_adapters: RealOmin with its
    robot state, Gen-HumanEgo with its forward camera, goal and timed steps). Any other layout is read for
    its cameras (every compressed-image or compressed-video channel), its depth image channels (each with the camera
    whose topic it shares), its arm joints on a teleoperated rig (joint_state: any channel whose messages carry a joint
@@ -6413,7 +6413,7 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: fl
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "remux",
+NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "lerobot_labels", "mcap_pose", "remux",
                 "signal_alignment", "state_notes", "videos", "camera_clock"}
 
 
@@ -6941,7 +6941,8 @@ def _join_gripper(groups: list[dict], q: np.ndarray | None = None) -> list[dict]
              "fields": arm["fields"] | grip["fields"]}]
 
 
-def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: list | None = None) -> dict:
+def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: list | None = None,
+                       *, capture_clock: bool = False) -> dict:
     """{key: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or None,
     "topic": its channel}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and
     text are not read. A channel's rows are grouped by the names their messages give (name_group), each in its group's
@@ -6975,14 +6976,18 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
                         if ch.topic not in found:
                             skip.add(ch.topic)        # not a joint channel (health, status, poses)
                         continue
-                    c = found.setdefault(ch.topic, {"groups": NameSets(), "rows": []})
+                    c = found.setdefault(ch.topic, {"groups": NameSets(), "rows": [], "clocks": set(), "clock_errors": []})
+                    stamp, error = mcap_capture_stamp(m) if capture_clock else (None, None)
+                    c["clocks"].add("capture" if stamp is not None else "arrival")
+                    if error:
+                        c["clock_errors"].append(error)
                     i, row = name_group(c["groups"], _joint_names(m, len(row)), row)
                     if i is None:
                         continue                      # a channel of more name sets than an arm has: not read here
                     if i == len(c["rows"]):
                         c["rows"].append({"t": [], "pos": [], "fields": set()})
                     r = c["rows"][i]
-                    r["t"].append(msg.log_time / 1e9)
+                    r["t"].append((stamp if stamp is not None else msg.log_time) / 1e9)
                     r["pos"].append(row)
                     r["fields"] |= _joint_fields(m)
             except Exception:
@@ -7006,7 +7011,8 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
         for g in groups:
             if len(g["t"]) > 1:
                 s = {"t": g["t"], "pos": g["pos"], "names": g["names"], "topic": topic,
-                     "field": next((k for k, _ in sorted(g["fields"], key=str) if k in JOINT_KEYS), "joints")}
+                     "field": next((k for k, _ in sorted(g["fields"], key=str) if k in JOINT_KEYS), "joints"),
+                     "clocks": c["clocks"], "clock_errors": c["clock_errors"]}
                 if g.get("dropped"):
                     s["dropped"], s["dropped_widths"] = g["dropped"], sorted(g["dropped_widths"])
                 if apart:
@@ -7252,7 +7258,7 @@ def bookkeeping_why(topic: str, schema: str) -> str | None:
     return BOOKKEEPING_NOTE if BOOKKEEPING_SCHEMA.search(schema or "") or BOOKKEEPING_TOPIC.search(topic) else None
 
 
-def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> Signals:
+def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, capture_clock: bool = False) -> Signals:
     """{name: (len(q), values) array} of every numeric field these MCAP files record on channels that are not cameras
     or text, sampled at the recorded message nearest each anchor frame time q (seconds, the files' log-time clock).
     used {topic: fields already read, or None for the whole channel} keeps out what the reader already shows as the
@@ -7284,7 +7290,8 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                     if ch.id not in decs:
                         decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
                     try:
-                        nums = _numbers(decs[ch.id](msg.data)) if decs[ch.id] else {}
+                        decoded = decs[ch.id](msg.data) if decs[ch.id] else None
+                        nums = _numbers(decoded) if decoded is not None else {}
                     except Exception:
                         nums = {}
                     for field, (vals, was_set, names, shape) in list(nums.items()):
@@ -7311,7 +7318,8 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
                         r = rows.setdefault((ch.topic, field, i),
                                             {"t": [], "v": [], "d": len(vals), "set": False, "names": names,
                                              "shape": shape, "topic": ch.topic, "kind": kind})
-                        r["t"].append(msg.log_time / 1e9)
+                        stamp, _ = mcap_capture_stamp(decoded) if capture_clock else (None, None)
+                        r["t"].append((stamp if stamp is not None else msg.log_time) / 1e9)
                         r["v"].append(vals)
                         r["set"] |= was_set
             except Exception:
@@ -7418,7 +7426,40 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None) -> 
     return out
 
 
-def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, StateNote | None]:
+def compose_mcap_arms(streams: dict, q: np.ndarray, clock: str) -> dict:
+    """Join one six value arm and its separately recorded scalar end effector on the camera clock."""
+    out = dict(streams)
+    for role in (False, True):
+        for side in ("left", "right"):
+            candidates = [k for k in streams if side_of(_topic(streams, k)) == side
+                          and bool(ACTION_TOPIC.search(_topic(streams, k))) == role]
+            arms = [k for k in candidates if streams[k]["pos"].shape[1] == 6
+                    and re.search(r"(^|[/_.-])arm([/_.-]|$)", _topic(streams, k), re.I)]
+            grips = [k for k in candidates if streams[k]["pos"].shape[1] == 1
+                     and re.search(r"(^|[/_.-])(ee|gripper)([/_.-]|$)", _topic(streams, k), re.I)]
+            if len(arms) != 1 or len(grips) != 1:
+                continue
+            arm, grip = arms[0], grips[0]
+            parts = [streams[arm], streams[grip]]
+            if any(p.get("clock_errors") or p.get("clocks") != {clock}
+                   or (np.diff(p["t"]) <= 0).any() for p in parts):
+                continue
+            placed = [fill_rows(q, p["t"], p["pos"]) for p in parts]
+            if any(gap for _, gap in placed):
+                continue
+            names = (parts[0]["names"] + (parts[1]["names"] or [_topic(streams, grip)])) \
+                if parts[0]["names"] else None
+            if state_layout(7, "teleop_arms", names)[0] != "joints":
+                continue
+            components = {_topic(streams, key): streams[key].get("fields") or
+                          {streams[key]["field"]} for key in [arm, grip]}
+            out[arm] = {**streams[arm], "t": np.asarray(q), "pos": np.concatenate([a for a, _ in placed], axis=1),
+                        "names": names, "components": components}
+            del out[grip]
+    return out
+
+
+def joint_state(streams: dict, q: np.ndarray, *, clock: str | None = None) -> tuple[np.ndarray | None, np.ndarray | None, StateNote | None]:
     """(state, action, note): the arms' joints and grippers interpolated onto the anchor camera's frame times q (the
     same clock as the streams), 7 values per arm, left arm first; the leader or command channels, when they match, as
     the action. None with a note when the streams are not a layout the checks read ("layout") or an arm does not
@@ -7427,6 +7468,11 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     if not st:
         return None, None, None
     order = joint_state_order(st)
+    invalid = [st[s] for s in order if streams[st[s]].get("clock_errors") or
+               (clock and streams[st[s]].get("clocks", {clock}) != {clock})]
+    if invalid:
+        return None, None, StateNote("Labelled from the cameras because recorded capture stamps are invalid or "
+                                     "do not establish the camera clock for " + ", ".join(invalid) + ".", "assumed_clock")
     if "only" in order and len(order) > 1:
         return None, None, StateNote("Labelled from the cameras, because the recorded arm channels do not say "
                                      "which arm is which.", "layout")
@@ -7474,7 +7520,8 @@ def joint_state(streams: dict, q: np.ndarray) -> tuple[np.ndarray | None, np.nda
     state = np.concatenate([r for r, _ in rows], axis=1)
     action = None
     if all(s in act and streams[act[s]]["pos"].shape[1] == JOINT_DIMS and covers(act[s])
-           and coarse_rows(streams[act[s]]["t"])[1] is None for s in order):
+           and coarse_rows(streams[act[s]]["t"])[1] is None and not streams[act[s]].get("clock_errors")
+           and (not clock or streams[act[s]].get("clocks", {clock}) == {clock}) for s in order):
         cmd = [fill(act[s])[0] for s in order]
         action = None if any(c is None for c in cmd) else np.concatenate(cmd, axis=1)
     return state, action, None
@@ -7562,6 +7609,11 @@ def state_fields(streams: dict, state, action) -> dict:
         topic = _topic(streams, t)
         if t in third or (action is None and ACTION_TOPIC.search(topic)):
             continue
+        if s.get("components"):
+            if t in read:
+                for component, fields in s["components"].items():
+                    out.setdefault(component, set()).update(fields)
+            continue
         if "fields" not in s:
             out[topic] = set(JOINT_KEYS) | set(GRIPPER_KEYS)
         elif t in read:
@@ -7614,6 +7666,106 @@ def _field(msg, key, binary: bool = False):
             return base64.b64decode(v)          # JSON messages carry bytes as base64
         return v
     return getattr(msg, key, None)
+
+
+def mcap_capture_fields(decoded) -> dict | None:
+    """Keep the declared scalar stamp fields even when they cannot establish a capture clock."""
+    fields = {str(name): value for name, value, _ in _msg_items(decoded)}
+    stamp = fields.get("timestamp")
+    if stamp is None and "header" in fields:
+        stamp = _field(fields["header"], "stamp")
+    if stamp is None and "stamp" in fields:
+        stamp = fields["stamp"]
+    if stamp is None:
+        return None
+    return {str(name): value for name, value, _ in _msg_items(stamp) if isinstance(value, (int, float, str, bool))}
+
+
+def mcap_capture_stamp(decoded) -> tuple[int | None, str | None]:
+    """Read explicitly structured capture stamps without interpreting an unlabelled numeric clock."""
+    values = mcap_capture_fields(decoded)
+    if values is None:
+        return None, None
+    seconds = next((values[k] for k in ("seconds", "sec", "secs") if k in values), None)
+    nanos = next((values[k] for k in ("nanos", "nanosec", "nsec", "nsecs") if k in values), None)
+    if seconds is None or nanos is None or isinstance(seconds, (bool, np.bool_)) or isinstance(nanos, (bool, np.bool_)) \
+            or not isinstance(seconds, (int, np.integer)) or not isinstance(nanos, (int, np.integer)) \
+            or not 0 <= nanos < 1_000_000_000:
+        return None, "The declared capture timestamp is not integral seconds and nanoseconds in range."
+    total = int(seconds) * 1_000_000_000 + int(nanos)
+    if not np.iinfo(np.int64).min < total <= np.iinfo(np.int64).max:
+        return None, "The declared capture timestamp is outside the retained integer clock range."
+    return total, None
+
+
+def retain_mcap_fields(path: Path, ep: Path, ctx: dict, *, archive_name="recorded_mcap_fields.npz") -> None:
+    """Retain native numeric samples and distinct integer capture arrival and publish clocks before placement."""
+    from mcap.reader import make_reader
+    metadata = []
+    with open(path, "rb") as fh:
+        try:
+            metadata = [{"name": m.name, "metadata": dict(m.metadata)} for m in make_reader(fh).iter_metadata()]
+        except Exception:
+            pass
+    ctx.setdefault("recorded_metadata", {})["mcap_metadata"] = metadata
+    ctx.setdefault("source", {})["recorded_file"] = str(path.resolve())
+    rows, decs, factories = {}, {}, _decoders()
+    with open(path, "rb") as fh:
+        for schema, channel, msg in mcap_messages(fh, path, [t for t, _ in mcap_channels(path)]):
+            if channel.id not in decs:
+                decs[channel.id] = _decoder_for(channel.message_encoding, schema, factories)
+            try:
+                decoded = decs[channel.id](msg.data) if decs[channel.id] else None
+            except Exception:
+                decoded = None
+            capture, error = mcap_capture_stamp(decoded)
+            row = rows.setdefault(channel.topic, {"schema": schema.name if schema else None,
+                                  "log_ns": [], "publish_ns": [], "capture_ns": [], "capture_valid": [],
+                                  "fields": {}, "errors": [], "text": [], "capture_fields": []})
+            index = len(row["log_ns"])
+            row["log_ns"].append(msg.log_time)
+            row["publish_ns"].append(msg.publish_time)
+            row["capture_ns"].append(capture if capture is not None else np.iinfo(np.int64).min)
+            row["capture_valid"].append(capture is not None)
+            row["capture_fields"].append(mcap_capture_fields(decoded))
+            if error:
+                row["errors"].append({"message_index": index, "what": error})
+            text = _field(decoded, "data")
+            if isinstance(text, str) and TEXT_TOPIC.search(channel.topic):
+                row["text"].append({"message_index": index, "text": text})
+            for field, (values, _, names, shape) in _numbers(decoded).items():
+                group = row["fields"].setdefault((field, len(values)), {"indices": [], "values": [], "names": [], "shape": shape})
+                group["indices"].append(index)
+                group["values"].append(values)
+                group["names"].append(names)
+    arrays, inventory = {}, []
+    for i, (topic, row) in enumerate(sorted(rows.items())):
+        entry = {"topic": topic, "schema": row["schema"], "fields": {}, "field_details": [],
+                 "capture_errors": row["errors"], "text": row["text"], "capture_fields": row["capture_fields"]}
+        for name in ("log_ns", "publish_ns", "capture_ns", "capture_valid"):
+            key = f"channel{i}_{name}"
+            arrays[key] = np.asarray(row[name], dtype=bool if name == "capture_valid" else np.int64)
+            entry[name] = key
+        stamps = arrays[entry["capture_ns"]] if all(row["capture_valid"]) else arrays[entry["log_ns"]]
+        if len(stamps) > 1:
+            delta = np.diff(stamps) / 1e6
+            median = float(np.median(delta))
+            ctx.setdefault("stream_checks", {}).setdefault("streams", {})[topic] = {
+                "n": len(stamps), "median_dt_ms": round(median, 2), "max_dt_ms": round(float(delta.max()), 1),
+                "n_gaps": int((delta > 1.5 * median).sum()), "n_near_duplicate_stamps": int((delta < 1).sum()),
+                "clock": "capture" if all(row["capture_valid"]) else "arrival"}
+        for j, ((field, width), group) in enumerate(sorted(row["fields"].items())):
+            key, indices = f"channel{i}_field{j}", f"channel{i}_field{j}_indices"
+            arrays[key], arrays[indices] = np.asarray(group["values"], dtype=np.float64), np.asarray(group["indices"], dtype=np.int64)
+            entry["fields"][field] = key if field not in entry["fields"] else [entry["fields"][field], key]
+            entry["field_details"].append({"field": field, "width": width, "array": key, "message_indices": indices,
+                                           "names": group["names"], "shape": group["shape"]})
+        inventory.append(entry)
+    ctx.update(recorded_mcap_fields=archive_name, mcap_field_inventory=inventory)
+    np.savez(ep / ctx["recorded_mcap_fields"], **arrays)
+    goals = {m["metadata"].get("task_name") for m in metadata if m["metadata"].get("task_name")}
+    if not ctx.get("instruction") and len(goals) == 1:
+        ctx.update(instruction=goals.pop(), instruction_note="The MCAP metadata records this task name.")
 
 
 def _decoders():
@@ -7757,6 +7909,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
     camera_damage: list = []
     capture_ns: dict[str, list[int]] = {}
+    clock_kinds, clock_errors = {}, []
     ep.mkdir(parents=True, exist_ok=True)
     with open(item["file"], "rb") as fh:
         try:
@@ -7771,6 +7924,12 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     undecodable.add(f"{ch.topic} ({ch.message_encoding})")
                     continue
                 dec = decs[ch.id](msg.data)
+                capture_stamp, stamp_error = mcap_capture_stamp(dec)
+                stamp = capture_stamp if capture_stamp is not None else int(msg.log_time)
+                if ch.topic in view_of_topic or ch.topic in unshown_of or ch.topic in depth_of:
+                    clock_kinds.setdefault(ch.topic, set()).add("capture" if capture_stamp is not None else "arrival")
+                    if stamp_error:
+                        clock_errors.append((ch.topic, stamp_error))
                 if ch.topic in depth_of:
                     if t0 is None:
                         continue                  # depth before the first colour frame has no frame to go with
@@ -7779,13 +7938,13 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         dw = dwriters.get(ch.topic)
                         if dw is None:
                             dw = dwriters[ch.topic] = DepthWriter(ep / f"depth_{depth_of[ch.topic]}.mkv")
-                        dw.add((int(msg.log_time) - t0) / 1e9, got[0], got[1])
+                        dw.add((stamp - t0) / 1e9, got[0], got[1])
                     continue
                 if ch.topic in unshown_of and t0 is None:
                     continue                      # before the first frame the model is shown: no clock to place it on
                 if ch.topic in view_of_topic or ch.topic in unshown_of:
                     if ch.topic in view_of_topic:
-                        t0 = int(msg.log_time) if t0 is None else t0      # every camera on the recording's one clock
+                        t0 = stamp if t0 is None else t0
                     w = writers.get(ch.topic)
                     if w is None:
                         out_mp4 = ep / (f"{view_of_topic[ch.topic]}.mp4" if ch.topic in view_of_topic
@@ -7794,15 +7953,15 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                                                             else str(_field(dec, "format") or "").lower())
                     before = len(w.pts)
                     if ch.topic in pictured:
-                        w.add_image((int(msg.log_time) - t0) / 1e9, depth_picture(depth_image(dec), ch.topic,
+                        w.add_image((stamp - t0) / 1e9, depth_picture(depth_image(dec), ch.topic,
                                                                                     depth_rng))
                     elif ch.topic in raw_topics:
                         # a frame raw_image cannot read is a frame not decoded (FrameWriter bad), never skipped silently
-                        w.add_image((int(msg.log_time) - t0) / 1e9, raw_image(dec))
+                        w.add_image((stamp - t0) / 1e9, raw_image(dec))
                     else:
-                        w.add((int(msg.log_time) - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
+                        w.add((stamp - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
                     if len(w.pts) > before:
-                        capture_ns.setdefault(ch.topic, []).append(int(msg.log_time))
+                        capture_ns.setdefault(ch.topic, []).append(stamp)
                 else:
                     d = _field(dec, "data")
                     add_text(texts, n_text, ch.topic, int(msg.log_time),
@@ -7832,6 +7991,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     files = {v: (t, ep / f"{v}.mp4") for v, t in vmap.items()}
     extra = {"task_label": [item["name"]], "source": {"format": "mcap (cameras and text channels)", "file": item["name"],
                                                       "unused_cameras": unused}}
+    camera_clocks = {kind for topic in vmap.values() for kind in clock_kinds.get(topic, [])}
+    camera_clock = next(iter(camera_clocks)) if len(camera_clocks) == 1 else None
+    extra["source"]["camera_clock"] = camera_clock or "mixed capture and arrival stamps"
+    for topic, error in clock_errors:
+        add_issue(extra, "capture_timestamp_invalid", error, camera=topic)
     for t in missing:
         add_issue(extra, "camera_not_decodable", f"No frame of the camera {t} could be decoded, so it is not shown.",
                   camera=t)
@@ -7850,7 +8014,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 anchor_topic = files[me.order_views(files)[0]][0]
                 # Match the shown cameras' recorder clock normalization. Original integer stamps stay separate.
                 origin_ns = capture_ns[anchor_topic][0]
-                recorded = stamps.astype(np.float64) / 1e9 - float(origin_ns) / 1e9
+                recorded = (stamps - int(origin_ns)) / 1e9
                 shown, note = presentation_clock(recorded)
                 if note:
                     clock_file = Path(name).stem + "_times.npz"
@@ -7890,7 +8054,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if notes:
         set_uploader_notes(extra, {t: x for t, x in notes.items()})
     if t0 is not None:
-        extra["clock_origin_s"] = t0 / 1e9   # the recording's log time at the clips' zero
+        extra["clock_origin_s"] = t0 / 1e9
     # the arms' joints, on the cameras' clock, when the file records them (joint_state)
     state = action = note = None
     prs = {v: probe(p) for v, (_, p) in files.items()}
@@ -7900,17 +8064,17 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     repeated = [v for v, (topic, _) in files.items() if len(capture_ns.get(topic, [])) > 1
                 and (np.diff(capture_ns[topic]) == 0).any()]
     real = None
+    paired = all(len(capture_ns.get(topic, [])) == len(prs[v]["pts"]) for v, (topic, _) in files.items())
+    if paired:
+        real = {v: (np.asarray(capture_ns[topic], dtype=np.int64) - t0) / 1e9 for v, (topic, _) in files.items()}
+        extra["recorded_camera_ns"] = "recorded_camera_ns.npz"
+        np.savez(ep / extra["recorded_camera_ns"],
+                 **{v: np.asarray(capture_ns[topic], dtype=np.int64) for v, (topic, _) in files.items()})
+        q = np.asarray(capture_ns[files[me.order_views(files)[0]][0]], dtype=np.float64) / 1e9
+        for d in depth.values():
+            dp = probe_depth(Path(d["path"]))
+            d["real"] = dp["pts"].astype(np.float64) * float(dp["time_base"])
     if repeated:
-        paired = all(len(capture_ns.get(topic, [])) == len(prs[v]["pts"]) for v, (topic, _) in files.items())
-        if paired:
-            real = {v: np.asarray(capture_ns[topic], dtype=np.float64) / 1e9 for v, (topic, _) in files.items()}
-            extra["recorded_camera_ns"] = "recorded_camera_ns.npz"
-            np.savez(ep / extra["recorded_camera_ns"],
-                     **{v: np.asarray(capture_ns[topic], dtype=np.int64) for v, (topic, _) in files.items()})
-            q = real[me.order_views(files)[0]]
-            for d in depth.values():
-                dp = probe_depth(Path(d["path"]))
-                d["real"] = t0 / 1e9 + dp["pts"].astype(np.float64) * float(dp["time_base"])
         for v in repeated:
             add_issue(extra, "camera_timestamp_repeated", f"{files[v][0]} has distinct frames sharing a recorded "
                       "timestamp; the encoded PTS are separated so every frame decodes, "
@@ -7929,14 +8093,18 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         # an arm state only when every arm the recording and its sensor files may hold was read on its clock
         # (state_blockers), as beside videos
         lost: list = []
-        streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q, lost)
+        streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q, lost, capture_clock=True)
+        streams = compose_mcap_arms(streams, q, camera_clock) if camera_clock else streams
         bad = unreadable_sensors(unplaced) + damaged_files(lost)
         others = "the recording's other files" if 1 + len(by_clock) + len(assumed) + len(unplaced) > len(bad) else None
         blocked = state_blockers(bad, assumed_arms(assumed, streams), others, unplaced_arms(unplaced, streams))
-        state, action, note = joint_state(streams, q) if not blocked else (None, None, blocked)
+        if not blocked and (clock_errors or camera_clock is None):
+            blocked = StateNote("Labelled from the cameras because their declared capture clocks are invalid or mixed "
+                                "with arrival stamps. Precise arm alignment was not inferred.", "assumed_clock")
+        state, action, note = joint_state(streams, q, clock=camera_clock) if not blocked else (None, None, blocked)
         used = state_fields(streams, state, action)
     # every other number the file records, under its own name (mcap_signals)
-    signals = mcap_signals([item["file"]] + sensor_mcaps, q, used)
+    signals = mcap_signals([item["file"]] + sensor_mcaps, q, used, capture_clock=True)
     if rig == "teleop_arms":
         signals.left_out += joint_left_out(streams, state, action)
     if sensor_h5s:
@@ -7952,6 +8120,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     motion = [t for t in motion if t not in shown_topics]            # kept as signals, so shown to the model
     if state is not None:
         extra["source"]["state"] = "joint channels"
+        extra["state_layout_note"] = ("Recorded sided arm positions and scalar end effector positions use the "
+                                      "existing seven value arm layout. Units and physical calibration were not inferred.")
         record_joint_state_identity(extra, streams)
     elif note:
         no_state(extra, note)
@@ -7976,7 +8146,22 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if item.get("fixed_window_s"):
         extra["collection_note"] = packaging_note(item["fixed_window_s"])
         extra["packaging"] = {"fixed_window_s": item["fixed_window_s"]}
+    retain_mcap_fields(item["file"], ep, extra)
+    if camera_clock and not clock_errors:
+        anchor_stamps = np.asarray(capture_ns[files[me.order_views(files)[0]][0]], dtype=np.int64)
+        for view, (topic, _) in files.items():
+            if view == me.order_views(files)[0] or not capture_ns.get(topic):
+                continue
+            stamps = np.asarray(capture_ns[topic], dtype=np.int64)
+            offsets = np.abs(stamps[nearest(stamps, anchor_stamps)] - anchor_stamps) / 1e6
+            extra["stream_checks"]["streams"][topic].update(pair_offset_ms_max=round(float(offsets.max()), 1),
+                                                            pair_offset_ms_median=round(float(np.median(offsets)), 2))
+    for i, path in enumerate(sensor_mcaps):
+        retained = {}
+        retain_mcap_fields(path, ep, retained, archive_name=f"recorded_sensor_mcap{i}.npz")
+        extra.setdefault("recorded_sensor_fields", []).append({"source": str(path), **retained})
     return video_views_episode(ep, files, rig, dataset, extra, shared_clock=True, prs=prs, real=real,
+                               real_origin_s=t0 / 1e9 if real else None,
                                state=state, action=action,
                                signals=signals, depth={v: d for v, d in depth.items() if v in files})
 
