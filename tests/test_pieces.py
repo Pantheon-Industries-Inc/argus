@@ -106,6 +106,33 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
 
 
 
+def test_a_task_carried_across_a_cut_is_one_task_again():
+    """Both parts report the task they were cut in. Meeting at the cut and handling the same object, the two entries
+    are one task: the first's start and description, the second's end and outcome, both entries kept. A task that
+    only happens to start at a cut, with no object in common, stays its own; a task carried across two cuts is one."""
+    t = lambda a, b, task, objs, outcome="success": {"start_s": a, "end_s": b, "task": task, "objects": objs,
+                                                      "outcome": outcome, "completed_at_s": b}
+    # the pilot's in-the-wild recording, cut at 304.833s
+    tasks = [t(190.0, 304.8, "Unfold the blanket over the bed", ["floral fleece blanket", "penguin plush"]),
+             t(304.833, 313.833, "Settle the floral blanket over the bed", ["floral blanket", "bed"]),
+             t(313.833, 326.833, "Group the three plush toys", ["penguin plush"])]
+    out = pieces.join_across_cuts(tasks, [304.833])
+    assert [(x["start_s"], x["end_s"]) for x in out] == [(190.0, 313.833), (313.833, 326.833)]
+    assert out[0]["task"] == "Unfold the blanket over the bed" and len(out[0]["joined_from"]) == 2
+    assert out[0]["completed_at_s"] == 313.833
+
+    # a new task starting at the cut, sharing no object with the one that ended there
+    apart = [t(0, 100.0, "Fold the towel", ["towel"]), t(100.2, 150, "Stack the cups", ["red cup"])]
+    assert len(pieces.join_across_cuts(apart, [100.0])) == 2
+
+    # carried across two cuts, its outcome decided in the last part
+    long = [t(0, 50.0, "Sort the blocks", ["blue block"]), t(50.1, 100.0, "Sort the blocks", ["blocks"]),
+            t(100.0, 120, "Finish sorting", ["green block"], "failure")]
+    one = pieces.join_across_cuts(long, [50.0, 100.0])
+    assert len(one) == 1 and one[0]["end_s"] == 120 and one[0]["outcome"] == "failure"
+    assert len(one[0]["joined_from"]) == 3
+
+
 def test_a_recording_with_other_signals_can_be_labelled_in_parts(tmp_path, monkeypatch):
     """A LeRobot upload with one column the reader has no slot for (a base velocity) is longer than a part: each part
     loads, carrying its own rows of the signals its context lists."""

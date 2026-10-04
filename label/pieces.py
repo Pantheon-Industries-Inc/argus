@@ -9,7 +9,9 @@ and its subtasks are the parts' tasks on its one timeline.
 
 Each part is told it is one part of a continuous recording cut at a still moment, so activity carrying across
 a cut is expected; an issue a part reports about being cut off at one of our cuts (a truncated start or end)
-describes our cut, not the recording, and is set aside with that reason. The recording's task text describes
+describes our cut, not the recording, and is set aside with that reason. A task that carries across a cut is
+reported by both parts, one ending at the cut and one starting there; when the two handle the same object they
+are joined back into one task (join_across_cuts). The recording's task text describes
 the whole recording, so a part is shown it as context, not as its goal.
 
     python -m label.pieces plan EP_DIR            # print the cuts
@@ -34,6 +36,7 @@ SEARCH = 0.3                # a cut is sought within +-30% of a part's length ar
 SMOOTH_S = 2.0              # motion is averaged over 2 s so a cut lands in a still stretch, not a still frame
 CUT_GUARD_S = 10.0          # an issue this close to one of our cuts, of a cut-off kind, describes the cut
 CUT_TAGS = ("truncat", "incomplete", "cut_off", "starts_mid", "ends_mid", "mid_task")
+JOIN_GUARD_S = 2.0          # a task ending this close to a cut, and one starting this close after it, may be one task
 
 
 def piece_max(ctx: dict) -> float:
@@ -305,10 +308,47 @@ def is_cut_artifact(iss: dict, part: int, count: int, t0: float, t1: float, cuts
     return any(abs(float(ts) - c) <= CUT_GUARD_S for c in cuts_s)
 
 
+def _heads(objects) -> set:
+    """The last word of each object name, singular: "floral fleece blanket" and "floral blanket" are both a blanket."""
+    out = set()
+    for o in objects or []:
+        words = str(o.get("name") if isinstance(o, dict) else o).lower().replace("-", " ").split()
+        if words:
+            w = words[-1]
+            out.add(w[:-1] if w.endswith("s") and not w.endswith("ss") and len(w) > 3 else w)
+    return out
+
+
+def join_across_cuts(tasks: list, cuts_s: list[float]) -> list:
+    """The recording's tasks with each task that carries across a cut made one again. Each part reports the task it
+    was cut in: the earlier part's ends at the cut, the later part's starts there. Two tasks that meet at a cut
+    (within JOIN_GUARD_S) and handle the same object are one task: it runs from the first's start to the second's
+    end, keeps the first's description (it saw the task begin), and takes the second's outcome (it saw the task
+    end). joined_from keeps every part's own entry. Tasks that meet at a cut but share no object stay apart: a new
+    task can begin exactly where we cut."""
+    tasks = sorted(tasks, key=lambda t: (t.get("start_s") or 0))
+    for c in cuts_s:
+        a = next((t for t in tasks if isinstance(t.get("end_s"), (int, float))
+                  and abs(t["end_s"] - c) <= JOIN_GUARD_S), None)
+        b = next((t for t in tasks if t is not a and isinstance(t.get("start_s"), (int, float))
+                  and abs(t["start_s"] - c) <= JOIN_GUARD_S), None)
+        if a is None or b is None or not (_heads(a.get("objects")) & _heads(b.get("objects"))):
+            continue
+        own = lambda t: {k: v for k, v in t.items() if k != "joined_from"}
+        joined = {**a, "end_s": b.get("end_s"),
+                  "objects": list(dict.fromkeys([*(a.get("objects") or []), *(b.get("objects") or [])])),
+                  "outcome": b.get("outcome") or a.get("outcome"), "completed_at_s": b.get("completed_at_s"),
+                  "note": f"Carries across the cut at {c:g}s, where the recording was labelled in two parts.",
+                  "joined_from": (a.get("joined_from") or [own(a)]) + [own(b)]}
+        tasks = [joined if t is a else t for t in tasks if t is not b]
+    return tasks
+
+
 def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     """One labelling result for the whole recording from its parts' results [(part context, part result), ...]
     in order. Times are shifted onto the recording's clock; lists are joined; each part's task and outcome
-    become one entry of tasks; issues describing our cuts are set aside in _excluded with the reason."""
+    become one entry of tasks, and a task carried across a cut becomes one again (join_across_cuts); issues
+    describing our cuts are set aside in _excluded with the reason."""
     from label import episode as me
     ep_dir = Path(ep_dir)
     ep = me.load(ep_dir)
@@ -380,6 +420,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
                        "reason": f"a long recording labelled in {count} parts; each part's outcome is under tasks"}
     for k in ("timeline",):
         L[k].sort(key=lambda s: (s.get("start_s") or 0))
+    L["tasks"] = join_across_cuts(L["tasks"], cuts_s)
     first = parts[0][1]
     ctx = ep["context"]
     cfg = dict(first.get("config") or {})
