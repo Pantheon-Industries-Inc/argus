@@ -13,6 +13,10 @@ def _owner(context, episode_id=None):
             or (context.get("data_dictionary") or {}).get("episode_id"))
 
 
+def _pointer_key(value):
+    return value.replace("~1", "/").replace("~0", "~")
+
+
 def _bound(context, field, binding):
     path = binding.get("context_path")
     if field.get("kind") == "signal":
@@ -30,13 +34,14 @@ def _bound(context, field, binding):
         name = (context.get("source") or {}).get(kind) or kind
         return path == kind and field.get("name") == name and binding.get("file") == "state.npz" and binding.get("key") == kind
     if field.get("kind") == "camera":
-        return isinstance(path, str) and path.startswith("cameras/") and path.split("/", 1)[1] in (context.get("cameras") or {})
+        return (isinstance(path, str) and path.startswith("cameras/")
+                and _pointer_key(path.split("/", 1)[1]) in (context.get("cameras") or {}))
     if not isinstance(path, str):
         return False
     value = context
     try:
         for part in path.split("/"):
-            value = value[int(part)] if isinstance(value, list) else value[part]
+            value = value[int(part)] if isinstance(value, list) else value[_pointer_key(part)]
     except (KeyError, IndexError, TypeError, ValueError):
         return False
     return True

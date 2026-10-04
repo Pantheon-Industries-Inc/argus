@@ -372,3 +372,61 @@ def test_numeric_metadata_never_materialises_a_full_float64_array(tmp_path, monk
     assert field["shape"] == [131_073] and field["dtype"] == "float64"
     assert field["summary"]["mean"] == pytest.approx(65_536)
     assert field["summary"]["minimum"] == 0 and field["summary"]["maximum"] == 131_072
+
+
+@pytest.mark.parametrize('keys', [('/mnt/private_a/episodes.jsonl', '/mnt/private_b/episodes.jsonl'),
+                                  (r'C:\private_a\episodes.jsonl', r'C:\private_b\episodes.jsonl')])
+def test_metadata_path_keys_keep_private_names_out_of_descriptors_and_keep_distinct_bindings(tmp_path, keys):
+    from label import dictionary as dd
+    from label.dictionary_context import apply_context, field_interpretation
+    ep = episode(tmp_path, 'one', [], extra={'recorded_metadata': {
+        key: {'gain': [1, 3], 'rows': [{'text': 'PRIVATE ROW TEXT', 'image': 'PRIVATE IMAGE DATA'}]}
+        for key in keys}})
+    context = json.loads((ep / 'context.json').read_text())
+    original = json.dumps(context, sort_keys=True)
+    inv = dd.inventory([ep])
+    fields = [field for field in inv['fields'] if field['name'].endswith('.gain')]
+    assert len(fields) == 2 and len({field['id'] for field in fields}) == 2
+    assert len({field['name'] for field in fields}) == len({field['source'] for field in fields}) == 2
+    assert all('episodes.jsonl' in field['name'] for field in fields)
+    text = dd.request(inv)[0]['text']
+    assert 'private_a' not in text and 'private_b' not in text
+    assert 'PRIVATE ROW TEXT' not in text and 'PRIVATE IMAGE DATA' not in text
+    assert 'image_url' not in text
+    for field in fields:
+        assert field['summary']['mean'] == 2 and len(field['summary']) == 5
+    record = {'schema': 1, 'inventory_digest': inv['digest'], 'inventory': inv, 'status': 'success',
+              'entries': {field['id']: {'meaning': 'Recorded gain', 'role': 'calibration', 'provenance': 'machine'}
+                          for field in fields}}
+    reviewed = apply_context(context, record, {fields[0]['id']: {'meaning': 'Human reviewed gain', 'role': ''}})
+    assert field_interpretation(reviewed, fields[0]['name'], fields[0]['kind']) == {
+        'meaning': 'Human reviewed gain', 'role': '', 'provenance': 'human'}
+    assert field_interpretation(reviewed, fields[1]['name'], fields[1]['kind'])['provenance'] == 'machine'
+    assert json.dumps(context, sort_keys=True) == original
+
+
+def test_pointer_escaping_keeps_slash_tilde_and_ordinary_metadata_keys_exact(tmp_path):
+    from label import dictionary as dd
+    from label.dictionary_context import apply_context, field_interpretation
+    ep = episode(tmp_path, 'one', [], extra={
+        'calibration/sensor~0': {'a/b': {'tilde~field': [11, 13]}, 'a~1b': {'tilde~field': [17, 19]}},
+        'calibration': {'ordinary': [23, 25]}})
+    context = json.loads((ep / 'context.json').read_text())
+    inv = dd.inventory([ep])
+    fields = {field['bindings'][0]['context_path']: field for field in inv['fields'] if field.get('summary')}
+    paths = {'calibration~1sensor~00/a~1b/tilde~0field': 12,
+             'calibration~1sensor~00/a~01b/tilde~0field': 18, 'calibration/ordinary': 24}
+    assert all(path in fields for path in paths)
+    for path, mean in paths.items():
+        assert fields[path]['summary']['mean'] == mean
+    entries = {fields[path]['id']: {'meaning': 'Original metadata', 'role': 'calibration', 'provenance': 'machine'}
+               for path in paths}
+    record = {'schema': 1, 'inventory_digest': inv['digest'], 'inventory': inv, 'status': 'success', 'entries': entries}
+    changed = fields['calibration~1sensor~00/a~1b/tilde~0field']
+    untouched = fields['calibration~1sensor~00/a~01b/tilde~0field']
+    reviewed = apply_context(context, record, {changed['id']: {'meaning': 'Human selected exact slash key'}})
+    assert field_interpretation(reviewed, changed['name'], 'calibration')['provenance'] == 'human'
+    assert field_interpretation(reviewed, untouched['name'], 'calibration')['provenance'] == 'machine'
+    ordinary = fields['calibration/ordinary']
+    assert field_interpretation(reviewed, ordinary['name'], 'calibration')['meaning'] == 'Original metadata'
+    assert context['calibration/sensor~0']['a/b']['tilde~field'] == [11, 13]

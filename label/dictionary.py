@@ -148,6 +148,10 @@ def _metadata_numbers(value):
     return shape, dtype, numbers
 
 
+def _pointer_key(value):
+    return str(value).replace("~", "~0").replace("/", "~1")
+
+
 def inventory(episodes: list[Path]) -> dict:
     """Keep every prepared field, with distinct identities for incompatible recorded descriptors."""
     fields, aggregates = {}, {}
@@ -190,12 +194,14 @@ def inventory(episodes: list[Path]) -> dict:
         add(ep, meta.get("name", key), kind, shape, dtype, meta, path,
             file=file, key=key, numbers=numbers, limitation=limitation)
 
-    def retained(ep, value, name, path, kind):
+    def retained(ep, value, name, path, kind, public_path):
         if isinstance(value, dict):
             if not value:
-                add(ep, name, kind, [], "object", {}, path)
+                add(ep, name, kind, [], "object", {"source": "context.json#" + public_path}, path)
             for key, child in sorted(value.items()):
-                retained(ep, child, name + "." + key, path + "/" + key, kind)
+                public_key = _relative(key, ep)
+                retained(ep, child, name + "." + public_key, path + "/" + _pointer_key(key), kind,
+                         public_path + "/" + _pointer_key(public_key))
             return
         numbers = None
         if isinstance(value, (int, float, bool, list)):
@@ -209,7 +215,7 @@ def inventory(episodes: list[Path]) -> dict:
                 shape, dtype = [len(value)] if isinstance(value, list) else [], "metadata"
         else:
             shape, dtype = [], "text" if isinstance(value, str) else "metadata"
-        add(ep, name, kind, shape, dtype, {}, path, numbers=numbers)
+        add(ep, name, kind, shape, dtype, {"source": "context.json#" + public_path}, path, numbers=numbers)
 
     for ep in sorted(map(Path, episodes), key=lambda p: p.name):
         ctx = json.loads((ep / "context.json").read_text())
@@ -265,8 +271,8 @@ def inventory(episodes: list[Path]) -> dict:
             meta = {**original, **meta}
             if "source" not in meta:
                 meta["source"] = meta.get("camera_key") or meta.get("packed") or "sources.json#" + view
-            add(ep, meta.get("name") or view, "camera", [meta.get("height"), meta.get("width")],
-                meta.get("pix_fmt"), meta, "cameras/" + view)
+            add(ep, meta.get("name") or _relative(view, ep), "camera", [meta.get("height"), meta.get("width")],
+                meta.get("pix_fmt"), meta, "cameras/" + _pointer_key(view))
         for key, value in sorted(ctx.items()):
             if key in DERIVED_CONTEXT:
                 continue
@@ -274,10 +280,13 @@ def inventory(episodes: list[Path]) -> dict:
                 continue
             kind = "calibration" if any(word in key for word in ("calibration", "intrinsic", "extrinsic")) else \
                 "annotation" if any(word in key for word in ("annotation", "instruction", "task", "subtask", "quality", "notes")) else "bookkeeping"
-            retained(ep, value, key, key, kind)
+            public_key = _relative(key, ep)
+            retained(ep, value, public_key, _pointer_key(key), kind, _pointer_key(public_key))
         for key, value in sorted(source.items()):
             if key not in ("state", "action", "bookkeeping"):
-                retained(ep, _relative(value, ep), "source." + key, "source/" + key, "bookkeeping")
+                public_key = _relative(key, ep)
+                retained(ep, _relative(value, ep), "source." + public_key, "source/" + _pointer_key(key),
+                         "bookkeeping", "source/" + _pointer_key(public_key))
     for ident, parts in aggregates.items():
         combined = _Numbers()
         for part in parts:
