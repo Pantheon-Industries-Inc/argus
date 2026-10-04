@@ -1477,6 +1477,14 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .se-sources { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10px; margin-top: 5px; opacity: .85; }
 .se-action, .se-timing { display: block; margin-top: 5px; font-size: 11px; line-height: 1.4; }
 .se-timing { opacity: .8; }
+.se-measure { display: block; font: 600 26px var(--mono); margin: 4px 0; }
+.se-measure small { font: 400 11px var(--sans); }
+.se-meter { display: block; height: 4px; background: rgba(128,128,128,.25); border-radius: 3px; overflow: hidden; }
+.se-meter > span { display: block; height: 100%; background: #a9c6cb; }
+.se-phases { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.se-phases > span { flex: 1 0 100%; font-size: 11px; color: var(--fg-3); }
+.se-phases button { display: grid; gap: 5px; max-width: 180px; text-align: left; }
+.se-phases strong { font: 600 17px var(--mono); }
 .sensor-evidence button { color: var(--fg); background: transparent; border: 1px solid var(--border-strong);
   border-radius: var(--r-sm); padding: 6px 9px; font: 500 11px var(--sans); cursor: pointer; }
 .sensor-evidence button:hover { border-color: var(--fg-2); }
@@ -4255,6 +4263,11 @@ function snDecode(doc) {
   for (let i = 1; i < doc.frames; i++) { ms += doc.times.dur + tr.next(); ft[i] = ms / 1000; }
   out.t = new Float64Array(n);
   for (let i = 0; i < n; i++) out.t[i] = ft[Math.min(doc.frames - 1, i * stride)];
+  const captures = out.playback && out.playback.captures;
+  // Use the retained exact anchor clock for phase boundaries when it agrees with the rounded sensor clock.
+  out.sampleTimes = captures && captures.length === doc.frames
+    && Array.from(out.t).every((t, i) => Number.isFinite(captures[i * stride]) && Math.abs(t - captures[i * stride]) <= .0011)
+    ? Float64Array.from(out.t, (_, i) => captures[i * stride]) : out.t;
   for (const s of doc.signals) {
     if (s.no_reading) { out.none.push(s); continue; }
     if (s.constant) { out.constant.push(s); continue; }
@@ -4686,14 +4699,99 @@ function sensorEvidenceOverlayHtml(e) {
     + `<span>${esc(e.visual)}</span></span>${e.detail ? `<span class="se-action">${esc(e.detail)}</span>` : ''}`
     + (e.timing ? `<span class="se-timing">${esc(e.timing)}</span>` : '');
 }
+function sensorReadingAvailable(s, i) {
+  // Strength maps a missing reading to zero; use retained source availability instead.
+  const raw = s.vals ? s.vals.v : s.map;
+  const dims = s.vals ? s.vals.dims : s.dims;
+  if (raw && dims > 0) {
+    for (let j = 0; j < dims; j++) if (!Number.isFinite(raw[i * dims + j])) return false;
+    return true;
+  }
+  return !!s.act && Number.isFinite(s.act[i]);
+}
+function sensorProfiles(d, D) {
+  if (!D || !D.t || !D.t.length) return [];
+  const groups = new Map();
+  for (const c of d.contacts || []) {
+    const names = [...new Set(c.signals || [])].sort();
+    if (!names.length) continue;
+    const signals = names.map(name => D.signals.find(s => s.name === name && s.str));
+    if (signals.some(s => !s)) continue;
+    const key = [c.hand || '', ...names].join('|');
+    if (!groups.has(key)) groups.set(key, {hand: c.hand, names, signals, peak: 0, contacts: []});
+    const p = groups.get(key);
+    p.contacts.push(c);
+    if (typeof c.peak_strength === 'number' && Number.isFinite(c.peak_strength))
+      p.peak = Math.max(p.peak, c.peak_strength);
+  }
+  const out = [];
+  for (const p of groups.values()) {
+    p.t = D.sampleTimes || D.t;
+    p.assumed = p.contacts.some(c => !!c.aligned_by)
+      || p.signals.some(s => !!s.aligned_by || !!s.camera_aligned_by);
+    p.label = Array.from(groups.values()).filter(g => g.hand === p.hand).length > 1
+      ? p.names.join(', ').replace(/_/g, ' ').replace(/[\u2013\u2014]/g, '-') : '';
+    p.values = Array.from(D.t, (_, i) => {
+      const samples = p.signals.map(s => s.str[i]);
+      return samples.every(Number.isFinite) && p.signals.every(s => sensorReadingAvailable(s, i))
+        ? Math.max(0, samples.reduce((a, b) => a + b, 0)) : NaN;
+    });
+    for (const v of p.values) if (Number.isFinite(v)) p.peak = Math.max(p.peak, v);
+    if (!(p.peak > 0) || !p.values.some(Number.isFinite)) continue;
+    p.phases = [];
+    for (const e of p.assumed ? [] : (d.event_labels || [])) {
+      if (![p.hand, 'both'].includes(e.arm) || typeof e.t_s !== 'number' || typeof e.end_s !== 'number'
+        || !Number.isFinite(e.t_s) || !Number.isFinite(e.end_s) || e.end_s <= e.t_s) continue;
+      const values = [], total = [];
+      for (let i = 0; i < p.t.length; i++) if (p.t[i] >= e.t_s && p.t[i] < e.end_s) {
+        total.push(i); if (Number.isFinite(p.values[i])) values.push(p.values[i]);
+      }
+      if (values.length < 2) continue;
+      values.sort((a, b) => a - b);
+      const middle = values.length >> 1;
+      const median = values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+      p.phases.push({start: e.t_s, end: e.end_s, label: String(e.verb_class || 'Action').replace(/[\u2013\u2014]/g, '-'),
+        percent: Math.round(100 * median / p.peak), samples: values.length, total: total.length});
+    }
+    out.push(p);
+  }
+  return out;
+}
+function sensorProfileAt(p, t) {
+  if (!p.t.length || t < p.t[0]) return null;
+  const last = p.t.length - 1;
+  if (t > p.t[last] + (last ? p.t[last] - p.t[last - 1] : 0) + 0.001) return null;
+  let i = 0;
+  while (i < last && p.t[i + 1] <= t + 0.001) i++;
+  if (!Number.isFinite(p.values[i])) return null;
+  return {percent: Math.round(100 * p.values[i] / p.peak), sample: p.t[i]};
+}
+function sensorProfileHtml(p, t) {
+  const value = sensorProfileAt(p, t);
+  const hand = p.hand === 'left' ? 'Left' : p.hand === 'right' ? 'Right' : '';
+  return `<span class="se-headline">${hand ? hand + ' ' : ''}tactile intensity${p.label ? ' (' + esc(p.label) + ')' : ''}</span>`
+    + (p.assumed ? '<span class="se-action">Assumed timing</span>' : '')
+    + (value ? `<span class="se-measure">${value.percent}% <small>of episode peak</small></span>
+      <span class="se-meter"><span style="width:${value.percent}%"></span></span>`
+      : '<span class="se-action">No reading at this sample</span>');
+}
+function sensorPhasesHtml(profiles) {
+  return profiles.filter(p => p.phases.length).map(p => `<div class="se-phases">
+    <span>Median intensity by action${p.hand ? ' for the ' + esc(p.hand) + ' hand' : ''}${p.label ? ' (' + esc(p.label) + ')' : ''}</span>
+    ${p.phases.map(e => `<button type="button" data-phase-t="${e.start}" title="${e.samples} of ${e.total} retained samples">
+      <span>${esc(e.label)}</span><strong>${e.percent}%</strong>
+      <span class="se-meter"><span style="width:${e.percent}%"></span></span></button>`).join('')}
+    <span class="se-action">Percent of this episode's peak tactile signal. Relative intensity, without force calibration.</span>
+  </div>`).join('');
+}
 function sensorEvidenceHtml(E, depth) {
   if (!E.contacts.length && !E.moments.length && !depth.length) return '';
-  const checked = E.contacts.filter(c => !['Not visually checked', 'No visual verdict'].includes(c.visual)).length;
   return `<div class="sensor-evidence" id="sensor-evidence">
-    ${E.contacts.length || E.moments.length ? `<div class="se-summary"><strong>Tactile evidence</strong>
-      <span>${checked} of ${E.contacts.length} contacts checked against video</span></div>
+    ${E.contacts.length || E.moments.length ? `<div class="se-summary"><strong>Tactile measurements</strong>
+      <span>Relative intensity</span></div>
       <div id="sensor-evidence-now" class="se-current"></div>
-      ${E.moments.length ? `<div class="se-moments" aria-label="Contact changes">${E.moments.map(m =>
+      <div id="sensor-phase-profile"></div>
+      ${E.moments.some(m => ['dip', 'missing'].includes(m.kind)) ? `<div class="se-moments" aria-label="Contact changes">${E.moments.filter(m => ['dip', 'missing'].includes(m.kind)).map(m =>
         `<button type="button" data-evidence-t="${m.t}" title="${esc(m.headline)}"><span>${fmtT(m.t)}</span>`
         + `<span>${esc(m.kind === 'dip' ? 'Signal dip' : m.kind === 'begin' ? 'Contact begins'
           : m.kind === 'end' ? 'Contact ends' : 'Unrecorded grasp')}</span></button>`).join('')}</div>` : ''}` : ''}
@@ -4704,10 +4802,10 @@ function sensorEvidenceHtml(E, depth) {
     <button type="button" id="sensor-evidence-inspect">Inspect evidence</button>
   </div>`;
 }
-function setupSensorEvidence(E, seek, on, inspectContact) {
+function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null) {
   const overlay = document.getElementById('sensor-overlay'), now = document.getElementById('sensor-evidence-now');
   const details = document.getElementById('sensor-evidence-details');
-  let current = null, currentTime = 0;
+  let current = null, currentTime = 0, profiles = [], loaded = false;
   const inspect = () => {
     if (current && current.index >= 0) inspectContact(current.index, currentTime);
     if (details) { details.open = true; details.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
@@ -4727,15 +4825,28 @@ function setupSensorEvidence(E, seek, on, inspectContact) {
     document.getElementById('sensor-depth-mode').hidden = !!showing;
   });
   let signature = null;
-  return {sync(t) {
-    const e = activeSensorEvidence(E, t), html = sensorEvidenceOverlayHtml(e);
+  const wire = {sync(t) {
+    const e = activeSensorEvidence(E, t);
+    const measurements = profiles.map(p => sensorProfileHtml(p, t)).join('');
+    const html = measurements + (e && e.priority >= 3 ? sensorEvidenceOverlayHtml(e) : '');
     current = e;
     currentTime = t;
     if (html === signature) return;
     signature = html;
-    if (overlay) { overlay.innerHTML = html; overlay.classList.toggle('active', !!e); }
-    if (now) now.innerHTML = html || '<span>No contact signal at the playhead</span>';
+    if (overlay) { overlay.innerHTML = html; overlay.classList.toggle('active', !!html); }
+    if (now) now.innerHTML = html || `<span>${loaded ? 'No retained tactile intensity samples' : 'Loading tactile measurements'}</span>`;
   }};
+  if (d && file && E.contacts.length) loadSensors(file).then(D => {
+    if (file !== _activeFile || !details || !document.body.contains(details)) return;
+    profiles = sensorProfiles(d, D); loaded = true; signature = null;
+    const phase = document.getElementById('sensor-phase-profile');
+    if (phase) {
+      phase.innerHTML = sensorPhasesHtml(profiles);
+      for (const el of phase.querySelectorAll('[data-phase-t]')) on(el, 'click', () => seek(+el.dataset.phaseT));
+    }
+    wire.sync(currentTime);
+  });
+  return wire;
 }
 
 // ================= touch: the recording's contacts and what the model saw at each (board/build.py add_contacts) =========
@@ -6403,7 +6514,7 @@ function renderEp(d, opts) {
       Number(el.dataset.i) === idx));
   }
   let tcWire = null;            // the Touch lane and its card (setupTouch), on an episode with contacts
-  const evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); });
+  const evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile);
   const syncEvidence = t => {
     evidenceWire.sync(t);
     if (sensorOverlay && sensorOverlay.classList.contains('active')) placeTop();
