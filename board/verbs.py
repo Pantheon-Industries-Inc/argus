@@ -26,8 +26,10 @@ PROMPT = (
     "manipulation footage. Several lines can name the same action in different words ('pick' and 'pick up', 'stand' "
     "and 'stand up', 'turn over' and 'flip'). Give each line the one name, in one or two words, that its action "
     "should be counted under, so that lines naming the same action get the same name and lines naming different "
-    "actions keep different names. Choose among the lines' own words, and use a name already in use (listed first) "
-    "whenever it names the same action. Reply with JSON only: "
+    "actions keep different names. Merge only different words for one action; never fold a more specific action "
+    "into a more general or a merely similar one (laying an object flat is not placing it, tipping it over is not "
+    "leaning it), so a line with no other words for its action keeps its own. Choose among the lines' own words, and "
+    "use a name already in use (listed first) whenever it names the same action. Reply with JSON only: "
     '{"verbs": {"<line>": "<name>"}}, every line spelled exactly as given.\n\n')
 
 
