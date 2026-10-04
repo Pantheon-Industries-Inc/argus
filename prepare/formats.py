@@ -16,8 +16,8 @@ Accepted uploads, in the order they are recognised:
        packed video is kept whole, as one recording;
      - no data parquet: the episode is labelled from video.
    Cameras stored as images inside the parquet are written to H.264 at their frame times. A dataset an adapter
-   recognizes by its columns goes through that adapter (the prepare/*.py that declare UPLOAD = "lerobot": HABIT
-   and Galaxea), which knows what the columns mean.
+   recognizes by its columns goes through that adapter (the prepare/*.py that declare UPLOAD = "lerobot": HABIT).
+   Complete named arm and scalar gripper columns are joined structurally by the generic reader.
 2. MCAP, one file per episode. A layout a dataset adapter recognizes goes through that adapter (the
    prepare/*.py that declare UPLOAD = "mcap", found by upload_adapters: ABC-130k and RealOmin with their
    robot state, Gen-HumanEgo with its forward camera, goal and timed steps). Any other layout is read for
@@ -4756,6 +4756,35 @@ def missing_lerobot_state(df) -> StateNote:
                      if "observation.state" in df else
                      "Labelled from the video: the dataset records no observation.state.", "not_recorded")
 
+
+def split_lerobot_columns(df, features, prefix):
+    """Join complete explicitly sided arm and scalar gripper columns in the existing seven value layout."""
+    columns = [str(c) for c in df if str(c).startswith(prefix + ".")
+               and re.search(r"_(arm|gripper)$", str(c))]
+    if not columns:
+        return None, [], [], None
+    expected = {f"{prefix}.{side}_{part}" for side in ("left", "right") for part in ("arm", "gripper")}
+    if set(columns) - expected:
+        return None, [], [], "Split state names an unknown actor; every original column stays a signal."
+    arrays, used, groups = [], [], []
+    for side in ("left", "right"):
+        arm, gripper = f"{prefix}.{side}_arm", f"{prefix}.{side}_gripper"
+        if arm not in columns and gripper not in columns:
+            continue
+        if arm not in columns or gripper not in columns:
+            return None, [], [], "Split state has an incomplete arm and gripper group; every original column stays a signal."
+        values, opening = _cells(df[arm]), _cells(df[gripper])
+        if values is None or opening is None or values.shape[1] != 6 or opening.shape[1] != 1:
+            return None, [], [], "Split state does not have six arm values and one scalar gripper per group; " \
+                                  "every original column stays a signal without supported arm checks."
+        names = (value_names((features.get(arm) or {}).get("names"), 6) or []) + \
+                (value_names((features.get(gripper) or {}).get("names"), 1) or [])
+        groups.append((arm, names, 7))
+        arrays.extend([values, opening])
+        used.extend([arm, gripper])
+    return np.concatenate(arrays, axis=1), used, groups, None
+
+
 def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=()) -> dict:
     """hold_back: columns an adapter keeps out of the prompt (a publisher's own labels, kept to score against)."""
     r, row = item["root"], item["row"]
@@ -4783,15 +4812,28 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     # signal (state_on_frames), never dropped for one NaN frame
     state = _cells(df["observation.state"]) if df is not None and "observation.state" in df.columns else None
     action = _cells(df["action"]) if df is not None and "action" in df.columns else None
+    state_columns, action_columns, state_groups, split_note = [], [], [], None
+    if df is not None and rig == "teleop_arms":
+        if state is None:
+            state, state_columns, state_groups, split_note = split_lerobot_columns(df, feats, "observation.state")
+        if action is None:
+            action, action_columns, _, _ = split_lerobot_columns(df, feats, "action")
     tasks = list(row.get("tasks") or [])
-    if not tasks and df is not None and "task_index" in df.columns and len(df):
+    task_column = "coarse_task_index" if df is not None and "coarse_task_index" in df else "task_index"
+    if not tasks and df is not None and task_column in df.columns and len(df):
         try:
-            tasks = constant_index_task(df["task_index"], r["tasks_by_index"])
+            tasks = constant_index_task(df[task_column], r["tasks_by_index"])
         except ValueError as error:
-            metadata_failure(r, row["data"], f"task_index: {plain_error(error)}; no task was inferred")
+            metadata_failure(r, row["data"], f"{task_column}: {plain_error(error)}; no task was inferred")
     annotated = r["annotated"].get(eidx)
     extra = {"task_label": tasks or [item["name"]], "episode_index": eidx, "robot_type": r["robot_type"],
              "source": {"format": f"lerobot {r['version']}", "episode_index": eidx, "dataset_folder": r["rel"] or None}}
+    if state_groups:
+        record_state_groups(extra, state_groups)
+        extra["source"]["state_columns"] = state_columns
+        extra["source"]["action_columns"] = action_columns
+        extra["state_layout_note"] = ("Named arm vectors and scalar grippers use the existing seven value arm "
+                                      "layout in left then right order. Units and physical calibration were not inferred.")
     if annotated:
         # the coarse task stays the task label; the per-episode annotation is the goal (label/episode.py states both)
         extra["instruction"] = annotated
@@ -4801,7 +4843,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
 
     video_cams = [k for k in r["cams"] if k in row["videos"]]
     if not video_cams and r["image_cams"] and df is not None:
-        return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes)
+        return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes,
+                                      state_columns=state_columns, action_columns=action_columns)
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
     unshown_keys = list(unused)
     descs = colour_depth_views(r, row, vmap)
@@ -4818,13 +4861,15 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         unused = unused + [f"{k} (images in the data file)" for k in r["image_cams"]]
     extra["source"]["unused_cameras"] = unused
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(feats, state))
-    if state is not None and kind != "none":
+    if state is not None and kind != "none" and not state_groups:
         record_state_identity(extra, "observation.state", state_value_names(feats, state), state.shape[1])
     note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
         # no observation.state, or one with no numbers, is a state not recorded; a data file that did not come is
         # one that could not be read
         note = missing_lerobot_state(df) if df is not None else StateNote(note, "not_recorded") if note else None
+        if split_note:
+            note = StateNote(split_note, "layout")
         if row.get("data") is None:
             note = StateNote("Labelled from the video: no data file came with this episode.", "unreadable")
         if notes:
@@ -4878,7 +4923,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         lerobot_annotations(ctx, r, df, row.get("data"))
         write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
         return finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
-                              signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
+                              signals=recorded_signals(df, _used_columns(kind, state, action, state_columns,
+                                                       action_columns) | set(hold_back),
                                                        ctx["n_state_frames"], feats))
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
     # frames, so frames on the exact k/fps grid need no times; frames off it are decoded by their own pts and
@@ -4896,6 +4942,10 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
         step = Fraction(1) / Fraction(fps).limit_denominator(1000) / pr["time_base"]
         grid[v] = bool(n and step.denominator == 1 and pr["pts"][0] == 0 and
                        np.array_equal(pr["pts"], np.arange(n) * int(step)))
+        if not grid[v]:
+            add_issue(extra, "recorded_rate_mismatch", f"{key} PTS do not follow the declared {fps:g} Hz grid. "
+                      "Frames remain mapped by their recorded indices; original encoded PTS are retained separately.",
+                      camera=key)
         sources[v] = {"packed": str(Path(row["videos"][key]).resolve()), "base_s": 0.0, "n_frames": n, "camera_key": key}
         cameras[v] = camera_entry(v, key, pr, rig)
         if key in descs:
@@ -4924,7 +4974,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=())
     lerobot_annotations(ctx, r, df, row.get("data"))
     write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
     return finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
-                          signals=recorded_signals(df, _used_columns(kind, state, action) | set(hold_back),
+                          signals=recorded_signals(df, _used_columns(kind, state, action, state_columns,
+                                                   action_columns) | set(hold_back),
                                                    ctx["n_state_frames"], feats))
 
 
@@ -5029,14 +5080,14 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
     return dep, tz
 
 
-def _used_columns(kind: str, state=None, action=None) -> set:
+def _used_columns(kind: str, state=None, action=None, state_columns=(), action_columns=()) -> set:
     """The columns already read as the state and action. A state that does not fit the arm layout (kind "none") is not
     read as one, so it stays a signal the model is shown, and so does an action finish_episode does not keep (not read,
     or of another shape than the state), which had been dropped without a word."""
     if kind == "none":
         return set()
     kept = action is not None and (state is None or np.shape(action) == np.shape(state))
-    return {"observation.state"} | ({"action"} if kept else set())
+    return set(state_columns or ["observation.state"]) | (set(action_columns or ["action"]) if kept else set())
 
 
 def state_filled_issue(what: str, k: int, n: int, t0: float, t1: float) -> dict:
@@ -5100,7 +5151,8 @@ def _shown_size(p: Path) -> tuple[int, int]:
     return display.shown_size(g) if g["stored"][0] else (0, 0)
 
 
-def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra, notes) -> dict:
+def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra, notes,
+                           *, state_columns=(), action_columns=()) -> dict:
     """Cameras stored as encoded images inside the data file: each written to H.264 at its frame time."""
     r = item["root"]
     # a camera meta/info.json lists whose column is not in this episode's data file is listed, never a failure
@@ -5162,7 +5214,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         keep_container_clocks(ep, extra, {"timestamp": native}, {v: "timestamp" for v in files},
                               {"timestamp": {"source": "parquet timestamp column", "units": None}})
     kind, note = state_layout(state.shape[1] if state is not None else 0, rig, state_value_names(r["features"], state))
-    if state is not None and kind != "none":
+    if state is not None and kind != "none" and not state_columns:
         record_state_identity(extra, "observation.state", state_value_names(r["features"], state), state.shape[1])
     note = StateNote(note, "layout") if note else None
     if state is None and rig != "ego_head":
@@ -5172,7 +5224,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     for i in fixes:
         add_issue(extra, **i)
     # the table's other numbers go with the frames as they do beside videos (recorded_signals)
-    signals = recorded_signals(df, _used_columns(kind, state, action) | set(r["image_cams"]), 0, r["features"])
+    signals = recorded_signals(df, _used_columns(kind, state, action, state_columns, action_columns)
+                               | set(r["image_cams"]), 0, r["features"])
     ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals,
                               real={v: t for v in files} if coarse else None, nominal_fps=fps,
                               placeholders={v: written[key].placeholders() for v, (key, _) in files.items()})
@@ -6360,11 +6413,18 @@ def upload_adapters(kind: str) -> list:
     if kind == "video":
         return []
     import importlib
+    import ast
     import pkgutil
     import prepare
     out = []
     for m in sorted(pkgutil.iter_modules(prepare.__path__), key=lambda m: m.name):
         if m.name in NOT_ADAPTERS:
+            continue
+        path = Path(m.module_finder.path) / m.name
+        path = path / "__init__.py" if m.ispkg else path.with_suffix(".py")
+        declarations = [node.value for node in ast.parse(path.read_text()).body if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "UPLOAD" for target in node.targets)]
+        if not declarations or ast.literal_eval(declarations[-1]) != kind:
             continue
         mod = importlib.import_module(f"prepare.{m.name}")
         if getattr(mod, "UPLOAD", None) == kind:

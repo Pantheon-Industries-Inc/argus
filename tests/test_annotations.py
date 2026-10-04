@@ -325,7 +325,7 @@ def test_adapter_boundary_uses_attributed_spans_and_never_truncates_coarse_codes
     assert len(ctx['annotation_subtasks']) == 2
     assert all(s['column'] == 'task_index' and s['raw_times'] for s in ctx['annotation_subtasks'])
     assert 't1' not in ctx['annotation_subtasks'][-1]
-    assert 'computed' in ctx['uploader_annotation'] and 'approximation' in ctx['uploader_annotation']
+    assert ctx['recorded_metadata'][str(root / 'meta/info.json')]['fps'] == 15
     assert any(s['column'] == 'quality_index' and s['value'] == 7 for s in ctx['annotation_unresolved'])
     assert {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()} == originals
 

@@ -36,9 +36,8 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 
-# an uploaded LeRobot dataset with Galaxea's layout (state split per arm part, coarse and fine task indices, a quality
-# index) is read by this adapter, so its joints, timed sub-steps and quality tag come along
-UPLOAD = "lerobot"
+# Uploads use structural LeRobot fields. Published preparation and sampling stay available here.
+UPLOAD = None
 GALAXEA_COLUMNS = ("observation.state.left_arm", "observation.state.right_arm", "observation.state.left_gripper",
                    "observation.state.right_gripper", "coarse_task_index", "task_index", "quality_index")
 
