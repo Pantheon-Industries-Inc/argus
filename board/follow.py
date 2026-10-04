@@ -11,7 +11,9 @@ hand pose).
 Every five minutes it also tags the kinds of object not tagged yet as rigid or deformable (board/materials.py, about
 a cent for a whole run; it needs the labelling keys in the environment and skips the step without them).
 
-A manifest entry's "run" must name the run folder itself while it labels: RUNS/<dataset>/latest means the newest
+A long recording is labelled in parts (label/pieces.py); follow puts it on the board once its last part is in,
+stitched exactly as the finished review job stitches it. A manifest entry's "run" must name the run folder itself
+(a review job's run/) while it labels: RUNS/<dataset>/latest means the newest
 finished run. An entry may also name "clips", the clips folder of its review job: follow hard-links each new
 episode's clips into BOARD/clips, so one board serves the clips of several jobs.
 
@@ -52,9 +54,35 @@ def link_clips(src: Path, dst: Path, eid: str) -> int:
     return n
 
 
+def _stitched(job: Path, eps: Path, ep: str, out: Path):
+    """(stitched result, newest part file) for a long recording whose parts are all labelled and parsed, else None.
+    The parts are the ones its context names (label/pieces.py write_pieces); the stitch is the one a finished
+    review job runs (label/pieces.py stitch), so a followed long recording is the file the job itself would write."""
+    from label import pieces
+    try:
+        names = (json.loads((eps / ep / "context.json").read_text()).get("pieces") or {}).get("parts") or []
+    except (OSError, ValueError):
+        return None
+    files = [out / f"{n}.json" for n in names]
+    if not names or not all(f.exists() for f in files):
+        return None
+    got = []
+    for n, f in zip(names, files):
+        try:
+            r = json.loads(f.read_text())
+            pc = json.loads((job / "pieces" / n / "context.json").read_text())
+        except (OSError, ValueError):
+            return None                     # a part still being written: stitched on a later pass
+        if not r.get("parse_ok") or r.get("dry_run"):
+            return None
+        got.append((pc, r))
+    return pieces.stitch(eps / ep, got), max(files, key=lambda f: f.stat().st_mtime_ns)
+
+
 def follow_once(board: Path, seen: dict) -> int:
     """One pass over every run the manifest names: each run output not seen before (or changed since) becomes the
-    board's episode file. seen maps an output file to the (mtime, size) it was read at. Returns the labels added."""
+    board's episode file, and a long recording labelled in parts becomes one once its last part is in. seen maps an
+    output file to the (mtime, size) it was read at. Returns the labels added."""
     manifest = json.loads((board / "manifest.json").read_text())
     here = board.resolve()
     qa = board / "qa"
@@ -71,6 +99,7 @@ def follow_once(board: Path, seen: dict) -> int:
         eps = _path(entry["episodes"], here)
         pre = entry.get("file_prefix") or ""
         info = None
+        todo, longs = [], set()
         for f in sorted(out.glob("episode_*.json")):
             try:
                 st = f.stat()
@@ -78,22 +107,35 @@ def follow_once(board: Path, seen: dict) -> int:
                 continue
             if seen.get(str(f)) == (st.st_mtime_ns, st.st_size):
                 continue
+            seen[str(f)] = (st.st_mtime_ns, st.st_size)
+            if "__p" in f.stem:
+                # one part of a long recording (label/pieces.py): the recording is stitched once all its parts are in
+                longs.add(f.stem.split("__p")[0])
+                continue
             try:
                 r = json.loads(f.read_text())
             except ValueError:
-                continue                    # still being written: read on the next pass
-            seen[str(f)] = (st.st_mtime_ns, st.st_size)
+                seen.pop(str(f), None)      # still being written: read on the next pass
+                continue
             if r.get("dry_run") or r.get("parse_ok") is False:
                 continue
-            name = Path(r.get("episode_dir", f.stem)).name
+            todo.append((Path(r.get("episode_dir", f.stem)).name, r, f))
+        for ep in sorted(longs):
+            got = _stitched(run.parent, eps, ep, out)
+            if got is None:
+                for f in out.glob(f"{ep}__p*.json"):
+                    seen.pop(str(f), None)  # looked at again when its next part lands
+                continue
+            todo.append((ep, got[0], got[1]))
+        for name, r, src in todo:
             fname = (name.replace("episode_", f"episode_{pre}", 1) if pre else name) + ".json"
             try:
-                if (qa / fname).stat().st_mtime_ns >= st.st_mtime_ns:
+                if (qa / fname).stat().st_mtime_ns >= src.stat().st_mtime_ns:
                     continue                # already on the board (a restarted follow does not rewrite it)
             except OSError:
                 pass
             info = info or json.loads((run / "run.json").read_text())
-            d, _ = board_label(entry, manifest, fname, name, f, r, info, eps)
+            d, _ = board_label(entry, manifest, fname, name, src, r, info, eps)
             tmp = qa / f".{fname}.tmp"
             tmp.write_text(json.dumps(d))
             os.replace(tmp, qa / fname)

@@ -114,6 +114,8 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "success_predicate": t.get("success_predicate") or "",
             "completed_at_s": t.get("completed_at_s"),
             "note": t.get("note") or "",
+            # a task carried across one of our cuts keeps each part's own entry (label/pieces.py join_across_cuts)
+            **({"joined_from": t["joined_from"]} if t.get("joined_from") else {}),
         })
     key_events = []
     for k in labels.get("key_events") or []:
