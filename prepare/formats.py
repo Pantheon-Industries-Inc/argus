@@ -6451,7 +6451,8 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: fl
 
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
-NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "lerobot_labels", "mcap_pose", "remux",
+NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "lerobot_labels", "mcap_claims",
+                "mcap_fields", "mcap_pose", "remux",
                 "signal_alignment", "state_notes", "videos", "camera_clock"}
 
 
@@ -7920,7 +7921,14 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         raise ValueError("the file has no camera channel"
                          + (f" (its channels: {', '.join(item['topics'][:12])})" if item["topics"] else ""))
     all_topics = [t for t, _ in chan_topics]
-    vmap, unused = pick_cameras(video_topics, rig, all_topics)
+    aliases, camera_role_proof = {}, {}
+    if rig == "handheld_gripper":
+        from prepare.mcap_pose import camera_roles
+        aliases, camera_role_proof = camera_roles(item["file"], video_topics)
+    native_topics = {aliases.get(topic, topic): topic for topic in video_topics}
+    vmap, unused = pick_cameras(list(native_topics), rig, all_topics)
+    vmap = {view: native_topics[topic] for view, topic in vmap.items()}
+    unused = [native_topics.get(topic, topic) for topic in unused]
     not_colour = [t for t in vmap.values() if not_rgb(t)]
     text_topics = sorted({t for t in all_topics if TEXT_TOPIC.search(t) and t not in video_topics})
     # depth image channels, each with the camera whose topic it shares the most of (depth_partner), one per camera
@@ -8029,6 +8037,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     files = {v: (t, ep / f"{v}.mp4") for v, t in vmap.items()}
     extra = {"task_label": [item["name"]], "source": {"format": "mcap (cameras and text channels)", "file": item["name"],
                                                       "unused_cameras": unused}}
+    if rig == "handheld_gripper":
+        extra["source"]["camera_selection"] = camera_role_proof or {
+            "limitation": "No recorded actor map establishes camera sides; selected slots are presentation roles."}
     camera_clocks = {kind for topic in vmap.values() for kind in clock_kinds.get(topic, [])}
     camera_clock = next(iter(camera_clocks)) if len(camera_clocks) == 1 else None
     extra["source"]["camera_clock"] = camera_clock or "mixed capture and arrival stamps"
@@ -8141,6 +8152,17 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                                 "with arrival stamps. Precise arm alignment was not inferred.", "assumed_clock")
         state, action, note = joint_state(streams, q, clock=camera_clock) if not blocked else (None, None, blocked)
         used = state_fields(streams, state, action)
+    elif rig == "handheld_gripper":
+        from prepare.mcap_pose import pose_state
+        if clock_errors or camera_clock is None:
+            note = StateNote("Declared camera capture clocks are invalid or mixed with arrival stamps; precise pose "
+                             "alignment was not inferred.", "assumed_clock")
+        else:
+            state, used, pose_extra, limitation = pose_state([item["file"]] + sensor_mcaps, q, camera_clock)
+            extra["source"].update(pose_extra.pop("source", {}))
+            extra.update(pose_extra)
+            if limitation:
+                note = StateNote("Labelled from the cameras because " + limitation, "layout")
     # every other number the file records, under its own name (mcap_signals)
     signals = mcap_signals([item["file"]] + sensor_mcaps, q, used, capture_clock=True)
     if rig == "teleop_arms":
@@ -8157,10 +8179,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     shown_topics = {n.split(" ", 1)[0] for n in signals}
     motion = [t for t in motion if t not in shown_topics]            # kept as signals, so shown to the model
     if state is not None:
-        extra["source"]["state"] = "joint channels"
-        extra["state_layout_note"] = ("Recorded sided arm positions and scalar end effector positions use the "
-                                      "existing seven value arm layout. Units and physical calibration were not inferred.")
-        record_joint_state_identity(extra, streams)
+        if rig == "teleop_arms":
+            extra["source"]["state"] = "joint channels"
+            extra["state_layout_note"] = ("Recorded sided arm positions and scalar end effector positions use the "
+                                          "existing seven value arm layout. Units and physical calibration were not inferred.")
+            record_joint_state_identity(extra, streams)
     elif note:
         no_state(extra, note)
     elif item["seconds"] is None and mcap_layout(item["topics"]) != "generic":

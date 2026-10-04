@@ -266,7 +266,7 @@ def test_every_adapter_says_whether_it_reads_uploads():
         if mod.UPLOAD is not None:
             assert callable(getattr(mod, "recognizes", None)) and callable(getattr(mod, "convert_upload", None)), m.name
     names = [m.__name__.rsplit(".", 1)[-1] for m in f.upload_adapters("mcap")]
-    assert names == ["genhumanego", "realomin"], names
+    assert names == ["genhumanego"], names
 
 
 def test_each_mcap_adapter_recognizes_its_own_layout_and_no_other():
@@ -275,7 +275,7 @@ def test_each_mcap_adapter_recognizes_its_own_layout_and_no_other():
                "realomin": [*realomin.CAMERA_TOPICS, *realomin.POSE_TOPICS],
                "genhumanego": [genhumanego.CAMERA_TOPIC, genhumanego.ANNOTATION_TOPIC]}
     for name, topics in layouts.items():
-        assert f.mcap_layout(topics) == ("generic" if name == "abc130k" else name), name
+        assert f.mcap_layout(topics) == (name if name == "genhumanego" else "generic"), name
     assert f.mcap_layout(["/camera/color/0/image", "/task", "/task/subtask"]) == "generic"
 
 
