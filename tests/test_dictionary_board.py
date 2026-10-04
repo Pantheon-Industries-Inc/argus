@@ -289,3 +289,78 @@ def test_prefetch_uses_piece_media_identity_independently_of_dictionary(tmp_path
     result = subprocess.run([node, str(path)], capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == [['piece.json', 'episode_a__p01', 'exo'],
                                          ['piece.json', 'episode_a__p01', 'left']]
+
+
+@pytest.mark.parametrize('navigate_at, return_to_old', [
+    ('post', False), ('get', False), ('get_json', False),
+    ('post', True), ('get', True), ('get_json', True), (None, False)])
+def test_dictionary_save_keeps_current_episode_after_navigation(tmp_path, navigate_at, return_to_old):
+    import shutil
+    import subprocess
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node is not installed')
+    page = serve.render_index('Tiny', {'mode': 'static', 'data': 'data/'})
+    start = page.index('function dictionaryRows(data, endpoint)')
+    end = page.index('\nasync function loadDictionary(', start)
+    script = '''
+    class Element {
+      constructor(tag) { this.tag=tag; this.children=[]; this.listeners={}; this.open=false; }
+      append(...children) { this.children.push(...children); }
+      replaceChildren() { this.children=[]; }
+      contains(element) { return this===element || this.children.some(child=>child.contains(element)); }
+      setAttribute() {}
+      addEventListener(name, callback) { this.listeners[name]=callback; }
+      querySelector(tag) {
+        for (const child of this.children) {
+          if (child.tag===tag) return child;
+          const found=child.querySelector(tag); if (found) return found;
+        }
+        return null;
+      }
+      names() { return (this.className==='dictionary-name' ? [this.textContent] : [])
+        .concat(...this.children.map(child=>child.names())); }
+    }
+    const target=new Element('div'), location={protocol:'http:'};
+    const document={getElementById:()=>target,createElement:tag=>new Element(tag),
+      createTextNode:text=>Object.assign(new Element('text'),{textContent:text})};
+    let _activeFile='old.json';
+    const data=name=>({revision:0,editable:true,fields:[{id:name,name,kind:'text'}],entries:{}});
+    const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve};};
+    const paused=deferred(), resumed=deferred();
+    const navigateAt=__NAVIGATE_AT__;
+    const returnToOld=__RETURN_TO_OLD__;
+    async function pause(stage) {
+      if (navigateAt===stage) { paused.resolve(); await resumed.promise; }
+    }
+    const calls=[];
+    async function fetch(url, options) {
+      const stage=options.method==='POST' ? 'post' : 'get'; calls.push([url,stage]);
+      await pause(stage);
+      return {ok:true,json:async()=>{await pause(stage+'_json');return stage==='post' ? {} : data('saved old');}};
+    }
+    '''.replace('__NAVIGATE_AT__', json.dumps(navigate_at)).replace(
+        '__RETURN_TO_OLD__', json.dumps(return_to_old)) + page[start:end] + '''
+    (async()=>{
+      dictionaryRows(data('old'),'/api/dictionary?file=old.json');
+      const saving=target.querySelector('form').listeners.submit({preventDefault(){}});
+      if (navigateAt!==null) {
+        await paused.promise;
+        _activeFile='new.json'; dictionaryRows(data('new'),'/api/dictionary?file=new.json');
+        if (returnToOld) {
+          _activeFile='old.json'; dictionaryRows(data('new old render'),'/api/dictionary?file=old.json');
+        }
+        resumed.resolve();
+      }
+      await saving;
+      console.log(JSON.stringify({names:target.names(),open:target.querySelector('details').open,calls}));
+    })().catch(error=>{console.error(error);process.exitCode=1;});
+    '''
+    path = tmp_path / 'dictionary_save.js'
+    path.write_text(script)
+    result = subprocess.run([node, str(path)], capture_output=True, text=True, check=True, timeout=10)
+    observed = json.loads(result.stdout)
+    expected = 'new old render' if return_to_old else 'new' if navigate_at else 'saved old'
+    assert observed['names'] == [expected]
+    assert observed['open'] is (navigate_at is None)
+    assert observed['calls'][0] == ['/api/dictionary', 'post']

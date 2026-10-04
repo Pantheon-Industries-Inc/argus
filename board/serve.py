@@ -3057,6 +3057,7 @@ function cardOutcomeHtml(ep) {
 // shown it all.
 
 function dictionaryRows(data, endpoint) {
+  const file = _activeFile;
   const target = document.getElementById('current-ep-dictionary');
   target.replaceChildren();
   if (!data || !(data.fields || []).length && !(data.limitations || []).length) return;
@@ -3118,7 +3119,9 @@ function dictionaryRows(data, endpoint) {
         const response = await fetch(endpoint.split('?')[0], {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
         const result = await response.json(); if (!response.ok) throw Error(result.error || 'Saving failed.');
         const loaded = await fetch(endpoint, {cache: 'no-store'}); if (!loaded.ok) throw Error('Reload the dictionary.');
-        dictionaryRows(await loaded.json(), endpoint);
+        const saved = await loaded.json();
+        if (_activeFile !== file || !target.contains(form)) return;
+        dictionaryRows(saved, endpoint);
         target.querySelector('details').open = true;
       } catch (error) { message.textContent = error.message; button.disabled = false; }
     });
