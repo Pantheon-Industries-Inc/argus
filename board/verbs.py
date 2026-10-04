@@ -31,10 +31,14 @@ PROMPT = (
     '{"verbs": {"<line>": "<name>"}}, every line spelled exactly as given.\n\n')
 
 
+NO_VERB = {"none", "null", "n/a", "na", "no action", "nothing", "idle"}   # what a labeler writes when no action happened
+
+
 def verb_of(raw) -> str | None:
-    """A verb as the labeler wrote it, lower case and single spaced; None when it wrote none."""
+    """A verb as the labeler wrote it, lower case and single spaced; None when it wrote none, or wrote that no action
+    happened ("none": an episode where the operator does nothing has no verb to count)."""
     v = " ".join(str(raw).lower().split()) if isinstance(raw, str) else ""
-    return v or None
+    return v if v and v not in NO_VERB else None
 
 
 def verbs_seen(qa: Path) -> set:

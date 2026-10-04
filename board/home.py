@@ -164,8 +164,10 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
     # each subtask's main verb: the labeler's (label/prompts.py), or the task sentence's first verb in a label written
     # before it named one. The events' own verbs (approach, grasp, lower, release) are the steps of nearly every task,
     # so they tell tasks apart poorly and are not counted.
+    # a label with the field counts the labeler's verb, or none where it says no action happened
     named = [t.get("verb") for t in tasks] if tasks else [d.get("task_verb")]
-    verbs = Counter(verb_of(v) or (k.split()[0] if k else None) for v, (k, _) in zip(named, task_rows))
+    verbs = Counter(verb_of(v) if isinstance(v, str) else (k.split()[0] if k else None)
+                    for v, (k, _) in zip(named, task_rows))
     verbs.pop(None, None)
     issues = [i for i in (d.get("data_issues") or []) if isinstance(i, dict) and i.get("issue")
               and counts("data_issues", i)]

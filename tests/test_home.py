@@ -64,6 +64,8 @@ def test_objects_and_mistakes_count_per_subtask(tmp_path):
     d["tasks"][1]["verb"] = "stack"
     named = home.summarize(qa / "session.json", d, _counts_all)
     assert named["verbs"] == {"fold in half": 1, "stack": 1}
+    d["tasks"][1]["verb"] = "None"                      # the labeler saying no action happened counts no verb
+    assert home.summarize(qa / "session.json", d, _counts_all)["verbs"] == {"fold in half": 1}
     # verbs naming one action count under the one name board/verbs.py gave them
     merged = home.stats([named, {**named, "file": "b.json", "verbs": {"stack up": 2}}], {}, time.time(),
                         names={"stack up": "stack", "fold in half": "fold"})
