@@ -266,3 +266,26 @@ def test_public_source_hides_other_absolute_directories(tmp_path):
     public = editor().public_dictionary(job)
     assert public['fields'][0]['source'] == 'signals.npz'
     assert public['fields'][0]['bindings'][0]['file'] == 'signals.npz'
+
+
+def test_prefetch_uses_piece_media_identity_independently_of_dictionary(tmp_path):
+    import shutil
+    import subprocess
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node is not installed')
+    page = serve.render_index('Tiny', {'mode': 'static', 'data': 'data/'})
+    start = page.index('async function prefetchDataset(ds)')
+    end = page.index('\nfunction prefetchWhenIdle()', start)
+    script = '''const _prefetched=new Set(), _prefetchImgs=[], BY=null, seen=[];
+    const ensureDataset=async()=>{},searchTerms=()=>[],railEps=()=>[{file:'piece.json'}],
+      datasetOf=()=> 'tiny',matchesSearch=()=>true,fetchEpisode=async()=>({
+        _meta:{episode_id:'episode_a__p01'}, data_dictionary:{episode_id:'episode_a'}}),
+      episodeCams=()=>({main:'exo',side:['left']}),posterSrc=(file,id,cam)=>{seen.push([file,id,cam]);return 'tiny';};
+    globalThis.Image=class{};
+    ''' + page[start:end] + "\nprefetchDataset('tiny').then(()=>console.log(JSON.stringify(seen)));"
+    path = tmp_path / 'prefetch.js'
+    path.write_text(script)
+    result = subprocess.run([node, str(path)], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == [['piece.json', 'episode_a__p01', 'exo'],
+                                         ['piece.json', 'episode_a__p01', 'left']]

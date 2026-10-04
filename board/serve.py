@@ -3631,7 +3631,7 @@ async function prefetchDataset(ds) {
     if (!first) return;
     const d = BY && cmpHas(BY, first.file) ? await cmpEpisode(BY, first.file) : await fetchEpisode(first.file);
     if (!d) return;
-    const eidEnc = encodeURIComponent((d.data_dictionary || {}).episode_id || (d._meta || {}).episode_id || '');
+    const eidEnc = encodeURIComponent((d._meta || {}).episode_id || '');
     const {main, side} = episodeCams(d);
     for (const cam of [main, ...side]) {
       const src = posterSrc(first.file, eidEnc, cam);
