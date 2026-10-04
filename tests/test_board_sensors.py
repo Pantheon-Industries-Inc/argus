@@ -619,3 +619,49 @@ def test_a_signal_the_same_wherever_it_reads_says_where_it_has_no_reading():
     assert doc["constant"] and doc["value"] == [0.5, 0.5] and doc["no_reading_frames"] == 150 and doc["frames"] == 300
     full = bs.signal_doc({"name": "force"}, np.full((300, 2), 0.5), t, 1)
     assert full["constant"] and "no_reading_frames" not in full
+
+
+def test_full_rate_tactile_keeps_distribution_and_gaps():
+    # Equal total intensity can come from one loaded cell or several loaded cells.
+    a = np.array([[0, 0, 0, 0], [4, 0, 0, 0], [1, 1, 1, 1],
+                  [0, 0, 0, 4], [np.nan, 0, 0, 0]], dtype=float)
+    doc = sensors.tactile_doc(a, np.zeros(4), 4, 'up', [2, 2])
+    intensity = sensors.dequantize(doc['intensity'], 5)[:, 0]
+    count = sensors.dequantize(doc['active'], 5)[:, 0]
+    focus = sensors.dequantize(doc['focus'], 5)[:, 0]
+    row = sensors.dequantize(doc['row'], 5)[:, 0]
+    assert intensity[1] == pytest.approx(intensity[2], abs=1e-4)
+    assert count[1] == pytest.approx(1, abs=1e-4) and count[2] == pytest.approx(4, abs=1e-4)
+    assert focus[1] == pytest.approx(1) and focus[2] == pytest.approx(.25, abs=1e-4)
+    assert row[1] == pytest.approx(0) and row[3] == pytest.approx(1)
+    assert np.isnan(intensity[4]) and np.isnan(count[4])
+    assert np.isnan(row[0]), 'a resting grid has no loaded centroid'
+    assert doc['n'] == 5 and doc['top_cells'] == 1
+
+
+def test_full_rate_tactile_does_not_threshold_away_small_changes():
+    a = np.array([[10, 10, 10, 10], [9.8, 10, 10, 10], [9, 10, 10, 10]])
+    doc = sensors.tactile_doc(a, np.full(4, 10), 4, 'down', [2, 2])
+    values = sensors.dequantize(doc['intensity'], 3)[:, 0]
+    assert values[1] == pytest.approx(.05, abs=1e-4)
+    assert sensors.dequantize(doc['active'], 3)[1, 0] == 0
+
+
+def test_contact_map_sidecar_retains_full_rate_metrics():
+    rng = np.random.default_rng(33)
+    a = rng.normal(0, .01, (30, 256))
+    a[10:20, :50] += 2
+    meta = {'name': 'right_pressure', 'dims':256, 'shape':[16,16], 'rest':np.zeros(256), 'swing':2}
+    doc = sensors.signal_doc(meta, a, np.arange(30) / 30, 3, True)
+    assert doc['tactile']['n'] == 30
+    assert len(sensors.dequantize(doc['strength'], 10)) == 10
+    assert doc['tactile']['shape'] == [16,16]
+
+
+
+def test_small_contact_map_keeps_full_rate_metrics():
+    rng = np.random.default_rng(9)
+    a = rng.normal(0, .01, (30, 4)); a[10:20, :2] += 2
+    doc = sensors.signal_doc({'name':'right_pressure', 'dims':4, 'shape':[2,2],
+                             'rest':np.zeros(4), 'swing':2}, a, np.arange(30)/30, 3, True)
+    assert doc['tactile']['n'] == 30 and doc['tactile']['shape'] == [2,2]

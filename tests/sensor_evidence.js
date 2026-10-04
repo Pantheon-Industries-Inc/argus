@@ -9,7 +9,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '
 const fmtT = t => t.toFixed(1) + 's';
 const E = new Function('esc', 'fmtT', source.slice(begin, end)
   + 'return {sensorEvidence, activeSensorEvidence, sensorEvidenceHtml, sensorEvidenceOverlayHtml, setupSensorEvidence, '
-  + 'sensorProfiles, sensorProfileAt, sensorProfileHtml, sensorPhasesHtml};')(esc, fmtT);
+  + 'sensorProfiles, sensorProfileAt, sensorProfileHtml, sensorPhasesHtml, sensorMedianTrace, sensorTraceHtml, sensorDistributionHtml};')(esc, fmtT);
 const c = {id:'c1', hand:'right', start_s:0, end_s:4, from_start:true, to_end:true, dips_s:[], shown:true,
   signals:['pressure'], seen:{touch_seen:'yes', hand:'right', object:'cup', action:'lift and lower cup', slip:'no'}};
 let d = E.sensorEvidence({contacts:[c]});
@@ -101,4 +101,40 @@ const multiple = E.sensorProfiles({...episode,contacts:[...episode.contacts,{...
   {...raw,signals:[...raw.signals,{...raw.signals[0],name:'other'}]});
 assert.notEqual(E.sensorProfileHtml(multiple[0],.3),E.sensorProfileHtml(multiple[1],.3),'different sensor groups must be identifiable');
 assert.notEqual(E.sensorPhasesHtml([multiple[0]]),E.sensorPhasesHtml([multiple[1]]));
-console.log('Sensor evidence controls passed');
+const fineT = Array.from({length:12},(_,i)=>i/30);
+const fine = {n:12,t:fineT,intensity:[1,1,1,4,1,1,1,NaN,2,2,2,2],active:Array(12).fill(4),
+ focus:Array(12).fill(.5),row:Array(12).fill(.5),col:Array(12).fill(.5),shape:[2,2],top_cells:1,map:Array(48).fill(.25)};
+const full = E.sensorProfiles(episode,{...raw,signals:[{...raw.signals[0],tactile:fine}]})[0];
+assert.equal(full.t.length,12,'quantitative profiles must use full-rate samples');
+assert.equal(full.values[3],4,'full-rate raw intensity retains a one-frame peak');
+assert.equal(full.sustained[3],1,'a median distinguishes a transient from sustained load');
+assert(Number.isNaN(full.sustained[7]),'smoothing cannot fill a gap');
+assert(Number.isNaN(full.sustained[8]),'a new segment needs its own window');
+assert(E.sensorProfileHtml(full,.1).includes('0.2s median'));
+assert(E.sensorPhasesHtml([full]).includes('samples'));
+assert(E.sensorTraceHtml(full).includes('Raw') && E.sensorTraceHtml(full).includes('0.2s median'));
+assert(E.sensorDistributionHtml(full,.1).includes('Sensor grid'));
+const unaligned = {...full,assumed:true,phases:[]};
+assert(E.sensorPhasesHtml([unaligned]).includes('Full-rate raw tactile'),'the raw trace survives unavailable action timing');
+assert(!E.sensorPhasesHtml([unaligned]).includes('data-phase-t'));
+const regular = E.sensorMedianTrace([0,.1,.2,.3,.4,.5],[1,1,1,1,1,1]);
+assert.equal(regular[4],1,'rounding must not create a gap on a regular 10Hz clock');
+const gaps = E.sensorTraceHtml({...full,t:[0,.03,.5,.53],values:[1,1,1,1],sustained:[1,1,1,1]});
+assert((gaps.match(/M/g)||[]).length >= 4,'both trace paths break across clock gaps');
+
+assert(!/finger|newton|kilogram|stable grasp/.test(E.sensorDistributionHtml(full,.1)));
+(async () => {
+  fine.active[3] = 1;
+  const panel = {now:{},overlay:{classList:{toggle(){}}},details:{}};
+  global.document = {body:{contains(){return true;}},querySelectorAll(){return [];},
+    getElementById(id){return ({'sensor-overlay':panel.overlay,'sensor-evidence-now':panel.now,'sensor-evidence-details':panel.details})[id] || null;}};
+  global._activeFile = 'fine';
+  global.loadSensors = () => Promise.resolve({...raw,signals:[{...raw.signals[0],tactile:fine}]});
+  const live = E.setupSensorEvidence(E.sensorEvidence(episode),()=>{},()=>{},()=>{},episode,'fine');
+  await Promise.resolve();
+  live.sync(2/30); const before = panel.now.innerHTML;
+  live.sync(3/30); const after = panel.now.innerHTML;
+  assert(before.includes('4 / 4') && after.includes('1 / 4'),'distribution must refresh when rounded intensity is unchanged');
+  delete global.document; delete global._activeFile; delete global.loadSensors;
+  console.log('Sensor evidence controls passed');
+})().catch(e => {console.error(e);process.exitCode=1;});

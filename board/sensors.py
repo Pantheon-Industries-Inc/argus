@@ -205,6 +205,32 @@ def pad(a: np.ndarray, n: int) -> np.ndarray:
     return np.concatenate([a, np.full((n - len(a),) + a.shape[1:], np.nan, dtype=a.dtype)])
 
 
+def tactile_doc(a: np.ndarray, rest, swing: float, direction, shape: list) -> dict:
+    """Full-rate directional deviation and grid distribution, without force calibration.
+
+    Intensity has no activity threshold. Active cells exceed 10% of the upload swing;
+    concentration is the share borne by the strongest 10% of cells. A partial row is a gap.
+    """
+    a = np.asarray(a, dtype=np.float64).reshape(len(a), -1)
+    delta = np.asarray(rest) - a if direction == "down" else a - np.asarray(rest) if direction == "up" else np.abs(a - np.asarray(rest))
+    load = np.maximum(0, delta) / swing
+    valid = np.isfinite(load).all(axis=1)
+    load[~valid] = np.nan
+    total = load.sum(axis=1)
+    active = (load > .1).sum(axis=1).astype(float)
+    active[~valid] = np.nan
+    top = max(1, int(np.ceil(load.shape[1] * .1)))
+    top_sum = np.sort(load, axis=1)[:, -top:].sum(axis=1)
+    focus = np.divide(top_sum, total, out=np.full(len(a), np.nan), where=total > 0)
+    rows, cols = shape
+    rr, cc = np.indices((rows, cols))
+    row = np.divide((load * rr.ravel()).sum(axis=1), total, out=np.full(len(a), np.nan), where=total > 0)
+    col = np.divide((load * cc.ravel()).sum(axis=1), total, out=np.full(len(a), np.nan), where=total > 0)
+    return {"format": "tactile-grid/1", "n": len(a), "shape": shape, "top_cells": top,
+            "intensity": quantize(total), "active": quantize(active), "focus": quantize(focus),
+            "row": quantize(row), "col": quantize(col), "map": quantize(load, bits=8, per_value=False)}
+
+
 def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact: bool = False) -> dict:
     """One signal's entry (module docstring); in_contact: one of the episode's contacts is timed by it, so its strength
     is kept too."""
@@ -247,6 +273,12 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
     if in_contact:
         from label import contacts as lc
         doc["strength"] = quantize(lc._strength(a, {"rest": rest, "swing": swing})[pick])
+    shape = meta.get("shape") or []
+    if in_contact and len(shape) == 2:
+        level = rest if rest is not None else np.asarray(_call(S.resting_level, a, rest, swing), dtype=np.float64)
+        full_swing = swing if swing is not None else float(S.swing_of(a))
+        if full_swing > 0:
+            doc["tactile"] = tactile_doc(a, level, full_swing, doc["direction"], shape)
     if d <= S.SMALL:
         doc["values"] = quantize(a[pick])
         return doc

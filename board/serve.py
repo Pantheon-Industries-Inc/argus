@@ -1473,6 +1473,19 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .se-summary, .se-depth { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 12px; }
 .se-summary > span, .se-depth > span { color: var(--fg-3); }
 .se-current { margin: 10px 0; }
+.se-trace { flex: 1 0 100%; min-width: 0; }
+.se-trace svg { width: 100%; height: 100px; background: var(--bg); }
+.se-trace path { fill: none; vector-effect: non-scaling-stroke; }
+.se-raw { stroke: #a8adaf; stroke-width: 1.2; }
+.se-sustained { stroke: #236979; stroke-width: 2; }
+.se-trace-key { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; }
+.se-distribution { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size: 11px; }
+.se-distribution > div { display: flex; flex-direction: column; gap: 5px; max-width: 210px; }
+.se-distribution svg { width: 150px; height: 150px; }
+.se-distribution strong { font: 600 20px var(--mono); margin-top: 8px; }
+.se-grid-scale { display: inline-block; width: 65px; height: 8px; background: linear-gradient(to right, hsl(190 42% 96%), hsl(190 42% 31%)); }
+.se-method { flex: 1 0 100%; font-size: 11px; }
+.se-method p { max-width: 640px; line-height: 1.5; }
 .se-headline { display: block; font-size: 14px; font-weight: 600; line-height: 1.35; }
 .se-sources { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10px; margin-top: 5px; opacity: .85; }
 .se-action, .se-timing { display: block; margin-top: 5px; font-size: 11px; line-height: 1.4; }
@@ -4275,6 +4288,14 @@ function snDecode(doc) {
     if (s.values) g.vals = snBlock(s.values, n, 16);
     if (s.activity) g.act = snBlock(s.activity, n, 16).v;
     if (s.strength) g.str = snBlock(s.strength, n, 16).v;
+    if (s.tactile && s.tactile.format === 'tactile-grid/1' && s.tactile.n === doc.frames) {
+      const a = s.tactile;
+      const exact = captures && captures.length === ft.length && Array.from(ft).every((t, i) =>
+        Number.isFinite(captures[i]) && Math.abs(t - captures[i]) <= .0011);
+      g.tactile = {n: a.n, t: exact ? Float64Array.from(captures) : ft, shape: a.shape, top_cells: a.top_cells};
+      for (const k of ['intensity', 'active', 'focus', 'row', 'col']) g.tactile[k] = snBlock(a[k], a.n, 16).v;
+      g.tactile.map = snBlock(a.map, a.n, 8).v;
+    }
     if (s.map && s.rest && s.swing > 0) { g.map = snBlock(s.map, n, 8).v; g.restArr = Float32Array.from(s.rest); }
     out.signals.push(g);
   }
@@ -4709,6 +4730,20 @@ function sensorReadingAvailable(s, i) {
   }
   return !!s.act && Number.isFinite(s.act[i]);
 }
+function sensorMedianTrace(ts, values) {
+  const out = Array(values.length).fill(NaN);
+  let segment = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (!Number.isFinite(values[i])) { segment = i + 1; continue; }
+    if (i && ts[i] - ts[i - 1] > .1001) segment = i;
+    let first = i;
+    while (first > segment && ts[first - 1] >= ts[i] - .2 - .0001) first--;
+    if (i - first < 2) continue;
+    const window = values.slice(first, i + 1).sort((a, b) => a - b), mid = window.length >> 1;
+    out[i] = window.length % 2 ? window[mid] : (window[mid - 1] + window[mid]) / 2;
+  }
+  return out;
+}
 function sensorProfiles(d, D) {
   if (!D || !D.t || !D.t.length) return [];
   const groups = new Map();
@@ -4726,16 +4761,22 @@ function sensorProfiles(d, D) {
   }
   const out = [];
   for (const p of groups.values()) {
-    p.t = D.sampleTimes || D.t;
+    p.full = p.signals.every(s => s.tactile && s.tactile.n > 0)
+      && p.signals.every(s => s.tactile.t.length === p.signals[0].tactile.t.length
+        && Array.from(s.tactile.t).every((t, i) => Math.abs(t - p.signals[0].tactile.t[i]) < .001));
+    p.t = p.full ? p.signals[0].tactile.t : (D.sampleTimes || D.t);
     p.assumed = p.contacts.some(c => !!c.aligned_by)
       || p.signals.some(s => !!s.aligned_by || !!s.camera_aligned_by);
     p.label = Array.from(groups.values()).filter(g => g.hand === p.hand).length > 1
       ? p.names.join(', ').replace(/_/g, ' ').replace(/[\u2013\u2014]/g, '-') : '';
-    p.values = Array.from(D.t, (_, i) => {
-      const samples = p.signals.map(s => s.str[i]);
-      return samples.every(Number.isFinite) && p.signals.every(s => sensorReadingAvailable(s, i))
+    p.values = Array.from(p.t, (_, i) => {
+      const samples = p.signals.map(s => p.full ? s.tactile.intensity[i] : s.str[i]);
+      return samples.every(Number.isFinite) && (p.full || p.signals.every(s => sensorReadingAvailable(s, i)))
         ? Math.max(0, samples.reduce((a, b) => a + b, 0)) : NaN;
     });
+    if (p.full) p.peak = 0;
+    p.spatial = p.full && p.signals.length === 1 ? p.signals[0].tactile : null;
+    p.sustained = p.full ? sensorMedianTrace(p.t, p.values) : p.values;
     for (const v of p.values) if (Number.isFinite(v)) p.peak = Math.max(p.peak, v);
     if (!(p.peak > 0) || !p.values.some(Number.isFinite)) continue;
     p.phases = [];
@@ -4753,6 +4794,7 @@ function sensorProfiles(d, D) {
       p.phases.push({start: e.t_s, end: e.end_s, label: String(e.verb_class || 'Action').replace(/[\u2013\u2014]/g, '-'),
         percent: Math.round(100 * median / p.peak), samples: values.length, total: total.length});
     }
+    p.traceIndex = out.length;
     out.push(p);
   }
   return out;
@@ -4764,24 +4806,65 @@ function sensorProfileAt(p, t) {
   let i = 0;
   while (i < last && p.t[i + 1] <= t + 0.001) i++;
   if (!Number.isFinite(p.values[i])) return null;
-  return {percent: Math.round(100 * p.values[i] / p.peak), sample: p.t[i]};
+  return {percent: Math.round(100 * p.values[i] / p.peak),
+    sustained: Number.isFinite(p.sustained && p.sustained[i]) ? Math.round(100 * p.sustained[i] / p.peak) : null,
+    sample: p.t[i], index: i};
 }
 function sensorProfileHtml(p, t) {
   const value = sensorProfileAt(p, t);
   const hand = p.hand === 'left' ? 'Left' : p.hand === 'right' ? 'Right' : '';
   return `<span class="se-headline">${hand ? hand + ' ' : ''}tactile intensity${p.label ? ' (' + esc(p.label) + ')' : ''}</span>`
     + (p.assumed ? '<span class="se-action">Assumed timing</span>' : '')
-    + (value ? `<span class="se-measure">${value.percent}% <small>of episode peak</small></span>
-      <span class="se-meter"><span style="width:${value.percent}%"></span></span>`
+    + (value ? `<span class="se-measure">${p.full && value.sustained == null ? 'Collecting readings' : (p.full ? value.sustained : value.percent) + '%'} <small>${p.full ? '0.2s median' : 'of episode peak'}</small></span>
+      <span class="se-meter"><span style="width:${p.full ? value.sustained || 0 : value.percent}%"></span></span>`
       : '<span class="se-action">No reading at this sample</span>');
 }
+function sensorTraceHtml(p) {
+  if (!p.full) return '';
+  const duration = p.t[p.t.length - 1] || 1;
+  const path = values => { let pen = false, d = ''; values.forEach((v, i) => {
+    if (!Number.isFinite(v)) { pen = false; return; }
+    if (i && p.t[i] - p.t[i - 1] > .1001) pen = false;
+    d += (pen ? 'L' : 'M') + (600 * p.t[i] / duration).toFixed(2) + ' ' + (78 - 70 * v / p.peak).toFixed(2);
+    pen = true;
+  }); return d; };
+  return `<div class="se-trace"><div class="se-trace-key"><span>Raw</span><strong>0.2s median</strong>
+    <span>${p.values.filter(Number.isFinite).length} of ${p.t.length} samples</span></div>
+    <svg viewBox="0 0 650 84" role="img" aria-label="Full-rate raw tactile intensity and trailing median">
+      <path class="se-raw" d="${path(p.values)}"/><path class="se-sustained" d="${path(p.sustained)}"/>
+      <line data-se-trace="${p.traceIndex}" x1="0" x2="0" y1="6" y2="78" stroke="#1c1c1a" stroke-width="1"/>
+      <text x="607" y="12" font-size="10" fill="#55544f">100%</text><text x="607" y="78" font-size="10" fill="#55544f">0%</text></svg>
+    <div class="se-trace-key"><span>0s</span><span>${duration.toFixed(2)}s</span></div></div>`;
+}
+function sensorDistributionHtml(p, t) {
+  const a = p.spatial, v = sensorProfileAt(p, t);
+  if (!a || !v) return '';
+  const [rows, cols] = a.shape, n = rows * cols, off = v.index * n;
+  const rects = Array.from({length:n}, (_, c) => {
+    const load = a.map[off + c], light = Number.isFinite(load) ? 96 - 65 * Math.min(1, Math.max(0, load)) : 60;
+    return `<rect x="${c % cols}" y="${Math.floor(c / cols)}" width=".92" height=".92" fill="hsl(190 42% ${light}%)"/>`;
+  }).join('');
+  const row = a.row[v.index], col = a.col[v.index], focus = a.focus[v.index];
+  return `<div class="se-distribution"><div><span>Sensor grid ${rows} x ${cols}</span>
+    <svg viewBox="0 0 ${cols} ${rows}" role="img" aria-label="Tactile sensor grid, darker cells deviate further from rest">${rects}
+    ${Number.isFinite(row) && Number.isFinite(col) ? `<circle cx="${col + .5}" cy="${row + .5}" r=".45" fill="none" stroke="#b3263c" stroke-width=".18"/>` : ''}</svg>
+    <span>Rest <span class="se-grid-scale"></span>Higher</span></div>
+    <div><strong>${Math.round(a.active[v.index])} / ${n}</strong><span>active cells</span>
+      <strong>${Number.isFinite(focus) ? Math.round(100 * focus) + '%' : '-'}</strong>
+      <span>of signal in the strongest ${a.top_cells} cells</span><span>Ring marks the signal centre</span></div></div>`;
+}
 function sensorPhasesHtml(profiles) {
-  return profiles.filter(p => p.phases.length).map(p => `<div class="se-phases">
-    <span>Median intensity by action${p.hand ? ' for the ' + esc(p.hand) + ' hand' : ''}${p.label ? ' (' + esc(p.label) + ')' : ''}</span>
+  return profiles.filter(p => p.full || p.phases.length).map(p => `<div class="se-phases">
+    <span>${p.phases.length ? 'Median intensity by action' : 'Recorded tactile intensity'}${p.hand ? ' for the ' + esc(p.hand) + ' hand' : ''}${p.label ? ' (' + esc(p.label) + ')' : ''}</span>
+    ${p.assumed ? '<span>Assumed timing</span>' : ''}
     ${p.phases.map(e => `<button type="button" data-phase-t="${e.start}" title="${e.samples} of ${e.total} retained samples">
-      <span>${esc(e.label)}</span><strong>${e.percent}%</strong>
+      <span>${esc(e.label)}</span><strong>${e.percent}%</strong><span>${e.samples} / ${e.total} samples</span>
       <span class="se-meter"><span style="width:${e.percent}%"></span></span></button>`).join('')}
-    <span class="se-action">Percent of this episode's peak tactile signal. Relative intensity, without force calibration.</span>
+    ${sensorTraceHtml(p)}
+    <details class="se-method"><summary>How this is measured</summary>
+      <p>${p.full ? 'Intensity sums directional changes from rest across every cell, with no activity threshold. The overlay uses a trailing median up to 0.2 seconds, with shorter initial windows and at least three readings. Gaps remain blank.' : 'Intensity uses the saved thresholded activity samples.'} Percentages use this episode's raw peak. Action cards use raw sample medians.</p>
+      ${p.full ? '<p>Active cells exceed 10% of the dataset swing. Concentration is the share in the strongest 10% of cells. Grid colours use that same dataset scale, capped at one swing. The ring is the intensity-weighted centre in sensor coordinates.</p>' : ''}
+      <p>These are relative sensor measurements without force calibration. Sensor coordinates do not identify fingers or physical contact area.</p></details>
   </div>`).join('');
 }
 function sensorEvidenceHtml(E, depth) {
@@ -4827,14 +4910,21 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
   let signature = null;
   const wire = {sync(t) {
     const e = activeSensorEvidence(E, t);
+    for (const line of document.querySelectorAll('[data-se-trace]')) {
+      const p = profiles[+line.dataset.seTrace];
+      if (!p) continue;
+      const x = 600 * Math.max(0, Math.min(p.t[p.t.length - 1], t)) / (p.t[p.t.length - 1] || 1);
+      line.setAttribute('x1', x); line.setAttribute('x2', x);
+    }
     const measurements = profiles.map(p => sensorProfileHtml(p, t)).join('');
     const html = measurements + (e && e.priority >= 3 ? sensorEvidenceOverlayHtml(e) : '');
     current = e;
     currentTime = t;
-    if (html === signature) return;
-    signature = html;
+    const distribution = profiles.map(p => sensorDistributionHtml(p, t)).join('');
+    if (html + distribution === signature) return;
+    signature = html + distribution;
     if (overlay) { overlay.innerHTML = html; overlay.classList.toggle('active', !!html); }
-    if (now) now.innerHTML = html || `<span>${loaded ? 'No retained tactile intensity samples' : 'Loading tactile measurements'}</span>`;
+    if (now) now.innerHTML = (html + distribution) || `<span>${loaded ? 'No retained tactile intensity samples' : 'Loading tactile measurements'}</span>`;
   }};
   if (d && file && E.contacts.length) loadSensors(file).then(D => {
     if (file !== _activeFile || !details || !document.body.contains(details)) return;
