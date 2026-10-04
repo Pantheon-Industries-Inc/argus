@@ -102,13 +102,47 @@ def _relative(value, ep):
     if isinstance(value, str):
         for root in (str(ep.parent), str(ep.parent.resolve())):
             value = value.replace(root + "/", "")
-        if value.startswith(("/Users/", "/private/", "/tmp/", "/home/")):
-            value = Path(value).name
+        if value.startswith(("/Users/", "/private/", "/tmp/", "/home/", "/data/", "/app/", "/var/")):
+            identity = hashlib.sha256(os.path.normpath(value).encode()).hexdigest()
+            value = Path(value).name + " (external source " + identity + ")"
     elif isinstance(value, dict):
         value = {k: _relative(v, ep) for k, v in value.items()}
     elif isinstance(value, list):
         value = [_relative(v, ep) for v in value]
     return value
+
+
+def _metadata_numbers(value):
+    kinds = set()
+    def shape_of(item):
+        if isinstance(item, list):
+            first = shape_of(item[0]) if item else []
+            if first is None or any(shape_of(child) != first for child in item):
+                return None
+            return [len(item)] + first
+        if isinstance(item, (bool, int, float)):
+            kinds.add("bool" if isinstance(item, bool) else "int64" if isinstance(item, int) else "float64")
+            return []
+        return None
+    def values(item):
+        if isinstance(item, list):
+            for child in item:
+                yield from values(child)
+        else:
+            yield item
+    shape = shape_of(value)
+    if shape is None:
+        return None
+    numbers, chunk = _Numbers(), []
+    for item in values(value):
+        chunk.append(item)
+        if len(chunk) == CHUNK_VALUES:
+            numbers.add(np.asarray(chunk, dtype=np.float64))
+            chunk.clear()
+    if chunk:
+        numbers.add(np.asarray(chunk, dtype=np.float64))
+    dtype = "float64" if "float64" in kinds or not kinds else "int64" if "int64" in kinds else "bool"
+    return shape, dtype, numbers
 
 
 def inventory(episodes: list[Path]) -> dict:
@@ -163,12 +197,9 @@ def inventory(episodes: list[Path]) -> dict:
         numbers = None
         if isinstance(value, (int, float, bool, list)):
             try:
-                array = np.asarray(value)
-                if array.dtype.kind in "biuf":
-                    numbers = _Numbers()
-                    for start in range(0, array.size, CHUNK_VALUES):
-                        numbers.add(array.reshape(-1)[start:start + CHUNK_VALUES])
-                    shape, dtype = list(array.shape), str(array.dtype)
+                numeric = _metadata_numbers(value)
+                if numeric is not None:
+                    shape, dtype, numbers = numeric
                 else:
                     shape, dtype = [len(value)] if isinstance(value, list) else [], "metadata"
             except (ValueError, TypeError):

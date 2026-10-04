@@ -340,3 +340,32 @@ def test_inventory_digest_ignores_generated_interpretation_and_checks(tmp_path):
     assert resumed["digest"] == original["digest"]
     assert any(f["name"] == "uploader_notes.calibration" for f in resumed["fields"])
     assert any(f["name"] == "annotation_subtasks" for f in resumed["fields"])
+
+
+def test_external_sources_with_the_same_basename_keep_distinct_identities(tmp_path):
+    from label import dictionary as dd
+    one = episode(tmp_path, "one", [("pad", np.ones((2, 1)), {"source": "/Users/private_a/sensor.h5"})])
+    two = episode(tmp_path, "two", [("pad", np.ones((2, 1)), {"source": "/Users/private_b/sensor.h5"})])
+    inventory = dd.inventory([one, two])
+    pads = [field for field in inventory["fields"] if field["name"] == "pad"]
+    assert len(pads) == 2
+    assert {tuple(field["episodes"]) for field in pads} == {("one",), ("two",)}
+    assert pads[0]["source"] != pads[1]["source"]
+    assert "sensor.h5" in pads[0]["source"] and "sensor.h5" in pads[1]["source"]
+    assert "/Users/" not in json.dumps(inventory)
+    assert "private_a" not in json.dumps(dd.request(inventory))
+
+
+def test_numeric_metadata_never_materialises_a_full_float64_array(tmp_path, monkeypatch):
+    from label import dictionary as dd
+    ep = episode(tmp_path, "one", [], extra={"calibration": {"recorded": [float(i) for i in range(131_073)]}})
+    original = np.asarray
+    def bounded(value, *args, **kwargs):
+        if isinstance(value, list):
+            assert len(value) <= 65_536, "numeric metadata was converted in bulk"
+        return original(value, *args, **kwargs)
+    monkeypatch.setattr(np, "asarray", bounded)
+    field = next(f for f in dd.inventory([ep])["fields"] if f["name"] == "calibration.recorded")
+    assert field["shape"] == [131_073] and field["dtype"] == "float64"
+    assert field["summary"]["mean"] == pytest.approx(65_536)
+    assert field["summary"]["minimum"] == 0 and field["summary"]["maximum"] == 131_072
