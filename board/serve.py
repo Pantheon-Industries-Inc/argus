@@ -392,6 +392,7 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
 
 PORT = 8896
 PAGE_TITLE = "Data Dashboard"
+DICTIONARY_JOB = None                # local editing requires an explicit upload root
 HERE = Path.cwd().resolve()           # the episode files (set by main from --board)
 MP4_DIR = HERE / "clips"              # the clips (set by main from --clips)
 COMPARE_DIR = HERE.parent / "compare" # other models' labels, beside qa/ (board/build.py writes them)
@@ -719,6 +720,16 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 #current-ep-src a:hover { color: var(--fg); border-bottom-color: var(--fg-3); }
 #current-ep-reader { font: 500 11px/1.35 var(--sans); color: var(--fg-3); }
 #current-ep-reader:empty { display: none; }
+#current-ep-dictionary { font: 500 12px/1.5 var(--sans); max-width: 640px; }
+#current-ep-dictionary:empty { display: none; }
+#current-ep-dictionary summary { cursor: pointer; color: var(--fg-2); }
+.dictionary-row { border-top: 1px solid var(--border); padding: 8px 0; overflow-wrap: anywhere; }
+.dictionary-name { font-family: var(--mono); color: var(--fg); }
+.dictionary-source, .dictionary-provenance { color: var(--fg-3); }
+.dictionary-edit { display: grid; gap: 6px; margin-top: 8px; }
+.dictionary-edit input, .dictionary-edit textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.dictionary-edit button { justify-self: start; }
+
 /* with the reader's line (which opens to a tall list) under the name, the buttons stay at the top, beside the name,
    instead of sliding down the header's centre as the list opens */
 .ep-head:has(#current-ep-reader:not(:empty)) { align-items: flex-start; }
@@ -2511,7 +2522,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   <aside class="left" id="left-pane">
     <div class="ep-head">
       <div class="ep-head-name"><span class="ep-head-k">Episode</span><span id="current-ep"></span><span
-        id="current-ep-raw"></span><span id="current-ep-src"></span><div id="current-ep-reader"></div></div>
+        id="current-ep-raw"></span><span id="current-ep-src"></span><div id="current-ep-reader"></div><div id="current-ep-dictionary"></div></div>
       <div class="ep-head-side">
         <div class="ep-head-acts">
           <button id="hp-btn" class="ep-head-dl hp-btn" type="button" aria-pressed="true" hidden
@@ -3044,6 +3055,87 @@ function cardOutcomeHtml(ep) {
 // gave, in the same fold as the notes in the files. The fold is closed until opened, since an upload can leave out
 // dozens of signals. The button says the counts and flips its label when open. Nothing is drawn when the model was
 // shown it all.
+
+function dictionaryRows(data, endpoint) {
+  const target = document.getElementById('current-ep-dictionary');
+  target.replaceChildren();
+  if (!data || !(data.fields || []).length && !(data.limitations || []).length) return;
+  const fold = document.createElement('details'), summary = document.createElement('summary');
+  summary.textContent = 'Data dictionary'; fold.append(summary); target.append(fold);
+  const line = (parent, text, cls) => { const el = document.createElement('div'); el.textContent = text;
+    if (cls) el.className = cls; parent.append(el); return el; };
+  if (data.after_labelling) line(fold, 'Edited after labelling. Saved labels retain their original interpretation.');
+  (data.limitations || []).forEach(text => line(fold, text));
+  for (const field of data.fields || []) {
+    const row = document.createElement('div'); row.className = 'dictionary-row'; fold.append(row);
+    const entry = (data.entries || {})[field.id] || {}, machine = (data.machine_entries || {})[field.id];
+    const name = document.createElement('div'); name.className = 'dictionary-name'; name.textContent = field.name; row.append(name);
+    const meaning = document.createElement('div'); meaning.textContent = entry.meaning || 'No interpretation'; row.append(meaning);
+    line(row, entry.role || 'Unassigned');
+    line(row, entry.provenance === 'human' ? 'Human edit' : machine ? 'Machine interpretation' : 'Uninterpreted', 'dictionary-provenance');
+    line(row, [field.kind, field.dtype, JSON.stringify(field.shape || [])].filter(Boolean).join('  '), 'dictionary-source');
+    if (field.source) line(row, typeof field.source === 'string' ? field.source : JSON.stringify(field.source), 'dictionary-source');
+    if ((field.names || []).length || (field.bindings || []).length) {
+      const details = document.createElement('details'), title = document.createElement('summary');
+      title.textContent = 'Recorded details'; details.append(title);
+      if ((field.names || []).length) line(details, field.names.join('  '));
+      if (field.rate_hz != null) line(details, `${field.rate_hz} Hz`);
+      if ((field.episodes || []).length) line(details, field.episodes.join('  '));
+      (field.bindings || []).forEach(b => line(details, [b.episode, b.file, b.key, b.context_path].filter(Boolean).join('  ')));
+      row.append(details);
+    }
+    if (entry.layout) line(row, entry.layout.map(g => `${g.name}  ${g.start}  ${g.count}`).join('  '));
+    if (machine && entry.provenance === 'human') {
+      const original = document.createElement('details'), title = document.createElement('summary');
+      title.textContent = 'Machine interpretation'; original.append(title);
+      line(original, machine.meaning || 'No interpretation'); line(original, machine.role || 'Unassigned'); row.append(original);
+    }
+    const history = (data.history || []).filter(h => h.field_id === field.id);
+    if (history.length) {
+      const saved = document.createElement('details'), title = document.createElement('summary');
+      title.textContent = 'Edit history'; saved.append(title);
+      history.forEach(h => { line(saved, `Revision ${h.revision}`); line(saved, (h.after || {}).meaning || '');
+        line(saved, Object.prototype.hasOwnProperty.call(h.after || {}, 'role') ? h.after.role || 'Unassigned' : ''); });
+      row.append(saved);
+    }
+    if (!data.editable || !endpoint || location.protocol === 'file:') continue;
+    const edit = document.createElement('details'), title = document.createElement('summary');
+    title.textContent = 'Edit'; edit.append(title); row.append(edit);
+    const form = document.createElement('form'); form.className = 'dictionary-edit'; edit.append(form);
+    const input = (label, value, max, area=false) => { const wrap = document.createElement('label');
+      wrap.append(document.createTextNode(label)); const el = document.createElement(area ? 'textarea' : 'input');
+      el.value = value; el.maxLength = max; wrap.append(el); form.append(wrap); return el; };
+    const m = input('Meaning', entry.meaning || '', 500), role = input('Role', entry.role || '', 80);
+    const layout = ['state', 'action', 'signal'].includes(field.kind) && (field.shape || []).length
+      ? input('Layout groups', entry.layout ? JSON.stringify(entry.layout) : '', 16384, true) : null;
+    const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Save'; form.append(button);
+    const message = line(form, ''); message.setAttribute('role', 'status');
+    form.addEventListener('submit', async event => {
+      event.preventDefault(); button.disabled = true;
+      try {
+        const body = {revision: data.revision, field_id: field.id, meaning: m.value, role: role.value};
+        if (layout && layout.value.trim()) body.layout = JSON.parse(layout.value);
+        const response = await fetch(endpoint.split('?')[0], {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        const result = await response.json(); if (!response.ok) throw Error(result.error || 'Saving failed.');
+        const loaded = await fetch(endpoint, {cache: 'no-store'}); if (!loaded.ok) throw Error('Reload the dictionary.');
+        dictionaryRows(await loaded.json(), endpoint);
+        target.querySelector('details').open = true;
+      } catch (error) { message.textContent = error.message; button.disabled = false; }
+    });
+  }
+}
+async function loadDictionary(d, file) {
+  const base = window.__DICTIONARY_URL || BOARD.dictionary_url;
+  const endpoint = base && (base + '?' + (STATIC ? 'episode=' + encodeURIComponent((d.data_dictionary || {}).episode_id || (d._meta || {}).episode_id || '') : 'file=' + encodeURIComponent(file)));
+  dictionaryRows(d.data_dictionary, null);
+  if (!endpoint || location.protocol === 'file:') return;
+  try {
+    const response = await fetch(endpoint, {cache: 'no-store'});
+    if (!response.ok) return;
+    const data = await response.json(); if (_activeFile === file) dictionaryRows(data, endpoint);
+  } catch (_) {}
+}
+
 function readerNotesHtml(rn) {
   if (!rn) return '';
   const left = rn.left_out || {};
@@ -3539,7 +3631,7 @@ async function prefetchDataset(ds) {
     if (!first) return;
     const d = BY && cmpHas(BY, first.file) ? await cmpEpisode(BY, first.file) : await fetchEpisode(first.file);
     if (!d) return;
-    const eidEnc = encodeURIComponent((d._meta || {}).episode_id || '');
+    const eidEnc = encodeURIComponent((d.data_dictionary || {}).episode_id || (d._meta || {}).episode_id || '');
     const {main, side} = episodeCams(d);
     for (const cam of [main, ...side]) {
       const src = posterSrc(first.file, eidEnc, cam);
@@ -4984,6 +5076,7 @@ function renderEp(d, opts) {
   document.getElementById('current-ep-raw').textContent = epName(eid) !== eid ? eid : '';
   document.getElementById('current-ep-src').innerHTML = datasetSourceHtml(d.dataset_source);
   document.getElementById('current-ep-reader').innerHTML = readerNotesHtml(d.reader_notes);
+  loadDictionary(d, _activeFile);
   document.getElementById('dl-json').href = episodeDownloadUrl(_activeFile);
   if (STATIC) document.getElementById('dl-json').setAttribute('download', _activeFile);
   // the episode's video to download, on a served board (a static build has no server to make it)
@@ -6967,10 +7060,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
         finally:
             f.close()
 
+    def _dictionary(self, body=None):
+        from label.dictionary_editor import public_dictionary, save_override, RevisionConflict
+        parsed = urllib.parse.urlparse(self.path)
+        if body is not None:
+            host = self.headers.get('Host') or ''
+            origin = self.headers.get('Origin')
+            local = urllib.parse.urlparse('http://' + host).hostname in ('127.0.0.1', 'localhost', '::1')
+            if DICTIONARY_JOB is None or not local or origin != 'http://' + host:
+                return self._send(403, {'error': 'Dictionary editing is disabled.'})
+            if (self.headers.get('Content-Type') or '').split(';')[0].strip().lower() != 'application/json':
+                return self._send(400, {'error': 'The dictionary edit must be JSON.'})
+            try:
+                return self._send(200, {**save_override(DICTIONARY_JOB, body, 'local'), 'editable': True})
+            except RevisionConflict as error:
+                return self._send(409, {'error': str(error)})
+            except ValueError as error:
+                return self._send(400, {'error': str(error)})
+            except OSError:
+                return self._send(400, {'error': 'The dictionary edit could not be saved.'})
+        q = urllib.parse.parse_qs(parsed.query)
+        fname = (q.get('file') or [''])[0]
+        p = HERE / fname
+        if not fname or not _under(HERE, p) or not p.is_file() or p.suffix != '.json':
+            return self._send(404, {'error': 'No such episode.'})
+        d = json.loads(p.read_text())
+        if DICTIONARY_JOB is None:
+            return self._send(200, {**(d.get('data_dictionary') or {}), 'editable': False})
+        try:
+            return self._send(200, {**public_dictionary(DICTIONARY_JOB, (d.get('data_dictionary') or {}).get('episode_id') or (d.get('_meta') or {}).get('episode_id') or p.stem), 'editable': True})
+        except (ValueError, OSError):
+            return self._send(200, {'fields': [], 'limitations': ['The saved data dictionary is unreadable.'], 'editable': False})
+
     def do_POST(self):
         """POST /api/export {"files": [...]} -> the listed episode files as JSON Lines, one per line,
         exactly as stored (annotation, dataset checks, run provenance)."""
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == '/api/dictionary':
+            try:
+                n = int(self.headers.get('Content-Length') or 0)
+                if not 0 < n <= 32768:
+                    return self._send(400, {'error': 'The edit is too large.'})
+                return self._dictionary(json.loads(self.rfile.read(n)))
+            except (ValueError, json.JSONDecodeError):
+                return self._send(400, {'error': 'The dictionary edit is not valid.'})
         if parsed.path != "/api/export":
             self._send(404, {"error": "not found"})
             return
@@ -7007,10 +7140,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # them (no request that can only fail)
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
                    "sensors": (SENSORS_DIR / "index.json").is_file(),
-                   "footage": FFMPEG is not None,
+                   "footage": FFMPEG is not None, "dictionary_url": "api/dictionary",
                    "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
             return
+        if parsed.path == '/api/dictionary':
+            return self._dictionary()
         if parsed.path == "/api/episodes":
             raw, gz = list_json()
             self._send(200, raw, gzipped=gz)
@@ -7182,7 +7317,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def main(argv=None) -> int:
     global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, SENSORS_DIR, FOOTAGE_DIR, PORT, PAGE_TITLE, BOARD_NAME
-    global HEADER
+    global HEADER, DICTIONARY_JOB
     ap = argparse.ArgumentParser(prog="python -m board serve", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", type=Path, required=True, help="a board folder (its qa/ holds the episode files)")
@@ -7192,7 +7327,9 @@ def main(argv=None) -> int:
                                                         f"(default {PAGE_TITLE!r})")
     ap.add_argument("--header", type=Path, help="an HTML file with a site's own header, shown in place of the page's "
                                                 "title bar (its <style> blocks go into the page's head)")
+    ap.add_argument("--dictionary-job", type=Path, help="enable local dictionary editing for this upload")
     a = ap.parse_args(argv)
+    DICTIONARY_JOB = a.dictionary_job.resolve() if a.dictionary_job else None
     HERE = (a.board / "qa").resolve()
     MP4_DIR = a.clips.resolve()
     COMPARE_DIR = (a.board / "compare").resolve()
@@ -7206,7 +7343,7 @@ def main(argv=None) -> int:
     # overflows it and those connections wait on SYN retries for up to a minute
     socketserver.ThreadingTCPServer.request_queue_size = 128
     socketserver.ThreadingTCPServer.daemon_threads = True
-    with socketserver.ThreadingTCPServer(("", PORT), Handler) as httpd:
+    with socketserver.ThreadingTCPServer(("127.0.0.1" if DICTIONARY_JOB else "", PORT), Handler) as httpd:
         print(f"board at http://localhost:{PORT} ({len(list_episodes())} episodes from {HERE}, clips from {MP4_DIR})",
               flush=True)
         httpd.serve_forever()

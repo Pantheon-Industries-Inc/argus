@@ -447,6 +447,13 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     rn = reader_notes(ctx)
     if rn:
         d["reader_notes"] = rn
+    from label.dictionary_editor import for_episode, context_dictionary
+    owner = (ctx.get('piece') or {}).get('of') or (ctx.get('data_dictionary') or {}).get('episode_id')
+    dictionary = for_episode(ep_dir, owner)
+    if dictionary is None and isinstance(ctx.get('data_dictionary'), dict):
+        dictionary = context_dictionary(ctx['data_dictionary'])
+    if dictionary is not None:
+        d["data_dictionary"] = dictionary
     # the cameras the model is not shown, which board clips cut like any other (board/clips.py unshown_views): the page
     # plays each, named as not shown to the model, with why; one board clips could not cut (record_unshown) has no
     # clip, so it is left out of what the page plays and of its note, and its problem stays on the episode
@@ -586,7 +593,7 @@ def normalize_enums(x, key: str | None = None):
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
                 "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels",
-                "timesteps_s", "task_label", "reader_notes", "unshown_cameras")
+                "timesteps_s", "task_label", "reader_notes", "unshown_cameras", "data_dictionary")
 
 
 def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict) -> dict:
