@@ -4202,6 +4202,34 @@ def test_invalid_episode_tasks_keep_valid_recorded_table_tasks_and_note_sources(
             assert 'camera loose' in prompt and '123' in prompt
 
 
+def test_projected_task_notes_keep_recorder_fields_and_timing_without_duplicate_task_text(tmp_path):
+    import copy
+    import json
+    from prepare.lerobot_labels import retain_metadata
+    spans = {'task_index': [
+        {'label': 'recorded table task', 'row_start': 0, 'row_end': 0,
+         'notes': {'task': 'recorded table task'}, 'raw_times': [None],
+         'timing_reason': 'timestamp is missing or nonfinite'},
+        {'label': 'recorded table task', 'row_start': 1, 'row_end': 1,
+         'notes': {'task': 'recorded table task', 'note': 'camera loose',
+                   'task_status': 'publisher verdict sentinel'}, 'raw_times': [None],
+         'timing_reason': 'timestamp is missing or nonfinite'}]}
+    notes = {'recorded annotation spans': spans, 'operator_notes.json': {'note': 'operator held the camera'}}
+    original = copy.deepcopy(notes)
+    ctx = {'episode_index': 0, 'uploader_notes': notes}
+    root = {'dir': str(tmp_path), 'episode_metadata': {}, 'metadata_read': set()}
+    retain_metadata(ctx, root, None, None)
+    projected = ctx['uploader_notes']['recorded annotation spans']['task_index']
+    assert 'notes' not in projected[0]
+    assert projected[1]['notes'] == {'note': 'camera loose'}
+    assert all(row['raw_times'] == [None] and row['timing_reason'] == 'timestamp is missing or nonfinite'
+               for row in projected)
+    assert ctx['recorded_uploader_notes'] == original and notes == original
+    assert 'camera loose' in ctx['uploader_annotation'] and 'operator held the camera' in ctx['uploader_annotation']
+    assert 'publisher verdict sentinel' not in ctx['uploader_annotation']
+    assert 'publisher verdict sentinel' in json.dumps(ctx['recorded_uploader_notes'])
+
+
 def test_valid_episode_lengths_and_text_tasks_stay_recorded_without_issues():
     import json
     with tempfile.TemporaryDirectory() as t:

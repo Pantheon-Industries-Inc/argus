@@ -39,11 +39,19 @@ def scoped_index_tables(meta, columns, read_jsonl):
     return out
 
 
-def _judgment_notes(value):
+def _judgment_notes(value, *, annotation_spans=False):
     if isinstance(value, dict):
-        return {key: _judgment_notes(cell) for key, cell in value.items() if key not in PUBLISHER_FIELDS}
+        projected = {key: _judgment_notes(cell, annotation_spans=annotation_spans or key == 'recorded annotation spans')
+                     for key, cell in value.items() if key not in PUBLISHER_FIELDS}
+        notes = projected.get('notes')
+        if annotation_spans and isinstance(notes, dict) and isinstance(projected.get('label'), str) \
+                and notes.get('task') == projected['label']:
+            notes.pop('task')
+            if not notes:
+                projected.pop('notes')
+        return projected
     if isinstance(value, list):
-        return [_judgment_notes(cell) for cell in value]
+        return [_judgment_notes(cell, annotation_spans=annotation_spans) for cell in value]
     return value
 
 
