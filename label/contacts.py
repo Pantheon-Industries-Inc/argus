@@ -67,7 +67,7 @@ def find(signals: dict, meta: dict, t: np.ndarray, verdicts=None) -> list[dict]:
         if m.get("variation_of") or name.endswith(VARIATION_SUFFIX):
             continue
         role = (m.get("dictionary") or {}).get("role")
-        if sg.touch_permission(name, role) is False:
+        if sg.touch_cache_permission(name, role, m.get("touch_role")) is False:
             continue
         if len(a) == n and (name in verdicts if verdicts is not None
                             else sg.is_touch(name, a, m.get("rest"), m.get("swing"), role=role)):
@@ -179,7 +179,8 @@ def of_episode(ep: dict, verdicts=None) -> list[dict]:
             meta.setdefault(name, {})["dictionary"] = entry
     if "contacts" in ep["context"]:
         contacts = [{**contact, "signals": [name for name in contact.get("signals") or []
-                     if sg.touch_permission(name, (meta.get(name, {}).get("dictionary") or {}).get("role")) is not False]}
+                     if sg.touch_cache_permission(name, (meta.get(name, {}).get("dictionary") or {}).get("role"),
+                        meta.get(name, {}).get("touch_role")) is not False]}
                     for contact in ep["context"]["contacts"] or []]
         return mark_aligned([contact for contact in contacts if contact["signals"]], meta)
     from label import episode as me

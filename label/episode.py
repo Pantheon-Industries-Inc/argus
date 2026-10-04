@@ -1296,7 +1296,7 @@ def touch_verdicts(ep: dict, n: int) -> frozenset:
     for name, a in (ep.get("signals") or {}).items():
         m = meta.get(name) or {}
         role = field_interpretation(ep["context"], name).get("role")
-        permission = sg.touch_permission(name, role)
+        permission = sg.touch_cache_permission(name, role, m.get("touch_role"))
         if permission is False:
             continue
         # read as stored (a float32 skin is never copied whole as float64, label/signals.py CHUNK_VALUES)
@@ -1312,8 +1312,9 @@ def _touch(ep: dict, pl: dict) -> frozenset:
         return touch_verdicts(ep, pl["n"])
     from label import signals as sg
     from label.dictionary_context import field_interpretation
-    return frozenset(name for name in pl["touch"] if sg.touch_permission(
-        name, field_interpretation(ep["context"], name).get("role")) is not False)
+    return frozenset(name for name in pl["touch"] if sg.touch_cache_permission(
+        name, field_interpretation(ep["context"], name).get("role"),
+        (ep.get("signal_meta") or {}).get(name, {}).get("touch_role")) is not False)
 
 
 def touch_contacts(ep: dict, pl: dict, contacts) -> list[dict]:

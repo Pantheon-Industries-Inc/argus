@@ -169,3 +169,23 @@ def test_long_piece_inherits_original_owner_and_qualified_touch_role(tmp_path, m
         assert loaded["context"]["data_dictionary"]["episode_id"] == "episode_one"
         assert loaded["signal_meta"]["channel0"]["touch_role"] == "touch"
         assert me.touch_verdicts(loaded, len(loaded["state"])) == frozenset({"channel0"})
+
+
+@pytest.mark.parametrize('role', ['', 'unknown_open_role'])
+@pytest.mark.parametrize('name,expected', [('channel0', False), ('left_pressure', True)])
+def test_human_clear_or_unknown_role_cannot_reuse_machine_piece_qualification(role, name, expected):
+    ep, record = fixture(name=name, role='touch', array=RISE[-10:], stored=True)
+    ep['signal_meta'][name]['touch_role'] = 'touch'
+    ep['context']['contacts'] = [{'id': 'c1', 'signals': [name]}]
+    reviewed = bind(ep, record, {'field0': {'role': role}})
+    touch = frozenset({name}) if expected else frozenset()
+    assert me.touch_verdicts(reviewed, 10) == touch
+    contacts = lc.of_episode(reviewed)
+    assert [c['id'] for c in contacts] == (['c1'] if expected else [])
+    assert me._touch(reviewed, {'n': 10, 'touch': frozenset({name})}) == touch
+    assert record['entries']['field0']['role'] == 'touch'
+
+
+def test_original_piece_without_dictionary_qualification_keeps_stored_verdict():
+    ep, _ = fixture(name='channel0', array=RISE[-10:], stored=True)
+    assert me.touch_verdicts(ep, 10) == frozenset({'channel0'})

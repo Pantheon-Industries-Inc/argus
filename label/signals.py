@@ -456,6 +456,15 @@ def touch_permission(name: str, role=None):
     return True if _role(role) == "touch" else None
 
 
+def touch_cache_permission(name: str, role=None, qualified_role=None):
+    """A cleared role can reuse a recorded verdict only when the native name itself names touch."""
+    permission = touch_permission(name, role)
+    if permission is None and qualified_role == "touch":
+        from prepare.formats import names_touch
+        return names_touch(name)
+    return permission
+
+
 def is_touch(name: str, a: np.ndarray, rest=None, swing=None, role=None) -> bool:
     """Whether a signal measures touch: its own name says so (prepare/formats.py names_touch: tactile, pressure,
     contact, force, and never a command) and its numbers behave like touch (touch_like). Numbers alone cannot
