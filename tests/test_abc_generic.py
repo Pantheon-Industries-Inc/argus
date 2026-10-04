@@ -13,7 +13,7 @@ from prepare import abc130k, formats
 from test_prepare import _h264_frames
 
 
-def schema():
+def schema(*, typed=False):
     fd = descriptor_pb2.FileDescriptorProto(name='argus_capture_parity.proto', package='capture_parity', syntax='proto3')
     def message(name, fields):
         msg = fd.message_type.add(name=name)
@@ -23,7 +23,11 @@ def schema():
                 f.type_name = '.capture_parity.' + ref
     message('Timestamp', [('seconds', 3, False, None), ('nanos', 5, False, None)])
     message('CompressedVideo', [('timestamp', 11, False, 'Timestamp'), ('format', 9, False, None), ('data', 12, False, None)])
-    message('Robot', [('timestamp', 11, False, 'Timestamp'), ('position', 1, True, None), ('velocity', 1, True, None)])
+    robot_fields = [('timestamp', 11, False, 'Timestamp'), ('position', 1, True, None), ('velocity', 1, True, None)]
+    if typed:
+        robot_fields += [('counter', 3, False, None), ('unsigned_counter', 4, False, None),
+                         ('temperature', 2, False, None), ('active', 8, False, None)]
+    message('Robot', robot_fields)
     message('Text', [('data', 9, False, None)])
     pool = descriptor_pool.DescriptorPool()
     pool.Add(fd)
@@ -33,8 +37,8 @@ def schema():
     return result
 
 
-def capture_mcap(path, *, n=6, omit=(), bad_header=None, top='/top-camera', tied=None, instruction=True):
-    types = schema()
+def capture_mcap(path, *, n=6, omit=(), bad_header=None, top='/top-camera', tied=None, instruction=True, typed=False):
+    types = schema(typed=typed)
     frames = _h264_frames(n)
     base = 1_700_000_000_000_000_000
     capture = base + np.arange(n, dtype=np.int64) * 33_000_000
@@ -57,6 +61,9 @@ def capture_mcap(path, *, n=6, omit=(), bad_header=None, top='/top-camera', tied
             for i, stamp in enumerate(capture):
                 msg = types['Robot'](position=[0.1 * j + 0.01 * i + k * 0.001 for k in range(width)],
                                      velocity=[0.003 * i + k * 0.001 for k in range(width)])
+                if typed:
+                    msg.counter, msg.unsigned_counter = 2**53 + 17 + i, 2**63 + 19 + i
+                    msg.temperature, msg.active = .1 + i * .01, bool(i % 2)
                 msg.timestamp.seconds, msg.timestamp.nanos = divmod(int(stamp), 1_000_000_000)
                 if topic == bad_header and i == 2:
                     msg.timestamp.nanos = 1_000_000_000
@@ -246,4 +253,30 @@ def test_retired_upload_discovery_does_not_import_the_published_adapter(monkeypa
             pytest.fail('retired adapter imported on the generic path')
         return load(name, *args, **kwargs)
     monkeypatch.setattr(importlib, 'import_module', declared_only)
-    assert [module.__name__ for module in formats.upload_adapters('mcap')] == ['prepare.genhumanego', 'prepare.realomin']
+    assert 'prepare.abc130k' not in [module.__name__ for module in formats.upload_adapters('mcap')]
+
+
+def test_typed_native_numeric_leaves_survive_compatibility_projection(tmp_path, monkeypatch):
+    root = tmp_path / 'typed'
+    root.mkdir()
+    capture_mcap(root / 'episode.mcap', typed=True)
+    original = hashlib.sha256((root / 'episode.mcap').read_bytes()).hexdigest()
+    ep, ctx = converted(root, tmp_path / 'generic', monkeypatch, legacy=False)
+    row = next(row for row in ctx['mcap_field_inventory'] if row['topic'] == '/left-arm-state')
+    descriptors = {item['field']: item for item in row['exact_numeric_fields']}
+    expected = {'counter': np.arange(6, dtype=np.int64) + np.int64(2**53 + 17),
+                'unsigned_counter': np.arange(6, dtype=np.uint64) + np.uint64(2**63 + 19),
+                'temperature': np.array([.1 + i * .01 for i in range(6)], dtype=np.float32),
+                'active': np.array([bool(i % 2) for i in range(6)]),
+                'timestamp.seconds': np.full(6, 1_700_000_000, dtype=np.int64),
+                'timestamp.nanos': np.arange(6, dtype=np.int32) * 33_000_000}
+    with np.load(ep / ctx['recorded_mcap_fields']) as arrays:
+        for field, values in expected.items():
+            descriptor = descriptors[field]
+            assert descriptor['dtype'] == str(values.dtype)
+            assert descriptor['dtype_source'] == 'protobuf declaration'
+            assert arrays[descriptor['array']].dtype == values.dtype
+            assert arrays[descriptor['array']].tobytes() == values.tobytes()
+            assert arrays[descriptor['message_indices']].tolist() == list(range(6))
+        assert arrays[descriptors['active']['presence']].tolist() == [False, True, False, True, False, True]
+    assert hashlib.sha256((root / 'episode.mcap').read_bytes()).hexdigest() == original

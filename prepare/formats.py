@@ -7740,6 +7740,7 @@ def mcap_capture_stamp(decoded) -> tuple[int | None, str | None]:
 def retain_mcap_fields(path: Path, ep: Path, ctx: dict, *, archive_name="recorded_mcap_fields.npz") -> None:
     """Retain native numeric samples and distinct integer capture arrival and publish clocks before placement."""
     from mcap.reader import make_reader
+    from prepare.mcap_fields import native_fields
     metadata = []
     with open(path, "rb") as fh:
         try:
@@ -7760,7 +7761,7 @@ def retain_mcap_fields(path: Path, ep: Path, ctx: dict, *, archive_name="recorde
             capture, error = mcap_capture_stamp(decoded)
             row = rows.setdefault(channel.topic, {"schema": schema.name if schema else None,
                                   "log_ns": [], "publish_ns": [], "capture_ns": [], "capture_valid": [],
-                                  "fields": {}, "errors": [], "text": [], "capture_fields": []})
+                                  "fields": {}, "exact": {}, "errors": [], "text": [], "capture_fields": []})
             index = len(row["log_ns"])
             row["log_ns"].append(msg.log_time)
             row["publish_ns"].append(msg.publish_time)
@@ -7777,6 +7778,14 @@ def retain_mcap_fields(path: Path, ep: Path, ctx: dict, *, archive_name="recorde
                 group["indices"].append(index)
                 group["values"].append(values)
                 group["names"].append(names)
+            for field, item in native_fields(decoded).items():
+                key = (field, item["dtype"], tuple(item["shape"]), item.get("dtype_source", "decoded Python type"))
+                group = row["exact"].setdefault(key, {"indices": [], "values": [], "present": [], "original": []})
+                group["indices"].append(index)
+                group["values"].append(item["values"])
+                group["present"].append(item["present"])
+                if item["values"] is None:
+                    group["original"].append(item["original"])
     arrays, inventory = {}, []
     for i, (topic, row) in enumerate(sorted(rows.items())):
         entry = {"topic": topic, "schema": row["schema"], "fields": {}, "field_details": [],
@@ -7799,6 +7808,18 @@ def retain_mcap_fields(path: Path, ep: Path, ctx: dict, *, archive_name="recorde
             entry["fields"][field] = key if field not in entry["fields"] else [entry["fields"][field], key]
             entry["field_details"].append({"field": field, "width": width, "array": key, "message_indices": indices,
                                            "names": group["names"], "shape": group["shape"]})
+        entry["exact_numeric_fields"] = []
+        for j, ((field, dtype, shape, dtype_source), group) in enumerate(sorted(row["exact"].items())):
+            key, indices, presence = f"channel{i}_native{j}", f"channel{i}_native{j}_indices", f"channel{i}_native{j}_presence"
+            arrays[indices], arrays[presence] = np.asarray(group["indices"], dtype=np.int64), np.asarray(group["present"], dtype=bool)
+            descriptor = {"field": field, "dtype": dtype, "shape": list(shape), "dtype_source": dtype_source,
+                          "message_indices": indices, "presence": presence}
+            if group["original"]:
+                descriptor["original"] = group["original"]
+            else:
+                arrays[key] = np.stack(group["values"])
+                descriptor["array"] = key
+            entry["exact_numeric_fields"].append(descriptor)
         inventory.append(entry)
     ctx.update(recorded_mcap_fields=archive_name, mcap_field_inventory=inventory)
     np.savez(ep / ctx["recorded_mcap_fields"], **arrays)
@@ -8215,8 +8236,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 continue
             stamps = np.asarray(capture_ns[topic], dtype=np.int64)
             offsets = np.abs(stamps[nearest(stamps, anchor_stamps)] - anchor_stamps) / 1e6
-            extra["stream_checks"]["streams"][topic].update(pair_offset_ms_max=round(float(offsets.max()), 1),
-                                                            pair_offset_ms_median=round(float(np.median(offsets)), 2))
+            facts = extra.setdefault("stream_checks", {}).setdefault("streams", {}).setdefault(topic, {"n": len(stamps)})
+            facts.update(pair_offset_ms_max=round(float(offsets.max()), 1), pair_offset_ms_median=round(float(np.median(offsets)), 2))
     for i, path in enumerate(sensor_mcaps):
         retained = {}
         retain_mcap_fields(path, ep, retained, archive_name=f"recorded_sensor_mcap{i}.npz")
