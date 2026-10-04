@@ -106,7 +106,7 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
 
 
 # an uploaded MCAP from this headset (its forward camera and its annotation) is read by this adapter
-UPLOAD = "mcap"
+UPLOAD = None
 
 
 def recognizes(topics: list[str]) -> bool:
