@@ -135,9 +135,12 @@ def task_kind(sentence: str, names: list) -> str | None:
 
 # ---- one episode file, summarised ----
 
-def summarize(p: Path, d: dict, counts) -> dict:
+def summarize(p: Path, d: dict, counts, name=None) -> dict:
     """What the home page needs from one episode file. counts(list_key, issue) is Families.counts: whether an issue
-    counts, the same rule as the rail and the issue filter."""
+    counts, the same rule as the rail and the issue filter. name(list_key, issue, dataset) is the issue's family as the
+    episode list's filter names it (serve.py issue_family_name); without it an issue goes by its tag."""
+    tag = (lambda key, i: name(key, i, d.get("dataset"))) if name else \
+        (lambda key, i: str(i.get("category") or i.get("issue"))[:60])
     names = [str(o.get("name") or "") for o in (d.get("objects") or []) if isinstance(o, dict) and o.get("name")]
     events = [e for e in (d.get("event_labels") or []) if isinstance(e, dict)]
     verbs = Counter(v for e in events for v in motion_verbs(e.get("verb_class")))
@@ -189,8 +192,8 @@ def summarize(p: Path, d: dict, counts) -> dict:
         "mistake_subtasks": mistake_subtasks,
         "verbs": dict(verbs),
         "tasks": task_rows,
-        "issue_tags": [str(i.get("category") or i.get("issue"))[:60] for i in issues],
-        "mistake_tags": [str(i.get("category") or i.get("issue"))[:60] for i in mistakes],
+        "issue_tags": [tag("data_issues", i) for i in issues],
+        "mistake_tags": [tag("operator_mistakes", i) for i in mistakes],
     }
 
 
@@ -316,8 +319,9 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
             "eps_with_issue": sum(1 for r in rs if r["issue_tags"]),
             "eps_with_mistake": sum(1 for r in rs if r["mistake_tags"]),
             "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rs),
-            "top_issues": _top(Counter(t for r in rs for t in r["issue_tags"]), 6),
-            "top_mistakes": _top(Counter(t for r in rs for t in r["mistake_tags"]), 6),
+            # data issues by the episodes that have each, operator mistakes by how often each happened
+            "top_issues": _top(Counter(t for r in rs for t in set(r["issue_tags"])), 5),
+            "top_mistakes": _top(Counter(t for r in rs for t in r["mistake_tags"]), 5),
         })
     sec = sum(r["seconds"] for r in rows)
     cost = sum(r["cost"] for r in rows)
@@ -349,8 +353,8 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
             "eps_with_issue": sum(1 for r in rows if r["issue_tags"]),
             "eps_with_mistake": sum(1 for r in rows if r["mistake_tags"]),
             "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rows),
-            "top_issues": _top(Counter(t for r in rows for t in r["issue_tags"]), 6),
-            "top_mistakes": _top(Counter(t for r in rows for t in r["mistake_tags"]), 6),
+            "top_issues": _top(Counter(t for r in rows for t in set(r["issue_tags"])), 5),
+            "top_mistakes": _top(Counter(t for r in rows for t in r["mistake_tags"]), 5),
             # the five commonest kinds of object (with their tag) and motions, split by dataset
             "top_objects": [[k, n, by, tags.get(k)] for k, n, by in _top_split(objs)],
             "top_motions": _top_split(verbs),
@@ -372,7 +376,7 @@ _BODY: dict = {}            # folder -> (signature, raw JSON, gzipped JSON, etag
 REBUILD_EVERY_S = 15        # the pace and the times on the page move with the clock even when no label lands
 
 
-def _summaries(here: Path, counts) -> list:
+def _summaries(here: Path, counts, name=None) -> list:
     with _LOCK:
         known = dict(_SUMMARIES.get(str(here)) or {})
     fresh = {}
@@ -390,7 +394,7 @@ def _summaries(here: Path, counts) -> list:
         except (OSError, ValueError):
             continue                        # half-written or not an episode file: read again next time
         if isinstance(d, dict) and "episode_prompt" in d:
-            fresh[p.name] = (st.st_mtime_ns, st.st_size, summarize(p, d, counts))
+            fresh[p.name] = (st.st_mtime_ns, st.st_size, summarize(p, d, counts, name))
     with _LOCK:
         _SUMMARIES[str(here)] = fresh
     return [v[2] for v in fresh.values()]
@@ -405,7 +409,7 @@ def load_tags(path: Path) -> dict:
     return {k: v.get("deformable") for k, v in kinds.items() if isinstance(v, dict)}
 
 
-def home_json(here: Path, plan_path: Path, counts) -> tuple:
+def home_json(here: Path, plan_path: Path, counts, name=None) -> tuple:
     """(JSON, gzipped JSON, ETag) of the home page's numbers. Rebuilt when a label lands, the plan changes or
     REBUILD_EVERY_S passes; between those every visitor gets the same bytes, and a visitor whose copy is current
     gets 304 from serve.py."""
@@ -425,7 +429,7 @@ def home_json(here: Path, plan_path: Path, counts) -> tuple:
         plan = json.loads(plan_path.read_text())
     except (OSError, ValueError):
         plan = {}
-    raw = json.dumps(stats(_summaries(here, counts), plan, now, load_tags(tags_path)),
+    raw = json.dumps(stats(_summaries(here, counts, name), plan, now, load_tags(tags_path)),
                      separators=(",", ":")).encode()
     gz = gzip.compress(raw, compresslevel=5)
     etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'

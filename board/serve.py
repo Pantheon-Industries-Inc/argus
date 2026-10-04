@@ -494,6 +494,19 @@ def public_label(d: dict) -> dict:
     return d
 
 
+_FAMILY_NAMES = None
+
+
+def issue_family_name(key: str, i: dict, dataset: str | None = None) -> str:
+    """An issue's family as the episode list's problem filter names it (board/families.json), so the home view and
+    the filter group and name issues the same way."""
+    global _FAMILY_NAMES
+    if _FAMILY_NAMES is None:
+        _FAMILY_NAMES = {k: (v or {}).get("name") for k, v in FAMILIES.catalog().items()}
+    slug = FAMILIES.family_of(key, i, dataset)
+    return _FAMILY_NAMES.get(slug) or slug.split(":", 1)[-1]
+
+
 def episode_view(d: dict) -> dict:
     """The episode as the page shows it: its public fields (public_label), each flagged issue carrying the family it
     is counted under and whether it counts (Families.counts), so the episode's own list names and counts a problem
@@ -2015,68 +2028,86 @@ main.src-fade.ep-fade #left-col > .video-wrap, main.src-fade.ep-fade .ep-head { 
 .goal-frame.nofr img { display: none; }
 .cmp-fail .cf-k { font: 600 11px/1.3 var(--sans); color: var(--fg-3); margin: 12px 0 6px; }
 
-/* ---------- the home view: the labelling run on one screen, no scrolling, in modules on one grid. Row one: the
-   headline numbers, each in a tile of the same build (label, value, one line under it). Row two: one table with a
-   row per dataset. Row three: kinds found as hours are labelled, the commonest objects, the commonest motions.
-   Text is never smaller than 12.5px; numbers sit right-aligned in their own columns. Each dataset has a hue (in the
-   plan's order: violet, rose, moss, navy, slate) only where it tells the datasets apart: the swatch by its name and
-   its line on the chart. Everything else is ink. ---------- */
-#home-view { display: none; height: calc(100vh - var(--header-h)); overflow: hidden; background: var(--bg);
+/* ---------- the home view: the labelling run, in sections that scroll. Progress first, then the tranches, the issues
+   and what the footage holds, each section a row of tiles of one build. Text is never smaller than 12.5px; numbers
+   sit right-aligned in their own columns. Each dataset has a hue (in the plan's order: violet, rose, moss, navy,
+   slate) only where it tells the datasets apart: the swatch by its name and its line on the chart. Everything else is
+   ink. ---------- */
+#home-view { display: none; height: calc(100vh - var(--header-h)); overflow-y: auto; background: var(--bg);
   transition: opacity 180ms ease; }
 body.view-home main, body.view-home #cmp-view, body.view-home .coverage { display: none; }
 body.view-home #home-view { display: block; }
 body.view-fade #home-view { opacity: 0; }
 .cv-all.home-link { cursor: pointer; position: relative; transition: background 140ms; }
 .cv-all.home-link:hover { background: color-mix(in srgb, var(--surface) 94%, var(--fg)); }
-.hv { height: 100%; box-sizing: border-box; max-width: 1600px; margin: 0 auto; padding: clamp(12px, 2.4vh, 20px) 32px;
-  display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: clamp(10px, 1.8vh, 16px); }
-.hv-tile { min-width: 0; min-height: 0; padding: clamp(11px, 1.9vh, 16px) 22px; background: var(--surface); border: 1px solid var(--border);
+.hv { max-width: 1440px; margin: 0 auto; padding: 28px 32px 56px; display: grid; gap: 20px; }
+.hv-sec { margin: 22px 0 -4px; font: 700 18px/1.2 var(--sans); letter-spacing: -0.01em; color: var(--fg); }
+.hv-tile { min-width: 0; padding: 20px 24px; background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; }
-.hv-tt { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 30px;
-  margin-bottom: clamp(6px, 1.2vh, 12px);
-  font: 600 15px/1 var(--sans); color: var(--fg); }
+.hv-tt { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px;
+  font: 600 15px/1.3 var(--sans); color: var(--fg); }
+.hv-tt small { font: 500 13px/1.3 var(--sans); color: var(--fg-3); }
+.hv .if-sev-seg button { font-size: 13px; }
 /* the headline numbers */
 .hv-kpis { display: grid; grid-template-columns: 1.8fr repeat(4, minmax(0, 1fr)); gap: 16px; }
 .hv-kpi .k { display: flex; align-items: center; gap: 8px; font: 500 13px/1 var(--sans); color: var(--fg-3); }
-.hv-kpi .v { margin-top: clamp(6px, 1.1vh, 10px); font: 600 clamp(26px, 3.6vh, 32px)/1 var(--mono); letter-spacing: -0.03em; color: var(--fg);
-  white-space: nowrap; }
+.hv-kpi .v { margin-top: 12px; font: 600 32px/1 var(--mono); letter-spacing: -0.03em; color: var(--fg); white-space: nowrap; }
 .hv-kpi .v small { font: 500 15px/1 var(--sans); letter-spacing: 0; color: var(--fg-3); margin-left: 4px; }
-.hv-kpi .s { margin-top: clamp(6px, 1.1vh, 10px); font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
+.hv-kpi .s { margin-top: 10px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
 .hv-kpi .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .hv-kpi .pct { font: 600 18px/1 var(--mono); color: var(--fg); }
-.hv-kpi .bar { margin-top: clamp(8px, 1.5vh, 14px); height: 8px; border-radius: 4px; overflow: hidden; background: rgba(28,28,26,0.08); }
+.hv-kpi .bar { margin-top: 14px; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(28,28,26,0.08); }
 .hv-kpi .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg);
   transition: width 900ms cubic-bezier(.2,.7,.2,1); }
 .hv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-disabled); }
 .hv-dot.on { background: var(--success); animation: hv-pulse 2.4s ease-in-out infinite; }
 @keyframes hv-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-/* one card per tranche */
+/* one card per tranche: its hours against the plan, then three numbers */
 .hv-cards { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 16px; }
-.hv-card { cursor: pointer; padding: 18px 22px 14px; transition: box-shadow 160ms ease, border-color 160ms ease; }
+/* four cards side by side need a wide window; below it they sit two by two */
+@media (max-width: 1500px) { .hv-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.hv-card { cursor: pointer; transition: box-shadow 160ms ease, border-color 160ms ease; }
 .hv-card:hover { border-color: var(--border-strong); box-shadow: 0 6px 22px rgba(0,0,0,0.08); }
 .hv-card .hd { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
-.hv-card .nm { font: 600 15px/1.2 var(--sans); color: var(--fg); white-space: nowrap; }
-.hv-card .nm i { display: inline-block; width: 10px; height: 10px; margin-right: 10px; border-radius: 3px; vertical-align: -1px; }
+.hv-nm { font: 600 15px/1.2 var(--sans); color: var(--fg); white-space: nowrap; }
+.hv-nm i { display: inline-block; width: 10px; height: 10px; margin-right: 10px; border-radius: 3px; vertical-align: -1px; }
 .hv-card .h { font: 600 15px/1 var(--mono); color: var(--fg); white-space: nowrap; }
-.hv-card .h small, .hv-card .hv-kv small { font-size: 13px; font-weight: 500; color: var(--fg-3); }
-.hv .if-sev-seg button { font-size: 13px; }
-.hv-card .bar { height: 4px; margin: clamp(7px, 1.3vh, 12px) 0 clamp(5px, 1.1vh, 10px); border-radius: 2px; overflow: hidden; background: rgba(28,28,26,0.08); }
+.hv-card .h small { font-weight: 500; color: var(--fg-3); }
+.hv-card .bar { height: 4px; margin: 14px 0 18px; border-radius: 2px; overflow: hidden; background: rgba(28,28,26,0.08); }
 .hv-card .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg-2);
   transition: width 900ms cubic-bezier(.2,.7,.2,1); }
-.hv-card .hv-kv { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
-  height: clamp(21px, 3.3vh, 28px); }
-.hv-card .hv-kv span { font: 500 13.5px/1 var(--sans); color: var(--fg-3); }
-.hv-card .hv-kv b { font: 600 14.5px/1 var(--mono); color: var(--fg); white-space: nowrap; }
-/* row three */
-.hv-low { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px;
-  min-height: 0; }
-.hv-low .hv-tile { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
-.hv-growth { display: grid; grid-template-columns: minmax(0, 1fr) 206px; grid-template-rows: minmax(0, 1fr); gap: 24px;
-  min-height: 0; }
+.hv-trio { display: grid; grid-template-columns: repeat(3, auto); justify-content: space-between; gap: 12px; }
+.hv-trio b { display: block; font: 600 24px/1 var(--mono); letter-spacing: -0.02em; color: var(--fg); white-space: nowrap; }
+.hv-trio b small { font: 500 13px/1 var(--mono); letter-spacing: 0; color: var(--fg-3); }
+.hv-trio span { display: block; margin-top: 8px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
+/* two tiles side by side, and three */
+.hv-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.hv-three { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr)); gap: 16px; }
+.hv-sub { margin: 22px 0 10px; padding-top: 18px; border-top: 1px solid var(--border);
+  font: 500 13px/1.2 var(--sans); color: var(--fg-3); }
+/* bar lists: each name inside a bar as long as its count, the count in its own right-aligned column */
+.hv-bl { display: grid; }
+.hv-bl .r { display: grid; grid-template-columns: minmax(0, 1fr) 92px 64px; align-items: center; column-gap: 16px;
+  height: 36px; }
+.hv-bl.two .r { grid-template-columns: minmax(0, 1fr) 64px; }
+.hv-bl .hd { display: grid; grid-template-columns: minmax(0, 1fr) 92px 64px; column-gap: 16px; padding-bottom: 10px;
+  margin-bottom: 4px; border-bottom: 1px solid var(--border); font: 500 13px/1.2 var(--sans); color: var(--fg-3); }
+.hv-bl.two .hd { grid-template-columns: minmax(0, 1fr) 64px; }
+.hv-bl .hd span:last-child, .hv-bl .r .n { text-align: right; }
+.hv-bl .hv-lb { position: relative; height: 28px; display: flex; align-items: center; min-width: 0; }
+.hv-bl .hv-lb > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; background: rgba(28,28,26,0.10);
+  transition: width 700ms cubic-bezier(.2,.7,.2,1); }
+.hv-bl .hv-lb span { position: relative; padding-left: 10px; font: 500 14px/1 var(--sans); color: var(--fg);
+  white-space: nowrap; overflow: visible; }
+.hv-bl .hv-lb span i { display: inline-block; width: 9px; height: 9px; margin-right: 9px; border-radius: 3px; }
+.hv-bl .ty { font: 500 13px/1 var(--sans); color: var(--fg-3); }
+.hv-bl .ty.d { color: var(--fg); font-weight: 600; }
+.hv-bl .n { font: 600 14px/1 var(--mono); color: var(--fg); }
+/* kinds found as hours are labelled: the chart, and its key as a table beside it */
+.hv-growth { display: grid; grid-template-columns: minmax(0, 1fr) 206px; gap: 24px; height: 300px; }
 .hv-plot { position: relative; min-height: 0; }
-/* the chart stretches to its box: lines in an SVG scaled to the area, labels and end dots placed in percentages, so
-   nothing is measured and nothing can spill out of the tile */
-.hv-area { position: absolute; left: 34px; right: 8px; top: 8px; bottom: 24px; }
+/* the chart stretches to its box: lines in an SVG scaled to the area, labels and end dots placed in percentages */
+.hv-area { position: absolute; left: 34px; right: 8px; top: 8px; bottom: 26px; }
 .hv-area svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .hv-area .grid { stroke: var(--row-divider); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .hv-area .ax { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -2093,34 +2124,12 @@ body.view-fade #home-view { opacity: 0; }
 .hv-key i { height: 3px; border-radius: 2px; }
 .hv-key span { font: 500 13.5px/1.2 var(--sans); color: var(--fg-2); }
 .hv-key b { font: 600 14.5px/1 var(--mono); color: var(--fg); }
-/* the commonest kinds: a list of bars, each name inside its bar, the count in its own right-aligned column */
-.hv-bl .hd, .hv-bl .r { display: grid; grid-template-columns: minmax(0, 1fr) 92px 52px; align-items: center;
-  column-gap: 16px; }
-.hv-bl.two .hd, .hv-bl.two .r { grid-template-columns: minmax(0, 1fr) 52px; }
-.hv-bl .hd { padding-bottom: 10px; margin-bottom: 6px; border-bottom: 1px solid var(--border);
-  font: 500 12.5px/1.2 var(--sans); color: var(--fg-3); }
-.hv-bl .hd span:last-child, .hv-bl .r .n { text-align: right; }
-.hv-bl { display: grid; grid-template-rows: auto repeat(5, minmax(30px, 34px)); min-height: 0; }
-.hv-bl .r { min-height: 0; }
-.hv-bl .hv-lb { position: relative; height: 28px; display: flex; align-items: center; min-width: 0; }
-.hv-bl .hv-lb i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; background: rgba(28,28,26,0.10);
-  transition: width 700ms cubic-bezier(.2,.7,.2,1); }
-.hv-bl .hv-lb span { position: relative; padding-left: 10px; font: 500 14px/1 var(--sans); color: var(--fg);
-  white-space: nowrap; }
-.hv-bl .ty { font: 500 13px/1 var(--sans); color: var(--fg-3); }
-.hv-bl .ty.d { color: var(--fg); font-weight: 600; }
-.hv-bl .n { font: 600 14px/1 var(--mono); color: var(--fg); }
 .hv-empty { font-size: 14px; color: var(--fg-3); }
-/* a short or narrow window scrolls rather than squeezing the modules */
-@media (max-height: 560px), (max-width: 1180px) {
-  #home-view { overflow-y: auto; }
-  .hv { height: auto; grid-template-rows: none; }
-  .hv-low { grid-template-columns: 1fr; }
-  .hv-low .hv-tile { height: 360px; }
-}
 @media (max-width: 1180px) {
   .hv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hv-kpis > :first-child { grid-column: 1 / -1; }
+  .hv-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hv-two, .hv-three { grid-template-columns: 1fr; }
 }
 
 /* ---------- the comparison view ---------- */
@@ -5598,7 +5607,7 @@ async function renderEpisodeTable(order, first) {
 // empty categories. Force a fresh load in that case.
 window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
 
-// ---- the home view: the labelling run on one screen ----
+// ---- the home view: the labelling run, in sections ----
 // board/home.py computes the numbers. The page asks again every 20 seconds while the home view is open and the tab is
 // visible; the server answers 304 while nothing has changed, so a handful of open pages cost next to nothing. Each
 // dataset has its own hue here, in the plan's order (BOARD/plan.json names the datasets and orders them).
@@ -5645,8 +5654,19 @@ async function fetchHome() {
 function buildHome() {
   homeView.innerHTML = `<div class="hv">
   <section class="hv-kpis" id="hv-kpis"></section>
+  <h3 class="hv-sec">Tranches</h3>
   <section class="hv-cards" id="hv-cards"></section>
-  <section class="hv-low">
+  <h3 class="hv-sec">Issues</h3>
+  <section class="hv-two">
+    <div class="hv-tile"><div class="hv-tt">Data issues<small>share of episodes with one</small></div>
+      <div class="hv-bl two" id="hv-issue-by"></div>
+      <div class="hv-sub">Most common, episodes with each</div><div class="hv-bl two" id="hv-issue-top"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Operator mistakes<small>share of subtasks with one</small></div>
+      <div class="hv-bl two" id="hv-mistake-by"></div>
+      <div class="hv-sub">Most common, times each happened</div><div class="hv-bl two" id="hv-mistake-top"></div></div>
+  </section>
+  <h3 class="hv-sec">What the footage holds</h3>
+  <section class="hv-three">
     <div class="hv-tile">
       <div class="hv-tt"><span id="hv-ch-title"></span>
         <div class="if-sev-seg" id="hv-kind" role="radiogroup" aria-label="What the chart counts">
@@ -5655,10 +5675,15 @@ function buildHome() {
           <button type="button" role="radio" data-v="tasks">Tasks</button></div></div>
       <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
     </div>
-    <div class="hv-tile"><div class="hv-tt">Top objects</div>
+    <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
       <div class="hv-bl" id="hv-top-objects"></div></div>
-    <div class="hv-tile"><div class="hv-tt">Top motions</div>
+    <div class="hv-tile"><div class="hv-tt">Top motions<small>events with each</small></div>
       <div class="hv-bl two" id="hv-top-motions"></div></div>
+  </section>
+  <section class="hv-two">
+    <div class="hv-tile"><div class="hv-tt">Kinds of object handled</div><div class="hv-bl two" id="hv-kinds-by"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Deformable<small>share of the objects handled</small></div>
+      <div class="hv-bl two" id="hv-def-by"></div></div>
   </section></div>`;
   _homeBuilt = true;
   document.getElementById('hv-kind').addEventListener('click', e => {
@@ -5691,37 +5716,6 @@ function renderKpis() {
 }
 
 // one card per tranche: its hours against the plan, then a short list of label and value, one fact per line
-function renderCards() {
-  const box = document.getElementById('hv-cards'), ds = homeDs();
-  box.style.setProperty('--n', ds.length);
-  const pct = (n, of) => of ? Math.round(100 * n / of) + '%' : '';
-  const tags = list => esc((list || []).map(([k, n]) => `${k.replace(/_/g, ' ')} ${n}`).join(', '));
-  const prev = new Map([...box.querySelectorAll('.hv-card')].map(c => [c.dataset.ds, c.querySelector('.bar i').style.width]));
-  box.innerHTML = ds.map(d => {
-    const o = d.outcomes || {}, n = (o.success || 0) + (o.failure || 0) + (o.other || 0);
-    const df = d.deformable || {}, dn = (df.deformable || 0) + (df.rigid || 0);
-    const row = (k, v, title) => `<div class="hv-kv"${title ? ` title="${title}"` : ''}><span>${k}</span><b>${v}</b></div>`;
-    return `<div class="hv-tile hv-card" data-ds="${esc(d.dataset)}"><div class="hd"><span class="nm"><i style="background:`
-      + `${hueOf(d.dataset)}"></i>${esc(homeName(d.dataset))}</span><span class="h">${fmtHrs(d.seconds)}`
-      + `${d.plan_seconds ? `<small> / ${fmtHrs(d.plan_seconds)}h</small>` : '<small>h</small>'}</span></div>`
-      + `<div class="bar"><i style="width:${prev.get(d.dataset) || '0%'}"></i></div><div>`
-      + row('Episodes', `${d.episodes.toLocaleString()}${d.plan_episodes ? `<small> / ${d.plan_episodes.toLocaleString()}</small>` : ''}`)
-      + row('Subtasks', `${(d.n_tasks || 0).toLocaleString()}<small> &middot; ${d.seconds ? (d.n_tasks / (d.seconds / 60)).toFixed(1) : '0'} per min</small>`,
-        'A session&rsquo;s tasks, or one per episode where an episode is one task')
-      + row('Success', pct(o.success || 0, n), 'Share of tasks that succeeded')
-      + row('Data issues', pct(d.eps_with_issue || 0, d.episodes), `Episodes with a data issue. ${tags(d.top_issues)}`)
-      + row('Operator mistakes', pct(d.subtasks_with_mistake || 0, d.n_tasks), `Subtasks with an operator mistake. ${tags(d.top_mistakes)}`)
-      + row('Kinds of object', d.diversity.objects.distinct.toLocaleString(), 'Kinds of object handled in a subtask')
-      + row('Deformable', dn ? pct(df.deformable || 0, dn) : '', 'Share of the objects handled that are deformable')
-      + '</div></div>';
-  }).join('');
-  requestAnimationFrame(() => box.querySelectorAll('.hv-card').forEach((c, i) => {
-    const d = ds[i];
-    c.querySelector('.bar i').style.width = (d.plan_seconds ? Math.min(100, 100 * d.seconds / d.plan_seconds) : 0)
-      .toFixed(2) + '%';
-  }));
-}
-
 function niceStep(max, n) {
   const raw = max / n, p = Math.pow(10, Math.floor(Math.log10(raw || 1)));
   return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || p * 10;
@@ -5759,23 +5753,74 @@ function renderPlot() {
     + `aria-label="Kinds found against labelled hours">${g}</svg>${html}</div>`;
 }
 
-// the five commonest kinds over every dataset: each name inside a bar as long as its count, the count in its own column
-// (the bar's tooltip splits the count by dataset)
-function renderList(el, head, rows, type) {
-  const max = Math.max(1, ...rows.map(r => r[1]));
-  const order = homeDs().map(d => d.dataset);
-  el.innerHTML = `<div class="hd">${head.map(h => `<span>${h}</span>`).join('')}</div>` + (rows.length ? rows.map(r =>
-    `<div class="r"><div class="hv-lb" title="${esc(order.filter(d => r[2][d]).map(d => `${homeName(d)} ${r[2][d]}`).join(', '))}">`
-    + `<i style="width:${(100 * r[1] / max).toFixed(1)}%"></i><span>${esc(r[0])}</span></div>`
-    + (type ? type(r) : '') + `<span class="n">${r[1].toLocaleString()}</span></div>`).join('')
-    : '<div class="hv-empty">Nothing labelled yet.</div>');
+// one card per tranche: its hours against the plan, then its episodes, subtasks and success
+function renderCards() {
+  const box = document.getElementById('hv-cards'), ds = homeDs();
+  box.style.setProperty('--n', ds.length);
+  const prev = new Map([...box.querySelectorAll('.hv-card')].map(c => [c.dataset.ds, c.querySelector('.bar i').style.width]));
+  box.innerHTML = ds.map(d => {
+    const o = d.outcomes || {}, n = (o.success || 0) + (o.failure || 0) + (o.other || 0);
+    const perMin = d.seconds ? (d.n_tasks / (d.seconds / 60)).toFixed(1) : '0';
+    return `<div class="hv-tile hv-card" data-ds="${esc(d.dataset)}"><div class="hd"><span class="hv-nm"><i style="background:`
+      + `${hueOf(d.dataset)}"></i>${esc(homeName(d.dataset))}</span><span class="h">${fmtHrs(d.seconds)}`
+      + `${d.plan_seconds ? `<small> / ${fmtHrs(d.plan_seconds)}h</small>` : '<small>h</small>'}</span></div>`
+      + `<div class="bar"><i style="width:${prev.get(d.dataset) || '0%'}"></i></div><div class="hv-trio">`
+      + `<div><b>${d.episodes.toLocaleString()}</b><span>${d.plan_episodes ? `of ${d.plan_episodes.toLocaleString()} ` : ''}`
+      + `episodes</span></div>`
+      + `<div><b>${(d.n_tasks || 0).toLocaleString()}</b><span>subtasks, ${perMin}/min</span></div>`
+      + `<div><b>${n ? Math.round(100 * (o.success || 0) / n) + '%' : ''}</b><span>succeeded</span></div>`
+      + '</div></div>';
+  }).join('');
+  requestAnimationFrame(() => box.querySelectorAll('.hv-card').forEach((c, i) => {
+    const d = ds[i];
+    c.querySelector('.bar i').style.width = (d.plan_seconds ? Math.min(100, 100 * d.seconds / d.plan_seconds) : 0)
+      .toFixed(2) + '%';
+  }));
 }
+
+// a list of bars: each label inside a bar as long as its share of `max`, the number in its own right-aligned column.
+// rows are {label (html), v, text, type (html, for a three-column list)}
+function renderBars(el, rows, opts) {
+  const o = opts || {};
+  const max = o.max || Math.max(1e-9, ...rows.map(r => r.v));
+  el.innerHTML = (o.head ? `<div class="hd">${o.head.map(h => `<span>${h}</span>`).join('')}</div>` : '')
+    + (rows.length ? rows.map(r => `<div class="r"${r.title ? ` title="${esc(r.title)}"` : ''}><div class="hv-lb">`
+      + `<i style="width:${(100 * Math.min(1, r.v / max)).toFixed(1)}%"></i><span>${r.label}</span></div>`
+      + (r.type != null ? r.type : '') + `<span class="n">${r.text}</span></div>`).join('')
+      : `<div class="hv-empty">${o.empty || 'Nothing labelled yet.'}</div>`);
+}
+const dsLabelHtml = d => `<i style="background:${hueOf(d.dataset)}"></i>${esc(homeName(d.dataset))}`;
+const pctText = (n, of) => of ? Math.round(100 * n / of) + '%' : '';
+
+function renderIssues() {
+  const ds = homeDs().filter(d => d.episodes), t = HOME.total;
+  renderBars(document.getElementById('hv-issue-by'), ds.map(d => ({label: dsLabelHtml(d),
+    v: d.episodes ? (d.eps_with_issue || 0) / d.episodes : 0, text: pctText(d.eps_with_issue || 0, d.episodes),
+    title: `${d.eps_with_issue || 0} of ${d.episodes} episodes`})), {max: 1});
+  renderBars(document.getElementById('hv-mistake-by'), ds.map(d => ({label: dsLabelHtml(d),
+    v: d.n_tasks ? (d.subtasks_with_mistake || 0) / d.n_tasks : 0, text: pctText(d.subtasks_with_mistake || 0, d.n_tasks),
+    title: `${d.subtasks_with_mistake || 0} of ${d.n_tasks} subtasks`})), {max: 1});
+  const top = list => (list || []).map(([k, n]) => ({label: esc(k), v: n, text: n.toLocaleString()}));
+  renderBars(document.getElementById('hv-issue-top'), top(t.top_issues), {empty: 'No data issue flagged.'});
+  renderBars(document.getElementById('hv-mistake-top'), top(t.top_mistakes), {empty: 'No operator mistake flagged.'});
+}
+
 function renderTops() {
-  const t = HOME.total;
-  renderList(document.getElementById('hv-top-objects'), ['Object', 'Type', 'Subtasks'], t.top_objects,
-    r => r[3] === true ? '<span class="ty d">Deformable</span>' : r[3] === false ? '<span class="ty">Rigid</span>'
-      : '<span class="ty"></span>');
-  renderList(document.getElementById('hv-top-motions'), ['Motion', 'Events'], t.top_motions);
+  const t = HOME.total, order = homeDs().map(d => d.dataset);
+  const split = by => order.filter(d => by[d]).map(d => `${homeName(d)} ${by[d]}`).join(', ');
+  renderBars(document.getElementById('hv-top-objects'), t.top_objects.map(([k, n, by, tag]) => ({label: esc(k), v: n,
+    text: n.toLocaleString(), title: split(by),
+    type: tag === true ? '<span class="ty d">Deformable</span>' : tag === false ? '<span class="ty">Rigid</span>'
+      : '<span class="ty"></span>'})), {head: ['Object', 'Type', 'Subtasks']});
+  renderBars(document.getElementById('hv-top-motions'), t.top_motions.map(([k, n, by]) => ({label: esc(k), v: n,
+    text: n.toLocaleString(), title: split(by)})));
+  const ds = homeDs().filter(d => d.episodes);
+  renderBars(document.getElementById('hv-kinds-by'), ds.map(d => ({label: dsLabelHtml(d),
+    v: d.diversity.objects.distinct, text: d.diversity.objects.distinct.toLocaleString()})));
+  renderBars(document.getElementById('hv-def-by'), ds.map(d => {
+    const df = d.deformable || {}, n = (df.deformable || 0) + (df.rigid || 0);
+    return {label: dsLabelHtml(d), v: n ? (df.deformable || 0) / n : 0, text: pctText(df.deformable || 0, n)};
+  }), {max: 1});
 }
 
 function renderLive() {
@@ -5793,7 +5838,7 @@ function renderHome() {
   if (!HOME) { homeView.innerHTML = '<div class="hv"><div class="hv-empty">The progress numbers did not load. '
     + 'Reload the page to try again.</div></div>'; _homeBuilt = false; return; }
   if (!_homeBuilt) buildHome();
-  renderKpis(); renderCards(); renderPlot(); renderTops();
+  renderKpis(); renderCards(); renderIssues(); renderPlot(); renderTops();
 }
 
 function startHomePoll() {
@@ -5831,6 +5876,7 @@ async function leaveHome(ds, file) {
   await setHomeView(false);
   if (target) await setDataset(target, ep ? ep.file : undefined);
 }
+
 
 loadEpisodes();
 </script>
@@ -6029,7 +6075,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/home":
             # the home page asks every 20 seconds; a visitor whose copy is current gets 304 and no body
-            raw, gz, etag = home.home_json(HERE, HERE.parent / "plan.json", FAMILIES.counts)
+            raw, gz, etag = home.home_json(HERE, HERE.parent / "plan.json", FAMILIES.counts, issue_family_name)
             if self.headers.get("If-None-Match") == etag:
                 self.send_response(304)
                 self.send_header("ETag", etag)
