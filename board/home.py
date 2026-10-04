@@ -342,7 +342,11 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
         "total": {
             "episodes": len(rows), "seconds": round(sec, 1), "plan_episodes": plan_eps, "plan_seconds": plan_sec,
             "cost": round(cost, 2), "cost_per_footage_h": round(cost / (sec / 3600), 2) if sec else None,
-            "projected_cost": round(cost / sec * plan_sec, 0) if sec and plan_sec else None,
+            # each planned dataset at its own cost per footage hour, so a cheap tranche labelled first does not set
+            # the price of the rest; none until every planned dataset has some labels
+            "projected_cost": (round(sum(d["cost"] / d["seconds"] * d["plan_seconds"] for d in datasets
+                                         if d["plan_seconds"]), 0)
+                               if plan_sec and all(d["seconds"] for d in datasets if d["plan_seconds"]) else None),
             "pace": pace,
             "eta_s": round(left_s / pace["footage_h_per_h"]) if pace and left_s and left_s > 0 else None,
             "last_at": max((r["at"] for r in rows), default=None),

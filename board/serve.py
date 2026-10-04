@@ -2029,113 +2029,139 @@ main.src-fade.ep-fade #left-col > .video-wrap, main.src-fade.ep-fade .ep-head { 
 .cmp-fail .cf-k { font: 600 11px/1.3 var(--sans); color: var(--fg-3); margin: 12px 0 6px; }
 
 /* ---------- the home view: the labelling run, in sections that scroll. Progress first, then the tranches, the issues
-   and what the footage holds, each section a row of tiles of one build. Text is never smaller than 12.5px; numbers
-   sit right-aligned in their own columns. Each dataset has a hue (in the plan's order: violet, rose, moss, navy,
-   slate) only where it tells the datasets apart: the swatch by its name and its line on the chart. Everything else is
-   ink. ---------- */
-#home-view { display: none; height: calc(100vh - var(--header-h)); overflow-y: auto; background: var(--bg);
+   and what the footage holds, each section a row of tiles of one build. The home view is the board's front page: the
+   dataset tabs stay above it, "All" is this page and each tranche's tab opens its episodes. Spacing comes from one
+   scale (8, 12, 16, 24, 32, 48): 24 inside a tile, 16 between tiles, 48 above a section. Text is never smaller than
+   13px and wraps rather than leaving its tile; numbers sit in their own columns. Each dataset has a hue (in the plan's
+   order: violet, rose, moss, navy, slate) only where it tells the datasets apart. Everything else is ink. ---------- */
+#home-view { display: none; height: calc(100vh - var(--top-h)); overflow-y: auto; background: var(--bg);
   transition: opacity 180ms ease; }
-body.view-home main, body.view-home #cmp-view, body.view-home .coverage { display: none; }
+body.view-home main, body.view-home #cmp-view { display: none; }
 body.view-home #home-view { display: block; }
 body.view-fade #home-view { opacity: 0; }
 .cv-all.home-link { cursor: pointer; position: relative; transition: background 140ms; }
 .cv-all.home-link:hover { background: color-mix(in srgb, var(--surface) 94%, var(--fg)); }
-.hv { max-width: 1440px; margin: 0 auto; padding: 28px 32px 56px; display: grid; gap: 20px;
+.hv { max-width: 1440px; margin: 0 auto; padding: 32px 40px 64px; display: grid; gap: 16px;
   font-variant-numeric: tabular-nums; }
-.hv-sec { margin: 30px 0 2px; padding-bottom: 12px; border-bottom: 1px solid var(--border-strong);
+.hv-sec { margin: 32px 0 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border-strong);
   font: 700 20px/1.2 var(--sans); letter-spacing: -0.01em; color: var(--fg); }
-.hv-tile { min-width: 0; padding: 20px 24px; background: var(--surface); border: 1px solid var(--border);
+.hv-tile { min-width: 0; padding: 24px; background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; }
-.hv-tt { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px;
-  margin: -20px -24px 18px; padding: 10px 24px; border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0;
-  background: color-mix(in srgb, var(--bg) 70%, var(--surface)); font: 600 15px/1.3 var(--sans); color: var(--fg); }
+.hv-tt { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  min-height: 56px; margin: -24px -24px 24px; padding: 12px 24px; border-bottom: 1px solid var(--border);
+  border-radius: 10px 10px 0 0; background: color-mix(in srgb, var(--bg) 70%, var(--surface));
+  font: 600 15px/1.3 var(--sans); color: var(--fg); }
 .hv-tt small { font: 500 13px/1.3 var(--sans); color: var(--fg-3); }
 .hv .if-sev-seg button { font-size: 13px; }
-/* the headline numbers */
-.hv-kpis { display: grid; grid-template-columns: 1.8fr repeat(4, minmax(0, 1fr)); gap: 16px; }
-.hv-kpi .k { display: flex; align-items: center; gap: 8px; font: 500 13px/1 var(--sans); color: var(--fg-3); }
-.hv-kpi .v { margin-top: 12px; font: 600 32px/1 var(--sans); letter-spacing: -0.03em; color: var(--fg); white-space: nowrap; }
-.hv-kpi .v small { font: 500 15px/1 var(--sans); letter-spacing: 0; color: var(--fg-3); margin-left: 4px; }
-.hv-kpi .s { margin-top: 10px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
+/* the headline numbers: a label, the number, one line under it */
+.hv-kpis { display: grid; grid-template-columns: minmax(0, 1.8fr) repeat(4, minmax(0, 1fr)); gap: 16px; }
+.hv-kpi { display: flex; flex-direction: column; }
+.hv-kpi .k { display: flex; align-items: center; gap: 8px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); }
+.hv-kpi .v { margin-top: 16px; font: 600 32px/1 var(--sans); letter-spacing: -0.03em; color: var(--fg); white-space: nowrap; }
+.hv-kpi .v small { font: 500 15px/1 var(--sans); letter-spacing: 0; color: var(--fg-3); margin-left: 6px; }
+.hv-kpi .s { margin-top: 12px; font: 500 13px/1.35 var(--sans); color: var(--fg-3); }
 .hv-kpi .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .hv-kpi .pct { font: 600 18px/1 var(--sans); color: var(--fg); }
-.hv-kpi .bar { margin-top: 14px; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(28,28,26,0.08); }
+.hv-kpi .bar { margin-top: 16px; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(28,28,26,0.08); }
 .hv-kpi .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg);
   transition: width 900ms cubic-bezier(.2,.7,.2,1); }
 .hv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-disabled); }
 .hv-dot.on { background: var(--success); animation: hv-pulse 2.4s ease-in-out infinite; }
 @keyframes hv-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-/* one card per tranche: its hours against the plan, then three numbers */
-.hv-cards { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 16px; }
-/* four cards side by side need a wide window; below it they sit two by two */
-@media (max-width: 1500px) { .hv-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* one card per tranche: its name and hours, its progress, then three numbers in equal columns split by a rule.
+   Cards are never narrower than 460px; below that a row holds one card. Clicking a card opens its episodes. */
+.hv-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: 16px; }
 .hv-card { cursor: pointer; transition: box-shadow 160ms ease, border-color 160ms ease; }
 .hv-card:hover { border-color: var(--border-strong); box-shadow: 0 6px 22px rgba(0,0,0,0.08); }
-.hv-card .hd { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px;
-  min-height: 52px; margin: -20px -24px 0; padding: 10px 24px; border-bottom: 1px solid var(--border);
+.hv-card .hd { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  min-height: 56px; margin: -24px -24px 0; padding: 12px 24px; border-bottom: 1px solid var(--border);
   border-radius: 10px 10px 0 0; background: color-mix(in srgb, var(--bg) 70%, var(--surface)); }
-.hv-nm { font: 600 15px/1.2 var(--sans); color: var(--fg); white-space: nowrap; }
-.hv-nm i { display: inline-block; width: 10px; height: 10px; margin-right: 10px; border-radius: 3px; vertical-align: -1px; }
+.hv-nm { font: 600 15px/1.2 var(--sans); color: var(--fg); }
+.hv-nm i { display: inline-block; width: 10px; height: 10px; margin-right: 12px; border-radius: 3px; vertical-align: -1px; }
 .hv-card .h { font: 600 15px/1 var(--sans); color: var(--fg); white-space: nowrap; }
 .hv-card .h small { font-weight: 500; color: var(--fg-3); }
-.hv-card .bar { height: 6px; margin: 18px 0 18px; border-radius: 2px; overflow: hidden; background: rgba(28,28,26,0.08); }
-.hv-card .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg-2);
+/* the way into a tranche's episodes: a button in the card's header, filled when the card is hovered */
+.hv-open { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 14px;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); cursor: pointer;
+  font: 600 13px/1 var(--sans); color: var(--fg); white-space: nowrap;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease; }
+.hv-open span { font-size: 16px; line-height: 1; margin-top: -2px; }
+.hv-card:hover .hv-open:not(.off), .hv-open:not(.off):focus-visible { background: var(--fg); border-color: var(--fg);
+  color: var(--surface); }
+.hv-open.off { border-style: dashed; color: var(--fg-3); font-weight: 500; cursor: default; }
+.hv-card.empty { cursor: default; }
+.hv-card.empty:hover { border-color: var(--border); box-shadow: none; }
+.hv-prog { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; margin: 24px 0; }
+.hv-prog .bar { height: 8px; border-radius: 4px; overflow: hidden; background: rgba(28,28,26,0.08); }
+.hv-prog .bar i { display: block; height: 100%; min-width: 4px; background: var(--fg-2);
   transition: width 900ms cubic-bezier(.2,.7,.2,1); }
-.hv-trio { display: grid; grid-template-columns: repeat(3, auto); justify-content: space-between; gap: 12px; }
+.hv-prog span { font: 500 13px/1 var(--sans); color: var(--fg-3); text-align: right; white-space: nowrap; }
+.hv-prog span b { font: 600 15px/1 var(--sans); color: var(--fg); margin-right: 2px; }
+.hv-trio > .wide { grid-column: span 2; }
+.hv-trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.hv-trio > div { min-width: 0; padding: 0 16px; border-left: 1px solid var(--row-divider); }
+.hv-trio > div:first-child { padding-left: 0; border-left: 0; }
 .hv-trio b { display: block; font: 600 24px/1 var(--sans); letter-spacing: -0.02em; color: var(--fg); white-space: nowrap; }
-.hv-trio b small { font: 500 13px/1 var(--sans); letter-spacing: 0; color: var(--fg-3); }
-.hv-trio span { display: block; margin-top: 8px; font: 500 13px/1.2 var(--sans); color: var(--fg-3); white-space: nowrap; }
-/* two tiles side by side, and three */
+.hv-trio b.none { font: 500 15px/24px var(--sans); letter-spacing: 0; color: var(--fg-3); }
+.hv-trio span { display: block; margin-top: 8px; font: 500 13px/1.35 var(--sans); color: var(--fg-3); }
+/* tiles two by two */
 .hv-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.hv-three { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr)); gap: 16px; }
-.hv-sub { margin: 24px -24px 12px; padding: 12px 24px; border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--row-divider); font: 600 13.5px/1.2 var(--sans); color: var(--fg-2); }
+.hv-sub { margin: 24px -24px 8px; padding: 12px 24px; border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--row-divider); font: 600 13px/1.3 var(--sans); color: var(--fg-2); }
 /* bar lists are tables of fixed columns: the name, the type where there is one, a bar track that starts at the
-   same x on every row, and the number right-aligned */
+   same x on every row, and the number right-aligned. A long name wraps inside its column; every row is at least
+   44px tall, so one wrapped name does not make its list uneven. */
 .hv-bl { display: grid; }
-.hv-bl .r, .hv-bl .hd { display: grid; grid-template-columns: minmax(150px, 38%) minmax(0, 1fr) 56px; align-items: center;
+.hv-bl .r, .hv-bl .hd { display: grid; grid-template-columns: minmax(160px, 40%) minmax(0, 1fr) 64px; align-items: center;
   column-gap: 16px; }
-.hv-bl.typed .r, .hv-bl.typed .hd { grid-template-columns: minmax(90px, 28%) 88px minmax(0, 1fr) 56px; }
-.hv-bl .r { height: 36px; border-bottom: 1px solid var(--row-divider); }
+.hv-bl.typed .r, .hv-bl.typed .hd { grid-template-columns: minmax(100px, 30%) 96px minmax(0, 1fr) 64px; }
+.hv-bl .r { min-height: 44px; padding: 8px 0; box-sizing: border-box; border-bottom: 1px solid var(--row-divider); }
 .hv-bl .r:last-child { border-bottom: 0; }
-.hv-bl .hd { padding-bottom: 10px; border-bottom: 1px solid var(--border); font: 500 13px/1.2 var(--sans);
+.hv-bl .hd { padding-bottom: 12px; border-bottom: 1px solid var(--border); font: 500 13px/1.2 var(--sans);
   color: var(--fg-3); }
 .hv-bl .hd span:last-child, .hv-bl .r .n { text-align: right; }
-.hv-bl .lab { min-width: 0; font: 500 14px/1.25 var(--sans); color: var(--fg); overflow-wrap: anywhere; }
-.hv-bl .lab i { display: inline-block; width: 9px; height: 9px; margin-right: 10px; border-radius: 3px; }
+.hv-bl .lab { min-width: 0; font: 500 14px/1.35 var(--sans); color: var(--fg); overflow-wrap: anywhere; }
+.hv-bl .lab i { display: inline-block; width: 9px; height: 9px; margin-right: 12px; border-radius: 3px; }
 .hv-bl .trk { height: 10px; border-radius: 5px; overflow: hidden; background: rgba(28,28,26,0.07); }
 .hv-bl .trk i { display: block; height: 100%; border-radius: 5px; background: var(--fg-2);
   transition: width 700ms cubic-bezier(.2,.7,.2,1); }
 .hv-bl .ty { font: 500 13px/1 var(--sans); color: var(--fg-3); }
 .hv-bl .ty.d { color: var(--fg); font-weight: 600; }
 .hv-bl .n { font: 600 14px/1 var(--sans); color: var(--fg); }
-/* kinds found as hours are labelled: the chart, and its key as a table beside it */
-.hv-growth { display: grid; grid-template-columns: minmax(0, 1fr) 206px; gap: 24px; height: 300px; }
+/* kinds found as hours are labelled: the chart across a whole row, its key as a table beside it */
+.hv-growth { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 48px; height: 280px; }
 .hv-plot { position: relative; min-height: 0; }
 /* the chart stretches to its box: lines in an SVG scaled to the area, labels and end dots placed in percentages */
-.hv-area { position: absolute; left: 34px; right: 8px; top: 8px; bottom: 26px; }
+.hv-area { position: absolute; left: 40px; right: 16px; top: 8px; bottom: 28px; }
 .hv-area svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .hv-area .grid { stroke: var(--row-divider); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .hv-area .ax { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .hv-area .ln { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round;
   vector-effect: non-scaling-stroke; }
-.hv-area .yt, .hv-area .xt { position: absolute; font: 500 12.5px/1 var(--sans); color: var(--fg-3); white-space: nowrap; }
-.hv-area .yt { right: calc(100% + 8px); transform: translateY(-50%); }
-.hv-area .xt { top: calc(100% + 9px); transform: translateX(-50%); }
+.hv-area .yt, .hv-area .xt { position: absolute; font: 500 13px/1 var(--sans); color: var(--fg-3); white-space: nowrap; }
+.hv-area .yt { right: calc(100% + 12px); transform: translateY(-50%); }
+.hv-area .xt { top: calc(100% + 12px); transform: translateX(-50%); }
 .hv-area .dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); }
 .hv-key { align-self: start; }
-.hv-key div { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px;
-  height: 36px; border-bottom: 1px solid var(--row-divider); }
+.hv-key div { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  min-height: 44px; border-bottom: 1px solid var(--row-divider); }
 .hv-key div:last-child { border-bottom: 0; }
 .hv-key i { height: 3px; border-radius: 2px; }
-.hv-key span { font: 500 13.5px/1.2 var(--sans); color: var(--fg-2); }
-.hv-key b { font: 600 14.5px/1 var(--sans); color: var(--fg); }
-.hv-empty { font-size: 14px; color: var(--fg-3); }
+.hv-key span { font: 500 14px/1.3 var(--sans); color: var(--fg-2); }
+.hv-key b { font: 600 14px/1 var(--sans); color: var(--fg); }
+.hv-empty { font: 500 14px/1.4 var(--sans); color: var(--fg-3); }
 @media (max-width: 1180px) {
+  .hv { padding: 24px 24px 48px; }
   .hv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hv-kpis > :first-child { grid-column: 1 / -1; }
-  .hv-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .hv-two, .hv-three { grid-template-columns: 1fr; }
+  .hv-two { grid-template-columns: 1fr; }
+  .hv-growth { grid-template-columns: 1fr; height: auto; }
+  .hv-plot { height: 260px; }
+}
+@media (max-width: 640px) {
+  .hv { padding: 16px 16px 40px; }
+  .hv-kpis { grid-template-columns: 1fr; }
+  .hv-trio > div { padding: 0 12px; }
 }
 
 /* ---------- the comparison view ---------- */
@@ -3416,12 +3442,12 @@ function selectEp(file, fromPop) {
       history.replaceState(null, '', u);
     } catch (_) {}
   }
-  document.querySelectorAll('.ep-card').forEach(c => {
-    c.classList.toggle('active', c.dataset.file === file);
-  });
+  // the highlight moves from the open card to the new one; a list of thousands of cards is never walked for it
+  epListEl.querySelectorAll('.ep-card.active').forEach(c => c.classList.remove('active'));
+  const card = epListEl.querySelector(`.ep-card[data-file="${CSS.escape(file)}"]`);
+  if (card) card.classList.add('active');
   // the open episode's card stays in view in the list (a link or a reload can open one far down it); only the list
   // scrolls, never the page
-  const card = epListEl.querySelector('.ep-card.active');
   if (card) {
     const top = card.offsetTop - epListEl.offsetTop, bot = top + card.offsetHeight;
     if (top < epListEl.scrollTop || bot > epListEl.scrollTop + epListEl.clientHeight) {
@@ -5672,15 +5698,15 @@ function buildHome() {
       <div class="hv-sub">Most common, times each happened</div><div class="hv-bl two" id="hv-mistake-top"></div></div>
   </section>
   <h3 class="hv-sec">What the footage holds</h3>
-  <section class="hv-three hv-stretch">
-    <div class="hv-tile">
-      <div class="hv-tt"><span id="hv-ch-title"></span>
-        <div class="if-sev-seg" id="hv-kind" role="radiogroup" aria-label="What the chart counts">
-          <button type="button" role="radio" data-v="objects">Objects</button>
-          <button type="button" role="radio" data-v="motions">Motions</button>
-          <button type="button" role="radio" data-v="tasks">Tasks</button></div></div>
-      <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
-    </div>
+  <section class="hv-tile">
+    <div class="hv-tt"><span id="hv-ch-title"></span>
+      <div class="if-sev-seg" id="hv-kind" role="radiogroup" aria-label="What the chart counts">
+        <button type="button" role="radio" data-v="objects">Objects</button>
+        <button type="button" role="radio" data-v="motions">Motions</button>
+        <button type="button" role="radio" data-v="tasks">Tasks</button></div></div>
+    <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
+  </section>
+  <section class="hv-two">
     <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
       <div class="hv-bl typed" id="hv-top-objects"></div></div>
     <div class="hv-tile"><div class="hv-tt">Top motions<small>events with each</small></div>
@@ -5695,7 +5721,7 @@ function buildHome() {
   document.getElementById('hv-kind').addEventListener('click', e => {
     const b = e.target.closest('button'); if (b) { HOME_KIND = b.dataset.v; renderPlot(); } });
   document.getElementById('hv-cards').addEventListener('click', e => {
-    const c = e.target.closest('.hv-card'); if (c) leaveHome(c.dataset.ds); });
+    const c = e.target.closest('.hv-card'); if (c && !c.classList.contains('empty')) leaveHome(c.dataset.ds); });
 }
 
 function renderKpis() {
@@ -5713,7 +5739,8 @@ function renderKpis() {
     tile('Episodes', t.episodes.toLocaleString(), t.plan_episodes ? `of ${t.plan_episodes.toLocaleString()}` : ''),
     tile('Time left', t.eta_s ? fmtLeft(t.eta_s) : plan && t.seconds >= plan ? 'Done' : 'Not known',
       p ? `at ${p.footage_h_per_h.toFixed(1)} footage hours per hour` : 'after 5min of labelling'),
-    tile('Cost', fmtUsd(t.cost), t.projected_cost != null ? `${fmtUsd(t.projected_cost)} for the whole run` : ''),
+    tile('Cost', fmtUsd(t.cost), t.projected_cost != null ? `${fmtUsd(t.projected_cost)} for the whole run`
+      : plan ? 'projected once every tranche has labels' : ''),
     `<div class="hv-tile hv-kpi"><div class="k"><i class="hv-dot" id="hv-dot"></i>Last label</div>`
       + `<div class="v" id="hv-last"></div><div class="s" id="hv-last-at"></div></div>`,
   ].join('');
@@ -5767,14 +5794,25 @@ function renderCards() {
   box.innerHTML = ds.map(d => {
     const o = d.outcomes || {}, n = (o.success || 0) + (o.failure || 0) + (o.other || 0);
     const perMin = d.seconds ? (d.n_tasks / (d.seconds / 60)).toFixed(1) : '0';
-    return `<div class="hv-tile hv-card" data-ds="${esc(d.dataset)}"><div class="hd"><span class="hv-nm"><i style="background:`
-      + `${hueOf(d.dataset)}"></i>${esc(homeName(d.dataset))}</span><span class="h">${fmtHrs(d.seconds)}`
-      + `${d.plan_seconds ? `<small> / ${fmtHrs(d.plan_seconds)}h</small>` : '<small>h</small>'}</span></div>`
-      + `<div class="bar"><i style="width:${prev.get(d.dataset) || '0%'}"></i></div><div class="hv-trio">`
+    const pc = d.plan_seconds ? Math.min(100, 100 * d.seconds / d.plan_seconds) : 0;
+    const name = esc(homeName(d.dataset));
+    return `<div class="hv-tile hv-card${d.episodes ? '' : ' empty'}" data-ds="${esc(d.dataset)}">`
+      + `<div class="hd"><span class="hv-nm"><i style="background:${hueOf(d.dataset)}"></i>${name}</span>`
+      + (d.episodes ? `<button type="button" class="hv-open" aria-label="Open the ${name} episodes">`
+        + `${d.episodes.toLocaleString()} episodes<span aria-hidden="true">&rsaquo;</span></button>`
+        : '<span class="hv-open off">No episodes yet</span>') + '</div>'
+      + `<div class="hv-prog"><div class="bar"><i style="width:${prev.get(d.dataset) || '0%'}"></i></div>`
+      + `<span><b>${fmtHrs(d.seconds)}</b>${d.plan_seconds ? ` of ${fmtHrs(d.plan_seconds)}h` : 'h'}`
+      + `${d.plan_seconds ? `, ${pc && pc < 10 ? pc.toFixed(1) : Math.round(pc)}%` : ''}</span></div><div class="hv-trio">`
       + `<div><b>${d.episodes.toLocaleString()}</b><span>${d.plan_episodes ? `of ${d.plan_episodes.toLocaleString()} ` : ''}`
       + `episodes</span></div>`
-      + `<div><b>${(d.n_tasks || 0).toLocaleString()}</b><span>subtasks, ${perMin}/min</span></div>`
-      + `<div><b>${n ? Math.round(100 * (o.success || 0) / n) + '%' : ''}</b><span>succeeded</span></div>`
+      + (d.episodes
+        ? `<div><b>${(d.n_tasks || 0).toLocaleString()}</b><span>subtasks, ${perMin} a minute</span></div>`
+          + `<div title="Of the subtasks labelled so far, the share the labels judge the operator finished `
+          + `successfully. How much of the tranche is labelled is the bar above."><b>${n ? Math.round(100 * (o.success
+          || 0) / n) + '%' : '0%'}</b><span>of subtasks the operator completed</span></div>`
+        : '<div class="wide"><b class="none">No labels yet</b><span>Subtasks, and how many of them the operator '
+          + 'completed, appear here as its episodes are labelled.</span></div>')
       + '</div></div>';
   }).join('');
   requestAnimationFrame(() => box.querySelectorAll('.hv-card').forEach((c, i) => {
