@@ -91,9 +91,9 @@ def pose_state(paths, q, clock):
                 group = target.setdefault(key, {'t': [], 'values': [], 'frames': set()})
                 group['t'].append(stamp / 1e9)
                 group['values'].append(values)
-                frame = f._field(decoded, 'frame_id')
-                if frame:
-                    group['frames'].add(str(frame))
+                for frame in [f._field(decoded, 'frame_id'), f._field(f._field(decoded, 'header'), 'frame_id')]:
+                    if frame:
+                        group['frames'].add(str(frame))
     if not poses:
         return None, {}, {}, '; '.join(dict.fromkeys(failures)) if failures else None
     actors = sorted({actor for actor, _ in poses} | {actor for actor, _ in grips})
@@ -130,13 +130,19 @@ def pose_state(paths, q, clock):
             np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))])
         matrices.append(np.concatenate([values[:, :3], rpy, gv[f.nearest(gt, q)]], axis=1))
         used[pose_topic], used[grip_topic] = {'pose.position', 'pose.orientation'}, {''}
-        identity = pose_topic + (' ' + next(iter(pose['frames'])) if len(pose['frames']) == 1 else '')
-        groups.append((identity, None, 7))
+        # A coordinate frame names the reference system, not the actor that moved.
+        groups.append((pose_topic, None, 7))
         identities.append({'actor': actor, 'pose': pose_topic, 'gripper': grip_topic,
                            'frame_ids': sorted(pose['frames'])})
     extra = {'source': {'state': 'recorded Cartesian pose and scalar gripper channels'},
              'pose_field_bindings': identities,
              'pose_transform': 'Recorded xyzw quaternions converted to roll pitch yaw radians; nearest native pose and gripper sample per camera frame.',
              'pose_unit_note': 'Position and gripper values retain their recorded scale; physical units and full opening range are not inferred.'}
+    contracts = [camera_roles(path, [topic for _, topic in poses])[1] for path in paths]
+    mappings = [contract['actor_map'] for contract in contracts if contract.get('actor_map')]
+    if mappings and all(mapping == mappings[0] for mapping in mappings) \
+            and all(actor in mappings[0] for actor in actors):
+        extra['state_actor_contract'] = {'actors': [mappings[0][actor] for actor in actors],
+                                         'source': 'MCAP actor_map metadata'}
     f.record_state_groups(extra, groups)
     return np.concatenate(matrices, axis=1).astype(np.float32), used, extra, None

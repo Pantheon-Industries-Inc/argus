@@ -26,7 +26,8 @@ def native_types():
     message('Quaternion', [('x', 1, False, None), ('y', 1, False, None),
                            ('z', 1, False, None), ('w', 1, False, None)])
     message('Pose', [('position', 11, False, 'Vector3'), ('orientation', 11, False, 'Quaternion')])
-    message('PoseStamped', [('pose', 11, False, 'Pose'), ('frame_id', 9, False, None)])
+    message('Header', [('frame_id', 9, False, None)])
+    message('PoseStamped', [('pose', 11, False, 'Pose'), ('frame_id', 9, False, None), ('header', 11, False, 'Header')])
     message('CompressedVideo', [('format', 9, False, None), ('data', 12, False, None),
                                 ('frame_id', 9, False, None)])
     message('Scalar', [('value', 1, False, None)])
@@ -38,7 +39,7 @@ def native_types():
             for name in ['PoseStamped', 'CompressedVideo', 'Scalar', 'Imu']}
 
 
-def indexed_recording(path, *, omit_pose=None, invalid_quaternion=False, actor_map=True):
+def indexed_recording(path, *, omit_pose=None, invalid_quaternion=False, actor_map=True, changing_frame=None):
     types = native_types()
     packets = _h264_frames(6)
     base = 1_700_000_000_000_000_000
@@ -58,6 +59,14 @@ def indexed_recording(path, *, omit_pose=None, invalid_quaternion=False, actor_m
                     log_time=now, publish_time=now - 700_000_000)
                 if robot != omit_pose:
                     pose = types['PoseStamped'](frame_id=side + '_gripper')
+                    if changing_frame == 'header':
+                        pose.ClearField('frame_id')
+                        pose.header.frame_id = side + '_gripper'
+                    if changing_frame and robot == 0 and index == 2:
+                        if changing_frame == 'header':
+                            pose.header.frame_id = 'different_coordinate_frame'
+                        else:
+                            pose.frame_id = 'different_coordinate_frame'
                     pose.pose.position.x = 0.1 + robot + index * 0.01
                     pose.pose.position.y, pose.pose.position.z = 0.2, 0.3
                     angle = index * 0.025
@@ -143,11 +152,13 @@ def test_structural_pose_join_matches_literal_old_arrays(tmp_path):
         assert state.dtype == original['state'].dtype
         assert state.tobytes() == original['state'].tobytes()
     assert len(used) == 4
-    assert [row['side'] for row in ctx['state_identities']] == ['left', 'right']
+    assert formats.state_contract_actors(ctx, 2) == ['left', 'right']
+    assert [row['side'] for row in ctx['state_identities']] == [None, None]
     assert ctx['pose_field_bindings'][0]['actor'] == 'robot0'
 
 
-@pytest.mark.parametrize('kwargs', [{'omit_pose': 1}, {'invalid_quaternion': True}])
+@pytest.mark.parametrize('kwargs', [{'omit_pose': 1}, {'invalid_quaternion': True},
+                                    {'changing_frame': 'direct'}, {'changing_frame': 'header'}])
 def test_partial_or_invalid_pose_never_creates_precise_state(tmp_path, kwargs):
     raw = tmp_path / 'episode.mcap'
     indexed_recording(raw, **kwargs)
@@ -166,3 +177,14 @@ def test_index_numbers_alone_never_establish_camera_sides(tmp_path):
     assert aliases[topics[0]].startswith('left ')
     assert aliases[topics[1]].startswith('right ')
     assert provenance['source'] == 'MCAP actor_map metadata'
+
+
+def test_coordinate_frame_names_do_not_supply_actor_sides(tmp_path):
+    raw = tmp_path / 'episode.mcap'
+    indexed_recording(raw, actor_map=False)
+    q = (1_700_000_000_000_000_000 + np.asarray([0, 32, 69, 101, 142, 177], dtype=np.int64) * 1_000_000) / 1e9
+    state, _, ctx, limitation = mcap_pose.pose_state([raw], q, 'arrival')
+    assert state is not None and limitation is None
+    assert ctx['pose_field_bindings'][0]['frame_ids'] == ['left_gripper']
+    assert formats.state_contract_actors(ctx, 2) is None
+    assert all(row['side'] is None for row in ctx['state_identities'])
