@@ -125,3 +125,13 @@ def test_only_a_quick_shut_reopen_reclose_reaches_the_facts():
     text = me.jaw_block(ep)
     assert "left gripper: closed 2.00s shut, opened 2.50s, closed 3.33s on something" in text and "6.00" not in text
     assert me.jaw_block({"jaws": {"left": evs[3:], "right": None}}) == ""
+
+
+def test_the_whole_run_cost_takes_each_tranche_at_its_own_rate_and_the_plan_rate_before_its_labels():
+    """A labelled tranche counts at its measured cost per footage hour, an unlabelled one at the rate plan.json gives
+    it, and with no rate for an unlabelled tranche there is no estimate at all."""
+    from board import home
+    ds = [{"dataset": "a", "plan_seconds": 7200, "seconds": 3600, "cost": 10.0},
+          {"dataset": "b", "plan_seconds": 3600, "seconds": 0, "cost": 0.0}]
+    assert home._projected(ds, {"a": {}, "b": {"cost_per_footage_h": 4.0}}) == 24
+    assert home._projected(ds, {"a": {}, "b": {}}) is None

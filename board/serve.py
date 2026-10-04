@@ -5739,8 +5739,8 @@ function renderKpis() {
     tile('Episodes', t.episodes.toLocaleString(), t.plan_episodes ? `of ${t.plan_episodes.toLocaleString()}` : ''),
     tile('Time left', t.eta_s ? fmtLeft(t.eta_s) : plan && t.seconds >= plan ? 'Done' : 'Not known',
       p ? `at ${p.footage_h_per_h.toFixed(1)} footage hours per hour` : 'after 5min of labelling'),
-    tile('Cost', fmtUsd(t.cost), t.projected_cost != null ? `${fmtUsd(t.projected_cost)} for the whole run`
-      : plan ? 'projected once every tranche has labels' : ''),
+    tile('Spent so far', fmtUsd(t.cost), t.projected_cost != null
+      ? `about ${fmtUsd(t.projected_cost)} to label all ${fmtHrs(plan)}h` : ''),
     `<div class="hv-tile hv-kpi"><div class="k"><i class="hv-dot" id="hv-dot"></i>Last label</div>`
       + `<div class="v" id="hv-last"></div><div class="s" id="hv-last-at"></div></div>`,
   ].join('');

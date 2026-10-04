@@ -287,6 +287,21 @@ def _deformable(rows: list, tags: dict) -> dict:
     return dict(c)
 
 
+def _projected(datasets: list, pds: dict) -> float | None:
+    """The whole run's cost: each planned dataset's footage hours at its measured cost per footage hour, or at its
+    plan.json rate while it has no labels yet; None while a planned dataset has neither."""
+    total = 0.0
+    for d in datasets:
+        if not d["plan_seconds"]:
+            continue
+        rate = (d["cost"] / (d["seconds"] / 3600) if d["seconds"]
+                else (pds.get(d["dataset"]) or {}).get("cost_per_footage_h"))
+        if rate is None:
+            return None
+        total += rate * d["plan_seconds"] / 3600
+    return round(total, 0)
+
+
 def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
     tags = tags or {}
     pds = (plan or {}).get("datasets") or {}
@@ -342,11 +357,10 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
         "total": {
             "episodes": len(rows), "seconds": round(sec, 1), "plan_episodes": plan_eps, "plan_seconds": plan_sec,
             "cost": round(cost, 2), "cost_per_footage_h": round(cost / (sec / 3600), 2) if sec else None,
-            # each planned dataset at its own cost per footage hour, so a cheap tranche labelled first does not set
-            # the price of the rest; none until every planned dataset has some labels
-            "projected_cost": (round(sum(d["cost"] / d["seconds"] * d["plan_seconds"] for d in datasets
-                                         if d["plan_seconds"]), 0)
-                               if plan_sec and all(d["seconds"] for d in datasets if d["plan_seconds"]) else None),
+            # each planned dataset at its own cost per footage hour once it has labels, so a cheap tranche labelled
+            # first does not set the price of the rest, and before that at the rate plan.json gives it
+            # ("cost_per_footage_h", from a pilot); none while a planned dataset has neither
+            "projected_cost": _projected(datasets, pds) if plan_sec else None,
             "pace": pace,
             "eta_s": round(left_s / pace["footage_h_per_h"]) if pace and left_s and left_s > 0 else None,
             "last_at": max((r["at"] for r in rows), default=None),
