@@ -147,6 +147,31 @@
    ]
   },
   {
+   "slug": "annotation-unresolved",
+   "list": "data",
+   "name": "Recorded annotations have invalid boundaries or structure",
+   "reader_issues": [
+    "annotation_unresolved"
+   ]
+  },
+  {
+   "slug": "device-metadata-disagree",
+   "list": "data",
+   "name": "Recorded device or resolution claims disagree",
+   "reader_issues": [
+    "device_metadata_disagree"
+   ]
+  },
+  {
+   "slug": "recorded-rate-mismatch",
+   "list": "handling",
+   "name": "Camera cadence differs from the declared rate",
+   "reader_issues": [
+    "recorded_rate_mismatch"
+   ],
+   "why": "encoded timestamps differing from a declared rate do not establish damaged footage; original timestamps and frame indices remain available"
+  },
+  {
    "slug": "metadata-unreadable",
    "list": "data",
    "name": "Uploaded metadata could not be read",
@@ -339,7 +364,8 @@
    "list": "data",
    "name": "Recorded camera timestamps cannot order the frames",
    "reader_issues": [
-    "camera_timestamp_invalid"
+    "camera_timestamp_invalid",
+    "capture_timestamp_invalid"
    ]
   },
   {
