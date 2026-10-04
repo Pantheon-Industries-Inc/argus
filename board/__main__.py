@@ -3,6 +3,7 @@
     python -m board build BOARD                                   BOARD/manifest.json -> BOARD/qa, BOARD/BUILT.json
     python -m board follow BOARD                                  each new label of a run in progress -> BOARD/qa
     python -m board materials BOARD                               each kind of object tagged rigid or deformable
+    python -m board verbs BOARD                                   the main verb of each task sentence
     python -m board clips --episodes EPISODES --out CLIPS         browser clips of every camera
     python -m board serve --board BOARD --clips CLIPS             the board at http://localhost:8896
     python -m board static site --board BOARD --clips CLIPS       the same board as plain files for a CDN
@@ -14,7 +15,7 @@ Each command takes --help.
 import importlib
 import sys
 
-COMMANDS = {"build": "board.build", "follow": "board.follow", "materials": "board.materials",
+COMMANDS = {"build": "board.build", "follow": "board.follow", "materials": "board.materials", "verbs": "board.verbs",
             "clips": "board.clips", "serve": "board.serve", "static": "board.static",
             "to_board": "board.to_board", "hands": "board.hands"}
 if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:

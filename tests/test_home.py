@@ -58,6 +58,9 @@ def test_objects_and_mistakes_count_per_subtask(tmp_path):
     assert by["freeform"]["outcomes"]["success"] == 1 and by["freeform"]["outcomes"]["failure"] == 1
     # verbs are the tasks' own (place, fold, stack), one per subtask, never the events' grasp or lift
     assert sorted(k for k, *_ in s["total"]["top_verbs"]) == ["fold", "place", "stack"]
+    # a verb board/verbs.py named for a sentence wins over its first word
+    named = home.stats(rows, {}, time.time(), verbs={"Place the pebble container on the tray.": "move"})
+    assert sorted(k for k, *_ in named["total"]["top_verbs"]) == ["fold", "move", "stack"]
 
 
 def test_the_numbers_keep_their_version_until_a_label_changes(tmp_path):

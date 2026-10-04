@@ -21,14 +21,15 @@ For the whole board and for each dataset the page shows
   effective number, e to the Shannon entropy of the counts: the number of equally common kinds that would give the
   same spread, so 40 kinds where one fills nine tenths of the footage counts as far fewer than 40);
 - whether new kinds still turn up: distinct kinds against labelled hours, in the order the episodes were labelled;
-- the five commonest kinds of object (subtasks that handle each) and task verbs (subtasks with each), each split
+- the five commonest kinds of object (subtasks that handle each) and main verbs (subtasks with each), each split
   by dataset, and the share of handled objects that are deformable (each kind's tag, board/materials.py).
 
 Kinds come from the labels' own words, never from a fixed list. An object's kind is the head noun of its name
 ("pebble container" is a container, "clear test tubes" a tube, "10 of diamonds" a card); a task is its verb and the
-kind of the first object it names ("Place the closed pebble container upright on the tray" is place container), and
-its verb alone is place. The rules are simple and the same
-for every dataset, so the datasets compare with each other even where a rule misreads a name.
+kind of the first object it names ("Place the closed pebble container upright on the tray" is place container). The
+rules are simple and the same for every dataset, so the datasets compare with each other even where a rule misreads a
+name. A task's main verb is the one exception: which verb a sentence is about takes reading the whole sentence, so a
+small model names it once per sentence (board/verbs.py), and until it has, the sentence's first verb counts.
 
 plan.json, written when a run starts:
     {"datasets": {"umi_scripted": {"name": "Scripted", "episodes": 6224, "seconds": 88474.8}, ...}}
@@ -49,6 +50,8 @@ import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+
+from board.verbs import load_verbs
 
 PACE_WINDOW_S = 3600        # the pace is the footage labelled in the last hour of labelling
 PACE_MIN_LABELS = 3         # fewer labels than this in the window give no pace and no time left
@@ -156,9 +159,9 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
     else:
         task_rows = [(task_kind(d.get("episode_prompt") or "", names),
                       ((d.get("completion") or {}).get("task_completed") or "").lower())]
-    # the verb of each subtask's task, "place container" is place: what the operator was asked to do. The events'
-    # own verbs (approach, grasp, lower, release) are the steps of nearly every task, so they tell tasks apart poorly.
-    verbs = Counter(k.split()[0] for k, _ in task_rows if k)
+    # each subtask's sentence, spaced as board/verbs.py keys it, for the task's main verb
+    sentences = [" ".join(str(t["task"]).split()) for t in tasks] if tasks else \
+        [" ".join(str(d.get("episode_prompt") or "").split())]
     issues = [i for i in (d.get("data_issues") or []) if isinstance(i, dict) and i.get("issue")
               and counts("data_issues", i)]
     mistakes = [i for i in (d.get("operator_mistakes") or []) if isinstance(i, dict) and i.get("issue")
@@ -184,7 +187,7 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
         "object_kinds": sorted({k for ks in sub_kinds for k in ks}),
         "subtask_objects": sub_kinds,
         "mistake_subtasks": mistake_subtasks,
-        "verbs": dict(verbs),
+        "sentences": sentences,
         "tasks": task_rows,
         "issue_tags": [tag("data_issues", i) for i in issues],
         "mistake_tags": [tag("operator_mistakes", i) for i in mistakes],
@@ -296,8 +299,24 @@ def _projected(datasets: list, pds: dict) -> float | None:
     return round(total, 0)
 
 
-def stats(rows: list, plan: dict, now: float, tags: dict | None = None) -> dict:
+def with_verbs(rows: list, verbs: dict) -> list:
+    """Each row with its subtasks' main verbs counted: the verb board/verbs.py named for the task sentence, or the
+    sentence's first verb until it is named. The events' own verbs (approach, grasp, lower, release) are the steps of
+    nearly every task, so they tell tasks apart poorly and are not counted."""
+    out = []
+    for r in rows:
+        c = Counter()
+        for s, (k, _) in zip(r["sentences"], r["tasks"]):
+            v = verbs.get(s) or (k.split()[0] if k else None)
+            if v:
+                c[v] += 1
+        out.append({**r, "verbs": dict(c)})
+    return out
+
+
+def stats(rows: list, plan: dict, now: float, tags: dict | None = None, verbs: dict | None = None) -> dict:
     tags = tags or {}
+    rows = with_verbs(rows, verbs or {})
     pds = (plan or {}).get("datasets") or {}
     by_ds = defaultdict(list)
     for r in rows:
@@ -429,8 +448,8 @@ def home_json(here: Path, plan_path: Path, counts, name=None) -> tuple:
         sig_files = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in here.glob("*.json")))
     except OSError:
         sig_files = ()
-    tags_path = plan_path.with_name("materials.json")
-    plan_m = tuple(p.stat().st_mtime_ns if p.exists() else None for p in (plan_path, tags_path))
+    tags_path, verbs_path = plan_path.with_name("materials.json"), plan_path.with_name("verbs.json")
+    plan_m = tuple(p.stat().st_mtime_ns if p.exists() else None for p in (plan_path, tags_path, verbs_path))
     sig = (hashlib.sha1(repr(sig_files).encode()).hexdigest(), plan_m)
     now = time.time()
     with _LOCK:
@@ -441,7 +460,7 @@ def home_json(here: Path, plan_path: Path, counts, name=None) -> tuple:
         plan = json.loads(plan_path.read_text())
     except (OSError, ValueError):
         plan = {}
-    raw = json.dumps(stats(_summaries(here, counts, name), plan, now, load_tags(tags_path)),
+    raw = json.dumps(stats(_summaries(here, counts, name), plan, now, load_tags(tags_path), load_verbs(verbs_path)),
                      separators=(",", ":")).encode()
     gz = gzip.compress(raw, compresslevel=5)
     etag = '"' + hashlib.sha1(raw).hexdigest()[:20] + '"'
