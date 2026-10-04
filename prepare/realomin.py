@@ -90,8 +90,8 @@ def mux(packets: list[bytes], ts: list[int], out: Path) -> list[int]:
     return ts
 
 
-# an uploaded MCAP in this layout (both grippers' cameras and poses) is read by this adapter
-UPLOAD = "mcap"
+# Uploads use recorded pose and gripper fields through the generic reader.
+UPLOAD = None
 
 
 def recognizes(topics: list[str]) -> bool:
