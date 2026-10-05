@@ -5708,9 +5708,9 @@ function buildHome() {
     <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
   </section>
   <section class="hv-three">
-    <div class="hv-tile"><div class="hv-tt">Top skills<small>subtasks with each</small></div>
+    <div class="hv-tile"><div class="hv-tt">Top skills<small>subtasks with each as their skill</small></div>
       <div class="hv-bl two" id="hv-top-skills"></div></div>
-    <div class="hv-tile"><div class="hv-tt">Actions inside tasks<small>subtasks with each</small></div>
+    <div class="hv-tile"><div class="hv-tt">Other actions inside tasks<small>subtasks with each besides their skill</small></div>
       <div class="hv-bl two" id="hv-top-actions"></div></div>
     <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
       <div class="hv-bl typed" id="hv-top-objects"></div></div>
