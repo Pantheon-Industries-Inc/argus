@@ -5669,7 +5669,7 @@ function hueOf(ds) {
   const i = HOME ? HOME.datasets.findIndex(d => d.dataset === ds) : -1;
   return HUES[(i < 0 ? 4 : i) % HUES.length];
 }
-const KIND = {objects: ['object', 1], skills: ['skill', 3], tasks: ['task', 2]};
+const KIND = {objects: ['object', 1], skills: ['main action', 3], tasks: ['task', 2]};
 
 async function fetchHome() {
   try {
@@ -5703,20 +5703,20 @@ function buildHome() {
     <div class="hv-tt"><span id="hv-ch-title"></span>
       <div class="if-sev-seg" id="hv-kind" role="radiogroup" aria-label="What the chart counts">
         <button type="button" role="radio" data-v="objects">Objects</button>
-        <button type="button" role="radio" data-v="skills">Skills</button>
+        <button type="button" role="radio" data-v="skills">Main actions</button>
         <button type="button" role="radio" data-v="tasks">Tasks</button></div></div>
     <div class="hv-growth"><div class="hv-plot" id="hv-plot"></div><div class="hv-key" id="hv-key"></div></div>
   </section>
   <section class="hv-three">
-    <div class="hv-tile"><div class="hv-tt">Top skills<small>subtasks with each as their skill</small></div>
+    <div class="hv-tile"><div class="hv-tt">Main action<small>subtasks with each</small></div>
       <div class="hv-bl two" id="hv-top-skills"></div></div>
-    <div class="hv-tile"><div class="hv-tt">Other actions<small>subtasks with each besides their skill</small></div>
+    <div class="hv-tile"><div class="hv-tt">Other actions<small>subtasks with each besides the main one</small></div>
       <div class="hv-bl two" id="hv-top-actions"></div></div>
     <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
       <div class="hv-bl typed" id="hv-top-objects"></div></div>
   </section>
   <section class="hv-three">
-    <div class="hv-tile"><div class="hv-tt">Kinds of skill</div><div class="hv-bl two" id="hv-skills-by"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Kinds of main action</div><div class="hv-bl two" id="hv-skills-by"></div></div>
     <div class="hv-tile"><div class="hv-tt">Kinds of object handled</div><div class="hv-bl two" id="hv-kinds-by"></div></div>
     <div class="hv-tile"><div class="hv-tt">Deformable<small>share of the objects handled</small></div>
       <div class="hv-bl two" id="hv-def-by"></div></div>
