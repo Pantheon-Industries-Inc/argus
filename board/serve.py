@@ -5710,7 +5710,7 @@ function buildHome() {
   <section class="hv-three">
     <div class="hv-tile"><div class="hv-tt">Top skills<small>subtasks with each as their skill</small></div>
       <div class="hv-bl two" id="hv-top-skills"></div></div>
-    <div class="hv-tile"><div class="hv-tt">Other actions inside tasks<small>subtasks with each besides their skill</small></div>
+    <div class="hv-tile"><div class="hv-tt">Other actions<small>subtasks with each besides their skill</small></div>
       <div class="hv-bl two" id="hv-top-actions"></div></div>
     <div class="hv-tile"><div class="hv-tt">Top objects<small>subtasks that handle each</small></div>
       <div class="hv-bl typed" id="hv-top-objects"></div></div>
@@ -5743,6 +5743,7 @@ function renderKpis() {
     tile('Episodes', t.episodes.toLocaleString(), t.plan_episodes ? `of ${t.plan_episodes.toLocaleString()}` : ''),
     tile('Time left', t.eta_s ? fmtLeft(t.eta_s) : plan && t.seconds >= plan ? 'Done' : 'Not known',
       p ? `at ${p.footage_h_per_h.toFixed(1)} footage hours per hour`
+        : plan && t.seconds >= plan ? 'every planned hour is labelled'
         : t.last_at && homeNow() - t.last_at > 600 ? 'no label in the last 10min' : 'known after 5min of labelling'),
     tile('Spent so far', fmtUsd(t.cost), t.projected_cost != null
       ? `about ${fmtUsd(t.projected_cost)} to label all ${fmtHrs(plan)}h` : ''),
