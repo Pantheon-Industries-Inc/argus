@@ -5689,6 +5689,18 @@ function buildHome() {
   <section class="hv-kpis" id="hv-kpis"></section>
   <h3 class="hv-sec">Tranches</h3>
   <section class="hv-cards" id="hv-cards"></section>
+  <h3 class="hv-sec">Annotations</h3>
+  <section class="hv-three">
+    <div class="hv-tile"><div class="hv-tt">Subtasks<small>per episode</small></div>
+      <div class="hv-bl two" id="hv-ann-tasks"></div>
+      <div class="hv-sub">In all</div><div class="hv-bl two" id="hv-ann-tasks-all"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Timeline annotations<small>per episode</small></div>
+      <div class="hv-bl two" id="hv-ann-timeline"></div>
+      <div class="hv-sub">In all</div><div class="hv-bl two" id="hv-ann-timeline-all"></div></div>
+    <div class="hv-tile"><div class="hv-tt">Key events<small>per episode</small></div>
+      <div class="hv-bl two" id="hv-ann-events"></div>
+      <div class="hv-sub">In all</div><div class="hv-bl two" id="hv-ann-events-all"></div></div>
+  </section>
   <h3 class="hv-sec">Issues</h3>
   <section class="hv-two">
     <div class="hv-tile"><div class="hv-tt">Data issues<small>share of episodes with one</small></div>
@@ -5843,6 +5855,21 @@ function renderBars(el, rows, opts) {
 const dsLabelHtml = d => `<i style="background:${hueOf(d.dataset)}"></i>${esc(homeName(d.dataset))}`;
 const pctText = (n, of) => of ? Math.round(100 * n / of) + '%' : '';
 
+// how much the labels hold, per tranche: subtasks, timeline rows and key events per episode, then the totals
+function renderAnnotations() {
+  const ds = homeDs().filter(d => d.episodes), t = HOME.total;
+  const avg = x => x >= 100 ? Math.round(x).toLocaleString() : x.toFixed(1);
+  for (const [id, key] of [['tasks', 'n_tasks'], ['timeline', 'n_timeline'], ['events', 'n_key_events']]) {
+    renderBars(document.getElementById(`hv-ann-${id}`), ds.map(d => ({label: dsLabelHtml(d),
+      v: (d[key] || 0) / d.episodes, text: avg((d[key] || 0) / d.episodes),
+      title: `${(d[key] || 0).toLocaleString()} over ${d.episodes.toLocaleString()} episodes`})));
+    renderBars(document.getElementById(`hv-ann-${id}-all`), [...ds.map(d => ({label: dsLabelHtml(d),
+      v: d[key] || 0, text: (d[key] || 0).toLocaleString()})),
+      {label: 'All tranches', v: t[key] || 0, text: (t[key] || 0).toLocaleString(),
+       title: `${avg((t[key] || 0) / Math.max(t.episodes, 1))} per episode over all ${t.episodes.toLocaleString()} episodes`}]);
+  }
+}
+
 function renderIssues() {
   const ds = homeDs().filter(d => d.episodes), t = HOME.total;
   renderBars(document.getElementById('hv-issue-by'), ds.map(d => ({label: dsLabelHtml(d),
@@ -5892,7 +5919,7 @@ function renderHome() {
   if (!HOME) { homeView.innerHTML = '<div class="hv"><div class="hv-empty">The progress numbers did not load. '
     + 'Reload the page to try again.</div></div>'; _homeBuilt = false; return; }
   if (!_homeBuilt) buildHome();
-  renderKpis(); renderCards(); renderIssues(); renderPlot(); renderTops();
+  renderKpis(); renderCards(); renderAnnotations(); renderIssues(); renderPlot(); renderTops();
 }
 
 function startHomePoll() {

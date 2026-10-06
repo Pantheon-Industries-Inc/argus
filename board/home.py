@@ -15,7 +15,7 @@ For the whole board and for each dataset the page shows
   pace (the plan's hours not yet labelled, divided by the pace);
 - cost: the labels' billed cost so far (each label's _usage.est_cost_usd), the cost per footage hour, and that rate
   times the plan's hours as the cost of the whole run;
-- subtasks, subtasks per minute of footage, the share of subtasks that succeeded, the share of episodes with a data
+- subtasks, timeline rows and key events, per episode and in all; subtasks per minute of footage, the share of subtasks that succeeded, the share of episodes with a data
   issue and the share of subtasks with an operator mistake (the issues the episode list counts, Families.counts);
 - diversity: how many kinds of object are handled, of skill and of task, and how evenly they are spread (the
   effective number, e to the Shannon entropy of the counts: the number of equally common kinds that would give the
@@ -200,6 +200,9 @@ def summarize(p: Path, d: dict, counts, name=None) -> dict:
         "object_kinds": sorted({k for ks in sub_kinds for k in ks}),
         "subtask_objects": sub_kinds,
         "mistake_subtasks": mistake_subtasks,
+        # how much the label holds: its timeline rows and its key events
+        "n_timeline": len(d.get("event_labels") or []),
+        "n_key_events": len(d.get("key_events") or []),
         "skills": dict(skills),
         "actions": dict(actions),
         "tasks": task_rows,
@@ -362,6 +365,8 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None, names: d
             # episodes with at least one data issue, and with at least one operator mistake, that the episode list counts
             # subtasks: a session's tasks, or one per episode where an episode is one task
             "n_tasks": sum(len(r["tasks"]) for r in rs),
+            "n_timeline": sum(r["n_timeline"] for r in rs),
+            "n_key_events": sum(r["n_key_events"] for r in rs),
             "eps_with_issue": sum(1 for r in rs if r["issue_tags"]),
             "eps_with_mistake": sum(1 for r in rs if r["mistake_tags"]),
             "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rs),
@@ -401,6 +406,8 @@ def stats(rows: list, plan: dict, now: float, tags: dict | None = None, names: d
             "deformable": _deformable(rows, tags),
             "outcomes": _outcomes(rows),
             "n_tasks": sum(len(r["tasks"]) for r in rows),
+            "n_timeline": sum(r["n_timeline"] for r in rows),
+            "n_key_events": sum(r["n_key_events"] for r in rows),
             "eps_with_issue": sum(1 for r in rows if r["issue_tags"]),
             "eps_with_mistake": sum(1 for r in rows if r["mistake_tags"]),
             "subtasks_with_mistake": sum(r["mistake_subtasks"] for r in rows),

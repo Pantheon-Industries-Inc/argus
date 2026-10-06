@@ -58,6 +58,8 @@ def test_objects_and_mistakes_count_per_subtask(tmp_path):
     assert [k for k, *_ in s["total"]["top_objects"]] == ["container", "cup", "towel"]
     assert s["total"]["deformable"] == {"rigid": 2, "deformable": 1}
     assert by["freeform"]["outcomes"]["success"] == 1 and by["freeform"]["outcomes"]["failure"] == 1
+    # timeline rows and key events are summed per dataset and in all
+    assert s["total"]["n_timeline"] == 3 and by["scripted"]["n_timeline"] == 2 and s["total"]["n_key_events"] == 0
     # without the labeler's skill a subtask counts its task's first verb, and no actions
     assert sorted(k for k, *_ in s["total"]["top_skills"]) == ["fold", "place", "stack"]
     assert s["total"]["top_actions"] == []
