@@ -108,7 +108,10 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what went wrong in the performance, in plain words>",
      "category": "<short snake_case tag for the kind of mistake. Reuse one of these when it fits, so the same kind gets the same tag across episodes: <<MISTAKE_TAGS>>. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
-     "t_s": <float when it occurs, or null if it spans the episode>,
+     "t_s": <float when the incident starts, or null if it spans the episode>,
+     "end_s": <float when it is over: the aim is met, the object is back, or the operator moves on; null if it spans the episode>,
+     "recovered": <true when the operator corrected it within the episode, false when not>,
+     "deliberate": "yes" | "no" | "unclear",
      "evidence": "<which camera and time show it>"}
   ]
 }
@@ -121,20 +124,26 @@ Rules:
   and the overall goal, NEVER as an isolated snapshot. You see the entire video,
   so reason over the full trajectory: what state had the task reached by this
   step, and does this step move it toward the goal FROM THERE.
-- contribution is the direction of movement relative to where the trajectory had
-  gotten to, judged by effect on task state, not how the motion looks:
-    "advancing": moves the task toward the goal given the history. This INCLUDES
-      recovering from an earlier fumble, getting back on track is advancing
-      relative to the botched state even if in isolation it looks like mere
-      repositioning, and includes indirect but effective means (bracing an object
-      so the other arm can work).
-    "wasteful": effort that does not move the task forward given the history, e.g.
-      repeating an approach that already failed with nothing new, or motion that
-      only undoes prior progress.
+- contribution says what a stretch did for what the operator was trying to do at that moment, judged by
+  its effect, not by how the motion looks. The aim is the operator's own, read from what they do: what the
+  motion is directed at, and above all what they do next. Retrying the same thing, fetching an object back
+  or putting something back shows the attempt before it did not get its aim; building on the result and
+  moving on shows it did. Where there is no outside goal, the operator's own aims are all there is; never
+  judge a stretch against a task you imagine for them.
+    "advancing": gets, or moves toward, what the operator was aiming at. This includes recovering after a
+      failure and indirect but effective means (bracing an object so the other arm can work).
+    "wasteful": motion that serves no aim that is met: every try at an aim except the one that works,
+      whether or not the tries differ; a fumble; a detour; motion the operator later undoes; hesitating
+      with an object in hand.
     "idle": the arm is not engaged in the task.
-  Do NOT rubber-stamp a genuinely stuck struggle as advancing, and do NOT punish
-  an unusual but effective strategy as wasteful. Per-step success/failure is not
-  used; success/failure lives at the key_event level.
+  A motion that gets what it was aimed at is never wasteful, however unusual or slow it looks (a regrasp to
+  change an object's orientation, setting one object down to free a gripper, a probe or tilt to look), and
+  imprecision the operator leaves as it is was evidently good enough for them.
+- A failure is an attempt that does not get what it was aimed at, or an outcome nobody aimed at: an object
+  that slips, falls, rolls or is knocked was not aimed at, whatever is done with it afterwards. Each failed
+  attempt is a key_event with outcome failure. A step succeeded only when the frames show its result (the
+  object between the jaws in the frames after, the things meant to meet meeting, the object staying where
+  it was put); when they do not show it, it is not a success, even when the instruction asks for that step.
 - progress is per step, 0..1: how much of the whole task is done at that instant
   (the absolute level), 0 at the start, 1.0 only when the full success_predicate
   holds, a never-completed task plateaus below 1.0 at the best state reached, and
@@ -213,8 +222,9 @@ Rules:
   <b>" phrases. Use whatever clear spatial or support relation you actually see
   (on, in, next-to, inside, holding, leaning-on, stacked-on, ...); there is no
   fixed set of relations. List only relations you can actually see.
-- recovery pairs each FAILED subevent with its recovery. failure_t_s and failure
-  describe the mistake (failure_t_s is when it happens, lining up with the wasteful
+- recovery pairs each failure with what the operator did about it. Repeated failed tries at one aim
+  are one entry, from the first try (failure_t_s) to the one that works (recovered_at_s). failure_t_s and
+  failure describe the failure (failure_t_s is when it happens, lining up with the wasteful
   attempt in the timeline and, for a milestone failure, a key_event with outcome
   failure). If the operator later corrects it within the episode, set recovered true,
   recovered_at_s to the time the correction succeeds, and correction to what they
@@ -332,7 +342,10 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what went wrong in the performance, in plain words>",
      "category": "<short snake_case tag for the kind of mistake. Reuse one of these when it fits, so the same kind gets the same tag across episodes: dropped_object, knocked_object, failed_grasp, rework, prolonged_struggle, hesitation, unnecessary_motion, incomplete_task. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
-     "t_s": <float when it occurs, or null if it spans the episode>,
+     "t_s": <float when the incident starts, or null if it spans the episode>,
+     "end_s": <float when it is over: the aim is met, the object is back, or the operator moves on; null if it spans the episode>,
+     "recovered": <true when the operator corrected it within the episode, false when not>,
+     "deliberate": "yes" | "no" | "unclear",
      "evidence": "<which camera and time show it>"}
   ]
 }
@@ -624,7 +637,7 @@ def data_contract(r: str, recorded: bool = True) -> str:
         for old, new in VIDEO_ONLY_CONTRACT_WORDING:
             c = _replace_once(c, old, new)
     if not robot:
-        slack = c[c.index("- NORMAL DEMONSTRATION SLACK"):c.index("- SEVERITY IS TRAINING IMPACT")]
+        slack = c[c.index("- OPERATOR MISTAKES ARE THE FAILURES"):c.index("- SEVERITY IS TRAINING IMPACT")]
         c = _replace_once(c, slack, _SLACK_EGO + "\n")
         for old, new in EGO_CONTRACT_WORDING:
             c = _replace_once(c, old, new)
@@ -655,13 +668,13 @@ _DATA_CONTRACT_BASE = (
   mismatch (a data issue), not an unfinished task (an operator mistake), and the outcome is still judged
   against the instruction. An operator mistake is recorded correctly; the question it raises is
   whether a model should learn from it.
-- NORMAL DEMONSTRATION SLACK IS NOT A MISTAKE. Real demonstrations include a few seconds of setup or
-  settling at the start and end, brief pauses to look, and small corrective adjustments of a grasp or a
-  placement; none of these belongs in either list. A fumble recovered within a few seconds, or a slow but
-  sound stretch, stays in the timeline and recovery fields only. A performance problem belongs in
-  operator_mistakes when a model imitating this episode would pick up a bad habit (a failed grasp or a drop it
-  would copy, an object knocked over, a struggle that goes on and on) or when it wastes a substantial share
-  of the episode. Every mistake still belongs in the timeline and recovery fields as usual.
+- OPERATOR MISTAKES ARE THE FAILURES AND WASTEFUL STRETCHES, GROUPED AND GRADED. Every failure and every
+  wasteful stretch in the timeline belongs to exactly one operator mistake, recovered or not, and every
+  operator mistake is made of them. One mistake is one incident: the failed tries at one aim and the motion
+  between them, a drop and fetching the object back, or one stretch of motion that serves no aim. t_s and
+  end_s span the whole incident. deliberate says whether the incident looks staged; it never removes an
+  incident or lowers its severity. Setup or settling in the first and last few seconds, brief pauses to look
+  with nothing in hand, and idle stretches are not mistakes.
 - SEVERITY IS TRAINING IMPACT, not how visible or dramatic something looks, in both lists. It comes from
   two things together: how much of the episode the problem touches, and how directly it corrupts what a
   model takes from the episode (what the cameras show, what the recorded motion says, what the instruction
@@ -670,13 +683,15 @@ _DATA_CONTRACT_BASE = (
   between what is seen, what is recorded and what is asked is high even when it is subtle to spot, because
   every frame inherits it. medium: a bounded part of the episode is wrong or wasted, and the rest is good
   once that part is trimmed, masked or corrected. low: worth knowing, but a model trained on the episode as
-  it is would barely be affected. For operator mistakes the same scale asks how much of what a model would
-  imitate is the mistake: a wrong strategy or a failure that dominates the episode is high; a clear
-  mistake confined to one stretch is medium; a slow or untidy stretch that still does the task the right
-  way is low, however long it takes to watch. A problem that is easy to fix
+  it is would barely be affected. For operator mistakes the scale grades the incident by what to do with its stretch: low is a
+  brief incident over within about two seconds that leaves the scene as it was (a grasp that misses and the
+  next one holds); medium is an incident that changes the scene (a drop, a knock, a spill) or lasts longer
+  than about three seconds, so its stretch should be trimmed or masked; high is an incident that dominates
+  the episode, or leaves the task wrong or given up.
+  A problem that is easy to fix
   once someone knows about it (trim the tail, mask a stretch, rewrite the instruction) is still an issue and
   keeps its severity; being fixable is exactly why it must be reported. Do not inflate: preferences about
-  style or efficiency that would not change what a model learns are not issues. Do not deflate: never argue
+  style that would not change what a model learns are not issues. Do not deflate: never argue
   a real problem away because some kind of training might tolerate it.
 - Each entry in either list carries the concrete evidence (which camera, which time). Leave a list empty
   when nothing belongs in it; a clean, well performed episode with both lists empty is a normal, common
