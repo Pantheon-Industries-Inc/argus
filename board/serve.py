@@ -1558,6 +1558,9 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .gf-pressure-range { display: block; font-size: 9px; opacity: .65; }
 .gf-pressure-value { display: block; font-size: 10px; font-variant-numeric: tabular-nums; }
 .gf-pressure-row svg { display: block; width: 100%; height: 32px; overflow: visible; }
+.gf-pressure-chart { position: relative; min-width: 0; }
+.gf-pressure-gap { position: absolute; top: 0; right: 0; font-size: 9px; line-height: 1.2; }
+.gf-pressure-gap[visibility="hidden"] { visibility: hidden; }
 .gf-pressure-note { font-size: 10px; color: rgba(255,255,255,.65); }
 
 .sensor-evidence.has-grip { padding: 16px; margin-top: 20px; }
@@ -5152,13 +5155,12 @@ function gripOverlayPressureHtml(G, f, limit = 3) {
         pen = true;
       });
       return `<span class="gf-pressure-row"><span>${esc(v.label)}${v.depthRegion ? `<span class="gf-pressure-range">${esc(v.recordedLow)} to ${esc(v.recordedHigh)}</span>` : ''}${G.generic ? `<span class="gf-pressure-value" data-grip-mini-value="${k}"></span>` : ''}</span>
-        <svg viewBox="0 0 180 32" preserveAspectRatio="none" role="img" aria-label="${esc(v.label)} ${G.generic ? 'recorded readings' : 'pressure change over this clip'}">
+        <span class="gf-pressure-chart"><svg viewBox="0 0 180 32" preserveAspectRatio="none" role="img" aria-label="${esc(v.label)} ${G.generic ? 'recorded readings' : 'pressure change over this clip'}">
           <rect x="${x(f.start)}" y="2" width="${x(f.end) - x(f.start)}" height="28" fill="currentColor" opacity=".08"/>
           ${v.depthRegion ? '' : `<line x1="0" x2="180" y1="${y(0)}" y2="${y(0)}" stroke="currentColor" opacity=".3" stroke-dasharray="2 3"/>`}
           ${points}<path d="${path.trim()}" fill="none" stroke="currentColor" opacity=".65" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
           <circle data-grip-mini-dot="${k}" cx="0" cy="0" r="2.8" fill="currentColor" visibility="hidden"/>
-          <text data-grip-mini-gap="${k}" x="178" y="11" text-anchor="end" fill="currentColor" font-size="9" visibility="hidden">${G.generic ? 'Not sampled' : 'No reading'}</text>
-        </svg></span>`;
+        </svg><span class="gf-pressure-gap" data-grip-mini-gap="${k}" visibility="hidden">${G.generic ? 'Not sampled' : 'No reading'}</span></span></span>`;
     }).join('')}
     </span>`;
 }
