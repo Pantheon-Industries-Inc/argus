@@ -208,7 +208,8 @@ assert.equal(JSON.stringify(E.insights),original,'presentation never rewrites th
     subprocess.run(['node', '-e', script, str(SOURCE)], check=True)
 
 
-def test_paused_blocked_pending_card_keeps_measurement_until_readable_space_returns():
+@pytest.mark.parametrize('first_sample', [1.05, 1.2], ids=['during-event', 'just-after-event'])
+def test_paused_blocked_pending_card_keeps_measurement_until_readable_space_returns(first_sample):
     script = r'''
 const fs=require('fs'),assert=require('assert');
 const s=fs.readFileSync(process.argv[1],'utf8');
@@ -239,7 +240,7 @@ const E=api.sensorEvidence({sensor_evidence:{version:1,findings:[
 wire=api.setupSensorEvidence(E,()=>{},()=>{},()=>{},null,null,placement.scheduleTopPlacement);
 function settle(){let count=0;while(pending.size){assert(++count<=8,'paused card measurement must settle');
   const [id,fn]=pending.entries().next().value;pending.delete(id);fn();}}
-wire.sync(.9);settle();wire.sync(1.05);settle();
+wire.sync(.9);settle();wire.sync(Number(process.argv[2]));settle();
 assert.equal(stack.style.visibility,'hidden','a 30px gap cannot present the 100px claim');
 wire.sync(7);settle();
 assert.equal(stack.style.visibility,'hidden');
@@ -253,4 +254,4 @@ for(let t=7.5;t<=10.5;t+=.5){wire.sync(t);settle();}
 assert(strip.hidden,'claim expires after 3.5 actual visible media seconds');
 assert.equal(stack.style.minHeight,undefined);assert.equal(stack.style.height,undefined);
 '''
-    subprocess.run(['node', '-e', script, str(SOURCE)], check=True)
+    subprocess.run(['node', '-e', script, str(SOURCE), str(first_sample)], check=True)

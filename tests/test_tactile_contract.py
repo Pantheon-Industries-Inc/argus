@@ -234,8 +234,10 @@ assert(panel.includes('Recorded sensor evidence')&&!panel.includes('OpenTouch')&
 const optical={version:1,sensors:[{id:'camera:extra1',name:'Tactile camera',kind:'image',view:'extra1'}],series:[],
   findings:[{...f,headline:'Contact shifts across the fingertip',evidence:[{sensor_id:'camera:extra1',time_s:[0,.3]}]}]};
 const O=api.sensorEvidence({sensor_evidence:optical});O.grip.media={eid:'episode'};
-assert(api.gripFindingStripHtml({...O.insights[0],phase:'Now'},O.grip).includes('/clip/episode/extra1'));
-assert(api.gripEvidencePanelHtml(O.grip,O.insights[0]).includes('data-sensor-evidence-video'));
+const opticalOverlay=api.gripFindingStripHtml({...O.insights[0],phase:'Now'},O.grip);
+assert(opticalOverlay.includes('Contact shifts across the fingertip')&&!opticalOverlay.includes('<video'));
+const opticalPanel=api.gripEvidencePanelHtml(O.grip,O.insights[0]);
+assert(opticalPanel.includes('data-sensor-evidence-video')&&opticalPanel.includes('/clip/episode/extra1'));
 const rejected=api.sensorEvidence({sensor_evidence:{...doc,findings:[{...f,review_status:'rejected'}]}});
 assert.equal(rejected.insights.length,0);
 '''

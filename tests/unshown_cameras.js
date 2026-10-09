@@ -22,8 +22,9 @@ check(T.unshownCams({}).length === 0 && T.unshownCellsHtml({}, 'e') === '' && T.
 check(T.unshownCams(d).length === 2, 'only entries with a view');
 const cells = T.unshownCellsHtml(d, 'ep1');
 check((cells.match(/class="cam-cell cam-wrist cam-unshown"/g) || []).length === 2, 'one cell per camera');
-check(cells.includes('src="api/video?id=ep1&cam=unshown1"') && cells.includes('id="video-unshown2"'),
-  'each plays its own clip, synced as a side camera');
+check(['unshown1', 'unshown2'].every(view => cells.includes(`id="video-${view}"`)
+  && cells.includes(`src="api/video?id=ep1&amp;cam=${view}"`)),
+  'each side camera retains its own source with the query escaped for HTML');
 check(cells.includes('cam_ir, not shown to the model') && cells.includes('cam &lt;low&gt;, not shown to the model'),
   'each is named as not shown to the model');
 const note = T.unshownNote(d);

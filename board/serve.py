@@ -5537,11 +5537,17 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
   });
   let signature = null, stripKey = null, plottedGrip = (E.insights || [])[0] || null;
   const deferred = new Map();
-  let blocked = false, previousTime = null, previousBlocked = false, previousFinding = null;
+  let blocked = false, previousTime = null, previousBlocked = false, previousFinding = null, currentCandidates = [];
   const wire = {setCapacity(height) {
     const next = !(height > 0);
     if (next === blocked) return;
     blocked = next;
+    // Layout learns capacity after rendering. Preserve that frame's candidates
+    // before the same-time sync loses any brief interval crossed by playback.
+    if (blocked) for (const finding of currentCandidates) {
+      if (!deferred.has(finding.findingIndex))
+        deferred.set(finding.findingIndex, {finding, visibleSeconds: 0});
+    }
     wire.sync(currentTime);
   }, sync(t) {
     const delta = previousTime == null ? 0 : t - previousTime;
@@ -5567,6 +5573,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     }
     available.sort((a, b) => Number(b.phase === 'Now') - Number(a.phase === 'Now')
       || b.priority - a.priority || b.start - a.start);
+    currentCandidates = available;
     displayedGrip = available.find(f => f.findingIndex === chosenGrip) || available[0] || null;
     if (!available.some(f => f.findingIndex === chosenGrip)) chosenGrip = null;
     if (strip) {
