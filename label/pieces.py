@@ -37,6 +37,7 @@ SMOOTH_S = 2.0              # motion is averaged over 2 s so a cut lands in a st
 CUT_GUARD_S = 10.0          # an issue this close to one of our cuts, of a cut-off kind, describes the cut
 CUT_TAGS = ("truncat", "incomplete", "cut_off", "starts_mid", "ends_mid", "mid_task")
 JOIN_GUARD_S = 2.0          # a task ending this close to a cut, and one starting this close after it, may be one task
+KEY_CUT_GUARD_S = 1.0       # a failed or unclear key event this close to a cut is the part running out, not the task
 
 
 def piece_max(ctx: dict) -> float:
@@ -344,6 +345,32 @@ def join_across_cuts(tasks: list, cuts_s: list[float]) -> list:
     return tasks
 
 
+def mark_cut_tasks(tasks: list, cuts_s: list[float]) -> list:
+    """Each task that began before one of our cuts and still ends at it after join_across_cuts (no task after the cut
+    took it up) was cut off by us, not finished or failed by the operator: its outcome becomes "continues_past_cut",
+    the part's own outcome is kept as outcome_in_part, and it has no completion time. A task that succeeded before the
+    cut keeps its outcome, and so does one that began after the cut (it ended on its own)."""
+    out = []
+    for t in tasks:
+        end, start = t.get("end_s"), t.get("start_s")
+        c = next((c for c in cuts_s if isinstance(end, (int, float)) and abs(end - c) <= JOIN_GUARD_S
+                  and (not isinstance(start, (int, float)) or start < c)), None)
+        if c is not None and not t.get("joined_from") and str(t.get("outcome") or "").lower() != "success":
+            note = (t.get("note") or "").rstrip(". ")
+            t = {**t, "outcome": "continues_past_cut", "outcome_in_part": t.get("outcome"), "completed_at_s": None,
+                 "note": (note + ". " if note else "") + f"Still under way at the cut at {c:g}s, where the recording "
+                                                          "was labelled in two parts."}
+        out.append(t)
+    return out
+
+
+def is_cut_key_event(k: dict, cuts_s: list[float]) -> bool:
+    """A failed or unclear key event within KEY_CUT_GUARD_S of one of our cuts: the part ran out mid-step."""
+    t = (k or {}).get("t_s")
+    return (str(k.get("outcome") or "").lower() in ("failure", "unclear") and isinstance(t, (int, float))
+            and any(abs(t - c) <= KEY_CUT_GUARD_S for c in cuts_s))
+
+
 def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     """One labelling result for the whole recording from its parts' results [(part context, part result), ...]
     in order. Times are shifted onto the recording's clock; lists are joined; each part's task and outcome
@@ -422,7 +449,16 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
                        "reason": f"a long recording labelled in {count} parts; each part's outcome is under tasks"}
     for k in ("timeline",):
         L[k].sort(key=lambda s: (s.get("start_s") or 0))
-    L["tasks"] = join_across_cuts(L["tasks"], cuts_s)
+    L["tasks"] = mark_cut_tasks(join_across_cuts(L["tasks"], cuts_s), cuts_s)
+    keep = []
+    for k in L["key_events"]:
+        if is_cut_key_event(k, cuts_s):
+            excluded.append({**k, "list": "key_events", "excluded_by": "piece_cut",
+                             "reason": "the labelling pipeline cut the recording into parts here; a step still under "
+                                       "way when a part ends describes our cut, not the recording"})
+        else:
+            keep.append(k)
+    L["key_events"] = keep
     first = parts[0][1]
     ctx = ep["context"]
     cfg = dict(first.get("config") or {})

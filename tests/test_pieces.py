@@ -71,7 +71,8 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
     """Times move onto the recording's clock, the lists are joined, each part's outcome becomes one task, and a
     cut-off issue at one of our cuts is set aside with the reason, while one at the recording's real end is kept."""
     monkeypatch.setitem(pieces.PIECE_MAX_S, "teleop_arms", 1.5)
-    monkeypatch.setattr(pieces, "CUT_GUARD_S", 0.2)          # the guard, scaled to a 3-second recording
+    monkeypatch.setattr(pieces, "CUT_GUARD_S", 0.2)          # the guards, scaled to a 3-second recording
+    monkeypatch.setattr(pieces, "KEY_CUT_GUARD_S", 0.2)
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "upload"
         recorder_folder(root, n=90)
@@ -96,7 +97,9 @@ def test_stitching_puts_the_parts_back_on_the_recordings_clock(monkeypatch):
         lab = out["labels"]
         assert [s["start_s"] for s in lab["timeline"]] == [0.2, round(0.2 + cut, 3)]
         assert [k["t_s"] for k in lab["key_events"]] == [0.5, round(0.5 + cut, 3)]
-        assert [x["outcome"] for x in lab["tasks"]] == ["partial", "partial"]
+        # part 1's task ends at our cut, so it was cut off by us; part 2's ends at the recording's real end
+        assert [x["outcome"] for x in lab["tasks"]] == ["continues_past_cut", "partial"]
+        assert lab["tasks"][0]["outcome_in_part"] == "partial"
         assert [x["part"] for x in lab["data_issues"]] == [2]                  # the recording's own end stays
         assert [x["excluded_by"] for x in lab["_excluded"]] == ["piece_cut"]   # the cut after part 1 is ours
         assert out["stitched"]["parts"] == 2 and out["usage"]["est_cost_usd"] == 1.0
@@ -131,6 +134,23 @@ def test_a_task_carried_across_a_cut_is_one_task_again():
     one = pieces.join_across_cuts(long, [50.0, 100.0])
     assert len(one) == 1 and one[0]["end_s"] == 120 and one[0]["outcome"] == "failure"
     assert len(one[0]["joined_from"]) == 3
+
+
+def test_a_task_or_step_left_open_at_our_cut_is_never_a_failure():
+    """A task still ending at a cut after the join (the next part named its objects differently, or started something
+    new) was cut off by us: it continues past the cut, keeping the part's outcome aside. A success before the cut,
+    a joined task and a task ending away from any cut keep their outcome. A failed or unclear key event at a cut is
+    the part running out; a success there, or a failure well before the cut, stays."""
+    t = lambda a, b, outcome, **kw: {"start_s": a, "end_s": b, "task": "x", "objects": [], "outcome": outcome, **kw}
+    out = pieces.mark_cut_tasks([t(0, 99.5, "failure"), t(0, 99.0, "success"), t(0, 60, "failure"),
+                                 t(0, 100.0, "partial", joined_from=[{}, {}]), t(100.1, 101.5, "failure")], [100.0])
+    assert [x["outcome"] for x in out] == ["continues_past_cut", "success", "failure", "partial", "failure"]
+    assert out[0]["outcome_in_part"] == "failure" and out[0]["completed_at_s"] is None
+    assert "cut at 100s" in out[0]["note"]
+    k = lambda ts, outcome: {"t_s": ts, "outcome": outcome, "label": "y"}
+    assert [pieces.is_cut_key_event(e, [100.0]) for e in
+            (k(99.6, "unclear"), k(100.4, "failure"), k(99.6, "success"), k(97.0, "failure"), k(100.0, None))] \
+        == [True, True, False, False, False]
 
 
 def test_a_recording_with_other_signals_can_be_labelled_in_parts(tmp_path, monkeypatch):
