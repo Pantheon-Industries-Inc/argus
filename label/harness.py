@@ -237,16 +237,22 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
 
 def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, api_key: str, max_tokens: int,
                   timeout: int, cell_w: int = 0, example_dir: str | None = None, dry_run: bool = False,
-                  reserve_final=None, reserve_selection=None, settle_selection=None) -> dict:
+                  reserve_final=None, reserve_selection=None, settle_selection=None, force_refresh=False) -> dict:
+    identity = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
+                              cell_w=cell_w, example_dir=example_dir)
+    billing = _billing_fields(out_path)
     # an explicit cell width skips the routing; otherwise a routed rig's widest cell comes from its task text
     route_w, route = (None, {"routed": False}) if cell_w else route_width(
-        ep_dir, None if dry_run else api_key, call_model, timeout=min(timeout, 120))
+        ep_dir, None if dry_run else api_key, call_model_once, timeout=min(timeout, 120),
+        receipt_path=Path(out_path).with_name(f'noreply_{Path(out_path).name}'), input_identity=identity,
+        reserve_dispatch=reserve_selection, settle_dispatch=settle_selection, billing_fields=billing,
+        force_refresh=force_refresh)
     req = me.build_request(ep_dir, detail=DETAIL, gate=DECODE_GATE, grid_cols=GRID_COLS, cell_w=cell_w or None,
                            max_cell_w=route_w, example_dir=example_dir, inspect_evidence=True)
     pl = req["plan"]
     fields = {
-        "input_identity": input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
-                                          cell_w=cell_w, example_dir=example_dir),
+        "input_identity": identity,
+        **billing,
         **({"sensor_evidence": req["sensor_evidence"]} if req.get("sensor_evidence", {}).get("sensors") else {}),
         "given_prompt": req["given_prompt"],
         "prompt_mode": "given" if req["given_prompt"] else "inferred",
@@ -317,6 +323,128 @@ def saved_input_problem(record: dict, ep_dir: Path) -> str | None:
     return None
 
 
+def billing_record(out_dir: Path, name: str):
+    """Select the latest durable paid attempt without discarding earlier label files."""
+    selected = None
+    for path in (Path(out_dir) / name, Path(out_dir) / f'failed_{name}', Path(out_dir) / f'noreply_{name}'):
+        if not path.exists():
+            continue
+        record = json.loads(path.read_text())
+        if not isinstance(record, dict):
+            raise ValueError('saved billing receipt is not an object')
+        index = record.get('final_attempt_index', 0)
+        if type(index) is not int or index < 0:
+            raise ValueError('saved final attempt index is invalid')
+        if selected is None or index > selected[1].get('final_attempt_index', 0):
+            selected = (path, record)
+    return selected
+
+
+def _history_cost(invoice: dict) -> float:
+    if not isinstance(invoice, dict):
+        raise ValueError('saved final invoice is not an object')
+    outcome = invoice.get('final_dispatch_outcome')
+    if outcome == 'not dispatched' or invoice.get('dry_run'):
+        return 0.0
+    value = invoice.get('final_reserved_usd') if outcome in ('claimed', 'unverified') else (
+        invoice.get('usage') or {}).get('est_cost_usd')
+    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+        raise ValueError('saved final invoice cost is not verified')
+    return float(value)
+
+
+def final_history_cost(record: dict) -> float:
+    history = record.get('final_cost_history', [])
+    if not isinstance(history, list):
+        raise ValueError('saved final invoice history is invalid')
+    return sum(_history_cost(invoice) for invoice in history)
+
+
+def final_history_complete(record: dict) -> bool:
+    final_history_cost(record)
+    return all(invoice.get('final_dispatch_outcome') not in ('claimed', 'unverified')
+               for invoice in record.get('final_cost_history', []))
+
+
+def auxiliary_cost(value: dict, *, routing=False) -> float:
+    cost = value.get('cost_usd', 0.0)
+    previous = cost if routing and value.get('previously_billed') is True else value.get('previously_billed_usd', 0.0)
+    if any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in (cost, previous)) or previous > cost:
+        raise ValueError('saved auxiliary invoice cost is invalid')
+    return float(cost - previous)
+
+
+def auxiliary_history_cost(record: dict) -> float:
+    history = record.get('auxiliary_cost_history', [])
+    if not isinstance(history, list) or any(not isinstance(invoice, dict) for invoice in history):
+        raise ValueError('saved auxiliary invoice history is invalid')
+    return sum(auxiliary_cost(invoice) for invoice in history)
+
+
+def auxiliary_history_complete(record: dict) -> bool:
+    auxiliary_history_cost(record)
+    return not any(invoice.get('cost_is_conservative_estimate') for invoice in record.get('auxiliary_cost_history', []))
+
+
+def inspection_billed(record: dict, digest) -> float:
+    """Inspection caches are cumulative; count only their costs not already represented in this receipt."""
+    if not digest:
+        return 0.0
+    auxiliary_history_cost(record)
+    cost = sum(auxiliary_cost(invoice) for invoice in record.get('auxiliary_cost_history', [])
+               if invoice.get('kind') == 'inspection' and invoice.get('digest') == digest)
+    active = record.get('evidence_inspection') or {}
+    if active.get('digest') == digest:
+        cost += auxiliary_cost(active)
+    return cost
+
+
+def _final_cost_history(out_path: Path) -> list:
+    saved = billing_record(Path(out_path).parent, Path(out_path).name)
+    if saved is None:
+        return []
+    record = saved[1]
+    final_history_cost(record)
+    history = copy.deepcopy(record.get('final_cost_history', []))
+    if record.get('final_dispatch_outcome') == 'not dispatched' or record.get('dry_run'):
+        return history
+    _history_cost(record)
+    history.append({key: copy.deepcopy(record[key]) for key in (
+        'model', 'reasoning_effort', 'provider', 'provider_name', 'generation_id', 'model_served',
+        'system_fingerprint', 'usage', 'usage_reported', 'finish_reason', 'final_dispatch_outcome',
+        'final_reserved_usd', 'final_attempt_index') if key in record})
+    return history
+
+
+def _billing_fields(out_path: Path) -> dict:
+    final = _final_cost_history(out_path)
+    current = billing_record(Path(out_path).parent, Path(out_path).name)
+    history = []
+    def retain(kind, value, cost):
+        if cost:
+            history.append({'kind': kind, 'cost_usd': cost,
+                **{key: copy.deepcopy(value[key]) for key in (
+                    'model', 'generation_id', 'usage', 'cost_source', 'dispatch_outcome',
+                    'reserved_usd', 'digest', 'rounds', 'cost_is_conservative_estimate') if key in value}})
+    if current is not None:
+        record = current[1]
+        auxiliary_history_cost(record)
+        history = copy.deepcopy(record.get('auxiliary_cost_history', []))
+        for kind, value in (('route', (record.get('config') or {}).get('resolution_route') or {}),
+                            ('inspection', record.get('evidence_inspection') or {})):
+            cost = auxiliary_cost(value, routing=kind == 'route')
+            retain(kind, value, cost)
+    cache = Path(out_path).parent / '.evidence' / (Path(out_path).name + '.inspection.json')
+    if cache.exists():
+        from label.evidence_access import recover_selection_reservations
+        inspection = json.loads(cache.read_text())
+        recover_selection_reservations(inspection)
+        carried = inspection_billed({'auxiliary_cost_history': history}, inspection.get('digest'))
+        retain('inspection', inspection, max(0.0, inspection['cost_usd'] - carried))
+    return {'final_cost_history': final, 'auxiliary_cost_history': history,
+            'final_attempt_index': current[1].get('final_attempt_index', 0) + 1 if current else 1}
+
+
 def episode_cost(result: dict) -> float:
     """What labelling one episode was billed: its model call plus, for a routed episode, the routing call made for
     it (label/route.py)."""
@@ -325,8 +453,8 @@ def episode_cost(result: dict) -> float:
     final = (result.get("usage") or {}).get("est_cost_usd")
     if final is None:
         final = result.get('final_reserved_usd') or 0.0
-    return (float(final) + float(route.get("cost_usd") or 0.0)
-            + float(inspection.get('cost_usd') or 0.0))
+    return (float(final) + final_history_cost(result) + auxiliary_history_cost(result)
+            + auxiliary_cost(route, routing=True) + auxiliary_cost(inspection))
 
 
 def final_cost_bound(content: list, max_tokens: int) -> float:
@@ -510,6 +638,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                      prompt_text: str = "", evidence_access=None, reserve_final=None,
                      reserve_selection=None, settle_selection=None) -> dict:
     """Send one request (or, in a dry run, record exactly what would be sent) and write the result."""
+    fields = {**fields, **(_billing_fields(out_path) if 'final_cost_history' not in fields else {})}
     if img_bytes * IMAGE_SIZE_INFLATION > IMAGE_LIMIT_BYTES:
         raise RuntimeError(f"payload {img_bytes} B exceeds the image-size cap; refusing to send")
     if evidence_access is not None:
@@ -550,12 +679,16 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                     except (OSError, ValueError):
                         pass
                 doc.update(status='incomplete', limitations=[f'Inspection failed: {type(error).__name__}: {error}'])
+                doc['previously_billed_usd'] = inspection_billed(fields, doc.get('digest'))
+                auxiliary_cost(doc)
                 fields['evidence_inspection'] = doc
                 failed = {'episode_dir': str(ep_dir), 'model': model, 'reasoning_effort': reasoning,
                           **fields, 'parse_ok': False, 'no_reply': f'{type(error).__name__}: {error}',
                           'final_dispatch_outcome': 'not dispatched'}
                 write_atomic(Path(out_path).with_name(f'noreply_{Path(out_path).name}'), failed)
                 raise
+            doc['previously_billed_usd'] = inspection_billed(fields, doc.get('digest'))
+            auxiliary_cost(doc)
             fields['evidence_inspection'] = doc
             addition = [{'type': 'text', 'text': ea.FINAL + '\nINSPECTION COVERAGE\n' +
                         ea.packed(ea.Access.coverage_summary(doc))}] + extra
@@ -614,7 +747,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
     try:
         resp = call_model_once(content, model, reasoning, api_key, max_tokens, timeout)
     except KeyExhausted:
-        claim_path.unlink(missing_ok=True)
+        write_atomic(claim_path, {**claim, 'final_dispatch_outcome': 'not dispatched',
+                                  'final_reserved_usd': 0.0, 'no_reply': 'final key has no credit'})
         raise
     except Exception as error:
         failed = dict(claim, no_reply=f"{type(error).__name__}: {error}",
@@ -867,6 +1001,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
             with spend_lock:
                 if spent["usd"] >= max_spend:
                     return ("skip", ep, f"spend cap ${max_spend:.2f} reached")
+        prior_cost = episode_cost(_billing_fields(out_for(ep)))
         reserved = [0.0]
         selection_accounted = [0.0]
         def reserve_selection(amount):
@@ -882,7 +1017,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 selection_accounted[0] += actual - reserve
         def reserve_final(amount, path, claim):
             with spend_lock:
-                new_amount = max(0.0, amount - selection_accounted[0])
+                new_amount = max(0.0, amount - selection_accounted[0] - prior_cost)
                 if max_spend > 0 and spent['usd'] + new_amount > max_spend:
                     raise SpendCap(f"final request reserve ${new_amount:.2f} exceeds remaining spend cap")
                 persist_final_claim(path, claim)
@@ -894,11 +1029,12 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 return ("fail", ep, "all keys retired (out of credit)")
             try:
                 r = label_episode(ep, out_for(ep), api_key=key, reserve_final=reserve_final,
-                                  reserve_selection=reserve_selection, settle_selection=settle_selection, **label_kw)
+                                  reserve_selection=reserve_selection, settle_selection=settle_selection,
+                                  force_refresh=force, **label_kw)
                 _release_memory()
                 c = episode_cost(r)
                 with spend_lock:
-                    spent["usd"] += c - reserved[0] - selection_accounted[0]
+                    spent["usd"] += c - reserved[0] - selection_accounted[0] - prior_cost
                 return ("ok", ep, c)
             except KeyExhausted as e:
                 with spend_lock:
@@ -908,7 +1044,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 continue
             except Truncated as e:
                 with spend_lock:
-                    spent["usd"] += e.cost - reserved[0] - selection_accounted[0]
+                    spent["usd"] += e.cost - reserved[0] - selection_accounted[0] - prior_cost
                 return ("fail", ep, str(e))
             except SpendCap as e:
                 return ("skip", ep, str(e))
@@ -916,7 +1052,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 failure = out_dir / f"noreply_{ep.name}.json"
                 if failure.exists() and not reserved[0]:
                     with spend_lock:
-                        spent['usd'] += episode_cost(json.loads(failure.read_text()))
+                        spent['usd'] += episode_cost(json.loads(failure.read_text())) - selection_accounted[0] - prior_cost
                 return ("fail", ep, f"{type(e).__name__}: {e}")
 
     def no_reply(ep: Path, why: str | None) -> None:
@@ -931,6 +1067,19 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
             (out_dir / f"stale_{ep.name}.json").unlink(missing_ok=True)
             return
         previous = json.loads(p.read_text()) if p.exists() else {}
+        current = billing_record(out_dir, f'{ep.name}.json')
+        if current is not None and current[0].name.startswith('failed_'):
+            previous = current[1]
+        if not previous:
+            previous = {**_billing_fields(out_for(ep)), 'final_dispatch_outcome': 'not dispatched',
+                        'final_reserved_usd': 0.0}
+            try:
+                previous['input_identity'] = input_identity(ep, model=label_kw.get('model', DEFAULT_MODEL),
+                    reasoning=label_kw.get('reasoning', DEFAULT_REASONING),
+                    max_tokens=label_kw.get('max_tokens', 64000), cell_w=label_kw.get('cell_w', 0),
+                    example_dir=label_kw.get('example_dir'))
+            except (OSError, ValueError):
+                pass
         write_atomic(p, {**previous, "episode_dir": str(ep), "model": label_kw.get("model"),
                          "parse_ok": False, "no_reply": why})
 

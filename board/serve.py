@@ -5512,16 +5512,17 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
   if (strip) on(strip, 'click', event => {
     const choice = event.target.closest('[data-overlay-finding]');
     if (choice) { chosenGrip = +choice.dataset.overlayFinding; wire.sync(currentTime); return; }
-    if (displayedGrip) seek(displayedGrip.t, false);
+    if (displayedGrip) {
+      const selected = displayedGrip;
+      seek(selected.t, false);
+      wire.sync(selected.t, selected.findingIndex);
+    }
   });
   for (const el of document.querySelectorAll('#sensor-evidence-inspect, #sensor-overlay')) on(el, 'click', inspect);
   for (const el of document.querySelectorAll('[data-evidence-t]')) on(el, 'click', () => {
-    if (el.dataset.gripFinding != null) {
-      const finding = E.insights[+el.dataset.gripFinding];
-      chosenGrip = finding ? finding.findingIndex : null;
-    }
+    const finding = el.dataset.gripFinding != null ? E.insights[+el.dataset.gripFinding] : null;
     seek(+el.dataset.evidenceT, el.dataset.evidencePause !== 'true');
-    wire.sync(+el.dataset.evidenceT);
+    wire.sync(+el.dataset.evidenceT, finding ? finding.findingIndex : null);
   });
   const compare = document.getElementById('sensor-depth-compare');
   if (compare) on(compare, 'click', () => {
@@ -5549,9 +5550,10 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
         deferred.set(finding.findingIndex, {finding, visibleSeconds: 0});
     }
     wire.sync(currentTime);
-  }, sync(t) {
+  }, sync(t, explicitFindingIndex = null) {
     const delta = previousTime == null ? 0 : t - previousTime;
     if (delta < -1e-6) { deferred.clear(); chosenGrip = null; }
+    if (explicitFindingIndex != null) chosenGrip = explicitFindingIndex;
     if (!blocked && !previousBlocked && delta > 0 && delta <= 1 + 1e-6) {
       const pending = deferred.get(previousFinding);
       if (pending) {

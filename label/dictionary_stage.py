@@ -41,26 +41,29 @@ def label_spend_complete(job: Path) -> bool:
 
 
 def _label_receipts(job: Path):
-    from label.harness import episode_cost
+    from label.harness import episode_cost, billing_record, final_history_complete, auxiliary_history_complete, inspection_billed
     from label.evidence_access import recover_selection_reservations
     out = job / 'run' / 'out'
     if not out.exists():
         return
-    names = {p.name.removeprefix('failed_').removeprefix('noreply_') for p in out.glob('*episode_*.json')}
+    names = {p.name.removeprefix('failed_').removeprefix('noreply_')
+             for prefix in ('', 'failed_', 'noreply_') for p in out.glob(f'{prefix}episode_*.json')}
     cache_dir = out / '.evidence'
     names.update(p.name.removesuffix('.inspection.json') for p in cache_dir.glob('episode_*.json.inspection.json'))
     for name in names:
         try:
             value, complete = 0.0, True
-            primary_inspection = None
-            p = next((p for p in (out / name, out / f'failed_{name}', out / f'noreply_{name}') if p.exists()), None)
-            if p is not None:
-                record = json.loads(p.read_text())
+            record = {}
+            current = billing_record(out, name)
+            if current is not None:
+                p, record = current
                 if not _known_label_cost(record, p):
                     raise ValueError('saved label cost is not verified')
                 value = episode_cost(record)
-                primary_inspection = record.get('evidence_inspection')
-                complete = (record.get('final_dispatch_outcome') not in ('claimed', 'unverified')
+                complete = (final_history_complete(record) and auxiliary_history_complete(record)
+                            and record.get('final_dispatch_outcome') not in ('claimed', 'unverified')
+                            and not ((record.get('config') or {}).get('resolution_route') or {}).get(
+                                'cost_is_conservative_estimate')
                             and not (record.get('evidence_inspection') or {}).get('cost_is_conservative_estimate'))
             cache = cache_dir / f'{name}.inspection.json'
             if cache.exists():
@@ -69,11 +72,7 @@ def _label_receipts(job: Path):
                 reserve = inspection['cost_usd']
                 if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
                     raise ValueError('saved inspection cost is invalid')
-                if (isinstance(primary_inspection, dict) and inspection.get('digest')
-                        and primary_inspection.get('digest') == inspection['digest']):
-                    value = max(value, float(reserve))
-                else:
-                    value += float(reserve)
+                value += max(0.0, float(reserve) - inspection_billed(record, inspection.get('digest')))
                 complete = complete and not inspection.get('cost_is_conservative_estimate')
             if not math.isfinite(value) or value < 0:
                 raise ValueError('saved label cost is invalid')

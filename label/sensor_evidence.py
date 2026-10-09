@@ -12,7 +12,7 @@ import math
 
 import numpy as np
 
-from label.dictionary_context import field_interpretation
+from label.dictionary_context import field_interpretation, prepared_interpretation
 from label import signals as sg
 from prepare.formats import is_sensing, names_touch, _names_word
 
@@ -470,22 +470,31 @@ def merge(parts, ctx, ep_dir=None):
         prefix = f'part{piece.get("index", position)}:'
         for row in doc.get('coverage') or []:
             result['coverage'].append({**copy.deepcopy(row), 'id': prefix + row['id']})
-        stale = stale_source or any(_json(s.get('interpretation') or {}) != _json(field_interpretation(ctx, s['name'],
-                    'camera' if s.get('kind') == 'image' else s['name'] if s.get('access_kind') and s['name'] in ('state', 'action')
-                    else 'signal')) for s in doc.get('sensors') or [] if s.get('access_kind') != 'depth')
+        stale = stale_source
         stale |= bool(doc.get('clock_digest') and doc['clock_digest'] != _clock_digest(ctx))
         stale |= _unsafe_timed_alignment(doc, ctx)
+        stale_sensors = set()
         for sensor in doc.get('sensors') or []:
+            if sensor.get('access_kind') != 'depth':
+                if sensor.get('access_kind') == 'image':
+                    interpretation = prepared_interpretation(ctx, sensor['view'], 'camera')
+                elif sensor.get('access_kind') and sensor['name'] in ('state', 'action'):
+                    interpretation = prepared_interpretation(ctx, sensor['name'], sensor['name'])
+                else:
+                    interpretation = field_interpretation(ctx, sensor['name'],
+                        'camera' if sensor.get('kind') == 'image' else 'signal')
+                if _json(sensor.get('interpretation') or {}) != _json(interpretation):
+                    stale_sensors.add(sensor['id'])
             if sensor.get('access_kind'):
                 from label.evidence_access import current_descriptor, descriptor_signature
                 current = current_descriptor(ctx, sensor)
                 if current is None or sensor.get('access_descriptor_digest') != descriptor_signature(current):
-                    stale = True
+                    stale_sensors.add(sensor['id'])
                 continue
             current = ((ctx.get('cameras') or {}).get(sensor.get('view')) if sensor.get('kind') == 'image'
                        else next((m for m in ctx.get('signals') or [] if m.get('name') == sensor['name']), None))
             if current is None or (sensor.get('descriptor_digest') and sensor['descriptor_digest'] != _descriptor_digest(current)):
-                stale = True
+                stale_sensors.add(sensor['id'])
         if doc.get('provenance'):
             result['provenance']['parts'].append({'part': piece.get('index', position), **copy.deepcopy(doc['provenance'])})
         for sensor in doc.get('sensors') or []:
@@ -508,6 +517,8 @@ def merge(parts, ctx, ep_dir=None):
             row['times'] = [t + offset for t in row['times']]
             result['series'].append(row)
         for finding in doc.get('findings') or []:
+            stale_finding = stale or any(ref.get('sensor_id') in stale_sensors
+                                        for ref in finding.get('evidence') or [])
             finding = copy.deepcopy(finding)
             if offset:
                 # Preserve the model's quoted times without silently rewriting its prose.
@@ -520,7 +531,7 @@ def merge(parts, ctx, ep_dir=None):
                 if ref.get('series_id'):
                     ref['series_id'] = prefix + ref['series_id']
                 ref['time_s'] = [t + offset for t in ref.get('time_s') or []]
-            if stale:
+            if stale_finding:
                 result['unbound_findings'].append({'part': piece.get('index', position), 'finding': finding,
                     'reason': 'sensor interpretation, descriptors or timing changed since this part was labeled'})
             else:

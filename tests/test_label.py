@@ -355,10 +355,10 @@ def test_routing_reads_the_task_text_and_falls_back_to_wide_cells(tmp_path, monk
         call, _ = _route_call([answer])
         assert route.route_width(ep, "sk-or-x", call)[0] == 448
         monkeypatch.setattr(route, "_CACHE", {})
-    # a failed routing call is not cached: the next episode with the same task text asks again
+    # An ambiguous routing dispatch uses the wide fallback without another paid call.
     call, calls = _route_call([RuntimeError("HTTP 500"), '{"fine_detail": false, "why": "whole objects"}'])
     assert route.route_width(ep, "sk-or-x", call)[1]["why"].startswith("routing failed")
-    assert route.route_width(ep, "sk-or-x", call)[0] == 224 and len(calls) == 2
+    assert route.route_width(ep, "sk-or-x", call)[0] == 448 and len(calls) == 1
     monkeypatch.setattr(route, "_CACHE", {})
     assert route.route_width(ep, None, call)[1]["why"] == "no key (dry run)"
     ctx = json.loads((ep / "context.json").read_text())
@@ -538,6 +538,9 @@ def test_an_episode_that_got_no_reply_says_why_until_it_gets_one(tmp_path, monke
 
     monkeypatch.setattr(harness, "label_episode", fake_label)
     eps = _dirs(tmp_path, 3)
+    for ep in eps:
+        (ep / 'context.json').write_text(json.dumps({'profile': 'handheld_gripper', 'state_kind': 'none'}))
+        (ep / 'sources.json').write_text('{}')
     assert harness.run_batch(eps, tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False) == 1
     rec = json.loads((tmp_path / "out" / "noreply_episode_000001.json").read_text())
     assert rec["no_reply"] == "ValueError: the request could not be built" and rec["parse_ok"] is False
@@ -819,7 +822,11 @@ def test_cut_off_reply_is_kept_beside_the_outputs_and_fails(tmp_path, monkeypatc
     assert harness.episode_cost(failed) == 0.5 and lrun.billed_cost(tmp_path) == 0.5
     with pytest.raises(harness.Truncated) as e:
         harness.label_episode(ep, out, model="m", reasoning="medium", api_key="sk-or-x", max_tokens=64000, timeout=60)
-    assert e.value.cost == 0.5
+    assert e.value.cost == 1.0
+    retried = json.loads((out.parent / "failed_episode_000007.json").read_text())
+    assert retried["usage"]["cost"] == 0.5
+    assert len(retried["final_cost_history"]) == 1
+    assert harness.episode_cost(retried) == lrun.billed_cost(tmp_path) == 1.0
 
 
 def test_dry_run_from_the_command_line(tmp_path, monkeypatch, capsys):

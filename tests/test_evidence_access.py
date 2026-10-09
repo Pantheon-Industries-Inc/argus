@@ -572,7 +572,8 @@ def test_harness_uses_requested_evidence_in_final_annotation_and_accounts_for_co
                               api_key='fixture', max_tokens=2000, timeout=10, cell_w=128)
     failed = json.loads((tmp_path / 'noreply_out.json').read_text())
     assert failed['final_dispatch_outcome'] == 'unverified'
-    assert harness.episode_cost(failed) == pytest.approx(failed['final_reserved_usd'] + .02)
+    assert harness.episode_cost(failed) == pytest.approx(failed['final_reserved_usd'] + .03)
+    assert failed['final_cost_history'][0]['generation_id'] == 'actual_inspection_fixture'
     assert failed['evidence_inspection']['inspections'][0]['values'][-1] == [11.]
 
     missing_calls = []
@@ -591,12 +592,13 @@ def test_harness_uses_requested_evidence_in_final_annotation_and_accounts_for_co
     assert missing['evidence_inspection']['cost_usd'] > 0
     def broken_decoder(*args, **kwargs):
         raise AttributeError('Unexpected decoded frame interface')
+    prior_cost = harness.episode_cost(failed)
     monkeypatch.setattr(ea.Access, 'pictures', broken_decoder)
     with pytest.raises(AttributeError):
         harness.label_episode(ep, tmp_path / 'out.json', model='openai/gpt-6-astra', reasoning='medium',
                               api_key='fixture', max_tokens=2000, timeout=10, cell_w=128)
     failed = json.loads((tmp_path / 'noreply_out.json').read_text())
-    assert harness.episode_cost(failed) == pytest.approx(.02)
+    assert harness.episode_cost(failed) == pytest.approx(prior_cost)
     assert failed['final_dispatch_outcome'] == 'not dispatched'
 
 
@@ -654,6 +656,38 @@ def test_crashed_selection_reservation_survives_resume_and_service_spend(tmp_pat
     assert doc['cost_usd'] == pytest.approx(.2)
     assert json.loads(cache.read_text())['rounds'][0]['reservation_accounted'] is True
     assert label_spend(job) == pytest.approx(.2)
+
+
+def test_legacy_resume_diagnostic_does_not_change_settled_spend(tmp_path):
+    from label import harness
+    from label.dictionary_stage import label_spend, label_spend_complete
+    ep = tmp_path / 'episode_a'
+    ep.mkdir()
+    job = tmp_path / 'job'
+    out = job / 'run' / 'out'
+    out.mkdir(parents=True)
+    (out / 'episode_a.json').write_text(json.dumps({
+        'parse_ok': True, 'labels': {}, 'usage': {'est_cost_usd': .2}}))
+    assert harness.run_batch([ep], out, keys=['sk-or-fixture'], concurrency=1, force=False) == 0
+    diagnostic = json.loads((out / 'stale_episode_a.json').read_text())
+    assert diagnostic['status'] == 'unverified'
+    assert label_spend(job) == pytest.approx(.2)
+    assert label_spend_complete(job) is True
+
+
+@pytest.mark.parametrize('prefix', ['', 'failed_', 'noreply_'])
+@pytest.mark.parametrize('record, expected, complete', [
+    ({'usage': {'est_cost_usd': None}}, 1e300, False),
+    ({'final_dispatch_outcome': 'unverified', 'final_reserved_usd': .3}, .3, False),
+    ({'final_dispatch_outcome': 'claimed', 'final_reserved_usd': .4}, .4, False),
+])
+def test_spend_retains_unknown_paid_receipts(tmp_path, prefix, record, expected, complete):
+    from label.dictionary_stage import label_spend, label_spend_complete
+    out = tmp_path / 'run' / 'out'
+    out.mkdir(parents=True)
+    (out / f'{prefix}episode_a.json').write_text(json.dumps(record))
+    assert label_spend(tmp_path) == pytest.approx(expected)
+    assert label_spend_complete(tmp_path) is complete
 
 
 def test_rgb_request_and_model_call_are_unchanged(tmp_path, monkeypatch):
@@ -773,6 +807,60 @@ def test_piece_merge_keeps_generic_findings_and_inspection_cost(tmp_path):
     assert stitched['cost_usd'] == .1
     assert stitched['parts'][0]['time_origin_s'] == 10
     assert stitched['parts'][0]['record']['inspections'][0]['times_s'][0] == 0
+
+
+@pytest.mark.parametrize('changed_kind', [None, 'state', 'action', 'camera'])
+def test_piece_merge_preserves_native_meanings_and_withholds_only_changed_citations(tmp_path, changed_kind):
+    import copy
+    from label import episode, sensor_evidence
+    from tests.test_label import _packed_mp4
+    directory = tmp_path / 'episode_native__p01'
+    directory.mkdir()
+    movie = directory / 'scene.mp4'
+    _packed_mp4(movie, 3)
+    parent = {'episode_id': 'episode_native', 'profile': 'teleop_arms', 'state_kind': 'joints',
+              'fps': 30, 'source': {'state': '/observations/qpos', 'action': '/action'},
+              'cameras': {'exo': {'name': 'recorded_head'}},
+              'data_dictionary': {'episode_id': 'episode_native', 'fields': [
+                  {'id': 'state', 'kind': 'state', 'name': '/observations/qpos', 'bindings': [
+                      {'episode': 'episode_native', 'context_path': 'state', 'file': 'state.npz', 'key': 'state'}]},
+                  {'id': 'action', 'kind': 'action', 'name': '/action', 'bindings': [
+                      {'episode': 'episode_native', 'context_path': 'action', 'file': 'state.npz', 'key': 'action'}]},
+                  {'id': 'camera', 'kind': 'camera', 'name': 'recorded_head', 'bindings': [
+                      {'episode': 'episode_native', 'context_path': 'cameras/exo'}]}],
+                  'entries': {kind: {'meaning': 'Reviewed ' + kind, 'role': 'unknown', 'provenance': 'human'}
+                              for kind in ('state', 'action', 'camera')}}}
+    piece = {**parent, 'episode_id': directory.name,
+             'piece': {'of': 'episode_native', 'index': 1, 't0_s': 10, 't1_s': 10.1}}
+    (directory / 'context.json').write_text(json.dumps(piece))
+    (directory / 'sources.json').write_text(json.dumps({'exo': {
+        'packed': str(movie), 'base_s': 0, 'n_frames': 3}}))
+    np.savez(directory / 'state.npz', state=np.array([[1], [2], [3]]), action=np.array([[2], [3], [4]]))
+    access = ea.Access(episode.load(directory))
+    references, findings = {}, []
+    for field in access.inventory():
+        if field['kind'] not in ('numeric', 'image'):
+            continue
+        kind = 'camera' if field['kind'] == 'image' else field['name']
+        receipt = access.inspect({'field_id': field['id']})
+        references[kind] = {'evidence_id': receipt['id'], 'time_s': [0, 2 / 30]}
+        findings.append({'headline': kind, 'start_s': 0, 'end_s': 2 / 30, 'adds_beyond_video': True,
+                         'evidence': [references[kind]]})
+    findings.append({'headline': 'combined', 'start_s': 0, 'end_s': 2 / 30, 'adds_beyond_video': True,
+                     'evidence': [references['state'], references['camera']]})
+    original = access.bind(findings)
+    assert len(original['findings']) == 4
+    current = copy.deepcopy(parent)
+    if changed_kind:
+        current['data_dictionary']['entries'][changed_kind]['meaning'] = 'Corrected reviewed meaning'
+    merged = sensor_evidence.merge([(piece, {'sensor_evidence': original})], current)
+    expected = {None: ['state', 'action', 'camera', 'combined'],
+                'state': ['action', 'camera'], 'action': ['state', 'camera', 'combined'],
+                'camera': ['state', 'action']}[changed_kind]
+    assert sorted(finding['headline'] for finding in merged['findings']) == sorted(expected)
+    assert len(merged['unbound_findings']) == 4 - len(expected)
+    assert all(finding['start_s'] == 10 for finding in merged['findings'])
+    assert original['findings'] == access.bind(findings)['findings']
 
 
 def test_source_row_findings_are_saved_without_becoming_timed_overlays(tmp_path):

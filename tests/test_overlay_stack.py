@@ -56,6 +56,14 @@ assert.deepEqual(buttons.map(b=>b['aria-pressed']),['true','false']);
 assert.equal(seeks,previousSeeks,'inline selection keeps the paused playhead');
 assert.equal(placements,previousPlacements+1,'changed paused finding schedules its new card geometry');
 wire.sync(2.46244);assert.equal(placements,previousPlacements+1,'unchanged finding does not reschedule');
+// Replaying the earlier finding from later playback must preserve explicit selection.
+wire.sync(7);
+callbacks.get(buttons[0])();assert.deepEqual(buttons.map(b=>b['aria-pressed']),['true','false']);
+assert(strip.innerHTML.includes(findings[0].headline),'backward replay selects the clicked finding');
+wire.sync(3);
+callbacks.get(strip)({target:{closest:()=>null}});
+assert.deepEqual(buttons.map(b=>b['aria-pressed']),['true','false'],
+  'replaying the retained overlay keeps the same finding when timestamps overlap');
 '''
     subprocess.run(['node', '-e', script, str(HERE / 'page_functions.js'),
                     (HERE / 'fixtures/overlapping_sensor_findings.json').read_text()], check=True)
