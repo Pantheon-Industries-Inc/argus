@@ -118,34 +118,19 @@ def test_follow_puts_a_long_recording_on_the_board_once_its_last_part_is_in(tmp_
     assert follow.follow_once(board, {}) == 0                        # restarted: nothing is rewritten
 
 
-def test_every_burst_of_jaw_moves_is_sent_densely_with_its_own_camera(monkeypatch):
-    """Jaw moves no more than JAW_JOIN_S apart are one burst, whatever the measured spacing says (a miss, a slip and a
-    grasp look alike there). Each burst gets instants every JAW_DENSE_STEP_S around it, showing the top camera and the
-    moving gripper's own camera only, skipping instants a regular one covers; when the dense instants would pass
-    JAW_DENSE_MAX_SHARE of the regular ones, the bursts with the most closes are kept. No moves, no text."""
+def test_every_jaw_move_reaches_the_facts_as_text_and_adds_no_frame():
+    """Every open and close of each gripper is listed with its time, moves no more than JAW_JOIN_S apart on one line,
+    whatever the measured spacing says (a miss, a slip and a grasp look alike there). No moves, no text; the sampled
+    instants stay one a second either way."""
     from label import episode as me
-    ep = {"context": {"fps": 30, "cameras": {}}, "sources": {"exo": {}, "left": {}, "right": {}},
+    ep = {"context": {"cameras": {}},
           "jaws": {"left": [{"t": 2.0, "kind": "close"}, {"t": 2.5, "kind": "open"}, {"t": 3.3, "kind": "close"},
                             {"t": 9.0, "kind": "open"}],
                    "right": [{"t": 12.0, "kind": "close"}], }}
-    got = [(b["view"], b["t0"], b["t1"], b["closes"]) for b in me.jaw_bursts(ep)]
-    assert got == [("left", 2.0, 3.3, 2), ("left", 9.0, 9.0, 0), ("right", 12.0, 12.0, 1)]
-    ks = list(range(0, 600, 30))
-    bursts, dense = me.jaw_dense(ep, ks, 600)
-    assert len(bursts) == 3
-    first = sorted(k for k in dense if k < 150)                   # 1.6 s to 3.9 s every 0.2 s, less those by a whole second
-    assert first[0] == 48 and first[-1] == 114 and all(abs(k - r) > 3 for k in first for r in ks)
-    assert all(dense[k] == {"exo", "left"} for k in first) and all(dense[k] == {"exo", "right"} for k in dense if k > 330)
-    pl = {"ks": sorted(set(ks) | set(dense)), "dense": dense}
-    imgs = {v: {k: None for k in pl["ks"]} for v in ("exo", "left", "right")}
-    monkeypatch.setattr(me.mf, "to_jpeg", lambda im, w, q: b"j")
-    steps = dict(me.timesteps(ep, pl, imgs, 64))
-    assert [c for c, _ in steps[48 / 30]] == ["top", "left"] and [c for c, _ in steps[1.0]] == ["top", "left", "right"]
-    monkeypatch.setattr(me, "JAW_DENSE_MAX_SHARE", 0.6)            # room for the two-close burst only
-    bursts, dense = me.jaw_dense(ep, ks, 600)
-    assert [(b["t0"], b["closes"]) for b in bursts] == [(2.0, 2)]
-    assert me.jaw_desc(ep, {"bursts": []}) == ""
-    assert "left gripper 2.00-3.30 s, 3 moves" in me.jaw_desc(ep, {"bursts": me.jaw_bursts(ep)})
+    assert [[e["t"] for e in b["moves"]] for b in me.jaw_bursts(ep)] == [[2.0, 2.5, 3.3], [9.0], [12.0]]
+    text = me.jaw_desc(ep)
+    assert "left gripper: close 2.00, open 2.50, close 3.30\n" in text and "right gripper: close 12.00" in text
+    assert me.jaw_desc({"jaws": {"left": [], "right": None}}) == ""
 
 
 def test_the_whole_run_cost_takes_each_tranche_at_its_own_rate_and_the_plan_rate_before_its_labels():

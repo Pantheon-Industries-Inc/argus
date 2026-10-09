@@ -3,8 +3,8 @@ closes and opens.
 
 A UMI gripper records no gripper signal, so a grasp that misses and is retried within a second falls between two of
 the harness's once-a-second instants. This measures the jaws on every frame of the wrist video instead, and the
-harness sends every burst of jaw moves densely (label/episode.py jaw_dense), so what each close and open did is read
-from the frames around it. retries below is no longer sent to the labeller.
+harness lists every open and close with its time in the episode's facts (label/episode.py jaw_desc), and what each
+did is read from the frames. retries below is no longer sent to the labeller.
 
 The method is umi-action-deltas' grip6 (Pantheon-Industries-Inc/umi-action-deltas, umi/gripper/grip6.py), applied to
 the flat 640x480 view the UMI release renders from the wrist fisheye. Each jaw carries two orange dots, one above the
