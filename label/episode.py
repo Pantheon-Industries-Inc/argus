@@ -86,12 +86,22 @@ CONTACT_EVERY_S = 4.0
 CONTACT_MAX = 8
 CONTACT_MIN_CHANGE = 0.25    # of the channel's own range over the episode, between consecutive instants
 CONTACT_MIN_GAP_S = 2.0
-# Jaw moves (prepare/jaws.py): a handheld gripper records no gripper value, and its grasps, misses and retries can all
-# happen within a second, between two of the once-a-second instants. Its jaws are measured from its own wrist camera on
-# every frame instead, and only the stretches that look like a missed grasp and its retry (prepare/jaws.py retries)
-# are listed in the episode's facts, one line each. It adds no frame, and nothing at all when there is no such stretch.
+# Jaw moves (prepare/jaws.py): a handheld gripper records no gripper value, and its grasps, slips, drops and retries
+# can all happen within a second, between two of the once-a-second instants. Its jaws are measured from its own wrist
+# camera on every frame instead, and every burst of jaw moves (closes and opens no more than JAW_JOIN_S apart) is sent
+# densely: extra instants every JAW_DENSE_STEP_S from JAW_DENSE_BEFORE_S before its first move to JAW_DENSE_AFTER_S
+# after its last, showing the cameras not mounted on a gripper and that gripper's own camera. Whether a close took
+# hold, stayed held or was a release is read from those frames, never from the measured spacing (a thin object and
+# empty jaws close to the same spacing).
 JAW_RIGS = ("handheld_gripper",)
 JAW_VERSION = 2              # bump when prepare/jaws.py changes what it measures, so cached results are redone
+JAW_DENSE_STEP_S = 0.2
+JAW_DENSE_BEFORE_S = 0.4
+JAW_DENSE_AFTER_S = 0.6
+JAW_JOIN_S = 0.8
+JAW_BURST_MAX_S = 5.0        # a longer run of jaw moves is sent as consecutive bursts of at most this long
+JAW_DENSE_MAX_SHARE = 1.0    # dense instants at most this many times the regular ones; bursts with the most closes
+                             # first, so the cells stay wide enough to read a grasp
 # one measurement per wrist video, shared by every part of a long recording (they all point at the same video)
 JAW_CACHE = Path(os.environ.get("ARGUS_JAW_CACHE") or Path.home() / ".cache" / "argus" / "jaws")
 PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
@@ -293,26 +303,67 @@ def plan(ep: dict) -> dict:
     pl = {"n": n, "ks": ks, "spans": spans, "checks": checks,
           "state_usable": checks["camera_windows_match_state"]}
     pl["contact"] = contact_instants(ep, pl)
+    if rig(ep) in JAW_RIGS and ep.get("jaws"):
+        pl["bursts"], pl["dense"] = jaw_dense(ep, ks, n)
+        pl["ks"] = sorted(set(ks) | set(pl["dense"]))
     return pl
 
 
-def jaw_block(ep: dict) -> str:
-    """One line per stretch where a gripper's jaws shut, reopened and closed again within a couple of seconds
-    (prepare/jaws.py retries), for the episode's facts; nothing when there is none."""
-    from prepare import jaws as pj
-    lines = []
-    for v, m in (ep.get("jaws") or {}).items():
-        for st in pj.retries(m or []):
-            lines.append(f"  {cam_name(ep, v)} gripper: " + ", ".join(
-                (f"closed {e['t']:.2f}s" + (" shut" if e.get("shut") else " on something")) if e["kind"] == "close"
-                else f"opened {e['t']:.2f}s" for e in st))
-    if not lines:
+def jaw_bursts(ep: dict) -> list[dict]:
+    """Each gripper's bursts of jaw moves, in time order: {"view", "t0", "t1" (first and last move), "closes", "moves"}.
+    Moves no more than JAW_JOIN_S apart are one burst, cut every JAW_BURST_MAX_S."""
+    out = []
+    for v, moves in (ep.get("jaws") or {}).items():
+        cur = None
+        for e in sorted(moves or [], key=lambda e: e["t"]):
+            if cur is None or e["t"] - cur["t1"] > JAW_JOIN_S or e["t"] - cur["t0"] > JAW_BURST_MAX_S:
+                cur = {"view": v, "t0": e["t"], "t1": e["t"], "closes": 0, "moves": 0}
+                out.append(cur)
+            cur["t1"] = e["t"]
+            cur["moves"] += 1
+            cur["closes"] += e["kind"] == "close"
+    return sorted(out, key=lambda b: b["t0"])
+
+
+def jaw_dense(ep: dict, ks: list[int], n: int) -> tuple[list[dict], dict]:
+    """(the bursts sent, {k: views}): the dense instants around the bursts of jaw moves, each showing the cameras not
+    on a gripper and the moving gripper's own camera, skipping instants a regular one already covers. Bursts with the
+    most closes are kept first until the dense instants reach JAW_DENSE_MAX_SHARE of the regular ones."""
+    fps, regular = ep_fps(ep), set(ks)
+    fixed = [v for v in views(ep) if v not in MOUNTED]
+    cap = int(JAW_DENSE_MAX_SHARE * len(ks))
+    dense, sent = {}, []
+    for b in sorted(jaw_bursts(ep), key=lambda b: (-b["closes"], -b["moves"], b["t0"])):
+        ts = np.arange(b["t0"] - JAW_DENSE_BEFORE_S, b["t1"] + JAW_DENSE_AFTER_S + 1e-6, JAW_DENSE_STEP_S)
+        new = [k for k in {int(round(t * fps)) for t in ts} if 0 <= k < n
+               and min(abs(k - r) for r in regular) > JAW_DENSE_STEP_S * fps / 2]
+        if len(dense) + len([k for k in new if k not in dense]) > cap:
+            continue
+        for k in new:
+            dense.setdefault(k, set(fixed)).add(b["view"])
+        sent.append(b)
+    return sorted(sent, key=lambda b: b["t0"]), dense
+
+
+def jaw_desc(ep: dict, pl: dict) -> str:
+    """What the dense instants are and the bursts they cover, for the episode's facts; nothing when there are none."""
+    bursts = pl.get("bursts") or []
+    if not bursts:
         return ""
-    return ("\nPOSSIBLE MISSED GRASPS, from each gripper's jaws measured on every frame of its own camera (the gripper "
-            "records nothing). In each stretch below the jaws closed all the way (\"shut\": nothing between them, or "
-            "only something thin like cloth or a band), opened again and then closed on something, within a couple "
-            "of seconds, which is how a missed grasp and its retry look. It is quick enough to fall between two "
-            "once-a-second instants.\n" + "\n".join(lines) + "\n")
+    left_out = sum(1 for _ in jaw_bursts(ep)) - len(bursts)
+    return ("\nJAW MOVES, SENT DENSELY. A handheld gripper records nothing, so its jaws were measured on every frame "
+            "of its own camera, and every burst of jaw moves (closes and opens close together) gets extra columns "
+            f"every {JAW_DENSE_STEP_S:g} s, from {JAW_DENSE_BEFORE_S:g} s before its first move to "
+            f"{JAW_DENSE_AFTER_S:g} s after its last. Those columns show the cameras not mounted on a gripper and "
+            "the moving gripper's own camera; the other gripper's cell is empty there. Grasps that miss or slip, "
+            "drops and retries happen inside such bursts, faster than one frame a second shows, so read every burst "
+            "in its dense columns: what each close took hold of, whether it is still held in the frames after, and "
+            "whether each open set the object down where it then stays. The measurement only says when the jaws "
+            "moved; what they did is read from the frames. The bursts:\n"
+            + "\n".join(f"  {cam_name(ep, b['view'])} gripper {b['t0']:.2f}-{b['t1']:.2f} s, {b['moves']} moves"
+                        for b in bursts)
+            + (f"\n({left_out} more bursts were not sent densely; they are covered by the once-a-second instants.)"
+               if left_out else "") + "\n")
 
 
 def contact_instants(ep: dict, pl: dict) -> list[int]:
@@ -437,10 +488,11 @@ def timesteps(ep: dict, pl: dict, imgs: dict, cell_w: int, quality: int = 90):
     """[(t_s, [(camera_name, jpeg bytes), ...]), ...] in time order, cameras in a fixed order; a camera with no
     frame at an instant (recording_at) is left out there, so its grid cell stays empty."""
     vs = order_views(imgs)
+    dense = pl.get("dense") or {}
     out = []
     for k in pl["ks"]:
         out.append((frame_time(ep, k), [(cam_name(ep, v), mf.to_jpeg(imgs[v][k], cell_w, quality)) for v in vs
-                                        if recording_at(ep, v, k)]))
+                                        if recording_at(ep, v, k) and (k not in dense or v in dense[k])]))
     return out
 
 
@@ -607,7 +659,8 @@ def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -
            "the frames." if pl.get("contact") else "")
         + "\n"
         f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
-        "frame." + _coverage_note(ep, pl) + jaw_block(ep))
+        "frame" + (", plus the dense jaw-move instants below." if pl.get("dense") else ".")
+        + _coverage_note(ep, pl) + jaw_desc(ep, pl))
     sig = _signals_table(ep, pl)
     if kind == "none":
         what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
