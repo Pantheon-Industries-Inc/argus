@@ -1534,15 +1534,6 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   box-sizing: border-box; padding: 12px 14px; margin: 0; border: 1px solid rgba(255,255,255,.3);
   border-left: 3px solid #a9c6cb; border-radius: 7px; background: rgba(12,18,22,.92); color: #fff;
   text-align: left; font-family: var(--sans); cursor: pointer; }
-.grip-finding-overlay:disabled { visibility: hidden; pointer-events: none; }
-.grip-finding-overlay { transition: top 190ms cubic-bezier(0.22,0.61,0.36,1); transition-delay: 240ms; }
-.cam-cell:has(.recovery-overlay.active, .state-toast.active) .grip-finding-overlay { transition-delay: 0ms; }
-/* Below 601px the recovery card is static and its transitions expand the layout instead of moving its top. */
-@media (min-width: 601px) {
-  .cam-cell:has(.grip-finding-overlay:not(:disabled)) .recovery-overlay { transition-duration: 240ms, 0ms; }
-  .cam-cell:has(.grip-finding-overlay:not(:disabled)) .recovery-overlay.active { transition-delay: 190ms, 0ms; }
-}
-.cam-cell:has(.grip-finding-overlay:not(:disabled)) .state-toast.active { transition-delay: 190ms, 190ms; }
 .grip-finding-overlay:hover:enabled { background: rgba(12,18,22,.98); }
 .grip-finger-name { color: inherit; font-weight: inherit; text-decoration: none; }
 .grip-finding-overlay .gf-title .grip-finger-name { text-decoration: underline;
@@ -1641,6 +1632,36 @@ aside.left .grip-strip .sensor-overlay { position: static; order: 2; max-width: 
 @media (max-width: 600px) {
   aside.left .cam-cell > .sensor-overlay { position: static; order: 5; flex: 1 0 100%; max-width: none;
     box-sizing: border-box; margin: 6px 0 0; }
+}
+
+/* Only sensor annotations use this dock. Existing video overlays keep their layout. */
+.sensor-overlay-stack { position: absolute; z-index: 5; left: calc(var(--fx-left, 0px) + 12px);
+  width: min(300px, 42%, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 24px));
+  display: grid; gap: 6px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+  box-sizing: border-box; pointer-events: none; }
+.sensor-overlay-stack > * { pointer-events: auto; }
+.sensor-overlay-stack .sensor-overlay, .sensor-overlay-stack .grip-finding-overlay {
+  position: static; left: auto; right: auto; top: auto; transform: none; width: 100%;
+  min-width: 0; max-width: none; margin: 0; box-sizing: border-box; padding: 9px 11px; }
+.sensor-overlay-stack .grip-finding-overlay[hidden] { display: none; }
+.sensor-overlay-stack .gf-title { display: block; width: 100%; padding: 0; border: 0; background: transparent;
+  color: inherit; text-align: left; font: 400 14px/1.35 var(--sans); cursor: pointer; }
+.sensor-overlay-stack .gf-copy { gap: 6px; width: 100%; }
+.sensor-overlay-stack .gf-inspect { display: none; }
+.sensor-overlay-stack .gf-time { font-size: 10px; }
+.sensor-overlay-stack .gf-phase { padding: 3px 5px; font-size: 9px; }
+.sensor-overlay-stack .gf-pressure { padding-top: 5px; }
+.sensor-overlay-stack .gf-pressure-head { font-size: 10px; }
+.sensor-overlay-stack .gf-pressure-row { grid-template-columns: 78px minmax(0,1fr); font-size: 10px; }
+.sensor-overlay-stack .gf-pressure-row svg { height: 20px; }
+.sensor-overlay-stack .gf-pressure-range, .sensor-overlay-stack .gf-pressure-value { display: none; }
+.sensor-overlay-stack.tight .gf-pressure { display: none; }
+.gf-pager { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; font-size: 10px; }
+.gf-pager button { border: 0; padding: 2px 6px; color: inherit; background: rgba(255,255,255,.1);
+  border-radius: 3px; font: inherit; cursor: pointer; }
+@media (max-width: 600px) {
+  .sensor-overlay-stack { width: min(260px, 54%, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 16px));
+    left: calc(var(--fx-left, 0px) + 8px); }
 }
 
 /* ---------- sensors: the recording's other signals and depth (board/sensors.py) ----------
@@ -2780,7 +2801,7 @@ const rightCol = document.getElementById('right-col');
 function esc(s) { return String(s ?? '').replace(/[\u2013\u2014]/g, '-').replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function isNullish(v) { return v == null || (typeof v === 'string' && v.toLowerCase() === 'null'); }
-function fmtT(t) { return (t == null) ? '-' : t.toFixed(1) + 's'; }
+function fmtT(t) { return Number.isFinite(t) ? t.toFixed(1) + 's' : '-'; }
 // a key event's kind as the model tagged it, in plain words ("subgoal_complete" reads "subgoal complete")
 function kindName(k) { return String(k || '').replace(/_/g, ' ').trim(); }
 
@@ -2918,7 +2939,7 @@ function videoSrc(eidEnc, cam) {
 // the camera's first frame as the video's poster attribute, or nothing where a static build has no such frame
 function posterAttr(eidEnc, cam) {
   const src = posterSrc(_activeFile, eidEnc, cam);
-  return src ? ` poster="${src}"` : '';
+  return src ? ` poster="${esc(src)}"` : '';
 }
 function posterSrc(file, eidEnc, cam) {
   if (STATIC) {
@@ -2938,7 +2959,7 @@ function markTallGoalFrames() {
 }
 function frameSrc(eidEnc, cam, t) { return frameSrcOf(_activeFile, eidEnc, cam, t); }
 function frameSrcOf(file, eidEnc, cam, t) {
-  if (!STATIC) return `api/frame?id=${eidEnc}&cam=${cam}&t=${t}&w=640`;
+  if (!STATIC) return `api/frame?id=${eidEnc}&cam=${encodeURIComponent(cam)}&t=${encodeURIComponent(t)}&w=640`;
   const rec = ALL_EPS.find(e => e.file === file) || {};
   return BOARD.media + ((rec._frames || {})[mediaKey(cam) + '|'
     + Math.round(Number(t) * 1000)] || '');
@@ -3119,7 +3140,7 @@ function readerIssueRows(d) {
     const fam = x.family || ('d:' + String(x.kind || 'reader issue').replace(/_/g, ' '));
     // a reply that gave no labels or a limit of how we read the recording is no fault in it, and is not counted
     const counted = ['data', 'mistake'].includes(famList(fam));
-    return `<div class="di-row ${counted ? 'high' : 'low minor'}"${t != null ? ` data-t="${t}"` : ''}>
+    return `<div class="di-row ${counted ? 'high' : 'low minor'}"${t != null ? ` data-t="${esc(t)}"` : ''}>
       <span class="di-sev">${counted ? 'check' : 'not counted'}</span>
       <div class="di-body">
         <div class="di-issue">${esc(x.what)}</div>
@@ -3182,7 +3203,7 @@ function setAsideHtml(d) {
   const why = t => { const w = String(t || '').trim(); return w ? w[0].toUpperCase() + w.slice(1).replace(/\.?$/, '.')
     : ''; };
   const fam = Object.fromEntries(OUR_CHECKS.map(([k, , f]) => [k, f]));
-  const rows = ex.map(x => `<div class="di-row low minor"${num(x.t_s) ? ` data-t="${parseFloat(x.t_s)}"` : ''}>
+  const rows = ex.map(x => `<div class="di-row low minor"${num(x.t_s) ? ` data-t="${esc(parseFloat(x.t_s))}"` : ''}>
       <span class="di-sev">${esc(x.severity || 'flag')}</span>
       <div class="di-body">
         <div class="di-issue">${esc(x.issue)}</div>
@@ -3215,7 +3236,7 @@ function unshownCellsHtml(d, eidEnc, kept) {
         <div class="cam-cell cam-wrist cam-unshown">
           <span class="cam-label">${esc(u.name || u.view)}, not shown to the model</span>
           <video id="video-${esc(u.view)}" preload="auto" muted playsinline${kept ? ''
-            : ` src="${videoSrc(eidEnc, u.view)}"${posterAttr(eidEnc, u.view)}`} `
+            : ` src="${esc(videoSrc(eidEnc, u.view))}"${posterAttr(eidEnc, u.view)}`} `
             + `onloadedmetadata="this.currentTime=0.03"></video>
         </div>`).join('');
 }
@@ -3252,7 +3273,7 @@ function cardOutcomeHtml(ep) {
       + `</span>`;
   }
   const oc = (ep.task_completed || '').toLowerCase();
-  return `<span class="outcome-tag ${oc || 'none'}">${esc(oc ? outcomeWords(oc, ep.failure_kind) : 'unrated')}</span>`;
+  return `<span class="outcome-tag ${esc(oc || 'none')}">${esc(oc ? outcomeWords(oc, ep.failure_kind) : 'unrated')}</span>`;
 }
 // What the model was not shown of the upload, from board/build.py reader_notes. It draws the reader's note on the
 // recorded state as text, then the cameras, signals, arrays and depth streams it did not read, each with the reason it
@@ -5028,7 +5049,7 @@ function sensorEvidence(d) {
   for (const f of grip && Array.isArray(grip.findings) ? grip.findings : []) {
     if (!f || f.review_status === 'rejected' || (grip.generic && f.adds_beyond_video !== true) || !finite(f.start_s) || !finite(f.end_s)
       || f.end_s < f.start_s || !text(f.headline)) continue;
-    insights.push({start: f.start_s, end: f.end_s, index: -1, priority: 3, kind: 'insight',
+    insights.push({findingIndex: insights.length, start: f.start_s, end: f.end_s, index: -1, priority: 3, kind: 'insight',
       headline: grip.generic ? text(f.headline) : gripFingerCopy(text(f.headline)),
       detail: grip.generic ? text(f.detail) : gripFingerCopy(text(f.detail)), reading: grip.generic ? 'Recorded sensor evidence' : 'Relative grip loading',
       visual: f.confidence === 'high' ? 'High confidence' : f.confidence === 'medium' ? 'Medium confidence' : 'Low confidence',
@@ -5060,7 +5081,7 @@ function sensorEvidence(d) {
       timing: c.aligned_by ? 'Contact placement is assumed. Inspect evidence for the clock qualification.' : '',
       id: text(c.id)};
     contacts.push(entry);
-    const add = (t, headline, kind) => moments.push({...entry, t, headline, kind});
+    const add = (t, headline, kind) => moments.push({...entry, t, headline, kind, priority: 0});
     if (!c.from_start) add(c.start_s, 'Contact signal begins', 'begin');
     for (const t of c.dips_s || []) if (finite(t) && t >= c.start_s && t <= c.end_s)
       add(t, 'Contact signal weakens and returns', 'dip');
@@ -5082,12 +5103,16 @@ function activeSensorEvidence(E, t) {
   if (moment && (!contact || moment.priority >= contact.priority)) return moment;
   return contact || null;
 }
-function displayGripFinding(E, t) {
-  // Browser media clocks can truncate a requested seek to microseconds.
-  const finding = (E.insights || []).filter(f => t + 1e-6 >= f.start)
-    .sort((a, b) => b.start - a.start)[0];
-  return finding ? {...finding, phase: t <= finding.end + 1e-6 ? 'Now' : 'Earlier'} : null;
+function displayGripFindings(E, t) {
+  // Keep brief findings readable, with their original interval still explicit.
+  // An ended event never displaces a finding that remains active.
+  return (E.insights || []).filter(f => t + 1e-6 >= f.start
+      && t <= Math.max(f.end, f.start + 3.5) + 1e-6)
+    .map(f => ({...f, phase: t <= f.end + 1e-6 ? 'Now' : 'Earlier'}))
+    .sort((a, b) => Number(b.phase === 'Now') - Number(a.phase === 'Now')
+      || b.priority - a.priority || b.start - a.start);
 }
+function displayGripFinding(E, t) { return displayGripFindings(E, t)[0] || null; }
 function gripOverlaySeries(G, f, limit = 3) {
   if (G && G.generic) return genericSensorSeries(G, f, limit);
   if (!G || !Array.isArray(G.times) || !G.times.length || !f) return [];
@@ -5168,16 +5193,13 @@ function syncGripOverlayPressure(G, f, t, scope = document, limit = 3) {
   }
   for (const label of scope.querySelectorAll('[data-grip-mini-time]')) label.textContent = 'Video ' + fmtT(t);
 }
-function gripFindingStripHtml(f, G = null) {
+function gripFindingStripHtml(f, G = null, pager = '') {
   if (!f) return '';
   return `<span class="gf-copy">
     <span class="gf-meta"><span class="gf-phase${f.phase === 'Now' ? ' is-now' : ''}">${esc(f.phase)}</span>
-      ${f.phase === 'Earlier' ? `<span class="gf-time">${fmtT(f.start)} to ${fmtT(f.end)}</span>` : ''}</span>
-    <span class="gf-title">${f.generic ? genericSensorHeadlineHtml(f.headline) : gripFingerHtml(f.headline)}</span>
-    ${G && G.generic && genericSensorSeries(G, f, Infinity).length > 3
-      ? `<span class="gf-detail">${genericSensorSeries(G, f, Infinity).length} recorded signals</span>`
-      : gripOverlayPressureHtml(G, f)}
-    ${G && G.generic && genericSensorSeries(G, f, Infinity).length ? '' : sensorImageEvidenceHtml(G, f, true)}</span>
+      <span class="gf-time">${fmtT(f.start)} to ${fmtT(f.end)}</span>${pager}</span>
+    <button type="button" class="gf-title" title="Replay this finding">${f.generic ? genericSensorHeadlineHtml(f.headline) : gripFingerHtml(f.headline)}</button>
+    ${gripOverlayPressureHtml(G, f, 2)}</span>
     <span class="gf-inspect" aria-hidden="true">↗</span>`;
 }
 function sensorEvidenceOverlayHtml(e) {
@@ -5468,7 +5490,7 @@ function syncGripEvidence(G, t, finding = null) {
   const label = document.getElementById('grip-evidence-time');
   if (label) label.textContent = 'Sample ' + fmtT(ts[i]);
 }
-function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null) {
+function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null, relayout = () => {}) {
   const overlay = document.getElementById('sensor-overlay'), strip = document.getElementById('grip-finding-overlay'),
     now = document.getElementById('sensor-evidence-now');
   const details = document.getElementById('sensor-evidence-details');
@@ -5482,14 +5504,25 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
       if (event.target.matches('[data-sensor-sample-select]') && event.target.value !== '') seek(+event.target.value, false);
     });
   }
-  let current = null, displayedGrip = null, currentTime = 0, profiles = [], loaded = false;
+  let current = null, displayedGrip = null, currentTime = 0, profiles = [], loaded = false, chosenGrip = null;
   const inspect = () => {
     if (current && current.index >= 0) inspectContact(current.index, currentTime);
     if (details) { details.open = true; details.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
   };
-  if (strip) on(strip, 'click', () => { if (displayedGrip) seek(displayedGrip.t, false); });
+  if (strip) on(strip, 'click', event => {
+    const choice = event.target.closest('[data-overlay-finding]');
+    if (choice) { chosenGrip = +choice.dataset.overlayFinding; wire.sync(currentTime); return; }
+    if (displayedGrip) seek(displayedGrip.t, false);
+  });
   for (const el of document.querySelectorAll('#sensor-evidence-inspect, #sensor-overlay')) on(el, 'click', inspect);
-  for (const el of document.querySelectorAll('[data-evidence-t]')) on(el, 'click', () => seek(+el.dataset.evidenceT, el.dataset.evidencePause !== 'true'));
+  for (const el of document.querySelectorAll('[data-evidence-t]')) on(el, 'click', () => {
+    if (el.dataset.gripFinding != null) {
+      const finding = E.insights[+el.dataset.gripFinding];
+      chosenGrip = finding ? finding.findingIndex : null;
+    }
+    seek(+el.dataset.evidenceT, el.dataset.evidencePause !== 'true');
+    wire.sync(+el.dataset.evidenceT);
+  });
   const compare = document.getElementById('sensor-depth-compare');
   if (compare) on(compare, 'click', () => {
     const switches = [...document.querySelectorAll('.cam-dp:not([hidden])')];
@@ -5503,17 +5536,51 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
     document.getElementById('sensor-depth-mode').hidden = !!showing;
   });
   let signature = null, stripKey = null, plottedGrip = (E.insights || [])[0] || null;
-  const wire = {sync(t) {
-    const e = activeSensorEvidence(E, t);
-    displayedGrip = displayGripFinding(E, t);
-    if (strip) {
-      const key = displayedGrip ? displayedGrip.start + '|' + displayedGrip.phase : '';
-      if (stripKey !== key) {
-        strip.innerHTML = gripFindingStripHtml(displayedGrip, E.grip);
-        stripKey = key;
+  const deferred = new Map();
+  let blocked = false, previousTime = null, previousBlocked = false, previousFinding = null;
+  const wire = {setCapacity(height) {
+    const next = !(height > 0);
+    if (next === blocked) return;
+    blocked = next;
+    wire.sync(currentTime);
+  }, sync(t) {
+    const delta = previousTime == null ? 0 : t - previousTime;
+    if (delta < -1e-6) { deferred.clear(); chosenGrip = null; }
+    if (!blocked && !previousBlocked && delta > 0 && delta <= 1 + 1e-6) {
+      const pending = deferred.get(previousFinding);
+      if (pending) {
+        pending.visibleSeconds += delta;
+        if (pending.visibleSeconds >= 3.5 - 1e-6) deferred.delete(previousFinding);
       }
-      strip.disabled = !displayedGrip;
-      if (displayedGrip) syncGripOverlayPressure(E.grip, displayedGrip, t, strip);
+    }
+    if (blocked) for (const finding of E.insights || []) {
+      const active = t + 1e-6 >= finding.start && t <= finding.end + 1e-6;
+      const crossed = delta > 0 && delta <= 1 + 1e-6 && finding.start <= t && finding.end >= previousTime;
+      if ((active || crossed) && !deferred.has(finding.findingIndex))
+        deferred.set(finding.findingIndex, {finding, visibleSeconds: 0});
+    }
+    const e = activeSensorEvidence(E, t);
+    const available = displayGripFindings(E, t);
+    for (const {finding} of deferred.values()) {
+      if (!available.some(f => f.findingIndex === finding.findingIndex))
+        available.push({...finding, phase: t <= finding.end + 1e-6 ? 'Now' : 'Earlier'});
+    }
+    available.sort((a, b) => Number(b.phase === 'Now') - Number(a.phase === 'Now')
+      || b.priority - a.priority || b.start - a.start);
+    displayedGrip = available.find(f => f.findingIndex === chosenGrip) || available[0] || null;
+    if (!available.some(f => f.findingIndex === chosenGrip)) chosenGrip = null;
+    if (strip) {
+      const key = JSON.stringify([displayedGrip && [displayedGrip.findingIndex, displayedGrip.phase], available.map(f => [f.findingIndex, f.phase])]);
+      if (stripKey !== key) {
+        const pager = available.length > 1 ? `<span class="gf-pager"><button type="button" aria-label="Previous sensor finding" data-overlay-finding="${available[(available.indexOf(displayedGrip) + available.length - 1) % available.length].findingIndex}">&#8592;</button>`
+          + `<span aria-label="${available.indexOf(displayedGrip) + 1} of ${available.length} findings">${available.indexOf(displayedGrip) + 1}/${available.length}</span>`
+          + `<button type="button" aria-label="Next sensor finding" data-overlay-finding="${available[(available.indexOf(displayedGrip) + 1) % available.length].findingIndex}">&#8594;</button></span>` : '';
+        strip.innerHTML = gripFindingStripHtml(displayedGrip, E.grip, pager);
+        stripKey = key;
+        relayout();
+      }
+      strip.hidden = !displayedGrip;
+      if (displayedGrip) syncGripOverlayPressure(E.grip, displayedGrip, t, strip, 2);
     }
     for (const line of document.querySelectorAll('[data-se-trace]')) {
       const p = profiles[+line.dataset.seTrace];
@@ -5523,7 +5590,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
     }
     const measurements = profiles.map(p => sensorProfileHtml(p, t)).join('');
     const selected = displayedGrip || (E.insights || [])[0];
-    if (selected && (!plottedGrip || selected.t !== plottedGrip.t)) {
+    if (selected && (!plottedGrip || selected.findingIndex !== plottedGrip.findingIndex)) {
       const panel = document.getElementById('grip-evidence-panel');
       if (panel) panel.innerHTML = gripEvidencePanelHtml(E.grip, selected);
       plottedGrip = selected;
@@ -5531,7 +5598,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
     if ((E.insights || []).length) syncGripEvidence(E.grip, t, selected);
     for (const button of document.querySelectorAll('[data-grip-finding]'))
       button.setAttribute('aria-pressed', String(E.insights[+button.dataset.gripFinding] === selected
-        || (!!selected && E.insights[+button.dataset.gripFinding].t === selected.t)));
+        || (!!selected && E.insights[+button.dataset.gripFinding].findingIndex === selected.findingIndex)));
     if (selected && E.grip && E.grip.times && E.grip.times.length) {
       const end = E.grip.times[E.grip.times.length - 1] || 1;
       for (const band of document.querySelectorAll('[data-grip-window]')) {
@@ -5543,10 +5610,19 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
     const html = measurements + findings;
     current = e;
     currentTime = t;
+    previousTime = t;
+    previousBlocked = blocked;
+    previousFinding = displayedGrip ? displayedGrip.findingIndex : null;
     const distribution = profiles.map(p => sensorDistributionHtml(p, t)).join('');
-    if (html + distribution === signature) return;
-    signature = html + distribution;
-    if (overlay) { overlay.innerHTML = findings; overlay.classList.toggle('active', !!findings); }
+    const anomaly = e && e.priority >= 3 ? sensorEvidenceOverlayHtml(e) : '';
+    const nextSignature = JSON.stringify([html, distribution, anomaly]);
+    if (nextSignature === signature) return;
+    signature = nextSignature;
+    if (overlay) {
+      const changed = overlay.innerHTML !== anomaly;
+      overlay.innerHTML = anomaly; overlay.classList.toggle('active', !!anomaly);
+      if (changed) relayout();
+    }
     if (now) now.innerHTML = (html + distribution) || `<span>${(E.insights || []).length ? 'Select a grip finding to inspect its evidence' : loaded ? 'No retained tactile intensity samples' : 'Loading tactile measurements'}</span>`;
   }};
   if (d && file && E.contacts.length && !(E.insights || []).length) loadSensors(file).then(D => {
@@ -5626,7 +5702,7 @@ function touchLaneHtml(T, lanePct, chev, duration = null) {
       <div class="recording-axis"><span>${fmtT(0)}</span><span>${fmtT(end)}</span></div></div>`;
   };
   const observations = missing.length ? `<div class="tc-observations"><div class="tc-observations-label">Video observations</div>
-    ${missing.map((x, j) => `<button type="button" class="tc-observation" data-t="${x.t_s}" data-m="${j}">
+    ${missing.map((x, j) => `<button type="button" class="tc-observation" data-t="${esc(x.t_s)}" data-m="${j}">
       <span class="tc-observation-time">${fmtT(x.t_s)}</span><span><span class="tc-observation-title">${esc(tcHandName(tcHandKey(x.hand)))} takes hold of ${esc(x.object || 'an object')}</span>
       <span class="tc-observation-note">No covering contact recorded for this hand</span></span></button>`).join('')}</div>` : '';
   return `<div class="lane lane-touch recording-card" id="lane-touch">
@@ -5654,7 +5730,7 @@ function tcRegions(c) {
 }
 function tcCardHtml(c, i, st) {
   const s = c.seen || {};
-  const tt = t => `<span data-t="${t}">${fmtT(t)}</span>`;
+  const tt = t => `<span data-t="${esc(t)}">${fmtT(t)}</span>`;
   const times = [c.from_start ? 'Already touching at the start' : `Begins ${tt(c.start_s)}`,
     isFinite(c.peak_s) ? `strongest ${tt(c.peak_s)}` : '',
     c.to_end ? 'still touching at the end' : `ends ${tt(c.end_s)}`].filter(Boolean).join(', ');
@@ -6269,8 +6345,8 @@ function renderEp(d, opts) {
         </span>` : ''}
       </div>
       <div class="hand-absence-times">${handStretches.map(([a, b]) => `<button type="button" class="hand-absence-time"
-        data-t="${a}">${fmtT(a)} to ${fmtT(b)}</button>`).join('')}</div>
-      <div class="lane-bar">${handStretches.map(([a, b], i) => `<div class="lane-seg hands" data-t="${a}" data-i="${i}" `
+        data-t="${esc(a)}">${fmtT(a)} to ${fmtT(b)}</button>`).join('')}</div>
+      <div class="lane-bar">${handStretches.map(([a, b], i) => `<div class="lane-seg hands" data-t="${esc(a)}" data-i="${i}" `
         + `title="${fmtT(a)} to ${fmtT(b)}" style="left:${lanePct(a)}%;width:max(3px, ${lanePct(b) - lanePct(a)}%)">`
         + `</div>`).join('')}<div class="lane-ph"></div></div>
       <div class="recording-axis"><span>${fmtT(0)}</span><span>${fmtT(duration)}</span></div>
@@ -6281,7 +6357,7 @@ function renderEp(d, opts) {
   laneHtml = '';
   // a label with no time is listed below, never drawn on the lane
   if (pubLabels.some(x => x.t0 != null)) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
-    x.t0 == null ? '' : `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" `
+    x.t0 == null ? '' : `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${esc(x.t0)}" data-i="${i}" `
       + `title="${esc(fmtT(x.t0) + ' to ' + fmtT(x.t1) + ': ' + x.label)}" `
       + `style="left:${lanePct(x.t0)}%;width:max(2px, `
       + `calc(${lanePct(x.t1) - lanePct(x.t0)}% - 1px))"></div>`).join(''));
@@ -6293,7 +6369,7 @@ function renderEp(d, opts) {
     pubHtml = `<h3 class="section">The dataset's own labels${pubLabels.length
       ? ` <span class="count">${pubLabels.length}</span>` : ''}</h3><div class="info-block pub-list">`
       + (d.dataset_labels_note ? `<div class="pub-note">${esc(d.dataset_labels_note)}</div>` : '')
-      + pubLabels.map((x, i) => `<div class="pub-row"${x.t0 != null ? ` data-t="${x.t0}"` : ''} data-i="${i}">`
+      + pubLabels.map((x, i) => `<div class="pub-row"${x.t0 != null ? ` data-t="${esc(x.t0)}"` : ''} data-i="${i}">`
         + `<span class="pub-t">${x.t0 == null ? 'no time' : x.t1 == null || x.t1 === x.t0 ? fmtT(x.t0)
           : `${fmtT(x.t0)} to ${fmtT(x.t1)}`}</span><span class="pub-l">${esc(x.label)}</span></div>`).join('')
       + (pubEp ? `<div class="pub-ep">`
@@ -6312,7 +6388,7 @@ function renderEp(d, opts) {
   const upl = d.uploader_notes || [];
   if (upl.length) {
     const kv = (it) => `<div class="pub-kv"><span class="pub-k">${esc(it.name)}</span><span class="pub-v">`
-      + `${esc(it.value)}${it.t != null ? `<button type="button" class="pub-at" data-t="${it.t}">at `
+      + `${esc(it.value)}${it.t != null ? `<button type="button" class="pub-at" data-t="${esc(it.t)}">at `
       + `${esc(fmtT(it.t))}</button>` : ''}</span></div>`;
     const grp = (g) => `<div class="pub-group"><div class="pub-gt">${esc(g.title)}</div>${g.items.map(kv).join('')}</div>`;
     const notes = upl.filter(g => g.kind !== 'row');
@@ -6331,7 +6407,7 @@ function renderEp(d, opts) {
     const pct = (onTl(e.t_s) / duration) * 100;
     const cls = contribClass(e.contribution);
     const tip = `${fmtT(e.t_s)}   ${esc(e.verb_class || '')}`;
-    markersHtml += `<div class="marker seg ${cls}" style="left:${pct}%" data-t="${e.t_s}"><div class="tip">${esc(tip)}`
+    markersHtml += `<div class="marker seg ${cls}" style="left:${pct}%" data-t="${esc(e.t_s)}"><div class="tip">${esc(tip)}`
       + `</div></div>`;
   }
   let ticksHtml = '';
@@ -6391,7 +6467,7 @@ function renderEp(d, opts) {
   for (const k of keyEvents) {
     const pct = (onTl(k.t_s) / duration) * 100;
     const oc = (k.outcome || '').toLowerCase();
-    keyMarkersHtml += `<div class="marker key" style="left:${pct}%;background:${keyColor(k)}" data-t="${k.t_s}"><div `
+    keyMarkersHtml += `<div class="marker key" style="left:${pct}%;background:${keyColor(k)}" data-t="${esc(k.t_s)}"><div `
       + `class="tip">${esc(fmtT(k.t_s))}   ${k.kind ? esc(kindName(k.kind)) + ': ' : ''}${esc(k.label || '')}${oc
       ? '  [' + esc(oc) + ']' : ''}</div></div>`;
   }
@@ -6400,12 +6476,12 @@ function renderEp(d, opts) {
   keyEvents.forEach((k, i) => {
     const oc = (k.outcome || '').toLowerCase();
     const goalish = k.kind === 'goal_reached' || k.kind === 'subgoal_complete';
-    keyPanelHtml += `<div class="key-ev ${oc}${goalish ? ' goal' : ''}" data-t="${k.t_s}">
+    keyPanelHtml += `<div class="key-ev ${esc(oc)}${goalish ? ' goal' : ''}" data-t="${esc(k.t_s)}">
       <span class="ke-num">${i + 1}</span>
       <span class="ke-time">${fmtT(k.t_s)}</span>
       <div class="ke-body">
         <div class="ke-row1"><span class="ke-label">${esc(k.label || '')}</span>${oc
-          ? `<span class="outcome ${oc}">${esc(oc)}</span>` : ''}</div>
+          ? `<span class="outcome ${esc(oc)}">${esc(oc)}</span>` : ''}</div>
         ${k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}
       </div>
     </div>`;
@@ -6433,7 +6509,7 @@ function renderEp(d, opts) {
   let rcHtml = '';
   for (const r of recoveries) {
     const recTag = r.recovered === true
-      ? `<span class="rec-ok"${r.recoveredAt != null ? ` data-t="${r.recoveredAt}"`
+      ? `<span class="rec-ok"${r.recoveredAt != null ? ` data-t="${esc(r.recoveredAt)}"`
         : ''}>recovered${r.recoveredAt != null ? ' at ' + fmtT(r.recoveredAt) : ''}</span>`
       : (r.recovered === false ? `<span class="rec-no">failed recovery</span>` : '');
     // Recovered -> show what it actually DID; only an unrecovered failure gets
@@ -6442,7 +6518,7 @@ function renderEp(d, opts) {
       ? (r.correction ? `<div class="rec-line"><span class="rec-k">did</span> ${esc(r.correction)}</div>` : '')
       : (r.howToFix ? `<div class="rec-line"><span class="rec-k">how to fix</span> ${esc(r.howToFix)}</div>` : '');
     rcHtml += `<div class="rec">
-      <div class="rec-head"><span class="rec-t" data-t="${r.failureT}">${fmtT(r.failureT)}</span><span `
+      <div class="rec-head"><span class="rec-t" data-t="${esc(r.failureT)}">${fmtT(r.failureT)}</span><span `
         + `class="rec-fail">${esc(r.failure)}</span>${recTag}</div>
       ${recDetail}
     </div>`;
@@ -6465,11 +6541,11 @@ function renderEp(d, opts) {
     const span = (t.start_s != null && t.end_s != null) ? `${fmtT(t.start_s)}-${fmtT(t.end_s)}` : '';
     const done = t.completed_at_s != null ? ` &middot; done ${fmtT(t.completed_at_s)}` : '';
     const jump = t.completed_at_s != null ? t.completed_at_s : t.start_s;
-    tasksHtml += `<div class="task-row ${oc}"${jump != null ? ` data-t="${jump}"` : ''}>
-      <span class="task-num ${oc}">${i + 1}</span>
+    tasksHtml += `<div class="task-row ${esc(oc)}"${jump != null ? ` data-t="${esc(jump)}"` : ''}>
+      <span class="task-num ${esc(oc)}">${i + 1}</span>
       <div class="task-body">
         <div class="task-head"><span class="task-name">${esc(t.task || '?')}</span>${oc
-          ? `<span class="outcome ${oc}">${esc(outcomeWords(oc, t.failure_kind))}</span>` : ''}</div>
+          ? `<span class="outcome ${esc(oc)}">${esc(outcomeWords(oc, t.failure_kind))}</span>` : ''}</div>
         <div class="task-meta">${span}${done}</div>
         ${t.success_predicate ? `<div class="task-pred">${esc(t.success_predicate)}</div>` : ''}
         ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
@@ -6487,8 +6563,8 @@ function renderEp(d, opts) {
         <div class="di-tags"><span class="di-cat">${esc(famName('sped-up'))}</span></div>
         <div class="di-ev">The recorder skipped ${((tb.skipped_frac || 0) * 100).toFixed(1)}% and `
           + `repeated ${((tb.repeated_frac || 0) * 100).toFixed(1)}% of samples and the follower arm trails the `
-          + `operator by only ${tb.follower_lag_frames} frames, so the recording loop ran below the 30 Hz its `
-          + `timestamps claim. Rule: ${tb.rule || ''}.</div>
+          + `operator by only ${esc(tb.follower_lag_frames)} frames, so the recording loop ran below the 30 Hz its `
+          + `timestamps claim. Rule: ${esc(tb.rule || '')}.</div>
       </div></div></div>` : '';
   // the entries that count first, then the minor ones, marked; excluded entries (_excluded) are listed apart, in the
   // fold of what this dataset's rules set aside (setAsideHtml)
@@ -6503,7 +6579,7 @@ function renderEp(d, opts) {
       const minor = !countsIssue(x);
       return `
       <div class="di-row ${(x.severity || '').toLowerCase() === 'high' ? 'high' : 'low'}${minor ? ' minor'
-        : ''}"${t != null ? ` data-t="${t}"` : ''}>
+        : ''}"${t != null ? ` data-t="${esc(t)}"` : ''}>
         <span class="di-sev">${esc((x.severity || 'flag'))}</span>
         <div class="di-body">
           <div class="di-issue">${esc(x.issue)}</div>
@@ -6523,23 +6599,23 @@ function renderEp(d, opts) {
         <div class="di-issue">Each gripper camera moves with the other side's recorded motion.</div>
         <div class="di-tags"><span class="di-cat">${esc(famName('streams-crossed'))}</span></div>
         <div class="di-ev">The left stream's image change follows the right side's recorded speed (r `
-          + `= ${sp.left_vs_right}) better than its own (${sp.left_vs_left}), and the right stream follows the left `
-          + `side (${sp.right_vs_left}) better than its own (${sp.right_vs_right}). Either the stream names or the `
+          + `= ${esc(sp.left_vs_right)}) better than its own (${esc(sp.left_vs_left)}), and the right stream follows the left `
+          + `side (${esc(sp.right_vs_left)}) better than its own (${esc(sp.right_vs_right)}). Either the stream names or the `
           + `state channels are swapped; the pixels tell which (where the other gripper appears in each view).</div>
       </div></div></div>` : '';
   const rj = (d.dataset_checks || {}).recorded_jumps || null;
   const rjEv = rj && rj.flagged ? (rj.events || []).filter(e => e.visual_jump === false) : [];
   const rjHtml = rjEv.length ? `
-    <div class="info-block di-block">${rjEv.map(e => `<div class="di-row high" data-t="${e.t_s}">
+    <div class="info-block di-block">${rjEv.map(e => `<div class="di-row high" data-t="${esc(e.t_s)}">
       <span class="di-sev">check</span>
       <div class="di-body">
         <div class="di-issue">The ${esc(e.actor)} ${esc(e.unit === 'cm' ? 'gripper' : 'arm')}'s recorded motion leaps `
-          + `${e.step} ${esc(e.unit)} in one frame, and its camera does not jump.</div>
+          + `${esc(e.step)} ${esc(e.unit)} in one frame, and its camera does not jump.</div>
         <div class="di-tags"><span class="di-cat">${esc(famName('recorded-jump'))}</span><span `
           + `class="di-t">@ ${esc(fmtT(e.t_s))}</span></div>
-        <div class="di-ev">Its typical step is ${e.typical_p95} ${esc(e.unit)} (95th percentile). The ${esc(e.camera
-          || '')} camera, which is mounted on it, changes ${e.image_change_at} at that frame against a median `
-          + `of ${e.image_change_window_median} over the surrounding frames, so the camera did not move with it. `
+        <div class="di-ev">Its typical step is ${esc(e.typical_p95)} ${esc(e.unit)} (95th percentile). The ${esc(e.camera
+          || '')} camera, which is mounted on it, changes ${esc(e.image_change_at)} at that frame against a median `
+          + `of ${esc(e.image_change_window_median)} over the surrounding frames, so the camera did not move with it. `
           + `Rule: ${esc(rj.rule || '')}.</div>
       </div></div>`).join('')}</div>` : '';
   const gc = (d.dataset_checks || {}).gripper_channels || null;
@@ -6548,7 +6624,7 @@ function renderEp(d, opts) {
     <div class="info-block di-block">${gcFlat.map(([name, a]) => `<div class="di-row high">
       <span class="di-sev">check</span>
       <div class="di-body">
-        <div class="di-issue">The ${esc(name)} gripper's recorded value never changes. It is exactly ${a.min} at `
+        <div class="di-issue">The ${esc(name)} gripper's recorded value never changes. It is exactly ${esc(a.min)} at `
           + `every frame.</div>
         <div class="di-tags"><span class="di-cat">${esc(famName('gripper-flat'))}</span></div>
         <div class="di-ev">Either this gripper was not used in the episode, or its sensor did not record. `
@@ -6560,7 +6636,7 @@ function renderEp(d, opts) {
   const cqc = (d.dataset_checks || {}).capture_qc || null;
   const cqFlags = cqc ? (cqc.flags || []).filter(f => f && f.title) : [];
   const cqHtml = cqFlags.length ? `
-    <div class="info-block di-block">${cqFlags.map(f => `<div class="di-row high"${f.t_s != null ? ` data-t="${f.t_s}"`
+    <div class="info-block di-block">${cqFlags.map(f => `<div class="di-row high"${f.t_s != null ? ` data-t="${esc(f.t_s)}"`
       : ''}>
       <span class="di-sev">check</span>
       <div class="di-body">
@@ -6640,23 +6716,21 @@ function renderEp(d, opts) {
       ${undone && comp.undone_by ? `<div class="kv"><div class="kv-k">What undid it</div><div `
         + `class="kv-v">${esc(comp.undone_by)}</div></div>` : ''}
     </div>
-    ${comp.completed_at_s != null ? `<div class="goal-frame" data-t="${comp.completed_at_s}"><div `
+    ${comp.completed_at_s != null ? `<div class="goal-frame" data-t="${esc(comp.completed_at_s)}"><div `
       + `class="goal-frame-cap">Goal frame at ${fmtT(comp.completed_at_s)} (click to jump)</div><img `
-      + `src="${frameSrc(eidEnc, mainCam, comp.completed_at_s)}" alt="goal frame" loading="lazy" `
+      + `src="${esc(frameSrc(eidEnc, mainCam, comp.completed_at_s))}" alt="goal frame" loading="lazy" `
       + `onerror="this.parentElement.classList.add('nofr')"></div>` : ''}
-    ${(undone && comp.goal_reached_at_s != null) ? `<div class="goal-frame" data-t="${comp.goal_reached_at_s}"><div `
+    ${(undone && comp.goal_reached_at_s != null) ? `<div class="goal-frame" data-t="${esc(comp.goal_reached_at_s)}"><div `
       + `class="goal-frame-cap">Goal reached at ${fmtT(comp.goal_reached_at_s)}, later undone${comp.undone_at_s != null
-      ? ` at ${fmtT(comp.undone_at_s)}` : ''} (click to jump)</div><img src="${frameSrc(eidEnc, mainCam,
-      comp.goal_reached_at_s)}" alt="goal reached frame" loading="lazy" `
+      ? ` at ${fmtT(comp.undone_at_s)}` : ''} (click to jump)</div><img src="${esc(frameSrc(eidEnc, mainCam,
+      comp.goal_reached_at_s))}" alt="goal reached frame" loading="lazy" `
       + `onerror="this.parentElement.classList.add('nofr')"></div>` : ''}
   `;
 
-  // gripper-only rigs (FastUMI): the notes go in a strip under the camera row, never over the image
   const gripOnly = !isEgo && !hasTop;
   const notesHtml = `
           <div class="state-toast" id="state-toast"></div>
           <div class="recovery-overlay" id="recovery-overlay"></div>
-          ${!evidence.insights.length && (evidence.contacts.length || evidence.moments.length) ? '<button type="button" class="sensor-overlay" id="sensor-overlay" aria-label="Inspect current tactile evidence"></button>' : ''}
           <div class="video-overlay" id="video-overlay"></div>
   `;
   leftCol.innerHTML = `
@@ -6666,7 +6740,7 @@ function renderEp(d, opts) {
         <div class="cam-cell cam-exo">
           ${isEgo ? '' : `<span class="cam-label">${esc(camLabel(mainCam))}</span>`}
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
-          <video id="video" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${videoUrl}"${posterAttr(eidEnc,
+          <video id="video" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${esc(videoUrl)}"${posterAttr(eidEnc,
             mainCam)}`}></video>${dpHtml(mainCam, dpViews)}
           ${isEgo ? '<canvas class="hp-canvas" id="hp-canvas" aria-hidden="true"></canvas>' : ''}
           ${isEgo ? `<div class="top-hud" id="top-hud"><div class="top-hud-in">
@@ -6680,15 +6754,17 @@ function renderEp(d, opts) {
             </div>
             <div class="th-r"></div>
           </div></div>` : progOverlayHtml}
-          ${evidence.insights.length ? '<button type="button" class="grip-finding-overlay" id="grip-finding-overlay" aria-label="Inspect grip finding" disabled></button>' : ''}
+          ${(evidence.insights.length || evidence.contacts.length || evidence.moments.length) ? `<div class="sensor-overlay-stack" id="sensor-overlay-stack" aria-label="Sensor findings">
+            ${evidence.insights.length ? '<div class="grip-finding-overlay" id="grip-finding-overlay" role="group" aria-label="Sensor findings" hidden></div>' : '<button type="button" class="sensor-overlay" id="sensor-overlay" aria-label="Inspect current tactile evidence"></button>'}
+          </div>` : ''}
           ${gripOnly ? '' : notesHtml}
         </div>
         ${isEgo ? '' : sideCams.map(v => `
         <div class="cam-cell cam-wrist">
           <span class="cam-label">${esc(camLabel(v))}</span>
           <video id="${sideId(v)}" preload="auto" muted playsinline${gripOnly
-            ? ' controls' : ''}${keep ? '' : ` src="${v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
-            : videoSrc(eidEnc, v)}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
+            ? ' controls' : ''}${keep ? '' : ` src="${esc(v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
+            : videoSrc(eidEnc, v))}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
             dpViews)}
         </div>`).join('')}${unshownCellsHtml(d, eidEnc, !!keep)}
       </div>${unshownNote(d)}
@@ -6697,9 +6773,9 @@ function renderEp(d, opts) {
     <div class="timeline" id="timeline">
       ${evidence.insights.map(f => `<span class="grip-span" style="left:${100 * onTl(f.start) / duration}%;width:${100 * (onTl(f.end) - onTl(f.start)) / duration}%" title="${esc(f.headline)} ${fmtT(f.start)} to ${fmtT(f.end)}"></span>`).join('')}
       ${markersHtml}${keyMarkersHtml}${comp.completed_at_s != null ? `<div class="marker goal" `
-        + `style="left:${(onTl(comp.completed_at_s) / duration) * 100}%" data-t="${comp.completed_at_s}"><div `
+        + `style="left:${(onTl(comp.completed_at_s) / duration) * 100}%" data-t="${esc(comp.completed_at_s)}"><div `
         + `class="tip">goal reached ${fmtT(comp.completed_at_s)}</div></div>` : ''}${taskGoalTimes.map((gt,
-        i) => `<div class="marker goal" style="left:${(onTl(gt) / duration) * 100}%" data-t="${gt}"><div `
+        i) => `<div class="marker goal" style="left:${(onTl(gt) / duration) * 100}%" data-t="${esc(gt)}"><div `
         + `class="tip">task done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
@@ -6755,16 +6831,16 @@ function renderEp(d, opts) {
     if (it.kind === 'key') {
       const k = it.k; const oc = (k.outcome || '').toLowerCase();
       const kindChip = k.kind ? `<span class="ke-kind">${esc(kindName(k.kind))}</span>` : '';
-      feedHtml += `<div class="ev keyrow" data-t="${k.t_s}" data-idx="${idx}">
+      feedHtml += `<div class="ev keyrow" data-t="${esc(k.t_s)}" data-idx="${idx}">
         <span class="t">${fmtT(k.t_s)}</span>
         <span class="ke-col"><span class="ke-badge">&#9670; key event</span></span>
         <span class="ke-text">${kindChip}${esc(k.label || '')}</span>
-        ${oc ? `<span class="outcome ${oc}">${esc(oc)}</span>` : '<span></span>'}
+        ${oc ? `<span class="outcome ${esc(oc)}">${esc(oc)}</span>` : '<span></span>'}
       </div>`;
     } else {
       const e = it.e; const cc = contribClass(e.contribution);
       const cl = (e.contribution || '').toLowerCase() || '-';
-      feedHtml += `<div class="ev" data-t="${e.t_s}" data-idx="${idx}">
+      feedHtml += `<div class="ev" data-t="${esc(e.t_s)}" data-idx="${idx}">
         <span class="t">${fmtT(e.t_s)}</span>
         <span class="who"><span class="arm ${esc(e.arm || '')}">${esc(armLabel(e.arm))}</span></span>
         <span class="phrase">${buildPhrase(e)}</span>
@@ -6835,6 +6911,7 @@ function renderEp(d, opts) {
     exoCell.style.setProperty('--fx-top', fy.toFixed(1) + 'px');
     exoCell.style.setProperty('--fx-right', (cellR.width - (fx + dW)).toFixed(1) + 'px');
     exoCell.style.setProperty('--fx-bottom', (cellR.height - (fy + dH)).toFixed(1) + 'px');
+    scheduleTopPlacement();
   }
   if (vid) {
     on(vid, 'loadedmetadata', layoutFrame);
@@ -6847,7 +6924,7 @@ function renderEp(d, opts) {
   if (window._epCleanup) { for (const fn of window._epCleanup) { try { fn(); } catch (_) {} } }
   window._epCleanup = [];
   const onResize = () => { layoutFrame(); alignHeads(); scheduleTopPlacement(); };
-  const onFs = () => setTimeout(layoutFrame, 60);
+  const onFs = () => setTimeout(() => { layoutFrame(); scheduleTopPlacement(); }, 60);
   window.addEventListener('resize', onResize);
   alignHeads();
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(alignHeads);
@@ -7009,11 +7086,11 @@ function renderEp(d, opts) {
         : 'goal reached'}</span></div>` : '';
     const keyHtml = k ? `<div class="vo-key"><span class="vo-key-badge">&#9670; ${esc(kindName(k.kind)
       || 'key event')}</span><span class="vo-key-label">${esc(k.label || '')}</span>${kOc
-      ? `<span class="vo-key-outcome ${kOc}">${esc(kOc)}</span>` : ''}</div>` : '';
+      ? `<span class="vo-key-outcome ${esc(kOc)}">${esc(kOc)}</span>` : ''}</div>` : '';
     overlay.innerHTML = `
       ${goalHtml}
       ${keyHtml}
-      <span class="vo-time">${ev.t_s.toFixed(1)}s</span>
+      <span class="vo-time">${fmtT(ev.t_s)}</span>
       <span class="vo-arm ${esc(ev.arm || '')}">${esc(armLabel(ev.arm))}</span>
       <span class="vo-phrase">${buildPhrase(ev)}</span>
       <span class="vo-contrib ${cc}">${esc(cl)}</span>`;
@@ -7101,74 +7178,82 @@ function renderEp(d, opts) {
   const topHud = document.getElementById('top-hud');
   const sensorOverlay = document.getElementById('sensor-overlay');
   const gripFindingOverlay = document.getElementById('grip-finding-overlay');
-  // The notes that come and go at the top of the image stack under what is always there, so none covers another at
-  // any width or text length: a state change goes under the progress chip (on a head camera, under the top row it
-  // sits in), which a narrow image leaves no room beside; the recovery banner goes under both.
+  let evidenceWire = null;
   function placeTop() {
     if (!exoCell) return;
     const cr = exoCell.getBoundingClientRect();
     const below = c => c.getBoundingClientRect().bottom - cr.top + 8;
+    let top = 8;
     const anchor = topHud || progOverlay;
-    const floating = c => c && !c.closest('.grip-strip') && getComputedStyle(c).position !== 'static';
-    let top = anchor ? below(anchor) : 8;
-    // the main camera's depth switch sits under the full-screen button: the notes go under it too
-    const dpBtn = exoCell.querySelector('.cam-dp:not([hidden])');
-    if (anchor && floating(stateToast)) {
-      stateToast.style.top = Math.max(top, below(fsBtn || anchor), dpBtn ? below(dpBtn) : 0) + 'px';
+    if (anchor && stateToast && !stateToast.closest('.grip-strip')) {
+      top = below(anchor);
+      stateToast.style.top = Math.max(top, below(fsBtn || anchor)) + 'px';
     }
-    if (dpBtn) top = Math.max(top, below(dpBtn));
-    if (floating(stateToast) && stateToast.classList.contains('active')) {
-      // Use the destination, so a toast's slide does not drag the stack through it.
-      top = Math.max(top, parseFloat(stateToast.style.top) + stateToast.getBoundingClientRect().height + 8);
+    if (!recOverlay) { placeSensors(); return; }
+    for (const c of [progOverlay, stateToast]) {
+      if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
     }
-    if (floating(recOverlay)) {
-      recOverlay.style.top = top + 'px';
-      if (recOverlay.classList.contains('active')) top += recOverlay.getBoundingClientRect().height + 8;
+    recOverlay.style.top = top + 'px';
+    placeSensors();
+  }
+  function placeSensors() {
+    if (!exoCell) return;
+    const stack = document.getElementById('sensor-overlay-stack');
+    const cr = exoCell.getBoundingClientRect();
+    const floating = el => el && !el.closest('.grip-strip') && getComputedStyle(el).position !== 'static';
+    const visible = el => floating(el) && (el.classList.contains('active') || +getComputedStyle(el).opacity > .001);
+    const rect = el => {
+      const r = el.getBoundingClientRect();
+      const top = Number.isFinite(parseFloat(el.style.top)) ? cr.top + parseFloat(el.style.top) : r.top;
+      return {left: r.left, right: r.right, top: Math.min(top, r.top), bottom: Math.max(top + r.height, r.bottom)};
+    };
+    const occupied = [stateToast, recOverlay].filter(visible).map(rect);
+    const depthControl = exoCell.querySelector('.cam-dp:not([hidden])');
+    if (depthControl) {
+      depthControl.style.top = '';
+      const r = depthControl.getBoundingClientRect();
+      let top = r.top;
+      for (const block of occupied.slice().sort((a, b) => a.top - b.top)) {
+        if (r.left < block.right && r.right > block.left && top < block.bottom + 8 && top + r.height > block.top - 8)
+          top = block.bottom + 8;
+      }
+      if (top > r.top) depthControl.style.top = top - cr.top + 'px';
     }
-    if (gripFindingOverlay && !gripFindingOverlay.disabled) {
-      // Recovery takes priority. Reserve its full height before it fades in.
-      // If visible text grows, move immediately rather than slide through it.
-      const growing = floating(recOverlay) && recOverlay.classList.contains('active')
-        && top > gripFindingOverlay.getBoundingClientRect().top - cr.top + 1;
-      gripFindingOverlay.style.transitionDuration = growing ? '0ms' : '';
-      const leaving = c => floating(c) && !c.classList.contains('active') && +getComputedStyle(c).opacity > .001;
-      gripFindingOverlay.style.transitionDelay = growing ? '0ms'
-        : leaving(recOverlay) ? '240ms' : leaving(stateToast) ? '150ms' : '0ms';
-      gripFindingOverlay.style.top = top + 'px';
-      top += gripFindingOverlay.getBoundingClientRect().height + 8;
-    }
-    if (floating(sensorOverlay)) {
-      sensorOverlay.style.top = top + 'px';
-    }
+    if (!stack) return;
+    const style = getComputedStyle(exoCell);
+    const imageTop = cr.top + (parseFloat(style.getPropertyValue('--fx-top')) || 0);
+    const imageBottom = cr.bottom - (parseFloat(style.getPropertyValue('--fx-bottom')) || 0);
+    const anchor = topHud || progOverlay;
+    const start = Math.max(imageTop + 8, anchor ? anchor.getBoundingClientRect().bottom + 8 : imageTop + 8);
     const caption = exoCell.querySelector('#video-overlay');
-    if (floating(caption)) {
-      let side = false;
-      if (gripFindingOverlay && !gripFindingOverlay.disabled && caption.classList.contains('active')) {
-        const gr = gripFindingOverlay.getBoundingClientRect(), vr = caption.getBoundingClientRect();
-        const gripBottom = parseFloat(gripFindingOverlay.style.top) + cr.top + gr.height;
-        const rightSpace = cr.right - gr.right - 20;
-        if (gripBottom + 8 > vr.top && rightSpace >= 120) {
-          side = true;
-          caption.style.transition = 'opacity 130ms ease';
-          caption.style.left = gr.right - cr.left + 8 + 'px';
-          caption.style.right = '12px';
-          caption.style.minWidth = '0';
-          caption.style.maxWidth = rightSpace + 'px';
-          caption.style.transform = 'none';
-        }
-      }
-      if (!side) {
-        for (const key of ['left', 'right', 'minWidth', 'maxWidth', 'transform', 'transition'])
-          caption.style[key] = '';
-      }
+    const end = Math.min(imageBottom - 44, visible(caption) ? rect(caption).top - 8 : imageBottom - 44);
+    const sr = stack.getBoundingClientRect();
+    const blocks = [...occupied, ...(depthControl ? [depthControl.getBoundingClientRect()] : [])]
+      .filter(r => r.left < sr.right && r.right > sr.left && r.bottom + 8 > start && r.top - 8 < end)
+      .sort((a, b) => a.top - b.top);
+    const gaps = []; let cursor = start;
+    for (const r of blocks) {
+      if (r.top - 8 > cursor) gaps.push({top: cursor, height: r.top - 8 - cursor});
+      cursor = Math.max(cursor, r.bottom + 8);
     }
+    if (end > cursor) gaps.push({top: cursor, height: end - cursor});
+    stack.classList.remove('tight');
+    const needed = stack.scrollHeight;
+    const gap = gaps.find(g => g.height >= needed) || gaps.sort((a, b) => b.height - a.height)[0];
+    stack.classList.toggle('tight', !!gap && gap.height < needed);
+    stack.style.top = ((gap ? gap.top : start) - cr.top) + 'px';
+    const capacity = Math.max(0, gap ? gap.height : 0);
+    stack.style.maxHeight = capacity + 'px';
+    const readable = capacity > 0 && capacity >= stack.scrollHeight;
+    stack.style.visibility = readable ? '' : 'hidden';
+    if (evidenceWire) evidenceWire.setCapacity(readable ? capacity : 0);
   }
   let topPlacementFrame = 0;
   function scheduleTopPlacement() {
     if (topPlacementFrame) cancelAnimationFrame(topPlacementFrame);
     topPlacementFrame = requestAnimationFrame(() => {
       topPlacementFrame = 0;
-      placeTop();
+      placeSensors();
     });
   }
   let _recSig = null;
@@ -7334,12 +7419,12 @@ function renderEp(d, opts) {
       Number(el.dataset.i) === idx));
   }
   let tcWire = null;            // the Touch lane and its card (setupTouch), on an episode with contacts
-  const evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile);
+  evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile, scheduleTopPlacement);
   const syncEvidence = t => {
     evidenceWire.sync(t);
     if ((sensorOverlay && sensorOverlay.classList.contains('active'))
-      || (gripFindingOverlay && !gripFindingOverlay.disabled)) {
-      placeTop();
+      || (gripFindingOverlay && !gripFindingOverlay.hidden)) {
+      placeSensors();
       scheduleTopPlacement();
     }
   };
@@ -7349,6 +7434,7 @@ function renderEp(d, opts) {
     // corner chips that are actually visible this frame.
     renderProgress(t); renderState(t); renderRecovery(t);
     renderOverlay(t); renderHands(t); renderTaskGoal(t); syncFeed(t); syncKeyEvents(t); renderSceneGraph(t);
+    placeSensors();
       syncLanes(t);
     const sensorTime = vid && !vid.paused ? snPlaybackTime(_snData.get(_activeFile), t) : t;
     if (window._sn) window._sn.sync(sensorTime);

@@ -21,6 +21,9 @@ check(!gap.includes('success') && gap.includes('2/2 tasks') && gap.includes('1 o
   'a long recording with a part not labelled never reads complete');
 check(T.cardOutcomeHtml({task_completed: 'success'}).includes('>success<'), 'an outcome');
 check(T.cardOutcomeHtml({}).includes('>unrated<'), 'no outcome');
+const malformed = T.cardOutcomeHtml({task_completed: 'success"><img src=x onerror="throw Error(1)">'});
+check(!malformed.includes('<img') && malformed.includes('&lt;img'),
+  'malformed saved completion remains text inside the outcome card');
 // the tasks panel of the episode says it too, next to its success count
 check(T.partsGapHtml({}) === '' && T.partsGapHtml({_stitched: {parts: 3, missing: []}}) === '', 'no part missing');
 check(T.partsGapHtml({_stitched: {parts: 3, missing: [{part: 2}]}}).includes('1 of 3 parts not labelled'),

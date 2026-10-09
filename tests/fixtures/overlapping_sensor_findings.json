@@ -1,0 +1,22 @@
+{
+  "description": "Two overlapping findings from a short optical tactile recording, with a continuing hold and a brief sound transient.",
+  "findings": [
+    {
+      "start_s": 0.99578,
+      "end_s": 2.962068,
+      "inspect_s": 2.46244,
+      "headline": "The held block is accompanied by repeated brief sensor-response changes",
+      "detail": "Two pronounced falls and recoveries occur while the scene samples continue to show the block between the same pads. This adds evidence of changing interaction within an apparently continuous hold, without establishing release or slip.",
+      "confidence": "medium",
+      "adds_beyond_video": true
+    },
+    {
+      "start_s": 2.3959099999999998,
+      "end_s": 2.595846,
+      "headline": "A brief sound transient occurs during the lowering motion",
+      "detail": "Both inspected microphone summaries show a short simultaneous increase not resolved by the one-second scene samples.",
+      "confidence": "medium",
+      "adds_beyond_video": true
+    }
+  ]
+}
