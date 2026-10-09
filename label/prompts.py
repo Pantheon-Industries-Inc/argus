@@ -101,7 +101,8 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what is anomalous, in plain words>",
      "category": "<short snake_case tag for the kind of data issue. Reuse one of these when it fits, so the same kind gets the same tag across episodes: <<ISSUE_TAGS>>. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
-     "t_s": <float when it occurs, or null if it spans the episode>,
+     "t_s": <float when it starts, or null if it spans the episode>,
+     "end_s": <float when it is over (the last frame it affects), or null if it spans the episode>,
      "evidence": "<which camera and time show it>"}
   ],
   "operator_mistakes": [
@@ -335,7 +336,8 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what is anomalous, in plain words>",
      "category": "<short snake_case tag for the kind of data issue. Reuse one of these when it fits, so the same kind gets the same tag across episodes: instruction_mismatch, other_person_same_object, camera_fault, recording_fault, unintended_out_of_view, setup_change, idle_stretch. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
-     "t_s": <float when it occurs, or null if it spans the episode>,
+     "t_s": <float when it starts, or null if it spans the episode>,
+     "end_s": <float when it is over (the last frame it affects), or null if it spans the episode>,
      "evidence": "<which camera and time show it>"}
   ],
   "operator_mistakes": [
