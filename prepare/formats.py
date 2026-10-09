@@ -5838,7 +5838,7 @@ def h5_episodes(f) -> list[str]:
                            (len(parts) == 2 and not m[2] and parts[1].isdigit())))
 
     def owns_recording(groups):
-        if not all(h5_streams(f, group)['camera'] for group in groups):
+        if not any(h5_streams(f, group)['camera'] for group in groups):
             return False
         whole = h5_streams(f, '')
         local = lambda p: any(p.startswith(group + '/') for group in groups)

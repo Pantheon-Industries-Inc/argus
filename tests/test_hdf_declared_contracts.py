@@ -141,3 +141,22 @@ def test_numbered_demo_siblings_split_only_when_all_recorded_streams_are_owned(t
             h['force'] = np.arange(6, dtype=np.float32)
             h['timestamp'] = np.arange(6) / 10
         assert formats.h5_episodes(h) == (['data/demo_0', 'data/demo_1'] if outside is None else [''])
+
+
+def test_numbered_demo_missing_camera_is_reported_without_collapsing_recordings(tmp_path):
+    upload = tmp_path / 'upload'
+    upload.mkdir()
+    with h5py.File(upload / 'demos.h5', 'w') as h:
+        for index in range(2):
+            group = h.create_group('data/demo_' + str(index))
+            group['qpos'] = np.full((6, 7), index, dtype=np.float32)
+            group.create_dataset('timestamps', data=np.arange(6) / 10 + index * 100).attrs['units'] = 'seconds'
+            if index == 0:
+                rgb(group)
+    out = tmp_path / 'episodes'
+    report = formats.convert(upload, 'teleop_arms', out, 'test', 900)
+    assert [episode['name'] for episode in report['episodes']] == ['demos/demo_0']
+    assert len(report['failed']) == 1 and report['failed'][0]['name'] == 'demos/demo_1'
+    assert 'no camera' in report['failed'][0]['why']
+    with np.load(out / report['episodes'][0]['episode_id'] / 'state.npz') as state:
+        np.testing.assert_array_equal(state['state'], np.zeros((6, 7)))
