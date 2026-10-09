@@ -92,14 +92,31 @@ def apply_context(context: dict, record: dict, overrides: dict | None = None, *,
     return result
 
 
-def field_interpretation(context: dict, name: str, kind="signal") -> dict:
+def native_field_name(context: dict, key: str, kind: str) -> str:
+    """Recorded name for a canonical prepared array or camera key."""
+    if kind in ("state", "action"):
+        return (context.get("source") or {}).get(kind) or kind
+    if kind == "camera":
+        return ((context.get("cameras") or {}).get(key) or {}).get("name") or key
+    return key
+
+
+def prepared_interpretation(context: dict, key: str, kind: str) -> dict:
+    """Resolve native meaning while retaining the exact prepared camera binding."""
+    path = "cameras/" + key.replace("~", "~0").replace("/", "~1") if kind == "camera" else key
+    return field_interpretation(context, native_field_name(context, key, kind), kind, context_path=path)
+
+
+def field_interpretation(context: dict, name: str, kind="signal", *, context_path=None) -> dict:
     """One exact bound field, or no interpretation when recorded identities are ambiguous."""
     overlay = context.get("data_dictionary") or {}
     owner = _owner(context)
     if owner != overlay.get("episode_id"):
         return {}
     matched = [field for field in overlay.get("fields", []) if field.get("name") == name and field.get("kind") == kind
-               and any(binding.get("episode") == owner and _bound(context, field, binding) for binding in field.get("bindings", []))]
+               and any(binding.get("episode") == owner and _bound(context, field, binding)
+                       and (context_path is None or binding.get("context_path") == context_path)
+                       for binding in field.get("bindings", []))]
     if len(matched) != 1:
         return {}
     return copy.deepcopy((overlay.get("entries") or {}).get(matched[0]["id"]) or {})

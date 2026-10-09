@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from label.atomic import write_atomic
-from label.dictionary_context import _public_source, field_interpretation
+from label.dictionary_context import _public_source, field_interpretation, native_field_name, prepared_interpretation
 from label import sensor_evidence as se
 
 MAX_COLUMNS = 8
@@ -29,6 +29,7 @@ MAX_SCAN_BYTES = 256 * 1024 * 1024
 SOURCE_HASH_LIMIT = 16 * 1024 * 1024
 IMPLEMENTATION_SHA256 = hashlib.sha256(b''.join(path.read_bytes() for path in (
     Path(__file__), Path(__file__).with_name('depth.py'),
+    Path(__file__).with_name('dictionary_context.py'),
     Path(__file__).parent.parent / 'prepare' / 'hdf_metadata.py',
     Path(__file__).parent.parent / 'prepare' / 'mcap_fields.py',
     Path(__file__).with_name('source_eligibility.py')))).hexdigest()
@@ -482,9 +483,9 @@ class Access:
         for kind in ('state', 'action'):
             a = self.ep.get(kind)
             if a is not None and a.size:
-                name = (ctx.get('source') or {}).get(kind) or kind
+                name = native_field_name(ctx, kind, kind)
                 self.add('numeric', kind, a, {'source': name,
-                    'interpretation': field_interpretation(ctx, name, kind)})
+                    'interpretation': prepared_interpretation(ctx, kind, kind)})
         for name, a in self.ep.get('signals', {}).items():
             meta = self.ep.get('signal_meta', {}).get(name, {})
             private = {}
@@ -509,7 +510,8 @@ class Access:
                 except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
                     self.add('unreadable', meta['name'], None, {'reason': str(error)[:200]})
         for view, entry in self.ep.get('sources', {}).items():
-            self.add('image', view, None, ctx.get('cameras', {}).get(view, {}), view=view)
+            self.add('image', view, None, {**ctx.get('cameras', {}).get(view, {}),
+                'interpretation': prepared_interpretation(ctx, view, 'camera')}, view=view)
         for view, entry in {**self.ep.get('depth', {}), **self.ep.get('additional_depth', {})}.items():
             meta = (ctx.get('depth') or {}).get(view) or {k: entry[k] for k in
                     (*se.SEMANTIC_KEYS, 'scale_m', 'range', 'kind', 'source') if k in entry}
@@ -1119,7 +1121,7 @@ class Access:
                       'access_descriptor_digest': descriptor_signature(metadata)}
             if field['kind'] == 'image':
                 sensor['view'] = self.fields[r['field_id']]['view']
-                sensor['interpretation'] = field_interpretation(self.ep['context'], sensor['view'], 'camera')
+                sensor['interpretation'] = prepared_interpretation(self.ep['context'], sensor['view'], 'camera')
             if field['kind'] == 'depth':
                 sensor['view'] = self.fields[r['field_id']]['view']
             doc['sensors'].append(sensor)

@@ -172,25 +172,27 @@ def test_stitch_preserves_current_proven_and_legacy_saved_short_results(tmp_path
 
 
 @pytest.mark.parametrize("native_names", [False, True])
-def test_inspection_preserves_exact_reviewed_state_action_interpretations(tmp_path, native_names):
+def test_inspection_preserves_exact_reviewed_native_interpretations(tmp_path, native_names):
     from label import dictionary
     from label.dictionary_context import apply_context, field_interpretation
     ep_dir = tmp_path / "episode_native"
     ep_dir.mkdir()
     source = {"state": "/observations/qpos", "action": "/action"} if native_names else {}
     ctx = {"episode_id": ep_dir.name, "profile": "teleop_arms", "state_kind": "joints", "fps": 30,
-           "source": source, "cameras": {"exo": {"name": "scene"}}}
+           "source": source, "cameras": {"exo": {"name": "recorded_head" if native_names else "exo"}}}
     values = np.arange(21, dtype=np.float64).reshape(3, 7)
     np.savez(ep_dir / "state.npz", state=values, action=values + 1)
     (ep_dir / "context.json").write_text(json.dumps(ctx))
     (ep_dir / "sources.json").write_text(json.dumps({"exo": {"n_frames": 3}}))
     inventory = dictionary.inventory([ep_dir])
-    fields = {field["kind"]: field for field in inventory["fields"] if field["kind"] in ("state", "action")}
+    fields = {field["kind"]: field for field in inventory["fields"] if field["kind"] in ("state", "action", "camera")}
     record = {"schema": 1, "inventory_digest": inventory["digest"], "inventory": inventory, "status": "success",
               "entries": {field["id"]: {"meaning": "Machine guess", "role": "unknown", "provenance": "machine"}
                           for field in fields.values()}}
-    edits = {field["id"]: {"meaning": "Reviewed " + kind, "role": "joint_state" if kind == "state" else "command",
-                            "layout": [{"start": 0, "count": 7, "name": "recorded arm"}]}
+    roles = {"state": "joint_state", "action": "command", "camera": "head_camera"}
+    edits = {field["id"]: {"meaning": "Reviewed " + kind, "role": roles[kind],
+                            **({"layout": [{"start": 0, "count": 7, "name": "recorded arm"}]}
+                               if kind != "camera" else {})}
              for kind, field in fields.items()}
     loaded = episode.load(ep_dir)
     loaded["context"] = apply_context(ctx, record, edits)
@@ -207,7 +209,27 @@ def test_inspection_preserves_exact_reviewed_state_action_interpretations(tmp_pa
         inspected = access.inspect({"field_id": field["id"], "columns": [6, 0]})
         assert inspected["values"] == (values + (kind == "action"))[:, [6, 0]].tolist()
     assert all(entry["meaning"] == "Machine guess" for entry in record["entries"].values())
+    image = next(field for field in access.inventory() if field["kind"] == "image")
+    canonical_image = next(field for field in canonical.inventory() if field["kind"] == "image")
+    expected_camera = field_interpretation(loaded["context"], ctx["cameras"]["exo"]["name"], "camera")
+    assert expected_camera["provenance"] == "human"
+    assert image["id"] == canonical_image["id"]
+    assert image["descriptor"]["interpretation"] == expected_camera
+    access.receipts = [{"id": "inspected_image", "field_id": image["id"], "times_s": [0, 1 / 30]}]
+    exported = access.bind([])["sensors"][0]
+    assert exported["view"] == "exo"
+    assert exported["interpretation"] == expected_camera
     changed = evidence_access.Access({**loaded, "context": {**loaded["context"],
-        "source": {"state": "/different/qpos", "action": "/different/command"}}})
+        "source": {"state": "/different/qpos", "action": "/different/command"},
+        "cameras": {"exo": {"name": "different_camera"}}}})
     assert all(not field["descriptor"]["interpretation"] for field in changed.inventory()
-               if field["kind"] == "numeric")
+               if field["kind"] in ("numeric", "image"))
+    changed.receipts = access.receipts
+    assert not changed.bind([])["sensors"][0]["interpretation"]
+    # A second prepared view reusing a native name cannot borrow the first view's review.
+    alias = evidence_access.Access({**loaded, "sources": {"right": {"n_frames": 3}},
+        "context": {**loaded["context"], "cameras": {**ctx["cameras"], "right": ctx["cameras"]["exo"]}}})
+    alias_image = next(field for field in alias.inventory() if field["kind"] == "image")
+    assert not alias_image["descriptor"]["interpretation"]
+    alias.receipts = [{"id": "alias_image", "field_id": alias_image["id"], "times_s": [0, 1 / 30]}]
+    assert not alias.bind([])["sensors"][0]["interpretation"]
