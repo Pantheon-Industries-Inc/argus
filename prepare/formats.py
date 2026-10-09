@@ -1914,6 +1914,7 @@ SIGNAL_MAX_VALUES = 4096
 SIGNAL_EPISODE_BYTES = 1_000_000_000
 SUMMARY_NAMES = ["lowest", "mean", "highest"]
 SUMMARY_CHUNK_ROWS = 256
+SUMMARY_CHUNK_VALUES = 1 << 20
 
 
 def float_rows(a) -> np.ndarray:
@@ -1930,14 +1931,17 @@ def summarise_rows(a) -> np.ndarray:
     """(n, 3) float32: each row's lowest, mean and highest finite value (SUMMARY_NAMES), NaN where a row has none,
     computed a block of rows at a time."""
     n = len(a)
+    width = max(1, int(np.prod(a.shape[1:])))
+    chunk_rows = max(1, min(SUMMARY_CHUNK_ROWS, SUMMARY_CHUNK_VALUES // width))
     out = np.full((n, 3), np.nan, dtype=np.float32)
     with np.errstate(all="ignore"):
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            for i in range(0, n, SUMMARY_CHUNK_ROWS):
-                b = np.asarray(a[i:i + SUMMARY_CHUNK_ROWS], dtype=np.float32)
+            for i in range(0, n, chunk_rows):
+                b = np.asarray(a[i:i + chunk_rows], dtype=np.float32)
                 b = b.reshape(len(b), -1)
+                b = np.where(np.isfinite(b), b, np.nan)
                 out[i:i + len(b)] = np.stack([np.nanmin(b, 1), np.nanmean(b, 1), np.nanmax(b, 1)], axis=1)
     return out
 
@@ -2417,6 +2421,10 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
             m.pop("shape", None)
             if names:
                 m["names"] = [names[c] for c in selected]
+            for unit_key in ("unit", "units"):
+                units = m.get(unit_key)
+                if isinstance(units, (list, tuple)) and len(units) == v.shape[1]:
+                    m[unit_key] = [units[c] for c in selected]
         readings.append({"name": k, "key": key, "dims": int(a.shape[1]), **m})
         if k not in quiet:
             for issue in signal_gaps(k, a, t):

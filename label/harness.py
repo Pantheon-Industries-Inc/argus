@@ -300,6 +300,23 @@ def same_input_identity(saved: dict, current: dict) -> bool:
             and equivalent_source_proof(saved.get('source_proof'), current.get('source_proof')))
 
 
+def saved_input_problem(record: dict, ep_dir: Path) -> str | None:
+    """Check proven source inputs before republishing a saved reply, without regrading historical labels."""
+    identity = record.get('input_identity')
+    if identity is None:
+        return None
+    if not isinstance(identity, dict) or identity.get('version') != 1:
+        return 'saved output input proof cannot be verified'
+    from label.evidence_access import same_source_proof
+    try:
+        ctx = json.loads((Path(ep_dir) / 'context.json').read_text())
+        if not isinstance(ctx, dict) or not same_source_proof(identity.get('source_proof'), ctx, ep_dir):
+            return 'saved output has changed or missing input'
+    except (OSError, ValueError, KeyError, TypeError):
+        return 'saved output has changed or missing input'
+    return None
+
+
 def episode_cost(result: dict) -> float:
     """What labelling one episode was billed: its model call plus, for a routed episode, the routing call made for
     it (label/route.py)."""

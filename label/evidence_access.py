@@ -30,6 +30,7 @@ SOURCE_HASH_LIMIT = 16 * 1024 * 1024
 IMPLEMENTATION_SHA256 = hashlib.sha256(b''.join(path.read_bytes() for path in (
     Path(__file__), Path(__file__).with_name('depth.py'),
     Path(__file__).parent.parent / 'prepare' / 'hdf_metadata.py',
+    Path(__file__).parent.parent / 'prepare' / 'mcap_fields.py',
     Path(__file__).with_name('source_eligibility.py')))).hexdigest()
 # These describe the prepared episode or checks already in the annotation request.
 # Original metadata and unfamiliar context keys retain their separate inspection path.
@@ -285,10 +286,12 @@ def withhold_stale_untimed(record, ctx, ep_dir, *, verified=True):
 
 
 def component_unit(meta, col):
-    units = meta.get('units')
+    units = meta.get('units', meta.get('unit'))
     if isinstance(units, str):
         return units
-    return units[col] if isinstance(units, (list, tuple)) and col < len(units) else meta.get('unit')
+    if isinstance(units, (list, tuple)):
+        return units[col] if col < len(units) else None
+    return meta.get('unit') if isinstance(meta.get('unit'), str) else None
 
 
 def current_descriptor(ctx, sensor):
@@ -315,10 +318,15 @@ def header(path, key):
         return shape, fortran, dtype, stream.tell()
 
 
+def _fortran_column_offset(shape, column):
+    coordinates = np.unravel_index(column, shape[1:]) if len(shape) > 1 else ()
+    return int(np.ravel_multi_index((0, *coordinates), shape, order='F'))
+
+
 def array_rows(path, key, rows, columns=None):
-    """Read selected C-order rows directly from an NPZ member, without loading the recording."""
+    """Read selected rows directly from either numeric NPZ layout, without loading the recording."""
     shape, fortran, dtype, offset = header(path, key)
-    if fortran or dtype.kind not in 'biuf' or not shape:
+    if dtype.kind not in 'biuf' or not shape:
         raise ValueError('unsupported native array layout')
     width = math.prod(shape[1:]) or 1
     supplied_width = width if columns is None else len(columns)
@@ -326,6 +334,18 @@ def array_rows(path, key, rows, columns=None):
         raise ValueError('native selection exceeds the value budget; request fewer rows')
     values = []
     with zipfile.ZipFile(path) as archive, archive.open(key + '.npy') as stream:
+        if fortran:
+            values = np.empty((len(rows), supplied_width), dtype=dtype)
+            selected = list(range(width)) if columns is None else columns
+            positions = sorted((_fortran_column_offset(shape, col), j) for j, col in enumerate(selected))
+            for base, j in positions:
+                for row, i in sorted((int(row), i) for i, row in enumerate(rows)):
+                    stream.seek(offset + (base + row) * dtype.itemsize)
+                    raw = stream.read(dtype.itemsize)
+                    if len(raw) != dtype.itemsize:
+                        raise ValueError('native array ended before its declared shape')
+                    values[i, j] = np.frombuffer(raw, dtype=dtype)[0]
+            return values
         for row in rows:
             start = offset + int(row) * width * dtype.itemsize
             if columns is None:
@@ -357,8 +377,8 @@ def extrema_rows(field, rows, columns):
     if path:
         shape, fortran, dtype, offset = header(path, key)
         width = math.prod(shape[1:]) or 1
-        if fortran or dtype.kind not in 'biuf':
-            raise ValueError('extrema requires a numeric C-order array')
+        if dtype.kind not in 'biuf':
+            raise ValueError('extrema requires a numeric array')
         if len(rows) and (int(rows[-1]) - int(rows[0]) + 1) * width * dtype.itemsize > MAX_SCAN_BYTES:
             raise ValueError('extrema scan exceeds 256 MiB; request a narrower window')
     else:
@@ -366,8 +386,8 @@ def extrema_rows(field, rows, columns):
         shape = values.shape
     stats = [{'column': col, 'valid_rows': 0, 'minimum': None, 'maximum': None} for col in columns]
     selected_rows = rows[rows < shape[0]]
-    def scan(block_rows, cells):
-        for position, stat in enumerate(stats):
+    def scan(block_rows, cells, component_stats=stats):
+        for position, stat in enumerate(component_stats):
             valid = np.flatnonzero(np.isfinite(cells[:, position]))
             stat['valid_rows'] += len(valid)
             if not len(valid):
@@ -380,8 +400,20 @@ def extrema_rows(field, rows, columns):
                     stat[name] = {'row': int(block_rows[i]), 'value': value}
     if path and len(selected_rows):
         with zipfile.ZipFile(path) as archive, archive.open(key + '.npy') as stream:
+            if fortran:
+                positions = sorted((_fortran_column_offset(shape, col), j) for j, col in enumerate(columns))
+                for base, j in positions:
+                    for start in range(int(selected_rows[0]), int(selected_rows[-1]) + 1, 4096):
+                        end = min(start + 4096, int(selected_rows[-1]) + 1)
+                        stream.seek(offset + (base + start) * dtype.itemsize)
+                        raw = stream.read((end - start) * dtype.itemsize)
+                        if len(raw) != (end - start) * dtype.itemsize:
+                            raise ValueError('native array ended before its declared shape')
+                        wanted = selected_rows[(selected_rows >= start) & (selected_rows < end)]
+                        cells = np.frombuffer(raw, dtype=dtype)
+                        scan(wanted, cells[wanted - start, None], [stats[j]])
             chunk = max(1, min(4096, 8 * 1024 * 1024 // (width * dtype.itemsize)))
-            for start in range(int(selected_rows[0]), int(selected_rows[-1]) + 1, chunk):
+            for start in (() if fortran else range(int(selected_rows[0]), int(selected_rows[-1]) + 1, chunk)):
                 end = min(start + chunk, int(selected_rows[-1]) + 1)
                 stream.seek(offset + start * width * dtype.itemsize)
                 raw = stream.read((end - start) * width * dtype.itemsize)
@@ -450,7 +482,9 @@ class Access:
         for kind in ('state', 'action'):
             a = self.ep.get(kind)
             if a is not None and a.size:
-                self.add('numeric', kind, a, {'interpretation': field_interpretation(ctx, kind, kind)})
+                name = (ctx.get('source') or {}).get(kind) or kind
+                self.add('numeric', kind, a, {'source': name,
+                    'interpretation': field_interpretation(ctx, name, kind)})
         for name, a in self.ep.get('signals', {}).items():
             meta = self.ep.get('signal_meta', {}).get(name, {})
             private = {}
@@ -855,6 +889,11 @@ class Access:
                 for row, message in enumerate(message_indices):
                     result['values'][row][position] = exact.get((keys[row], int(message)))
                 result.setdefault('native_component_dtypes', {})[str(col)] = sorted({d['dtype'] for d in leaves})
+            if detail.get('presence'):
+                present = array_rows(field['path'], detail['presence'], rows).ravel()
+                for row, exists in enumerate(present):
+                    if not exists:
+                        result['values'][row] = [None] * len(cols)
         if spectrum:
             if not packet:
                 raise ValueError('spectrum requires retained waveform packets, not aligned summary values')

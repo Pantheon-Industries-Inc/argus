@@ -30,15 +30,18 @@ def native_fields(message):
             for field in descriptor.fields:
                 key = path + '.' + field.name if path else field.name
                 cell = getattr(value, field.name)
+                # Scalars with implicit protobuf presence always have their declared
+                # default value. Optional fields still distinguish absent from false/zero.
+                available = not field.has_presence or field.name in present
                 if field.type in PROTO_DTYPES:
                     add(key, list(cell) if field.is_repeated else cell,
-                        PROTO_DTYPES[field.type], field.name in present, 'protobuf declaration')
+                        PROTO_DTYPES[field.type], available, 'protobuf declaration')
                 elif field.type == 9:
                     if field.is_repeated:
                         for index, item in enumerate(cell):
                             text(f'{key}[{index}]', item, True, 'protobuf declaration')
                     else:
-                        text(key, cell, field.name in present, 'protobuf declaration')
+                        text(key, cell, available, 'protobuf declaration')
                 elif field.message_type is not None and field.name in present:
                     if field.message_type.GetOptions().map_entry:
                         value_field = field.message_type.fields_by_name['value']

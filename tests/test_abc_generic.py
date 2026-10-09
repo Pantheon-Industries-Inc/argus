@@ -281,5 +281,5 @@ def test_typed_native_numeric_leaves_survive_compatibility_projection(tmp_path, 
             assert arrays[descriptor['array']].dtype == values.dtype
             assert arrays[descriptor['array']].tobytes() == values.tobytes()
             assert arrays[descriptor['message_indices']].tolist() == list(range(6))
-        assert arrays[descriptors['active']['presence']].tolist() == [False, True, False, True, False, True]
+        assert arrays[descriptors['active']['presence']].tolist() == [True] * 6
     assert hashlib.sha256((root / 'episode.mcap').read_bytes()).hexdigest() == original

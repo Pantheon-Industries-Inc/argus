@@ -428,12 +428,41 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
     written, as a reply that gave no labels, so the board shows its footage, checks and sensors and says why; it is
     listed under "unlabelled"."""
     src = Path(job) / "run" / "out"
+    short_outputs = [p for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json"),
+                                  *src.glob("noreply_episode_*.json")] if "__p" not in p.stem]
+    # Upload resumes can skip the harness when every saved reply parsed. Verify
+    # the active reply for each unit before any result reaches a new export.
+    from label.harness import saved_input_problem
+    units = {p.stem.removeprefix('failed_').removeprefix('noreply_'):
+             Path(eps) / p.stem.removeprefix('failed_').removeprefix('noreply_') for p in short_outputs}
+    units.update({name: Path(job) / 'pieces' / name for parts in long_eps.values() for name in parts})
+    records = {}
+    for name, directory in sorted(units.items()):
+        record, _ = _part_reply(src, name)
+        records[name] = record
+        problem = saved_input_problem(record, directory) if record else None
+        if problem:
+            raise RuntimeError(f'{name}: {problem}; use an explicit fresh job to label changed inputs')
+    for parent, parts in long_eps.items():
+        proof_path = Path(job) / 'pieces' / f'.{parent}.source_proof.json'
+        if not proof_path.exists() and not any((records.get(name) or {}).get('input_identity') for name in parts):
+            continue
+        from label.evidence_access import same_source_proof
+        try:
+            proof = json.loads(proof_path.read_text())
+            directory = Path(eps) / parent
+            context = json.loads((directory / 'context.json').read_text())
+            current = same_source_proof(proof, context, directory)
+        except (OSError, ValueError, KeyError, TypeError):
+            current = False
+        if not current:
+            raise RuntimeError(f'{parent}: saved pieces have changed or missing input; '
+                               'use an explicit fresh job to label changed inputs')
     out.mkdir(parents=True, exist_ok=True)
     res = {"stitched": 0, "incomplete": [], "unlabelled": []}
     # every short episode's reply as it came, a cut-off one (failed_<episode>.json) too: the board shows each
-    for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json"), *src.glob("noreply_episode_*.json")]:
-        if "__p" not in p.stem:
-            shutil.copy(p, out / p.name)
+    for p in short_outputs:
+        shutil.copy(p, out / p.name)
     for ep, parts in long_eps.items():
         got, missing, failed = [], [], []
         for n in parts:

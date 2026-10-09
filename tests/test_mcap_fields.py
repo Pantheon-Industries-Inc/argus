@@ -86,7 +86,7 @@ def test_protobuf_maps_keep_declared_numeric_and_nested_values():
     assert result['counters["motor\\\"]"]']['values'].item() == 0
     assert result['details["sensor"].gain']['values'].tobytes() == np.float32(message.details['sensor'].gain).tobytes()
     assert result['details["sensor"].valid']['values'].item() is False
-    assert result['details["sensor"].valid']['present'] is False
+    assert result['details["sensor"].valid']['present'] is True
     assert result['notes["text"]']['dtype'] == 'string'
     assert result['notes["text"]']['values'] is None
     assert result['notes["text"]']['original'] == message.notes['text']
