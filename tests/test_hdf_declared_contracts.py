@@ -77,7 +77,8 @@ def test_conflicting_clock_units_keep_source_but_only_assume_frame_placement(tmp
 
 
 @pytest.mark.parametrize('name,shape,dtype', [('tactile_pressure', (128, 128), 'uint16'),
-                                           ('taxels', (32, 48, 3), 'float32')])
+                                           ('taxels', (32, 48, 3), 'float32'),
+                                           ('depth', (128, 128), 'uint16')])
 def test_declared_tactile_maps_are_signals_with_original_units(tmp_path, name, shape, dtype):
     source = tmp_path / 'skin.h5'
     with h5py.File(source, 'w') as h:
@@ -99,6 +100,46 @@ def test_unnamed_numeric_map_does_not_acquire_depth_semantics(tmp_path):
         assert formats.h5_kind('readings', field) == 'signal'
         depth = h.create_dataset('depth', data=np.ones((6, 128, 128), dtype=np.float32))
         assert formats.h5_kind('depth', depth) == 'depth'
+
+
+@pytest.mark.parametrize('name,representation', [('readings', 'depth'),
+                                                ('force_sensor/depth', 'depth'),
+                                                ('readings', 'disparity')])
+def test_declared_depth_representation_survives_classification_and_conversion(tmp_path, name, representation):
+    from label import depth
+    source = tmp_path / 'depth.h5'
+    values = np.full((6, 64, 80), 25, dtype=np.uint16)
+    with h5py.File(source, 'w') as h:
+        rgb(h)
+        h['timestamp'] = np.arange(6) / 10
+        field = h.create_dataset(name, data=values)
+        field.attrs['sensor_type'] = representation
+        field.attrs['units'] = 'm' if representation == 'depth' else 'pixels'
+        streams = formats.h5_streams(h, '')
+        assert [s['path'] for s in streams['depth']] == [name]
+        assert not streams['signal']
+    ep, ctx = convert(source, tmp_path)
+    entry = depth.load(ep)['exo']
+    assert entry['kind'] == representation
+    assert depth.metric_scale(entry) == (1. if representation == 'depth' else None)
+    decoded = depth.decode(entry, entry['pts'], [0])[0]
+    np.testing.assert_array_equal(decoded, values[0])
+    assert decoded.dtype == np.uint16
+    if representation == 'disparity':
+        pixels = np.array([[1, 2]], dtype=np.uint16)
+        disparity = np.asarray(depth.picture(pixels, entry, (1., 2.)))
+        ordinary = np.asarray(depth.picture(pixels, {'kind': 'depth'}, (1., 2.)))
+        np.testing.assert_array_equal(disparity, ordinary[:, ::-1])
+        assert ctx['depth']['exo']['units'] == 'relative'
+
+
+@pytest.mark.parametrize('sensor_type', ['depth pressure', 'depth disparity'])
+def test_incompatible_sensor_declarations_do_not_establish_depth(tmp_path, sensor_type):
+    with h5py.File(tmp_path / 'ambiguous.h5', 'w') as h:
+        rgb(h)
+        field = h.create_dataset('depth', data=np.ones((6, 64, 80), dtype=np.uint16))
+        field.attrs['sensor_type'] = sensor_type
+        assert not formats.h5_streams(h, '')['depth']
 
 
 @pytest.mark.parametrize('name,sensor_type', [('tactile_image', 'optical tactile sensor'),

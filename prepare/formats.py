@@ -2886,6 +2886,8 @@ def video_views_episode(ep: Path, files: dict, rig: str, dataset: str, extra: di
         display_ta = placed[anchor]
         entry, tz = depth_entry(ep, v, Path(d["path"]), display_td, display_ta, pd_["pts"], d.get("scale_m"), d.get("source") or "",
                                 extra, files[v][0] if v in files else d.get('source') or v)
+        if d.get('kind') in ('depth', 'disparity'):
+            entry['kind'] = d['kind']
         tz[f"depth_{v}"] = td
         if depth_note:
             depth_placement[f"depth_{v}"], depth_notes[v] = display_td, depth_note
@@ -5697,6 +5699,22 @@ def h5_clock_unit(ds) -> tuple[float | None, str | None]:
     return found[0], None
 
 
+def h5_sensor_representation(ds) -> str | None:
+    """Only unambiguous scalar measurement declarations establish a depth representation."""
+    sensor_type = ds.attrs.get('sensor_type')
+    if sensor_type is None or np.asarray(sensor_type).ndim != 0:
+        return None
+    sensor_type = np.asarray(sensor_type).item()
+    sensor_type = sensor_type.decode('utf-8', 'replace') if isinstance(sensor_type, bytes) else sensor_type
+    if not isinstance(sensor_type, str):
+        return None
+    words = set(tokens(sensor_type))
+    families = words & {'depth', 'disparity'}
+    if words & {'pressure', 'taxel', 'taxels', 'force', 'forces'}:
+        families.add('signal')
+    return next(iter(families)) if len(families) == 1 else 'signal' if families else None
+
+
 def h5_kind(name: str, ds) -> str | None:
     """camera, depth, time, signal, text or None (empty, or nothing we read) for one HDF5 dataset."""
     shape, dt = ds.shape, ds.dtype
@@ -5725,14 +5743,11 @@ def h5_kind(name: str, ds) -> str | None:
     if len(per) <= 1 and (not per or per[0] == 1) and n > 1 and is_time_name(leaf):
         # A recorded clock claim remains a clock even when its values cannot order the frames.
         return "time"
-    sensor_type = ds.attrs.get('sensor_type')
-    if sensor_type is not None and np.asarray(sensor_type).ndim == 0:
-        sensor_type = np.asarray(sensor_type).item()
-        sensor_type = sensor_type.decode('utf-8', 'replace') if isinstance(sensor_type, bytes) else sensor_type
-    if not isinstance(sensor_type, str):
-        sensor_type = ''
+    representation = h5_sensor_representation(ds)
+    if representation is not None:
+        return 'depth' if representation in ('depth', 'disparity') and len(per) == 2 else 'signal'
     measurements = {'pressure', 'taxel', 'taxels', 'force', 'forces'}
-    if (set(tokens(name)) | set(tokens(sensor_type))) & measurements:
+    if set(tokens(name)) & measurements:
         return "signal"
     if _picture_axes(per) is not None and (dt == np.uint8 or (dt.kind == "f" and _picture_values(ds))):
         return "camera"
@@ -6561,7 +6576,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             ds = f[d["path"]]
             t = relative_times(d)
             display_t = presentation_clock(t, fps)[0] if coarse else t
-            scale = depth_scale_attr(ds)
+            representation = h5_sensor_representation(ds)
+            scale = None if representation == 'disparity' else depth_scale_attr(ds)
             dw = DepthWriter(ep / f"depth_{v}.mkv")
             for i in range(d["n"]):
                 dw.add(float(display_t[i]), ds[i], scale)
@@ -6569,6 +6585,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 depth[v] = {"path": ep / f"depth_{v}.mkv", "real": t if coarse else None,
                             "capture_clock": coarse, "scale_m": dw.scale_m, "source": source,
                             "storage": dw.storage,
+                            "kind": representation,
                             "paired_camera": camera if v == camera and source == d['name'] else None}
         q_selected, anchor_note = presentation_clock(q_abs, fps)
         presentation_q = None
