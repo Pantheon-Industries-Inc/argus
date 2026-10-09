@@ -49,25 +49,38 @@ check(D.contacts.map(c => c.id).join() === 'c1,c2,c3,c4', 'contacts in time orde
 check(D.rows.join() === 'left,right', 'one row per hand, left first');
 check(D.missing.length === 1 && D.missing[0].t_s === 6.5, 'a grasp with no time is left out');
 const lane = T.touchLaneHtml(D, lanePct, chev);
-check(lane.includes('4 contacts, 3 checked, 1 not seen, 1 grasp with no contact'), 'the lane counts: ' + lane.match(
-  /lane-sum">([^<]*)/)[1]);
+check(lane.includes('Recorded touch') && !lane.includes('3 checked, 1 not seen'), 'plain heading without the count sentence');
 check(lane.includes('>Left hand<') && lane.includes('>Right hand<'), 'each row is named by its hand');
-check(count(lane, /class="tc-seg /g) === 4 && count(lane, /class="tc-peak /g) === 4, 'a bar and a peak tick per contact');
+check(count(lane, /class="tc-seg /g) === 4 && count(lane, /class="tc-peak /g) === 0, 'contact curves without unexplained peak ticks');
 check(lane.includes('tc-seg st-yes') && lane.includes('tc-seg st-no') && lane.includes('tc-seg st-unshown')
   && lane.includes('tc-seg st-unclear'), 'each contact styled by what the model found');
 check(lane.includes('left:10%;width:max(3px, 10%)'), 'a bar runs from its begin to its end on the timeline');
 const rows = lane.split('class="tc-row"').slice(1);
-check(rows.length === 2 && rows[0].includes('tc-miss') && !rows[1].includes('tc-miss'), 'the grasp is on its hand\'s row');
+check(rows.length === 2 && !rows[0].includes('tc-miss') && lane.includes('tc-observation'), 'video observations are separate from sensor curves');
 check(rows[0].includes('data-c="1"') && !rows[0].includes('data-c="0"'), 'a contact is on its own hand\'s row');
-check(lane.includes('id="lane-touch-pos">4 contacts<'), 'the stepper starts with the count');
+check(lane.includes('id="lane-touch-pos">4 contacts<'), 'multiple contacts keep the stepper');
 
 // a grasp on a hand the contacts do not name gets that hand's row; a recording that names no hand has one row
 check(T.tcData({contacts: [contact('c1', 'right', 0, 1)], contacts_missing: [{t_s: 2, hand: 'left'}]}).rows.join()
   === 'left,right', 'a hand only a grasp names gets a row');
+const single = T.touchLaneHtml(T.tcData({contacts:[contact('c1','right',0,1,seen('yes'))],contacts_missing:[{t_s:0,hand:'left',object:'bowl'}]}),lanePct,chev);
+check(!single.includes('class="tc-hand">Left hand') && single.includes('Left hand takes hold of bowl'), 'no empty left sensor row for a video observation');
+check(single.includes('Touch seen in sampled frames') && single.includes('No covering contact recorded for this hand'), 'sensor and video evidence are labeled');
+check(!single.includes('Previous contact') && !single.includes('class="tc-key"'), 'one contact needs no stepper or legend');
 const one = T.tcData({contacts: [contact('c1', null, 0, 1, seen('yes'))], contacts_missing: [{t_s: 2, hand: 'left'}]});
 const oneLane = T.touchLaneHtml(one, lanePct, chev);
-check(one.rows.join() === '' && !oneLane.includes('class="tc-hand"') && oneLane.includes('tc-miss'),
-  'one unnamed row, without a hand name, carrying every grasp');
+check(one.rows.join() === '' && !oneLane.includes('class="tc-hand"') && oneLane.includes('tc-observation'),
+  'unnamed sensor row with a separate video observation');
+
+// Human review keeps the sensor reading but removes rejected visual claims.
+const reviewed=T.tcData({contacts:[contact('discarded','right',0,1,{review_status:'rejected'}),
+ contact('raw','right',1,2,seen('no',{review_status:'rejected',object:'Rejected cup'}))],
+ contacts_missing:[{t_s:3,hand:'left',object:'Rejected grasp',review_status:'rejected'}]});
+check(reviewed.contacts.length===1 && reviewed.contacts[0].id==='raw' && reviewed.missing.length===0,
+ 'human rejection removes contacts and missing grasps from the lane');
+const reviewedLane=T.touchLaneHtml(reviewed,lanePct,chev);
+check(reviewedLane.includes('No visual verdict') && !reviewedLane.includes('Rejected cup'),
+ 'a rejected visual verdict does not color or describe a raw contact');
 
 // the card
 const cards = T.tcCardsHtml(D);

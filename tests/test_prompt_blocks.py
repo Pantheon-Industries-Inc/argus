@@ -204,8 +204,14 @@ def _add_contact(ep, pl):
     ep["contacts"] = ep["contacts_shown"] = [dict(CONTACT)]
 
 
+def _add_shared_sensor_evidence(ep, pl):
+    pl["sensor_evidence"] = {"sensors": [{"id": "camera:extra1", "kind": "image", "times": [0],
+                                          "capabilities": ["image_deformation"]}], "series": [], "limitations": []}
+
+
 # (block, the case without its data, what adds the data, text only that block says)
 BLOCK_CASES = [
+    ("sensor_evidence", "teleop_joints", _add_shared_sensor_evidence, ["SENSOR EVIDENCE FOR ADDITIONAL ANNOTATION"]),
     ("collection_note", "teleop_joints", _add(collection_note="consecutive 3-minute clips of a shift."),
      ("How the dataset cuts its recordings",)),
     ("contact_views", "teleop_joints", _add_contact_views, ("So are the instants just after",)),

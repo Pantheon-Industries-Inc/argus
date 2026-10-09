@@ -220,7 +220,8 @@
     "depth_clip_failed",
     "depth_clip_timing",
     "camera_offset",
-    "metadata_limit"
+    "metadata_limit",
+    "sensor_metadata_not_read"
    ]
   },
   {

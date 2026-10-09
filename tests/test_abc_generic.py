@@ -236,12 +236,15 @@ def test_metadata_goal_and_owned_same_clock_sensor_samples_remain_complete(tmp_p
     ep, ctx = converted(root, tmp_path / 'generic', monkeypatch, legacy=False)
     assert ctx['instruction'] == 'align fabric'
     signal = next(s for s in ctx['signals'] if s['name'] == '/force force')
+    expected = np.stack([values, values + 1], axis=1)
     with np.load(ep / 'signals.npz') as arrays:
-        assert arrays[signal['key']].tobytes() == np.stack([values, values + 1], axis=1).astype(np.float32).tobytes()
+        np.testing.assert_array_equal(arrays[signal['key']], expected)
     retained = ctx['recorded_sensor_fields'][0]
     row = next(row for row in retained['mcap_field_inventory'] if row['topic'] == '/force')
     with np.load(ep / retained['recorded_mcap_fields']) as fields:
-        assert fields[row['fields']['force']].tobytes() == np.stack([values, values + 1], axis=1).tobytes()
+        assert fields[row['fields']['force']].dtype == expected.dtype
+        assert fields[row['fields']['force']].shape == expected.shape
+        assert fields[row['fields']['force']].tobytes() == expected.tobytes()
     assert {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()} == originals
 
 

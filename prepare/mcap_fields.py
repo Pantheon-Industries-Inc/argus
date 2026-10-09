@@ -1,4 +1,4 @@
-"""Retain typed native numeric leaves separately from judgment signal projections."""
+"""Retain native values and declared types separately from judgment signal projections."""
 from __future__ import annotations
 
 import json
@@ -11,12 +11,16 @@ PROTO_DTYPES = {1: 'float64', 2: 'float32', 3: 'int64', 4: 'uint64', 5: 'int32',
 
 
 def native_fields(message):
-    """Exact native path to numeric array, source dtype, shape and presence descriptor."""
+    """Exact native paths, values, source types, shapes and declared presence."""
     out = {}
 
     def add(path, value, dtype=None, present=True, dtype_source='decoded Python type'):
         array = np.asarray(value, dtype=dtype)
         out[path] = {'values': array, 'dtype': str(array.dtype), 'shape': list(array.shape),
+                     'present': present, 'dtype_source': dtype_source}
+
+    def text(path, value, present=True, dtype_source='decoded Python type'):
+        out[path] = {'values': None, 'dtype': 'string', 'shape': [], 'original': str(value),
                      'present': present, 'dtype_source': dtype_source}
 
     def walk(value, path=''):
@@ -29,6 +33,12 @@ def native_fields(message):
                 if field.type in PROTO_DTYPES:
                     add(key, list(cell) if field.is_repeated else cell,
                         PROTO_DTYPES[field.type], field.name in present, 'protobuf declaration')
+                elif field.type == 9:
+                    if field.is_repeated:
+                        for index, item in enumerate(cell):
+                            text(f'{key}[{index}]', item, True, 'protobuf declaration')
+                    else:
+                        text(key, cell, field.name in present, 'protobuf declaration')
                 elif field.message_type is not None and field.name in present:
                     if field.message_type.GetOptions().map_entry:
                         value_field = field.message_type.fields_by_name['value']
@@ -37,6 +47,8 @@ def native_fields(message):
                             if value_field.type in PROTO_DTYPES:
                                 add(entry_path, item, PROTO_DTYPES[value_field.type],
                                     True, 'protobuf declaration')
+                            elif value_field.type == 9:
+                                text(entry_path, item, True, 'protobuf declaration')
                             elif value_field.message_type is not None:
                                 walk(item, entry_path)
                     elif field.is_repeated:
@@ -56,6 +68,8 @@ def native_fields(message):
                              'shape': [], 'original': str(value), 'present': True}
         elif isinstance(value, (float, np.floating)):
             add(path, value, value.dtype if isinstance(value, np.floating) else 'float64')
+        elif isinstance(value, str):
+            text(path, value)
         elif isinstance(value, dict):
             for name, item in value.items():
                 walk(item, path + '.' + str(name) if path else str(name))

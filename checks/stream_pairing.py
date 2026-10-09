@@ -133,7 +133,19 @@ def unaligned(ep: dict) -> dict | None:
     state_unaligned: the camera it was recorded on was taken out, board/clips.py drop_cameras), so a check that compares
     the state with the video is not run on it; None otherwise."""
     why = ep["context"].get("state_unaligned")
-    return {"not_assessed": f"The recorded state is not on these cameras' frames. {why}"} if why else None
+    if why:
+        return {"not_assessed": f"The recorded state is not on these cameras' frames. {why}"}
+    if not me.plan(ep)["checks"]["camera_windows_match_state"]:
+        return {"not_assessed": "The recorded state does not match the anchor camera's frame window."}
+    return None
+
+
+def camera_alignment_reason(ep: dict, cam: str) -> str | None:
+    """An assumed camera or anchor clock cannot place this camera against recorded state motion."""
+    clocks = ep["context"].get("camera_clock") or {}
+    affected = [v for v in {cam, me.anchor(ep)} if v in clocks]
+    return (f"Camera placement for {', '.join(sorted(affected))} uses assumed presentation timing."
+            if affected else None)
 
 
 def pairing(ep_dir: Path) -> dict | None:
@@ -146,6 +158,9 @@ def pairing(ep_dir: Path) -> dict | None:
         return None
     if unaligned(ep):
         return unaligned(ep)
+    reasons = [camera_alignment_reason(ep, v) for v in ("left", "right")]
+    if any(reasons):
+        return {"not_assessed": " ".join(dict.fromkeys(r for r in reasons if r))}
     mapped = me.actor_views(ep)
     if set(mapped) != {"left", "right"}:
         return {"not_assessed": "The recorded actor identities do not establish one actor for each mounted camera."}
@@ -231,7 +246,11 @@ def jumps(ep_dir: Path) -> dict | None:
             ev = {"actor": name, "t_s": round(me.frame_time(ep, i + 1), 3), "step": round(float(st[i]), 2),
                   "unit": unit, "typical_p95": round(p95, 3), "dt_s": round(float(dts[i]), 3), "camera": cam}
             if cam is not None:
-                ev.update(_camera_at(ep, cam, i))
+                reason = camera_alignment_reason(ep, cam)
+                if reason:
+                    ev["not_assessed"] = reason
+                else:
+                    ev.update(_camera_at(ep, cam, i))
             events.append(ev)
     flagged = [e for e in events if e.get("visual_jump") is False]
     return {"events": events, "flagged": len(flagged) > 0,

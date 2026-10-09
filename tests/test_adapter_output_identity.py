@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from label import episode
 from prepare import formats
+from request_identity import assert_same_model_inputs
 from test_formats import _clip
 
 
@@ -82,7 +82,7 @@ def test_selected_openaoe_keeps_original_adapter_output_identity(tmp_path, first
     expected = full["episodes"][1]
     assert expected["episode_id"] == ("episode_raw_x_seg_1_2" if first_adapter else "episode_raw_x_seg_1")
     assert subset["episodes"][0]["episode_id"] == expected["episode_id"]
-    assert episode.build_request(subset_dir / expected["episode_id"]) == episode.build_request(full_dir / expected["episode_id"])
+    assert_same_model_inputs(subset_dir / expected["episode_id"], full_dir / expected["episode_id"])
 
 
 def test_galaxea_adapter_keeps_separate_normalized_output_names(tmp_path):

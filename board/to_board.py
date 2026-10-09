@@ -246,6 +246,15 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "operator_mistakes": labels.get("operator_mistakes") or [],
         "completion": completion,
         "tasks": tasks,
+        **({"evidence_inspection": finite(copy.deepcopy(result["evidence_inspection"]))}
+           if isinstance(result.get("evidence_inspection"), dict) and result["evidence_inspection"].get("version") == 1 else {}),
+        # Supplementary sensor analysis keeps its own model and source provenance.
+        **({"sensor_evidence": finite(copy.deepcopy(result["sensor_evidence"]))}
+           if isinstance(result.get("sensor_evidence"), dict) and result["sensor_evidence"].get("version") == 1 else {}),
+        **({"grip_evidence": finite(copy.deepcopy(result["grip_evidence"]))}
+           if isinstance(result.get("grip_evidence"), dict) and result["grip_evidence"].get("version") == 1 else {}),
+        **({"tactile_qc": finite(copy.deepcopy(result["tactile_qc"]))}
+           if isinstance(result.get("tactile_qc"), dict) and result["tactile_qc"].get("version") == 1 else {}),
         # the model's answer for each contact it was shown, the moments it saw a hand take hold of something no
         # recorded contact covers, and the strips it was shown (board/build.py joins them to the recording's contacts)
         **({"contacts_model": [c for c in labels.get("contacts") or [] if isinstance(c, dict)],

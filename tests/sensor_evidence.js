@@ -38,7 +38,7 @@ d = E.sensorEvidence({contacts_missing:[{t_s:3, hand:'left', object:'cup'},{t_s:
 assert.equal(d.moments.length, 1);
 assert.equal(E.activeSensorEvidence(d,3).headline, 'Visible grasp has no recorded contact');
 const depth = E.sensorEvidenceHtml(E.sensorEvidence({}), ['exo']);
-assert(depth.includes('No depth-specific finding in the saved annotation'));
+assert(!depth.includes('data-grip-finding=') && !depth.includes('Sensor findings'), 'depth availability alone cannot invent a sensor finding');
 assert(E.sensorEvidenceHtml(E.sensorEvidence({contacts:[c]}),[]).includes('Unloaded baseline unverified'));
 assert(depth.includes('Compare RGB and depth'));
 assert.equal(E.sensorEvidenceHtml(E.sensorEvidence({}), []), '', 'ordinary video-only pages remain unchanged');

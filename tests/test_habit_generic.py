@@ -181,6 +181,7 @@ def test_recorded_pose_has_no_undeclared_physical_robot_or_opening_range(tmp_pat
 def test_bare_indexed_positions_never_invent_joint_or_cartesian_axes(tmp_path, monkeypatch):
     root = tmp_path / 'recording'
     expected, _ = native(root, indexed=True)
+    original_sources = source_hashes(root)
     old_ep, old = converted(root, tmp_path / 'old', monkeypatch, legacy=True)
     new_ep, new = converted(root, tmp_path / 'generic', monkeypatch, legacy=False)
     assert old['state_kind'] == 'ee_pose'
@@ -188,8 +189,10 @@ def test_bare_indexed_positions_never_invent_joint_or_cartesian_axes(tmp_path, m
     assert 'indexed position' in new['state_note'].lower()
     descriptor = next(s for s in new['signals'] if s['name'] == 'observation.state')
     with np.load(old_ep / 'state.npz') as a, np.load(new_ep / 'signals.npz') as b, np.load(new_ep / 'state.npz') as raw:
-        assert a['state'].dtype == b[descriptor['key']].dtype == raw['state'].dtype == expected.dtype
-        assert a['state'].tobytes() == b[descriptor['key']].tobytes() == raw['state'].tobytes() == expected.tobytes()
+        assert a['state'].shape == raw['state'].shape == expected.shape
+        assert a['state'].dtype == raw['state'].dtype == expected.dtype
+        assert a['state'].tobytes() == raw['state'].tobytes() == expected.tobytes()
+        np.testing.assert_array_equal(b[descriptor['key']], expected)
     assert descriptor['names'] == [f'position_{i}' for i in range(14)]
     before, _ = prompt(old_ep)
     after, text = prompt(new_ep)
@@ -197,6 +200,7 @@ def test_bare_indexed_positions_never_invent_joint_or_cartesian_axes(tmp_path, m
     assert not episode._has_state(episode.load(new_ep), after['plan'])
     assert 'timebase' not in after['plan']['checks']
     assert 'RECORDED MOTION' not in text
+    assert source_hashes(root) == original_sources
 
 
 def test_publisher_only_notes_cannot_leave_previously_rendered_judgment_text(tmp_path):

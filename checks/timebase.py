@@ -267,13 +267,15 @@ def measure_folder(eps: Path) -> int:
         near = [x for x in run if all(y in run for y in range(min(x, e), max(x, e) + 1))]
         p = d / "context.json"
         ctx = json.loads(p.read_text())
+        before = dict(ctx)
         if len(near) >= 3 and m == m:
             ctx["timebase_neighbour_lag_frames"] = round(float(m), 3)
             n += 1
         else:
             ctx.pop("timebase_neighbour_lag_frames", None)
         ctx["timebase_neighbours_in_upload"] = len(near)
-        write_atomic(p, ctx, indent=1, default=str)
+        if ctx != before:
+            write_atomic(p, ctx, indent=1, default=str)
     return n
 
 

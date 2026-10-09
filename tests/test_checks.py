@@ -15,6 +15,7 @@ import pytest
 
 from checks import capture_qc, label_consistency, stream_pairing, timebase
 from label import episode as me
+from prepare import formats
 
 REPO = Path(__file__).resolve().parent.parent
 T = 120
@@ -97,10 +98,41 @@ def test_stream_pairing_swapped_streams(tmp_path):
     assert r["left_vs_right"] > 0.9 and r["right_vs_left"] > 0.9
 
 
+def test_assumed_wrist_clock_does_not_qualify_pairing_or_jump_video(tmp_path):
+    s, vL, vR = two_grippers(1)
+    s[60:, 0] += 0.10
+    s[60:, 7] += 0.10
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"exo": levels_for(vL), "left": levels_for(vL), "right": levels_for(vR)})
+    ctx = json.loads((d / "context.json").read_text())
+    sources = json.loads((d / "sources.json").read_text())
+    finished = formats.finish_episode(d, ctx, sources, state=s,
+                                      times={"exo": np.arange(T) / 30, "left": np.arange(T) / 30,
+                                             "right": np.zeros(T)}, nominal_fps=30)
+    assert "right" in finished["camera_clock"] and "exo" not in finished["camera_clock"]
+    assert finished["state_kind"] == "ee_pose"
+    assert "not_assessed" in stream_pairing.pairing(d)
+    jump = stream_pairing.jumps(d)
+    assert jump["flagged"] is True
+    assert any(e["actor"] == "left" and e.get("visual_jump") is False for e in jump["events"])
+    assert any(e["actor"] == "right" and "not_assessed" in e for e in jump["events"])
+    capture = {c["check"]: c for c in capture_qc.run_episode(d)["checks"]}
+    assert capture["nonfinite_signal"]["status"] == "clear"
+    assert all("right" in capture[c]["why"] for c in capture_qc.CAMERA_MOTION_CHECKS)
+
+
 def test_stream_pairing_needs_two_mounted_streams(tmp_path):
     s, vL, _ = two_grippers()
     d = write_episode(tmp_path / "episode_000000", s[:, :7], {"right": levels_for(vL)})
     assert stream_pairing.pairing(d) is None
+
+
+def test_stream_pairing_and_jumps_need_state_on_anchor_frames(tmp_path):
+    s, vL, vR = two_grippers()
+    d = write_episode(tmp_path / "episode_000000", s[:-1],
+                      {"left": levels_for(vL), "right": levels_for(vR)})
+    assert "not_assessed" in stream_pairing.pairing(d)
+    assert "not_assessed" in stream_pairing.jumps(d)
 
 
 # ---------------------------------------------------------------- recorded_jumps
@@ -203,6 +235,103 @@ def test_capture_qc_live_camera(tmp_path):
     r = capture_qc.run_episode(d)
     assert "video_frozen_run" not in {f["check"] for f in r["flags"]}
     assert r["source"] == capture_qc.SOURCE and r["version"] == capture_qc.VERSION
+
+
+def test_capture_qc_assumed_wrist_clock_skips_its_frozen_motion_comparison(tmp_path):
+    s, vL, vR = two_grippers(3)
+    frozen = vR.copy()
+    frozen[40:100] = 0.0
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": levels_for(vL), "right": levels_for(frozen)},
+                      camera_clock={"right": {"clock_problem": "repeated timestamps"}})
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    assert not any(f["check"] == "video_frozen_run" and f["camera"] == "right" for f in r["flags"])
+    assert listed["nonfinite_signal"]["status"] == "clear"
+    assert listed["video_extreme_exposure"]["status"] in ("clear", "fired")
+
+
+def test_capture_qc_state_window_mismatch_withholds_video_motion(tmp_path):
+    s, vL, vR = two_grippers(3)
+    frozen = vL.copy()
+    frozen[40:100] = 0.0
+    d = write_episode(tmp_path / "episode_000000", s[:-1],
+                      {"left": levels_for(frozen), "right": levels_for(vR)})
+    listed = {c["check"]: c for c in capture_qc.run_episode(d)["checks"]}
+    assert listed["camera_state_alignment_mismatch"]["status"] == "fired"
+    assert listed["video_frozen_run"]["status"] == "not_applicable"
+    assert listed["nonfinite_signal"]["status"] == "clear"
+
+
+def test_capture_qc_placeholder_pixels_are_missing_frames(tmp_path):
+    s, vL, vR = two_grippers(3)
+    levels = levels_for(vL)
+    levels[20:70] = 0
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": levels, "right": levels_for(vR)},
+                      placeholder_frames={"left": [[20, 69]]})
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    camera = r["metrics"]["cameras"]["left"]
+    assert camera["decoded"] == T - 50
+    assert camera["extreme_exposure_fraction"] == 0
+    assert listed["video_decode_frame_count_mismatch"]["status"] == "fired"
+    assert "left: 70 of 120 usable frames" in listed["video_extreme_exposure"]["why"]
+    assert "left:" in listed["video_duplicate_frames"]["why"]
+    assert "left:" in listed["visual_change_unexplained_by_action"]["why"]
+    assert not any(f["check"] == "video_extreme_exposure" and f["camera"] == "left" for f in r["flags"])
+
+
+def test_capture_qc_placeholder_anchor_run_maps_to_native_frame(tmp_path):
+    s, vL, vR = two_grippers(3)
+    levels = levels_for(vL)
+    levels[19] = 0
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": levels, "right": levels_for(vR)},
+                      placeholder_frames={"left": [[20, 24]]})
+    km = np.arange(T)
+    km[20:25] = 19
+    np.save(d / "kmap_left.npy", km)
+    sources = json.loads((d / "sources.json").read_text())
+    sources["left"]["kmap"] = "kmap_left.npy"
+    (d / "sources.json").write_text(json.dumps(sources))
+    camera = capture_qc.run_episode(d)["metrics"]["cameras"]["left"]
+    assert camera["decoded"] == T - 1
+    assert camera["extreme_exposure_fraction"] == 0
+
+
+def test_capture_qc_trimmed_all_placeholder_window_has_no_pixel_assessment(tmp_path):
+    s, vL, _ = two_grippers(3)
+    levels = levels_for(vL)
+    levels[:40] = 0
+    d = write_episode(tmp_path / "episode_000000", s[:, :7], {"left": levels},
+                      placeholder_frames={"left": [[0, 39]]})
+    formats.trim_episode(d, 1.0)
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    camera = r["metrics"]["cameras"]["left"]
+    assert camera["frames"] == 30 and camera["decoded"] == 0
+    assert camera["repeated_frame_fraction"] is None
+    assert camera["longest_still_run_s"] is None
+    assert listed["video_decode_frame_count_mismatch"]["status"] == "fired"
+    for check in ("video_extreme_exposure", "video_low_contrast", "video_duplicate_frames",
+                  "video_frozen_run", *capture_qc.CAMERA_MOTION_CHECKS):
+        assert listed[check]["status"] == "not_applicable", check
+
+
+def test_capture_qc_frozen_motion_needs_usable_pairs_on_aligned_camera(tmp_path):
+    s, _, vR = two_grippers(3)
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": np.zeros(T), "right": levels_for(vR)},
+                      placeholder_frames={"left": [[0, T - 1]]},
+                      camera_clock={"right": {"clock_problem": "repeated timestamps"}})
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    assert listed["video_decode_frame_count_mismatch"]["status"] == "fired"
+    frozen = listed["video_frozen_run"]
+    assert frozen["status"] == "not_applicable"
+    assert "left" in frozen["why"] and "right" in frozen["why"]
+    assert listed["video_extreme_exposure"]["status"] in ("clear", "fired")
 
 
 # ---------------------------------------------------------------- the command line
@@ -459,6 +588,24 @@ def test_neighbour_lag_in_one_collection_is_the_neighbours_median(tmp_path):
     timebase.measure_folder(tmp_path)
     ctx = json.loads((tmp_path / "episode_B_000002" / "context.json").read_text())
     assert abs(ctx["timebase_neighbour_lag_frames"] - 4.0) < 0.3
+
+
+def test_measure_folder_resume_preserves_context_identity(tmp_path):
+    from label.evidence_access import source_proof, same_source_proof
+    for i in range(4):
+        _tb_episode(tmp_path, f'episode_B_{i:06d}', i, 'collection_B', lag=4)
+    timebase.measure_folder(tmp_path)
+    ep = tmp_path / 'episode_B_000001'
+    path = ep / 'context.json'
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    ctx = json.loads(path.read_text())
+    proof = source_proof(ctx, ep)
+    timebase.measure_folder(tmp_path)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    assert same_source_proof(proof, ctx, ep)
+    assert not same_source_proof([None], ctx, ep)
+    path.write_text(path.read_text() + ' ')
+    assert same_source_proof(proof, json.loads(path.read_text()), ep) is False
 
 
 def test_a_one_arm_recorders_folder_builds_its_request(tmp_path):

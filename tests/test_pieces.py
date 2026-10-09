@@ -309,6 +309,32 @@ def _part_result(p: Path, action: str) -> dict:
                        "completion": {"task_completed": "success"}}}
 
 
+def test_stitch_keeps_distinct_untimed_issues_and_failed_rgb_receipts(tmp_path, monkeypatch):
+    job, src, parts = _three_parts(tmp_path, monkeypatch)
+    out = job / 'run' / 'out'
+    left = _part_result(parts[0], 'reach')
+    left['labels']['data_issues'] = [
+        {'category': 'sensor_problem', 'severity': 'medium', 'issue': 'left wrist is noisy'},
+        {'category': 'sensor_problem', 'severity': 'medium', 'issue': 'right wrist is noisy'}]
+    last = _part_result(parts[2], 'place')
+    last['labels']['data_issues'] = [{'category': 'sensor_problem', 'severity': 'medium',
+                                      'issue': 'left wrist is noisy'}]
+    (out / f'{parts[0].name}.json').write_text(json.dumps(left))
+    (out / f'{parts[2].name}.json').write_text(json.dumps(last))
+    failed = {'episode_dir': str(parts[1]), 'finish_reason': 'length', 'generation_id': 'paid-2',
+              'usage': {'prompt_tokens': 100, 'completion_tokens': 20, 'est_cost_usd': .3},
+              'decode_failed': [{'view': 'exo', 't0_s': 1.1, 't1_s': 1.2}]}
+    (out / f'failed_{parts[1].name}.json').write_text(json.dumps(failed))
+    pieces.stitch_run(job, src.parent, {src.name: [p.name for p in parts]}, tmp_path / 'final')
+    result = json.loads((tmp_path / 'final' / f'{src.name}.json').read_text())
+    assert [(x['issue'], x.get('parts')) for x in result['labels']['data_issues']] == [
+        ('left wrist is noisy', [1, 3]), ('right wrist is noisy', None)]
+    assert result['usage']['est_cost_usd'] == 1.3
+    assert result['usage']['prompt_tokens'] == 100
+    assert result['decode_failed'] == failed['decode_failed']
+    assert result['config']['pieces'][1]['generation_id'] == 'paid-2'
+
+
 def test_a_long_recording_with_a_part_that_failed_is_stitched_from_the_rest_with_the_gap_marked(tmp_path, monkeypatch):
     """Part 2's reply did not parse: the recording is stitched from parts 1 and 3, on its own clock, and the record
     names part 2 with its span and why, which the board flags as a data issue at that span."""
@@ -317,11 +343,14 @@ def test_a_long_recording_with_a_part_that_failed_is_stitched_from_the_rest_with
     out = job / "run" / "out"
     (out / f"{parts[0].name}.json").write_text(json.dumps(_part_result(parts[0], "reach")))
     (out / f"{parts[1].name}.json").write_text(json.dumps({"episode_dir": str(parts[1]), "parse_ok": False,
-                                                           "labels": {"_raw": "{oops", "_parse_error": "x"}}))
+                                                           "labels": {"_raw": "{oops", "_parse_error": "x"},
+                                                           "evidence_inspection": {"version": 1, "cost_usd": .12, "inspections": []}}))
     (out / f"{parts[2].name}.json").write_text(json.dumps(_part_result(parts[2], "place")))
     res = pieces.stitch_run(job, src.parent, {src.name: [p.name for p in parts]}, tmp_path / "final")
     assert res["stitched"] == 1 and res["incomplete"] == [src.name]
     r = json.loads((tmp_path / "final" / f"{src.name}.json").read_text())
+    assert r["evidence_inspection"]["cost_usd"] == .12
+    assert r["evidence_inspection"]["parts"][0]["part"] == 2
     pcs = [json.loads((p / "context.json").read_text())["piece"] for p in parts]
     assert r["parse_ok"] is True and [s["action"] for s in r["labels"]["timeline"]] == ["reach", "place"]
     assert r["labels"]["timeline"][1]["start_s"] == round(0.1 + pcs[2]["t0_s"], 3)
@@ -350,13 +379,17 @@ def test_a_long_recording_none_of_whose_parts_parsed_is_still_on_the_board(tmp_p
                                                                   "usage": {"completion_tokens": 64000}}))
     (out / f"{parts[1].name}.json").write_text(json.dumps({"episode_dir": str(parts[1]), "parse_ok": False,
                                                            "labels": {"_raw": "{", "_parse_error": "x"}}))
+    (out / f"noreply_{parts[2].name}.json").write_text(json.dumps({"no_reply": "decoder failed after inspection",
+        "evidence_inspection": {"version": 1, "cost_usd": .07, "status": "incomplete", "inspections": []}}))
     res = pieces.stitch_run(job, src.parent, {src.name: [p.name for p in parts]}, tmp_path / "final")
     assert res["stitched"] == 0 and res["unlabelled"] == [src.name]
     r = json.loads((tmp_path / "final" / f"{src.name}.json").read_text())
+    assert r["evidence_inspection"]["cost_usd"] == .07
+    assert r["evidence_inspection"]["parts"][0]["part"] == 3
     assert r["parse_ok"] is False and r["episode_dir"] == str(src)
     assert [g["why"] for g in r["stitched"]["missing"]] == [
         "the model's reply was cut off at the output limit", "the model's reply did not parse",
-        "the model gave no reply"]
+        "the model gave no reply (decoder failed after inspection)"]
     # the board says why for each part, never that the model's reply did not parse
     from board import build as board_build
     from board import to_board

@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from board import build as board_build
 from board import rules
@@ -18,6 +19,52 @@ from checks import timebase
 from test_formats import recorder_folder
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+@pytest.mark.parametrize('extra,cap,expected', [(False, 20.0, 'skipped'),
+                                                  (True, 20.0, 'success'),
+                                                  (True, .001, 'skipped')])
+def test_review_cli_raw_hdf_dictionary_gate(tmp_path, monkeypatch, extra, cap, expected):
+    import h5py
+    from review import __main__ as review_main
+    from label import dictionary, harness
+    upload = tmp_path / 'upload'
+    upload.mkdir()
+    with h5py.File(upload / 'recording.h5', 'w') as source:
+        source.attrs['fps'] = 10
+        source.create_dataset('timestamps', data=np.int64(1790000000000000000)
+                              + np.arange(12, dtype=np.int64) * 100000000)
+        camera = source.create_dataset('images/top', data=np.full((12, 36, 64, 3), 60, np.uint8))
+        if extra:
+            camera.attrs['calibration'] = 'fixture calibration'
+        source.create_dataset('observations/qpos', data=np.zeros((12, 14)))
+    job = tmp_path / 'job'
+    calls = []
+    def provider(content, model, reasoning, api_key, max_tokens, timeout):
+        paths = list((job / 'episodes').glob('episode_*'))
+        plan = dictionary.request_plan(dictionary.inventory(paths))
+        assert content == plan['content'] and max_tokens == plan['max_tokens']
+        calls.append(1)
+        ident = plan['field_ids'][0]
+        return {'choices': [{'message': {'content': json.dumps({'entries': [
+            {'id': ident, 'meaning': 'Reviewed recording descriptor', 'role': 'annotation'}]})}}],
+                'usage': {'cost': .01}}
+    class ReachedChecks(Exception):
+        pass
+    monkeypatch.setattr(harness, 'get_keys', lambda: ['sk-or-fixture'])
+    monkeypatch.setattr(harness, 'call_model_once', provider)
+    monkeypatch.setattr(review_main, 'run_step', lambda *a, **k: (_ for _ in ()).throw(ReachedChecks()))
+    monkeypatch.setattr(sys, 'argv', ['review', '--data', str(upload), '--rig', 'teleop_arms',
+                                      '--out', str(job), '--cap', str(cap)])
+    with pytest.raises(ReachedChecks):
+        review_main.main()
+    receipt = json.loads((job / 'dictionary_status.json').read_text())
+    assert receipt['status'] == expected
+    assert len(calls) == int(expected == 'success')
+    assert (job / 'dictionary.claim').exists() is (expected == 'success')
+    if expected == 'success':
+        ctx = json.loads(next((job / 'episodes').glob('episode_*/context.json')).read_text())
+        assert ctx['data_dictionary']['entries']
 
 
 def test_unknown_outcomes_and_severities_are_shown_as_unclear():

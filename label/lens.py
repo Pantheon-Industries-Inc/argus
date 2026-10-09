@@ -38,15 +38,16 @@ RADII = np.round(np.arange(0.50, 1.5001, 0.02), 2)   # ellipse radii, as fractio
 
 def thumb(im) -> np.ndarray:
     """A frame as a THUMB_W px wide 8-bit grey array, made from its SOURCE_W px copy (the narrowest grid cell, which
-    every request keeps), so a frame kept full size and one kept only at cell widths give the same thumbnail."""
+    every request keeps). Original dimensions set the aspect ratio even if cell resizing rounded its height."""
     from PIL import Image
     from label import frames as mf
+    width, height = im.width, im.height
     if isinstance(im, mf.Shrunk):
         im = im.by_width.get(SOURCE_W) or im.by_width[min(im.by_width)]
     else:
         im = mf.downscaled(im, SOURCE_W)
     g = im.convert("L")
-    h = max(2, int(round(g.height * THUMB_W / g.width)))
+    h = max(2, int(round(height * THUMB_W / width)))
     return np.asarray(g.resize((THUMB_W, h), Image.BOX), dtype=np.uint8)
 
 

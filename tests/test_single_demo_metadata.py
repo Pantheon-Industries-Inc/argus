@@ -20,9 +20,10 @@ def _single_demo(root):
     with h5py.File(path, 'w') as h:
         h.attrs['serial'] = 'test recorder'
         h.create_dataset('calibration/extrinsics', data=np.eye(4, dtype=np.float64))
+        h.create_dataset('calibration/covariance', data=np.arange(64, dtype=np.float64).reshape(8, 8))
         demo = h.create_group('data/demo_0')
         demo.attrs['fps'] = 25
-        demo.attrs['task'] = 'pick up the test block'
+        demo.attrs['task'] = np.array([b'pick up the test block'])
         demo.attrs['operator_note'] = 'camera stayed fixed'
         demo.create_dataset('timestamps', data=clock).attrs['units'] = 'ns'
         demo.create_dataset('images/cam_high', data=frames)
@@ -59,8 +60,11 @@ def test_a_single_demo_keeps_camera_clock_state_and_original_bytes(tmp_path):
         assert saved['state'].tobytes() == state.tobytes()
     aux = next(s for s in ctx['signals'] if s['name'] == 'aux_sensor')
     with np.load(ep / 'signals.npz') as saved:
-        assert saved[aux['key']].dtype == sensor.dtype and saved[aux['key']].shape == sensor.shape
-        assert saved[aux['key']].tobytes() == sensor.tobytes()
+        np.testing.assert_array_equal(saved[aux['key']], sensor)
+    with h5py.File(source, 'r') as native:
+        retained = native['data/demo_0/aux_sensor'][()]
+        assert retained.dtype == sensor.dtype and retained.shape == sensor.shape
+        assert retained.tobytes() == sensor.tobytes()
     with av.open(str(ep / 'exo.mp4')) as video:
         decoded = [f.to_ndarray(format='rgb24') for f in video.decode(video=0)]
     assert len(decoded) == len(frames)
@@ -78,12 +82,65 @@ def test_a_single_recorded_demo_keeps_its_local_rate_task_and_notes(tmp_path):
     ep, ctx = _convert(root, tmp_path / 'prepared')
     assert ctx.get('instruction') == 'pick up the test block'
     assert ctx['source']['group'] == 'data/demo_0'
-    assert ctx['uploader_notes']['episode attribute fps'] == 25
+    assert ctx['fps'] == 25
+    from label import episode, evidence_access
+    access = evidence_access.Access(episode.load(ep))
+    field = next(f for f in access.inventory()
+                 if f['name'] == 'HDF5 recording data/demo_0 attribute fps')
+    assert access.inspect({'field_id': field['id'], 'mode': 'metadata'})['value'] == 25
     assert ctx['uploader_notes']['episode attribute operator_note'] == 'camera stayed fixed'
-    assert ctx['uploader_notes']['file calibration/extrinsics'] == np.eye(4).ravel().tolist()
+    assert ctx['uploader_notes']['file calibration/extrinsics'] == np.eye(4).tolist()
+    assert ctx['uploader_notes']['file calibration/covariance'] == np.arange(64).reshape(8, 8).tolist()
     with h5py.File(source, 'r') as h:
         assert formats.h5_fps(h, ctx['source']['group']) == 25
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original
+
+
+def test_original_metadata_is_selectable_without_copying_other_episode_data(tmp_path):
+    from label import episode, evidence_access
+    root = tmp_path / 'upload'
+    source, _, _, _, _ = _single_demo(root)
+    with h5py.File(source, 'a') as h:
+        h.create_dataset('calibration/response_table', data=np.arange(8192, dtype=np.uint64).reshape(128, 64) + 2**63)
+        h.create_dataset('calibration/no_readings', dtype='f8')
+        h.attrs['no_calibration'] = h5py.Empty('f8')
+        h.create_dataset('data/demo_0/sensor_setup/response_table', data=np.arange(8192, dtype=np.float64).reshape(128, 64))
+        h['data/demo_0'].attrs['reference_table'] = np.arange(5120, dtype=np.int64).reshape(80, 64)
+        h['data/demo_0'].attrs['calibration_record'] = np.array([(2.5, 7)], dtype=[('scale', 'f8'), ('revision', 'i8')])
+        h.copy('data/demo_0', 'data/demo_1')
+        h['data/demo_1'].attrs['operator_note'] = 'another recording'
+    original = hashlib.sha256(source.read_bytes()).hexdigest()
+    prepared = tmp_path / 'prepared'
+    report = formats.convert(root, 'teleop_arms', prepared, 'test', 900)
+    assert not report['failed'] and len(report['episodes']) == 2
+    epdir = prepared / report['episodes'][0]['episode_id']
+    access = evidence_access.Access(episode.load(epdir))
+    fields = access.inventory()
+    absent = next(f for f in fields if f['name'] == 'HDF5 file calibration/no_readings')
+    assert absent['kind'] == 'unreadable' and not absent.get('available_modes')
+    absent_attribute = next(f for f in fields if f['name'] == 'HDF5 file / attribute no_calibration')
+    assert absent_attribute['kind'] == 'unreadable'
+    response = next(f for f in fields if f['name'] == 'HDF5 file calibration/response_table')
+    attribute = next(f for f in fields if f['name'] == 'HDF5 recording data/demo_0 attribute reference_table')
+    setup = next(f for f in fields if f['name'] == 'HDF5 recording data/demo_0/sensor_setup/response_table')
+    assert access.inspect({'field_id': setup['id'], 'mode': 'metadata', 'pointer': '/127/63'})['value'] == 8191
+    assert not any('demo_1' in f['name'] for f in fields)
+    with pytest.raises(ValueError, match='pointer'):
+        access.inspect({'field_id': response['id'], 'mode': 'metadata'})
+    result = access.inspect({'field_id': response['id'], 'mode': 'metadata', 'pointer': '/127/63'})
+    assert result['value'] == 2**63 + 8191 and 'times_s' not in result
+    assert result['exact_metadata_values'] == [{'pointer': '', 'decimal': str(2**63 + 8191)}]
+    assert access.inspect({'field_id': attribute['id'], 'mode': 'metadata', 'pointer': '/70/5'})['value'] == 4485
+    calibration = next(f for f in fields if f['name'].endswith('demo_0 attribute calibration_record'))
+    assert access.inspect({'field_id': calibration['id'], 'mode': 'metadata', 'pointer': '/0/scale'})['value'] == 2.5
+    with pytest.raises(ValueError, match='pointer'):
+        access.inspect({'field_id': attribute['id'], 'mode': 'metadata', 'pointer': '/-1/5'})
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == original
+    assert not (epdir / source.name).exists()
+    with h5py.File(source, 'a') as h:
+        h.attrs['changed'] = True
+    with pytest.raises(ValueError, match='changed'):
+        access.inspect({'field_id': response['id'], 'mode': 'metadata', 'pointer': '/127/63'})
 
 
 @pytest.mark.parametrize('name', ['sensor', 'camera', 'observations'])

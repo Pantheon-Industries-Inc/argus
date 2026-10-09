@@ -7,6 +7,7 @@ import pytest
 
 from label import episode
 from prepare import formats
+from request_identity import assert_same_model_inputs
 from test_formats import _clip
 
 
@@ -43,7 +44,7 @@ def test_selected_video_take_keeps_the_whole_original_request(tmp_path, layout, 
     original_row = next(item for item in full["episodes"] if item["name"].endswith("ep01"))
     assert row["name"] == original_row["name"]
     assert row["episode_id"] == original_row["episode_id"]
-    assert episode.build_request(subset / row["episode_id"]) == episode.build_request(whole / row["episode_id"])
+    assert_same_model_inputs(subset / row["episode_id"], whole / row["episode_id"])
 
 
 def test_selected_same_stem_hdf_keeps_its_original_output_identity(tmp_path):
@@ -68,7 +69,7 @@ def test_selected_same_stem_hdf_keeps_its_original_output_identity(tmp_path):
     row = report["episodes"][0]
     original_row = full["episodes"][1]
     assert row["episode_id"] == original_row["episode_id"]
-    assert episode.build_request(subset / row["episode_id"]) == episode.build_request(whole / row["episode_id"])
+    assert_same_model_inputs(subset / row["episode_id"], whole / row["episode_id"])
 
 
 def test_normalized_mcap_names_keep_both_recordings(tmp_path):
@@ -117,7 +118,7 @@ def test_selected_recording_keeps_original_fixed_window_packaging(tmp_path, kind
     row = report["episodes"][0]
     expected = full["episodes"][0]
     assert report.get("packaging") == full.get("packaging")
-    assert episode.build_request(subset / row["episode_id"]) == episode.build_request(whole / expected["episode_id"])
+    assert_same_model_inputs(subset / row["episode_id"], whole / expected["episode_id"])
 
 
 def test_subset_cannot_turn_original_unmatched_depth_into_a_paired_model_camera(tmp_path):
@@ -138,7 +139,7 @@ def test_subset_cannot_turn_original_unmatched_depth_into_a_paired_model_camera(
     report = formats.convert(chosen, "ego_head", subset, "identity", 900, ownership_context=context)
     row = report["episodes"][0]
     expected = full["episodes"][1]
-    assert episode.build_request(subset / row["episode_id"]) == episode.build_request(whole / expected["episode_id"])
+    assert_same_model_inputs(subset / row["episode_id"], whole / expected["episode_id"])
 
 
 

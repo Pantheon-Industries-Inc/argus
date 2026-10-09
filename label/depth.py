@@ -49,7 +49,7 @@ def load(ep_dir: Path) -> dict:
 
 
 def decode(entry: dict, pts_all, idx: list[int]) -> dict:
-    """{index: uint16 array} for the depth frames idx (indices into the stream), each found at its exact pts. A frame
+    """{index: original depth array} for frames idx, each found at its exact pts. A frame
     that is not found, or that the decoder fails on (a damaged stretch of the video), is left out, never replaced by
     a neighbour, and the other frames are read as usual."""
     import av
@@ -69,7 +69,7 @@ def decode(entry: dict, pts_all, idx: list[int]) -> dict:
                     if fr.pts is None:
                         continue
                     if fr.pts in want and want[fr.pts] not in out:
-                        out[want[fr.pts]] = _array(fr)
+                        out[want[fr.pts]] = _array(fr, entry)
                     if fr.pts >= p:
                         break
             except av.error.FFmpegError as e:
@@ -78,13 +78,28 @@ def decode(entry: dict, pts_all, idx: list[int]) -> dict:
     return out
 
 
-def _array(fr) -> np.ndarray:
+def _array(fr, entry: dict | None = None) -> np.ndarray:
     name = fr.format.name
     if name.startswith("gray16") or name.startswith("gray12") or name.startswith("gray10"):
-        return fr.to_ndarray().astype(np.uint16)
-    if name in ("gray", "gray8"):
-        return fr.to_ndarray().astype(np.uint16)
-    return fr.to_ndarray(format="gray16le").astype(np.uint16)
+        a = fr.to_ndarray().astype(np.uint16)
+    elif name in ("gray", "gray8"):
+        a = fr.to_ndarray().astype(np.uint16)
+    else:
+        a = fr.to_ndarray(format="gray16le").astype(np.uint16)
+    storage = (entry or {}).get('storage') or {}
+    if not storage:
+        return a
+    if storage.get('encoding') != 'uint16_bitplanes':
+        raise ValueError('Unsupported depth storage encoding')
+    dtype = np.dtype(storage['dtype'])
+    if dtype.kind not in 'iuf' or dtype.itemsize not in (2, 4, 8):
+        raise ValueError('Unsupported stored depth dtype')
+    height, width = storage['shape']
+    planes = dtype.itemsize // 2
+    if a.shape != (height * planes, width):
+        raise ValueError('Depth bitplanes do not match the recorded image shape')
+    words = np.ascontiguousarray(a.reshape(planes, height, width).transpose(1, 2, 0), dtype='<u2')
+    return words.view(dtype).reshape(height, width)
 
 
 def at_anchor(ep: dict, depth: dict, view: str, ks: list[int]) -> dict:
@@ -105,6 +120,40 @@ def valid(a: np.ndarray) -> np.ndarray:
     if a.dtype == np.uint16:
         ok &= a != 65535
     return ok
+
+
+def region(a: np.ndarray, roi) -> dict:
+    """Statistics of a fixed image region, excluding absent sensor readings."""
+    if not isinstance(roi, list) or len(roi) != 4 or any(type(v) not in (int, float) or not np.isfinite(v)
+            for v in roi) or not (0 <= roi[0] < roi[2] <= 1 and 0 <= roi[1] < roi[3] <= 1):
+        raise ValueError('roi must be [left, top, right, bottom] fractions of the depth image')
+    h, w = a.shape
+    left, top = int(roi[0] * w), int(roi[1] * h)
+    right, bottom = max(left + 1, int(roi[2] * w)), max(top + 1, int(roi[3] * h))
+    crop = a[top:bottom, left:right]
+    readings = crop[valid(crop)]
+    return {'roi': roi, 'pixels': [left, top, right, bottom], 'valid_fraction': float(valid(crop).mean()),
+            'valid_pixels': int(len(readings)), 'total_pixels': int(crop.size),
+            'percentiles_stored': np.percentile(readings, [10, 50, 90]).tolist() if len(readings) else [None] * 3}
+
+
+def metric_scale(entry: dict):
+    """A stored disparity scale is not a conversion to metric depth."""
+    scale = entry.get('scale_m')
+    return scale if entry.get('kind') != 'disparity' and type(scale) in (int, float) and np.isfinite(scale) and scale > 0 else None
+
+
+def spatial_grid(a: np.ndarray, entry: dict) -> dict:
+    """Small spatial overview in depth-image coordinates, without RGB registration or object tracking."""
+    medians, fractions = [], []
+    scale = metric_scale(entry)
+    for y in range(6):
+        cells = [region(a, [x / 8, y / 6, (x + 1) / 8, (y + 1) / 6]) for x in range(8)]
+        medians.append([r['percentiles_stored'][1] * (scale or 1) if r['valid_pixels'] else None for r in cells])
+        fractions.append([r['valid_fraction'] for r in cells])
+    return {'rows': 6, 'columns': 8, 'medians': medians, 'valid_fractions': fractions,
+            'unit': 'm' if scale else None, 'coordinate_frame': 'depth image, top-left origin',
+            'operation': 'median of valid pixels per fixed cell; not tracked objects or surface clearance'}
 
 
 def scale_range(frames) -> tuple[float, float] | None:
@@ -139,10 +188,11 @@ def picture(a: np.ndarray, entry: dict, rng: tuple[float, float] | None = None):
     from PIL import Image
     a = np.asarray(a)
     ok = valid(a)
-    x = a.astype(np.float64)
+    x = np.where(ok, a, 0).astype(np.float64)
     disparity = entry.get("kind") == "disparity"
-    if entry.get("scale_m") and not disparity:
-        rgb = _ramp(metric_position(x * float(entry["scale_m"])))
+    scale = metric_scale(entry)
+    if scale:
+        rgb = _ramp(metric_position(x * scale))
     else:
         lo, hi = entry.get("range") or rng or (scale_range([a]) or (0.0, 1.0))
         t = np.clip((x - lo) / max(hi - lo, 1e-9), 0, 1)
@@ -156,10 +206,34 @@ def colorize(a: np.ndarray, rng: tuple[float, float], scale_m: float | None = No
     return picture(a, {"scale_m": scale_m, "range": rng})
 
 
+def mark_regions(image, regions: list, source_shape):
+    """Number measured source-pixel regions on a preview, without changing depth values."""
+    from PIL import ImageDraw
+    image = image.copy()
+    draw = ImageDraw.Draw(image)
+    height, width = source_shape
+    sx, sy = image.width / width, image.height / height
+    for number, region in enumerate(regions, 1):
+        left, top, right, bottom = region['pixels']
+        box = (int(left * sx), int(top * sy), min(image.width - 1, int(right * sx) - 1),
+               min(image.height - 1, int(bottom * sy) - 1))
+        box = (box[0], box[1], max(box[0], box[2]), max(box[1], box[3]))
+        draw.rectangle(box, outline='black', width=3)
+        draw.rectangle(box, outline='white', width=1)
+        text = f'R{number}'
+        bounds = draw.textbbox((0, 0), text)
+        tw, th = bounds[2] - bounds[0], bounds[3] - bounds[1]
+        x = max(0, min(box[0], image.width - tw - 4))
+        y = max(0, box[1] - th - 5)
+        draw.rectangle((x, y, x + tw + 3, y + th + 3), fill='black')
+        draw.text((x + 2 - bounds[0], y + 1 - bounds[1]), text, fill='white')
+    return image
+
+
 def legend(entry_or_rng, scale_m: float | None = None) -> str:
     """The words for a camera's depth colours."""
     entry = entry_or_rng if isinstance(entry_or_rng, dict) else {"scale_m": scale_m}
-    if entry.get("scale_m"):
+    if metric_scale(entry):
         return (f"metric: one fixed scale in every episode, dark red {METRIC_NEAR_M:g} m, orange 0.3 m, yellow 0.5 m, "
                 f"green 1 m, light blue 3 m, dark blue {METRIC_FAR_M:g} m (a log scale), black no reading")
     return ("red near to blue far, relative to this camera's readings across the upload (the recording does not say "
@@ -168,7 +242,7 @@ def legend(entry_or_rng, scale_m: float | None = None) -> str:
 
 def legend_ticks(entry: dict) -> list[tuple[float, str]]:
     """[(position 0..1 along the colour bar, far to near, label)] for a camera's depth colours."""
-    if entry.get("scale_m") and entry.get("kind") != "disparity":
+    if metric_scale(entry):
         return [(float(1.0 - metric_position(np.array(m))), f"{m:g} m") for m in METRIC_TICKS_M]
     return [(0.0, "far"), (1.0, "near")]
 

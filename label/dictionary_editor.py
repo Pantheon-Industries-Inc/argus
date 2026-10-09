@@ -73,7 +73,8 @@ def context_dictionary(overlay: dict) -> dict:
     """Project an already scoped reader overlay without its private human attribution."""
     result = {k: copy.deepcopy(overlay[k]) for k in
               ('schema', 'inventory_digest', 'episode_id', 'status', 'model', 'fields', 'entries',
-               'machine_entries', 'limitations', 'override_limitations', 'missing_fields') if k in overlay}
+               'machine_entries', 'limitations', 'override_limitations', 'missing_fields',
+               'request_field_ids', 'deferred_fields') if k in overlay}
     for field in result.get('fields', []):
         for key in ('source', 'bindings', 'limitations'):
             if key in field:
@@ -93,7 +94,7 @@ def public_dictionary(job: Path, episode_id: str | None = None) -> dict:
     resolved = effective(record, overrides)
     fields = [{k: _source(f[k]) if k in ('source', 'bindings', 'limitations') else copy.deepcopy(f[k])
                for k in ('id', 'name', 'kind', 'shape', 'dtype', 'names', 'rate_hz', 'source', 'episodes',
-                         'bindings', 'summary', 'limitations') if k in f}
+                         'bindings', 'summary', 'limitations', 'unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description') if k in f}
               for f in record['inventory']['fields'] if episode_id is None or episode_id in (f.get('episodes') or [])]
     ids = {f['id'] for f in fields}
     history = _history([row for row in overrides['history']
@@ -106,6 +107,8 @@ def public_dictionary(job: Path, episode_id: str | None = None) -> dict:
             'after_labelling': any(row.get('after_labelling') is True for row in history),
             'limitations': _source(list(record.get('limitations') or []) + list(resolved.get('override_limitations') or [])),
             'missing_fields': [k for k in resolved.get('missing_fields', []) if k in ids],
+            **{key: [ident for ident in record[key] if ident in ids]
+               for key in ('request_field_ids', 'deferred_fields') if key in record},
             'unknown_entries': len(record.get('unknown_entries') or []),
             'damaged_entries': len(record.get('damaged_entries') or []), 'editable': False}
 

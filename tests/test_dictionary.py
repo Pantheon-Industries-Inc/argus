@@ -278,7 +278,7 @@ def test_request_limit_keeps_full_inventory_and_failure_cache_without_dispatch(t
 
 def test_receipt_write_failure_after_dispatch_keeps_claim_and_unknown_failure_cost(tmp_path, monkeypatch):
     from label import dictionary as dd
-    ep = episode(tmp_path, "one", [])
+    ep = episode(tmp_path, "one", [], extra={"recorded_metadata": {"operator_note": "recorded"}})
     calls = []
     def fake(*args, **kwargs):
         calls.append(1)

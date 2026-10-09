@@ -12,6 +12,7 @@ import pytest
 from label import episode
 from prepare import formats
 from test_adapter_output_identity import original_context
+from request_identity import assert_same_model_inputs
 from test_formats import _clip
 
 
@@ -35,7 +36,7 @@ def test_root_openaoe_identity_survives_a_different_selected_input_folder(tmp_pa
     expected = full["episodes"][0]["episode_id"]
     assert expected == "episode_root_clip_original"
     assert subset["episodes"][0]["episode_id"] == expected
-    assert episode.build_request(subset_dir / expected) == episode.build_request(full_dir / expected)
+    assert_same_model_inputs(subset_dir / expected, full_dir / expected)
 
 
 @pytest.mark.parametrize("suffix", ["tbz", "tbz2", "tar.bz2"])
@@ -81,7 +82,7 @@ def test_a_note_named_for_original_root_stays_shared_after_subset_selection(tmp_
         expected = next(r for r in full["episodes"] if r["episode_id"] == row["episode_id"])
         assert expected["instruction"] == "the original folder task"
         assert row["instruction"] == expected["instruction"]
-        assert episode.build_request(subset_dir / row["episode_id"]) == episode.build_request(full_dir / row["episode_id"])
+        assert_same_model_inputs(subset_dir / row["episode_id"], full_dir / row["episode_id"])
 
 
 @pytest.mark.parametrize("name", [None, "", ".", "..", "other/root", "other\\root", "\x00", 42])
@@ -120,7 +121,7 @@ def test_specific_group_task_outranks_shared_root_with_a_container_basename(tmp_
         assert ctx["uploader_notes"]["a.json"]["note"] == "original root note"
     for row in subset["episodes"]:
         name = row["episode_id"]
-        assert episode.build_request(subset_dir / name) == episode.build_request(whole_dir / name)
+        assert_same_model_inputs(subset_dir / name, whole_dir / name)
 
 
 def test_shared_root_task_disagreement_is_not_hidden_by_a_container_alias(tmp_path):
@@ -200,7 +201,7 @@ def test_single_video_episode_folder_keeps_its_primary_json_task_after_selection
     name = whole["episodes"][0]["episode_id"]
     assert whole["episodes"][0]["instruction"] == "pour the tea"
     assert subset["episodes"][0]["instruction"] == "pour the tea"
-    assert episode.build_request(subset_dir / name) == episode.build_request(whole_dir / name)
+    assert_same_model_inputs(subset_dir / name, whole_dir / name)
 
 
 def test_root_openaoe_does_not_guess_identity_when_context_omits_root_name(tmp_path):
@@ -255,4 +256,4 @@ def test_public_folder_cli_accepts_the_current_or_parent_upload_folder(tmp_path,
     assert not report['failed'] and len(report['episodes']) == len(expected['episodes']) == 4
     for row in report['episodes']:
         name = row['episode_id']
-        assert episode.build_request(output / name) == episode.build_request(expected_dir / name)
+        assert_same_model_inputs(output / name, expected_dir / name, cli_stamp=True)

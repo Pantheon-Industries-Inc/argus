@@ -412,6 +412,10 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     from prepare.formats import clock_context
     ctx = clock_context(ctx)
     d["_rig"] = ctx.get("profile")
+    mounting = {view: camera['mounting'] for view, camera in (ctx.get('cameras') or {}).items()
+                if camera.get('mounting')}
+    if mounting:
+        d['camera_mounting'] = mounting
     if ctx.get("dataset") in SOURCES:
         d["dataset_source"] = SOURCES[ctx["dataset"]]
     # the sampled timesteps end before the last frame and are sparse in still spans, so the length comes from
@@ -447,13 +451,6 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     rn = reader_notes(ctx)
     if rn:
         d["reader_notes"] = rn
-    from label.dictionary_editor import for_episode, context_dictionary
-    owner = (ctx.get('piece') or {}).get('of') or (ctx.get('data_dictionary') or {}).get('episode_id')
-    dictionary = for_episode(ep_dir, owner)
-    if dictionary is None and isinstance(ctx.get('data_dictionary'), dict):
-        dictionary = context_dictionary(ctx['data_dictionary'])
-    if dictionary is not None:
-        d["data_dictionary"] = dictionary
     # the cameras the model is not shown, which board clips cut like any other (board/clips.py unshown_views): the page
     # plays each, named as not shown to the model, with why; one board clips could not cut (record_unshown) has no
     # clip, so it is left out of what the page plays and of its note, and its problem stays on the episode
@@ -465,6 +462,19 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     if unshown:
         d["unshown_cameras"] = unshown
     add_contacts(d, ctx, result)
+    if ctx.get('signals') and (Path(ep_dir) / 'signals.npz').exists():
+        from checks.tactile_quality import for_episode
+        try:
+            # Preserve reviewed saved warnings until explicitly refreshed.
+            if 'tactile_qc' not in d:
+                d['tactile_qc'] = for_episode(Path(ep_dir), d.get('contacts') or [],
+                                            ((result or {}).get('contact_views') or {}).get('strips') or {})
+        except (OSError, ValueError, KeyError) as error:
+            if 'tactile_qc' not in d:
+                d['tactile_qc'] = {'version': 1, 'warnings': [],
+                                   'checks': {'readings': 'errored'}, 'error': type(error).__name__}
+    from board.dictionary_projection import apply as apply_dictionary
+    apply_dictionary(d, ctx, ep_dir)
 
 
 UPLOADER_LIST_MAX = 24       # a list of more numbers than this (a calibration matrix is 16) is summarised by its length
@@ -498,7 +508,7 @@ def uploader_groups(notes, start_s, dur_s) -> list[dict]:
         if isinstance(x, dict):
             for k, v in x.items():
                 flat(v, path + [str(k)], out)
-        elif isinstance(x, list) and x and all(isinstance(i, (dict, list)) for i in x):
+        elif isinstance(x, list) and x and any(isinstance(i, dict) for i in x):
             for i, v in enumerate(x):
                 flat(v, path + [str(i + 1)] if len(x) > 1 else path, out)
         else:
@@ -592,7 +602,7 @@ def normalize_enums(x, key: str | None = None):
 # the episode's context a comparison label carries from the board's own label, so the page lays out the same player
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
-                "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels",
+                "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels", "camera_mounting",
                 "timesteps_s", "task_label", "reader_notes", "unshown_cameras", "data_dictionary")
 
 

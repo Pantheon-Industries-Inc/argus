@@ -329,6 +329,48 @@ def test_one_undecodable_image_keeps_the_state_and_a_frame_for_every_row(tmp_pat
     assert abs(bad["t0_s"] - 10 / 30) < 0.01 and abs(bad["t1_s"] - 11 / 30) < 0.01, bad
 
 
+def test_embedded_images_and_state_use_the_same_sparse_row_order(tmp_path):
+    import pandas as pd
+    import av
+    root = tmp_path / "lr"
+    _lerobot_images(root, n=3)
+    data = root / "data/chunk-000/episode_000000.parquet"
+    df = pd.read_parquet(data)
+    df["frame_index"] = [0, 2, 3]
+    df["observation.state"] = [np.full(14, k, np.float32) for k in (10, 20, 30)]
+    df.to_parquet(data)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _ctx(tmp_path / "eps", rep)
+    ep = tmp_path / "eps" / ctx["episode_id"]
+    np.testing.assert_array_equal(np.load(ep / "state.npz")["state"][:, 0], [10, 20, 30])
+    with av.open(str(ep / "exo.mp4")) as clip:
+        shades = [frame.to_ndarray(format="rgb24").mean() for frame in clip.decode(video=0)]
+    assert len(shades) == 3 and shades[0] < shades[1] < shades[2]
+
+
+def test_embedded_image_nonfinite_source_clock_uses_assumed_presentation(tmp_path):
+    import pandas as pd
+    root = tmp_path / "lr"
+    _lerobot_images(root, n=12)
+    data = root / "data/chunk-000/episode_000000.parquet"
+    df = pd.read_parquet(data)
+    df.loc[4, "timestamp"] = np.nan
+    df.loc[7, "timestamp"] = np.inf
+    df.to_parquet(data)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _ctx(tmp_path / "eps", rep)
+    ep = tmp_path / "eps" / ctx["episode_id"]
+    assert ctx["n_state_frames"] == 12 and ctx["state_kind"] == "none"
+    assert ctx["state_why"] == "assumed_clock" and any(s["name"] == "recorded state" for s in ctx["signals"])
+    assert _issues(ctx, "camera_timestamp_invalid")
+    with np.load(ep / "recorded_container_times.npz") as raw:
+        assert np.isnan(raw["timestamp"][4]) and np.isposinf(raw["timestamp"][7])
+    with np.load(ep / "times.npz") as times:
+        assert np.isnan(times["exo"][4]) and np.isposinf(times["exo"][7])
+
+
 def test_an_hdf5_camera_with_an_undecodable_frame_keeps_its_rows_on_their_frames(tmp_path):
     """An HDF5 camera of encoded JPEGs with frame 4 garbage had lost that frame, so every state row after it was one
     frame early. The frame is written blank, the state stays one row per frame, and the frame is flagged."""
@@ -350,6 +392,31 @@ def test_an_hdf5_camera_with_an_undecodable_frame_keeps_its_rows_on_their_frames
     (bad,) = _issues(ctx, "frames_not_decodable")
     assert bad["camera"].endswith("cam_high") and abs(bad["t0_s"] - 4 / 30) < 0.01, bad
     assert ctx["placeholder_frames"] == {"exo": [[4, 4]]}, ctx.get("placeholder_frames")
+
+
+def test_hdf_uint64_clock_reset_keeps_signed_capture_step(tmp_path):
+    import h5py
+    root = tmp_path / "h5"
+    root.mkdir()
+    stamps = np.array([1_700_000_000_000_000_000,
+                       1_699_999_999_966_666_667,
+                       1_699_999_999_983_333_334,
+                       1_700_000_000_016_666_667], dtype=np.uint64)
+    with h5py.File(root / "episode_0.hdf5", "w") as h:
+        h.attrs["fps"] = 30
+        h.create_dataset("timestamps", data=stamps).attrs["units"] = "ns"
+        h.create_dataset("images/top", data=np.stack([
+            np.full((48, 64, 3), 30 + 30 * k, np.uint8) for k in range(len(stamps))]))
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"], rep
+    ctx = _ctx(tmp_path / "eps", rep)
+    ep = tmp_path / "eps" / ctx["episode_id"]
+    with np.load(ep / "recorded_container_times.npz") as raw:
+        np.testing.assert_array_equal(raw["timestamps"], stamps)
+    with np.load(ep / "times.npz") as times:
+        assert abs(times["exo"][1] + 1 / 30) < 1e-6
+        assert abs(times["exo"][2] + 1 / 60) < 1e-6
+    assert _issues(ctx, "camera_timestamp_invalid")
 
 
 def test_a_placeholder_frame_is_never_shown_to_the_model_as_footage(tmp_path):
@@ -523,6 +590,31 @@ def test_an_mcap_whose_only_camera_is_depth_is_labelled_from_its_depth_picture(t
     assert [i["camera"] for i in _issues(ctx, "camera_not_colour")] == ["/camera/front/depth"]
     assert ctx["state_kind"] == "joints" and ctx["n_state_frames"] == 30
     assert f.probe(tmp_path / "eps" / ctx["episode_id"] / "exo.mp4")["width"] == 64
+    from label import depth as dp, episode as me
+    ep = me.load(tmp_path / 'eps' / ctx['episode_id'])
+    pixels = dp.at_anchor(ep, ep['depth'], 'exo', [0, 29])
+    assert pixels[0].dtype == np.uint16
+    assert int(pixels[29][0, 0]) == 1190
+    # ROS compressed float depth stores inverse readings plus reconstruction parameters.
+    import io, struct
+    from PIL import Image
+    compressed = tmp_path / 'compressed_depth'
+    compressed.mkdir()
+    def compressed_depth(row):
+        inverse = np.full((48, 64), 900 + 10 * row, np.uint16)
+        inverse[0, 0] = 0
+        buffer = io.BytesIO()
+        Image.fromarray(inverse).save(buffer, format='PNG')
+        data = struct.pack('<iff', 0, 10100.0, -1009.0) + buffer.getvalue()
+        return {'format': '32FC1; compressedDepth png', 'data': base64.b64encode(data).decode()}
+    _json_mcap(compressed / 'run.mcap', {'/camera/front/depth': ('foxglove.CompressedImage', compressed_depth)})
+    report = f.convert(compressed, 'ego_head', tmp_path / 'compressed_eps', 'test', 900)
+    ep = me.load(tmp_path / 'compressed_eps' / report['episodes'][0]['episode_id'])
+    decoded = dp.at_anchor(ep, ep['depth'], 'exo', [0, 29])
+    assert ep['depth']['exo']['scale_m'] == 1.0 and decoded[0].dtype == np.float32
+    assert np.isnan(decoded[0][0, 0])
+    assert decoded[29][1, 1] == np.float32(10100.0) / np.float32(1190 + 1009)
+    assert decoded[29][1, 1] < decoded[0][1, 1]
 
 
 def test_an_mcap_depth_topic_with_no_camera_of_its_own_goes_to_the_board(tmp_path):
@@ -534,6 +626,30 @@ def test_an_mcap_depth_topic_with_no_camera_of_its_own_goes_to_the_board(tmp_pat
     ctx = _ctx(tmp_path / "eps", rep)
     (u,) = ctx["unshown_cameras"]
     assert u["name"] == "/lidar/depth" and u["n_frames"] == 30 and "depth" in u["why"]
+    from label import episode as me, evidence_access as ea
+    ep = me.load(tmp_path / 'eps' / ctx['episode_id'])
+    assert not ep['depth'] and len(ep['additional_depth']) == 1
+    access = ea.Access(ep)
+    field = next(row for row in access.inventory() if row['kind'] == 'depth')
+    receipt = access.inspect({'field_id': field['id'], 'mode': 'regions'})
+    assert receipt['values'][0] == [.9] and receipt['values'][-1] == [1.19]
+    assert any('No recorded RGB camera pairing' in line for line in receipt['limitations'])
+    assert ep['additional_depth'][field['name']]['paired_camera'] is None
+    # Matching-looking numbers from arrival and capture clocks do not prove synchronization.
+    other = tmp_path / 'mixed_clock'
+    other.mkdir()
+    def captured_depth(row):
+        return {**_depth_msg(row), 'timestamp': {'sec': 1_790_000_000, 'nanosec': int(row * 1e9 / 30)}}
+    _json_mcap(other / 'run.mcap', {'/front/image': ('foxglove.CompressedImage', _jpg_msg),
+                                  '/lidar/depth': ('foxglove.RawImage', captured_depth)})
+    report = f.convert(other, 'teleop_arms', tmp_path / 'mixed_eps', 'test', 900)
+    mixed = me.load(tmp_path / 'mixed_eps' / report['episodes'][0]['episode_id'])
+    mixed_access = ea.Access(mixed)
+    mixed_field = next(row for row in mixed_access.inventory() if row['kind'] == 'depth')
+    inspected = mixed_access.inspect({'field_id': mixed_field['id'], 'mode': 'regions'})
+    assert inspected['values'][0] == [.9] and 'times_s' not in inspected
+    assert len(inspected['source_frames']) == 30
+    assert 'unverified' in mixed['context']['depth_camera_clock'][mixed_field['name']]['what']
 
 
 # ---------------------------------------------------------------- a take of many cameras

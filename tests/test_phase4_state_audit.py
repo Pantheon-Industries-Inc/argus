@@ -63,7 +63,9 @@ def test_chinese_pose_and_unknown_names_never_become_joints_by_width(tmp_path, n
     field = next(s for s in ctx['signals'] if s['name'] == 'observation.state')
     assert field['names'] == names
     with np.load(path / 'signals.npz') as signals, np.load(path / 'state.npz') as archive:
-        assert signals[field['key']].tobytes() == archive['state'].tobytes() == original.tobytes()
+        np.testing.assert_array_equal(signals[field['key']], original)
+        assert archive['state'].dtype == original.dtype and archive['state'].shape == original.shape
+        assert archive['state'].tobytes() == original.tobytes()
 
 
 @pytest.mark.parametrize('split', [False, True])

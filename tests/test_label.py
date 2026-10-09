@@ -446,6 +446,66 @@ def _dirs(tmp_path, n):
     return eps
 
 
+def test_resume_source_identity_skips_same_input_and_stops_changed_input(tmp_path, monkeypatch):
+    ep = tmp_path / 'episode_000000'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
+    (ep / 'sources.json').write_text('{}')
+    out = tmp_path / 'out'
+    out.mkdir()
+    calls = []
+
+    def fake_label(path, target, *, api_key, **kw):
+        calls.append(path)
+        result = {'parse_ok': True, 'input_identity': harness.input_identity(path, model='m', reasoning='medium',
+                  max_tokens=100, cell_w=0, example_dir=None)}
+        target.write_text(json.dumps(result))
+        return result
+
+    monkeypatch.setattr(harness, 'label_episode', fake_label)
+    args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='m', reasoning='medium', max_tokens=100,
+                timeout=30)
+    assert harness.run_batch([ep], out, **args) == 0
+    assert harness.run_batch([ep], out, **args) == 0
+    assert len(calls) == 1
+    (ep / 'sources.json').write_text('{"camera": {}}')
+    assert harness.run_batch([ep], out, **args) == 1
+    assert len(calls) == 1
+    assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] == 'stale'
+
+
+def test_resume_legacy_reply_is_marked_unverified_without_a_paid_call(tmp_path, monkeypatch):
+    ep = tmp_path / 'episode_000000'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
+    out = tmp_path / 'out'
+    out.mkdir()
+    (out / f'{ep.name}.json').write_text(json.dumps({'parse_ok': True}))
+    monkeypatch.setattr(harness, 'label_episode', lambda *args, **kwargs: pytest.fail('unexpected paid call'))
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
+                             model='m', reasoning='medium', max_tokens=100, timeout=30) == 0
+    assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] == 'unverified'
+
+
+@pytest.mark.parametrize('receipt,body', [('episode_000000.json', '[]'),
+                                           ('failed_episode_000000.json', 'null'),
+                                           ('noreply_episode_000000.json', '[]')])
+def test_resume_preserves_non_object_receipt_without_a_paid_call(tmp_path, monkeypatch, receipt, body):
+    ep = tmp_path / 'episode_000000'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
+    out = tmp_path / 'out'
+    out.mkdir()
+    saved = out / receipt
+    saved.write_text(body)
+    monkeypatch.setattr(harness, 'label_episode', lambda *args, **kwargs: pytest.fail('unexpected paid call'))
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
+                             model='m', reasoning='medium', max_tokens=100, timeout=30) == 1
+    marker = json.loads((out / f'stale_{ep.name}.json').read_text())
+    assert marker['status'] == 'stale' and receipt in marker['reason']
+    assert saved.read_text() == body
+
+
 def test_batch_finishes_when_a_key_runs_out(tmp_path, monkeypatch):
     calls = {"sk-or-a": 0, "sk-or-b": 0}
 
@@ -523,6 +583,119 @@ def _packed_episode(tmp_path):
     return ep, T
 
 
+def test_final_timeout_claim_survives_resume_without_second_dispatch(tmp_path, monkeypatch):
+    ep, _ = _packed_episode(tmp_path)
+    out = tmp_path / 'out'
+    calls = []
+    def provider(*args, **options):
+        calls.append(options.get('attempts'))
+        raise TimeoutError('response outcome unknown')
+    monkeypatch.setattr(harness, 'call_model', provider)
+    args = dict(keys=['sk-or-fixture'], concurrency=1, force=False, model='openai/gpt-6-astra',
+                reasoning='medium', max_tokens=2000, timeout=1, cell_w=128, max_spend=20)
+    assert harness.run_batch([ep], out, **args) == 1
+    receipt = json.loads((out / f'noreply_{ep.name}.json').read_text())
+    assert calls == [1]
+    assert receipt['final_dispatch_outcome'] == 'unverified'
+    assert receipt['final_reserved_usd'] > 0
+    assert harness.run_batch([ep], out, **args) == 0
+    assert calls == [1]
+
+
+@pytest.mark.parametrize('usage', [None, {}, {'prompt_tokens': 100},
+                                   {'cost': 'unknown', 'prompt_tokens': 100},
+                                   {'prompt_tokens': 100, 'completion_tokens': -1}])
+def test_successful_reply_without_verifiable_usage_keeps_final_reservation(tmp_path, monkeypatch, usage):
+    from label.dictionary_stage import label_spend, label_spend_complete
+    out = tmp_path / 'job' / 'run' / 'out' / 'episode_a.json'
+    out.parent.mkdir(parents=True)
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(1)
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}],
+                **({'usage': usage} if usage is not None else {})}
+    monkeypatch.setattr(harness, 'call_model', provider)
+    result = harness._call_and_record(tmp_path, out, [{'type': 'text', 'text': 'test'}], 0, {},
+                                      model='openai/gpt-6-astra', reasoning='medium', api_key='fixture',
+                                      max_tokens=100, timeout=1)
+    assert calls == [1]
+    assert result['parse_ok'] is True
+    assert result['usage']['est_cost_usd'] is None
+    assert result['final_dispatch_outcome'] == 'unverified'
+    assert result['final_reserved_usd'] > 0
+    assert harness.episode_cost(result) == result['final_reserved_usd']
+    assert label_spend(tmp_path / 'job') == result['final_reserved_usd']
+    assert label_spend_complete(tmp_path / 'job') is False
+
+
+def test_complete_token_usage_settles_final_claim(tmp_path, monkeypatch):
+    out = tmp_path / 'episode_a.json'
+    monkeypatch.setattr(harness, 'call_model', lambda *a, **kw: {
+        'usage': {'prompt_tokens': 100, 'completion_tokens': 10},
+        'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]})
+    result = harness._call_and_record(tmp_path, out, [{'type': 'text', 'text': 'test'}], 0, {},
+                                      model='openai/gpt-6-astra', reasoning='medium', api_key='fixture',
+                                      max_tokens=100, timeout=1)
+    assert result['usage']['est_cost_usd'] > 0
+    assert result['usage']['cost_source'] == 'estimate'
+    assert 'final_dispatch_outcome' not in result
+
+
+def test_run_batch_does_not_replay_successful_reply_with_missing_usage(tmp_path, monkeypatch):
+    from label.dictionary_stage import label_spend, label_spend_complete
+    ep, _ = _packed_episode(tmp_path)
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(kwargs.get('attempts'))
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}
+    monkeypatch.setattr(harness, 'call_model', provider)
+    out = tmp_path / 'job' / 'run' / 'out'
+    args = dict(keys=['sk-or-fixture'], concurrency=1, force=False, model='openai/gpt-6-astra',
+                reasoning='medium', max_tokens=2000, timeout=1, cell_w=128, max_spend=20)
+    assert harness.run_batch([ep], out, **args) == 0
+    receipt = json.loads((out / f'{ep.name}.json').read_text())
+    assert receipt['parse_ok'] is True
+    assert receipt['final_dispatch_outcome'] == 'unverified'
+    assert calls == [1]
+    assert label_spend(tmp_path / 'job') >= receipt['final_reserved_usd']
+    assert label_spend_complete(tmp_path / 'job') is False
+    assert harness.run_batch([ep], out, **args) == 0
+    assert calls == [1]
+
+
+def test_final_claim_survives_worker_crash_and_budget_refusal_has_no_dispatch(tmp_path, monkeypatch):
+    ep, _ = _packed_episode(tmp_path)
+    calls = []
+    def crash(*args, **options):
+        calls.append(options.get('attempts'))
+        raise KeyboardInterrupt('worker stopped after dispatch')
+    monkeypatch.setattr(harness, 'call_model', crash)
+    args = dict(keys=['sk-or-fixture'], concurrency=1, force=False, model='openai/gpt-6-astra',
+                reasoning='medium', max_tokens=2000, timeout=1, cell_w=128)
+    refused = tmp_path / 'refused'
+    assert harness.run_batch([ep], refused, max_spend=.001, **args) == 0
+    assert calls == []
+    out = tmp_path / 'crashed'
+    with pytest.raises(KeyboardInterrupt):
+        harness.run_batch([ep], out, max_spend=20, **args)
+    receipt = json.loads((out / f'noreply_{ep.name}.json').read_text())
+    assert receipt['final_dispatch_outcome'] == 'claimed'
+    assert calls == [1]
+    assert harness.run_batch([ep], out, max_spend=20, **args) == 0
+    assert calls == [1]
+
+
+def test_single_episode_cli_refuses_unreadable_no_reply_claim(tmp_path, monkeypatch):
+    ep = tmp_path / 'episode_a'
+    ep.mkdir()
+    target = tmp_path / 'answer.json'
+    (tmp_path / 'noreply_answer.json').write_text('damaged claim')
+    monkeypatch.setenv('OPENROUTER_API_KEYS', 'sk-or-fixture')
+    monkeypatch.setattr(sys, 'argv', ['label.harness', '--episode-dir', str(ep), '--out', str(target)])
+    assert harness.main() == 1
+    assert not target.exists()
+
+
 SERVED = {"provider": "SomeHost", "id": "gen-123", "model": "openai/gpt-6-astra-20260901", "system_fingerprint": "fp_1"}
 
 
@@ -531,8 +704,9 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     ep, T = _packed_episode(tmp_path)
     sent = {}
 
-    def fake_call(content, model, reasoning, api_key, max_tokens, timeout):
+    def fake_call(content, model, reasoning, api_key, max_tokens, timeout, **options):
         sent["content"] = content
+        sent['attempts'] = options.get('attempts')
         labels = {"completion": {"task_completed": "success", "completed_at_s": 3.0, "goal_reached_at_s": 3.0},
                   "timeline_columns": harness.TIMELINE_COLUMNS,
                   "timeline": [[0.0, 3.0, "left", "reach", "block", None, None, "advancing", 0.5, None]],
@@ -543,7 +717,8 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     monkeypatch.setattr(harness, "call_model", fake_call)
     out = tmp_path / "out" / "episode_000007.json"
     r = harness.label_episode(ep, out, model="openai/gpt-6-astra", reasoning="medium", api_key="sk-or-x",
-                              max_tokens=64000, timeout=60)
+                                  max_tokens=64000, timeout=60)
+    assert sent['attempts'] == 1
     assert r["parse_ok"] and r["usage"]["est_cost_usd"] == 0.01 and r["usage"]["cost_source"] == "billed"
     assert (r["provider_name"], r["generation_id"], r["model_served"], r["system_fingerprint"]) == \
         ("SomeHost", "gen-123", "openai/gpt-6-astra-20260901", "fp_1")
@@ -637,7 +812,7 @@ def test_an_openai_key_sends_the_request_straight_to_openai(monkeypatch):
 def test_cut_off_reply_is_kept_beside_the_outputs_and_fails(tmp_path, monkeypatch):
     ep, _ = _packed_episode(tmp_path)
 
-    def fake_call(content, model, reasoning, api_key, max_tokens, timeout):
+    def fake_call(content, model, reasoning, api_key, max_tokens, timeout, **options):
         return {"choices": [{"message": {"content": '{"timeline": [[0.0, 1'}, "finish_reason": "length"}],
                 "usage": {"prompt_tokens": 1000, "completion_tokens": 64000, "cost": 0.5}, **SERVED}
 

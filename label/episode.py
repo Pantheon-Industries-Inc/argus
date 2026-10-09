@@ -54,6 +54,7 @@ from checks import timebase
 from label import frames as mf
 from label import lens
 from label import prompts
+from label import sensor_evidence as se
 from label import state as ms
 from prepare.signal_alignment import ALIGNED_CAMERA, ALIGNED_ASSUMED, placement_text
 from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, STATE_WHY, UNREADABLE
@@ -107,6 +108,11 @@ def load(ep_dir: Path) -> dict:
     ctx = json.loads((ep_dir / "context.json").read_text())
     from prepare.formats import clock_context
     ctx = clock_context(ctx)
+    from label.dictionary_editor import for_episode
+    owner = (ctx.get("piece") or {}).get("of") or (ctx.get("data_dictionary") or {}).get("episode_id") or ep_dir.name
+    resolved = for_episode(ep_dir, owner)
+    if resolved is not None:
+        ctx["data_dictionary"] = resolved
     src = json.loads((ep_dir / "sources.json").read_text())
     for v, d in src.items():
         if "n_frames" not in d:
@@ -154,7 +160,9 @@ def load(ep_dir: Path) -> dict:
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
     # each camera's depth stream, when the recording has one (label/depth.py)
     from label import depth as dp
-    ep["depth"] = {v: e for v, e in dp.load(ep_dir).items() if v in src}
+    recorded_depth = dp.load(ep_dir)
+    ep["depth"] = {v: e for v, e in recorded_depth.items() if v in src}
+    ep['additional_depth'] = {v: e for v, e in recorded_depth.items() if v not in src}
     return ep
 
 
@@ -1023,6 +1031,8 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
     vs, r = views(ep), rig(ep)
     n = _rig_nouns(r)
     cams = ep["context"].get("cameras") or {}
+    unknown_mount = {v for v in vs if cams.get(v, {}).get("mounting") == "unspecified"}
+    mounted = [v for v in vs if v in MOUNTED and v not in unknown_mount]
     res = sorted({f"{c.get('width')}x{c.get('height')}" for c in cams.values() if c.get("width")})
     rec = f" (recording {', '.join(res)} at {ep_fps(ep):g} fps)" if res else ""
     count = "There is exactly 1 camera; every grid row and every image strip is labelled with its name" \
@@ -1030,8 +1040,7 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
                               "with one of these names")
     s = (f"Cameras in this episode, as named in the dataset{rec}. {count}:\n"
          + "\n".join(_camera_line(ep, v) for v in vs) + "\n")
-    if not any(v not in MOUNTED for v in vs):
-        mounted = [v for v in vs if v in MOUNTED]
+    if not unknown_mount and not any(v not in MOUNTED for v in vs):
         s += (f"No camera in this episode is off the {n['actor'] if len(mounted) == 1 else n['actors']}: the "
               f"whole scene is seen only through {'that camera' if len(mounted) == 1 else 'those cameras'}, so "
               "reconstruct the layout and where things end up from what it shows.\n")
@@ -1048,7 +1057,7 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
               "pixels. If a stream's content contradicts its name (a mounted camera that shows a fixed view "
               f"or the reverse, two {n['actor']} streams swapped or identical, a black or frozen stream), "
               "describe what the view actually is and record it as a data issue.")
-    if r != "ego_head" and any(v in MOUNTED for v in vs):
+    if r != "ego_head" and mounted:
         s += (f" A mounted camera turns with its {n['actor']}, so where it looks changes through the episode: "
               "sometimes down onto the work, sometimes along or across it. Work out its direction at each instant "
               "from the frame itself (the perspective of the table or floor, which faces of an object are in view, "
@@ -1059,7 +1068,12 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
               "that fills a view looking along the table is a side, and only a view looking down on an object shows "
               "its top. So an object changed state only when views from comparable directions, or the camera that "
               "is not mounted, show the change, never because a mounted camera now sees it from elsewhere.")
-    if "left" in vs and "right" in vs:
+    if unknown_mount:
+        s += (" Camera labels identify views; they do not establish which arm owns a view. "
+              "Determine camera placement and arm identity from the pixels and explicit recorded identities. "
+              "Do not report a camera metadata mismatch merely because a side-named camera is fixed: "
+              "its mounting was not declared.")
+    elif "left" in vs and "right" in vs:
         s += (f" In the output, \"left\", \"right\" and \"both\" name the streams: an action is \"left\" when "
               "the left stream's own gripper makes the contact, \"right\" likewise, "
               f"\"both\" when the two act together. The other {n['actor']} often appears inside a view, and an "
@@ -1936,6 +1950,10 @@ def _dictionary_text(ep: dict, pl: dict) -> str:
     return "\nDATA DICTIONARY INTERPRETATIONS\n" + "\n".join(lines) if lines else ""
 
 
+def _has_sensor_evidence(ep: dict, pl: dict) -> bool:
+    return bool((pl.get("sensor_evidence") or {}).get("sensors"))
+
+
 BLOCKS = (
     Block("collection_note", "intro", _has_collection_note, _collection_text),
     Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
@@ -1951,6 +1969,9 @@ BLOCKS = (
     Block("contacts", "after_frames", _has_contacts, contacts_block,
           schema_fields=("contacts", "contacts_missing"),
           checks=("contact_checks",)),
+    Block("sensor_evidence", "signals", _has_sensor_evidence,
+          lambda ep, pl: se.prompt(pl["sensor_evidence"]),
+          schema_fields=("sensor_findings",)),
     Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
     Block("metadata_issues", "after_task", _has_metadata_issues, _metadata_issues),
     Block("state_identity_issues", "after_task", _has_state_identity_issues, _state_identity_issues),
@@ -2150,7 +2171,7 @@ EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
 
 def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int | None = None,
                   max_cell_w: int | None = None, grid_cols: int = 4, grid_quality: int = 80,
-                  example_dir=None) -> dict:
+                  example_dir=None, inspect_evidence=False) -> dict:
     """Everything the harness sends for one episode (content parts), and what it records about it. cell_w fixes
     the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell."""
     ep = load(ep_dir)
@@ -2171,6 +2192,8 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     any_img = next(im[pl["ks"][0]] for im in imgs.values() if pl["ks"][0] in im)
     # a circular image with black corners names a fisheye lens in that camera's line (label/lens.py)
     ep["lens"] = {v: lens.circular_image(imgs[v]) for v in order_views(imgs)}
+    pl["sensor_evidence"] = se.build(ep, pl, shown={v: [k for k in pl["ks"] if k in im and recording_at(ep, v, k)]
+                                                  for v, im in imgs.items()}, images=imgs)
     # depth at the detail instants, and one colour scale per camera from its readings at the sampled instants
     depth_at = _depth_frames(ep, pl)
     if len(views(ep)) == 1:
@@ -2238,7 +2261,10 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                                                 f"{c['start_s']:.2f}-{c['end_s']:.2f}s ==="})
         content.append({"type": "image_url", "image_url": {
             "url": "data:image/jpeg;base64," + base64.b64encode(cjpg).decode("ascii"), "detail": detail}})
-    return {"content": content, "prompt": prompt, "plan": pl, "n_grids": n_grids,
+    from label.evidence_access import Access, needs_inspection
+    access = Access(ep, pl['sensor_evidence'], plan=pl) if inspect_evidence and needs_inspection(ep, pl['sensor_evidence']) else None
+    return {**({"evidence_access": access} if inspect_evidence else {}), "sensor_evidence": pl["sensor_evidence"],
+            "content": content, "prompt": prompt, "plan": pl, "n_grids": n_grids,
             "n_images": n_grids + len(views_sent) + len(depth_sent) + len(contacts_sent),
             "image_bytes": grid_bytes + extra_bytes,
             "contact_s": [round(frame_time(ep, k), 3) for k in pl["contact"]],

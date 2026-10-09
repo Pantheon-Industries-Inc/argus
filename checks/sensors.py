@@ -166,7 +166,7 @@ def depth_findings(ep: dict) -> list[dict]:
         got = dp.at_anchor(ep, d, v, pick)
         if not got:
             continue
-        inv = float(np.mean([(x == 0).mean() for x in got.values()]))
+        inv = float(np.mean([(~dp.valid(x)).mean() for x in got.values()]))
         if inv > DEPTH_INVALID_SHARE:
             out.append({"check": "depth_invalid", "camera": name,
                         "evidence": f"on average {inv:.0%} of the pixels of {name}'s depth pictures hold no reading"})

@@ -1,0 +1,764 @@
+{
+  "sensor_evidence": {
+    "version": 1,
+    "sensors": [
+      {
+        "id": "inspection:e7cb77b2a1e070ba1ada",
+        "name": "exo",
+        "kind": "numeric",
+        "times": [
+          27.0,
+          31.5,
+          36.0,
+          40.5
+        ],
+        "capabilities": [
+          "recorded_evidence"
+        ],
+        "source": "exo",
+        "access_field_id": "depth:242abc18100117cd",
+        "access_kind": "depth",
+        "interpretation": {},
+        "access_descriptor_digest": "b622c0e17663b6f7ea9e88f48843f9e48a7bdae4ccfa7909594a108c8222f713",
+        "view": "exo"
+      },
+      {
+        "id": "inspection:127b63d8d7853b92e040",
+        "name": "exo",
+        "kind": "numeric",
+        "times": [
+          27.0,
+          31.5,
+          36.0,
+          40.5
+        ],
+        "capabilities": [
+          "recorded_evidence"
+        ],
+        "source": "exo",
+        "access_field_id": "depth:242abc18100117cd",
+        "access_kind": "depth",
+        "interpretation": {},
+        "access_descriptor_digest": "b622c0e17663b6f7ea9e88f48843f9e48a7bdae4ccfa7909594a108c8222f713",
+        "view": "exo"
+      }
+    ],
+    "series": [
+      {
+        "id": "inspection:e7cb77b2a1e070ba1ada:median_stored",
+        "sensor_id": "inspection:e7cb77b2a1e070ba1ada",
+        "label": "Median depth in inspected region",
+        "unit": null,
+        "times": [
+          27.0,
+          31.5,
+          36.0,
+          40.5
+        ],
+        "values": [
+          672.0,
+          683.0,
+          689.0,
+          690.0
+        ],
+        "operation": "median of valid depth pixels in the requested region"
+      },
+      {
+        "id": "inspection:127b63d8d7853b92e040:0",
+        "sensor_id": "inspection:127b63d8d7853b92e040",
+        "label": "Region 1 depth",
+        "unit": null,
+        "times": [
+          27.0,
+          31.5,
+          36.0,
+          40.5
+        ],
+        "values": [
+          559.0,
+          578.0,
+          606.0,
+          637.0
+        ],
+        "columns": [
+          0
+        ],
+        "operation": "median of valid pixels in each requested depth-image region"
+      },
+      {
+        "id": "inspection:127b63d8d7853b92e040:1",
+        "sensor_id": "inspection:127b63d8d7853b92e040",
+        "label": "Region 2 depth",
+        "unit": null,
+        "times": [
+          27.0,
+          31.5,
+          36.0,
+          40.5
+        ],
+        "values": [
+          546.0,
+          547.0,
+          546.0,
+          547.0
+        ],
+        "columns": [
+          1
+        ],
+        "operation": "median of valid pixels in each requested depth-image region"
+      }
+    ],
+    "findings": [
+      {
+        "start_s": 27.0,
+        "end_s": 40.5,
+        "headline": "Drawer-front depth increases during closure",
+        "detail": "The marked right-side drawer-front regions show increasing camera-relative depth while the upper-cabinet reference stays nearly unchanged, supporting the visible inward motion. These are region medians, not tracked-point displacement or calibrated travel distance.",
+        "observation": "At 27.0, 31.5, 36.0 and 40.5 s, drawer-front region medians are 559, 578, 606 and 637 stored units; the upper-cabinet reference medians are 546, 547, 546 and 547. Both regions have fully valid readings at these samples.",
+        "claim": "The drawer-front surface recedes relative to the camera during the closing push, with a 78-unit difference between the first and last sampled region medians.",
+        "alternative": "The drawer region is repositioned between samples and does not track one physical point, so surface orientation and changing sampled patches may contribute to the numerical difference.",
+        "confidence": "medium",
+        "adds_beyond_video": true,
+        "evidence": [
+          {
+            "sensor_id": "inspection:127b63d8d7853b92e040",
+            "series_id": "inspection:127b63d8d7853b92e040:0",
+            "time_s": [
+              27.0,
+              31.5,
+              36.0,
+              40.5
+            ]
+          },
+          {
+            "sensor_id": "inspection:127b63d8d7853b92e040",
+            "series_id": "inspection:127b63d8d7853b92e040:1",
+            "time_s": [
+              27.0,
+              31.5,
+              36.0,
+              40.5
+            ]
+          },
+          {
+            "sensor_id": "inspection:e7cb77b2a1e070ba1ada",
+            "time_s": [
+              27.0,
+              31.5,
+              36.0,
+              40.5
+            ]
+          }
+        ],
+        "claim_type": "recorded_evidence"
+      }
+    ]
+  },
+  "evidence_inspection": {
+    "version": 1,
+    "inspections": [
+      {
+        "field_id": "depth:242abc18100117cd",
+        "mode": "images",
+        "descriptor": {
+          "id": "depth:242abc18100117cd",
+          "name": "exo",
+          "kind": "depth",
+          "descriptor": {
+            "units": "relative",
+            "scale_m": null,
+            "kind": "depth",
+            "source": "/top-depth",
+            "paired_camera": "exo"
+          },
+          "available_modes": [
+            "images",
+            "regions"
+          ]
+        },
+        "limitations": [
+          "Depth has no recorded metric scale; values are not distances in metres.",
+          "Images are sampled. Depth ROI uses depth-image coordinates, not an inferred RGB registration."
+        ],
+        "frames": [
+          {
+            "row": 270,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "valid_fraction": 0.9665755208333333,
+            "roi_valid_fraction": 0.9665755208333333,
+            "regions": [
+              {
+                "roi": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "pixels": [
+                  0,
+                  0,
+                  640,
+                  480
+                ],
+                "valid_fraction": 0.9665755208333333,
+                "valid_pixels": 296932,
+                "total_pixels": 307200,
+                "percentiles_stored": [
+                  489.0,
+                  672.0,
+                  1403.0
+                ]
+              }
+            ],
+            "median_stored": 672.0,
+            "time_s": 27.0
+          },
+          {
+            "row": 315,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "valid_fraction": 0.9673697916666667,
+            "roi_valid_fraction": 0.9673697916666667,
+            "regions": [
+              {
+                "roi": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "pixels": [
+                  0,
+                  0,
+                  640,
+                  480
+                ],
+                "valid_fraction": 0.9673697916666667,
+                "valid_pixels": 297176,
+                "total_pixels": 307200,
+                "percentiles_stored": [
+                  524.0,
+                  683.0,
+                  1394.0
+                ]
+              }
+            ],
+            "median_stored": 683.0,
+            "time_s": 31.5
+          },
+          {
+            "row": 360,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "valid_fraction": 0.969873046875,
+            "roi_valid_fraction": 0.969873046875,
+            "regions": [
+              {
+                "roi": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "pixels": [
+                  0,
+                  0,
+                  640,
+                  480
+                ],
+                "valid_fraction": 0.969873046875,
+                "valid_pixels": 297945,
+                "total_pixels": 307200,
+                "percentiles_stored": [
+                  535.0,
+                  689.0,
+                  1394.0
+                ]
+              }
+            ],
+            "median_stored": 689.0,
+            "time_s": 36.0
+          },
+          {
+            "row": 405,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "valid_fraction": 0.9725846354166666,
+            "roi_valid_fraction": 0.9725846354166666,
+            "regions": [
+              {
+                "roi": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "pixels": [
+                  0,
+                  0,
+                  640,
+                  480
+                ],
+                "valid_fraction": 0.9725846354166666,
+                "valid_pixels": 298778,
+                "total_pixels": 307200,
+                "percentiles_stored": [
+                  537.0,
+                  690.0,
+                  1386.0
+                ]
+              }
+            ],
+            "median_stored": 690.0,
+            "time_s": 40.5
+          }
+        ],
+        "rows": [
+          270,
+          315,
+          360,
+          405
+        ],
+        "selected_rows": [
+          270,
+          315,
+          360,
+          405
+        ],
+        "unavailable_rows": [],
+        "total_rows_in_window": 136,
+        "source_frames": [
+          {
+            "row": 270,
+            "source_frame": 270,
+            "pts": 27000,
+            "source_time_s": 27.0
+          },
+          {
+            "row": 315,
+            "source_frame": 315,
+            "pts": 31500,
+            "source_time_s": 31.5
+          },
+          {
+            "row": 360,
+            "source_frame": 360,
+            "pts": 36000,
+            "source_time_s": 36.0
+          },
+          {
+            "row": 405,
+            "source_frame": 405,
+            "pts": 40500,
+            "source_time_s": 40.5
+          }
+        ],
+        "times_s": [
+          27.0,
+          31.5,
+          36.0,
+          40.5
+        ],
+        "id": "inspection:e7cb77b2a1e070ba1ada"
+      },
+      {
+        "field_id": "depth:242abc18100117cd",
+        "mode": "regions",
+        "descriptor": {
+          "id": "depth:242abc18100117cd",
+          "name": "exo",
+          "kind": "depth",
+          "descriptor": {
+            "units": "relative",
+            "scale_m": null,
+            "kind": "depth",
+            "source": "/top-depth",
+            "paired_camera": "exo"
+          },
+          "available_modes": [
+            "images",
+            "regions"
+          ]
+        },
+        "limitations": [
+          "Depth has no recorded metric scale; values are not distances in metres.",
+          "Requested regions do not establish object tracking. Verify their contents and camera motion in the images.",
+          "Images are sampled. Depth ROI uses depth-image coordinates, not an inferred RGB registration."
+        ],
+        "frames": [
+          {
+            "row": 270,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0.61,
+              0.3,
+              0.66,
+              0.34
+            ],
+            "valid_fraction": 0.9665755208333333,
+            "roi_valid_fraction": 1.0,
+            "regions": [
+              {
+                "roi": [
+                  0.61,
+                  0.3,
+                  0.66,
+                  0.34
+                ],
+                "pixels": [
+                  390,
+                  144,
+                  422,
+                  163
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 608,
+                "total_pixels": 608,
+                "percentiles_stored": [
+                  550.0,
+                  559.0,
+                  569.0
+                ]
+              },
+              {
+                "roi": [
+                  0.55,
+                  0.025,
+                  0.63,
+                  0.075
+                ],
+                "pixels": [
+                  352,
+                  12,
+                  403,
+                  36
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 1224,
+                "total_pixels": 1224,
+                "percentiles_stored": [
+                  537.0,
+                  546.0,
+                  556.0
+                ]
+              }
+            ],
+            "median_stored": 559.0,
+            "time_s": 27.0
+          },
+          {
+            "row": 315,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0.61,
+              0.25,
+              0.66,
+              0.29
+            ],
+            "valid_fraction": 0.9673697916666667,
+            "roi_valid_fraction": 1.0,
+            "regions": [
+              {
+                "roi": [
+                  0.61,
+                  0.25,
+                  0.66,
+                  0.29
+                ],
+                "pixels": [
+                  390,
+                  120,
+                  422,
+                  139
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 608,
+                "total_pixels": 608,
+                "percentiles_stored": [
+                  568.0,
+                  578.0,
+                  587.0
+                ]
+              },
+              {
+                "roi": [
+                  0.55,
+                  0.025,
+                  0.63,
+                  0.075
+                ],
+                "pixels": [
+                  352,
+                  12,
+                  403,
+                  36
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 1224,
+                "total_pixels": 1224,
+                "percentiles_stored": [
+                  537.0,
+                  547.0,
+                  557.0
+                ]
+              }
+            ],
+            "median_stored": 578.0,
+            "time_s": 31.5
+          },
+          {
+            "row": 360,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0.61,
+              0.2,
+              0.66,
+              0.24
+            ],
+            "valid_fraction": 0.969873046875,
+            "roi_valid_fraction": 1.0,
+            "regions": [
+              {
+                "roi": [
+                  0.61,
+                  0.2,
+                  0.66,
+                  0.24
+                ],
+                "pixels": [
+                  390,
+                  96,
+                  422,
+                  115
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 608,
+                "total_pixels": 608,
+                "percentiles_stored": [
+                  598.0,
+                  606.0,
+                  619.0
+                ]
+              },
+              {
+                "roi": [
+                  0.55,
+                  0.025,
+                  0.63,
+                  0.075
+                ],
+                "pixels": [
+                  352,
+                  12,
+                  403,
+                  36
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 1224,
+                "total_pixels": 1224,
+                "percentiles_stored": [
+                  537.0,
+                  546.0,
+                  557.0
+                ]
+              }
+            ],
+            "median_stored": 606.0,
+            "time_s": 36.0
+          },
+          {
+            "row": 405,
+            "source_shape": [
+              480,
+              640
+            ],
+            "roi": [
+              0.61,
+              0.2,
+              0.66,
+              0.24
+            ],
+            "valid_fraction": 0.9725846354166666,
+            "roi_valid_fraction": 1.0,
+            "regions": [
+              {
+                "roi": [
+                  0.61,
+                  0.2,
+                  0.66,
+                  0.24
+                ],
+                "pixels": [
+                  390,
+                  96,
+                  422,
+                  115
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 608,
+                "total_pixels": 608,
+                "percentiles_stored": [
+                  625.0,
+                  637.0,
+                  647.0
+                ]
+              },
+              {
+                "roi": [
+                  0.55,
+                  0.025,
+                  0.63,
+                  0.075
+                ],
+                "pixels": [
+                  352,
+                  12,
+                  403,
+                  36
+                ],
+                "valid_fraction": 1.0,
+                "valid_pixels": 1224,
+                "total_pixels": 1224,
+                "percentiles_stored": [
+                  537.0,
+                  547.0,
+                  557.0
+                ]
+              }
+            ],
+            "median_stored": 637.0,
+            "time_s": 40.5
+          }
+        ],
+        "rows": [
+          270,
+          315,
+          360,
+          405
+        ],
+        "selected_rows": [
+          270,
+          315,
+          360,
+          405
+        ],
+        "unavailable_rows": [],
+        "total_rows_in_window": 4,
+        "source_frames": [
+          {
+            "row": 270,
+            "source_frame": 270,
+            "pts": 27000,
+            "source_time_s": 27.0
+          },
+          {
+            "row": 315,
+            "source_frame": 315,
+            "pts": 31500,
+            "source_time_s": 31.5
+          },
+          {
+            "row": 360,
+            "source_frame": 360,
+            "pts": 36000,
+            "source_time_s": 36.0
+          },
+          {
+            "row": 405,
+            "source_frame": 405,
+            "pts": 40500,
+            "source_time_s": 40.5
+          }
+        ],
+        "times_s": [
+          27.0,
+          31.5,
+          36.0,
+          40.5
+        ],
+        "columns": [
+          0,
+          1
+        ],
+        "component_units": [
+          null,
+          null
+        ],
+        "component_names": [
+          "Region 1 depth",
+          "Region 2 depth"
+        ],
+        "values": [
+          [
+            559.0,
+            546.0
+          ],
+          [
+            578.0,
+            547.0
+          ],
+          [
+            606.0,
+            546.0
+          ],
+          [
+            637.0,
+            547.0
+          ]
+        ],
+        "operation": "median of valid pixels in each requested depth-image region",
+        "preview_rows": [
+          270,
+          315,
+          360,
+          405
+        ],
+        "id": "inspection:127b63d8d7853b92e040"
+      }
+    ],
+    "source_current": true
+  },
+  "duration_s": 66.4
+}

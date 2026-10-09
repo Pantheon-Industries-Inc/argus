@@ -268,6 +268,7 @@ def test_split_value_names_set_the_recorded_layout_on_every_storage(tmp_path, mo
         info['features'][f'observation.state.{side}_arm'] = {'dtype': 'float32', 'shape': [6], 'names': names}
         info['features'][f'observation.state.{side}_gripper'] = {'dtype': 'float32', 'shape': [1]}
     (root / 'meta/info.json').write_text(json.dumps(info))
+    originals = hashes(root)
     ep, ctx = convert(root, tmp_path / 'out', monkeypatch)
     assert ctx['state_kind'] == want
     assert ctx['recorded_metadata'][str(root / 'meta/info.json')] == info
@@ -277,9 +278,10 @@ def test_split_value_names_set_the_recorded_layout_on_every_storage(tmp_path, mo
             for signal in ctx['signals']:
                 if signal['name'].startswith('observation.state.'):
                     values = np.asarray(list(original[signal['name']]))
-                    assert arrays[signal['key']].tobytes() == values.astype(np.float32).reshape(len(values), -1).tobytes()
+                    np.testing.assert_array_equal(arrays[signal['key']], values.reshape(len(values), -1))
     else:
         assert ctx['state_identities'][0]['names'][-1] == 'observation.state.left_gripper'
+    assert hashes(root) == originals
 
 
 @pytest.mark.parametrize('names', [['x', 'y'], ['x', 'y', 'z', 'joint3', 'joint4', 'joint5']])

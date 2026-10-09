@@ -73,7 +73,7 @@ def apply_context(context: dict, record: dict, overrides: dict | None = None, *,
             limitations.append(f"dictionary field {field['id']} has no exact prepared binding for {owner}")
             continue
         selected = {key: copy.deepcopy(field[key]) for key in
-                    ("id", "name", "kind", "shape", "dtype", "names", "rate_hz", "source", "summary", "limitations") if key in field}
+                    ("id", "name", "kind", "shape", "dtype", "names", "rate_hz", "source", "summary", "limitations", 'unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description') if key in field}
         selected.update(episodes=[owner], bindings=copy.deepcopy(matched))
         selected["source"] = _public_source(selected.get("source"))
         fields.append(selected)
@@ -86,7 +86,9 @@ def apply_context(context: dict, record: dict, overrides: dict | None = None, *,
         "override_history": copy.deepcopy(resolved.get("override_history") or []),
         "override_limitations": _public_source(resolved.get("override_limitations") or []),
         "limitations": _public_source(limitations),
-        "missing_fields": [ident for ident in resolved.get("missing_fields", []) if ident in ids]}
+        "missing_fields": [ident for ident in resolved.get("missing_fields", []) if ident in ids],
+        **{key: [ident for ident in record[key] if ident in ids]
+           for key in ('request_field_ids', 'deferred_fields') if key in record}}
     return result
 
 

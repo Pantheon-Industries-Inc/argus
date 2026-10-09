@@ -231,6 +231,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             c2["placeholder_frames"] = held       # on the part's own frames
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
+        if ctx.get('recorded_mcap_fields') or ctx.get('recorded_sensor_fields'):
+            c2['retained_evidence_root'] = str(Path(ctx.get('retained_evidence_root') or ep_dir).resolve())
         if ctx.get("recorded_camera_ns"):
             c2["recorded_camera_ns"] = str((ep_dir / ctx["recorded_camera_ns"]).resolve())
         if ctx.get("recorded_container_times"):
@@ -349,11 +351,30 @@ def write_units(job: Path, eps: Path) -> dict:
 
 
 def _write_or_reuse(d: Path, proot: Path) -> list[Path]:
+    from label.evidence_access import same_source_proof, source_proof
     ctx = json.loads((d / "context.json").read_text())
     names = (ctx.get("pieces") or {}).get("parts") or []
-    if names and all((proot / n / "context.json").exists() for n in names):
-        return [proot / n for n in names]          # a resumed job reuses its parts (their labels depend on them)
-    return write_pieces(d, proot)
+    proof_path = proot / f".{d.name}.source_proof.json"
+    if names and not proof_path.exists() and not any((proot / n).exists() for n in names):
+        # A different job may have cut this source before. This job has no saved parts or paid replies to reuse.
+        parts = write_pieces(d, proot)
+        ctx = json.loads((d / "context.json").read_text())
+        write_atomic(proof_path, source_proof(ctx, d))
+        return parts
+    if names:
+        try:
+            saved = json.loads(proof_path.read_text())
+        except (OSError, ValueError):
+            raise RuntimeError(f"{d.name}: existing pieces have no verifiable source proof; use an explicit fresh job")
+        if not same_source_proof(saved, ctx, d):
+            raise RuntimeError(f"{d.name}: prepared source changed since pieces were cut; use an explicit fresh job")
+        if not all((proot / n / "context.json").exists() for n in names):
+            raise RuntimeError(f"{d.name}: a saved piece is missing; use an explicit fresh job")
+        return [proot / n for n in names]
+    parts = write_pieces(d, proot)
+    ctx = json.loads((d / "context.json").read_text())
+    write_atomic(proof_path, source_proof(ctx, d))
+    return parts
 
 
 def _read(p: Path) -> tuple[dict | None, str | None]:
@@ -387,7 +408,7 @@ def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
     if nr.exists():
         r, _ = _read(nr)
         if r and r.get("no_reply"):
-            return None, f"the model gave no reply ({r['no_reply']})"
+            return r, f"the model gave no reply ({r['no_reply']})"
     return None, "the model gave no reply"
 
 
@@ -427,7 +448,29 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
                             **({"raw_head": _raw_head(r)} if _raw_head(r) else {})})
             failed.append((pc, r))
         if got:
-            write_atomic(out / f"{ep}.json", stitch(Path(eps) / ep, got, missing), indent=None)
+            result = stitch(Path(eps) / ep, got, missing)
+            from label.evidence_access import merge as merge_inspection
+            inspection = merge_inspection(got + [(pc, r) for pc, r in failed if r], Path(eps) / ep)
+            if inspection['parts']:
+                result['evidence_inspection'] = inspection
+            for pc, r in failed:
+                if not r:
+                    continue
+                u = r.get('usage') or {}
+                for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens',
+                            'cache_write_tokens', 'latency_s', 'est_cost_usd'):
+                    result['usage'][key] = round(result['usage'][key] + float(u.get(key) or 0), 4)
+                result['config']['pieces'][int(pc['piece']['index']) - 1].update(
+                    episode_dir=r.get('episode_dir'), cost_usd=u.get('est_cost_usd'),
+                    usage=u, provider=r.get('provider'), generation_id=r.get('generation_id'),
+                    finish_reason=r.get('finish_reason'), resolution_route=(r.get('config') or {}).get('resolution_route'))
+            routes = [((r or {}).get('config') or {}).get('resolution_route') or {}
+                      for _, r in sorted(got + failed, key=lambda item: item[0]['piece']['index'])]
+            result['config']['resolution_route']['parts'] = routes
+            result['config']['resolution_route']['cost_usd'] = round(
+                sum(float(route.get('cost_usd') or 0) for route in routes), 6)
+            result['decode_failed'] += [x for _, r in failed for x in (r or {}).get('decode_failed') or []]
+            write_atomic(out / f"{ep}.json", result, indent=None)
             res["stitched"] += 1
             if missing:
                 res["incomplete"].append(ep)
@@ -446,11 +489,28 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
     raw = (first.get("labels") or {}).get("_raw") if isinstance(first.get("labels"), dict) else None
     raw = raw if raw is not None else first.get("content_tail") or ""
     whys = "; ".join(f"part {g['part']}: {g['why']}" for g in missing)
-    usage = {"est_cost_usd": round(sum(float(((r or {}).get("usage") or {}).get("est_cost_usd") or 0)
-                                       for _, r in failed), 4)}
+    usage = {key: round(sum(float(((r or {}).get('usage') or {}).get(key) or 0) for _, r in failed), 4)
+             for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens',
+                         'cache_write_tokens', 'latency_s', 'est_cost_usd')}
     count = len(missing)
+    from label.evidence_access import merge as merge_inspection
+    inspection = merge_inspection([(pc, r) for pc, r in failed if r], ep_dir)
+    from label.sensor_evidence import merge as merge_sensor
+    ctx = json.loads((Path(ep_dir) / 'context.json').read_text())
+    sensor = merge_sensor([(pc, r) for pc, r in failed if r], ctx, ep_dir=ep_dir)
+    cfg = dict(first.get('config') or {})
+    routes = [((r or {}).get('config') or {}).get('resolution_route') or {} for _, r in failed]
+    cfg['resolution_route'] = {'parts': routes,
+                               'cost_usd': round(sum(float(route.get('cost_usd') or 0) for route in routes), 6)}
+    cfg['pieces'] = [{**pc.get('piece', {}), 'episode_dir': (r or {}).get('episode_dir'),
+                      'usage': (r or {}).get('usage') or {}, 'provider': (r or {}).get('provider'),
+                      'generation_id': (r or {}).get('generation_id'), 'finish_reason': (r or {}).get('finish_reason'),
+                      'resolution_route': ((r or {}).get('config') or {}).get('resolution_route')}
+                     for pc, r in failed]
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
-            "config": first.get("config") or {}, "parse_ok": False, "no_part": True, "usage": usage,
+            **({'evidence_inspection': inspection} if inspection['parts'] else {}),
+            **({'sensor_evidence': sensor} if sensor['sensors'] else {}),
+            "config": cfg, "parse_ok": False, "no_part": True, "usage": usage,
             "labels": {"_raw": raw, "_parse_error": f"no part of the recording returned labels that parse ({whys})"},
             "stitched": {"parts": count, "cuts_s": [g["t0_s"] for g in missing[1:]], "missing": missing},
             "decode_failed": [x for _, r in failed for x in (r or {}).get("decode_failed") or []]}
@@ -553,8 +613,9 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         for k in ("data_issues", "operator_mistakes"):
             for iss in lab.get(k) or []:
                 iss = {**iss, "part": i}
+                semantic = {key: value for key, value in iss.items() if key not in ('part', 'parts')}
                 same = next((x for x in L[k] if x.get("t_s") is None and iss.get("t_s") is None
-                             and x.get("category") == iss.get("category")), None)
+                             and {key: value for key, value in x.items() if key not in ('part', 'parts')} == semantic), None)
                 if same is not None:
                     # an issue about a whole part, reported by several parts, is one issue about the recording
                     same["parts"] = sorted(set(same.get("parts") or [same["part"]]) | {i})
@@ -652,7 +713,13 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         L["_dropped"] = dropped
     if views["shown"]:
         L["contacts"], L["contacts_missing"] = list(contacts_model.values()), contacts_missing
+    from label.sensor_evidence import merge
+    sensor_evidence = merge(parts, ctx, ep_dir=ep_dir)
+    from label.evidence_access import merge as merge_inspection
+    evidence_inspection = merge_inspection(parts, ep_dir)
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
+            **({"sensor_evidence": sensor_evidence} if sensor_evidence["sensors"] else {}),
+            **({"evidence_inspection": evidence_inspection} if evidence_inspection['parts'] else {}),
             # each part inferred its own task, with the recording's task text given only as context (write_pieces), so
             # no part was graded against that text and the recording is not either
             "given_prompt": (ctx.get("instruction") or "").strip() or None, "prompt_mode": "inferred",

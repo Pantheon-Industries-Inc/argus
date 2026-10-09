@@ -39,16 +39,23 @@ def test_valid_force_rows_survive_nonfinite_camera_origin(tmp_path, origin, bad,
             ]))
         if not external:
             f.create_dataset('sensors/timestamps', data=t).attrs['units'] = 's'
-            f.create_dataset('sensors/left_force', data=values)
+            force = f.create_dataset('sensors/left_force', data=values)
+            force.attrs['units'] = np.bytes_(b'N')
+            force.attrs['coordinate_frame'] = 'sensor'
     if external:
         with h5py.File(upload / 'force.h5', 'w') as f:
+            f.attrs['operator_note'] = 'zeroed before recording'
+            f.create_dataset('calibration/response_table', data=np.arange(1024).reshape(128, 8))
             f.create_dataset('timestamps', data=t).attrs['units'] = 's'
-            f.create_dataset('left_force', data=values)
+            force = f.create_dataset('left_force', data=values)
+            force.attrs['units'] = np.bytes_(b'N')
+            force.attrs['coordinate_frame'] = 'sensor'
     report = formats.convert(upload, 'teleop_arms', tmp_path / 'prepared', 'test', 900)
     assert not report['failed'] and len(report['episodes']) == 1
     ep = tmp_path / 'prepared' / report['episodes'][0]['episode_id']
     ctx = json.loads((ep / 'context.json').read_text())
     force = next(s for s in ctx.get('signals', []) if s['name'].endswith('left_force'))
+    assert force['units'] == 'N' and force['coordinate_frame'] == 'sensor'
     with np.load(ep / 'signals.npz') as arrays:
         np.testing.assert_array_equal(arrays[force['key']].ravel(), values)
     if bad != 'none':
@@ -57,3 +64,13 @@ def test_valid_force_rows_survive_nonfinite_camera_origin(tmp_path, origin, bad,
     if bad == 'first':
         assert ctx['clock_start_assumed'] is True
         assert 'source clock origin is estimated' in episode.build_request(ep)['prompt']
+    if external and bad == 'none':
+        from label import evidence_access
+        access = evidence_access.Access(episode.load(ep))
+        note = next(v for v in access.inventory() if v['name'] == 'HDF5 recording / attribute operator_note'
+                    and v['descriptor']['source_file'] == 'force.h5')
+        result = access.inspect({'field_id': note['id'], 'mode': 'metadata'})
+        assert result['value'] == 'zeroed before recording' and 'times_s' not in result
+        calibration = next(v for v in access.inventory() if v['name'] == 'HDF5 recording calibration/response_table'
+                           and v['descriptor']['source_file'] == 'force.h5')
+        assert access.inspect({'field_id': calibration['id'], 'mode': 'metadata', 'pointer': '/127/7'})['value'] == 1023

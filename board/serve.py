@@ -514,6 +514,21 @@ def public_label(d: dict) -> dict:
     return d
 
 
+def current_label(d: dict, job: Path | None, filename: str) -> dict:
+    """Project current human interpretation for a public read or export."""
+    if job is None:
+        return d
+    from board.dictionary_projection import project
+    meta = d.get('_meta') or {}
+    owner = (d.get('data_dictionary') or {}).get('episode_id') or meta.get('run_episode') or Path(filename).stem
+    episode_dir = Path(job) / 'episodes' / owner
+    if not episode_dir.is_dir():
+        units = Path(job) / 'units' / owner
+        if units.is_dir():
+            episode_dir = units
+    return project(d, episode_dir, owner)
+
+
 def withheld_status(result: dict) -> dict:
     """What a check a rule withheld found, so the page says it as the check came out, never clear for a check that
     crashed, fired or measured nothing: {"status": "errored" | "not_assessed" | "fired" | "clear"}, with the error or
@@ -662,7 +677,7 @@ INDEX_HTML = r"""<!doctype html>
   /* one meaning per colour: crimson, something wrong with the data or the outcome; green, the task done; indigo, the
      operator's performance; teal, interactive; blue and purple, the left and right arm; ink and greys, everything
      else. Severity is never a hue: stronger fill is higher severity. On the dark video panels the crimson is #e58c9a
-     and the indigo #a3aee0. No orange or amber anywhere. */
+     and the indigo #a3aee0. Orange and amber do not encode issue severity. */
   --accent:    #45818e;   /* interactive: links, selection, the playhead */
   --success:   #2f7d52;   /* the task done */
   --warning:   #4d5aa0;   /* the operator's performance */
@@ -1348,8 +1363,8 @@ aside.left .cam-cell.cam-exo .cam-label { top: calc(var(--fx-top, 0px) + 8px); l
   opacity: 0; transform: translateY(4px); transition: opacity 140ms ease, transform 140ms ease;
 }
 .ego-status .es-hand.show { opacity: 1; transform: translateY(0); }
-.ego-status .es-hand.hidden-hands { background: rgba(20, 22, 18, 0.9); border-color: rgba(255,255,255,0.45);
-  color: #f3f2ec; }
+.ego-status .es-hand.hidden-hands { background: rgba(250, 211, 92, 0.95); border-color: rgba(255,223,123,0.95);
+  color: #252015; }
 .ego-status .es-hand.gloved { background: rgba(20, 22, 18, 0.9); border-color: rgba(255,255,255,0.3); color: #e6e8df; }
 /* phones: the video is too small to carry the caption card on top of it, so it moves below the footage (as the
    handheld grippers' strip already does), its space kept while hidden so nothing jumps */
@@ -1513,6 +1528,115 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   font-family: var(--sans); cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
 .sensor-overlay.active { display: block; }
 .sensor-overlay .se-headline { font-size: 13px; }
+.grip-finding-overlay { position: absolute; z-index: 5; display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 12px; left: calc(var(--fx-left, 0px) + 12px); top: 80px;
+  width: min(300px, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 24px));
+  box-sizing: border-box; padding: 12px 14px; margin: 0; border: 1px solid rgba(255,255,255,.3);
+  border-left: 3px solid #a9c6cb; border-radius: 7px; background: rgba(12,18,22,.92); color: #fff;
+  text-align: left; font-family: var(--sans); cursor: pointer; }
+.grip-finding-overlay:disabled { visibility: hidden; pointer-events: none; }
+.grip-finding-overlay { transition: top 190ms cubic-bezier(0.22,0.61,0.36,1); transition-delay: 240ms; }
+.cam-cell:has(.recovery-overlay.active, .state-toast.active) .grip-finding-overlay { transition-delay: 0ms; }
+/* Below 601px the recovery card is static and its transitions expand the layout instead of moving its top. */
+@media (min-width: 601px) {
+  .cam-cell:has(.grip-finding-overlay:not(:disabled)) .recovery-overlay { transition-duration: 240ms, 0ms; }
+  .cam-cell:has(.grip-finding-overlay:not(:disabled)) .recovery-overlay.active { transition-delay: 190ms, 0ms; }
+}
+.cam-cell:has(.grip-finding-overlay:not(:disabled)) .state-toast.active { transition-delay: 190ms, 190ms; }
+.grip-finding-overlay:hover:enabled { background: rgba(12,18,22,.98); }
+.grip-finger-name { color: inherit; font-weight: inherit; text-decoration: none; }
+.grip-finding-overlay .gf-title .grip-finger-name { text-decoration: underline;
+  text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.gf-copy { display: grid; gap: 9px; }
+.gf-title { font-size: 16px; line-height: 1.3; font-weight: 400; }
+.gf-detail { font-size: 12px; line-height: 1.45; color: rgba(255,255,255,.85); }
+.gf-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.gf-phase { display: inline-block; padding: 4px 8px; border: 1px solid rgba(255,255,255,.4);
+  border-radius: 4px; background: rgba(255,255,255,.12); color: #fff;
+  font-size: 11px; line-height: 1; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.gf-phase.is-now { background: #dceaf1; border-color: #dceaf1; color: #18232d; }
+.gf-confidence { font-size: 11px; color: rgba(255,255,255,.7); }
+.gf-time { font-size: 12px; color: rgba(255,255,255,.85); }
+.gf-inspect { color: rgba(255,255,255,.7); font-size: 14px; }
+.gf-pressure { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.18); }
+.gf-pressure-head { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: rgba(255,255,255,.85); }
+.gf-pressure-row { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 8px; align-items: center; font-size: 11px; }
+.sensor-samples { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 11px; }
+.sensor-samples button, .sensor-samples select { padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.sensor-samples button:hover { background: var(--surface); }
+.gf-pressure-range { display: block; font-size: 9px; opacity: .65; }
+.gf-pressure-value { display: block; font-size: 10px; font-variant-numeric: tabular-nums; }
+.gf-pressure-row svg { display: block; width: 100%; height: 32px; overflow: visible; }
+.gf-pressure-note { font-size: 10px; color: rgba(255,255,255,.65); }
+
+.sensor-evidence.has-grip { padding: 16px; margin-top: 20px; }
+.tactile-qc { margin-bottom: 14px; }
+.tactile-qc-warning { padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 6px; }
+.tactile-qc-warning + .tactile-qc-warning { margin-top: 8px; }
+.tactile-qc-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+.tactile-qc-warning p { margin: 8px 0 0; color: var(--fg-2); font-size: 12px; line-height: 1.5; }
+.grip-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.grip-panel-head > strong { font-size: 15px; }
+.grip-count { margin-left: 7px; color: var(--fg-2); font-size: 12px; font-weight: 400; }
+.grip-model { font-size: 11px; color: var(--fg-2); }
+.grip-findings-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.sensor-evidence .grip-findings-list button { display: grid; gap: 9px; text-align: left; padding: 10px 12px; }
+.sensor-evidence .grip-findings-list button[aria-pressed="true"] { border-color: #9c85bd; background: rgba(156,133,189,.10); }
+.grip-finding-name { font-size: 12px; font-weight: 600; line-height: 1.4; }
+.grip-finding-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--fg-2); font-size: 10px; }
+.grip-selected { margin: 16px 0; padding: 14px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.grip-selected-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
+.grip-selected-head strong { font-size: 13px; }
+.grip-selected-head > span { font-size: 11px; color: var(--fg-2); }
+.recording-findings { margin: 16px 0; }
+.recording-findings > p { color: var(--fg-2); font-size: 11px; }
+.recording-evidence { overflow-x: auto; margin-top: 10px; font-size: 11px; }
+.recording-evidence summary { cursor: pointer; }
+.recording-evidence pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 90ch; }
+.recording-evidence table { border-collapse: collapse; margin: 8px 0; font-variant-numeric: tabular-nums; }
+.recording-evidence th, .recording-evidence td { padding: 5px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+.grip-adds { margin: 8px 0; font-size: 13px; line-height: 1.6; max-width: 90ch; }
+.grip-reasoning summary { font-size: 11px; cursor: pointer; color: var(--fg-2); }
+.grip-reasoning > div { margin: 12px 0; max-width: 90ch; }
+.grip-reasoning p { font-size: 12px; line-height: 1.6; margin: 5px 0; }
+.grip-field-label { font-size: 11px; font-weight: 600; }
+.grip-evidence-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.grip-evidence-head strong { font-size: 12px; }
+.grip-evidence-head > span { font-size: 11px; color: var(--fg-2); }
+.grip-evidence-grid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
+.grip-evidence-grid figure { margin: 0; min-width: 0; }
+.grip-evidence-grid figcaption { font-size: 12px; font-weight: 500; }
+.grip-trace-figure figcaption > span { display: block; margin-top: 5px; font-size: 10px; font-weight: 400; color: var(--fg-2); }
+.grip-map-figure svg { display: block; width: 100%; height: 190px; margin-top: 8px; }
+.grip-map-key { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 9px; color: var(--fg-2); }
+.grip-map-key i { width: 38px; height: 5px; background: linear-gradient(90deg, #28415f, #c3a4eb); border-radius: 3px; }
+.grip-chart-row { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 7px; margin-top: 16px; }
+.grip-y-axis { display: flex; flex-direction: column; justify-content: space-between; height: 150px; text-align: right; font-size: 10px; color: var(--fg-2); }
+.grip-plot svg { width: 100%; height: 150px; display: block; overflow: visible; }
+.grip-x-axis { position: relative; height: 18px; margin-top: 5px; font-size: 10px; color: var(--fg-2); }
+.grip-x-axis span { position: absolute; transform: translateX(-50%); }
+.grip-x-axis span:first-child { transform: none; }
+.grip-x-axis span:last-child { transform: translateX(-100%); }
+.grip-trace-key { display: flex; flex-wrap: wrap; gap: 7px 12px; margin-top: 8px; margin-left: 35px; }
+.grip-trace-key span { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-2); }
+.grip-trace-key i { width: 13px; height: 3px; border-radius: 2px; }
+.grip-method { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.grip-method > summary { font-size: 11px; cursor: pointer; color: var(--fg-2); }
+@media (max-width: 720px) {
+  .grip-evidence-grid { grid-template-columns: 180px minmax(0, 1fr); gap: 12px; }
+  .grip-map-figure svg { height: 170px; }
+  .grip-findings-list { grid-template-columns: 1fr; }
+  .sensor-evidence .grip-findings-list button { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .grip-finding-meta { justify-content: flex-end; }
+}
+@media (max-width: 450px) {
+  .grip-evidence-grid { grid-template-columns: 1fr; }
+  .grip-map-figure svg { width: 200px; margin: 8px auto; }
+  .sensor-evidence .grip-findings-list button { grid-template-columns: 1fr; }
+  .grip-finding-meta { justify-content: flex-start; }
+}
+.timeline .grip-span { position: absolute; height: 4px; bottom: 0; background: #9c85bd; border-radius: 2px; pointer-events: none; }
+
 aside.left .grip-strip .sensor-overlay { position: static; order: 2; max-width: 92%; margin-top: 6px; }
 @media (max-width: 600px) {
   aside.left .cam-cell > .sensor-overlay { position: static; order: 5; flex: 1 0 100%; max-width: none;
@@ -1597,6 +1721,8 @@ aside.left .grip-strip .sensor-overlay { position: static; order: 2; max-width: 
     #000 calc(var(--dp-bar, 0px) + 12px)); }
 .dp-vid.on { opacity: 1; }
 .cam-cell.dp-compare .dp-vid.on { clip-path: inset(0 0 0 50%); }
+.dp-roi { position: absolute; z-index: 4; pointer-events: none; overflow: visible; }
+.cam-cell.dp-compare .dp-roi { clip-path: inset(0 0 0 50%); }
 .dp-vid.ctl { --dp-band: 0.18; }
 @media (prefers-reduced-motion: reduce) { .dp-vid, .sn-peak, .sn-hv { transition: none; } }
 #sn-slot { transition: opacity 220ms ease; }
@@ -1616,6 +1742,31 @@ aside.left .grip-strip .sensor-overlay { position: static; order: 2; max-width: 
    box's colour is what the model found in the frames. A diamond is a moment the model saw a hand take hold of
    something that no recorded contact covers. */
 .tc-row + .tc-row { margin-top: 6px; }
+.recording-card { padding: 16px; margin: 14px 0; border: 1px solid var(--border-strong); border-radius: 7px;
+  background: var(--surface); font-family: var(--sans); }
+.recording-card .lane-title { font: 600 14px/1.4 var(--sans); }
+.recording-card .lane-head { margin-bottom: 12px; align-items: center; }
+.tc-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 7px; }
+.recording-card .tc-hand { margin: 0; color: var(--fg); font: 500 13px/1.4 var(--sans); }
+.tc-verdict { font-size: 12px; color: var(--fg-2); }
+.recording-card .tc-bar { height: 34px; border: 1px solid var(--border); box-shadow: none; }
+.recording-card .tc-seg, .recording-card .tc-seg.now { border: none; box-shadow: none; border-radius: 2px; opacity: 1; }
+.recording-card .tc-seg path { fill: var(--fg-2); opacity: .5; }
+.recording-card .lane-ph { z-index: 2; }
+.recording-axis { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; color: var(--fg-2); }
+.tc-observations { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.tc-observations-label { font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 7px; }
+.tc-observation { display: flex; align-items: baseline; gap: 12px; text-align: left; color: var(--fg); background: transparent;
+  border: 0; width: 100%; padding: 6px 0; cursor: pointer; font: 13px/1.4 var(--sans); }
+.tc-observation:hover .tc-observation-title { text-decoration: underline; }
+.tc-observation-time { color: var(--fg-2); min-width: 38px; }
+.tc-observation-title, .tc-observation-note { display: block; }
+.tc-observation-note { color: var(--fg-2); font-size: 12px; margin-top: 3px; }
+.recording-card.lane-hands .lane-bar { height: 8px; margin-top: 10px; }
+.hand-absence-time { background: transparent; border: 0; padding: 0; color: var(--fg); cursor: pointer; font: 13px/1.4 var(--sans); }
+.hand-absence-time:hover { text-decoration: underline; }
+.hand-absence-times { display: flex; gap: 8px 16px; flex-wrap: wrap; }
+.hand-absence-share { color: var(--fg-2); font-size: 12px; }
 .tc-hand { display: block; margin: 0 0 3px; font: 500 10.5px/1.3 var(--mono); color: var(--fg-2); }
 .lane-bar.tc-bar { height: 24px; }
 .tc-seg { --c: var(--fg-2); position: absolute; top: 2px; bottom: 2px; box-sizing: border-box; overflow: hidden;
@@ -2868,7 +3019,8 @@ function buildVideoMenu() {
   const hasTop = main === 'exo';
   // an extra camera is named as its cell is (camera_labels), never as a wrist
   const label = c => { const i = views.indexOf(c); return (d.camera_labels && i >= 0 && d.camera_labels[i]) || c; };
-  const name = c => c === 'exo' ? 'exo' : (c !== 'left' && c !== 'right') ? label(c)
+  const name = c => (d.camera_mounting || {})[c] === 'unspecified' ? `${label(c)} camera`
+    : c === 'exo' ? 'exo' : (c !== 'left' && c !== 'right') ? label(c)
     : (hasTop ? `${c} wrist` : `${c} camera`);
   const eidEnc = encodeURIComponent(eid);
   vdMenu.innerHTML = `<button type="button" class="vd-opt" role="menuitem" data-whole="1">Whole episode<small>`
@@ -3170,16 +3322,22 @@ function dictionaryRows(data, endpoint) {
         if (layout && layout.value.trim()) body.layout = JSON.parse(layout.value);
         const response = await fetch(endpoint.split('?')[0], {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
         const result = await response.json(); if (!response.ok) throw Error(result.error || 'Saving failed.');
-        const loaded = await fetch(endpoint, {cache: 'no-store'}); if (!loaded.ok) throw Error('Reload the dictionary.');
-        const saved = await loaded.json();
-        if (_activeFile !== file || !target.contains(form)) return;
-        dictionaryRows(saved, endpoint);
-        target.querySelector('details').open = true;
+        _epCache.clear();
+        const current = _activeFile;
+        if (current) {
+          await selectEp(current, true);
+          if (current === file && _activeFile === current) {
+            const fold = target.querySelector('details');
+            if (fold) fold.open = true;
+          }
+        }
       } catch (error) { message.textContent = error.message; button.disabled = false; }
     });
   }
 }
+let _dictionaryLoadToken = 0;
 async function loadDictionary(d, file) {
+  const token = ++_dictionaryLoadToken;
   const base = window.__DICTIONARY_URL || BOARD.dictionary_url;
   const endpoint = base && (base + '?' + (STATIC ? 'episode=' + encodeURIComponent((d.data_dictionary || {}).episode_id || (d._meta || {}).episode_id || '') : 'file=' + encodeURIComponent(file)));
   dictionaryRows(d.data_dictionary, null);
@@ -3187,7 +3345,7 @@ async function loadDictionary(d, file) {
   try {
     const response = await fetch(endpoint, {cache: 'no-store'});
     if (!response.ok) return;
-    const data = await response.json(); if (_activeFile === file) dictionaryRows(data, endpoint);
+    const data = await response.json(); if (token === _dictionaryLoadToken && _activeFile === file) dictionaryRows(data, endpoint);
   } catch (_) {}
 }
 
@@ -4665,15 +4823,225 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
   else loadSensors(file).then(D => fill(D, true));
 }
 // ================= sensor evidence: present saved observations without adding model conclusions =================
+function gripFingerCopy(value) {
+  return String(value ?? '').replace(/\b(index|ring|little)(?:[- ]+finger(?:tip)?)?\b|\b(middle)(?:[- ]+finger(?:tip)?|(?= pressure| response| patch|$))\b/gi,
+    (match, name, middle) => (name || middle) + ' finger' + (/fingertip$/i.test(match) ? ' tip' : ''));
+}
+function gripFingerHtml(value) {
+  return esc(gripFingerCopy(value)).replace(/\b(thumb|(?:index|middle|ring|little) finger)\b/gi,
+    name => `<span class="grip-finger-name" data-finger="${name.split(' ')[0].toLowerCase()}">${name}</span>`);
+}
+function genericSensorReceipts(d) {
+  const inspection = d.evidence_inspection;
+  if (!inspection || inspection.version !== 1) return null;
+  const receipts = [];
+  const add = (record, prefix, origin, current) => {
+    for (const r of Array.isArray(record.inspections) ? record.inspections : []) {
+      if (!r || !r.id) continue;
+      receipts.push({...r, id: prefix + r.id, current: current && r.review_status !== 'rejected' && !r.withheld_from_final,
+        times_s: (r.times_s || []).filter(Number.isFinite).map(t => t + origin)});
+    }
+  };
+  add(inspection, '', 0, inspection.source_current !== false);
+  for (const part of inspection.parts || []) {
+    if (!part || !part.record || part.record.version !== 1) continue;
+    add(part.record, 'part' + part.part + ':', Number.isFinite(part.time_origin_s) ? part.time_origin_s : 0,
+      inspection.source_current !== false && part.record.source_current === true && Number.isFinite(part.time_origin_s));
+  }
+  return receipts;
+}
+function genericSensorAvailable(G, id) {
+  const sensor = (G.sensors || []).find(s => s.id === id);
+  if (!sensor || sensor.review_status === 'rejected' || sensor.withheld_from_final) return false;
+  const receipt = (G.receipts || []).find(r => r.id === id);
+  if (receipt) return receipt.current;
+  return !(G.receipts && sensor.access_kind);
+}
+function genericSensorSampleTimes(G, f) {
+  if (!G || !G.generic || !f || f.review_status === 'rejected') return [];
+  const times = [];
+  for (const ref of f.evidence || []) {
+    if (!genericSensorAvailable(G, ref.sensor_id)) continue;
+    if (ref.series_id) {
+      const r = (G.series || []).find(r => r.id === ref.series_id && r.sensor_id === ref.sensor_id);
+      if (!r || r.review_status === 'rejected' || r.withheld_from_final || !Array.isArray(r.times)
+          || !Array.isArray(r.values) || r.times.length !== r.values.length) continue;
+      times.push(...r.times.filter((t, i) => Number.isFinite(r.values[i])));
+    } else {
+      const receipt = (G.receipts || []).find(r => r.id === ref.sensor_id);
+      const sensor = (G.sensors || []).find(s => s.id === ref.sensor_id);
+      times.push(...(receipt ? receipt.times_s : sensor.times || []));
+    }
+  }
+  return [...new Set(times.filter(t => Number.isFinite(t) && t >= 0 && t >= f.start && t <= f.end))].sort((a, b) => a - b);
+}
+function genericSensorSamplesHtml(G, f) {
+  const times = genericSensorSampleTimes(G, f);
+  if (!times.length) return '';
+  if (times.length > 8) return `<label class="sensor-samples"><span>Samples</span><select data-sensor-sample-select aria-label="Inspect recorded sample paused"><option value="">Choose time</option>${times.map(t =>
+    `<option value="${t}">${esc(String(Number(t.toFixed(6))))}s</option>`).join('')}</select></label>`;
+  return `<div class="sensor-samples" role="group" aria-label="Recorded evidence samples"><span>Samples</span>${times.map(t =>
+    `<button type="button" data-sensor-sample-t="${t}" title="Inspect recorded sample paused">${esc(String(Number(t.toFixed(6))))}s</button>`).join('')}</div>`;
+}
+function genericSensorSeries(G, f, limit = 3) {
+  if (!G || !G.generic || !f) return [];
+  const ids = new Set((f.evidence || []).map(e => e.series_id).filter(Boolean));
+  const selected = (G.series || []).filter(r => ids.has(r.id) && genericSensorAvailable(G, r.sensor_id) && r.review_status !== 'rejected'
+    && !r.withheld_from_final && (f.evidence || []).some(e => e.series_id === r.id && e.sensor_id === r.sensor_id) && Array.isArray(r.values) && Array.isArray(r.times)
+    && r.values.length === r.times.length && r.values.some(Number.isFinite));
+  const sensors = new Map((G.sensors || []).map(s => [s.id, s]));
+  const sourceName = r => String((sensors.get(r.sensor_id) || {}).name || r.sensor_id || 'Recorded field');
+  const leafName = r => sourceName(r).split(/[./]/).filter(Boolean).pop() || sourceName(r);
+  const readable = name => name.replace(/_/g, ' ');
+  return selected.slice(0, limit).map(r => {
+      const valid = r.values.filter(Number.isFinite);
+      const receipt = (G.receipts || []).find(receipt => receipt.id === r.sensor_id && receipt.current);
+      const depthRegion = !!receipt && receipt.mode === 'regions' && (receipt.descriptor || {}).kind === 'depth';
+      const recordedLow = Math.min(...valid), recordedHigh = Math.max(...valid);
+      const low = depthRegion ? recordedLow : Math.min(0, recordedLow), high = depthRegion ? recordedHigh : Math.max(0, recordedHigh);
+      const padding = Math.max(1, high - low) * .12;
+      let label = r.label;
+      if (/^(?:position|component|value|channel)_?\d+$/i.test(label)
+          || selected.some(other => other.id !== r.id && other.label === label && other.sensor_id !== r.sensor_id)) {
+        const name = selected.some(other => other.sensor_id !== r.sensor_id && leafName(other) === leafName(r))
+          ? sourceName(r) : leafName(r);
+        label = readable(name) + (selected.filter(other => other.sensor_id === r.sensor_id).length > 1 ? ': ' + readable(r.label) : '');
+      }
+      return {...r, depthRegion, recordedLow, recordedHigh, label: label + (typeof r.unit === 'string' ? ' (' + r.unit + ')' : ''),
+        low: low - padding, high: high + padding};
+    });
+}
+function genericSensorHeadlineHtml(value) {
+  return esc(value).replace(/\b(thumb|(?:index|middle|ring|little) finger)\b/gi,
+    name => `<span class="grip-finger-name">${name}</span>`);
+}
+function sensorImageEvidenceHtml(G, f, compact = false) {
+  if (!G || !G.generic || !G.media || !f) return '';
+  const ids = new Set((f.evidence || []).map(e => e.sensor_id));
+  return (G.sensors || []).filter(s => s.kind === 'image' && ids.has(s.id) && genericSensorAvailable(G, s.id)
+    && /^(exo|left|right|extra\d{1,2})$/.test(s.view)).slice(0, compact ? 1 : 2).map(s =>
+      `<span class="sensor-image-evidence"><span>${esc(s.name)}</span>
+      <video data-sensor-evidence-video="${esc(s.id)}" src="${esc(videoSrc(G.media.eid, s.view))}" muted playsinline preload="metadata"
+        style="display:block;width:${compact ? '100%' : 'min(100%,320px)'};max-height:${compact ? '90px' : '240px'};object-fit:contain"></video></span>`).join('');
+}
+function genericSensorPanelHtml(G, f) {
+  if (!G || !G.generic || !f) return '';
+  const ids = new Set((f.evidence || []).map(e => e.sensor_id));
+  const sensors = (G.sensors || []).filter(s => ids.has(s.id) && genericSensorAvailable(G, s.id));
+  return `<div class="grip-evidence-head"><strong>Recorded sensor evidence</strong></div>
+    ${genericSensorSamplesHtml(G, f)}${gripOverlayPressureHtml(G, f, Infinity)}${sensorImageEvidenceHtml(G, f)}
+    <div class="grip-trace-key">${sensors.map(s => `<span>${esc(s.name)}</span>`).join('')}</div>`;
+}
+function genericSensorMethodHtml(G) {
+  if (!G || !G.generic) return '';
+  return `<details class="se-method grip-method"><summary>Method and limits</summary>
+    <p>These findings use the video and the recorded sensor evidence supplied in the same annotation request. They have not been validated by a matched control or an accuracy study.</p>
+    <p>Each trace shows recorded values on its own fixed scale. Points mark supplied samples, without implying continuous measurements between them. Units and locations come from recorded descriptors and the data dictionary. Unknown units remain unknown. Zero codes are retained unless the source declares them invalid. Missing readings remain blank. A larger electrical reading does not establish a stronger squeeze.</p>
+    ${(G.limitations || []).map(x => `<p>${esc(x)}</p>`).join('')}
+    ${(G.sensors || []).filter(s => Object.keys(s.timing || {}).length).map(s => {
+      const timing = s.timing || {}, parts = [];
+      if (Number.isFinite(timing.rate_hz)) parts.push(timing.rate_hz + 'Hz recorded rate');
+      if (timing.aligned_by) parts.push('Aligned by ' + timing.aligned_by);
+      if (timing.camera_aligned_by) parts.push('Camera alignment ' + timing.camera_aligned_by);
+      return parts.length ? `<p>${esc(s.name)}<br>${parts.map(esc).join('<br>')}</p>` : '';
+    }).join('')}
+    ${G.unbound_findings && G.unbound_findings.length ? `<p>${G.unbound_findings.length} model findings could not be bound to supplied evidence and are withheld.</p>` : ''}</details>`;
+}
+function syncGenericSensorVideos(t) {
+  document.querySelectorAll('[data-sensor-evidence-video]').forEach(v => {
+    if (Math.abs(v.currentTime - t) > .08) v.currentTime = t;
+  });
+}
+
+function recordingFindings(d) {
+  const records = [], findings = [];
+  function visit(record) {
+    if (!record || record.version !== 1) return;
+    records.push(record);
+    for (const part of record.parts || []) visit(part.record);
+  }
+  visit(d.evidence_inspection);
+  for (const record of records) {
+    const receipts = new Map((record.inspections || []).map(r => [r.id, r]));
+    for (const finding of record.untimed_findings || []) {
+      if (!finding || finding.review_status === 'rejected' || finding.adds_beyond_video !== true
+          || finding.start_s != null || finding.end_s != null || !finding.headline) continue;
+      const refs = finding.evidence || [];
+      if (!refs.length || refs.some(ref => !receipts.has(ref.evidence_id))) continue;
+      findings.push({...finding, receipts: refs.map(ref => ({ref, receipt: receipts.get(ref.evidence_id)}))});
+    }
+  }
+  return findings;
+}
+function recordingFindingsHtml(findings) {
+  if (!findings.length) return '';
+  return `<section class="recording-findings"><div class="grip-panel-head"><strong>Recording findings</strong></div>
+    <p>These findings have no verified position on the video timeline.</p>
+    ${findings.map(f => `<article class="grip-selected"><div class="grip-selected-head"><strong>${genericSensorHeadlineHtml(f.headline)}</strong>
+      <span>${esc(f.confidence || 'Unspecified')} confidence</span></div>
+      <p class="grip-adds">${esc(f.detail || f.claim || f.observation || '')}</p>
+      <details class="recording-evidence"><summary>Evidence</summary>
+      ${f.receipts.map(({ref, receipt:r}) => {
+        const title = `<p><strong>${esc((r.descriptor || {}).name || 'Recorded field')}</strong></p>`;
+        if (r.mode === 'metadata') {
+          let display = JSON.parse(JSON.stringify(r.value));
+          for (const exact of r.exact_metadata_values || []) {
+            if (!exact.pointer) { display = exact.decimal; continue; }
+            const keys = exact.pointer.slice(1).split('/').map(k => k.replace(/~1/g, '/').replace(/~0/g, '~'));
+            let parent = display;
+            for (const key of keys.slice(0, -1)) parent = parent[key];
+            parent[keys[keys.length - 1]] = exact.decimal;
+          }
+          return title + `<pre>${esc(JSON.stringify(display, null, 2))}</pre>`;
+        }
+        const cols = (ref.columns || r.columns || []).filter(c => (r.columns || []).includes(c));
+        const rows = (ref.rows || []).filter(row => (r.rows || []).includes(row));
+        if (!r.values || !cols.length) return title + `<p>Source rows ${rows.map(esc).join(', ')}</p>`;
+        return title + `<table><thead><tr><th>Source row</th>${cols.map(c => {
+          const i = r.columns.indexOf(c), name = (r.component_names || [])[i] || 'Component ' + c, unit = (r.component_units || [])[i];
+          return `<th>${esc(name)}${unit ? ' (' + esc(unit) + ')' : ''}</th>`;
+        }).join('')}</tr></thead><tbody>${rows.slice(0, 8).map(row => `<tr><td>${row}</td>${cols.map(c => {
+          const v = r.values[r.rows.indexOf(row)][r.columns.indexOf(c)];
+          const exact = (r.exact_integer_values || []).find(item => item.row === row && item.column === c);
+          return `<td>${v == null ? 'Missing' : esc(exact ? exact.decimal : v)}</td>`;
+        }).join('')}</tr>`).join('')}</tbody></table>${rows.length > 8 ? `<p>Showing 8 of ${rows.length} cited rows. Full evidence is in the JSON.</p>` : ''}`;
+      }).join('')}
+      ${f.alternative ? `<p>${esc(f.alternative)}</p>` : ''}</details></article>`).join('')}</section>`;
+}
+
 function sensorEvidence(d) {
   const text = v => v != null && String(v).trim() && String(v).toLowerCase() !== 'null'
     ? String(v).replace(/[\u2013\u2014]/g, '-') : '';
   const finite = v => typeof v === 'number' && Number.isFinite(v);
-  const contacts = [], moments = [];
+  const contacts = [], moments = [], insights = [];
+  const quality = d.tactile_qc && d.tactile_qc.version === 1 ? d.tactile_qc : null;
+  const warnings = (quality && Array.isArray(quality.warnings) ? quality.warnings : []).filter(w =>
+    w && w.review_status !== 'rejected' && finite(w.start_s) && finite(w.end_s)
+    && w.start_s >= 0 && w.end_s >= w.start_s && text(w.headline)
+    && !(w.contact_ids || []).some(id => (d.contacts || []).some(c => c.id === id
+      && (c.review_status === 'rejected' || c.seen && c.seen.review_status === 'rejected'))))
+    .map(w => ({...w, headline: text(w.headline), detail: text(w.detail)}));
+  const generic = d.sensor_evidence && d.sensor_evidence.version === 1
+    ? {...d.sensor_evidence, generic: true, receipts: genericSensorReceipts(d)} : null;
+  const grip = generic && (generic.findings || []).length ? generic
+    : d.grip_evidence && d.grip_evidence.version === 1 ? d.grip_evidence : null;
+  for (const f of grip && Array.isArray(grip.findings) ? grip.findings : []) {
+    if (!f || f.review_status === 'rejected' || (grip.generic && f.adds_beyond_video !== true) || !finite(f.start_s) || !finite(f.end_s)
+      || f.end_s < f.start_s || !text(f.headline)) continue;
+    insights.push({start: f.start_s, end: f.end_s, index: -1, priority: 3, kind: 'insight',
+      headline: grip.generic ? text(f.headline) : gripFingerCopy(text(f.headline)),
+      detail: grip.generic ? text(f.detail) : gripFingerCopy(text(f.detail)), reading: grip.generic ? 'Recorded sensor evidence' : 'Relative grip loading',
+      visual: f.confidence === 'high' ? 'High confidence' : f.confidence === 'medium' ? 'Medium confidence' : 'Low confidence',
+      t: finite(f.inspect_s) && f.inspect_s >= f.start_s && f.inspect_s <= f.end_s ? f.inspect_s : f.start_s,
+      timing: '', alternative: text(f.alternative), observation: text(f.observation), claim: text(f.claim),
+      quotedTimeOffset: finite(f.quoted_time_offset_s) ? f.quoted_time_offset_s : 0,
+      generic: !!grip.generic, evidence: grip.generic && Array.isArray(f.evidence) ? f.evidence : [],
+      addsBeyond: f.adds_beyond_video === true || f.adds_beyond_rgb_pose === true, cellGroups: Array.isArray(f.cell_groups) ? f.cell_groups : []});
+  }
   for (const [i, c] of (d.contacts || []).entries()) {
-    if (!finite(c.start_s) || !finite(c.end_s) || c.end_s < c.start_s) continue;
-    const s = c.shown && c.seen ? c.seen : {};
-    const visual = !c.shown ? 'Not visually checked' : !c.seen ? 'No visual verdict'
+    if (!c || c.review_status === 'rejected' || !finite(c.start_s) || !finite(c.end_s) || c.end_s < c.start_s) continue;
+    const s = c.shown && c.seen && c.seen.review_status !== 'rejected' ? c.seen : {};
+    const visual = !c.shown ? 'Not visually checked' : !c.seen || c.seen.review_status === 'rejected' ? 'No visual verdict'
       : s.touch_seen === 'yes' ? 'Touch seen in sampled frames'
       : s.touch_seen === 'no' ? 'Touch not seen in sampled frames' : 'Visual touch unclear';
     const hand = c.hand === 'left' ? 'Left hand' : c.hand === 'right' ? 'Right hand' : 'Hand';
@@ -4698,14 +5066,14 @@ function sensorEvidence(d) {
       add(t, 'Contact signal weakens and returns', 'dip');
     if (!c.to_end) add(c.end_s, 'Contact signal ends', 'end');
   }
-  for (const m of d.contacts_missing || []) if (finite(m.t_s)) moments.push({t: m.t_s, kind: 'missing',
+  for (const m of d.contacts_missing || []) if (m && m.review_status !== 'rejected' && finite(m.t_s)) moments.push({t: m.t_s, kind: 'missing',
     headline: 'Visible grasp has no recorded contact', reading: 'No covering contact', visual: 'Reported from video',
     detail: [text(m.hand), text(m.object)].filter(Boolean).join(' '), priority: 6, index: -1, timing: ''});
   moments.sort((a, b) => a.t - b.t || b.priority - a.priority);
-  return {contacts, moments};
+  return {contacts, moments, insights, grip, warnings, recordingFindings: recordingFindings(d)};
 }
 function activeSensorEvidence(E, t) {
-  const active = E.contacts.filter(c => t >= c.start && t <= c.end)
+  const active = [...E.contacts, ...(E.insights || [])].filter(c => t + 1e-6 >= c.start && t <= c.end + 1e-6)
     .sort((a, b) => b.priority - a.priority || b.start - a.start);
   const moments = E.moments.filter(m => t >= m.t && t < m.t + (m.kind === 'missing' ? 1.5 : 0.65)
     && (m.kind === 'end' || m.kind === 'missing' || t <= m.end))
@@ -4714,11 +5082,120 @@ function activeSensorEvidence(E, t) {
   if (moment && (!contact || moment.priority >= contact.priority)) return moment;
   return contact || null;
 }
+function displayGripFinding(E, t) {
+  // Browser media clocks can truncate a requested seek to microseconds.
+  const finding = (E.insights || []).filter(f => t + 1e-6 >= f.start)
+    .sort((a, b) => b.start - a.start)[0];
+  return finding ? {...finding, phase: t <= finding.end + 1e-6 ? 'Now' : 'Earlier'} : null;
+}
+function gripOverlaySeries(G, f, limit = 3) {
+  if (G && G.generic) return genericSensorSeries(G, f, limit);
+  if (!G || !Array.isArray(G.times) || !G.times.length || !f) return [];
+  const patches = gripPatchTraces(G, f);
+  const names = gripFingerCopy(f.headline + ' ' + (f.detail || '')).toLowerCase();
+  const traces = patches.length ? patches.map((p, i) => ({...p,
+    label: gripFingerCopy(p.label.replace(/\b(?:tip|middle) patch\b/i, 'area ' + (i + 1))).replace(/patch [ab]/i, 'area ' + (i + 1))}))
+    : Object.entries(G.regions || {}).filter(([key, values]) =>
+      ['thumb', 'index', 'middle', 'ring', 'little', 'palm'].includes(key)
+      && new RegExp('\\b' + key + '\\b').test(names)
+      && Array.isArray(values) && values.length === G.times.length)
+      .map(([key, values]) => ({label: gripFingerCopy(key[0].toUpperCase() + key.slice(1)), values}));
+  return traces.slice(0, 3).filter(v => v.values.some(Number.isFinite)).map(v => {
+    const valid = v.values.filter(Number.isFinite), low = Math.min(0, ...valid), high = Math.max(0, ...valid);
+    const padding = Math.max(1, high - low) * .12;
+    return {...v, low: low - padding, high: high + padding};
+  });
+}
+function gripOverlayPressureHtml(G, f, limit = 3) {
+  const traces = gripOverlaySeries(G, f, limit);
+  if (!traces.length) return '';
+  const allTimes = traces.flatMap(v => v.times || G.times || []);
+  const end = Math.max(1e-6, ...allTimes), x = t => 180 * t / end;
+  return `<span class="gf-pressure" title="${G.generic ? 'Recorded readings, each row on its own fixed scale. Points are sampled readings. Depth region rows show their recorded range. Other rows retain zero. Missing samples remain blank. Compare within a row.' : 'The dot follows the video. The dashed line is the starting level. Each row uses a fixed scale over the whole clip. Height shows recorded sensor change, not calibrated force. Compare changes within a row.'}">
+    ${traces.map((v, k) => {
+      const times = v.times || G.times;
+      const y = value => 28 - 24 * (value - v.low) / (v.high - v.low);
+      let pen = false, path = '', points = '';
+      v.values.forEach((value, i) => {
+        if (!Number.isFinite(value)) { pen = false; return; }
+        if (G.generic) {
+          points += `<circle data-sensor-recorded-point cx="${x(times[i]).toFixed(2)}" cy="${y(value).toFixed(2)}" r="1.8" fill="currentColor" opacity=".65"/>`;
+          return;
+        }
+        if (!G.generic && i && times[i] - times[i - 1] > .1001) pen = false;
+        path += `${pen ? 'L' : 'M'}${x(times[i]).toFixed(2)},${y(value).toFixed(2)} `;
+        pen = true;
+      });
+      return `<span class="gf-pressure-row"><span>${esc(v.label)}${v.depthRegion ? `<span class="gf-pressure-range">${esc(v.recordedLow)} to ${esc(v.recordedHigh)}</span>` : ''}${G.generic ? `<span class="gf-pressure-value" data-grip-mini-value="${k}"></span>` : ''}</span>
+        <svg viewBox="0 0 180 32" preserveAspectRatio="none" role="img" aria-label="${esc(v.label)} ${G.generic ? 'recorded readings' : 'pressure change over this clip'}">
+          <rect x="${x(f.start)}" y="2" width="${x(f.end) - x(f.start)}" height="28" fill="currentColor" opacity=".08"/>
+          ${v.depthRegion ? '' : `<line x1="0" x2="180" y1="${y(0)}" y2="${y(0)}" stroke="currentColor" opacity=".3" stroke-dasharray="2 3"/>`}
+          ${points}<path d="${path.trim()}" fill="none" stroke="currentColor" opacity=".65" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
+          <circle data-grip-mini-dot="${k}" cx="0" cy="0" r="2.8" fill="currentColor" visibility="hidden"/>
+          <text data-grip-mini-gap="${k}" x="178" y="11" text-anchor="end" fill="currentColor" font-size="9" visibility="hidden">${G.generic ? 'Not sampled' : 'No reading'}</text>
+        </svg></span>`;
+    }).join('')}
+    </span>`;
+}
+function syncGripOverlayPressure(G, f, t, scope = document, limit = 3) {
+  const traces = gripOverlaySeries(G, f, limit);
+  if (!traces.length) return;
+  const end = Math.max(1e-6, ...traces.flatMap(v => v.times || G.times || []));
+  const sample = v => {
+    const times = v.times || G.times;
+    let i = 0;
+    while (i + 1 < times.length && Math.abs(times[i + 1] - t) <= Math.abs(times[i] - t)) i++;
+    const nearby = Math.abs(times[i] - t) <= (G.generic ? Math.max(.001, (v.sample_period_s || .03) * 1.5) : .1001);
+    return {i, x: 180 * times[i] / end, value: v.values[i], nearby};
+  };
+  for (const dot of scope.querySelectorAll('[data-grip-mini-dot]')) {
+    const v = traces[+dot.dataset.gripMiniDot];
+    if (!v) continue;
+    const {x, value, nearby} = sample(v);
+    dot.setAttribute('visibility', nearby && Number.isFinite(value) ? 'visible' : 'hidden');
+    if (Number.isFinite(value)) {
+      dot.setAttribute('cx', x); dot.setAttribute('cy', 28 - 24 * (value - v.low) / (v.high - v.low));
+    }
+  }
+  for (const gap of scope.querySelectorAll('[data-grip-mini-gap]')) {
+    const v = traces[+gap.dataset.gripMiniGap];
+    const now = v && sample(v);
+    gap.setAttribute('visibility', now && now.nearby && Number.isFinite(now.value) ? 'hidden' : 'visible');
+  }
+  for (const label of scope.querySelectorAll('[data-grip-mini-value]')) {
+    const v = traces[+label.dataset.gripMiniValue], now = v && sample(v);
+    label.textContent = now && now.nearby && Number.isFinite(now.value) ? String(now.value) : '';
+  }
+  for (const label of scope.querySelectorAll('[data-grip-mini-time]')) label.textContent = 'Video ' + fmtT(t);
+}
+function gripFindingStripHtml(f, G = null) {
+  if (!f) return '';
+  return `<span class="gf-copy">
+    <span class="gf-meta"><span class="gf-phase${f.phase === 'Now' ? ' is-now' : ''}">${esc(f.phase)}</span>
+      ${f.phase === 'Earlier' ? `<span class="gf-time">${fmtT(f.start)} to ${fmtT(f.end)}</span>` : ''}</span>
+    <span class="gf-title">${f.generic ? genericSensorHeadlineHtml(f.headline) : gripFingerHtml(f.headline)}</span>
+    ${G && G.generic && genericSensorSeries(G, f, Infinity).length > 3
+      ? `<span class="gf-detail">${genericSensorSeries(G, f, Infinity).length} recorded signals</span>`
+      : gripOverlayPressureHtml(G, f)}
+    ${G && G.generic && genericSensorSeries(G, f, Infinity).length ? '' : sensorImageEvidenceHtml(G, f, true)}</span>
+    <span class="gf-inspect" aria-hidden="true">↗</span>`;
+}
 function sensorEvidenceOverlayHtml(e) {
   if (!e) return '';
   return `<span class="se-headline">${esc(e.headline)}</span><span class="se-sources"><span>${esc(e.reading)}</span>`
     + `<span>${esc(e.visual)}</span></span>${e.detail ? `<span class="se-action">${esc(e.detail)}</span>` : ''}`
     + (e.timing ? `<span class="se-timing">${esc(e.timing)}</span>` : '');
+}
+function gripFindingDetailHtml(f) {
+  if (!f) return '';
+  return `<div class="grip-selected-head"><strong>${f.generic ? genericSensorHeadlineHtml(f.headline) : gripFingerHtml(f.headline)}</strong><span>${fmtT(f.start)} to ${fmtT(f.end)}</span></div>
+    <p class="grip-adds">${esc(f.detail)}</p>
+    <details class="grip-reasoning"><summary>${f.generic ? 'Reasoning' : "Astra's reasoning"}</summary>
+      ${f.quotedTimeOffset ? `<p>Times quoted below start at 0s in the excerpt. Add ${fmtT(f.quotedTimeOffset)} to locate them in the video.</p>` : ''}
+      ${f.observation ? `<div><span class="grip-field-label">Recorded evidence</span><p>${esc(f.observation)}</p></div>` : ''}
+      ${f.claim ? `<div><span class="grip-field-label">Interpretation</span><p>${esc(f.claim)}</p></div>` : ''}
+      ${f.alternative ? `<div><span class="grip-field-label">Other explanations</span><p>${esc(f.alternative)}</p></div>` : ''}
+    </details>`;
 }
 function sensorReadingAvailable(s, i) {
   // Strength maps a missing reading to zero; use retained source availability instead.
@@ -4868,9 +5345,33 @@ function sensorPhasesHtml(profiles) {
   </div>`).join('');
 }
 function sensorEvidenceHtml(E, depth) {
-  if (!E.contacts.length && !E.moments.length && !depth.length) return '';
-  return `<div class="sensor-evidence" id="sensor-evidence">
-    ${E.contacts.length || E.moments.length ? `<div class="se-summary"><strong>Tactile recording</strong>
+  const insights = E.insights || [];
+  const warnings = E.warnings || [];
+  const recording = E.recordingFindings || [];
+  const depthSensors = new Set(((E.grip || {}).sensors || [])
+    .filter(s => s.access_kind === 'depth').map(s => s.id));
+  const depthFindingCount = insights.filter(f => (f.evidence || []).some(ref => depthSensors.has(ref.sensor_id))).length
+    + recording.filter(f => (f.receipts || []).some(({receipt}) => (receipt.descriptor || {}).kind === 'depth')).length;
+  if (!E.contacts.length && !E.moments.length && !insights.length && !depth.length && !warnings.length && !recording.length) return '';
+  return `<div class="sensor-evidence${insights.length ? ' has-grip' : ''}" id="sensor-evidence">
+    ${recordingFindingsHtml(recording)}
+    ${warnings.length ? `<div class="tactile-qc" aria-label="Tactile quality warnings">${warnings.map(w =>
+      `<div class="tactile-qc-warning"><div class="tactile-qc-head"><strong>${esc(w.headline)}</strong>
+      <button type="button" data-evidence-t="${w.start_s}" data-evidence-pause="true" title="Inspect warning at ${fmtT(w.start_s)}">${fmtT(w.start_s)} to ${fmtT(w.end_s)}</button></div>
+      <p>${esc(w.detail)}</p></div>`).join('')}</div>` : ''}
+    ${insights.length ? `<div class="grip-panel-head"><strong>${E.grip.generic ? 'Sensor findings' : 'Tactile findings'} <span class="grip-count">${insights.length}</span></strong>
+      <span class="grip-model">${E.grip.generic && !/astra/i.test((E.grip.provenance || {}).model || '') ? 'Model annotation' : 'Astra annotation'}</span></div>
+      <div class="grip-findings-list" aria-label="${E.grip.generic ? 'Sensor findings' : 'Grip findings'}">${insights.map((f, i) => `<button type="button" data-grip-finding="${i}" data-evidence-t="${f.t}" data-evidence-pause="true" aria-pressed="${i === 0}">
+        <span class="grip-finding-name">${f.generic ? esc(f.headline) : gripFingerHtml(f.headline)}</span><span class="grip-finding-meta"><span>${fmtT(f.start)} to ${fmtT(f.end)}</span><span>${esc(f.visual)}</span></span></button>`).join('')}</div>
+      <div id="sensor-evidence-now" class="grip-selected">${gripFindingDetailHtml(insights[0])}</div>
+      <div id="grip-evidence-panel">${gripEvidencePanelHtml(E.grip, insights[0])}</div>
+      ${E.grip.generic ? genericSensorMethodHtml(E.grip) : `<details class="se-method grip-method"><summary>Method and limits</summary>
+        <p>Astra interpreted the mapped tactile recording together with video and estimated hand pose. Existing annotations and uploader descriptions were excluded. ${esc(E.grip.control_summary || 'The matched video-and-pose control produced no additional grip-loading findings.')} This is an exploratory comparison, not an accuracy estimate.</p>
+        <p>Relative response is uncalibrated. ADC is the sensor's electrical reading. No squeeze percentage or physical force units are established. The reference is the first three samples, not a mechanically unloaded glove.</p>
+        <p>Finger names follow the upstream OpenTouch layout; this recording's hardware revision is unverified. Glove bending, contact relocation and repeated pose estimates can affect interpretations.</p>
+        <p>Regional traces exclude every cell that ever reads zero. Local patch traces retain other samples of those cells, with censored samples left blank. The hand map uses one fixed scale; white rings mark zero raw codes. ${E.grip.map && E.grip.map.signed ? 'Orange and blue show response increases and decreases from the initial reference. Negative trace values mean lower response relative to that reference.' : ''} Regional ADC magnitudes cannot be compared as physical force between fingers.</p>
+      </details>`}`
+      : E.contacts.length || E.moments.length ? `<div class="se-summary"><strong>Tactile recording</strong>
       <span>Unloaded baseline unverified</span></div>
       <div id="sensor-evidence-now" class="se-current"></div>
       <div id="sensor-phase-profile"></div>
@@ -4879,22 +5380,116 @@ function sensorEvidenceHtml(E, depth) {
         + `<span>${esc(m.kind === 'dip' ? 'Signal dip' : m.kind === 'begin' ? 'Contact begins'
           : m.kind === 'end' ? 'Contact ends' : 'Unrecorded grasp')}</span></button>`).join('')}</div>` : ''}` : ''}
     ${depth.length ? `<div class="se-depth"><strong>Depth evidence</strong>
-      <span>No depth-specific finding in the saved annotation</span>
-      <button type="button" id="sensor-depth-compare">Compare RGB and depth</button>
+      ${depthFindingCount ? `<span>${depthFindingCount} depth ${depthFindingCount === 1 ? 'finding' : 'findings'}</span>` : ''}
+      <button type="button" id="sensor-depth-compare" title="R1 and R2 mark sampled depth pixels on paired depth clips. They do not track objects or map onto RGB.">Compare RGB and depth</button>
       <span id="sensor-depth-mode" hidden>RGB on the left Depth on the right</span></div>` : ''}
-    <button type="button" id="sensor-evidence-inspect">Inspect evidence</button>
+    ${insights.length ? '' : '<button type="button" id="sensor-evidence-inspect">Inspect evidence</button>'}
   </div>`;
 }
+function gripPatchTraces(G, f) {
+  if (!f || !Array.isArray(f.cellGroups) || !G.map || !Array.isArray(G.map.positions)
+    || !Array.isArray(G.map.response)) return [];
+  const palette = ['#ffaa6e', '#83c8e4', '#c3a4eb', '#92ca9b'];
+  return f.cellGroups.slice(0, 4).flatMap((group, k) => {
+    if (!group || !Array.isArray(group.cells) || !group.label) return [];
+    const ids = [...new Set(group.cells)], indexes = ids.map(id => G.map.positions.findIndex(p => p.cell === id));
+    if (!ids.length || indexes.some(i => i < 0)) return [];
+    return [{label: String(group.label), color: palette[k], cells: ids, values: G.times.map((t, i) => {
+      const row = G.map.response[i], zero = (G.map.zero || [])[i] || [];
+      return row && indexes.every(j => Number.isFinite(row[j]) && !zero[j])
+        ? indexes.reduce((sum, j) => sum + row[j], 0) / indexes.length : NaN;
+    })}];
+  });
+}
+function gripEvidencePanelHtml(G, f = null) {
+  if (G && G.generic) return genericSensorPanelHtml(G, f);
+  if (!G || !Array.isArray(G.times) || !G.times.length || !G.map || !Array.isArray(G.map.positions)) return '';
+  const colors = {thumb: '#c3a4eb', index: '#83c8e4', middle: '#718696', ring: '#607585', little: '#526c7c', palm: '#768995'};
+  const times = G.times, end = times[times.length - 1] || 1, W = 600, H = 150;
+  const patches = gripPatchTraces(G, f);
+  const traces = patches.length ? patches : Object.entries(G.regions || {})
+    .filter(([k, v]) => Array.isArray(v) && v.length === times.length)
+    .map(([k, v]) => ({label: k[0].toUpperCase() + k.slice(1), color: colors[k] || '#7d8d9c', values: v,
+      width: ['thumb', 'index'].includes(k) ? 2.5 : 1}));
+  const finiteValues = traces.flatMap(v => v.values).filter(Number.isFinite);
+  const max = 100 * Math.ceil(Math.max(1, ...finiteValues) / 100);
+  const min = 100 * Math.floor(Math.min(0, ...finiteValues) / 100), range = max - min;
+  const path = v => { let pen = false, d = ''; v.forEach((y, i) => {
+    if (!Number.isFinite(y)) { pen = false; return; }
+    d += `${pen ? 'L' : 'M'}${(W * times[i] / end).toFixed(2)},${(H - H * (y - min) / range).toFixed(2)} `;
+    pen = true;
+  }); return d.trim(); };
+  const paths = traces.map(v => `<path d="${path(v.values)}" fill="none" stroke="${v.color}" stroke-width="${v.width || 2.5}" vector-effect="non-scaling-stroke"/>`).join('');
+  const circles = G.map.positions.map((p, i) => {
+    const patch = patches.find(v => v.cells.includes(p.cell));
+    return `<circle data-grip-cell="${i}"${patch ? ` data-grip-patch-color="${patch.color}" stroke="${patch.color}" stroke-width="1.8"` : ''} cx="${100 + (p.x - 230) * .69}" cy="${35 + (p.y - 73) * .69}" r="3.3" fill="#28415f"><title>${esc(gripFingerCopy(p.region) + ' cell ' + p.cell + (patch ? ': ' + patch.label : ''))}</title></circle>`;
+  }).join('');
+  const ticks = [0, .25, .5, .75, 1].map(q => `<span style="left:${100 * q}%">${(q * end).toFixed(1)}s</span>`).join('');
+  return `<div class="grip-evidence-head"><strong>Recorded tactile evidence</strong><span id="grip-evidence-time"></span></div>
+    <div class="grip-evidence-grid"><figure class="grip-map-figure"><figcaption>Response by location</figcaption>
+      <svg viewBox="70 -14 290 334" role="img" aria-label="Mapped tactile response">${circles}
+        <g fill="currentColor" font-size="14" text-anchor="middle"><text x="96" y="84"><tspan x="96">Little </tspan><tspan x="96" dy="15">finger</tspan></text><text x="133" y="17"><tspan x="133">Ring </tspan><tspan x="133" dy="15">finger</tspan></text><text x="184" y="2"><tspan x="184">Middle </tspan><tspan x="184" dy="15">finger</tspan></text><text x="241" y="14"><tspan x="241">Index </tspan><tspan x="241" dy="15">finger</tspan></text><text x="316" y="150">Thumb</text><text x="204" y="310">Palm</text></g></svg>
+      <div class="grip-map-key"><span>${G.map.signed ? 'Decrease' : 'Less change'}</span><i${G.map.signed ? ' style="background:linear-gradient(90deg,#46aaf0,#465a6e,#ffaa6e)"' : ''}></i><span>${G.map.signed ? 'Increase' : 'More change'}</span></div></figure>
+      <figure class="grip-trace-figure"><figcaption>${patches.length ? 'Local patches over time' : 'Response over time'} <span>${patches.length ? 'Mean cell change from initial reference in ADC' : 'Change from initial reference in ADC'}</span></figcaption>
+        <div class="grip-chart-row"><div class="grip-y-axis"><span>${max}</span><span>${(max + min) / 2}</span><span>${min}</span></div>
+          <div class="grip-plot"><svg viewBox="0 0 600 150" preserveAspectRatio="none" role="img" aria-label="Regional tactile response">
+            <rect data-grip-window x="0" y="0" width="0" height="150" fill="#c3a4eb" opacity=".15"/>
+            ${[0, 75, 150].map(y => `<line x1="0" x2="600" y1="${y}" y2="${y}" stroke="currentColor" opacity=".13" vector-effect="non-scaling-stroke"/>`).join('')}
+            ${min < 0 ? `<line x1="0" x2="600" y1="${H - H * (0 - min) / range}" y2="${H - H * (0 - min) / range}" stroke="currentColor" opacity=".25" vector-effect="non-scaling-stroke"/>` : ''}
+            ${paths}<line data-grip-cursor x1="0" x2="0" y1="0" y2="150" stroke="currentColor" opacity=".65" vector-effect="non-scaling-stroke"/></svg>
+            <div class="grip-x-axis">${ticks}</div></div></div>
+        <div class="grip-trace-key">${traces.map(v => `<span><i style="background:${v.color}"></i>${gripFingerHtml(v.label)}</span>`).join('')}</div>
+        ${patches.length ? '<p class="grip-adds">Coloured rings locate these patches on the hand. Censored samples remain blank.</p>' : ''}
+      </figure></div>`;
+}
+function syncGripEvidence(G, t, finding = null) {
+  if (G && G.generic) {
+    const panel = document.getElementById('grip-evidence-panel');
+    if (panel && finding) syncGripOverlayPressure(G, finding, t, panel, Infinity);
+    syncGenericSensorVideos(t); return;
+  }
+  if (!G || !Array.isArray(G.times) || !G.times.length || !G.map) return;
+  const ts = G.times;
+  let i = 0;
+  while (i + 1 < ts.length && Math.abs(ts[i + 1] - t) <= Math.abs(ts[i] - t)) i++;
+  const values = G.map.response[i], zero = (G.map.zero || [])[i] || [];
+  if (!Array.isArray(values)) return;
+  const scale = Number.isFinite(G.map.scale_adc) && G.map.scale_adc > 0 ? G.map.scale_adc : 1;
+  for (const cell of document.querySelectorAll('[data-grip-cell]')) {
+    const k = +cell.dataset.gripCell, value = values[k];
+    const q = Number.isFinite(value) ? Math.max(G.map.signed ? -1 : 0, Math.min(1, value / scale)) : 0;
+    cell.setAttribute('fill', G.map.signed
+      ? `rgb(${Math.round(70 + 185 * Math.max(q, 0))},${Math.round(90 + 80 * Math.abs(q))},${Math.round(110 + 130 * Math.max(-q, 0))})`
+      : `rgb(${Math.round(40 + 155 * q)},${Math.round(65 + 99 * q)},${Math.round(95 + 140 * q)})`);
+    cell.setAttribute('stroke', zero[k] ? 'white' : cell.dataset.gripPatchColor || 'none');
+  }
+  const x = 600 * Math.max(0, Math.min(ts[ts.length - 1], t)) / (ts[ts.length - 1] || 1);
+  for (const line of document.querySelectorAll('[data-grip-cursor]')) { line.setAttribute('x1', x); line.setAttribute('x2', x); }
+  const label = document.getElementById('grip-evidence-time');
+  if (label) label.textContent = 'Sample ' + fmtT(ts[i]);
+}
 function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null) {
-  const overlay = document.getElementById('sensor-overlay'), now = document.getElementById('sensor-evidence-now');
+  const overlay = document.getElementById('sensor-overlay'), strip = document.getElementById('grip-finding-overlay'),
+    now = document.getElementById('sensor-evidence-now');
   const details = document.getElementById('sensor-evidence-details');
-  let current = null, currentTime = 0, profiles = [], loaded = false;
+  const samplePanel = document.getElementById('grip-evidence-panel');
+  if (samplePanel && E.grip && E.grip.generic) {
+    on(samplePanel, 'click', event => {
+      const button = event.target.closest('[data-sensor-sample-t]');
+      if (button) seek(+button.dataset.sensorSampleT, false);
+    });
+    on(samplePanel, 'change', event => {
+      if (event.target.matches('[data-sensor-sample-select]') && event.target.value !== '') seek(+event.target.value, false);
+    });
+  }
+  let current = null, displayedGrip = null, currentTime = 0, profiles = [], loaded = false;
   const inspect = () => {
     if (current && current.index >= 0) inspectContact(current.index, currentTime);
     if (details) { details.open = true; details.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
   };
+  if (strip) on(strip, 'click', () => { if (displayedGrip) seek(displayedGrip.t, false); });
   for (const el of document.querySelectorAll('#sensor-evidence-inspect, #sensor-overlay')) on(el, 'click', inspect);
-  for (const el of document.querySelectorAll('[data-evidence-t]')) on(el, 'click', () => seek(+el.dataset.evidenceT));
+  for (const el of document.querySelectorAll('[data-evidence-t]')) on(el, 'click', () => seek(+el.dataset.evidenceT, el.dataset.evidencePause !== 'true'));
   const compare = document.getElementById('sensor-depth-compare');
   if (compare) on(compare, 'click', () => {
     const switches = [...document.querySelectorAll('.cam-dp:not([hidden])')];
@@ -4907,9 +5502,19 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
     compare.textContent = showing ? 'Compare RGB and depth' : 'Return to RGB';
     document.getElementById('sensor-depth-mode').hidden = !!showing;
   });
-  let signature = null;
+  let signature = null, stripKey = null, plottedGrip = (E.insights || [])[0] || null;
   const wire = {sync(t) {
     const e = activeSensorEvidence(E, t);
+    displayedGrip = displayGripFinding(E, t);
+    if (strip) {
+      const key = displayedGrip ? displayedGrip.start + '|' + displayedGrip.phase : '';
+      if (stripKey !== key) {
+        strip.innerHTML = gripFindingStripHtml(displayedGrip, E.grip);
+        stripKey = key;
+      }
+      strip.disabled = !displayedGrip;
+      if (displayedGrip) syncGripOverlayPressure(E.grip, displayedGrip, t, strip);
+    }
     for (const line of document.querySelectorAll('[data-se-trace]')) {
       const p = profiles[+line.dataset.seTrace];
       if (!p) continue;
@@ -4917,7 +5522,24 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
       line.setAttribute('x1', x); line.setAttribute('x2', x);
     }
     const measurements = profiles.map(p => sensorProfileHtml(p, t)).join('');
-    const findings = e && e.priority >= 3 ? sensorEvidenceOverlayHtml(e) : '';
+    const selected = displayedGrip || (E.insights || [])[0];
+    if (selected && (!plottedGrip || selected.t !== plottedGrip.t)) {
+      const panel = document.getElementById('grip-evidence-panel');
+      if (panel) panel.innerHTML = gripEvidencePanelHtml(E.grip, selected);
+      plottedGrip = selected;
+    }
+    if ((E.insights || []).length) syncGripEvidence(E.grip, t, selected);
+    for (const button of document.querySelectorAll('[data-grip-finding]'))
+      button.setAttribute('aria-pressed', String(E.insights[+button.dataset.gripFinding] === selected
+        || (!!selected && E.insights[+button.dataset.gripFinding].t === selected.t)));
+    if (selected && E.grip && E.grip.times && E.grip.times.length) {
+      const end = E.grip.times[E.grip.times.length - 1] || 1;
+      for (const band of document.querySelectorAll('[data-grip-window]')) {
+        band.setAttribute('x', String(600 * selected.start / end));
+        band.setAttribute('width', String(600 * (selected.end - selected.start) / end));
+      }
+    }
+    const findings = selected ? gripFindingDetailHtml(selected) : '';
     const html = measurements + findings;
     current = e;
     currentTime = t;
@@ -4925,9 +5547,9 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null)
     if (html + distribution === signature) return;
     signature = html + distribution;
     if (overlay) { overlay.innerHTML = findings; overlay.classList.toggle('active', !!findings); }
-    if (now) now.innerHTML = (html + distribution) || `<span>${loaded ? 'No retained tactile intensity samples' : 'Loading tactile measurements'}</span>`;
+    if (now) now.innerHTML = (html + distribution) || `<span>${(E.insights || []).length ? 'Select a grip finding to inspect its evidence' : loaded ? 'No retained tactile intensity samples' : 'Loading tactile measurements'}</span>`;
   }};
-  if (d && file && E.contacts.length) loadSensors(file).then(D => {
+  if (d && file && E.contacts.length && !(E.insights || []).length) loadSensors(file).then(D => {
     if (file !== _activeFile || !details || !document.body.contains(details)) return;
     profiles = sensorProfiles(d, D); loaded = true; signature = null;
     const phase = document.getElementById('sensor-phase-profile');
@@ -4954,7 +5576,7 @@ const TC_WORD = {yes: 'The frames show touch', no: 'The frames show no touch', u
 // unanswered when it was shown and left it out
 function tcState(c) {
   if (!c.shown) return 'unshown';
-  if (!c.seen) return 'unanswered';
+  if (!c.seen || c.seen.review_status === 'rejected') return 'unanswered';
   const v = String(c.seen.touch_seen || '').toLowerCase();
   return v === 'yes' || v === 'no' ? v : 'unclear';
 }
@@ -4965,9 +5587,10 @@ const tcHandName = h => h === 'left' ? 'Left hand' : h === 'right' ? 'Right hand
 const tcList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
 // the episode's contacts in time order and the model's other grasps, both checked for times
 function tcData(d) {
-  const contacts = (d.contacts || []).filter(c => c && isFinite(c.start_s) && isFinite(c.end_s))
+  const contacts = (d.contacts || []).filter(c => c && c.review_status !== 'rejected' && isFinite(c.start_s) && isFinite(c.end_s))
+    .map(c => c.seen && c.seen.review_status === 'rejected' ? {...c, seen: null} : c)
     .slice().sort((a, b) => a.start_s - b.start_s || String(a.hand).localeCompare(String(b.hand)));
-  const missing = (d.contacts_missing || []).filter(x => x && x.t_s != null && isFinite(parseFloat(x.t_s)))
+  const missing = (d.contacts_missing || []).filter(x => x && x.review_status !== 'rejected' && x.t_s != null && isFinite(parseFloat(x.t_s)))
     .map(x => ({...x, t_s: parseFloat(x.t_s)})).sort((a, b) => a.t_s - b.t_s);
   // one row per hand the contacts name (or one row when they name none), and a row for a hand only a missed grasp names
   const named = new Set(contacts.map(c => tcHandKey(c.hand)));
@@ -4978,45 +5601,42 @@ function tcData(d) {
 // the rows a missed grasp is marked on: its hand's, or every row when it names none (or both)
 const tcMissRows = (x, rows) => rows.includes(tcHandKey(x.hand)) ? [tcHandKey(x.hand)] : rows;
 // the Touch lane, in the lane markup the Hands out of view lane uses
-function touchLaneHtml(T, lanePct, chev) {
+function touchLaneHtml(T, lanePct, chev, duration = null) {
   const {contacts, missing, rows} = T;
   if (!contacts.length) return '';
   const n = contacts.length, st = contacts.map(tcState);
-  const checked = contacts.filter(c => c.shown && c.seen).length, notSeen = st.filter(x => x === 'no').length;
-  const sum = [`${n} ${n === 1 ? 'contact' : 'contacts'}`, `${checked} checked`, `${notSeen} not seen`]
-    .concat(missing.length ? [`${missing.length} ${missing.length === 1 ? 'grasp' : 'grasps'} with no contact`] : []);
+  const end = duration != null ? duration : Math.max(...contacts.map(c => c.end_s));
+  const recordedRows = rows.filter(h => contacts.some(c => tcHandKey(c.hand) === h));
+  const words = {yes: 'Touch seen in sampled frames', no: 'No touch seen in sampled frames',
+    unclear: 'Visual touch unclear', unshown: 'Not visually checked', unanswered: 'No visual verdict'};
   const seg = (c, i) => {
     const a = lanePct(c.start_s), b = lanePct(c.end_s), cls = tcCls(st[i]);
     const tip = `${c.id ? c.id + ', ' : ''}${fmtT(c.start_s)} to ${fmtT(c.end_s)}${c.aligned_by === 'assumed camera clock'
       ? ' on an assumed camera presentation clock' : c.aligned_by ? ' ' + placementText(c.aligned_by)
       : ''}: ${TC_WORD[st[i]].toLowerCase()}${c.seen && c.seen.object ? ', ' + String(c.seen.object) : ''}`;
     return `<div class="tc-seg ${cls}" data-c="${i}" title="${esc(tip)}" style="left:${a}%;width:max(3px, ${b - a}%)">`
-      + `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=""></path></svg></div>`
-      + (isFinite(c.peak_s) ? `<div class="tc-peak ${cls}" style="left:${lanePct(c.peak_s)}%"></div>` : '');
+      + `<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d=""></path></svg></div>`;
   };
-  const miss = (x, j) => `<div class="tc-miss" data-t="${x.t_s}" data-m="${j}" title="${esc(`${fmtT(x.t_s)}: the model `
-    + `saw ${tcHandKey(x.hand) ? 'the ' + tcHandKey(x.hand) + ' hand' : 'a hand'} take hold of ${x.object || 'something'}`
-    + `, and no recorded contact covers it`)}" style="left:${lanePct(x.t_s)}%"></div>`;
-  const rowHtml = h => `<div class="tc-row">${rows.length > 1 || h ? `<span class="tc-hand">${tcHandName(h)}</span>` : ''}`
-    + `<div class="lane-bar tc-bar">${contacts.map((c, i) => tcHandKey(c.hand) === h || (!rows.includes(tcHandKey(c.hand))
-      && h === rows[0]) ? seg(c, i) : '').join('')}${missing.map((x, j) => tcMissRows(x, rows).includes(h) ? miss(x, j)
-      : '').join('')}<div class="lane-ph"></div></div></div>`;
-  const keys = ['yes', 'no', 'unclear', 'unshown'].filter(k => st.some(x => (x === 'unanswered' ? 'unclear' : x) === k));
-  const key = keys.map(k => `<span class="tc-k"><i class="st-${k}" aria-hidden="true"></i>${k === 'unclear'
-    && st.includes('unanswered') ? 'Unclear in the frames, or no answer' : TC_WORD[k]}</span>`).join('')
-    + (missing.length ? `<span class="tc-k"><i class="miss" aria-hidden="true"></i>A hand takes hold with no recorded `
-      + `contact</span>` : '');
-  return `<div class="lane lane-touch" id="lane-touch">
-      <div class="lane-head">
-        <span class="lane-title">Touch <span class="lane-sum">${sum.join(', ')}</span></span>
-        <span class="lane-nav" role="group" aria-label="Contacts">
+  const rowHtml = h => {
+    const indices = contacts.map((c, i) => tcHandKey(c.hand) === h ? i : -1).filter(i => i >= 0);
+    const states = [...new Set(indices.map(i => st[i]))];
+    return `<div class="tc-row"><div class="tc-row-head">${h ? `<span class="tc-hand">${tcHandName(h)}</span>` : '<span>Sensor response</span>'}
+      <span class="tc-verdict">${states.length === 1 ? words[states[0]] : 'Inspect a contact for its visual verdict'}</span></div>
+      <div class="lane-bar tc-bar">${indices.map(i => seg(contacts[i], i)).join('')}<div class="lane-ph"></div></div>
+      <div class="recording-axis"><span>${fmtT(0)}</span><span>${fmtT(end)}</span></div></div>`;
+  };
+  const observations = missing.length ? `<div class="tc-observations"><div class="tc-observations-label">Video observations</div>
+    ${missing.map((x, j) => `<button type="button" class="tc-observation" data-t="${x.t_s}" data-m="${j}">
+      <span class="tc-observation-time">${fmtT(x.t_s)}</span><span><span class="tc-observation-title">${esc(tcHandName(tcHandKey(x.hand)))} takes hold of ${esc(x.object || 'an object')}</span>
+      <span class="tc-observation-note">No covering contact recorded for this hand</span></span></button>`).join('')}</div>` : '';
+  return `<div class="lane lane-touch recording-card" id="lane-touch">
+      <div class="lane-head"><span class="lane-title">Recorded touch</span>
+        ${n > 1 ? `<span class="lane-nav" role="group" aria-label="Contacts">
           <button type="button" class="lane-step" data-dir="-1" aria-label="Previous contact">${chev('M6.5 2 3.5 5l3 3')}</button>
-          <span class="lane-pos" id="lane-touch-pos">${n} ${n === 1 ? 'contact' : 'contacts'}</span>
+          <span class="lane-pos" id="lane-touch-pos">${n} contacts</span>
           <button type="button" class="lane-step" data-dir="1" aria-label="Next contact">${chev('M3.5 2l3 3-3 3')}</button>
-        </span>
-      </div>
-      ${rows.map(rowHtml).join('')}
-      <div class="tc-key">${key}</div>
+        </span>` : ''}</div>
+      ${recordedRows.map(rowHtml).join('')}${observations}
     </div>`;
 }
 // where a contact bears: each map's active cells at its strongest, and which of its signals are active
@@ -5156,7 +5776,7 @@ function setupTouch(T, file, duration, seek, on, vid, evidenceSync = null) {
   const go = (k, t) => { inspected = -1; pinned = k; shown = -2;
     seek(t != null ? t : (C[k].from_start ? 0 : C[k].start_s)); };
   segs.forEach(g => g.addEventListener('click', e => { e.stopPropagation(); go(+g.dataset.c); }));
-  lane.querySelectorAll('.tc-miss').forEach(m => m.addEventListener('click', e => { e.stopPropagation();
+  lane.querySelectorAll('.tc-observation').forEach(m => m.addEventListener('click', e => { e.stopPropagation();
     pinned = -1; seek(m.dataset.t); }));
   box.querySelectorAll('.tc-times [data-t]').forEach(el => el.addEventListener('click', () => {
     go(+el.closest('.tc-card').dataset.c, el.dataset.t); }));
@@ -5211,18 +5831,70 @@ function setupTouch(T, file, duration, seek, on, vid, evidenceSync = null) {
   }};
 }
 
+// Only the depth frame named by a regions receipt gets its measured boxes. These are sampled image regions,
+// not tracked objects or boxes registered to RGB.
+function depthRoiFrames(label, view) {
+  const inspection = label.evidence_inspection || {};
+  if (inspection.source_current === false) return [];
+  const records = (Array.isArray(inspection.inspections) ? inspection.inspections : [])
+    .map(r => ({receipt: r, origin: 0}));
+  for (const part of Array.isArray(inspection.parts) ? inspection.parts : []) {
+    if (!part || !part.record || part.record.version !== 1 || part.record.source_current !== true
+        || !Number.isFinite(part.time_origin_s)) continue;
+    for (const receipt of Array.isArray(part.record.inspections) ? part.record.inspections : [])
+      records.push({receipt, origin: part.time_origin_s});
+  }
+  return records.filter(({receipt: r}) => r && r.review_status !== 'rejected' && !r.withheld_from_final
+    && r.mode === 'regions' && (r.descriptor || {}).kind === 'depth'
+    && ((r.descriptor || {}).descriptor || {}).paired_camera === view)
+    .flatMap(({receipt: r, origin}) => (Array.isArray(r.frames) ? r.frames : [])
+      .filter(f => f && Array.isArray(f.source_shape) && f.source_shape.length === 2
+      && Number.isFinite(+f.time_s) && Array.isArray(f.regions) && f.regions.length)
+      .map(f => ({...f, time_s: Number(f.time_s) + origin, receipt: r.id})));
+}
+function depthRoiMarkup(frame) {
+  const [height, width] = frame.source_shape.map(Number);
+  if (!(height > 0 && width > 0)) return '';
+  const boxes = frame.regions.map((region, i) => {
+    const p = (region && Array.isArray(region.pixels) ? region.pixels : []).map(Number);
+    if (p.length !== 4 || p.some(v => !Number.isFinite(v)) || p[0] < 0 || p[1] < 0
+        || p[2] > width || p[3] > height || p[2] <= p[0] || p[3] <= p[1]) return '';
+    const color = i % 2 ? '#fff069' : '#ff624c';
+    return `<rect x="${p[0]}" y="${p[1]}" width="${p[2]-p[0]}" height="${p[3]-p[1]}" fill="none" stroke="${color}" stroke-width="3"/>`
+      + `<text x="${p[0]}" y="${Math.max(17, p[1]-5)}" fill="${color}" stroke="#111" stroke-width="3" paint-order="stroke" font-size="17" font-weight="700">R${i+1}</text>`;
+  }).join('');
+  if (!boxes) return '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" role="img" aria-label="Measured depth regions at ${Number(frame.time_s).toFixed(1)}s">${boxes}</svg>`;
+}
+
 // each camera with depth: its switch, and its depth clip laid over its colour clip and played in step with it
-function setupDepth(file, eidEnc, on) {
+function setupDepth(file, eidEnc, on, label) {
   for (const btn of document.querySelectorAll('.cam-dp')) {
     const view = btn.dataset.view, cell = btn.closest('.cam-cell');
     const dv = cell && cell.querySelector('.dp-vid'), cv = cell && cell.querySelector('video:not(.dp-vid)');
     if (!dv || !cv) { btn.hidden = true; continue; }
+    const samples = depthRoiFrames(label, view);
+    const overlay = samples.length ? document.createElement('div') : null;
+    if (overlay) { overlay.className = 'dp-roi'; overlay.setAttribute('aria-live', 'off'); cell.appendChild(overlay); }
     let want = false, hover = 0, hoverT = 0;
     const place = () => {
       Object.assign(dv.style, {left: cv.offsetLeft + 'px', top: cv.offsetTop + 'px', width: cv.offsetWidth + 'px',
         height: cv.offsetHeight + 'px'});
+      if (overlay) {
+        const vw = dv.videoWidth || cv.videoWidth, vh = dv.videoHeight || cv.videoHeight;
+        const scale = vw > 0 && vh > 0 ? Math.min(cv.offsetWidth / vw, cv.offsetHeight / vh) : 1;
+        const width = vw > 0 ? vw * scale : cv.offsetWidth, height = vh > 0 ? vh * scale : cv.offsetHeight;
+        Object.assign(overlay.style, {left: (cv.offsetLeft + (cv.offsetWidth-width)/2) + 'px',
+          top: (cv.offsetTop + (cv.offsetHeight-height)/2) + 'px', width: width + 'px', height: height + 'px'});
+      }
       // the player's own controls sit along the bottom of a video with controls: the strip of depth over them is dimmed
       dv.style.setProperty('--dp-bar', cv.controls ? '52px' : '0px');
+    };
+    const mark = () => {
+      if (!overlay) return;
+      const frame = want && dv.readyState >= 1 ? samples.find(f => Math.abs(+f.time_s - dv.currentTime) <= .12) : null;
+      overlay.innerHTML = frame ? depthRoiMarkup(frame) : '';
+      overlay.hidden = !frame;
     };
     const controls = () => dv.classList.toggle('ctl', !!cv.controls && (cv.paused || hover > 0));
     const follow = () => {
@@ -5233,6 +5905,7 @@ function setupDepth(file, eidEnc, on) {
       }
       if (cv.paused && !dv.paused) dv.pause();
       else if (!cv.paused && dv.paused) dv.play().catch(() => {});
+      mark();
     };
     const show = () => { if (want) requestAnimationFrame(() => { if (want) dv.classList.add('on'); }); };
     const set = (on_) => {
@@ -5245,7 +5918,7 @@ function setupDepth(file, eidEnc, on) {
           dv.src = videoSrc(eidEnc, 'depth_' + view);
           dv.addEventListener('loadeddata', () => { follow(); show(); }, {once: true});
         } else { follow(); show(); }
-      } else dv.classList.remove('on');      // the fade out; the clip pauses when it ends (transitionend below)
+      } else { dv.classList.remove('on'); mark(); }      // the fade out; the clip pauses when it ends (transitionend below)
     };
     btn.addEventListener('click', () => {
       const v = !want;
@@ -5253,7 +5926,9 @@ function setupDepth(file, eidEnc, on) {
       set(v);
     });
     on(dv, 'transitionend', e => { if (e.propertyName === 'opacity' && !dv.classList.contains('on')) dv.pause(); });
-    on(dv, 'loadedmetadata', follow);
+    on(dv, 'loadedmetadata', () => { place(); follow(); });
+    on(dv, 'timeupdate', mark);
+    on(dv, 'seeked', mark);
     // no depth clip to play after all: the switch goes, the colour picture stays
     on(dv, 'error', () => { want = false; dv.classList.remove('on'); btn.hidden = true; });
     for (const ev of ['play', 'pause', 'seeked', 'ratechange']) on(cv, ev, () => { follow(); controls(); });
@@ -5583,22 +6258,27 @@ function renderEp(d, opts) {
   const nHand = handStretches.length;
   const chev = (d) => `<svg viewBox="0 0 10 10" aria-hidden="true"><path d="${d}" fill="none" stroke="currentColor" `
     + `stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  if (nHand) laneHtml += `<div class="lane lane-hands" id="lane-hands">
+  if (nHand) laneHtml += `<div class="lane lane-hands recording-card" id="lane-hands">
       <div class="lane-head">
-        <span class="lane-title">Hands out of view <span class="lane-sum">${(100 * handShare).toFixed(handShare < 0.1
-          ? 1 : 0)}% of the clip</span></span>
-        <span class="lane-nav" role="group" aria-label="Stretches with the hands out of view">
+        <span class="lane-title">Hands out of view</span>
+        <span class="hand-absence-share">${(100 * handShare).toFixed(handShare < 0.1 ? 1 : 0)}% of the clip</span>
+        ${nHand > 1 ? `<span class="lane-nav" role="group" aria-label="Stretches with the hands out of view">
           <button type="button" class="lane-step" data-dir="-1" aria-label="Previous stretch">${chev('M6.5 2 3.5 5l3 3')}</button>
           <span class="lane-pos" id="lane-hands-pos">${nHand} ${nHand === 1 ? 'stretch' : 'stretches'}</span>
           <button type="button" class="lane-step" data-dir="1" aria-label="Next stretch">${chev('M3.5 2l3 3-3 3')}</button>
-        </span>
+        </span>` : ''}
       </div>
+      <div class="hand-absence-times">${handStretches.map(([a, b]) => `<button type="button" class="hand-absence-time"
+        data-t="${a}">${fmtT(a)} to ${fmtT(b)}</button>`).join('')}</div>
       <div class="lane-bar">${handStretches.map(([a, b], i) => `<div class="lane-seg hands" data-t="${a}" data-i="${i}" `
         + `title="${fmtT(a)} to ${fmtT(b)}" style="left:${lanePct(a)}%;width:max(3px, ${lanePct(b) - lanePct(a)}%)">`
         + `</div>`).join('')}<div class="lane-ph"></div></div>
+      <div class="recording-axis"><span>${fmtT(0)}</span><span>${fmtT(duration)}</span></div>
     </div>`;
   // the recording's contacts, one bar per hand, and the card of the contact under the playhead below the lanes
-  laneHtml += touchLaneHtml(touch, lanePct, chev);
+  laneHtml = touchLaneHtml(touch, lanePct, chev, duration) + laneHtml;
+  const recordingLanes = laneHtml;
+  laneHtml = '';
   // a label with no time is listed below, never drawn on the lane
   if (pubLabels.some(x => x.t0 != null)) laneHtml += lane('lane-pub', "Dataset's labels", true, pubLabels.map((x, i) =>
     x.t0 == null ? '' : `<div class="lane-seg pub${i % 2 ? ' alt' : ''}" data-t="${x.t0}" data-i="${i}" `
@@ -5677,20 +6357,21 @@ function renderEp(d, opts) {
   };
   const hasTop = mainCam === 'exo';
   const sideCams = camViews.filter(v => v !== mainCam && v !== 'exo');
-  const camLabel = v => v === 'exo' ? 'exo' : (v !== 'left' && v !== 'right') ? camNameOf(v)
+  const camLabel = v => (d.camera_mounting || {})[v] === 'unspecified' ? `${camNameOf(v)} camera`
+    : v === 'exo' ? 'exo' : (v !== 'left' && v !== 'right') ? camNameOf(v)
     : (hasTop ? `${v} wrist` : `${camNameOf(v)}${camNameOf(v) === 'gripper' ? '' : ' gripper'}`);
   // the side cells' video ids: the two mounted cameras keep theirs, any other camera is video-<its view>
   const sideId = v => v === 'left' ? 'video-wl' : v === 'right' ? 'video-wr' : `video-${v}`;
   const videoUrl = videoSrc(eidEnc, mainCam);
   const dpViews = depthViews(_activeFile);     // the cameras with a depth clip, each with its switch
   const evidence = sensorEvidence({...d, contacts: touch.contacts});
-  // under the lanes: the contact card, and the slot the sensors panel fills, only on an episode that has them, so every
-  // other episode's page is what it was
+  if (evidence.grip && evidence.grip.generic) evidence.grip.media = {eid: eidEnc, file: _activeFile};
+  // Keep recording diagnostics together, apart from the annotated findings.
   const rawEvidence = [tcCardsHtml(touch), BOARD.sensors && SN_INDEX && SN_INDEX[_activeFile] ? '<div id="sn-slot"></div>'
     : ''].filter(Boolean).map(x => '\n    ' + x).join('');
   const evidencePanel = sensorEvidenceHtml(evidence, dpViews);
-  const belowLanes = evidencePanel ? `<details class="sensor-evidence-details" id="sensor-evidence-details">
-    <summary>Contact and sensor details</summary>${rawEvidence}</details>` : rawEvidence;
+  const belowLanes = rawEvidence ? `<details class="sensor-evidence-details" id="sensor-evidence-details" open>
+    <summary>Sensor details</summary>${rawEvidence}</details>` : '';
   const videoUrlWL = videoSrc(eidEnc, 'left');
   const videoUrlWR = videoSrc(eidEnc, 'right');
 
@@ -5975,7 +6656,7 @@ function renderEp(d, opts) {
   const notesHtml = `
           <div class="state-toast" id="state-toast"></div>
           <div class="recovery-overlay" id="recovery-overlay"></div>
-          ${evidence.contacts.length || evidence.moments.length ? '<button type="button" class="sensor-overlay" id="sensor-overlay" aria-label="Inspect current tactile evidence"></button>' : ''}
+          ${!evidence.insights.length && (evidence.contacts.length || evidence.moments.length) ? '<button type="button" class="sensor-overlay" id="sensor-overlay" aria-label="Inspect current tactile evidence"></button>' : ''}
           <div class="video-overlay" id="video-overlay"></div>
   `;
   leftCol.innerHTML = `
@@ -5999,6 +6680,7 @@ function renderEp(d, opts) {
             </div>
             <div class="th-r"></div>
           </div></div>` : progOverlayHtml}
+          ${evidence.insights.length ? '<button type="button" class="grip-finding-overlay" id="grip-finding-overlay" aria-label="Inspect grip finding" disabled></button>' : ''}
           ${gripOnly ? '' : notesHtml}
         </div>
         ${isEgo ? '' : sideCams.map(v => `
@@ -6013,6 +6695,7 @@ function renderEp(d, opts) {
       ${gripOnly ? `<div class="grip-strip">${sideCams.length ? '' : `<p class="grip-note">A single-arm task: the dataset records one gripper camera.</p>`}${notesHtml}</div>` : ''}
     </div>
     <div class="timeline" id="timeline">
+      ${evidence.insights.map(f => `<span class="grip-span" style="left:${100 * onTl(f.start) / duration}%;width:${100 * (onTl(f.end) - onTl(f.start)) / duration}%" title="${esc(f.headline)} ${fmtT(f.start)} to ${fmtT(f.end)}"></span>`).join('')}
       ${markersHtml}${keyMarkersHtml}${comp.completed_at_s != null ? `<div class="marker goal" `
         + `style="left:${(onTl(comp.completed_at_s) / duration) * 100}%" data-t="${comp.completed_at_s}"><div `
         + `class="tip">goal reached ${fmtT(comp.completed_at_s)}</div></div>` : ''}${taskGoalTimes.map((gt,
@@ -6020,7 +6703,7 @@ function renderEp(d, opts) {
         + `class="tip">task done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
-    ${evidencePanel}${laneHtml}${belowLanes}
+    ${evidencePanel}${recordingLanes}${laneHtml}${belowLanes}
     ${failed ? '' : noLabels ? `${noLabelsHtml(d._label_failed)}
 
     ${problemsAndNotes}
@@ -6163,7 +6846,7 @@ function renderEp(d, opts) {
   // (all closing over the detached previous video), degrading a long-open session.
   if (window._epCleanup) { for (const fn of window._epCleanup) { try { fn(); } catch (_) {} } }
   window._epCleanup = [];
-  const onResize = () => { layoutFrame(); alignHeads(); };
+  const onResize = () => { layoutFrame(); alignHeads(); scheduleTopPlacement(); };
   const onFs = () => setTimeout(layoutFrame, 60);
   window.addEventListener('resize', onResize);
   alignHeads();
@@ -6222,11 +6905,12 @@ function renderEp(d, opts) {
     if (window._epCleanup) window._epCleanup.push(() => clearInterval(_driftIv));
   }
 
-  const seek = (t) => {
+  const seek = (t, autoplay = true) => {
     if (vid && t != null && t !== '' && !isNaN(parseFloat(t))) {
       vid.currentTime = parseFloat(t);
       // Auto-play from the clicked point (slaves follow via the 'play' handler).
-      vid.play().catch(()=>{});
+      if (autoplay) vid.play().catch(()=>{});
+      else vid.pause();
       // Bring the video back into view: a timestamp clicked from a section
       // scrolled far down (recoveries, scene graph) is useless if you then have
       // to scroll up manually while it plays past. The video is the first thing
@@ -6256,7 +6940,7 @@ function renderEp(d, opts) {
       : handStretches.map(([a]) => a).reduce((k, a, j) => (a < t - 1 ? j : k), -1);
     if (i >= 0) seek(handStretches[i][0]);
   }));
-  document.querySelectorAll('.lane .lane-seg[data-t], .pub-list .pub-row[data-t], .pub-list .pub-at[data-t]').forEach(r => {
+  document.querySelectorAll('.lane .lane-seg[data-t], .hand-absence-time[data-t], .pub-list .pub-row[data-t], .pub-list .pub-at[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
   document.querySelectorAll('.pub-show').forEach(b => b.addEventListener('click', () => {
@@ -6416,6 +7100,7 @@ function renderEp(d, opts) {
   const progOverlay = document.getElementById('prog-overlay');
   const topHud = document.getElementById('top-hud');
   const sensorOverlay = document.getElementById('sensor-overlay');
+  const gripFindingOverlay = document.getElementById('grip-finding-overlay');
   // The notes that come and go at the top of the image stack under what is always there, so none covers another at
   // any width or text length: a state change goes under the progress chip (on a head camera, under the top row it
   // sits in), which a narrow image leaves no room beside; the recovery banner goes under both.
@@ -6423,27 +7108,71 @@ function renderEp(d, opts) {
     if (!exoCell) return;
     const cr = exoCell.getBoundingClientRect();
     const below = c => c.getBoundingClientRect().bottom - cr.top + 8;
-    let top = 8;
     const anchor = topHud || progOverlay;
+    const floating = c => c && !c.closest('.grip-strip') && getComputedStyle(c).position !== 'static';
+    let top = anchor ? below(anchor) : 8;
     // the main camera's depth switch sits under the full-screen button: the notes go under it too
     const dpBtn = exoCell.querySelector('.cam-dp:not([hidden])');
-    if (anchor && stateToast && !stateToast.closest('.grip-strip')) {
-      top = below(anchor);
+    if (anchor && floating(stateToast)) {
       stateToast.style.top = Math.max(top, below(fsBtn || anchor), dpBtn ? below(dpBtn) : 0) + 'px';
     }
-    if (!recOverlay) return;
     if (dpBtn) top = Math.max(top, below(dpBtn));
-    for (const c of [progOverlay, stateToast]) {
-      if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
+    if (floating(stateToast) && stateToast.classList.contains('active')) {
+      // Use the destination, so a toast's slide does not drag the stack through it.
+      top = Math.max(top, parseFloat(stateToast.style.top) + stateToast.getBoundingClientRect().height + 8);
     }
-    recOverlay.style.top = top + 'px';
-    if (sensorOverlay) {
-      for (const c of [topHud, recOverlay]) if (c && (c === topHud || c.classList.contains('active')))
-        top = Math.max(top, below(c));
+    if (floating(recOverlay)) {
+      recOverlay.style.top = top + 'px';
+      if (recOverlay.classList.contains('active')) top += recOverlay.getBoundingClientRect().height + 8;
+    }
+    if (gripFindingOverlay && !gripFindingOverlay.disabled) {
+      // Recovery takes priority. Reserve its full height before it fades in.
+      // If visible text grows, move immediately rather than slide through it.
+      const growing = floating(recOverlay) && recOverlay.classList.contains('active')
+        && top > gripFindingOverlay.getBoundingClientRect().top - cr.top + 1;
+      gripFindingOverlay.style.transitionDuration = growing ? '0ms' : '';
+      const leaving = c => floating(c) && !c.classList.contains('active') && +getComputedStyle(c).opacity > .001;
+      gripFindingOverlay.style.transitionDelay = growing ? '0ms'
+        : leaving(recOverlay) ? '240ms' : leaving(stateToast) ? '150ms' : '0ms';
+      gripFindingOverlay.style.top = top + 'px';
+      top += gripFindingOverlay.getBoundingClientRect().height + 8;
+    }
+    if (floating(sensorOverlay)) {
       sensorOverlay.style.top = top + 'px';
     }
+    const caption = exoCell.querySelector('#video-overlay');
+    if (floating(caption)) {
+      let side = false;
+      if (gripFindingOverlay && !gripFindingOverlay.disabled && caption.classList.contains('active')) {
+        const gr = gripFindingOverlay.getBoundingClientRect(), vr = caption.getBoundingClientRect();
+        const gripBottom = parseFloat(gripFindingOverlay.style.top) + cr.top + gr.height;
+        const rightSpace = cr.right - gr.right - 20;
+        if (gripBottom + 8 > vr.top && rightSpace >= 120) {
+          side = true;
+          caption.style.transition = 'opacity 130ms ease';
+          caption.style.left = gr.right - cr.left + 8 + 'px';
+          caption.style.right = '12px';
+          caption.style.minWidth = '0';
+          caption.style.maxWidth = rightSpace + 'px';
+          caption.style.transform = 'none';
+        }
+      }
+      if (!side) {
+        for (const key of ['left', 'right', 'minWidth', 'maxWidth', 'transform', 'transition'])
+          caption.style[key] = '';
+      }
+    }
+  }
+  let topPlacementFrame = 0;
+  function scheduleTopPlacement() {
+    if (topPlacementFrame) cancelAnimationFrame(topPlacementFrame);
+    topPlacementFrame = requestAnimationFrame(() => {
+      topPlacementFrame = 0;
+      placeTop();
+    });
   }
   let _recSig = null;
+  window._epCleanup.push(() => { if (topPlacementFrame) cancelAnimationFrame(topPlacementFrame); });
   function renderRecovery(t) {
     if (!recOverlay) return;
     let w = null;
@@ -6608,7 +7337,11 @@ function renderEp(d, opts) {
   const evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile);
   const syncEvidence = t => {
     evidenceWire.sync(t);
-    if (sensorOverlay && sensorOverlay.classList.contains('active')) placeTop();
+    if ((sensorOverlay && sensorOverlay.classList.contains('active'))
+      || (gripFindingOverlay && !gripFindingOverlay.disabled)) {
+      placeTop();
+      scheduleTopPlacement();
+    }
   };
   function syncAll(t) {
     if (duration > 0 && ph) ph.style.left = (100 * t / duration) + '%';
@@ -6629,7 +7362,7 @@ function renderEp(d, opts) {
   setupSensors(_activeFile, duration, seek, on, vid, v => v === mainCam && isEgo ? 'head' : camLabel(v), camViews,
     touch.contacts.length > 0);
   if (touch.contacts.length) tcWire = setupTouch(touch, _activeFile, duration, seek, on, vid, syncEvidence);
-  setupDepth(_activeFile, eidEnc, on);
+  setupDepth(_activeFile, eidEnc, on, d);
   syncAll(vid && keep ? vid.currentTime : 0);
   setupHandPose(vid, exoCell, isEgo, on, _activeFile);
 }
@@ -7489,7 +8222,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not _under(HERE, p) or not p.is_file() or p.suffix != ".json":
                 self._send(404, {"error": f"no such file: {fname}"})
                 return
-            lines.append(dumps(public_label(json.loads(p.read_text())), separators=(",", ":")))
+            lines.append(dumps(public_label(current_label(json.loads(p.read_text()), DICTIONARY_JOB, p.name)), separators=(",", ":")))
         body = ("\n".join(lines) + "\n").encode()
         gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
         if gz:
@@ -7529,7 +8262,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(404, {"error": "no such file"})
                 return
             if (q.get("download") or [""])[0] == "1":
-                body = dumps(public_label(json.loads(p.read_text())), separators=(",", ":")).encode()
+                body = dumps(public_label(current_label(json.loads(p.read_text()), DICTIONARY_JOB, p.name)), separators=(",", ":")).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
@@ -7537,7 +8270,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            self._send(200, dumps(episode_view(json.loads(p.read_text()))), "application/json")
+            self._send(200, dumps(episode_view(current_label(json.loads(p.read_text()), DICTIONARY_JOB, p.name))), "application/json")
             return
         if parsed.path.startswith("/api/compare/"):
             # other models' labels (board/build.py compare/): kept beside the board's own and never in its lists

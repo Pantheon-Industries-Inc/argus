@@ -49,7 +49,10 @@ def test_json_mixed_numeric_types_do_not_round_large_integer():
     assert result['values[0]']['values'].item() == 2**53 + 7
     assert result['values[1]']['values'].item() == 0.25
     assert result['values[2]']['values'].item() is True
-    assert 'text' not in result
+    assert result['text']['dtype'] == 'string'
+    assert result['text']['values'] is None
+    assert result['text']['original'] == 'note'
+    assert result['text']['dtype_source'] == 'decoded Python type'
 
 
 def test_protobuf_maps_keep_declared_numeric_and_nested_values():
@@ -84,7 +87,10 @@ def test_protobuf_maps_keep_declared_numeric_and_nested_values():
     assert result['details["sensor"].gain']['values'].tobytes() == np.float32(message.details['sensor'].gain).tobytes()
     assert result['details["sensor"].valid']['values'].item() is False
     assert result['details["sensor"].valid']['present'] is False
-    assert not any(path.startswith('notes') for path in result)
+    assert result['notes["text"]']['dtype'] == 'string'
+    assert result['notes["text"]']['values'] is None
+    assert result['notes["text"]']['original'] == message.notes['text']
+    assert result['notes["text"]']['dtype_source'] == 'protobuf declaration'
 
 
 def test_one_frame_secondary_camera_remains_a_usable_recording(tmp_path, monkeypatch):

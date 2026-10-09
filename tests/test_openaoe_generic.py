@@ -10,6 +10,7 @@ import pytest
 from label import episode
 from prepare import formats, openaoe
 from test_adapter_output_identity import original_context
+from request_identity import assert_same_model_inputs
 from test_formats import _clip
 
 
@@ -102,7 +103,7 @@ def test_selected_original_root_keeps_generic_identity_and_request(tmp_path, mon
     full, _, _ = convert(root, tmp_path / 'full', monkeypatch)
     subset, _, _ = convert(selected, tmp_path / 'subset', monkeypatch, ownership=ownership)
     assert full.name == subset.name == 'episode_original_clip'
-    assert episode.build_request(full) == episode.build_request(subset)
+    assert_same_model_inputs(full, subset)
 
 
 def test_generic_structural_notes_use_content_and_keep_caller_rig(tmp_path, monkeypatch):

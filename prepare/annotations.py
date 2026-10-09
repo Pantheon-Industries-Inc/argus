@@ -29,10 +29,16 @@ def _label(claims):
     return {'label': texts[0] if why is None else None, 'notes': fields[0], 'claims': claims, 'why': why}
 
 
+def _episode_catalog(path, meta):
+    """Canonical episode tables require an episode owner, including damaged or missing owner cells."""
+    return path.stem == 'episodes' or Path(meta) / 'episodes' in path.parents
+
+
 def index_tables(meta, columns, read_jsonl):
     """Tables keyed by (exact recorded column, original path), with every nonkey field and conflicting row.
 
     A recorded column or named parquet index establishes ownership. Positional row order never does.
+    Episode-owned rows contain references to codes, not global definitions of those codes.
     Only a unique nonempty text field supplies a display label; other cells remain attributed notes.
     """
     import pandas as pd
@@ -42,14 +48,14 @@ def index_tables(meta, columns, read_jsonl):
     for path in sorted(Path(meta).glob('*')):
         if path.suffix not in ('.jsonl', '.parquet'):
             continue
+        if _episode_catalog(path, meta):
+            continue
         try:
             if path.suffix == '.jsonl':
                 rows = read_jsonl(path)
-                keys = [c for c in columns if any(c in row for row in rows)]
                 cells = [(i, {k: original(v) for k, v in row.items()}) for i, row in enumerate(rows)]
             else:
                 df = pd.read_parquet(path)
-                keys = [c for c in columns if c in df.columns or c == df.index.name]
                 cells = []
                 for i, index in enumerate(df.index):
                     row = {k: original(df[k].iloc[i]) for k in df.columns}
@@ -61,6 +67,10 @@ def index_tables(meta, columns, read_jsonl):
         except Exception as error:
             out[(None, str(path))] = {'labels': {}, 'issues': [{'why': f'table read failed ({error})'}]}
             continue
+        # Presence establishes the ownership domain even when the episode owner is invalid.
+        # Those claims are retained by episode_metadata, without acquiring a global task owner.
+        cells = [(i, row) for i, row in cells if 'episode_index' not in row]
+        keys = [c for c in columns if any(c in row for _, row in cells)]
         for column in keys:
             claims, issues = defaultdict(list), []
             for row_number, row in cells:
@@ -213,10 +223,8 @@ def episode_metadata(meta, read_jsonl):
     import pandas as pd
     from prepare.formats import recorded_index
     meta = Path(meta)
-    paths = set(meta.glob('*annotat*.jsonl')) | set(meta.glob('*annotat*.parquet'))
+    paths = set(meta.glob('*.jsonl')) | set(meta.glob('*.parquet'))
     paths |= set((meta / 'episodes').rglob('*.parquet'))
-    if (meta / 'episodes.jsonl').exists():
-        paths.add(meta / 'episodes.jsonl')
     owned, unassigned = {}, []
     for path in sorted(paths):
         try:
@@ -250,6 +258,8 @@ def episode_metadata(meta, read_jsonl):
             unassigned.append({'source': str(path), 'why': f'metadata table read failed ({error})'})
             continue
         for number, row in rows:
+            if 'episode_index' not in row and not (_episode_catalog(path, meta) or 'annotat' in path.name):
+                continue
             claim = {'source': str(path), 'row': number, 'fields': metadata_value(row)}
             try:
                 owner = recorded_index(row.get('episode_index'))

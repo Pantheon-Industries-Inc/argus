@@ -10,7 +10,8 @@ uploaded to Data Review get the same requests and the same board:
 
   1. convert  the data into episode sidecars (prepare/formats.py, the reader python -m prepare folder runs), with
               a report of what was read, used and left out (JOB/report.json)
-  2. checks   crossed camera streams, recorded jumps and flat gripper channels where the data has arm state
+  2. dictionary  interpret source fields when recorded descriptors leave their meanings uncertain
+  3. checks   crossed camera streams, recorded jumps and flat gripper channels where the data has arm state
               (checks.stream_pairing), sped-up recordings measured against their neighbours in the same folder
               (checks.timebase measure_folder), the capture checks (checks.capture_qc), and the checks on the
               other signals and depth streams where the data has them (checks.sensors)
@@ -110,7 +111,7 @@ def main() -> int:
     from board import clips as board_clips
     from board import rules as board_rules
     from checks import capture_qc, timebase
-    from label import pieces
+    from label import pieces, dictionary_stage
     from prepare import formats
 
     job = a.out.resolve()
@@ -130,6 +131,9 @@ def main() -> int:
     if not rep["episodes"]:
         why = "; ".join(f"{f['name']}: {f['why']}" for f in rep["failed"][:3])
         raise SystemExit("no episode could be read" + (f" ({why})" if why else ""))
+
+    print('== dictionary', flush=True)
+    dictionary_stage.prepare(job, eps, [e['episode_id'] for e in rep['episodes']], free=a.free, cap=a.cap)
 
     if any(e["state_kind"] != "none" for e in rep["episodes"]):
         for flag in ([], ["--jumps"], ["--grippers"]):
@@ -174,10 +178,21 @@ def main() -> int:
     info = {"run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
             "code": f"argus@{commit()}", "started_at": now(), "cap_usd": a.cap, "status": "running"}
     (run_dir / "run.json").write_text(json.dumps(info, indent=1))
-    run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
-                            str(run_dir / "out"), "--concurrency", str(a.concurrency), "--max-spend", str(a.cap)],
-             env, ok_codes=(0, 1))
-    info.update(status="done", finished_at=now())
+    remaining = round(a.cap - dictionary_stage.dictionary_spend(job)['reserved_usd'], 6)
+    if remaining > 0:
+        run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
+                                str(run_dir / "out"), "--concurrency", str(a.concurrency),
+                                "--max-spend", str(remaining)], env, ok_codes=(0, 1))
+    else:
+        print('label budget exhausted by dictionary reservation', flush=True)
+    spend = dictionary_stage.dictionary_spend(job)
+    label_cost = dictionary_stage.label_spend(job)
+    complete = spend['complete'] and dictionary_stage.label_spend_complete(job)
+    total = label_cost + (spend['cost_usd'] or 0.0)
+    info.update(status="done", finished_at=now(), dictionary=spend,
+                cost_usd=round(total, 6) if complete else None,
+                reserved_cost_usd=round(label_cost + spend['reserved_usd'], 6),
+                cost_complete=complete)
     (run_dir / "run.json").write_text(json.dumps(info, indent=1))
 
     print("== board", flush=True)

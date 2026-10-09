@@ -387,6 +387,48 @@ def test_depth_colours_are_one_scale_and_black_is_only_no_reading():
     assert sum(dp.picture(np.array([[100]], np.uint16), {"range": [0, 100]}).getpixel((0, 0))) > 40   # far is not black
 
 
+def test_float_depth_survives_hdf5_preparation_without_quantization_or_invented_units(tmp_path):
+    root = tmp_path / "up"
+    root.mkdir()
+    pixels = np.linspace(0.1234567, 1234.5678, 6 * 64 * 80, dtype=np.float32).reshape(6, 64, 80)
+    pixels[:, 0, :5] = [np.nan, np.inf, -np.inf, -1, 0]
+    with h5py.File(root / "depth.hdf5", "w") as source:
+        for index in range(2):
+            group = source.create_group(f"data/demo_{index:02d}")
+            camera = group.create_dataset("rgb_images_jpeg", (6,), dtype=h5py.vlen_dtype(np.dtype("uint8")))
+            for row in range(6):
+                camera[row] = np.frombuffer(_jpeg(row * 15), np.uint8)
+            group.create_dataset("timestamps", data=10**12 + np.arange(6, dtype=np.int64) * 100_000_000)
+            depth = group.create_dataset("depth_images", data=pixels)
+            secondary = group.create_dataset("depth_images_secondary", data=pixels + np.float32(.007))
+            secondary.attrs["units"] = "m"
+            if index == 0:
+                depth.attrs["units"] = "m"
+    report = formats.convert(root, "ego_head", tmp_path / "eps", "depth", 900)
+    assert not report["failed"] and len(report["episodes"]) == 2
+    for index, item in enumerate(report["episodes"]):
+        episode = me.load(tmp_path / "eps" / item["episode_id"])
+        entry = episode["depth"]["exo"]
+        assert len(episode['additional_depth']) == 1
+        extra_view, extra_entry = next(iter(episode['additional_depth'].items()))
+        assert extra_entry['paired_camera'] is None
+        extra_pixels = dp.at_anchor(episode, episode['additional_depth'], extra_view, list(range(6)))
+        assert len(extra_pixels) == 6
+        assert all(frame.tobytes() == (pixels[row] + np.float32(.007)).tobytes()
+                   for row, frame in extra_pixels.items())
+        assert entry["scale_m"] == (1.0 if index == 0 else None)
+        decoded = dp.at_anchor(episode, episode["depth"], "exo", list(range(6)))
+        assert len(decoded) == 6
+        for row, frame in decoded.items():
+            assert frame.dtype == pixels.dtype and frame.shape == pixels.shape[1:]
+            assert frame.tobytes() == pixels[row].tobytes()
+        assert dp.picture(decoded[0], entry).size == (80, 64)
+        from board import clips
+        preview = tmp_path / f"preview_{index}.mp4"
+        assert not clips.extract_depth(episode['dir'], 'exo', episode['dir'] / 'exo.mp4', preview)
+        assert clips.clip_frames(preview) == 6
+
+
 def test_a_sensor_faster_than_the_camera_is_summarised_per_frame():
     q = np.arange(30) / 30.0
     t = np.arange(900) / 900.0
@@ -428,6 +470,27 @@ def test_contacts_are_checked_against_the_frames():
     kinds = {n["check"] for n in res["notes"]}
     assert {"clock_offset", "hand_mismatch", "contact_missing"} <= kinds
     assert res["offset_ms"]["median"] > 100                 # touch shows about 0.22 s after the signal says it begins
+
+
+
+def test_human_rejection_removes_contact_verdicts_from_checks():
+    contacts = [{"id": f"c{i}", "hand": "right", "start_s": 1.0 + i, "end_s": 1.5 + i}
+                for i in range(3)]
+    strips = {f"c{i}": {"begin": [0.7 + i, 0.85 + i, 1.0 + i, 1.15 + i, 1.3 + i],
+                        "end": [1.35 + i, 1.5 + i, 1.65 + i]} for i in range(3)}
+    seen = [{"id": f"c{i}", "touch_seen": "no", "first_touch_frame": 5, "last_touch_frame": 3,
+             "hand": "left", "review_status": "rejected"} for i in range(3)]
+    labels = {"contacts": seen, "contacts_missing": [
+        {"t_s": 9.0, "hand": "left", "object": "cup", "review_status": "rejected"}]}
+    result = cc.check(labels, contacts, strips, 30)
+    assert result["contacts"] == 3  # Raw recorded contacts remain evidence.
+    assert result["checked"] == 0
+    assert result["notes"] == []
+    assert "offset_ms" not in result
+    labels["contacts"][1].pop("review_status")
+    result = cc.check(labels, contacts, strips, 30)
+    assert result["checked"] == 1
+    assert {x["check"] for x in result["notes"]} == {"touch_not_seen", "hand_mismatch"}
 
 
 def test_contacts_placed_from_both_starts_are_never_judged_for_timing():
@@ -581,11 +644,15 @@ def test_lerobot_depth_with_no_camera_of_its_own_goes_with_the_scene_camera_and_
     assert list(dep) == ["exo"] and "scene camera" in dep["exo"]["source"]
 
 
-def test_a_second_lerobot_depth_stream_for_one_camera_is_listed_as_left_out(tmp_path):
-    """As the HDF5 reader lists it among the unused cameras, never dropped without a word."""
+def test_a_second_lerobot_depth_stream_for_one_camera_remains_inspectable(tmp_path):
     dep, unused = _lerobot_depth_of(tmp_path, "observation.depth.cam_left_wrist", "observation.depth.left_wrist")
     assert dep["left"]["source"] == "observation.depth.cam_left_wrist"
-    assert unused == ["observation.depth.left_wrist (depth with no camera of its own)"]
+    assert len(dep) == 2 and not unused
+    extra = next(e for v, e in dep.items() if v != 'left')
+    assert extra['paired_camera'] is None
+    decoded = dp.decode(extra, formats.probe_depth(Path(extra['packed']))['pts'], [0, 1])
+    assert len(decoded) == 2
+    assert decoded[0].min() == 1000 and decoded[1].max() == 1001
 
 
 HOLD_THEN_RISE = np.r_[np.zeros(30), np.linspace(0, 0.3, 10), np.full(20, 0.3)][:, None]   # rests, then moves one way

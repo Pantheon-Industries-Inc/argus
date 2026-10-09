@@ -286,6 +286,14 @@ def decode_gray(ep: dict, v: str) -> dict:
         raise FileNotFoundError(f"camera {v}: {path} not found")
     frames = np.zeros((n, GRAY, GRAY), dtype=np.uint8)
     got = np.zeros(n, dtype=bool)
+    placeholder = np.zeros(n, dtype=bool)
+    km = ep["kmap"].get(v)
+    for first, last in (ep["context"].get("placeholder_frames") or {}).get(v, []):
+        if km is None:
+            placeholder[max(0, first):min(n, last + 1)] = True
+        else:
+            own = np.asarray(km[max(0, first):last + 1], dtype=int)
+            placeholder[own[(own >= 0) & (own < n)]] = True
     info = {"n_expected": n, "error": None}
     try:
         with av.open(str(path)) as c:
@@ -300,8 +308,9 @@ def decode_gray(ep: dict, v: str) -> dict:
                 for fr in c.decode(st):
                     if k >= n:
                         break
-                    frames[k] = to_gray(fr)
-                    got[k] = True
+                    if not fr.is_corrupt and not placeholder[k]:
+                        frames[k] = to_gray(fr)
+                        got[k] = True
                     k += 1
             else:
                 index: dict[int, int] = {}
@@ -317,8 +326,9 @@ def decode_gray(ep: dict, v: str) -> dict:
                     k = index.get(fr.pts)
                     if k is None:
                         continue
-                    frames[k] = to_gray(fr)
-                    got[k] = True
+                    if not fr.is_corrupt and not placeholder[k]:
+                        frames[k] = to_gray(fr)
+                        got[k] = True
                     if got[-1] and k == n - 1:
                         break
     except FileNotFoundError:
@@ -455,6 +465,7 @@ class _guard:
 VIDEO_CHECKS = ("missing_camera", "camera_state_alignment_mismatch", "video_decode_failure",
                 "video_decode_frame_count_mismatch", "video_extreme_exposure", "video_low_contrast",
                 "video_duplicate_frames", "video_frozen_run")
+PIXEL_CHECKS = ("video_extreme_exposure", "video_low_contrast", "video_duplicate_frames", "video_frozen_run")
 # the motion checks that compare every camera's picture with the recorded motion
 CAMERA_MOTION_CHECKS = ("largest_action_not_in_video", "visual_change_unexplained_by_action",
                         "pixel_action_corr_mismatch")
@@ -530,6 +541,14 @@ def assess(feats: dict) -> dict:
     the upstream lines it reproduces (filtering.py, processing.py of public-dataset-adapter)."""
     ep, T, cams = feats["ep"], feats["T"], feats["cams"]
     ctx = ep["context"]
+    assumed_clocks = ctx.get("camera_clock") or {}
+    anchor = me.anchor(ep) if cams else None
+    # The same frame-window eligibility as label.episode.plan, without running its sampling work here.
+    state_window_ok = (anchor is not None and not ctx.get("state_unaligned")
+                       and int(ep["sources"][anchor]["n_frames"]) == T
+                       and all(len(km) >= T for v, km in ep["kmap"].items() if v != anchor and v in cams))
+    comparison_cameras = ({v for v in cams if v not in assumed_clocks and anchor not in assumed_clocks}
+                          if state_window_ok else set())
     rig = me.rig(ep)
     kind = me.state_kind(ep)
     policy, extra = policy_for(rig)
@@ -782,6 +801,9 @@ def assess(feats: dict) -> dict:
     exp_ev, low_ev, dup_ev, frz_ev = [], [], [], []
     lists = (align_ev, dec_ev, cnt_ev, exp_ev, low_ev, dup_ev, frz_ev)
     list_checks = VIDEO_CHECKS[1:]    # the check each evidence list is for, in the same order
+    pixel_observed = {check: 0 for check in PIXEL_CHECKS}
+    pixel_limited = {check: [] for check in PIXEL_CHECKS}
+    motion_limited = []
     with _guard(R, ("missing_camera",)):
         R["missing_camera"] = _fired([] if cams else [_ev("the episode has no camera")])
     # of the video checks only the frozen picture needs the camera each actor is mounted on (to tell it from a still
@@ -796,7 +818,7 @@ def assess(feats: dict) -> dict:
     def expected_motion(v: str, t0: float, t1: float) -> str:
         """Why camera v's picture must change between t0 and t1, from the recorded state, or "" when the
         recording gives no such reason (video-only rigs, or nothing recorded moving)."""
-        if not usable_state or av_all is None:    # None: video_frozen_run is errored already
+        if not usable_state or av_all is None or v not in comparison_cameras:
             return ""
         k = np.flatnonzero((ts >= t0) & (ts <= t1))
         if len(k) < 2:
@@ -847,6 +869,18 @@ def assess(feats: dict) -> dict:
             done.add("video_decode_frame_count_mismatch")
             means, stds, pair = c["means"], c["stds"], c["pair"]
             ok = np.isfinite(means)
+            pok = np.isfinite(pair)
+            for check in PIXEL_CHECKS:
+                seen, expected = (int(ok.sum()), n) if check in PIXEL_CHECKS[:2] else (int(pok.sum()), max(n - 1, 0))
+                if seen < expected or not seen:
+                    pixel_limited[check].append(f"camera {v}: {seen} of {expected} usable "
+                                                + ("frames" if check in PIXEL_CHECKS[:2] else "frame pairs"))
+                if check == "video_frozen_run" and extra["frozen_needs_motion"] and v not in comparison_cameras:
+                    pixel_limited[check].append(f"camera {v}: state and video timing cannot be compared")
+                else:
+                    pixel_observed[check] += seen > 0
+            if v in comparison_cameras and int(pok.sum()) < max(n - 1, 0):
+                motion_limited.append(f"camera {v}: {int(pok.sum())} of {max(n - 1, 0)} usable frame pairs")
             if ok.any():
                 black = ok & (means < extra["black_mean"])
                 white = ok & (means > extra["white_mean"])
@@ -870,7 +904,6 @@ def assess(feats: dict) -> dict:
                                       f"{policy.maximum_low_contrast_fraction:.0%}",
                                       _cam_t(ep, v, longest[0], c["fps"]), v))
             done.update(("video_extreme_exposure", "video_low_contrast"))    # nothing to judge with no frame decoded
-            pok = np.isfinite(pair)
             dupm = pok & (pair < extra["duplicate_pair_mad"])
             if extra["duplicate_motion_mad"]:
                 # count repeats only inside motion: a run of at most duplicate_max_run repeated pairs whose neighbouring
@@ -891,8 +924,8 @@ def assess(feats: dict) -> dict:
                 base = pok
                 dupm_count = dupm
             min_n = max(2, int(2 * c["fps"])) if extra["duplicate_motion_mad"] else 1   # at least 2 s of moving frames
-            dfrac = float(dupm_count[base].mean()) if base.sum() >= min_n else 0.0
-            if dfrac > policy.maximum_duplicate_pair_fraction:
+            dfrac = float(dupm_count[base].mean()) if base.sum() >= min_n else (0.0 if pok.any() else None)
+            if dfrac is not None and dfrac > policy.maximum_duplicate_pair_fraction:
                 where = ("of its frame steps while it moves (a short repeat between two steps that each change by at "
                          f"least {extra['duplicate_motion_mad']:g} grey levels)" if extra["duplicate_motion_mad"]
                          else "of consecutive frames")
@@ -949,13 +982,14 @@ def assess(feats: dict) -> dict:
                               "extreme_exposure_fraction": round(float(extreme[ok].mean()), 4) if ok.any() else None,
                               "low_contrast_fraction": (round(float((stds < extra["low_contrast_std"])[ok].mean()), 4)
                                                         if ok.any() else None),
-                              "repeated_frame_fraction": round(dfrac, 4),
-                              "longest_still_run_s": round(longest_s, 2),
+                              "repeated_frame_fraction": round(dfrac, 4) if dfrac is not None else None,
+                              "longest_still_run_s": round(longest_s, 2) if pok.any() else None,
                               "mean_grey_p01_p99": ([round(float(np.nanquantile(means, q)), 1) for q in (0.01, 0.99)]
                                                     if ok.any() else None)}
             ap = to_anchor(ep, v, pair.astype(np.float64), T)
             pc = to_anchor(ep, v, c["pchange"].astype(np.float64), T)
-            if ap is not None:
+            if ap is not None and pc is not None and v in comparison_cameras \
+                    and np.isfinite(ap).any() and np.isfinite(pc).any():
                 anchor_pair[v] = ap
                 anchor_pc[v] = np.concatenate([[0.0], pc])
         except Exception as e:  # noqa: BLE001 - recorded on the camera and on the checks that need it
@@ -971,6 +1005,14 @@ def assess(feats: dict) -> dict:
         for chk, x in zip(list_checks, lists):
             if chk not in R:    # video_frozen_run is errored already when the actors' cameras were not worked out
                 R[chk] = _fired(x)
+    for check in PIXEL_CHECKS:
+        r = R.get(check)
+        if r and r["status"] in ("clear", "fired"):
+            why = "; ".join(pixel_limited[check])
+            if not pixel_observed[check] and not cam_err:
+                R[check] = _na(f"No usable video observations for this check. {why}")
+            elif why:
+                R[check] = {**r, "why": why}
 
     # ---- motion (filtering.py:1654-1700, 1796-1861), end-effector pose only
     actor_metrics: dict[str, dict] = {}
@@ -1056,9 +1098,11 @@ def assess(feats: dict) -> dict:
             # largest action vs video (filtering.py:1161-1238), every camera on the anchor interval grid: on handheld
             # rigs each actor against its own mounted camera only (largest_action_own_camera)
             av = actor_views(ep, names)
-            if extra["largest_action_own_camera"] and all(v in anchor_pair for v in av):
+            if extra["largest_action_own_camera"]:
                 vc = {}
                 for g, v in enumerate(av):
+                    if v not in anchor_pair:
+                        continue
                     part, _ = up._largest_action_video_checks(global_, avalid, {v: anchor_pair[v]}, policy)
                     arm = ("left", "right")[g]
                     vc.update({k: m for k, m in part.items() if k.startswith(arm + "_")})
@@ -1141,9 +1185,29 @@ def assess(feats: dict) -> dict:
         why = f"The recorded state is not on these cameras' frames. {ctx['state_unaligned']}"
         for c in STATE_VS_VIDEO + (("video_frozen_run",) if extra["frozen_needs_motion"] else ()):
             R[c] = _na(why)
-    if ctx.get("camera_clock"):
+    if assumed_clocks or not state_window_ok:
+        skipped = sorted(set(cams) - comparison_cameras)
+        why = ("The recorded state does not match the anchor camera's frame window."
+               if not state_window_ok else
+               f"State and video motion were not compared for {', '.join(skipped)}: camera placement uses assumed presentation timing.")
+        for c in CAMERA_MOTION_CHECKS + (("video_frozen_run",) if extra["frozen_needs_motion"] else ()):
+            r = R.get(c)
+            if r and r["status"] in ("clear", "fired"):
+                if (c in CAMERA_MOTION_CHECKS and not anchor_pair) or (c == "video_frozen_run" and not comparison_cameras):
+                    R[c] = _na(why)
+                else:
+                    R[c] = {**r, "why": "; ".join(x for x in (r.get("why"), why) if x)}
+    if comparison_cameras and not anchor_pair:
+        why = "No usable video frame pairs remain for state and video motion comparison."
         for c in CAMERA_MOTION_CHECKS:
-            R[c] = _na("Camera placement uses an assumed presentation clock rather than measured capture timing.")
+            if (R.get(c) or {}).get("status") in ("clear", "fired"):
+                R[c] = _na(why)
+    elif motion_limited:
+        why = "; ".join(motion_limited)
+        for c in CAMERA_MOTION_CHECKS:
+            r = R.get(c)
+            if r and r["status"] in ("clear", "fired"):
+                R[c] = {**r, "why": "; ".join(x for x in (r.get("why"), why) if x)}
     if state_error is not None:
         R.update({c: _errored(state_error) for c in STATE_CHECKS})
     return {"checks": R, "cameras": cam_metrics, "actors": actor_metrics,
@@ -1482,7 +1546,7 @@ def format_result(a: dict) -> dict:
             listing.append({**row, "status": "errored", "why": r["why"]})
             continue
         if r["status"] != "fired":
-            listing.append({**row, "status": "clear"})
+            listing.append({**row, "status": "clear", **({"why": r["why"]} if r.get("why") else {})})
             continue
         counted = d["disposition"] == "flag" and rig in d["applies"]
         if counted:

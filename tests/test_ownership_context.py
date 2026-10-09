@@ -10,8 +10,8 @@ import h5py
 import numpy as np
 import pytest
 
-from label import episode
 from prepare import formats
+from request_identity import assert_same_model_inputs
 from test_formats import _camera_mcap, _clip
 
 
@@ -55,7 +55,7 @@ def test_selected_hdf5_tasks_keep_ownership_from_the_original_upload(tmp_path, s
         ctx = json.loads((ep / "context.json").read_text())
         expected = "move the demo zero object" if row["name"] == "a/demo_0" else None
         assert ctx.get("instruction") == expected
-        assert episode.build_request(ep) == episode.build_request(whole / row["episode_id"])
+        assert_same_model_inputs(ep, whole / row["episode_id"])
     assert hashes == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in original.iterdir()}
     assert registry["episodes"] == descriptor_context(original)["episodes"]
     assert len(full["episodes"]) == 4
@@ -113,7 +113,7 @@ def test_whole_upload_registry_preserves_shared_tasks_and_recorded_instructions(
     after = formats.convert(original, "ego_head", final, "ownership", 900, ownership_context=context)
     assert before == after
     for row in after["episodes"]:
-        assert episode.build_request(base / row["episode_id"]) == episode.build_request(final / row["episode_id"])
+        assert_same_model_inputs(base / row["episode_id"], final / row["episode_id"])
     row = next(row for row in after["episodes"] if row["name"] == "b/first_recording")
     assert json.loads((final / row["episode_id"] / "context.json").read_text())["instruction"] == "instruction inside the recording"
 
@@ -140,7 +140,7 @@ def test_selected_hdf5_notes_keep_omitted_media_filename_owners(tmp_path, omitte
     assert len(report["episodes"]) == 2 and not report["failed"]
     for row in report["episodes"]:
         assert not json.loads((subset / row["episode_id"] / "context.json").read_text()).get("instruction")
-        assert episode.build_request(subset / row["episode_id"]) == episode.build_request(whole / row["episode_id"])
+        assert_same_model_inputs(subset / row["episode_id"], whole / row["episode_id"])
 
 
 @pytest.mark.parametrize("filename", ["session_meta.json", "b_capture_red_meta.json", "b_meta.json"])
@@ -163,7 +163,7 @@ def test_subset_context_keeps_shared_and_multiple_owner_tasks(tmp_path, filename
     for row in report["episodes"]:
         ctx = json.loads((subset / row["episode_id"] / "context.json").read_text())
         assert ctx["instruction"] == "shared or explicitly multiple owners"
-        assert episode.build_request(subset / row["episode_id"]) == episode.build_request(whole / row["episode_id"])
+        assert_same_model_inputs(subset / row["episode_id"], whole / row["episode_id"])
 
 
 @pytest.mark.parametrize("video", ["capture_mask.mp4", "capture_depth.mp4"])
@@ -183,7 +183,7 @@ def test_unshown_filename_owners_stay_unshown_when_only_hdf5_is_selected(tmp_pat
     formats.convert(original, "ego_head", full_out, "ownership", 900)
     subset = formats.convert(selected, "ego_head", subset_out, "ownership", 900, ownership_context=context)
     for row in subset["episodes"]:
-        assert episode.build_request(subset_out / row["episode_id"]) == episode.build_request(full_out / row["episode_id"])
+        assert_same_model_inputs(subset_out / row["episode_id"], full_out / row["episode_id"])
 
 
 
@@ -206,4 +206,4 @@ def test_hidden_original_filenames_cannot_take_a_shared_task(tmp_path):
     after = formats.convert(original, "ego_head", final, "ownership", 900, ownership_context=context)
     assert before == after
     for row in after["episodes"]:
-        assert episode.build_request(base / row["episode_id"]) == episode.build_request(final / row["episode_id"])
+        assert_same_model_inputs(base / row["episode_id"], final / row["episode_id"])

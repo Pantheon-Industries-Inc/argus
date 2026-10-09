@@ -500,7 +500,7 @@ def extract_depth(ep_dir: Path, cam: str, colour_mp4: Path, out_mp4: Path, threa
                     if k is not None:
                         cur_i, cur = k, fr
                 if j is not None and cur_i == j:
-                    im = dp.picture(dp._array(cur), entry, rng)
+                    im = dp.picture(dp._array(cur, entry), entry, rng)
                     if im.size != (w, h):
                         im = im.resize((w, h), resample=0)
                     rgb = np.asarray(im.convert("RGB"))
