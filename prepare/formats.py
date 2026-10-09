@@ -2758,6 +2758,13 @@ def finish_episode(ep: Path, ctx: dict, sources: dict, state=None, action=None, 
         if times and view in times:
             placed, note = presentation_clock(times[view], nominal_fps)
             if note:
+                clock = (ctx.get('recorded_container_times') or {}).get('cameras', {}).get(view)
+                unit_issue = next((i for i in ctx.get('reader_issues') or []
+                                   if i.get('kind') == 'clock_units_unresolved' and i.get('signal') == clock), None)
+                if unit_issue:
+                    note = {**note, 'clock_problem': 'unresolved units',
+                            'what': unit_issue['what'] + f" Frames use {note['nominal_fps']:g} Hz from "
+                                    f"{note['cadence_source']}; these are assumed presentation times."}
                 if note.get("clock_problem") and ctx.get("clock_start_assumed"):
                     note = {**note, "origin_assumed": True,
                             "what": note["what"] + " " + ctx["clock_origin_note"]}
@@ -5610,7 +5617,8 @@ RANGE_PERCENTILES = (1, 99)    # a clock's time range, so a stray stamp (a 0 bef
 SPAN_MATCH = 2.0               # a clock from near zero takes the unit that puts its span within this factor
 
 
-def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None) -> dict[str, np.ndarray]:
+def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None,
+                       declared_scales: dict[str, float] | None = None) -> dict[str, np.ndarray]:
     """{path: seconds} for the clocks of one episode. Each driver stamps in its own unit: a 1 kHz pad beside a 30 fps
     camera steps by 1e6 in nanoseconds or 1e3 in microseconds, which its step alone reads as microseconds or
     milliseconds. So each clock is read against a reference clock, which is read with its own _seconds_scale.
@@ -5627,13 +5635,15 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
     The reference is the camera's clock (reference). Without one, the clock with the largest step is a guess, so it is
     used only when its size settles its unit (_epoch_scale), and otherwise every clock keeps its own reading. A
     reference that does not step forward (one value, or stuck at one) says nothing about units, so then too every
-    clock keeps its own reading."""
+    clock keeps its own reading. Declared scales always take precedence over these inferences."""
+    declared_scales = declared_scales or {}
+    scale_of = lambda p: declared_scales[p] if p in declared_scales else _seconds_scale(raw[p])
     facts = {p: _clock_facts(a) for p, a in raw.items()}
     if reference not in raw:
         guess = max(raw, key=lambda p: facts[p][1], default=None)
         reference = guess if guess is not None and _epoch_scale(raw[guess]) is not None else None
     if reference is None or facts[reference][1] <= 0:
-        return {p: a * _seconds_scale(a) for p, a in raw.items()}
+        return {p: a * scale_of(p) for p, a in raw.items()}
 
     def far_from_zero(p):
         _, step, size = facts[p]
@@ -5642,12 +5652,12 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
     def bounds(p):
         lo, hi = np.percentile(facts[p][0], RANGE_PERCENTILES)
         return float(lo), float(hi)
-    ref_scale = _seconds_scale(raw[reference])
+    ref_scale = scale_of(reference)
     ref_lo, ref_hi = (x * ref_scale for x in bounds(reference))
     out = {}
     for p, a in raw.items():
-        scale = _seconds_scale(a)
-        if p != reference and len(facts[p][0]) > 1:
+        scale = scale_of(p)
+        if p not in declared_scales and p != reference and len(facts[p][0]) > 1:
             lo, hi = bounds(p)
             if far_from_zero(p) and far_from_zero(reference):
                 overlapping = [s for s in CLOCK_SCALES if lo * s <= ref_hi and hi * s >= ref_lo]
@@ -5660,6 +5670,31 @@ def _clocks_in_seconds(raw: dict[str, np.ndarray], reference: str | None = None)
                     scale = closest
         out[p] = a * scale
     return out
+
+
+def h5_clock_unit(ds) -> tuple[float | None, str | None]:
+    """Literal time units constrain normalization; unusable declarations cannot establish seconds."""
+    scales = {'s': 1., 'sec': 1., 'secs': 1., 'second': 1., 'seconds': 1.,
+              'ms': 1e-3, 'millisecond': 1e-3, 'milliseconds': 1e-3,
+              'us': 1e-6, 'microsecond': 1e-6, 'microseconds': 1e-6,
+              'ns': 1e-9, 'nanosecond': 1e-9, 'nanoseconds': 1e-9}
+    declarations = [ds.attrs[key] for key in ('unit', 'units') if key in ds.attrs]
+    if not declarations:
+        return None, None
+    found = []
+    for value in declarations:
+        a = np.asarray(value)
+        if a.size != 1:
+            return None, 'the recorded time unit declaration is not scalar'
+        text = a.ravel()[0]
+        text = text.decode('utf-8', 'replace') if isinstance(text, bytes) else str(text)
+        scale = scales.get(text.strip().lower())
+        if scale is None:
+            return None, f'the recorded time unit {text!r} is unsupported'
+        found.append(scale)
+    if len(set(found)) != 1:
+        return None, 'the recorded unit and units declarations conflict'
+    return found[0], None
 
 
 def h5_kind(name: str, ds) -> str | None:
@@ -5690,11 +5725,19 @@ def h5_kind(name: str, ds) -> str | None:
     if len(per) <= 1 and (not per or per[0] == 1) and n > 1 and is_time_name(leaf):
         # A recorded clock claim remains a clock even when its values cannot order the frames.
         return "time"
+    sensor_type = ds.attrs.get('sensor_type')
+    if sensor_type is not None and np.asarray(sensor_type).ndim == 0:
+        sensor_type = np.asarray(sensor_type).item()
+        sensor_type = sensor_type.decode('utf-8', 'replace') if isinstance(sensor_type, bytes) else sensor_type
+    if not isinstance(sensor_type, str):
+        sensor_type = ''
+    measurements = {'pressure', 'taxel', 'taxels', 'force', 'forces'}
+    if (set(tokens(name)) | set(tokens(sensor_type))) & measurements:
+        return "signal"
     if _picture_axes(per) is not None and (dt == np.uint8 or (dt.kind == "f" and _picture_values(ds))):
         return "camera"
     if len(per) == 2 and min(per) >= CAMERA_MIN_PX:
-        wide_numeric_picture = int(np.prod(per)) > SIGNAL_MAX_VALUES and dt.kind in "uf" and dt.itemsize >= 2
-        if "depth" in leaf.lower() or "depth" in name.lower() or wide_numeric_picture:
+        if "depth" in leaf.lower() or "depth" in name.lower():
             return "depth"
         if dt == np.uint8:
             return "camera"
@@ -5781,38 +5824,50 @@ def _h5_datasets(g, base: str = "") -> list[tuple[str, object]]:
 
 def h5_episodes(f) -> list[str]:
     """Episode groups share a sibling layout, or one numbered take contains every recorded stream. The whole file
-    stays one episode otherwise, so ordinary sensor groups and streams outside a named take remain in scope."""
+    stays one episode otherwise, so ordinary sensor groups and streams outside a named take remain in scope.
+    Similar layouts alone cannot distinguish unnamed episodes from actors or camera families."""
     import h5py
 
     def layout(g):
         return frozenset(p for p, _ in _h5_datasets(g))
+
+    def is_numbered(name):
+        parts = tokens(name)
+        m = TAKE_WORD.fullmatch(parts[0]) if parts else None
+        return bool(m and ((len(parts) == 1 and m[2]) or
+                           (len(parts) == 2 and not m[2] and parts[1].isdigit())))
+
+    def owns_recording(groups):
+        if not all(h5_streams(f, group)['camera'] for group in groups):
+            return False
+        whole = h5_streams(f, '')
+        local = lambda p: any(p.startswith(group + '/') for group in groups)
+        settings = {'calibration', 'configuration', 'config', 'settings'}
+        streams = [s['path'] for kind in ('camera', 'depth', 'signal') for s in whole[kind]
+                   if kind != 'signal' or s['clock'] or not set(tokens(s['path'])) & settings]
+        streams += list(whole['native_clock'])
+        return (all(local(p) for p in streams + whole['unused']) and
+                all(local(s['path']) or f[s['path']].size <= H5_CONSTANT_MAX for s in whole['text']))
     queue = [("", f)]
     while queue:
         path, g = queue.pop(0)
         kids = [(k, g[k]) for k in g if isinstance(g[k], h5py.Group)]
         lays = {k: layout(kg) for k, kg in kids}
-        lays = {k: lay for k, lay in lays.items() if lay}
+        lays = {k: lay for k, lay in lays.items() if lay and is_numbered(k)}
         # siblings that share most of one layout are episodes: a demo that also records one more array (or one fewer)
         # is still a demo, never dropped for it
         similar = lambda a, b: len(a & b) * 2 >= max(len(a), len(b))
         best = max(([k2 for k2, l2 in lays.items() if similar(l1, l2)] for l1 in lays.values()), key=len, default=[])
         if len(best) >= 2:
-            return [f"{path}/{k}" if path else k for k in sorted(best, key=_natural)]
+            groups = [f"{path}/{k}" if path else k for k in sorted(best, key=_natural)]
+            if owns_recording(groups):
+                return groups
         numbered = []
         for k in lays:
-            parts = tokens(k)
-            m = TAKE_WORD.fullmatch(parts[0]) if parts else None
-            if m and ((len(parts) == 1 and m[2]) or
-                      (len(parts) == 2 and not m[2] and parts[1].isdigit())):
+            if is_numbered(k):
                 numbered.append(f"{path}/{k}" if path else k)
         if len(numbered) == 1:
-            prefix = numbered[0] + "/"
-            whole = h5_streams(f, "")
-            streams = [s["path"] for kind in ("camera", "depth", "signal") for s in whole[kind]]
-            streams += list(whole["native_clock"])
-            outside_notes = [s for s in whole["text"] if not s["path"].startswith(prefix)]
-            if (whole["camera"] and all(p.startswith(prefix) for p in streams + whole["unused"])
-                    and all(f[s["path"]].size <= H5_CONSTANT_MAX for s in outside_notes)):
+            if owns_recording(numbered):
                 return numbered
         queue += [(f"{path}/{k}" if path else k, kg) for k, kg in kids]
     return [""]
@@ -5911,8 +5966,21 @@ def h5_streams(f, group: str) -> dict:
     # raw until the streams are paired with their clocks by length, then in seconds read against a camera's clock
     native = {p: np.asarray(ds[()]) for p, ds in items if kinds[p] == "time"}
     clocks = {p: np.asarray(a, dtype=np.float64).ravel() for p, a in native.items()}
+    declared_scales, clock_issues = {}, []
+    for p, ds in items:
+        if p not in clocks:
+            continue
+        scale, error = h5_clock_unit(ds)
+        if error:
+            clocks[p] = np.full(clocks[p].shape, np.nan)
+            clock_issues.append({'kind': 'clock_units_unresolved', 'signal': p,
+                                 'what': f'{p}: {error}; no measured seconds or clock alignment are assigned. '
+                                         'Original values and declarations remain in the source; camera rows use '
+                                         'an explicitly assumed presentation cadence.'})
+        elif scale is not None:
+            declared_scales[p] = scale
     out = {"camera": [], "depth": [], "signal": [], "text": [], "clock": clocks, "unused": [],
-           "native_clock": native}
+           "native_clock": native, "clock_issues": clock_issues}
     for p, ds in items:
         k = kinds[p]
         if k == "time":
@@ -5937,7 +6005,7 @@ def h5_streams(f, group: str) -> dict:
                 break
         out[k].append({"path": f"{group}/{p}" if group else p, "name": p, "n": n, "clock": clock})
     camera_clock = next((c["clock"] for c in out["camera"] if c["clock"]), None)
-    out["clock"] = _clocks_in_seconds(clocks, reference=camera_clock)
+    out["clock"] = _clocks_in_seconds(clocks, reference=camera_clock, declared_scales=declared_scales)
     # names inside the episode: a group every camera and signal sits under (OpenTouch's data/demo_023/ in a file of one
     # demo) says nothing about any one of them, so it is left off their names
     timed = out["camera"] + out["depth"] + out["signal"]
@@ -6082,6 +6150,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
     readings, and left out only when it records nothing inside the footage), or, with no clock, one row per anchor
     frame when it has as many rows as the anchor has frames. A value that is not finite is NaN (not_finite)."""
     out = Signals()
+    out.issues.extend(streams.get('clock_issues') or [])
     recorded_q = np.asarray(q_abs, dtype=np.float64)
     q, camera_note = presentation_clock(recorded_q, fps)
     if presentation_q is not None:
@@ -6120,7 +6189,11 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             _, signal_note = presentation_clock(raw_t, fps)
             if signal_note and signal_note.get("clock_problem"):
                 problem = signal_note["clock_problem"]
-                what = "nonfinite values" if problem == "nonfinite" else "backwards steps"
+                unit_problem = any(i.get('signal') == s['clock'] for i in streams.get('clock_issues') or [])
+                if unit_problem:
+                    problem = 'unresolved units'
+                what = ('unresolved unit declarations' if unit_problem else
+                        'nonfinite values' if problem == 'nonfinite' else 'backwards steps')
                 source_rows, camera_frames = len(ds), n_anchor
                 matched = source_rows == camera_frames and len(a) == len(q)
                 placement = (f"Its {source_rows} original rows are placed one row per frame against "
@@ -6412,6 +6485,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
 
         def relative_times(s):
             t = times_of(s)
+            if not np.isfinite(t).any():
+                return t.copy()
             if coarse and s["clock"]:
                 raw = st["native_clock"][s["clock"]].ravel()
                 # Subtract in the original integer unit first. Epoch sized float conversion loses native ticks.
@@ -6512,8 +6587,10 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
             if stream.get('clock'):
                 clock_path = f"{g}/{stream['clock']}" if g else stream['clock']
                 mark_hdf(represented, str(Path(f.filename).resolve()), clock_path)
-                if 'units' in f[clock_path].attrs:
-                    mark_hdf(represented, str(Path(f.filename).resolve()), clock_path, 'units')
+                if h5_clock_unit(f[clock_path])[1] is None:
+                    for key in ('unit', 'units'):
+                        if key in f[clock_path].attrs:
+                            mark_hdf(represented, str(Path(f.filename).resolve()), clock_path, key)
             if stream in st['signal']:
                 ds = f[path]
                 for key in (*SIGNAL_METADATA_KEYS, 'names', 'columns', 'labels', 'fields'):
@@ -6570,11 +6647,13 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str) -> dict:
         if st["native_clock"]:
             for name in st["native_clock"]:
                 ds = f[f"{g}/{name}" if g else name]
-                units = ds.attrs.get("units")
+                units = ds.attrs.get("units", ds.attrs.get("unit"))
                 units = units.decode() if isinstance(units, bytes) else str(units) if units is not None else None
                 native_meta[name] = {"source": ds.name, "units": units}
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
+    for issue in st.get('clock_issues') or []:
+        add_issue(extra, **issue)
     extra.update(identity_extra)
     extra['recorded_hdf5_metadata'] = original_metadata
     extra['represented_source_members'] = represented
