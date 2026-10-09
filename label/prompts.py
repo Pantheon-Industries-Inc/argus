@@ -23,8 +23,7 @@ FIXED_HEADER = ("HOW TO LABEL. These instructions are the same for every episode
 # An episode with no recorded state and no other signal is video only (label/episode.py RECORDED_BLOCKS), and its
 # shared instructions say nothing of a recorded motion it does not have. These are the words taken out, from the
 # header, the robot rigs' tag list and the data contract; the 2026-10-02 audit found "the recorded motion" in the
-# instructions of every video only robot episode. The variant is pinned by derivation from the recorded one
-# (tests/test_label.py), so the pinned hashes stay.
+# instructions of every video only robot episode. Tests check the resulting video-only capabilities and schema.
 VIDEO_ONLY_HEADER = ("frames, recorded motion and instruction", "frames and instruction")
 VIDEO_ONLY_TAG = ("state_video_mismatch, ", "")
 VIDEO_ONLY_CONTRACT_WORDING = [

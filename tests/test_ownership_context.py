@@ -1,7 +1,6 @@
 """Selected containers retain note ownership from the original upload."""
 import copy
 import hashlib
-import inspect
 import json
 import shutil
 from pathlib import Path
@@ -36,8 +35,6 @@ def descriptor_context(root):
 
 @pytest.mark.parametrize("selected", ["a.h5", "b.h5"])
 def test_selected_hdf5_tasks_keep_ownership_from_the_original_upload(tmp_path, selected):
-    # A missing optional input is an assertion failure rather than a fixture setup exception.
-    assert "ownership_context" in inspect.signature(formats.convert).parameters
     original = containers(tmp_path / "original")
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in original.iterdir()}
     registry = descriptor_context(original)

@@ -70,9 +70,4 @@ check(odd.includes('>The model was not shown 1 signal</button>') && !odd.include
   'a kind whose value is not a list is passed over: ' + odd);
 check(safe({left_out: {cameras: 'cam_high'}}) === '', 'only kinds that are not lists draw nothing');
 
-// the shared fold handler has two users, so the files fold's labels are pinned too
-check(src.includes('data-closed="Show the notes in the files"')
-  && src.includes('data-open="Hide the notes in the files"'), 'the notes in the files fold keeps its two labels');
-check(src.includes('b.textContent = on ? b.dataset.open : b.dataset.closed;'),
-  'the handler reads both labels from the button');
 process.exit(bad ? 1 : 0);

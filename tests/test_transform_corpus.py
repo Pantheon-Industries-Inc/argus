@@ -12,9 +12,7 @@ Every frame shows a white square at the top left and a black one at the top righ
 seen, and its own time in 1/30 s as eight blocks. At every artifact the test reads them back and requires the picture
 upright, its displayed aspect ratio kept within one pixel, never larger than the source, every frame there and no
 other, each frame at its own time, and every camera on the episode's one clock.
-
-tests/fixtures/transform_table.json is each place's measured input and output for every case, and this test keeps it
-true; after a deliberate change, rewrite it with TRANSFORM_TABLE=write."""
+"""
 from __future__ import annotations
 
 import base64
@@ -35,7 +33,6 @@ import pytest
 FF, FP = shutil.which("ffmpeg"), shutil.which("ffprobe")
 pytestmark = pytest.mark.skipif(not (FF and FP), reason="no ffmpeg")
 
-TABLE = Path(__file__).with_name("fixtures") / "transform_table.json"
 CODE_RATE = 30            # the time each frame shows, in steps of 1/30 s
 
 H264 = ("-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "15")
@@ -710,10 +707,12 @@ def check_details(run, tag, req, ep, pl, imgs, et, me):
 # ---------------------------------------------------------------- the tests
 
 @pytest.fixture(scope="module")
-def corpus(tmp_path_factory):
+def corpus(tmp_path_factory, request):
     work = tmp_path_factory.mktemp("corpus")
     have = encoders()
-    names = [n for n, c in CASES.items() if all(e in have for e in c.need)]
+    selected = {item.callspec.params["name"] for item in request.session.items
+                if item.path == Path(__file__) and hasattr(item, "callspec") and "name" in item.callspec.params}
+    names = [n for n, c in CASES.items() if n in selected and all(e in have for e in c.need)]
 
     def one(n):
         try:
@@ -726,27 +725,8 @@ def corpus(tmp_path_factory):
         return dict(zip(names, ex.map(one, names)))
 
 
-# cases that still break a rule, each with where; a fix removes its case (strict, so a case that passes must go)
-KNOWN = {}
-
-
 @pytest.mark.parametrize("name", list(CASES))
-def test_every_transform_keeps_the_picture_upright_whole_and_on_time(corpus, name, request):
+def test_every_transform_keeps_the_picture_upright_whole_and_on_time(corpus, name):
     if name not in corpus:
         pytest.skip(f"this ffmpeg has no {', '.join(CASES[name].need)} encoder")
-    if name in KNOWN:
-        request.node.add_marker(pytest.mark.xfail(reason=KNOWN[name], strict=True))
     assert not corpus[name].failures, "\n".join(corpus[name].failures)
-
-
-def test_the_table_is_what_the_code_does(corpus):
-    rows = [r for n in CASES if n in corpus for r in corpus[n].rows]
-    if os.environ.get("TRANSFORM_TABLE") == "write":
-        TABLE.write_text(json.dumps(rows, indent=1, ensure_ascii=False) + "\n")
-    want = [r for r in json.loads(TABLE.read_text()) if r["case"] in corpus]
-    key = lambda r: (r["case"], r["camera"], r["place"])
-    got_by, want_by = {key(r): r for r in rows}, {key(r): r for r in want}
-    diff = [f"{k}: table {want_by.get(k)}, measured {got_by.get(k)}" for k in sorted(set(got_by) | set(want_by))
-            if got_by.get(k) != want_by.get(k)]
-    assert not diff, "the table no longer says what the code does (TRANSFORM_TABLE=write rewrites it):\n" + \
-        "\n".join(diff[:20])

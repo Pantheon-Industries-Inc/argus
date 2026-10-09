@@ -332,11 +332,46 @@ def test_build_projects_after_contacts_are_added(tmp_path, monkeypatch):
     assert label['withheld_contact_checks']['checked'] == 1
 
 
-def test_static_dictionary_has_safe_fold_and_no_edit_route():
+def test_static_dictionary_renders_uploaded_text_without_html_or_edit_controls(tmp_path):
+    import shutil
+    import subprocess
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node is not installed')
     page = serve.render_index('Tiny', {'mode': 'static', 'data': 'data/'})
-    assert 'Data dictionary' in page and 'dictionaryRows' in page
-    assert 'dictionary_url' not in page.split('const BOARD = ', 1)[1].split(';', 1)[0]
-    assert "name.textContent" in page and "meaning.textContent" in page
+    configuration = json.loads(page.split('const BOARD = ', 1)[1].split(';', 1)[0])
+    start = page.index('function dictionaryRows(data, endpoint)')
+    end = page.index('\nlet _dictionaryLoadToken = 0;', start)
+    payload = {'editable': True, 'fields': [{'id': 'unsafe', 'name': '<img src=x onerror=bad()>',
+                'kind': 'signal', 'source': '<script>bad()</script>'}],
+               'entries': {'unsafe': {'meaning': '<svg onload=bad()>', 'role': '', 'provenance': 'human'}},
+               'machine_entries': {'unsafe': {'meaning': 'Original interpretation', 'role': 'touch'}}}
+    script = '''
+    class Element {
+      constructor(tag) { this.tag=tag; this.children=[]; this.open=false; }
+      append(...children) { this.children.push(...children); }
+      replaceChildren() { this.children=[]; }
+      set innerHTML(value) { throw Error('Uploaded dictionary text was parsed as HTML'); }
+      flatten() { return [this].concat(...this.children.map(child=>child.flatten())); }
+    }
+    const target=new Element('div'), _activeFile='episode.json', location={protocol:'https:'};
+    const document={getElementById:()=>target,createElement:tag=>new Element(tag)};
+    const fetch=()=>{throw Error('A static dictionary tried to use the network');};
+    ''' + page[start:end] + '\nconst data=' + json.dumps(payload) + ";\n" + '''
+    const before=JSON.stringify(data);
+    dictionaryRows(data, ''' + json.dumps(configuration.get('dictionary_url')) + ''');
+    const nodes=target.flatten();
+    console.log(JSON.stringify({tags:nodes.map(node=>node.tag),texts:nodes.map(node=>node.textContent),
+      open:target.children[0].open,unchanged:JSON.stringify(data)===before}));
+    '''
+    path = tmp_path / 'static_dictionary.js'
+    path.write_text(script)
+    result = subprocess.run([node, str(path)], capture_output=True, text=True, check=True, timeout=10)
+    observed = json.loads(result.stdout)
+    assert observed['open'] is False and observed['unchanged'] is True
+    assert 'form' not in observed['tags'] and 'button' not in observed['tags']
+    assert {'Data dictionary', '<img src=x onerror=bad()>', '<script>bad()</script>', '<svg onload=bad()>',
+            'Human edit', 'Original interpretation', 'Unassigned'} <= set(observed['texts'])
 
 
 def test_missing_upload_receipt_uses_bound_context_overlay(tmp_path):

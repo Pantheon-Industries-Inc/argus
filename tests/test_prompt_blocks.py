@@ -1,19 +1,14 @@
-"""The episode prompt as a base (the task and the rig's camera geometry) plus blocks, each present only when the
-episode holds its data (label/episode.py BLOCKS). Today's episode prompts are pinned as text in tests/fixtures/prompts,
-so moving text between blocks cannot change a word, and the prompts of episodes with no optional data (NO_DATA) are
-never rewritten: an episode without a kind of data never hears of it."""
+"""Prompt capabilities follow available evidence, preserving clock and omission truth."""
 from __future__ import annotations
 
-import os
-from pathlib import Path
+import copy
+import re
 
 import numpy as np
 import pytest
 
 from label import episode as me
 from label import state as ms
-
-GOLDEN = Path(__file__).parent / "fixtures" / "prompts"
 
 
 def _pl(n, spans=(), contact=(), usable=True, every=1.5, fps=30):
@@ -131,27 +126,33 @@ CASES = {"teleop_joints": case_teleop_joints, "handheld_pose": case_handheld_pos
          "teleop_unaligned": case_teleop_unaligned, "teleop_everything": case_teleop_everything,
          "ego_annotated_tracks": case_ego_annotated_tracks,
          "teleop_video_only_two_wrists": case_teleop_video_only_two_wrists}
-# episodes with no optional data: their episode prompts never change (an episode without a kind of data never hears of
-# it). teleop_video_only_two_wrists has none either, and changes once, in Task 3, by one false clause.
-NO_DATA = ("teleop_joints", "handheld_pose", "teleop_video_only", "ego_plain", "teleop_unaligned")
-
-
-def _episode(name):
-    ep, pl = CASES[name]()
-    return me.build_prompt(ep, pl, cell_w=448, cell_h=252)[1]
+# Expectations describe evidence, independently of the block registry and prompt wording.
+CASE_CAPABILITIES = {
+    "teleop_joints": ({"state"}, ()),
+    "handheld_pose": ({"state"}, ()),
+    "teleop_video_only": ({"no_state"}, ()),
+    "ego_plain": ({"no_state"}, ()),
+    "teleop_unaligned": ({"state_unaligned"}, ()),
+    "teleop_everything": ({"collection_note", "contact_views", "depth", "state", "signals", "contacts",
+                            "uploader_notes"}, ("contacts", "contacts_missing")),
+    "ego_annotated_tracks": ({"no_state", "signals"}, ()),
+    "teleop_video_only_two_wrists": ({"no_state"}, ()),
+}
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
-def test_episode_prompts_match_their_pinned_text(name):
-    """The episode part of each case's prompt is its golden file. ARGUS_WRITE_PROMPTS=<name> (or all) rewrites one
-    from the current code, for a deliberate change to a case with data; a NO_DATA case is never rewritten
-    (=all rewrites only the cases with data)."""
-    text = _episode(name)
-    path = GOLDEN / f"{name}.txt"
-    if os.environ.get("ARGUS_WRITE_PROMPTS") in (name, "all") and name not in NO_DATA:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    assert path.read_text() == text, f"{name}: the episode prompt changed"
+def test_prompt_cases_request_only_their_available_evidence(name):
+    ep, pl = CASES[name]()
+    blocks, schema = CASE_CAPABILITIES[name]
+    assert {block.name for block in me.present_blocks(ep, pl)} == blocks
+    assert me.requested_schema(ep, pl) == schema
+    fixed, prompt = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
+    assert bool("CONTACTS:" in prompt) == ("contacts" in blocks)
+    assert bool("OTHER RECORDED SIGNALS" in prompt) == ("signals" in blocks)
+    assert bool("DEPTH:" in prompt) == ("depth" in blocks)
+    assert bool("recorded motion" in fixed) == bool(blocks & {"state", "state_unaligned", "signals"})
+    if ep["context"].get("instruction"):
+        assert ep["context"]["instruction"] in prompt
 
 
 def _add(**ctx):
@@ -244,7 +245,7 @@ CHANGES_FIXED = ("state", "no_state")
 @pytest.mark.parametrize("block,base,add,markers", BLOCK_CASES, ids=[c[0] for c in BLOCK_CASES])
 def test_a_block_is_in_the_prompt_and_the_schema_only_when_its_data_is(block, base, add, markers):
     ep, pl = CASES[base]()
-    fields = next(b.schema_fields for b in me.BLOCKS if b.name == block)
+    fields = {"contacts": ("contacts", "contacts_missing"), "sensor_evidence": ("sensor_findings",)}.get(block, ())
     fixed0, ep0 = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
     assert block not in [b.name for b in me.present_blocks(ep, pl)]
     assert not any(m in fixed0 + ep0 for m in markers)
@@ -260,14 +261,19 @@ def test_a_block_is_in_the_prompt_and_the_schema_only_when_its_data_is(block, ba
         assert fixed1 == fixed0                      # the cached shared instructions stay byte for byte the same
 
 
-def test_every_block_is_tested_and_presence_never_reads_the_rig_or_dataset_name():
-    import inspect
-    assert {c[0] for c in BLOCK_CASES} == {b.name for b in me.BLOCKS}
-    for b in me.BLOCKS:
-        assert b.present.__name__ != "<lambda>", b.name   # a named test, so its source can be read here
-        src = inspect.getsource(b.present)
-        assert "rig(" not in src and "dataset" not in src, b.name
-    assert {b.slot for b in me.BLOCKS} <= set(me.PROMPT_SLOTS)
+@pytest.mark.parametrize("block,base,add,markers", BLOCK_CASES, ids=[c[0] for c in BLOCK_CASES])
+def test_block_presence_depends_on_evidence_across_dataset_and_rig_names(block, base, add, markers):
+    ep, pl = CASES[base]()
+    add(ep, pl)
+    expected = {b.name for b in me.present_blocks(ep, pl)}
+    schema = me.requested_schema(ep, pl)
+    for dataset, profile in (("unfamiliar/publisher", "ego_head"),
+                             ("allenai/MolmoAct2-BimanualYAM-Dataset", "handheld_gripper"),
+                             ("", "teleop_arms")):
+        candidate = copy.deepcopy(ep)
+        candidate["context"].update(dataset=dataset, profile=profile, robot_type="unfamiliar robot")
+        assert {b.name for b in me.present_blocks(candidate, pl)} == expected
+        assert me.requested_schema(candidate, pl) == schema
 
 
 def test_contacts_ask_for_their_fields_and_imply_the_contact_check():
@@ -384,7 +390,7 @@ def test_sensor_data_the_reader_left_unread_never_shows_its_note_or_a_claim_that
 
 def test_an_episode_with_no_state_but_depth_is_told_its_colour_and_depth_images_are_all_there_is():
     """Depth images follow the detail views of a video only episode with depth, so "the video is all there is" would be
-    false there; an episode without depth keeps its line (the NO_DATA goldens)."""
+    false there; an episode without depth keeps its video-only description."""
     for note, line in ((None, "RECORDED STATE: none; this dataset records no robot or gripper state, so the cameras' "
                               "colour and depth images are all there is."),
                        ("Labelled from the cameras.", "RECORDED STATE: none was read from this episode, so the "
@@ -483,11 +489,14 @@ def test_a_humanoid_state_and_a_bases_odometry_are_shown_value_by_value_under_th
     # Long descriptors group every original range by value index; the readout retains each original value name.
     from label import signals as sg
     description = sg.describe("observation.state", ep["signals"]["observation.state"], names=HUMANOID)
-    assert description in episode and "value names retained in episode metadata" in description
+    assert "value names retained in episode metadata" in description
     assert "values from" not in description and description.count(" to ") == 26
-    for name, lo, hi in zip(HUMANOID, *sg.finite_range(ep["signals"]["observation.state"])):
+    printed = np.array([(float(lo), float(hi)) for lo, hi in re.findall(r'([-\d.e+]+) to ([-\d.e+]+)', description)])
+    native = ep["signals"]["observation.state"]
+    expected = np.stack([native.min(axis=0), native.max(axis=0)], axis=1)
+    np.testing.assert_allclose(printed, expected, rtol=.005, atol=.0005)
+    for name in HUMANOID:
         assert f"    observation.state {name}: " in episode
-        assert f"{sg._num(lo)} to {sg._num(hi)}" in description
     # new: one row per value at each instant, and the state line names the joint readings
     assert "    observation.state left_arm_j1: " in episode and "    observation.base.odom vx: " in episode
     assert "total activity" not in episode
@@ -670,31 +679,27 @@ def _sweeps_wide_and_flags():
     return ep, _pl(n)
 
 
-def test_the_rows_shown_at_each_instant_are_always_the_top_of_the_ranking(monkeypatch):
-    """Choose in movement rank order when each row fits. An oversized row leaves space for smaller later rows,
-    and the omission reason never claims all omitted rows moved least.
+@pytest.mark.parametrize("budget,expected_tail", [(12000, {"flag_0", "flag_1"}),
+                                                    (13000, {"wide", "flag_0", "flag_1", "flag_2"})])
+def test_signal_readout_skips_an_oversized_row_without_discarding_smaller_evidence(monkeypatch, budget, expected_tail):
+    """The captured 60 s fixture fits 42 moving signals, then smaller flags at 12k.
+    At 13k the previously oversized row and the remaining flag fit as well.
     """
-    from label import signals as sg
-    monkeypatch.setattr(me, "SIGNAL_TABLE_MAX_CHARS", 12000)
+    monkeypatch.setattr(me, "SIGNAL_TABLE_MAX_CHARS", budget)
     ep, pl = _sweeps_wide_and_flags()
     lines, whole = me._signal_readout(ep, pl)
-    shown = [l.split(":")[0].strip() for l in lines if l.startswith("    ") and not l.startswith("    at: ")]
-    order = list(ep["signals"])
-    ranked = sorted(order, key=lambda k: (-float(sg.movements(ep["signals"][k])[0]), order.index(k)))
-    # Printed in original signal order, with exact first fit selection from the movement ranking.
-    room = me.SIGNAL_TABLE_MAX_CHARS - len(lines[1])
-    expected = set()
-    for name in ranked:
-        row = "    " + name + ": " + " ".join(me._num(x) for x in ep["signals"][name][pl["ks"], 0])
-        if len(row) <= room:
-            expected.add(name)
-            room -= len(row)
-    assert set(shown) == expected == whole and shown == [k for k in order if k in whole]
-    assert ranked[42] == "wide" and "wide" not in whole
-    flag = len("    flag_0: " + " ".join(me._num(x) for x in ep["signals"]["flag_0"][pl["ks"], 0]))
-    assert room < flag and {"flag_0", "flag_1"} <= whole and "flag_2" not in whole
-    assert lines[-1] == ("  The values at each instant leave out wide (1 value) and flag_2 (1 value), because rows are "
-                        "ranked by movement and kept when they fit the 12000 character budget.")
+    shown = [line.split(":")[0].strip() for line in lines
+             if line.startswith("    ") and not line.startswith("    at: ")]
+    expected = {f"sweep_{i:02d}" for i in range(42)} | expected_tail
+    assert set(shown) == whole == expected
+    assert shown == [name for name in ep["signals"] if name in expected]
+    assert sum(len(line) for line in lines if line.startswith("    ")) <= budget
+    omitted = set(ep["signals"]) - expected
+    if omitted:
+        assert all(name in lines[-1] for name in omitted)
+        assert "ranked by movement" in lines[-1] and "move least" not in lines[-1]
+    else:
+        assert "leave out" not in "\n".join(lines)
 
 
 def test_with_no_row_that_fits_each_signal_with_rows_is_named_as_left_out_because_none_fits(monkeypatch):

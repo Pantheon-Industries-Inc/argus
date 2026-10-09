@@ -2,8 +2,11 @@
 episode page, through board build, the server and the depth clips (board/clips.py)."""
 from __future__ import annotations
 
+import base64
 import json
 import shutil
+import struct
+import subprocess
 from fractions import Fraction
 from pathlib import Path
 
@@ -12,10 +15,47 @@ import pytest
 
 from board import build as board_build
 from board import clips, sensors
-from label import signals as S
 
 
 # ---------------------------------------------------------------- quantization
+
+WIRE_CASES = [
+    (16, True, [[-2, 10], [-1.5, 10.5], [32765, 32777], [np.nan, np.inf]],
+     {'lo': [-2, 10], 'step': [.5, .5]}, struct.pack('<8H', 0, 0, 1, 1, 65534, 65534, 65535, 65535),
+     [[-2, 10], [-1.5, 10.5], [32765, 32777], [None, None]]),
+    (8, False, [[-10, 117], [0, np.nan]], {'lo': -10, 'step': .5}, bytes([0, 254, 20, 255]),
+     [[-10, 117], [0, None]]),
+]
+
+
+@pytest.mark.parametrize('bits,per_value,raw,metadata,encoded,expected', WIRE_CASES, ids=['vector16', 'map8'])
+def test_quantized_wire_format_has_independent_codes_and_missing_sentinels(bits, per_value, raw, metadata, encoded, expected):
+    values = np.array(raw, dtype=np.float64)
+    block = sensors.quantize(values, bits=bits, per_value=per_value)
+    assert {key: block[key] for key in ('lo', 'step')} == metadata
+    assert base64.b64decode(block['data']) == encoded
+    # Decode independently authored bytes, so matching writer and reader mistakes cannot cancel.
+    authored = {**metadata, 'data': base64.b64encode(encoded).decode()}
+    decoded = sensors.dequantize(authored, len(raw), bits=bits)
+    wanted = np.array([[np.nan if value is None else value for value in row] for row in expected])
+    np.testing.assert_equal(decoded, wanted)
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='no node')
+@pytest.mark.parametrize('bits,per_value,raw,metadata,encoded,expected', WIRE_CASES, ids=['vector16', 'map8'])
+def test_browser_decodes_independent_quantized_samples(bits, per_value, raw, metadata, encoded, expected):
+    from board import serve
+    page = serve.render_index('Sensors', {'mode': 'static', 'data': 'data/'})
+    start = page.index('function snBlock(')
+    end = page.index('\nfunction snDecode(', start)
+    block = {**metadata, 'data': base64.b64encode(encoded).decode()}
+    script = page[start:end] + '\nconst decoded=snBlock(' + json.dumps(block) + f',{len(raw)},{bits});' + '''
+    console.log(JSON.stringify({dims:decoded.dims,values:Array.from(decoded.v)}));
+    '''
+    result = subprocess.run([shutil.which('node'), '-e', script], capture_output=True, text=True,
+                            check=True, timeout=10)
+    assert json.loads(result.stdout) == {'dims': 2, 'values': [value for row in expected for value in row]}
+
 
 def test_values_round_trip_within_half_a_step():
     rng = np.random.default_rng(0)
@@ -95,10 +135,8 @@ def test_an_episode_file_keeps_what_label_signals_reads(tmp_path):
     force, pmap, health = doc["signals"]
     assert health["constant"] is True and health["value"] == [1.0] and "values" not in health
     a = np.load(ep / "signals.npz")["s0"].astype(np.float64)
-    clip_t = 12.5 + np.arange(300) / 30 - 12.5
-    assert force["rests_and_rises"] is bool(S.rests_and_rises(a)) is True and force["direction"] == "up"
-    # the spans are label/signals.py's, from every frame, on the clip's clock
-    assert force["spans"] == [[round(s, 3), round(e, 3)] for s, e in S.active_spans(a, clip_t)]
+    assert force["rests_and_rises"] is True and force["direction"] == "up"
+    # Independent frame boundaries from the fixture's two recorded presses.
     assert force["spans"] == [[2.0, 2.967], [6.667, 7.967]]
     v = sensors.dequantize(force["values"], doc["n"])
     assert np.max(np.abs(v[:, 0] - a[::2, 0])) <= force["values"]["step"][0] / 2 + 1e-9

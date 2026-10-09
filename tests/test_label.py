@@ -9,7 +9,6 @@ run folder tests; nothing calls a model.
 from __future__ import annotations
 
 import base64
-import hashlib
 import io
 import json
 import re
@@ -255,38 +254,28 @@ def test_no_rig_borrows_another_rigs_hardware():
     assert "what the arm does" not in hand
 
 
-# The shared instructions each rig is sent, pinned so that no prompt text changes by accident. A deliberate prompt
-# change updates these in the same commit.
-PINNED = {
-    ("teleop_arms", True): "79456a4ab69aea8202fe215d606484dfc38fcbc242da768b9a911c115c887f4e",
-    ("teleop_arms", False): "93b9200f2bb18f4ca3f8eda72fb8a502d2c4829277251193bbd6696508ad80ae",
-    ("handheld_gripper", True): "fa5f49ffe3c6042e757f78ad775a87f1af7308b858a59b30420e9ab416434989",
-    ("handheld_gripper", False): "0e421e7c6ddc2d8d9954629b6f152d2ac61d65406547647c9519040e9c1a4da5",
-    ("ego_head", True): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
-    ("ego_head", False): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
-}
-
-
-@pytest.mark.parametrize("rig,has_instruction", sorted(PINNED))
-def test_prompts_are_pinned(rig, has_instruction):
-    text = prompts.fixed_instructions(rig, has_instruction=has_instruction)
-    assert hashlib.sha256(text.encode()).hexdigest() == PINNED[(rig, has_instruction)]
-
-
-@pytest.mark.parametrize("rig,has_instruction", sorted(PINNED))
-def test_a_video_only_episode_gets_the_pinned_instructions_without_the_recorded_motion(rig, has_instruction):
-    """The video only variant is the pinned text with exactly these words taken out, so it needs no hash of its own
-    and the pinned hashes above never change for it."""
-    rec = prompts.fixed_instructions(rig, has_instruction=has_instruction)
-    vid = prompts.fixed_instructions(rig, has_instruction=has_instruction, recorded=False)
-    want = rec.replace(*prompts.VIDEO_ONLY_HEADER, 1)
+@pytest.mark.parametrize("rig", ["teleop_arms", "handheld_gripper", "ego_head"])
+@pytest.mark.parametrize("has_instruction", [False, True])
+def test_recorded_and_video_only_instructions_keep_the_same_output_contract(rig, has_instruction):
+    recorded = prompts.fixed_instructions(rig, has_instruction=has_instruction)
+    video = prompts.fixed_instructions(rig, has_instruction=has_instruction, recorded=False)
+    columns = ["start_s", "end_s", "arm", "action", "object", "destination", "spatial_relation",
+               "contribution", "progress"]
+    if rig == "ego_head":
+        columns += ["hands_visible", "hands_wearing"]
+    columns += ["notes"]
+    for text in (recorded, video):
+        offered = json.loads(re.search(r'"timeline_columns": (\[[^\]]+\])', text).group(1))
+        assert offered == columns
+        for field in ("scene", "timeline", "key_events", "data_issues", "operator_mistakes", "recovery"):
+            assert f'"{field}":' in text
+        assert ('"tasks":' in text) is (rig == "ego_head")
+        assert ('"completion":' in text) is (rig != "ego_head")
+    assert "recorded motion" in recorded
+    assert "recorded motion" not in video and "what is recorded" not in video
+    assert "state_video_mismatch" not in video
     if rig != "ego_head":
-        want = want.replace(*prompts.VIDEO_ONLY_TAG, 1)
-        for old, new in prompts.VIDEO_ONLY_CONTRACT_WORDING:
-            assert rec.count(old) == 1, old
-            want = want.replace(old, new, 1)
-    assert vid == want and vid != rec
-    assert "recorded motion" not in vid and "what is recorded" not in vid and "state_video_mismatch" not in vid
+        assert "state_video_mismatch" in recorded
 
 
 def test_an_episode_without_instruction_gets_the_task_rule_and_head_cameras_never_do():

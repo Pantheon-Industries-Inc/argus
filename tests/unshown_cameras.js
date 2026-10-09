@@ -6,20 +6,7 @@
 //
 // Prints nothing and exits 0 when every case holds; prints each failure and exits 1 otherwise.
 'use strict';
-const fs = require('fs');
-const path = require('path');
-
-const src = fs.readFileSync(process.argv[2] || path.join(__dirname, '..', 'board', 'serve.py'), 'utf8');
-const piece = (name) => {
-  const a = src.indexOf('\nfunction ' + name + '(');
-  if (a < 0) { console.log('no ' + name + ' in the page'); process.exit(1); }
-  let i = src.indexOf('{', a), depth = 0;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}' && --depth === 0) break;
-  }
-  return src.slice(a, i + 1) + '\n';
-};
+const {src, piece} = require('./page_functions')(process.argv[2]);
 const stubs = 'const videoSrc = (e, c) => "api/video?id=" + e + "&cam=" + c; const posterAttr = () => "";';
 const T = new Function(stubs + piece('esc') + piece('unshownCams') + piece('unshownCellsHtml') + piece('unshownNote')
   + 'return {unshownCams, unshownCellsHtml, unshownNote};')();

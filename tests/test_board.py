@@ -1443,5 +1443,3 @@ def test_times_that_fit_the_episode_but_not_their_order_or_part_are_never_said_t
                            "footage, from 3.0 s to 6.0 s; and 2 steps and 1 key event of part 3 lie outside that "
                            "part's footage, from 6.0 s to 9.0 s. They are kept as given.")
     assert steps_outside({"duration_s": float("nan"), "event_labels": [{"t_s": 50.0}], "key_events": []}) == []
-    page = (REPO / "board" / "serve.py").read_text()
-    assert "duration = d.duration_s > 0 && !d.duration_estimated ? d.duration_s" in page

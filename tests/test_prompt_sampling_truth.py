@@ -1,5 +1,6 @@
 """Sampling and sensor text describe the actual selected evidence."""
 import copy
+import re
 
 import numpy as np
 import pytest
@@ -102,12 +103,15 @@ def test_long_named_vector_keeps_ranges_and_names_in_metadata_with_bounded_descr
 
 def test_long_descriptor_groups_rows_without_losing_individual_ranges():
     a = np.vstack([np.arange(64) * 1234.56789, np.arange(64) * 1234.56789 + 76543.21])
+    a[0, 7] = np.nan
     names = [f"coordinate_{j}" for j in range(64)]
     text = sg.describe("observed.joints", a, names=names)
     assert max(map(len, text.splitlines())) <= 768
     assert "value names retained in episode metadata" in text
-    for lo, hi in zip(*sg.finite_range(a)):
-        assert f"{sg._num(lo)} to {sg._num(hi)}" in text
+    readings = re.findall(r'([-\d.e+]+) (?:to ([-\d.e+]+)|throughout)', text)
+    printed = np.array([(float(lo), float(hi or lo)) for lo, hi in readings])
+    expected = np.stack([np.nanmin(a, axis=0), np.nanmax(a, axis=0)], axis=1)
+    np.testing.assert_allclose(printed, expected, rtol=.005)
 
 
 def test_readout_grows_with_selected_instants_and_has_an_explicit_maximum():

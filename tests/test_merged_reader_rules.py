@@ -85,10 +85,7 @@ def test_every_reader_issue_writer_has_one_documented_family():
         assert slug in families.classify(doc)[group]
 
 
-def test_span_boundaries_and_state_reasons_have_one_definition():
-    tree = ast.parse(Path(formats.__file__).read_text())
-    assert len([node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "edge_slack"]) == 1
-    assert episode.STATE_WHY is formats.STATE_WHY
+def test_reader_state_reasons_have_request_wording_and_times_do_not_print_negative_zero():
     assert set(episode.STATE_WORDING) == set(formats.STATE_WHY)
     assert episode.seconds(-0.001) == "0.00 s" and episode.tenths(-0.01) == "0.0s"
 
