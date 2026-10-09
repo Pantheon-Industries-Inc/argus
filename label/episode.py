@@ -139,11 +139,11 @@ def load(ep_dir: Path) -> dict:
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
     if rig(ep) in JAW_RIGS and state_kind(ep) == "none":
-        ep["jaws"] = jaw_moves(ep_dir, src)
+        ep["jaws"] = jaw_moves(ep_dir, src, ep["times"])
     return ep
 
 
-def jaw_moves(ep_dir: Path, src: dict) -> dict:
+def jaw_moves(ep_dir: Path, src: dict, times: dict | None = None) -> dict:
     """{mounted camera: [jaw moves] or None} for each wrist camera, measured by prepare/jaws.py (None where it finds no
     jaw dots), on the camera's own clip times, cached in the episode folder as jaws.json."""
     from prepare import jaws as pj
@@ -159,13 +159,26 @@ def jaw_moves(ep_dir: Path, src: dict) -> dict:
         if r is None:
             moves[v] = None
             continue
-        base, dur = float(src[v].get("base_s") or 0.0), int(src[v]["n_frames"]) / r["fps"]
+        base, dur = first_frame_s(path, (times or {}).get(f"{v}_pts"), src[v], r["fps"]), int(src[v]["n_frames"]) / r["fps"]
         inside = lambda t: 0 <= t - base <= dur
         moves[v] = [{**e, "t": round(e["t"] - base, 3)} for e in r["events"] if inside(e["t"])]
     tmp = cache.with_name(".jaws.json.tmp")
     tmp.write_text(json.dumps({"version": JAW_VERSION, "videos": want, "moves": moves}))
     os.replace(tmp, cache)
     return moves
+
+
+def first_frame_s(path: str, pts, s: dict, fps: float) -> float:
+    """Where the clip starts in its video, in the jaw measurement's own time (decoded frame index / fps). A clip
+    decoded by pts (a part of a long recording keeps base_s 0 and is placed by its pts) starts at its first pts;
+    any other clip at base_s."""
+    if pts is None or not len(pts):
+        return float(s.get("base_s") or 0.0)
+    import av
+    with av.open(path) as c:
+        st = c.streams.video[0]
+        t = float((int(pts[0]) - int(st.start_time or 0)) * st.time_base)
+    return round(t * fps) / fps
 
 
 def video_jaws(path: str) -> dict | None:
@@ -242,7 +255,7 @@ STATE_KINDS = ("joints", "ee_pose", "none")
 # where a stopped recording would hide). Teleop arms move slowly and are seen by up to three cameras, so one
 # instant every 1.5 s is enough. Handheld demonstrations are short and fast, so denser. Egocentric footage has one
 # low-resolution head camera and the hands are the whole point, so it is sampled twice as densely again.
-SAMPLE_EVERY_S = {"teleop_arms": 1.5, "handheld_gripper": 1.0, "ego_head": 0.5}
+SAMPLE_EVERY_S = {"teleop_arms": 1.5, "handheld_gripper": 0.5, "ego_head": 0.5}
 
 
 def rig(ep: dict) -> str:
@@ -322,9 +335,10 @@ def jaw_desc(ep: dict) -> str:
         return ""
     return ("\nJAW MOVES. A handheld gripper records nothing, so its jaws were measured on every frame of its own "
             "camera. Below is every time a gripper's jaws closed or opened, moves close together on one line. They "
-            "are faster than one frame a second shows: a close, an open and a close within a second or two is how a "
-            "missed or slipped grasp and its retry look, and so is a deliberate regrasp, so weigh each burst against "
-            "the frames before and after it (what is between the jaws, where the object ends up). The measurement "
+            "can be faster than the sampled instants show. A burst of closes and opens can be a missed or slipped "
+            "grasp and its retry, a deliberate regrasp or adjustment, or simply how the task is done (fast stacking, "
+            "folding cloth); the timing alone does not say which. Decide from the frames before and after each burst "
+            "(what is between the jaws, where the object ends up) whether anything went wrong. The measurement "
             "says only when the jaws moved, not what they held: a thin object and empty jaws close alike.\n"
             + "\n".join(f"  {cam_name(ep, b['view'])} gripper: "
                         + ", ".join(f"{e['kind']} {e['t']:.2f}" for e in b["moves"]) for b in bursts) + "\n")

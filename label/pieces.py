@@ -31,7 +31,7 @@ import numpy as np
 
 # the longest recording the published board labels in one request is 443 s (OpenAoE); a recording longer than
 # this is labelled in parts, so an upload is never sent to the model in a longer request than the board's
-PIECE_MAX_S = {"teleop_arms": 450.0, "handheld_gripper": 450.0, "ego_head": 450.0}
+PIECE_MAX_S = {"teleop_arms": 450.0, "handheld_gripper": 330.0, "ego_head": 450.0}
 SEARCH = 0.3                # a cut is sought within +-30% of a part's length around its target
 SMOOTH_S = 2.0              # motion is averaged over 2 s so a cut lands in a still stretch, not a still frame
 CUT_GUARD_S = 10.0          # an issue this close to one of our cuts, of a cut-off kind, describes the cut
