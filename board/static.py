@@ -479,6 +479,8 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
         h.update(f"frame|{rel}\n".encode())
     if keypoints is not None:
         h.update(hashlib.sha1((keypoints / "index.json").read_bytes()).digest())
+    if (qa.parent / "actions" / "index.json").exists():   # the actions downloads are part of the build too
+        h.update(hashlib.sha1((qa.parent / "actions" / "index.json").read_bytes()).digest())
     for name in ("index.json", "metrics.json"):
         if compare is not None and (compare / name).exists():
             h.update(hashlib.sha1((compare / name).read_bytes()).digest())
@@ -597,6 +599,27 @@ def cmd_site(a):
             res = list(ex.map(one, todo))
         hands_res = {"dir": str(hands), "files": sum(1 for _, err in res if err is None),
                      "skipped": {f: err for f, err in res if err is not None}}
+    act_res = None
+    actions = a.qa.parent / "actions"
+    if (actions / "index.json").exists():
+        # each episode's actions, byte for byte, under media/ with a name from their content (as the keypoints)
+        (stage / "data/actions").mkdir()
+        aidx = json.loads((actions / "index.json").read_text())
+        listed = set(files)
+        aidx["files"] = {f: v for f, v in aidx["files"].items() if f in listed and (actions / v["npz"]).exists()}
+        (a.out / "media" / "a").mkdir(parents=True, exist_ok=True)
+        for f, v in aidx["files"].items():
+            body = (actions / v["npz"]).read_bytes()
+            rel = f"a/{q(f[:-5])}.{hashlib.sha1(body).hexdigest()[:10]}.npz"
+            dst = a.out / "media" / rel
+            if not dst.exists():
+                part = dst.with_name(dst.name + ".part")
+                part.write_bytes(body)
+                part.rename(dst)
+            v["path"] = rel
+        (stage / "data/actions/index.json").write_text(json.dumps(aidx, separators=(",", ":")))
+        act_res = {"dir": str(actions), "files": len(aidx["files"]),
+                   "bytes": sum(v["bytes"] for v in aidx["files"].values())}
     kp_res = None
     if keypoints is not None:
         # the downloads, byte for byte: they are in the dataset video's own pixels and times, not the web copy's.
@@ -622,7 +645,8 @@ def cmd_site(a):
     # the page asks for other models' labels, hand pose files and keypoint downloads only when the build has them
     # (no request that can only fail)
     has = {"compare": compare is not None, "hands": bool(hands_res and hands_res["files"]),
-           "keypoints": bool(kp_res and kp_res["files"]), "labels_license": sa.labels_license(a.board)}
+           "keypoints": bool(kp_res and kp_res["files"]),
+           "actions": bool(act_res and act_res["files"]), "labels_license": sa.labels_license(a.board)}
     name = sa.board_name(a.board)
     header = sa.read_header(getattr(a, "header", None))
     (stage / "index.html").write_text(sa.render_index(

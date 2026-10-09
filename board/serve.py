@@ -357,6 +357,7 @@ HERE = Path.cwd().resolve()           # the episode files (set by main from --bo
 MP4_DIR = HERE / "clips"              # the clips (set by main from --clips)
 COMPARE_DIR = HERE.parent / "compare" # other models' labels, beside qa/ (board/build.py writes them)
 HANDS_DIR = HERE.parent / "hands"     # the hand pose drawn over head-camera footage (board/build.py)
+ACTIONS_DIR = HERE.parent / "actions"            # each episode's actions as a download (index.json and .npz files)
 KEYPOINTS_DIR = HERE.parent / "hand_keypoints"   # the same keypoints as a download, in the dataset video's pixels
 FOOTAGE_DIR = HERE.parent / "footage" # the videos made to download (footage), or $BOARD_FOOTAGE_DIR (set by main)
 BOARD_NAME = ""                     # the manifest's "board" (set by main)
@@ -834,7 +835,7 @@ body.lb-swap #ep-list, body.lb-swap .issue-filter, body.lb-swap .coverage .cv-nu
 .ep-head-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
 .kp-note { width: 0; min-width: 100%; }
 .kp-note-in { padding-top: 7px; text-align: right; font: 400 11px/1.4 var(--sans); color: var(--fg-3); }
-#kp-dl[hidden] { display: none; }
+#kp-dl[hidden], #act-dl[hidden] { display: none; }
 
 /* ---------- main grid ---------- */
 main {
@@ -2426,6 +2427,9 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
               stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             <div class="vd-menu" id="vd-menu" role="menu"></div>
           </div>
+          <a id="act-dl" class="ep-head-dl" download hidden
+            title="this episode's actions: each wrist's state and its step to the next frame, as NumPy .npz"
+            >Actions</a>
           <a id="dl-json" class="ep-head-dl" download
             title="this episode's full annotation and dataset checks as JSON">Episode JSON</a>
         </div>
@@ -2575,6 +2579,14 @@ function keypointsUrl(file) {
   return STATIC ? BOARD.media + ((KP_INDEX || {})[file] || {}).path : 'api/keypoints?file=' + encodeURIComponent(file);
 }
 function keypointsDownloadUrl(file) { return STATIC ? keypointsUrl(file) : keypointsUrl(file) + '&download=1'; }
+// each episode's actions (actions/: the state of each wrist and its step to the next frame, as .npz); a static build
+// lists them in data/actions/index.json and keeps the files with the media, named by their content
+const actIndexUrl = () => STATIC ? BOARD.data + 'actions/index.json' : 'api/actions?file=index.json';
+function actionsDownloadUrl(file) {
+  const a = (ACT_INDEX || {})[file] || {};
+  return STATIC ? BOARD.media + a.path : 'api/actions?file=' + encodeURIComponent(a.npz) + '&download=1';
+}
+let ACT_INDEX = null;         // {file: {npz, frames, bytes}}: the episodes that have actions
 let KP_INDEX = null;          // {file: {frames, bytes}}: the episodes that have one
 function fmtBytes(b) {
   return b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + ' MB'
@@ -2661,7 +2673,7 @@ function saveBlob(blob, name) {
 }
 // a browser ignores <a download> across origins, so when a static build's data sits on another origin
 // (the CDN) the episode JSON and the hand keypoints are fetched and saved instead of opened
-if (STATIC) for (const id of ['dl-json', 'kp-dl']) document.getElementById(id).addEventListener('click', async (e) => {
+if (STATIC) for (const id of ['dl-json', 'kp-dl', 'act-dl']) document.getElementById(id).addEventListener('click', async (e) => {
   const a = e.currentTarget;
   if (new URL(a.href, location.href).origin === location.origin) return;
   e.preventDefault();
@@ -3145,8 +3157,9 @@ function firstDataset(want) {
   return want && datasets.includes(want) && has(want) ? want : (datasets.find(has) || null);
 }
 async function loadEpisodes() {
-  const [eps, cmp, kp] = await Promise.all([loadAllEpisodes(), BOARD.compare ? fetchJson(compareUrl('index')) : null,
-    BOARD.keypoints ? fetchJson(kpIndexUrl()) : null]);
+  const [eps, cmp, kp, act] = await Promise.all([loadAllEpisodes(), BOARD.compare ? fetchJson(compareUrl('index')) : null,
+    BOARD.keypoints ? fetchJson(kpIndexUrl()) : null, BOARD.actions ? fetchJson(actIndexUrl()) : null]);
+  ACT_INDEX = act && act.files ? act.files : null;
   ALL_EPS = eps;
   CMP = cmp && (cmp.models || []).length ? cmp : null;
   KP_INDEX = kp && kp.files ? kp.files : null;
@@ -3922,6 +3935,16 @@ function renderEp(d, opts) {
     kpA.title = `The model's 2D keypoints of both hands on all ${Number(kp.frames).toLocaleString()} frames of this `
       + `episode's video, in the dataset's own pixels and frame times (JSON, ${fmtBytes(kp.bytes)}). Non-commercial `
       + `use only.`;
+  }
+
+  // the episode's actions, a download of their own beside the labels'
+  const act = ACT_INDEX && ACT_INDEX[_activeFile], actA = document.getElementById('act-dl');
+  actA.hidden = !act;
+  if (act) {
+    actA.href = actionsDownloadUrl(_activeFile);
+    actA.setAttribute('download', _activeFile.replace(/\.json$/, '') + '.actions.npz');
+    actA.title = `This episode's actions on all ${Number(act.frames).toLocaleString()} frames: each wrist's state and its `
+      + `step to the next frame, with what is valid and where each pose came from (NumPy .npz, ${fmtBytes(act.bytes)}).`;
   }
 
   // what the label call cost and took, as the harness recorded it (the provider's billed cost when it reports one),
@@ -6147,7 +6170,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cfg = {"mode": "api", "compare": (COMPARE_DIR / "index.json").is_file(), "hands": HANDS_DIR.is_dir(),
                    "home": True, "names": home.plan_names(HERE.parent / "plan.json"),
                    "footage": FFMPEG is not None,
-                   "keypoints": (KEYPOINTS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
+                   "keypoints": (KEYPOINTS_DIR / "index.json").is_file(),
+                   "actions": (ACTIONS_DIR / "index.json").is_file(), "labels_license": labels_license(HERE.parent)}
             self._send(200, render_index(PAGE_TITLE, cfg, BOARD_NAME, HEADER), "text/html; charset=utf-8")
             return
         if parsed.path == "/api/episodes":
@@ -6224,6 +6248,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(404, {"error": "no hand pose for this episode"})
                 return
             self._send(200, p.read_bytes(), "application/json")
+            return
+        if parsed.path == "/api/actions":
+            # one episode's actions, a download of their own; index.json lists the episodes that have them
+            q = urllib.parse.parse_qs(parsed.query)
+            fname = (q.get("file") or [""])[0]
+            p = ACTIONS_DIR / fname
+            if not fname or "/" in fname or not _under(ACTIONS_DIR, p) or not p.is_file() or p.suffix not in (".json", ".npz"):
+                self._send(404, {"error": "no actions for this episode"})
+                return
+            if p.suffix == ".json":
+                self._send(200, p.read_bytes(), "application/json")
+                return
+            body = p.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            if (q.get("download") or [""])[0] == "1":
+                self.send_header("Content-Disposition", f'attachment; filename="{p.stem}.actions.npz"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if parsed.path == "/api/keypoints":
             # one head-camera episode's hand keypoints, a download of their own (never in the labels or their
@@ -6321,7 +6365,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main(argv=None) -> int:
-    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, FOOTAGE_DIR, PORT, PAGE_TITLE, BOARD_NAME, HEADER
+    global HERE, MP4_DIR, COMPARE_DIR, HANDS_DIR, KEYPOINTS_DIR, ACTIONS_DIR, FOOTAGE_DIR, PORT, PAGE_TITLE, BOARD_NAME, HEADER
     ap = argparse.ArgumentParser(prog="python -m board serve", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", type=Path, required=True, help="a board folder (its qa/ holds the episode files)")
@@ -6337,6 +6381,7 @@ def main(argv=None) -> int:
     COMPARE_DIR = (a.board / "compare").resolve()
     HANDS_DIR = (a.board / "hands").resolve()
     KEYPOINTS_DIR = (a.board / "hand_keypoints").resolve()
+    ACTIONS_DIR = (a.board / "actions").resolve()
     FOOTAGE_DIR = Path(os.environ.get("BOARD_FOOTAGE_DIR") or (a.board / "footage")).resolve()
     PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
     socketserver.ThreadingTCPServer.allow_reuse_address = True
