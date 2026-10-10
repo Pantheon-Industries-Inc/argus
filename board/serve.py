@@ -5551,14 +5551,14 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
   });
   let signature = null, stripKey = null, plottedGrip = (E.insights || [])[0] || null;
   const deferred = new Map(), presented = new Set();
-  let presentationTimer = null, presentationKey = null, disposed = false;
+  let presentationTimer = null, presentationKey = null, presentationVisible = true, disposed = false;
   function cancelPresentation() {
     if (presentationTimer != null) presentation.cancel(presentationTimer);
     presentationTimer = null; presentationKey = null;
   }
   function schedulePresentation() {
     if (!presentation) return;
-    const key = !blocked && displayedGrip && deferred.has(displayedGrip.findingIndex)
+    const key = !blocked && presentationVisible && displayedGrip && deferred.has(displayedGrip.findingIndex)
       ? displayedGrip.findingIndex : null;
     if (key === presentationKey) return;
     cancelPresentation();
@@ -5591,6 +5591,10 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
         deferred.set(finding.findingIndex, {finding, visibleSeconds: 0});
     }
     wire.sync(currentTime);
+  }, setPresentationVisible(visible) {
+    if (presentationVisible === visible) return;
+    presentationVisible = visible;
+    schedulePresentation();
   }, dispose() {
     disposed = true;
     if (presentation) cancelPresentation();
@@ -7490,6 +7494,18 @@ function renderEp(d, opts) {
   evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile, scheduleTopPlacement,
     {schedule: fn => setTimeout(fn, 3500), cancel: id => clearTimeout(id)});
   window._epCleanup.push(() => evidenceWire.dispose());
+  if (gripFindingOverlay) {
+    let sensorInView = false;
+    const updateVisibility = () => evidenceWire.setPresentationVisible(sensorInView && !document.hidden);
+    const observer = new IntersectionObserver(entries => {
+      sensorInView = entries.some(entry => entry.isIntersecting);
+      updateVisibility();
+    });
+    observer.observe(gripFindingOverlay);
+    on(document, 'visibilitychange', updateVisibility);
+    updateVisibility();
+    window._epCleanup.push(() => observer.disconnect());
+  }
   const syncEvidence = t => {
     evidenceWire.sync(t);
     if ((sensorOverlay && sensorOverlay.classList.contains('active'))

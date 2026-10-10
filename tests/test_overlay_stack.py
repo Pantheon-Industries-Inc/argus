@@ -288,6 +288,8 @@ wire.sync(2.46244);wire.sync(4.1);
 assert(strip.innerHTML.includes(findings[0].headline),'first finding retains its reading time');
 assert(pending,'concurrent findings must progress without manual selection');
 function advance(){const fn=pending;pending=null;assert(fn);fn();}
+wire.setPresentationVisible(false);assert.equal(pending,null,'offscreen or hidden card cancels its reading slot');
+wire.setPresentationVisible(true);
 doc.hidden=true;advance();assert(strip.innerHTML.includes(findings[0].headline),'hidden tab cannot consume reading time');
 doc.hidden=false;advance();assert(strip.innerHTML.includes('Touch and video clocks disagree'),'quality warning receives a video card');
 assert(strip.innerHTML.includes('Earlier'));assert(strip.innerHTML.includes('2.4s to 2.6s'));
