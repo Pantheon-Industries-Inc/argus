@@ -263,3 +263,42 @@ assert(strip.hidden,'claim expires after 3.5 actual visible media seconds');
 assert.equal(stack.style.minHeight,undefined);assert.equal(stack.style.height,undefined);
 '''
     subprocess.run(['node', '-e', script, str(SOURCE), str(first_sample)], check=True)
+
+
+def test_concurrent_recorded_findings_and_quality_warning_receive_visible_time():
+    script = r"""
+const fs=require('fs'),assert=require('assert');
+const src=fs.readFileSync(process.argv[1],'utf8');
+const begin=src.indexOf('// ================= sensor evidence:'),end=src.indexOf('// ================= touch:',begin);
+const strip={innerHTML:'',hidden:true,dataset:{},querySelectorAll:()=>[]};
+const doc={getElementById:id=>id==='grip-finding-overlay'?strip:null,querySelectorAll:()=>[]};
+const api=new Function('esc','fmtT','document',src.slice(begin,end)
+ +'return {sensorEvidence,setupSensorEvidence};')(String,t=>t.toFixed(1)+'s',doc);
+const findings=JSON.parse(fs.readFileSync(process.argv[2],'utf8')).findings;
+const E=api.sensorEvidence({sensor_evidence:{version:1,findings},tactile_qc:{version:1,warnings:[
+ {start_s:2.4,end_s:2.6,headline:'Touch and video clocks disagree',detail:'Measured offset exceeds the review threshold.'},
+ {start_s:2.4,end_s:2.6,headline:'Rejected warning',review_status:'rejected'}
+]}});
+const original=JSON.stringify(E);
+let pending=null;
+const presentation={schedule(fn){pending=fn;return fn;},cancel(){pending=null;}};
+const wire=api.setupSensorEvidence(E,()=>{},()=>{},()=>{},null,null,()=>{},presentation);
+wire.sync(1.1);wire.setCapacity(200);assert(strip.innerHTML.includes(findings[0].headline));
+wire.sync(2.46244);wire.sync(4.1);
+assert(strip.innerHTML.includes(findings[0].headline),'first finding retains its reading time');
+assert(pending,'concurrent findings must progress without manual selection');
+function advance(){const fn=pending;pending=null;assert(fn);fn();}
+doc.hidden=true;advance();assert(strip.innerHTML.includes(findings[0].headline),'hidden tab cannot consume reading time');
+doc.hidden=false;advance();assert(strip.innerHTML.includes('Touch and video clocks disagree'),'quality warning receives a video card');
+assert(strip.innerHTML.includes('Earlier'));assert(strip.innerHTML.includes('2.4s to 2.6s'));
+wire.setCapacity(0);assert.equal(pending,null,'blocked time cannot consume the warning');
+wire.setCapacity(200);advance();
+assert(strip.innerHTML.includes(findings[1].headline),'brief sound event receives its own reading time after playback ends');
+advance();assert(strip.hidden,'every queued finding retires after readable display time');
+assert(!strip.innerHTML.includes('Rejected warning'));
+wire.sync(0);assert(strip.hidden,'backward seek clears the presentation queue');
+assert.equal(JSON.stringify(E),original,'presentation preserves recorded annotations');
+wire.dispose();assert.equal(pending,null,'episode cleanup cancels pending presentation');
+"""
+    subprocess.run(['node', '-e', script, str(SOURCE),
+                    str(HERE / 'fixtures/overlapping_sensor_findings.json')], check=True)

@@ -1659,10 +1659,17 @@ aside.left .grip-strip .sensor-overlay { position: static; order: 2; max-width: 
 .sensor-overlay-stack .gf-pressure-row svg { height: 20px; }
 .sensor-overlay-stack .gf-pressure-range, .sensor-overlay-stack .gf-pressure-value { display: none; }
 .sensor-overlay-stack.tight .gf-pressure { display: none; }
+.cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack {
+  width: min(300px, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 24px)); }
+.cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack.tight .grip-finding-overlay { padding: 6px 8px; }
+.cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack.tight .gf-copy { gap: 4px; }
+.cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack.tight .gf-title { font-size: 13px; line-height: 1.3; }
+.sensor-overlay-stack .sensor-quality { border-left-color: #f1c85a; }
 .gf-pager { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; font-size: 10px; }
 .gf-pager button { border: 0; padding: 2px 6px; color: inherit; background: rgba(255,255,255,.1);
   border-radius: 3px; font: inherit; cursor: pointer; }
 @media (max-width: 600px) {
+  aside.left .cam-row-grippers:has(.sensor-overlay-stack) .cam-cell.cam-exo { grid-column: 1 / span 2; }
   .sensor-overlay-stack { width: min(260px, 54%, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 16px));
     left: calc(var(--fx-left, 0px) + 8px); }
 }
@@ -5094,7 +5101,11 @@ function sensorEvidence(d) {
     headline: 'Visible grasp has no recorded contact', reading: 'No covering contact', visual: 'Reported from video',
     detail: [text(m.hand), text(m.object)].filter(Boolean).join(' '), priority: 6, index: -1, timing: ''});
   moments.sort((a, b) => a.t - b.t || b.priority - a.priority);
-  return {contacts, moments, insights, grip, warnings, recordingFindings: recordingFindings(d)};
+  const overlayFindings = [...insights, ...warnings.map((w, i) => ({
+    findingIndex: insights.length + i, start: w.start_s, end: w.end_s, t: w.start_s,
+    headline: w.headline, detail: w.detail, kind: 'quality', priority: 6, generic: true, evidence: []
+  }))];
+  return {contacts, moments, insights, overlayFindings, grip, warnings, recordingFindings: recordingFindings(d)};
 }
 function activeSensorEvidence(E, t) {
   const active = [...E.contacts, ...(E.insights || [])].filter(c => t + 1e-6 >= c.start && t <= c.end + 1e-6)
@@ -5109,7 +5120,7 @@ function activeSensorEvidence(E, t) {
 function displayGripFindings(E, t) {
   // Keep brief findings readable, with their original interval still explicit.
   // An ended event never displaces a finding that remains active.
-  return (E.insights || []).filter(f => t + 1e-6 >= f.start
+  return (E.overlayFindings || E.insights || []).filter(f => t + 1e-6 >= f.start
       && t <= Math.max(f.end, f.start + 3.5) + 1e-6)
     .map(f => ({...f, phase: t <= f.end + 1e-6 ? 'Now' : 'Earlier'}))
     .sort((a, b) => Number(b.phase === 'Now') - Number(a.phase === 'Now')
@@ -5201,7 +5212,7 @@ function gripFindingStripHtml(f, G = null, pager = '') {
     <span class="gf-meta"><span class="gf-phase${f.phase === 'Now' ? ' is-now' : ''}">${esc(f.phase)}</span>
       <span class="gf-time">${fmtT(f.start)} to ${fmtT(f.end)}</span>${pager}</span>
     <button type="button" class="gf-title" title="Replay this finding">${f.generic ? genericSensorHeadlineHtml(f.headline) : gripFingerHtml(f.headline)}</button>
-    ${gripOverlayPressureHtml(G, f, 2)}</span>
+    ${f.kind === 'quality' ? '' : gripOverlayPressureHtml(G, f, 2)}</span>
     <span class="gf-inspect" aria-hidden="true">↗</span>`;
 }
 function sensorEvidenceOverlayHtml(e) {
@@ -5492,7 +5503,7 @@ function syncGripEvidence(G, t, finding = null) {
   const label = document.getElementById('grip-evidence-time');
   if (label) label.textContent = 'Sample ' + fmtT(ts[i]);
 }
-function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null, relayout = () => {}) {
+function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null, relayout = () => {}, presentation = null) {
   const overlay = document.getElementById('sensor-overlay'), strip = document.getElementById('grip-finding-overlay'),
     now = document.getElementById('sensor-evidence-now');
   const details = document.getElementById('sensor-evidence-details');
@@ -5513,7 +5524,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
   };
   if (strip) on(strip, 'click', event => {
     const choice = event.target.closest('[data-overlay-finding]');
-    if (choice) { chosenGrip = +choice.dataset.overlayFinding; wire.sync(currentTime); return; }
+    if (choice) { wire.sync(currentTime, +choice.dataset.overlayFinding); return; }
     if (displayedGrip) {
       const selected = displayedGrip;
       seek(selected.t, false);
@@ -5539,7 +5550,35 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     document.getElementById('sensor-depth-mode').hidden = !!showing;
   });
   let signature = null, stripKey = null, plottedGrip = (E.insights || [])[0] || null;
-  const deferred = new Map();
+  const deferred = new Map(), presented = new Set();
+  let presentationTimer = null, presentationKey = null, disposed = false;
+  function cancelPresentation() {
+    if (presentationTimer != null) presentation.cancel(presentationTimer);
+    presentationTimer = null; presentationKey = null;
+  }
+  function schedulePresentation() {
+    if (!presentation) return;
+    const key = !blocked && displayedGrip && deferred.has(displayedGrip.findingIndex)
+      ? displayedGrip.findingIndex : null;
+    if (key === presentationKey) return;
+    cancelPresentation();
+    if (key == null) return;
+    presentationKey = key;
+    presentationTimer = presentation.schedule(() => {
+      presentationTimer = null; presentationKey = null;
+      if (disposed) return;
+      const bounds = strip && strip.getBoundingClientRect?.();
+      const viewport = document.documentElement;
+      if (document.hidden || (bounds && viewport &&
+          (bounds.bottom <= 0 || bounds.top >= viewport.clientHeight
+            || bounds.right <= 0 || bounds.left >= viewport.clientWidth))) {
+        schedulePresentation(); return;
+      }
+      deferred.delete(key); presented.add(key);
+      if (chosenGrip === key) chosenGrip = null;
+      wire.sync(currentTime);
+    });
+  }
   let blocked = false, previousTime = null, previousBlocked = false, previousFinding = null, currentCandidates = [];
   const wire = {setCapacity(height) {
     const next = !(height > 0);
@@ -5548,29 +5587,42 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     // Layout learns capacity after rendering. Preserve that frame's candidates
     // before the same-time sync loses any brief interval crossed by playback.
     if (blocked) for (const finding of currentCandidates) {
-      if (!deferred.has(finding.findingIndex))
+      if (!presented.has(finding.findingIndex) && !deferred.has(finding.findingIndex))
         deferred.set(finding.findingIndex, {finding, visibleSeconds: 0});
     }
     wire.sync(currentTime);
+  }, dispose() {
+    disposed = true;
+    if (presentation) cancelPresentation();
+    deferred.clear();
   }, sync(t, explicitFindingIndex = null) {
+    if (disposed) return;
     const delta = previousTime == null ? 0 : t - previousTime;
-    if (delta < -1e-6) { deferred.clear(); chosenGrip = null; }
-    if (explicitFindingIndex != null) chosenGrip = explicitFindingIndex;
-    if (!blocked && !previousBlocked && delta > 0 && delta <= 1 + 1e-6) {
+    if (delta < -1e-6) {
+      deferred.clear(); presented.clear(); chosenGrip = null;
+      if (presentation) cancelPresentation();
+    }
+    if (explicitFindingIndex != null) {
+      chosenGrip = explicitFindingIndex;
+      presented.delete(explicitFindingIndex);
+      if (presentation) cancelPresentation();
+    }
+    if (!presentation && !blocked && !previousBlocked && delta > 0 && delta <= 1 + 1e-6) {
       const pending = deferred.get(previousFinding);
       if (pending) {
         pending.visibleSeconds += delta;
         if (pending.visibleSeconds >= 3.5 - 1e-6) deferred.delete(previousFinding);
       }
     }
-    if (blocked) for (const finding of E.insights || []) {
+    if (blocked || presentation) for (const finding of E.overlayFindings || E.insights || []) {
       const active = t + 1e-6 >= finding.start && t <= finding.end + 1e-6;
       const crossed = delta > 0 && delta <= 1 + 1e-6 && finding.start <= t && finding.end >= previousTime;
-      if ((active || crossed) && !deferred.has(finding.findingIndex))
+      if ((active || crossed) && !presented.has(finding.findingIndex) && !deferred.has(finding.findingIndex))
         deferred.set(finding.findingIndex, {finding, visibleSeconds: 0});
     }
     const e = activeSensorEvidence(E, t);
-    const available = displayGripFindings(E, t);
+    const available = displayGripFindings(E, t).filter(f =>
+      !presentation || !presented.has(f.findingIndex) || t <= f.end + 1e-6);
     for (const {finding} of deferred.values()) {
       if (!available.some(f => f.findingIndex === finding.findingIndex))
         available.push({...finding, phase: t <= finding.end + 1e-6 ? 'Now' : 'Earlier'});
@@ -5578,7 +5630,10 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     available.sort((a, b) => Number(b.phase === 'Now') - Number(a.phase === 'Now')
       || b.priority - a.priority || b.start - a.start);
     currentCandidates = available;
-    displayedGrip = available.find(f => f.findingIndex === chosenGrip) || available[0] || null;
+    const retained = presentation && displayedGrip && deferred.has(displayedGrip.findingIndex)
+      ? available.find(f => f.findingIndex === displayedGrip.findingIndex) : null;
+    displayedGrip = available.find(f => f.findingIndex === chosenGrip) || retained
+      || available.find(f => deferred.has(f.findingIndex)) || available[0] || null;
     if (!available.some(f => f.findingIndex === chosenGrip)) chosenGrip = null;
     if (strip) {
       const key = JSON.stringify([displayedGrip && [displayedGrip.findingIndex, displayedGrip.phase], available.map(f => [f.findingIndex, f.phase])]);
@@ -5591,7 +5646,8 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
         relayout();
       }
       strip.hidden = !displayedGrip;
-      if (displayedGrip) syncGripOverlayPressure(E.grip, displayedGrip, t, strip, 2);
+      strip.classList?.toggle('sensor-quality', displayedGrip?.kind === 'quality');
+      if (displayedGrip && displayedGrip.kind !== 'quality') syncGripOverlayPressure(E.grip, displayedGrip, t, strip, 2);
     }
     for (const line of document.querySelectorAll('[data-se-trace]')) {
       const p = profiles[+line.dataset.seTrace];
@@ -5600,7 +5656,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
       line.setAttribute('x1', x); line.setAttribute('x2', x);
     }
     const measurements = profiles.map(p => sensorProfileHtml(p, t)).join('');
-    const selected = displayedGrip || (E.insights || [])[0];
+    const selected = displayedGrip && displayedGrip.kind !== 'quality' ? displayedGrip : (E.insights || [])[0];
     if (selected && (!plottedGrip || selected.findingIndex !== plottedGrip.findingIndex)) {
       const panel = document.getElementById('grip-evidence-panel');
       if (panel) panel.innerHTML = gripEvidencePanelHtml(E.grip, selected);
@@ -5627,6 +5683,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     const distribution = profiles.map(p => sensorDistributionHtml(p, t)).join('');
     const anomaly = e && e.priority >= 3 ? sensorEvidenceOverlayHtml(e) : '';
     const nextSignature = JSON.stringify([html, distribution, anomaly]);
+    schedulePresentation();
     if (nextSignature === signature) return;
     signature = nextSignature;
     if (overlay) {
@@ -6765,8 +6822,8 @@ function renderEp(d, opts) {
             </div>
             <div class="th-r"></div>
           </div></div>` : progOverlayHtml}
-          ${(evidence.insights.length || evidence.contacts.length || evidence.moments.length) ? `<div class="sensor-overlay-stack" id="sensor-overlay-stack" aria-label="Sensor findings">
-            ${evidence.insights.length ? '<div class="grip-finding-overlay" id="grip-finding-overlay" role="group" aria-label="Sensor findings" hidden></div>' : '<button type="button" class="sensor-overlay" id="sensor-overlay" aria-label="Inspect current tactile evidence"></button>'}
+          ${(evidence.insights.length || evidence.warnings.length || evidence.contacts.length || evidence.moments.length) ? `<div class="sensor-overlay-stack" id="sensor-overlay-stack" aria-label="Sensor findings">
+            ${evidence.insights.length || evidence.warnings.length ? '<div class="grip-finding-overlay" id="grip-finding-overlay" role="group" aria-label="Sensor findings" hidden></div>' : '<button type="button" class="sensor-overlay" id="sensor-overlay" aria-label="Inspect current tactile evidence"></button>'}
           </div>` : ''}
           ${gripOnly ? '' : notesHtml}
         </div>
@@ -7430,7 +7487,9 @@ function renderEp(d, opts) {
       Number(el.dataset.i) === idx));
   }
   let tcWire = null;            // the Touch lane and its card (setupTouch), on an episode with contacts
-  evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile, scheduleTopPlacement);
+  evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile, scheduleTopPlacement,
+    {schedule: fn => setTimeout(fn, 3500), cancel: id => clearTimeout(id)});
+  window._epCleanup.push(() => evidenceWire.dispose());
   const syncEvidence = t => {
     evidenceWire.sync(t);
     if ((sensorOverlay && sensorOverlay.classList.contains('active'))
