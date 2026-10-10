@@ -167,7 +167,7 @@ def main() -> int:
     if rc != 0:
         raise SystemExit(f"clips exited {rc} with episodes still to put on the board (log {job / 'logs' / 'clips.log'})")
 
-    long_eps = pieces.write_units(job, eps)
+    long_eps = pieces.write_units(job, eps, a.model)          # parts cut for the model that labels them
     env = repo_env(RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)))
     run_step(job, "dry_run", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                               str(job / "dry"), "--concurrency", jobs, "--dry-run", *model_args], env)

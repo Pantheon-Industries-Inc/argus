@@ -49,6 +49,7 @@ from pathlib import Path
 import numpy as np
 
 from checks import timebase
+from label import vlm
 from label import frames as mf
 from label import lens
 from label import prompts
@@ -252,10 +253,16 @@ def describe_spans(ep: dict, spans) -> list[dict]:
 RIGS = ("teleop_arms", "handheld_gripper", "ego_head")
 STATE_KINDS = ("joints", "ee_pose", "none")
 # One sampled instant every N s for the whole episode, still spans included (a still span is exactly
-# where a stopped recording would hide). Teleop arms move slowly and are seen by up to three cameras, so one
-# instant every 1.5 s is enough. Handheld demonstrations are short and fast, so denser. Egocentric footage has one
-# low-resolution head camera and the hands are the whole point, so it is sampled twice as densely again.
-SAMPLE_EVERY_S = {"teleop_arms": 1.5, "handheld_gripper": 0.5, "ego_head": 0.5}
+# where a stopped recording would hide). These are Astra's rates: teleop arms move slowly and are seen by up to three
+# cameras, so one instant every 1.5 s is enough. Handheld demonstrations are short and fast, so denser. Egocentric
+# footage has one low-resolution head camera and the hands are the whole point, so it is sampled twice as densely
+# again. Every other model is sent 2 instants per second on every rig (label/vlm.py).
+SAMPLE_EVERY_S = {"teleop_arms": 1.5, "handheld_gripper": 1.0, "ego_head": 0.5}
+
+
+def every_s(ep: dict, model: str | None = None) -> float:
+    """Seconds between sampled instants for this episode and model: Astra's per-rig rate, else label/vlm.py's."""
+    return SAMPLE_EVERY_S[rig(ep)] if vlm.is_astra(model) else vlm.OTHER_EVERY_S
 
 
 def rig(ep: dict) -> str:
@@ -273,8 +280,9 @@ def state_kind(ep: dict) -> str:
     return k
 
 
-def plan(ep: dict) -> dict:
-    """Frames to send plus the deterministic checks we report ourselves."""
+def plan(ep: dict, model: str | None = None) -> dict:
+    """Frames to send plus the deterministic checks we report ourselves. The sampling rate depends on the model
+    (every_s)."""
     T = int(len(ep["state"]))
     r, kind, fps = rig(ep), state_kind(ep), ep_fps(ep)
     windows = {v: int(ep["sources"][v]["n_frames"]) for v in views(ep)}
@@ -305,7 +313,7 @@ def plan(ep: dict) -> dict:
         # checks/stream_pairing.py: whether each mounted stream follows its own actor's recorded motion (a
         # report field, never a claim made to the model)
         checks["stream_pairing"] = ep["context"]["stream_pairing"]
-    every = SAMPLE_EVERY_S[r]
+    every = every_s(ep, model)
     ks = ms.sample_frames(n, spans, fps=fps, moving_every_s=every, still_every_s=every)
     pl = {"n": n, "ks": ks, "spans": spans, "checks": checks,
           "state_usable": checks["camera_windows_match_state"]}
@@ -616,11 +624,11 @@ def _detail_desc(native: tuple) -> str:
     return f"the full {w}x{h}" if (dw, dh) == (w, h) else f"{dw}x{dh} (the recording is {w}x{h})"
 
 
-def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -> str:
+def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple, model: str | None = None) -> str:
     r, kind = rig(ep), state_kind(ep)
     n = _rig_nouns(r)
     names = ", ".join(cam_name(ep, v) for v in views(ep))
-    every = SAMPLE_EVERY_S[r]
+    every = every_s(ep, model)
     s = (
         f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
         "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
@@ -828,7 +836,8 @@ def ego_annotation_block(ctx: dict) -> str:
             + (f"  about these annotations: {ctx['annotation_note'].strip()}\n" if ctx.get("annotation_note") else ""))
 
 
-def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None) -> tuple[str, str]:
+def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None,
+                 model: str | None = None) -> tuple[str, str]:
     """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
     identical for every episode of the dataset, then the facts about THIS episode (rig, cameras, frames,
     recorded state, instruction)."""
@@ -882,7 +891,7 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
     fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=recorded,
                                        sessions=bool(ctx.get("sessions")) and not given)
     return (fixed + prompts.example_block(r, example_dir),
-            EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + "\n" + given_block)
+            EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native, model) + "\n" + given_block)
 
 
 EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
@@ -890,11 +899,20 @@ EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
 
 def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int | None = None,
                   max_cell_w: int | None = None, grid_cols: int = 4, grid_quality: int = 80,
-                  example_dir=None) -> dict:
+                  example_dir=None, model: str | None = None) -> dict:
     """Everything the harness sends for one episode (content parts), and what it records about it. cell_w fixes
-    the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell."""
+    the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell. model sets
+    the sampling rate (every_s), and a part of a long recording must have been cut for that model's part length."""
     ep = load(ep_dir)
-    pl = plan(ep)
+    part = ep["context"].get("piece") or {}
+    if part.get("max_s") is not None:
+        from label import pieces
+        want = pieces.piece_max(ep["context"], model)
+        if abs(float(part["max_s"]) - want) > 1e-6:
+            raise ValueError(f"{Path(ep_dir).name} was cut into parts of at most {part['max_s']:g} s, but "
+                             f"{model or 'the default model'} is labelled in parts of at most {want:g} s; cut the "
+                             "recording again for this model (label/pieces.py write_units)")
+    pl = plan(ep, model)
     # An explicit cell width is used as given. The rig's default is the largest width whose grids fit the
     # request's image-size cap: a long episode at 448 px can exceed it, and is then sent at the next step
     # down rather than refused. Episodes that fit are unchanged.
@@ -917,7 +935,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     for cell_w in widths:
         steps = timesteps(ep, pl, imgs, cell_w)
         cell_h = int(round(any_img.height * cell_w / any_img.width / 2)) * 2
-        fixed, episode = build_prompt(ep, pl, cell_w=cell_w, cell_h=cell_h, example_dir=example_dir)
+        fixed, episode = build_prompt(ep, pl, cell_w=cell_w, cell_h=cell_h, example_dir=example_dir, model=model)
         content, n_grids, grid_bytes = mf.build_content(fixed, episode, steps, cam_labels, grid_cols, detail,
                                                         grid_quality, gutter=GRID_GUTTER, header=GRID_HEADER)
         if grid_bytes <= budget:
@@ -950,4 +968,4 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
             "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]], "lens": ep["lens"],
             "grid_cols": grid_cols,
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
-            "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s"}
+            "sampling": f"{rig(ep)}-every-{every_s(ep, model):g}s"}

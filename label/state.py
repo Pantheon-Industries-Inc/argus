@@ -6,7 +6,7 @@ kind "joints" (MolmoAct2, ABC-130k, Galaxea), or x y z (m), roll pitch yaw (rad)
 
 State is used for three things, all deterministic:
 
-1. Frame selection: one instant every N s for the whole episode (N per rig, episode.SAMPLE_EVERY_S),
+1. Frame selection: one instant every N s for the whole episode (N per rig and model, episode.every_s),
    plus the first and last frame.
 2. Still spans: a span is reported only when, over the whole span, every channel stayed inside its
    tolerance. It is handed to the model as the RECORDING'S CLAIM, to check against the video: a

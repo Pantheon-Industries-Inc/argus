@@ -29,9 +29,12 @@ from pathlib import Path
 
 import numpy as np
 
+from label import vlm
+
 # the longest recording the published board labels in one request is 443 s (OpenAoE); a recording longer than
-# this is labelled in parts, so an upload is never sent to the model in a longer request than the board's
-PIECE_MAX_S = {"teleop_arms": 450.0, "handheld_gripper": 330.0, "ego_head": 450.0}
+# this is labelled in parts, so an upload is never sent to the model in a longer request than the board's. These are
+# Astra's part lengths; every other model is labelled in parts of at most label/vlm.py OTHER_PART_MAX_S
+PIECE_MAX_S = {"teleop_arms": 450.0, "handheld_gripper": 450.0, "ego_head": 450.0}
 SEARCH = 0.3                # a cut is sought within +-30% of a part's length around its target
 SMOOTH_S = 2.0              # motion is averaged over 2 s so a cut lands in a still stretch, not a still frame
 CUT_GUARD_S = 10.0          # an issue this close to one of our cuts, of a cut-off kind, describes the cut
@@ -40,7 +43,10 @@ JOIN_GUARD_S = 2.0          # a task ending this close to a cut, and one startin
 KEY_CUT_GUARD_S = 1.0       # a failed or unclear key event this close to a cut is the part running out, not the task
 
 
-def piece_max(ctx: dict) -> float:
+def piece_max(ctx: dict, model: str | None = None) -> float:
+    """The longest part this model labels in one request: Astra's per-rig length, else label/vlm.py's."""
+    if not vlm.is_astra(model):
+        return vlm.OTHER_PART_MAX_S
     return PIECE_MAX_S.get(ctx.get("profile"), PIECE_MAX_S["teleop_arms"])
 
 
@@ -48,9 +54,9 @@ def duration(ctx: dict) -> float:
     return float(ctx.get("duration_s") or ctx["n_state_frames"] / float(ctx["fps"]))
 
 
-def needs_pieces(ep_dir: Path) -> bool:
+def needs_pieces(ep_dir: Path, model: str | None = None) -> bool:
     ctx = json.loads((Path(ep_dir) / "context.json").read_text())
-    return duration(ctx) > piece_max(ctx) * 1.05
+    return duration(ctx) > piece_max(ctx, model) * 1.05
 
 
 def motion(ep: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -133,15 +139,17 @@ def fmt_clock(s: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
-def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
-    """Write one sidecar folder per part under pieces_root (named <episode>__pNN) and record the cuts in the
-    episode's context (context["pieces"]). Returns the part folders."""
+def write_pieces(ep_dir: Path, pieces_root: Path, model: str | None = None) -> list[Path]:
+    """Write one sidecar folder per part under pieces_root (named <episode>__pNN), cut for this model's part length,
+    and record the cuts in the episode's context (context["pieces"]). Each part records that length, so it cannot be
+    labelled by a model that needs shorter or longer parts (label/episode.py build_request). Returns the part folders."""
     from label import episode as me
     ep_dir = Path(ep_dir)
     ep = me.load(ep_dir)
     ctx = ep["context"]
     t, m = motion(ep)
-    cuts = choose_cuts(t, m, piece_max(ctx))
+    max_s = piece_max(ctx, model)
+    cuts = choose_cuts(t, m, max_s)
     n = len(t)
     bounds = [0] + [c["frame"] for c in cuts] + [n]
     total = duration(ctx)
@@ -183,7 +191,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "stream_checks", "pieces",
             "instruction", "instruction_note", "real_times", "timebase_neighbour_lag_frames")}
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
-                  piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
+                  piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3),
+                         "max_s": max_s})
         note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total)} recording, from "
                 f"{fmt_clock(t0)} to {fmt_clock(t1)} of it. The labelling pipeline cut the recording into parts at "
                 "moments of little motion to label it; activity that carries across a cut is expected, and a part "
@@ -216,15 +225,15 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         (d / "context.json").write_text(json.dumps(c2, indent=1, default=str))
         (d / "instruction.txt").write_text("\n")
         out.append(d)
-    ctx["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
+    ctx["pieces"] = {"max_s": max_s, "cuts": cuts, "parts": [p.name for p in out]}
     (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
     return out
 
 
-def write_units(job: Path, eps: Path) -> dict:
+def write_units(job: Path, eps: Path, model: str | None = None) -> dict:
     """The requests to send for a folder of prepared episodes: short episodes as they are, long recordings as their
-    parts. job/units holds one link per request so one labelling run covers both, and job/pieces the parts.
-    Returns {long episode: [its part folders' names]}."""
+    parts, cut for the model that will label them (piece_max). job/units holds one link per request so one labelling
+    run covers both, and job/pieces the parts. Returns {long episode: [its part folders' names]}."""
     units = Path(job) / "units"
     if units.exists():
         shutil.rmtree(units)
@@ -232,8 +241,8 @@ def write_units(job: Path, eps: Path) -> dict:
     proot = Path(job) / "pieces"
     long_eps = {}
     for d in sorted(Path(eps).glob("episode_*")):
-        if needs_pieces(d):
-            parts = _write_or_reuse(d, proot)
+        if needs_pieces(d, model):
+            parts = _write_or_reuse(d, proot, model)
             long_eps[d.name] = [p.name for p in parts]
             for p in parts:
                 (units / p.name).symlink_to(p.resolve())
@@ -242,12 +251,13 @@ def write_units(job: Path, eps: Path) -> dict:
     return long_eps
 
 
-def _write_or_reuse(d: Path, proot: Path) -> list[Path]:
+def _write_or_reuse(d: Path, proot: Path, model: str | None = None) -> list[Path]:
     ctx = json.loads((d / "context.json").read_text())
-    names = (ctx.get("pieces") or {}).get("parts") or []
-    if names and all((proot / n / "context.json").exists() for n in names):
+    rec = ctx.get("pieces") or {}
+    names = rec.get("parts") or []
+    if names and rec.get("max_s") == piece_max(ctx, model) and all((proot / n / "context.json").exists() for n in names):
         return [proot / n for n in names]          # a resumed job reuses its parts (their labels depend on them)
-    return write_pieces(d, proot)
+    return write_pieces(d, proot, model)
 
 
 def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:

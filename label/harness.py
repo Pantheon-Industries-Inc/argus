@@ -46,6 +46,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from label import episode as me
+from label import vlm
 from label.route import route_width
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -184,7 +185,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
     route_w, route = (None, {"routed": False}) if cell_w else route_width(
         ep_dir, None if dry_run else api_key, call_model, timeout=min(timeout, 120))
     req = me.build_request(ep_dir, detail=DETAIL, gate=DECODE_GATE, grid_cols=GRID_COLS, cell_w=cell_w or None,
-                           max_cell_w=route_w, example_dir=example_dir)
+                           max_cell_w=route_w, example_dir=example_dir, model=model)
     pl = req["plan"]
     fields = {
         "given_prompt": req["given_prompt"],
@@ -619,7 +620,8 @@ def main() -> int:
     ap.add_argument("--out-dir", type=Path, help="output folder with --episodes-root, one <episode>.json each")
     ap.add_argument("--model", default=DEFAULT_MODEL, help=f"OpenRouter model id (default {DEFAULT_MODEL}); an "
                                                           "OpenAI key runs only openai/ models")
-    ap.add_argument("--reasoning", default=DEFAULT_REASONING, help="reasoning effort (default medium)")
+    ap.add_argument("--reasoning", default=None, help="reasoning effort (default: the prescribed model's, label/vlm.py; "
+                                                      "medium for any other model)")
     ap.add_argument("--max-tokens", type=int, default=64000, help="output tokens per episode (default 64000)")
     ap.add_argument("--timeout", type=int, default=600, help="seconds per request (default 600)")
     ap.add_argument("--concurrency", type=int, default=0, help="episodes in flight (default 4 per key)")
@@ -651,6 +653,10 @@ def main() -> int:
         from label import route
         n = route.seed(json.loads(args.route_seeds.read_text()), args.route_seeds.name)
         print(f"routing answers seeded for {n} task texts from {args.route_seeds}", flush=True)
+    args.reasoning = args.reasoning or vlm.reasoning_for(args.model, DEFAULT_REASONING)
+    if args.model not in vlm.PRESCRIBED:
+        print(f"note: {args.model} is not one of the prescribed VLMs ({', '.join(vlm.PRESCRIBED)}); it is sent "
+              f"{1 / vlm.OTHER_EVERY_S:g} instants per second like every model but Astra (label/vlm.py)", file=sys.stderr)
     label_kw = dict(model=args.model, reasoning=args.reasoning, max_tokens=args.max_tokens, timeout=args.timeout,
                     cell_w=args.cell_w, example_dir=args.example_dir, dry_run=args.dry_run)
     if args.episode_dir:
