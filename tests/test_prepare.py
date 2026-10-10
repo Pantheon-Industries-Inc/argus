@@ -182,6 +182,94 @@ def test_state_layout_reads_seven_values_per_actor_else_video_only():
     assert formats.state_layout(14, "ego_head") == ("none", None)
 
 
+def test_state_value_names_settle_six_joints_and_a_gripper_against_seven_joints_or_a_pose():
+    """The names datasets on disk give observation.state. A seventh value named for a gripper is the layout, and its
+    first six named for a position and an orientation make it a pose on any rig; seven joints and no gripper (a
+    Franka arm), a quaternion, or a gripper out of place stay signals; names that say neither keep the width rule."""
+    j = lambda side: [f"{side}_joint_{i}.pos" for i in range(6)] + [f"{side}_gripper.pos"]
+    pose = ["x", "y", "z", "roll", "pitch", "yaw", "gripper"]
+    wrist = ["wrist_x", "wrist_y", "wrist_z", "wrist_roll", "wrist_pitch", "wrist_yaw", "gripper"]
+    left_right_wrist = [n for s in ("left", "right") for n in [f"{s}_wrist_{a}" for a in (
+        "pos_x", "pos_y", "pos_z", "roll", "pitch", "yaw")] + [f"{s}_gripper"]]
+    cases = [
+        (14, "teleop_arms", j("left") + j("right"), "joints"),                        # MolmoAct2 bi_yam
+        (7, "teleop_arms", pose, "ee_pose"),                                           # lerobot_franka_finger_tactile
+        (7, "handheld_gripper", pose, "ee_pose"),                                       # FastUMI
+        (14, "teleop_arms", [f"position_{i}" for i in range(14)], "none"),             # Indexed positions
+        (7, "teleop_arms", [f"fr3_left_joint{i}" for i in range(1, 8)], "none"),       # a Franka arm, no gripper
+        (7, "handheld_gripper", ["x", "y", "z", "qx", "qy", "qz", "qw"], "none"),       # a quaternion and no opening
+        (7, "teleop_arms", ["gripper"] + [f"joint{i}" for i in range(1, 7)], "none"),  # the gripper first
+        (7, "teleop_arms", None, "joints"), (14, "teleop_arms", None, "joints"),
+        (7, "handheld_gripper", None, "ee_pose"),
+        (16, "teleop_arms", [f"j{i}" for i in range(16)], "none"), (14, "ego_head", j("left") + j("right"), "none"),
+        # joints named for the axis they turn about are joints, never a pose
+        (7, "teleop_arms", ["shoulder_yaw", "shoulder_pitch", "elbow_pitch", "forearm_roll", "wrist_pitch",
+                            "wrist_roll", "gripper"], "joints"),
+        (7, "teleop_arms", ["waist_yaw", "waist_pitch", "waist_roll", "shoulder_pitch", "shoulder_roll",
+                            "elbow_pitch", "gripper"], "joints"),
+        (14, "teleop_arms", [f"{s}_{n}" for s in ("left", "right") for n in ("shoulder_pitch", "shoulder_roll",
+                             "shoulder_yaw", "elbow_pitch", "wrist_roll", "wrist_pitch", "gripper")], "joints"),
+        (7, "handheld_gripper", ["ee_x", "ee_y", "ee_z", "rx", "ry", "rz", "gripper"], "ee_pose"),
+        (7, "handheld_gripper", ["ee.pos.x", "ee.pos.y", "ee.pos.z", "ee.rot.x", "ee.rot.y", "ee.rot.z", "jaw"],
+         "ee_pose"),
+        # a pose of the wrist frame names a position, which no joint does, so it stays a pose on either rig
+        (7, "handheld_gripper", wrist, "ee_pose"), (7, "teleop_arms", wrist, "ee_pose"),
+        (14, "handheld_gripper", left_right_wrist, "ee_pose"), (14, "teleop_arms", left_right_wrist, "ee_pose"),
+        # a quaternion under any separator, and quat only as a word of its own
+        (7, "handheld_gripper", ["x", "y", "z", "ee-qx", "ee-qy", "ee-qz", "ee-qw"], "none"),
+        (7, "handheld_gripper", ["x", "y", "z", "q_x", "q_y", "q_z", "q_w"], "none"),
+        (7, "teleop_arms", [f"squat_motor_{i}" for i in range(6)] + ["gripper"], "joints"),
+    ]
+    for dims, rig, names, want in cases:
+        kind, note = formats.state_layout(dims, rig, names)
+        assert kind == want, (dims, rig, names, kind)
+        assert (note is None) == (want != "none" or rig == "ego_head"), (names, note)
+    assert "7 joints and no gripper" in formats.state_layout(7, "teleop_arms", [f"a_joint{i}" for i in range(7)])[1]
+
+
+def test_a_state_without_informative_names_reads_as_it_always_did():
+    """No existing fixture names its state, so none changes: no names, or names that say neither joints, a gripper
+    nor a pose, give exactly the width rule's answer for every width and rig."""
+    for dims in range(0, 30):
+        for rig in ("teleop_arms", "handheld_gripper", "ego_head"):
+            want = formats.state_layout(dims, rig)
+            assert formats.state_layout(dims, rig, None) == want
+            assert formats.state_layout(dims, rig, [f"motor_{i}" for i in range(dims)]) == want
+
+
+POSE_NAMES = ["x", "y", "z", "roll", "pitch", "yaw", "gripper"]
+
+
+def test_a_lerobot_state_named_as_a_pose_is_read_as_a_pose_on_an_arm_rig(tmp_path):
+    """A teleop dataset that stores its arm's end effector as x, y, z, roll, pitch, yaw and a gripper in
+    observation.state (lerobot_franka_finger_tactile) had it read as six joints; its names make it a pose, and seven
+    joints named with no gripper make no state at all."""
+    for names, want in ((POSE_NAMES, "ee_pose"), ([f"fr3_joint{i}" for i in range(1, 8)], "none")):
+        root = tmp_path / want / "named"
+        expected = _lerobot_v21(root, dims=7)
+        info = json.loads((root / "meta" / "info.json").read_text())
+        info["features"]["observation.state"]["names"] = names
+        (root / "meta" / "info.json").write_text(json.dumps(info))
+        out = tmp_path / want / "episodes"
+        rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
+        ctx = json.loads((out / "episode_000000" / "context.json").read_text())
+        assert rc == 0 and ctx["state_kind"] == want, (names, ctx["state_kind"])
+        with np.load(out / "episode_000000" / "state.npz") as arrays:
+            assert arrays["state"].dtype == expected.dtype and arrays["state"].tobytes() == expected.tobytes()
+        if want == "none":
+            assert ctx["recorded_state_archive"]["meaning"].startswith("Unsupported native rows")
+
+
+def test_video_views_episode_reads_the_state_by_its_value_names(tmp_path):
+    _mp4(tmp_path / "v" / "a.mp4", 6)
+    state = np.zeros((6, 7))
+    for names, want in ((POSE_NAMES, "ee_pose"), (None, "joints"), ([f"motor_{i}" for i in range(7)], "joints")):
+        ep = tmp_path / "out" / f"episode_{want}_{names is None}"
+        ctx = formats.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "teleop_arms", "mine",
+                                          {"instruction": None}, state=state, state_names=names)
+        assert ctx["state_kind"] == want, (names, ctx["state_kind"])
+
+
 # ---- the sidecar writer on a real mp4 ----
 
 def test_video_views_episode_times_frames_by_their_pts(tmp_path):
@@ -293,7 +381,9 @@ def test_every_other_recorded_signal_reaches_the_model_under_its_own_name(tmp_pa
     p = me.build_request(ep)["prompt"]
     table = p.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
     assert "observation.state.chassis (3 values): 0 to 0.9, 0, 0 to 0.3" in table
-    assert "observation.state.torso (2 values): [0.5, 0.25] throughout" in table and "next.done (1 value): 0 to 1" in table
+    # a value the same at every frame is named once, on one line with the others like it
+    assert "The same at every frame: observation.state.torso [0.5, 0.25]" in table
+    assert "next.done (1 value): 0 to 1" in table
     assert "task_index" not in table and "  index" not in table and "timestamp" not in table
     # an episode that records nothing else gets exactly the prompt it had before
     plain = tmp_path / "plain"
@@ -322,7 +412,7 @@ def test_the_other_signals_are_measured_over_each_still_span():
                       "noise": np.full((120, 2), 0.5)}, "times": None, "kmap": {},
           "context": {"fps": 30}, "state": np.zeros((120, 14)), "sources": {}}
     t = me._signals_table(ep, {"n": 120, "spans": [(0, 59), (60, 119)], "ks": [0, 119]})
-    assert "base (1 value): 0 to 2" in t and "noise (2 values): [0.5, 0.5] throughout" in t
+    assert "base (1 value): 0 to 2" in t and "The same at every frame: noise [0.5, 0.5]" in t
     assert "0.00-1.97s: none changed" in t and "2.00-3.97s: base 2" in t
 
 
@@ -330,11 +420,32 @@ def test_recorded_signals_skip_bookkeeping_and_what_an_adapter_holds_back():
     n = 4
     df = pd.DataFrame({"observation.velocity": [[1.0, 2.0]] * n, "frame_index": np.arange(n),
                        "coarse_quality_index": np.zeros(n), "timestamp": np.arange(n) / 30.0,
-                       "is_error_segment": [0, 1, 1, 0], "note": ["a"] * n, "wide": [list(range(100))] * n})
+                       "is_error_segment": [0, 1, 1, 0], "note": ["a"] * n,
+                       "picture": [list(range(formats.SIGNAL_MAX_VALUES + 1))] * n})
     got = formats.recorded_signals(df, set(habit.PUBLISHER_COLUMNS), n)
-    assert list(got) == ["observation.velocity"] and got["observation.velocity"].shape == (n, 2)
-    assert list(formats.recorded_signals(df, set(), n)) == ["observation.velocity", "is_error_segment"]
-    assert formats.recorded_signals(df, set(), n + 1) == {}          # a column shorter than the episode is not kept
+    assert list(got) == ["observation.velocity", "picture"] and got["observation.velocity"].shape == (n, 2)
+    every = formats.recorded_signals(df, set(), n)
+    assert list(every) == ["observation.velocity", "is_error_segment", "picture"]
+    # a column wider than SIGNAL_MAX_VALUES is kept as a map (past the episode's budget, write_signals summarises it)
+    assert every["picture"].shape == (n, formats.SIGNAL_MAX_VALUES + 1) and not every.left_out
+    # a table shorter than the episode is kept, NaN past its last row, and says so
+    longer = formats.recorded_signals(df, set(), n + 1)
+    assert longer["observation.velocity"].shape == (n + 1, 2) and np.isnan(longer["observation.velocity"][n]).all()
+    assert [i["kind"] for i in longer.issues] == ["table_short"]
+
+
+def test_a_tactile_map_keeps_its_shape_and_its_value_names():
+    """A glove's 16 x 16 pressure map (parquet's list of lists) is one signal of 256 values shaped 16 x 16, not dropped
+    for being wide; a force sensor's values keep the names the dataset gives them."""
+    n = 5
+    grid = [[[float(r * 16 + c + k) for c in range(16)] for r in range(16)] for k in range(n)]
+    df = pd.DataFrame({"observation.tactile.right": grid, "observation.force": [[0.1, 0.2, 9.8]] * n})
+    feats = {"observation.force": {"dtype": "float32", "shape": [3], "names": {"axes": ["fx", "fy", "fz"]}}}
+    got = formats.recorded_signals(df, set(), n, feats)
+    assert got["observation.tactile.right"].shape == (n, 256)
+    assert got.meta["observation.tactile.right"]["shape"] == [16, 16]
+    assert got["observation.tactile.right"][2, 17] == 2 + 17            # row 1, column 1 of frame 2, in the map's order
+    assert got.meta["observation.force"]["names"] == ["fx", "fy", "fz"] and "shape" not in got.meta["observation.force"]
 
 
 def test_a_fourth_camera_is_sent_to_the_model_under_its_own_name(tmp_path):
@@ -365,7 +476,7 @@ def test_a_lerobot_camera_without_its_video_is_listed_as_unused(tmp_path):
     rc, _ = _main(lerobot, ["prepare", "--root", root, "--rig", "teleop_arms", "--out", out])
     ctx = json.loads((out / "episode_000000" / "context.json").read_text())
     assert rc == 0 and set(ctx["cameras"]) == {"exo", "left"}
-    assert ctx["source"]["unused_cameras"] == ["observation.images.cam_low"]
+    assert ctx["source"]["unused_cameras"] == ["observation.images.cam_low (no video of it for this episode is in the upload)"]
 
 
 # ---- your own data: a folder of videos ----
@@ -491,6 +602,51 @@ def test_spread_permutation_prefixes_span_the_range():
     assert order[:3] == [4, 1, 6]
 
 
+def _galaxea_folder(root, n: int = 20):
+    """A one-episode Galaxea R1 Lite folder (LeRobot v2.1) with the real feature table's names and shapes, trimmed to
+    the columns the reader and the chassis IMU need."""
+    imu = ["ax", "ay", "az", "gx", "gy", "gz", "qw", "qx", "qy", "qz"]
+    shapes = {"observation.state.left_arm": 6, "observation.state.right_arm": 6, "observation.state.left_gripper": 1,
+              "observation.state.right_gripper": 1, "observation.state.chassis.imu": 10, "action.left_arm": 6,
+              "action.right_arm": 6, "action.left_gripper": 1, "action.right_gripper": 1}
+    feats = {k: {"dtype": "float64", "shape": [d], "names": imu if "imu" in k else None} for k, d in shapes.items()}
+    feats |= {k: {"dtype": "int64", "shape": [1], "names": None} for k in galaxea.GALAXEA_COLUMNS[4:]}
+    feats |= {k: {"dtype": "video", "shape": [H, W, 3]} for k in galaxea.VIDEO_KEYS.values()}
+    info = {"codebase_version": "v2.1", "fps": galaxea.FPS, "chunks_size": 1000, "robot_type": "r1lite",
+            "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+            "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+            "features": feats}
+    (root / "meta").mkdir(parents=True)
+    (root / "meta" / "info.json").write_text(json.dumps(info))
+    tasks = ["qualified", "\u62ff\u8d77@pick up the bottle"]
+    (root / "meta" / "tasks.jsonl").write_text("".join(
+        json.dumps({"task_index": i, "task": t}) + "\n" for i, t in enumerate(tasks)))
+    (root / "meta" / "episodes.jsonl").write_text(json.dumps({"episode_index": 0, "tasks": tasks, "length": n}) + "\n")
+    rng = np.random.default_rng(0)
+    cols = {k: list(rng.normal(0, 1, (n, d))) if d > 1 else rng.normal(0, 1, n) for k, d in shapes.items()}
+    cols |= {"coarse_task_index": np.ones(n, dtype=np.int64), "task_index": np.ones(n, dtype=np.int64),
+             "quality_index": np.zeros(n, dtype=np.int64)}
+    (root / "data" / "chunk-000").mkdir(parents=True)
+    pd.DataFrame(cols).to_parquet(root / "data" / "chunk-000" / "episode_000000.parquet")
+    for key in galaxea.VIDEO_KEYS.values():
+        _mp4(root / "videos" / "chunk-000" / key / "episode_000000.mp4", n, pts=[k * 1024 for k in range(n)])
+    return info
+
+
+def test_galaxea_signals_keep_the_dataset_s_value_names(tmp_path):
+    """The chassis IMU is recorded as ten values (acceleration, angular rate, orientation); the reader names each one
+    from the folder's feature table, as the generic reader does, instead of showing 10 anonymous values."""
+    root = tmp_path / "galaxea_one"
+    info = _galaxea_folder(root)
+    assert galaxea.recognizes(info)
+    meta = galaxea.meta_from(lambda rel: root / rel, "galaxea_one")
+    ep = meta["episodes"][0]
+    ctx = galaxea.write_episode(meta, ep, lambda rel: root / rel, tmp_path / "ep", "galaxea_test")
+    sig = {s["name"]: s for s in ctx["signals"]}
+    assert sig["observation.state.chassis.imu"].get("names"), "the chassis IMU's value names are kept"
+    assert sig["observation.state.chassis.imu"]["names"][:3] == ["ax", "ay", "az"]
+
+
 def test_galaxea_habit_and_openaoe_annotation_helpers():
     assert galaxea.spans(np.array([3, 3, 5, 5, 5, 3])) == [(0, 1, 3), (2, 4, 5), (5, 5, 3)]
     assert galaxea.english("拿起@pick up the cup") == "pick up the cup"
@@ -501,6 +657,34 @@ def test_galaxea_habit_and_openaoe_annotation_helpers():
         {"verb": "pick up", "object": "cup", "hand": "left"}, {"verb": "wipe"}]}, {"start_ts": 5, "end_ts": 7}])
     assert subs == [{"t0": 0.0, "t1": 5.0, "label": "pick up cup (left hand); wipe", "ok": True},
                     {"t0": 5.0, "t1": 7.0, "label": "segment", "ok": True}]
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_habit_task_table_releases_file_after_read_or_parse_failure(tmp_path, monkeypatch, malformed):
+    import builtins
+
+    path = tmp_path / "subtasks.jsonl"
+    path.write_text('{"task_index": 9007199254740993, "task": "拿起 cup"}\n'
+                    + ('{broken\n' if malformed else '{"task_index": 7, "task": "place cup"}\n'))
+    opened = []
+
+    def tracked_open(*args, **kwargs):
+        stream = builtins.open(*args, **kwargs)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr(habit, "open", tracked_open, raising=False)
+    try:
+        if malformed:
+            with pytest.raises(json.JSONDecodeError):
+                habit._texts(path)
+        else:
+            assert habit._texts(path) == {9007199254740993: "拿起 cup", 7: "place cup"}
+        assert len(opened) == 1
+        assert opened[0].closed
+    finally:
+        for stream in opened:
+            stream.close()
 
 
 def test_realomin_quaternion_to_roll_pitch_yaw():
@@ -660,3 +844,28 @@ def test_an_off_grid_file_without_times_fails_or_shows_the_frame_of_its_time(tmp
     _mp4(tmp_path / "shift.mp4", 4, pts=[512, 1024, 1536, 2048])  # the whole file one frame late
     with pytest.raises(mf.FrameError):
         mf.extract_frames(tmp_path / "shift.mp4", 0.0, 4, [0])
+
+
+def test_an_abc130k_arm_with_a_long_gap_is_not_drawn_as_motion():
+    """abc130k placed its arms with a straight line across any gap, so a recorder that stopped for 2 s was drawn as
+    motion; it places them as the other readers do (formats.fill_rows), on its nanosecond clock."""
+    from prepare import abc130k
+    q = (np.arange(300) / 30.0 * 1e9).astype(np.float64)
+    t = np.arange(-0.05, 10.05, 0.01)
+    keep = (t < 4.0) | (t > 6.0)
+    stream = {"t": (t[keep] * 1e9).astype(np.int64), "pos": np.ones((int(keep.sum()), 7))}
+    rows, gap = abc130k.interp(stream, q)
+    assert rows is None and abs(gap[0] - 3.99) < 0.02 and abs(gap[1] - 6.01) < 0.02
+    rows, gap = abc130k.interp({"t": (t * 1e9).astype(np.int64), "pos": np.ones((len(t), 7))}, q)
+    assert gap is None and rows.shape == (300, 7)
+
+
+def test_abc130k_leaves_the_arm_positions_out_of_the_signals_only_when_it_read_them():
+    """abc130k always left every arm's and command's position out of the signals, so an episode whose state was
+    unread lost them from everything. They leave the signals only as the state (and the action) they were read as,
+    as formats.state_fields does."""
+    from prepare import abc130k
+    state, action = np.zeros((3, 14)), np.zeros((3, 14))
+    assert abc130k.read_fields(state, action) == {t: {"position"} for t in abc130k.ARM + abc130k.ARM_ACT}
+    assert abc130k.read_fields(state, None) == {t: {"position"} for t in abc130k.ARM}
+    assert abc130k.read_fields(None, None) == {}

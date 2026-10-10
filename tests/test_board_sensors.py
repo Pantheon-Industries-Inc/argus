@@ -1,0 +1,705 @@
+"""The board's sensors files (board/sensors.py): what a recording's other signals and depth streams become on the
+episode page, through board build, the server and the depth clips (board/clips.py)."""
+from __future__ import annotations
+
+import base64
+import json
+import shutil
+import struct
+import subprocess
+from fractions import Fraction
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from board import build as board_build
+from board import clips, sensors
+
+
+# ---------------------------------------------------------------- quantization
+
+WIRE_CASES = [
+    (16, True, [[-2, 10], [-1.5, 10.5], [32765, 32777], [np.nan, np.inf]],
+     {'lo': [-2, 10], 'step': [.5, .5]}, struct.pack('<8H', 0, 0, 1, 1, 65534, 65534, 65535, 65535),
+     [[-2, 10], [-1.5, 10.5], [32765, 32777], [None, None]]),
+    (8, False, [[-10, 117], [0, np.nan]], {'lo': -10, 'step': .5}, bytes([0, 254, 20, 255]),
+     [[-10, 117], [0, None]]),
+]
+
+
+@pytest.mark.parametrize('bits,per_value,raw,metadata,encoded,expected', WIRE_CASES, ids=['vector16', 'map8'])
+def test_quantized_wire_format_has_independent_codes_and_missing_sentinels(bits, per_value, raw, metadata, encoded, expected):
+    values = np.array(raw, dtype=np.float64)
+    block = sensors.quantize(values, bits=bits, per_value=per_value)
+    assert {key: block[key] for key in ('lo', 'step')} == metadata
+    assert base64.b64decode(block['data']) == encoded
+    # Decode independently authored bytes, so matching writer and reader mistakes cannot cancel.
+    authored = {**metadata, 'data': base64.b64encode(encoded).decode()}
+    decoded = sensors.dequantize(authored, len(raw), bits=bits)
+    wanted = np.array([[np.nan if value is None else value for value in row] for row in expected])
+    np.testing.assert_equal(decoded, wanted)
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='no node')
+@pytest.mark.parametrize('bits,per_value,raw,metadata,encoded,expected', WIRE_CASES, ids=['vector16', 'map8'])
+def test_browser_decodes_independent_quantized_samples(bits, per_value, raw, metadata, encoded, expected):
+    from board import serve
+    page = serve.render_index('Sensors', {'mode': 'static', 'data': 'data/'})
+    start = page.index('function snBlock(')
+    end = page.index('\nfunction snDecode(', start)
+    block = {**metadata, 'data': base64.b64encode(encoded).decode()}
+    script = page[start:end] + '\nconst decoded=snBlock(' + json.dumps(block) + f',{len(raw)},{bits});' + '''
+    console.log(JSON.stringify({dims:decoded.dims,values:Array.from(decoded.v)}));
+    '''
+    result = subprocess.run([shutil.which('node'), '-e', script], capture_output=True, text=True,
+                            check=True, timeout=10)
+    assert json.loads(result.stdout) == {'dims': 2, 'values': [value for row in expected for value in row]}
+
+
+def test_values_round_trip_within_half_a_step():
+    rng = np.random.default_rng(0)
+    a = np.c_[rng.normal(0, 1, 500), rng.normal(1000, 50, 500), np.full(500, 3.0)]
+    a[17, 1] = np.nan
+    blk = sensors.quantize(a)
+    back = sensors.dequantize(blk, len(a))
+    assert np.isnan(back[17, 1]) and np.isfinite(back[16, 1])
+    for c in range(3):
+        ok = np.isfinite(a[:, c])
+        assert np.max(np.abs(back[ok, c] - a[ok, c])) <= blk["step"][c] / 2 + 1e-9
+    assert np.all(back[:, 2] == 3.0)          # a value that never changes is stored exactly
+
+
+def test_a_map_round_trips_in_one_byte_a_value():
+    rng = np.random.default_rng(1)
+    a = 3072 - np.clip(rng.normal(0, 400, (40, 256)), 0, None)
+    a[3] = np.nan                              # a frame with no reading
+    blk = sensors.quantize(a, bits=8, per_value=False)
+    back = sensors.dequantize(blk, len(a), bits=8)
+    assert np.isnan(back[3]).all()
+    ok = np.isfinite(a)
+    assert np.max(np.abs(back[ok] - a[ok])) <= blk["step"] / 2 + 1e-9
+
+
+def test_times_round_trip_to_the_millisecond():
+    t = np.cumsum(np.r_[0.0, np.full(60, 1 / 30), [0.1], np.full(20, 1 / 30)])
+    back = sensors.decode_times(sensors.encode_times(t))
+    assert len(back) == len(t) and np.max(np.abs(back - t)) <= 0.0005 + 1e-9
+
+
+# ---------------------------------------------------------------- one episode
+
+def _episode(root: Path, n: int = 300, fps: float = 30.0, depth: bool = False) -> Path:
+    """A prepared episode with a force that rests at 0 and is pressed twice, a 4 x 4 pressure map that reads about
+    3072 at rest and falls where it is pressed, a constant health flag, and the anchor camera's capture times starting
+    at 12.5 s (a real clock, not the clip's)."""
+    ep = root / "episode_000000"
+    ep.mkdir(parents=True)
+    t = 12.5 + np.arange(n) / fps
+    force = np.zeros((n, 1), np.float32)
+    force[60:90] = 5.0
+    force[200:240] = 7.0
+    # a real sensor's noise on every cell: a map that only ever takes a few readings is a setting, not touch
+    rng = np.random.default_rng(0)
+    pmap = (3072.0 + rng.normal(0, 2, (n, 16))).astype(np.float32)
+    pmap[60:90, 5] += 2000.0 - 3072.0
+    pmap[200:240, 10] += 1500.0 - 3072.0
+    pmap[200:240, 11] += 2600.0 - 3072.0
+    np.savez(ep / "signals.npz", s0=force, s1=pmap, s2=np.ones((n, 1), np.float32))
+    np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
+    ctx = {"dataset": "you/your-own-dataset", "profile": "teleop_arms", "fps": fps, "n_state_frames": n,
+           "clock_zero_s": 12.5,
+           "signals": [{"name": "fingertip force", "key": "s0", "dims": 1, "names": ["fz"], "rate_hz": 100.0},
+                       {"name": "pressure", "key": "s1", "dims": 16, "shape": [4, 4]},
+                       {"name": "health", "key": "s2", "dims": 1, "names": ["ok"]}]}
+    sources = {"exo": {"packed": str(ep / "exo.mp4"), "base_s": 0.0, "n_frames": n}}
+    if depth:
+        np.save(ep / "depth_kmap_exo.npy", np.arange(n))
+        (ep / "depth.json").write_text(json.dumps({"exo": {"packed": str(ep / "depth.mkv"), "base_s": 0.0,
+                                                            "n_frames": n, "kmap": "depth_kmap_exo.npy",
+                                                            "scale_m": 0.001, "width": 8, "height": 6}}))
+        ctx["depth"] = {"exo": {"units": "metres", "scale_m": 0.001, "source": "depth.mkv"}}
+    (ep / "context.json").write_text(json.dumps(ctx))
+    (ep / "sources.json").write_text(json.dumps(sources))
+    return ep
+
+
+def test_an_episode_file_keeps_what_label_signals_reads(tmp_path):
+    ep = _episode(tmp_path)
+    doc = sensors.episode_doc(ep)
+    assert doc["format"] == sensors.FORMAT and doc["frames"] == 300
+    # 30 frames a second sampled every second frame: at most 15 a second, on the clip's clock (first frame 0)
+    assert doc["stride"] == 2 and doc["n"] == 150
+    t = sensors.decode_times(doc["times"])
+    assert t[0] == 0.0 and t[-1] == pytest.approx(299 / 30, abs=1e-3)
+    force, pmap, health = doc["signals"]
+    assert health["constant"] is True and health["value"] == [1.0] and "values" not in health
+    a = np.load(ep / "signals.npz")["s0"].astype(np.float64)
+    assert force["rests_and_rises"] is True and force["direction"] == "up"
+    # Independent frame boundaries from the fixture's two recorded presses.
+    assert force["spans"] == [[2.0, 2.967], [6.667, 7.967]]
+    v = sensors.dequantize(force["values"], doc["n"])
+    assert np.max(np.abs(v[:, 0] - a[::2, 0])) <= force["values"]["step"][0] / 2 + 1e-9
+    # the pressure map behaves like touch: falls when pressed, drawn as a heatmap against its rest and swing
+    assert pmap["touch"] is True and pmap["direction"] == "down" and pmap["shape"] == [4, 4]
+    assert np.allclose(pmap["rest"], 3072.0, atol=10) and pmap["swing_from"] == "episode" and pmap["swing"] > 0
+    m = sensors.dequantize(pmap["map"], doc["n"], bits=8)
+    raw = np.load(ep / "signals.npz")["s1"].astype(np.float64)
+    assert m.shape == (150, 16) and abs(m[110, 10] - raw[220, 10]) <= pmap["map"]["step"] / 2 + 1e-6
+    act = sensors.dequantize(pmap["activity"], doc["n"])[:, 0]
+    assert act[10] == 0 and act[110] > act[40] > 0
+
+
+def test_the_uploads_rest_and_swing_are_used_when_prepare_measured_them(tmp_path):
+    ep = _episode(tmp_path)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"][1].update({"rest": [3100.0] * 16, "swing": 2000.0})
+    (ep / "context.json").write_text(json.dumps(ctx))
+    pmap = sensors.episode_doc(ep)["signals"][1]
+    assert pmap["swing"] == 2000.0 and pmap["swing_from"] == "upload" and pmap["rest"] == [3100.0] * 16
+
+
+def _resave(ep: Path, **arrays) -> None:
+    with np.load(ep / "signals.npz") as z:
+        a = {k: z[k] for k in z.files}
+    np.savez(ep / "signals.npz", **{**a, **arrays})
+
+
+def test_each_signal_keeps_its_own_length_and_its_gaps(tmp_path):
+    """A signal shorter than the others is drawn for the frames it has and as no reading after them; a gap inside a
+    signal and a signal that starts late are drawn as gaps, never as values; the episode keeps every frame."""
+    ep = _episode(tmp_path)
+    force = np.load(ep / "signals.npz")["s0"][:250].astype(np.float64)
+    force[100:120] = np.nan
+    force[:10] = np.nan
+    _resave(ep, s0=force)
+    doc = sensors.episode_doc(ep)
+    assert doc["frames"] == 300 and doc["n"] == 150
+    f = next(s for s in doc["signals"] if s["name"] == "fingertip force")
+    v = sensors.dequantize(f["values"], doc["n"])[:, 0]
+    assert np.isnan(v[125:]).all() and np.isnan(v[50:60]).all() and np.isnan(v[:5]).all()
+    assert np.isfinite(v[30:50]).all() and np.isfinite(v[60:120]).all()
+
+
+def test_a_signal_that_cannot_be_drawn_is_named_and_the_others_are_drawn(tmp_path, monkeypatch):
+    ep = _episode(tmp_path)
+    real = sensors.signal_doc
+
+    def doc_or_fail(meta, *a, **kw):
+        if meta["name"] == "pressure":
+            raise ValueError("boom")
+        return real(meta, *a, **kw)
+    monkeypatch.setattr(sensors, "signal_doc", doc_or_fail)
+    doc = sensors.episode_doc(ep)
+    assert [s["name"] for s in doc["signals"]] == ["fingertip force", "health"]
+    assert doc["errors"] == [{"name": "pressure", "error": "ValueError: boom"}]
+
+
+def test_a_signal_placed_by_an_assumed_start_says_so(tmp_path):
+    ep = _episode(tmp_path)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"][0]["aligned_by"] = "assumed start"
+    (ep / "context.json").write_text(json.dumps(ctx))
+    doc = sensors.episode_doc(ep)
+    f = next(s for s in doc["signals"] if s["name"] == "fingertip force")
+    assert f["aligned_by"] == "assumed start" and "aligned_by" not in doc["signals"][1]
+
+
+def test_the_page_names_a_signal_placed_by_an_assumed_start_and_one_it_cannot_draw():
+    import subprocess
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("sensor_lanes.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_an_episode_without_signals_or_depth_has_no_file(tmp_path):
+    ep = tmp_path / "episode_000000"
+    ep.mkdir()
+    (ep / "context.json").write_text(json.dumps({"profile": "ego_head", "fps": 30}))
+    assert sensors.episode_doc(ep) is None
+
+
+def test_depth_cameras_carry_their_units_and_colour_bar(tmp_path):
+    doc = sensors.episode_doc(_episode(tmp_path, depth=True))
+    d = doc["depth"]["exo"]
+    assert d["units"] == "metres" and d["scale_m"] == 0.001
+    assert len(d["bar"]) == sensors.BAR_STOPS and all(c.startswith("#") for c in d["bar"])
+    labels = [label for _, label in d["ticks"]]
+    assert labels[0] == "0.1 m" and labels[-1] == "10 m"              # near first, on the fixed metric scale
+    assert [p for p, _ in d["ticks"]] == sorted(p for p, _ in d["ticks"])
+
+
+# ---------------------------------------------------------------- board build
+
+def _run(runs: Path, ep: Path) -> Path:
+    run = runs / "r1"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": "r1", "code": "abc1234", "kind": "full", "status": "done",
+                                              "slice": str(ep.parent)}))
+    (run / "out" / f"{ep.name}.json").write_text(json.dumps({
+        "episode_dir": str(ep), "parse_ok": True, "model": "some/model",
+        "labels": {"task_summary": "lift the cup", "timeline": [{"start_s": 0.0, "end_s": 5.0, "action": "lift"}],
+                   "completion": {"task_completed": "success", "completed_at_s": 5.0}}}))
+    return run
+
+
+def _board(tmp: Path, ep: Path, **manifest) -> Path:
+    board = tmp / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "b", "datasets": [
+        {"dataset": "mine", "run": str(_run(tmp / "runs", ep)), "episodes": str(ep.parent)}], **manifest}))
+    return board
+
+
+def test_board_build_writes_sensors_only_for_episodes_that_have_them(tmp_path):
+    ep = _episode(tmp_path / "eps")
+    board = _board(tmp_path, ep)
+    built = board_build.build(board)
+    assert built["sensors"]["written"] == 1 and not built["sensors"]["skipped"]
+    idx = json.loads((board / "sensors" / "index.json").read_text())
+    assert idx["files"] == {"episode_000000.json": {"signals": 2, "constant": 1, "depth": []}}
+    assert json.loads((board / "sensors" / "episode_000000.json").read_text())["format"] == sensors.FORMAT
+    qa = json.loads((board / "qa" / "episode_000000.json").read_text())
+    assert not any("sensor" in k for k in qa if k != "dataset_checks")     # nothing new in the label itself
+    # turned off in the manifest: the folder goes with the next build
+    m = json.loads((board / "manifest.json").read_text())
+    (board / "manifest.json").write_text(json.dumps({**m, "sensors": False}))
+    assert "sensors" not in board_build.build(board) and not (board / "sensors").exists()
+
+
+def test_a_board_without_signals_builds_as_before(tmp_path):
+    ep = tmp_path / "eps" / "episode_000000"
+    ep.mkdir(parents=True)
+    (ep / "context.json").write_text(json.dumps({"dataset": "you/your-own-dataset", "profile": "teleop_arms",
+                                                 "fps": 30, "n_state_frames": 150}))
+    board = _board(tmp_path, ep)
+    built = board_build.build(board)
+    first = {p.name: p.read_bytes() for p in (board / "qa").iterdir()}
+    assert "sensors" not in built and not (board / "sensors").exists() and not (board / "sensors.new").exists()
+    assert set(json.loads((board / "BUILT.json").read_text())) == {"manifest", "counts"}
+    # and a second build writes the same bytes
+    board_build.build(board)
+    assert {p.name: p.read_bytes() for p in (board / "qa").iterdir()} == first
+
+
+# ---------------------------------------------------------------- depth clips
+
+def test_each_colour_frame_shows_the_nearest_depth_frame():
+    ct = np.arange(10) / 30
+    dt = np.r_[np.arange(5) / 30, 7 / 30 + np.arange(3) / 30] + 0.004     # a gap at frames 5 and 6
+    assert clips.depth_frame_map(ct, dt) == [0, 1, 2, 3, 4, 4, None, 5, 6, 7]
+
+
+def test_the_board_and_the_model_give_a_colour_frame_depth_by_one_rule():
+    """The board had shown depth only within half a depth frame of a colour frame, the model within a frame of it, so
+    depth 20 ms after its colour was black on the board and read by the model. Both follow prepare/formats.py
+    depth_kmap: the nearest depth frame within a frame, else none."""
+    from prepare.formats import depth_kmap
+    ct = np.arange(90) / 30
+    for dt in (ct, ct + 0.02, np.arange(45) / 15, np.arange(30) / 30):
+        assert clips.depth_frame_map(ct, dt) == [int(k) if k >= 0 else None for k in depth_kmap(dt, ct)]
+    assert None not in clips.depth_frame_map(ct, ct + 0.02)
+
+
+def _damaged_from(path: Path, first: int) -> None:
+    """The packets of a video from first on overwritten with bytes that do not decode."""
+    import av
+    with av.open(str(path)) as c:
+        spans = [(pk.pos, pk.size) for pk in c.demux(c.streams.video[0]) if pk.size and pk.pos is not None]
+    b = bytearray(path.read_bytes())
+    for pos, size in spans[first:]:
+        b[pos:pos + size] = bytes(size)
+    path.write_bytes(bytes(b))
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_depth_clip_keeps_every_depth_frame_that_decodes(tmp_path):
+    """A depth file whose second half is damaged had lost its whole board clip, while labelling skips only the frames
+    that do not decode. The clip keeps every depth frame that decodes, is black where one does not, and the stretch
+    is flagged as depth that does not decode."""
+    import av
+    n = 40
+    ep = _episode(tmp_path / "eps", n=n, depth=True)
+    _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+    _video(ep / "depth.mkv", n, "ffv1", "gray16le",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32), 1000, np.uint16), format="gray16le"))
+    t = 12.5 + np.arange(n) / 30
+    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
+    _damaged_from(ep / "depth.mkv", 20)
+    out = tmp_path / "clips"
+    for (pk, b, du, o, fps, main, off, skip, t_, q, km, pts, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t_, q, km, pts)
+    (job,) = clips.depth_jobs(ep, out, False)
+    (iss,) = clips.extract_depth(*job[:4], 1, job[4])
+    assert iss["kind"] == "depth_not_decodable" and iss["camera"] == "exo", iss
+    assert iss["t0_s"] == pytest.approx(20 / 30, abs=0.02) and iss["t1_s"] == pytest.approx(39 / 30, abs=0.02), iss
+    with av.open(str(out / "depth_exo" / "episode_000000.mp4")) as c:
+        frames = [fr.to_ndarray(format="rgb24") for fr in c.decode(video=0)]
+    assert len(frames) == n and frames[10].max() > 40 and frames[30].max() < 20
+
+
+def _video(path: Path, n: int, codec: str, pix: str, frame, rate: int = 30) -> None:
+    import av
+    with av.open(str(path), "w") as c:
+        s = c.add_stream(codec, rate=rate)
+        s.width, s.height, s.pix_fmt = 32, 24, pix
+        s.time_base = Fraction(1, 15360)
+        for k in range(n):
+            fr = frame(k)
+            fr.pts, fr.time_base = k * 512, s.time_base
+            for pkt in s.encode(fr):
+                c.mux(pkt)
+        for pkt in s.encode():
+            c.mux(pkt)
+
+
+def _pts(path: Path) -> np.ndarray:
+    """A video's frames' pts in display order, as prepare records a depth stream's (depth_times.npz)."""
+    import av
+    with av.open(str(path)) as c:
+        return np.array(sorted(pk.pts for pk in c.demux(c.streams.video[0]) if pk.size and pk.pts is not None))
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+@pytest.mark.parametrize("depth_times", ["depth_times.npz", "times.npz"])
+def test_a_depth_clip_has_its_colour_clips_frames_and_timestamps(tmp_path, depth_times):
+    """The depth stream's frame times are read from depth_times.npz (prepare writes them there), or from times.npz in an
+    episode prepared before that file existed."""
+    import av
+    from board.hands import probe_pts
+    n = 40
+    ep = _episode(tmp_path / "eps", n=n, depth=True)
+    _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+    # metric depth: near (300 mm) on the left half, far (3 m) on the right, no reading in the top rows
+    def depth(k):
+        a = np.full((24, 32), 3000, np.uint16)
+        a[:, :16] = 300
+        a[:6] = 0
+        return av.VideoFrame.from_ndarray(a, format="gray16le")
+    _video(ep / "depth.mkv", n, "ffv1", "gray16le", depth)
+    t = 12.5 + np.arange(n) / 30
+    if depth_times == "times.npz":
+        np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512, depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
+    else:
+        np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
+        np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
+    out = tmp_path / "clips"
+    jobs = clips.episode_jobs(ep, out, False)
+    for (pk, b, du, o, fps, main, off, skip, t, q, km, pts, _, _) in jobs:
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t, q, km, pts)
+    (job,) = clips.depth_jobs(ep, out, False)
+    clips.extract_depth(*job[:4], 1, job[4])
+    colour, dclip = out / "episode_000000.mp4", out / "depth_exo" / "episode_000000.mp4"
+    assert probe_pts(dclip)[3] == probe_pts(colour)[3]
+    assert clips.depth_jobs(ep, out, False) == []                  # idempotent: a matching clip is not cut again
+    with av.open(str(dclip)) as c:
+        fr = next(c.decode(video=0)).to_ndarray(format="rgb24").astype(int)
+    near, far, none = fr[16, 4], fr[16, 28], fr[1, 8]
+    assert near[0] > near[2] and far[2] > far[0]                  # near warm, far cool on the turbo scale
+    assert none.max() < 40                                        # no reading is black
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_depth_clip_whose_times_do_not_cover_the_colour_clip_is_kept_and_flagged(tmp_path):
+    """The camera's frame times stop before its colour clip does: the depth clip is still cut, with the colour clip's
+    frames and timestamps, its frames past the times black, and the run says so; board clips records it on the
+    episode (record_depth), where the board shows it as a data issue, and a later clean cut takes the entry away."""
+    import av
+    from board.hands import probe_pts
+    n = 40
+    ep = _episode(tmp_path / "eps", n=n, depth=True)
+    _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+    _video(ep / "depth.mkv", n, "ffv1", "gray16le",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32), 1000, np.uint16), format="gray16le"))
+    t = 12.5 + np.arange(n) / 30
+    np.savez(ep / "times.npz", exo=t[:30], exo_pts=np.arange(n) * 512)
+    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=_pts(ep / "depth.mkv"))
+    out = tmp_path / "clips"
+    for (pk, b, du, o, fps, main, off, skip, t, q, km, pts, _, _) in clips.episode_jobs(ep, out, False):
+        clips.extract_one(pk, b, du, o, clips.find_ffmpeg(), 1, fps, main, off, skip, t, q, km, pts)
+    (job,) = clips.depth_jobs(ep, out, False)
+    issues = clips.extract_depth(*job[:4], 1, job[4])
+    dclip = out / "depth_exo" / "episode_000000.mp4"
+    assert probe_pts(dclip)[3] == probe_pts(out / "episode_000000.mp4")[3]
+    (iss,) = issues
+    assert iss["kind"] == "depth_clip_partial" and iss["camera"] == "exo" and "30 of its 40 frames" in iss["what"]
+    clips.record_depth(ep, "exo", issues)
+    clips.record_depth(ep, "exo", issues)
+    ctx = json.loads((ep / "context.json").read_text())
+    assert [x["kind"] for x in ctx["reader_issues"]] == ["depth_clip_partial"]
+    clips.record_depth(ep, "exo", [])
+    assert "reader_issues" not in json.loads((ep / "context.json").read_text())
+
+
+def test_a_depth_clip_that_cannot_be_cut_is_flagged_on_its_episode(tmp_path):
+    ep = tmp_path / "episode_000000"
+    ep.mkdir()
+    (ep / "context.json").write_text(json.dumps({"profile": "teleop_arms", "reader_issues": [
+        {"kind": "signal_gap", "signal": "force", "what": "The force signal stops."}]}))
+    clips.record_depth(ep, "left", [clips.depth_failed(ep, "left", RuntimeError("no depth_left_pts"))])
+    ri = json.loads((ep / "context.json").read_text())["reader_issues"]
+    assert [x["kind"] for x in ri] == ["signal_gap", "depth_clip_failed"]
+    assert ri[1]["camera"] == "left" and "no depth_left_pts" in ri[1]["what"] and "no depth" in ri[1]["what"]
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_depth_stream_that_does_not_decode_is_a_fault_in_the_recording(tmp_path):
+    """A depth file that does not decode had been recorded like a failure of our own cut (depth_clip_failed), which the
+    board does not count. It is recorded as depth_not_decodable, a fault in the recording; a failure of the cut itself
+    stays depth_clip_failed."""
+    import av
+    n = 40
+    ep = _episode(tmp_path / "eps", n=n, depth=True)
+    _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+           lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+    (ep / "depth.mkv").write_bytes(b"\x00" * 4000)
+    t = 12.5 + np.arange(n) / 30
+    np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
+    np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+    out = tmp_path / "clips"
+    for job in clips.episode_jobs(ep, out, False):
+        clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:12])
+    (job,) = clips.depth_jobs(ep, out, False)
+    with pytest.raises(Exception) as got:
+        clips.extract_depth(*job[:4], 1, job[4])
+    iss = clips.depth_failed(ep, "exo", got.value)
+    assert iss["kind"] == "depth_not_decodable" and iss["camera"] == "exo", iss
+    assert clips.depth_failed(ep, "exo", RuntimeError("no depth_exo_pts"))["kind"] == "depth_clip_failed"
+    clips.record_depth(ep, "exo", [iss])
+    clips.record_depth(ep, "exo", [])
+    assert "reader_issues" not in json.loads((ep / "context.json").read_text())
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_only_a_depth_file_that_opens_and_does_not_decode_is_a_fault_in_the_recording(tmp_path):
+    """A depth file that is missing had been recorded as depth_not_decodable, a fault in the recording, though nothing
+    of the recording was read. Only a file that opens and does not decode, or holds no video stream, is the recording's
+    fault; a file that is gone or cannot be opened is a failure of our cut (depth_clip_failed), as label/depth.py
+    decode treats it."""
+    import av
+    n = 40
+
+    def kind_of(tmp, scale, make_depth):
+        ep = _episode(tmp / "eps", n=n, depth=True)
+        if not scale:
+            d = json.loads((ep / "depth.json").read_text())
+            d["exo"].pop("scale_m")
+            (ep / "depth.json").write_text(json.dumps(d))
+        _video(ep / "exo.mp4", n, "mpeg4", "yuv420p",
+               lambda k: av.VideoFrame.from_ndarray(np.full((24, 32, 3), 40 + k, np.uint8), format="rgb24"))
+        make_depth(ep / "depth.mkv")
+        t = 12.5 + np.arange(n) / 30
+        np.savez(ep / "times.npz", exo=t, exo_pts=np.arange(n) * 512)
+        np.savez(ep / "depth_times.npz", depth_exo=t, depth_exo_pts=np.arange(n) * 512)
+        out = tmp / "clips"
+        for job in clips.episode_jobs(ep, out, False):
+            clips.extract_one(*job[:4], clips.find_ffmpeg(), 1, *job[4:12])
+        (job,) = clips.depth_jobs(ep, out, False)
+        with pytest.raises(Exception) as got:
+            clips.extract_depth(*job[:4], 1, job[4])
+        return clips.depth_failed(ep, "exo", got.value)["kind"]
+
+    def audio_only(p):
+        with av.open(str(p), "w") as c:
+            s = c.add_stream("pcm_s16le", rate=8000)
+            fr = av.AudioFrame.from_ndarray(np.zeros((1, 800), np.int16), format="s16", layout="mono")
+            fr.sample_rate = 8000
+            for pkt in s.encode(fr):
+                c.mux(pkt)
+            for pkt in s.encode():
+                c.mux(pkt)
+    for scale in (True, False):
+        tag = "known" if scale else "unknown"
+        assert kind_of(tmp_path / f"gone_{tag}", scale, lambda p: None) == "depth_clip_failed"
+        assert kind_of(tmp_path / f"garbage_{tag}", scale, lambda p: p.write_bytes(b"\x00" * 4000)) \
+            == "depth_not_decodable"
+        assert kind_of(tmp_path / f"audio_{tag}", scale, audio_only) == "depth_not_decodable"
+
+
+# ---------------------------------------------------------------- the server
+
+def test_the_server_hands_out_sensors_and_depth_clips(tmp_path, monkeypatch):
+    import socketserver
+    import threading
+    import urllib.error
+    import urllib.request
+    from board import serve
+    ep = _episode(tmp_path / "eps")
+    board = _board(tmp_path, ep)
+    board_build.build(board)
+    clips_dir = tmp_path / "clips"
+    (clips_dir / "depth_exo").mkdir(parents=True)
+    (clips_dir / "depth_exo" / "episode_000000.mp4").write_bytes(b"depth")
+    for k, v in (("HERE", board / "qa"), ("MP4_DIR", clips_dir), ("COMPARE_DIR", board / "compare"),
+                 ("HANDS_DIR", board / "hands"), ("KEYPOINTS_DIR", board / "hand_keypoints"),
+                 ("SENSORS_DIR", board / "sensors")):
+        monkeypatch.setattr(serve, k, v.resolve())
+    monkeypatch.setattr(serve, "_LIST_CACHE", {})
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), serve.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def get(path):
+        try:
+            with urllib.request.urlopen(url + path) as r:
+                return r.status, dict(r.headers), r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read()
+    try:
+        page = get("/")[2].decode()
+        assert '"sensors":true' in page
+        assert json.loads(get("/api/sensors?file=index.json")[2])["files"]["episode_000000.json"]["signals"] == 2
+        assert json.loads(get("/api/sensors?file=episode_000000.json")[2])["format"] == sensors.FORMAT
+        for bad in ("../qa/episode_000000.json", "", "nope.json"):
+            assert get("/api/sensors?file=" + bad)[0] == 404
+        code, headers, body = get("/api/video?id=episode_000000&cam=depth_exo&download=1")
+        assert code == 200 and body == b"depth" and "episode_000000_depth_exo.mp4" in headers["Content-Disposition"]
+        assert get("/api/video?id=episode_000000&cam=depth_../x")[0] == 404
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_static_build_publishes_sensors_and_each_depth_clip(tmp_path):
+    import argparse
+    from board import static
+    ep = _episode(tmp_path / "eps", depth=True)
+    board = _board(tmp_path, ep)
+    board_build.build(board)
+    clips_dir = tmp_path / "clips"
+    (clips_dir / "depth_exo").mkdir(parents=True)
+    (clips_dir / "episode_000000.mp4").write_bytes(b"colour")
+    (clips_dir / "depth_exo" / "episode_000000.mp4").write_bytes(b"depth")
+    (e,) = static.plan(board / "qa", clips_dir)
+    assert {k for k in e["media"] if k.startswith("depth_")} == {"depth_exo"}
+    assert e["media"]["depth_exo"]["rel"].startswith("v/depth_exo/")
+    a = argparse.Namespace(board=board, qa=board / "qa", clips=clips_dir, compare=None, hands=None, keypoints=None,
+                           out=tmp_path / "out", build_id="b1", force=False, public_base=None, title="Data Dashboard")
+    assert static.cmd_site(a) == 0
+    site = tmp_path / "out" / "b1"
+    assert '"sensors":true' in (site / "index.html").read_text()
+    assert (site / "data" / "sensors" / "episode_000000.json").read_bytes() == \
+        (board / "sensors" / "episode_000000.json").read_bytes()
+    assert list(json.loads((site / "data" / "sensors" / "index.json").read_text())["files"]) == ["episode_000000.json"]
+    (rec,) = json.loads((site / "data" / "lists" / "mine.json").read_text())
+    assert rec["_media"]["depth_exo"].startswith("v/depth_exo/episode_000000.")
+
+
+def test_the_boards_touch_flag_needs_a_touch_name_as_the_contacts_do():
+    """A torso joint that rests and rises draws no touch lane; the same numbers named for pressure do."""
+    a = np.r_[np.zeros(30), np.linspace(0, 0.3, 10), np.full(20, 0.3)][:, None]
+    t = np.arange(60) / 30.0
+    assert sensors.signal_doc({"name": "observation.state.torso"}, a, t, 1)["touch"] is False
+    assert sensors.signal_doc({"name": "left_pressure"}, a, t, 1)["touch"] is True
+
+
+def test_a_wide_float32_signal_is_drawn_without_a_whole_float64_copy(tmp_path):
+    """pad keeps a float32 signal in float32 (NaN after its rows), and the sensors file of an episode with a wide
+    float32 signal peaks within about three times the signal's size, with every entry as a float64 copy gives it."""
+    import tracemalloc
+    a = np.ones((5, 3), np.float32)
+    p = sensors.pad(a, 7)
+    assert p.dtype == np.float32 and np.isnan(p[5:]).all() and sensors.pad(a, 4).dtype == np.float32
+    assert sensors.pad(np.ones((2, 1), np.int16), 3).dtype == np.float64
+    ep = _episode(tmp_path / "eps", n=200)
+    rng = np.random.default_rng(0)
+    wide = (3000 + rng.normal(0, 3, (200, 100_000))).astype(np.float32)
+    wide[50:80, :40] -= 800
+    _resave(ep, s3=wide)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"].append({"name": "skin pressure", "key": "s3", "dims": 100_000, "shape": [250, 400]})
+    (ep / "context.json").write_text(json.dumps(ctx))
+    tracemalloc.start()
+    try:
+        doc = sensors.episode_doc(ep)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak <= 3 * wide.nbytes, peak / wide.nbytes
+    skin = next(s for s in doc["signals"] if s["name"] == "skin pressure")
+    assert skin["constant"] is False and "activity" in skin
+
+
+def test_a_signal_with_no_reading_at_any_frame_is_named_as_such_not_as_constant(tmp_path):
+    """A signal with no reading at any frame was listed under "Constant through this episode", which is false: it
+    never read anything. Its entry says no_reading, the index counts it apart, and the page names it as having no
+    reading, as the no_reading check does; a constant signal is still listed as constant."""
+    ep = _episode(tmp_path)
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.full((300, 3), np.nan, np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"].append({"name": "glove", "key": "s3", "dims": 3})
+    (ep / "context.json").write_text(json.dumps(ctx))
+    doc = sensors.episode_doc(ep)
+    by = {s["name"]: s for s in doc["signals"]}
+    assert by["glove"]["no_reading"] is True and "constant" not in by["glove"]
+    assert by["health"]["constant"] is True and "no_reading" not in by["health"]
+    assert sensors.summary(doc) == {"signals": 2, "constant": 1, "no_reading": 1, "depth": []}
+    import subprocess
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("sensor_lanes.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_signal_the_same_wherever_it_reads_says_where_it_has_no_reading():
+    """The board listed a signal that read one value for half the episode, and nothing after, as constant through the
+    episode. It is constant where it reads, and its entry says at how many of the frames it has no reading."""
+    from board import sensors as bs
+    a = np.concatenate([np.full((150, 2), 0.5), np.full((150, 2), np.nan)])
+    t = np.arange(300) / 30.0
+    doc = bs.signal_doc({"name": "force"}, a, t, 1)
+    assert doc["constant"] and doc["value"] == [0.5, 0.5] and doc["no_reading_frames"] == 150 and doc["frames"] == 300
+    full = bs.signal_doc({"name": "force"}, np.full((300, 2), 0.5), t, 1)
+    assert full["constant"] and "no_reading_frames" not in full
+
+
+def test_full_rate_tactile_keeps_distribution_and_gaps():
+    # Equal total intensity can come from one loaded cell or several loaded cells.
+    a = np.array([[0, 0, 0, 0], [4, 0, 0, 0], [1, 1, 1, 1],
+                  [0, 0, 0, 4], [np.nan, 0, 0, 0]], dtype=float)
+    doc = sensors.tactile_doc(a, np.zeros(4), 4, 'up', [2, 2])
+    intensity = sensors.dequantize(doc['intensity'], 5)[:, 0]
+    count = sensors.dequantize(doc['active'], 5)[:, 0]
+    focus = sensors.dequantize(doc['focus'], 5)[:, 0]
+    row = sensors.dequantize(doc['row'], 5)[:, 0]
+    assert intensity[1] == pytest.approx(intensity[2], abs=1e-4)
+    assert count[1] == pytest.approx(1, abs=1e-4) and count[2] == pytest.approx(4, abs=1e-4)
+    assert focus[1] == pytest.approx(1) and focus[2] == pytest.approx(.25, abs=1e-4)
+    assert row[1] == pytest.approx(0) and row[3] == pytest.approx(1)
+    assert np.isnan(intensity[4]) and np.isnan(count[4])
+    assert np.isnan(row[0]), 'a resting grid has no loaded centroid'
+    assert doc['n'] == 5 and doc['top_cells'] == 1
+
+
+def test_full_rate_tactile_does_not_threshold_away_small_changes():
+    a = np.array([[10, 10, 10, 10], [9.8, 10, 10, 10], [9, 10, 10, 10]])
+    doc = sensors.tactile_doc(a, np.full(4, 10), 4, 'down', [2, 2])
+    values = sensors.dequantize(doc['intensity'], 3)[:, 0]
+    assert values[1] == pytest.approx(.05, abs=1e-4)
+    assert sensors.dequantize(doc['active'], 3)[1, 0] == 0
+
+
+def test_contact_map_sidecar_retains_full_rate_metrics():
+    rng = np.random.default_rng(33)
+    a = rng.normal(0, .01, (30, 256))
+    a[10:20, :50] += 2
+    meta = {'name': 'right_pressure', 'dims':256, 'shape':[16,16], 'rest':np.zeros(256), 'swing':2}
+    doc = sensors.signal_doc(meta, a, np.arange(30) / 30, 3, True)
+    assert doc['tactile']['n'] == 30
+    assert len(sensors.dequantize(doc['strength'], 10)) == 10
+    assert doc['tactile']['shape'] == [16,16]
+
+
+
+def test_small_contact_map_keeps_full_rate_metrics():
+    rng = np.random.default_rng(9)
+    a = rng.normal(0, .01, (30, 4)); a[10:20, :2] += 2
+    doc = sensors.signal_doc({'name':'right_pressure', 'dims':4, 'shape':[2,2],
+                             'rest':np.zeros(4), 'swing':2}, a, np.arange(30)/30, 3, True)
+    assert doc['tactile']['n'] == 30 and doc['tactile']['shape'] == [2,2]

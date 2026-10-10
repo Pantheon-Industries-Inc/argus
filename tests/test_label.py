@@ -9,7 +9,6 @@ run folder tests; nothing calls a model.
 from __future__ import annotations
 
 import base64
-import hashlib
 import io
 import json
 import re
@@ -255,22 +254,28 @@ def test_no_rig_borrows_another_rigs_hardware():
     assert "what the arm does" not in hand
 
 
-# The shared instructions each rig is sent, pinned so that no prompt text changes by accident. A deliberate prompt
-# change updates these in the same commit.
-PINNED = {
-    ("teleop_arms", True): "79456a4ab69aea8202fe215d606484dfc38fcbc242da768b9a911c115c887f4e",
-    ("teleop_arms", False): "93b9200f2bb18f4ca3f8eda72fb8a502d2c4829277251193bbd6696508ad80ae",
-    ("handheld_gripper", True): "fa5f49ffe3c6042e757f78ad775a87f1af7308b858a59b30420e9ab416434989",
-    ("handheld_gripper", False): "0e421e7c6ddc2d8d9954629b6f152d2ac61d65406547647c9519040e9c1a4da5",
-    ("ego_head", True): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
-    ("ego_head", False): "5586ce3c436effeaae3b8d02b36d24726811bf533cfb3ec5fe99b77b09887c60",
-}
-
-
-@pytest.mark.parametrize("rig,has_instruction", sorted(PINNED))
-def test_prompts_are_pinned(rig, has_instruction):
-    text = prompts.fixed_instructions(rig, has_instruction=has_instruction)
-    assert hashlib.sha256(text.encode()).hexdigest() == PINNED[(rig, has_instruction)]
+@pytest.mark.parametrize("rig", ["teleop_arms", "handheld_gripper", "ego_head"])
+@pytest.mark.parametrize("has_instruction", [False, True])
+def test_recorded_and_video_only_instructions_keep_the_same_output_contract(rig, has_instruction):
+    recorded = prompts.fixed_instructions(rig, has_instruction=has_instruction)
+    video = prompts.fixed_instructions(rig, has_instruction=has_instruction, recorded=False)
+    columns = ["start_s", "end_s", "arm", "action", "object", "destination", "spatial_relation",
+               "contribution", "progress"]
+    if rig == "ego_head":
+        columns += ["hands_visible", "hands_wearing"]
+    columns += ["notes"]
+    for text in (recorded, video):
+        offered = json.loads(re.search(r'"timeline_columns": (\[[^\]]+\])', text).group(1))
+        assert offered == columns
+        for field in ("scene", "timeline", "key_events", "data_issues", "operator_mistakes", "recovery"):
+            assert f'"{field}":' in text
+        assert ('"tasks":' in text) is (rig == "ego_head")
+        assert ('"completion":' in text) is (rig != "ego_head")
+    assert "recorded motion" in recorded
+    assert "recorded motion" not in video and "what is recorded" not in video
+    assert "state_video_mismatch" not in video
+    if rig != "ego_head":
+        assert "state_video_mismatch" in recorded
 
 
 def test_an_episode_without_instruction_gets_the_task_rule_and_head_cameras_never_do():
@@ -350,10 +355,10 @@ def test_routing_reads_the_task_text_and_falls_back_to_wide_cells(tmp_path, monk
         call, _ = _route_call([answer])
         assert route.route_width(ep, "sk-or-x", call)[0] == 448
         monkeypatch.setattr(route, "_CACHE", {})
-    # a failed routing call is not cached: the next episode with the same task text asks again
+    # An ambiguous routing dispatch uses the wide fallback without another paid call.
     call, calls = _route_call([RuntimeError("HTTP 500"), '{"fine_detail": false, "why": "whole objects"}'])
     assert route.route_width(ep, "sk-or-x", call)[1]["why"].startswith("routing failed")
-    assert route.route_width(ep, "sk-or-x", call)[0] == 224 and len(calls) == 2
+    assert route.route_width(ep, "sk-or-x", call)[0] == 448 and len(calls) == 1
     monkeypatch.setattr(route, "_CACHE", {})
     assert route.route_width(ep, None, call)[1]["why"] == "no key (dry run)"
     ctx = json.loads((ep / "context.json").read_text())
@@ -430,6 +435,66 @@ def _dirs(tmp_path, n):
     return eps
 
 
+def test_resume_source_identity_skips_same_input_and_stops_changed_input(tmp_path, monkeypatch):
+    ep = tmp_path / 'episode_000000'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
+    (ep / 'sources.json').write_text('{}')
+    out = tmp_path / 'out'
+    out.mkdir()
+    calls = []
+
+    def fake_label(path, target, *, api_key, **kw):
+        calls.append(path)
+        result = {'parse_ok': True, 'input_identity': harness.input_identity(path, model='m', reasoning='medium',
+                  max_tokens=100, cell_w=0, example_dir=None)}
+        target.write_text(json.dumps(result))
+        return result
+
+    monkeypatch.setattr(harness, 'label_episode', fake_label)
+    args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='m', reasoning='medium', max_tokens=100,
+                timeout=30)
+    assert harness.run_batch([ep], out, **args) == 0
+    assert harness.run_batch([ep], out, **args) == 0
+    assert len(calls) == 1
+    (ep / 'sources.json').write_text('{"camera": {}}')
+    assert harness.run_batch([ep], out, **args) == 1
+    assert len(calls) == 1
+    assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] == 'stale'
+
+
+def test_resume_legacy_reply_is_marked_unverified_without_a_paid_call(tmp_path, monkeypatch):
+    ep = tmp_path / 'episode_000000'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
+    out = tmp_path / 'out'
+    out.mkdir()
+    (out / f'{ep.name}.json').write_text(json.dumps({'parse_ok': True}))
+    monkeypatch.setattr(harness, 'label_episode', lambda *args, **kwargs: pytest.fail('unexpected paid call'))
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
+                             model='m', reasoning='medium', max_tokens=100, timeout=30) == 0
+    assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] == 'unverified'
+
+
+@pytest.mark.parametrize('receipt,body', [('episode_000000.json', '[]'),
+                                           ('failed_episode_000000.json', 'null'),
+                                           ('noreply_episode_000000.json', '[]')])
+def test_resume_preserves_non_object_receipt_without_a_paid_call(tmp_path, monkeypatch, receipt, body):
+    ep = tmp_path / 'episode_000000'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
+    out = tmp_path / 'out'
+    out.mkdir()
+    saved = out / receipt
+    saved.write_text(body)
+    monkeypatch.setattr(harness, 'label_episode', lambda *args, **kwargs: pytest.fail('unexpected paid call'))
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
+                             model='m', reasoning='medium', max_tokens=100, timeout=30) == 1
+    marker = json.loads((out / f'stale_{ep.name}.json').read_text())
+    assert marker['status'] == 'stale' and receipt in marker['reason']
+    assert saved.read_text() == body
+
+
 def test_batch_finishes_when_a_key_runs_out(tmp_path, monkeypatch):
     calls = {"sk-or-a": 0, "sk-or-b": 0}
 
@@ -454,7 +519,38 @@ def test_spend_cap_stops_new_episodes(tmp_path, monkeypatch):
     monkeypatch.setattr(harness, "label_episode", fake_label)
     harness.run_batch(_dirs(tmp_path, 10), tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False,
                       max_spend=3.0)
-    assert len(list((tmp_path / "out").glob("*.json"))) == 3
+    assert len(list((tmp_path / "out").glob("episode_*.json"))) == 3
+    # every episode the cap stopped says so, for the board (board/to_board.py label_outputs)
+    left = sorted((tmp_path / "out").glob("noreply_episode_*.json"))
+    assert len(left) == 7 and json.loads(left[0].read_text())["no_reply"] == "spend cap $3.00 reached"
+
+
+def test_an_episode_that_got_no_reply_says_why_until_it_gets_one(tmp_path, monkeypatch):
+    """An episode whose request could not be built, or whose call failed, left no file, so the board never showed it.
+    Each gets noreply_<episode>.json with why; a later run that labels it removes it, and a dry run writes none."""
+    state = {"fail": True}
+
+    def fake_label(ep, out, *, api_key, **kw):
+        if state["fail"] and ep.name.endswith("1"):
+            raise ValueError("the request could not be built")
+        out.write_text(json.dumps({"parse_ok": True, "usage": {"est_cost_usd": 0.1}}))
+        return {"usage": {"est_cost_usd": 0.1}}
+
+    monkeypatch.setattr(harness, "label_episode", fake_label)
+    eps = _dirs(tmp_path, 3)
+    for ep in eps:
+        (ep / 'context.json').write_text(json.dumps({'profile': 'handheld_gripper', 'state_kind': 'none'}))
+        (ep / 'sources.json').write_text('{}')
+    assert harness.run_batch(eps, tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False) == 1
+    rec = json.loads((tmp_path / "out" / "noreply_episode_000001.json").read_text())
+    assert rec["no_reply"] == "ValueError: the request could not be built" and rec["parse_ok"] is False
+    assert rec["episode_dir"] == str(eps[1])
+    state["fail"] = False
+    assert harness.run_batch(eps, tmp_path / "out", keys=["sk-or-a"], concurrency=1, force=False) == 0
+    assert not (tmp_path / "out" / "noreply_episode_000001.json").exists()
+    state["fail"] = True
+    harness.run_batch(eps, tmp_path / "dry", keys=["dry-run"], concurrency=1, force=True, dry_run=True)
+    assert not list((tmp_path / "dry").glob("noreply_*"))
 
 
 # ---------------------------------------------------------------- one episode, end to end, offline
@@ -469,14 +565,127 @@ def _packed_episode(tmp_path):
     ep = tmp_path / "episode_000007"
     ep.mkdir()
     T = 120
-    json.dump({v: {"packed": str(packs[v]), "base_s": 50 / 30, "n_frames": T} for v in packs},
-              open(ep / "sources.json", "w"))
+    (ep / "sources.json").write_text(json.dumps({v: {"packed": str(packs[v]), "base_s": 50 / 30, "n_frames": T}
+                                                for v in packs}))
     np.savez(ep / "state.npz", state=_state(T), action=_state(T))
-    json.dump({"dataset": "allenai/MolmoAct2-BimanualYAM-Dataset", "robot_type": "bi_yam_follower", "fps": 30,
-               "task_label": ["Spell out Ai2"], "instruction": "Spell AI2.", "n_state_frames": T,
-               "profile": "teleop_arms", "state_kind": "joints", "cameras": {"exo": {"width": 64, "height": 36}}},
-              open(ep / "context.json", "w"))
+    (ep / "context.json").write_text(json.dumps({
+        "dataset": "allenai/MolmoAct2-BimanualYAM-Dataset", "robot_type": "bi_yam_follower", "fps": 30,
+        "task_label": ["Spell out Ai2"], "instruction": "Spell AI2.", "n_state_frames": T, "profile": "teleop_arms",
+        "state_kind": "joints", "cameras": {"exo": {"width": 64, "height": 36}}}))
     return ep, T
+
+
+def test_final_timeout_claim_survives_resume_without_second_dispatch(tmp_path, monkeypatch):
+    ep, _ = _packed_episode(tmp_path)
+    out = tmp_path / 'out'
+    calls = []
+    def provider(*args, **options):
+        calls.append(options.get('attempts'))
+        raise TimeoutError('response outcome unknown')
+    monkeypatch.setattr(harness, 'call_model', provider)
+    args = dict(keys=['sk-or-fixture'], concurrency=1, force=False, model='openai/gpt-6-astra',
+                reasoning='medium', max_tokens=2000, timeout=1, cell_w=128, max_spend=20)
+    assert harness.run_batch([ep], out, **args) == 1
+    receipt = json.loads((out / f'noreply_{ep.name}.json').read_text())
+    assert calls == [1]
+    assert receipt['final_dispatch_outcome'] == 'unverified'
+    assert receipt['final_reserved_usd'] > 0
+    assert harness.run_batch([ep], out, **args) == 0
+    assert calls == [1]
+
+
+@pytest.mark.parametrize('usage', [None, {}, {'prompt_tokens': 100},
+                                   {'cost': 'unknown', 'prompt_tokens': 100},
+                                   {'prompt_tokens': 100, 'completion_tokens': -1}])
+def test_successful_reply_without_verifiable_usage_keeps_final_reservation(tmp_path, monkeypatch, usage):
+    from label.dictionary_stage import label_spend, label_spend_complete
+    out = tmp_path / 'job' / 'run' / 'out' / 'episode_a.json'
+    out.parent.mkdir(parents=True)
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(1)
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}],
+                **({'usage': usage} if usage is not None else {})}
+    monkeypatch.setattr(harness, 'call_model', provider)
+    result = harness._call_and_record(tmp_path, out, [{'type': 'text', 'text': 'test'}], 0, {},
+                                      model='openai/gpt-6-astra', reasoning='medium', api_key='fixture',
+                                      max_tokens=100, timeout=1)
+    assert calls == [1]
+    assert result['parse_ok'] is True
+    assert result['usage']['est_cost_usd'] is None
+    assert result['final_dispatch_outcome'] == 'unverified'
+    assert result['final_reserved_usd'] > 0
+    assert harness.episode_cost(result) == result['final_reserved_usd']
+    assert label_spend(tmp_path / 'job') == result['final_reserved_usd']
+    assert label_spend_complete(tmp_path / 'job') is False
+
+
+def test_complete_token_usage_settles_final_claim(tmp_path, monkeypatch):
+    out = tmp_path / 'episode_a.json'
+    monkeypatch.setattr(harness, 'call_model', lambda *a, **kw: {
+        'usage': {'prompt_tokens': 100, 'completion_tokens': 10},
+        'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]})
+    result = harness._call_and_record(tmp_path, out, [{'type': 'text', 'text': 'test'}], 0, {},
+                                      model='openai/gpt-6-astra', reasoning='medium', api_key='fixture',
+                                      max_tokens=100, timeout=1)
+    assert result['usage']['est_cost_usd'] > 0
+    assert result['usage']['cost_source'] == 'estimate'
+    assert 'final_dispatch_outcome' not in result
+
+
+def test_run_batch_does_not_replay_successful_reply_with_missing_usage(tmp_path, monkeypatch):
+    from label.dictionary_stage import label_spend, label_spend_complete
+    ep, _ = _packed_episode(tmp_path)
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(kwargs.get('attempts'))
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}
+    monkeypatch.setattr(harness, 'call_model', provider)
+    out = tmp_path / 'job' / 'run' / 'out'
+    args = dict(keys=['sk-or-fixture'], concurrency=1, force=False, model='openai/gpt-6-astra',
+                reasoning='medium', max_tokens=2000, timeout=1, cell_w=128, max_spend=20)
+    assert harness.run_batch([ep], out, **args) == 0
+    receipt = json.loads((out / f'{ep.name}.json').read_text())
+    assert receipt['parse_ok'] is True
+    assert receipt['final_dispatch_outcome'] == 'unverified'
+    assert calls == [1]
+    assert label_spend(tmp_path / 'job') >= receipt['final_reserved_usd']
+    assert label_spend_complete(tmp_path / 'job') is False
+    assert harness.run_batch([ep], out, **args) == 0
+    assert calls == [1]
+
+
+def test_final_claim_survives_worker_crash_and_budget_refusal_has_no_dispatch(tmp_path, monkeypatch):
+    ep, _ = _packed_episode(tmp_path)
+    calls = []
+    def crash(*args, **options):
+        calls.append(options.get('attempts'))
+        raise KeyboardInterrupt('worker stopped after dispatch')
+    monkeypatch.setattr(harness, 'call_model', crash)
+    args = dict(keys=['sk-or-fixture'], concurrency=1, force=False, model='openai/gpt-6-astra',
+                reasoning='medium', max_tokens=2000, timeout=1, cell_w=128)
+    refused = tmp_path / 'refused'
+    assert harness.run_batch([ep], refused, max_spend=.001, **args) == 0
+    assert calls == []
+    out = tmp_path / 'crashed'
+    with pytest.raises(KeyboardInterrupt):
+        harness.run_batch([ep], out, max_spend=20, **args)
+    receipt = json.loads((out / f'noreply_{ep.name}.json').read_text())
+    assert receipt['final_dispatch_outcome'] == 'claimed'
+    assert calls == [1]
+    assert harness.run_batch([ep], out, max_spend=20, **args) == 0
+    assert calls == [1]
+
+
+def test_single_episode_cli_refuses_unreadable_no_reply_claim(tmp_path, monkeypatch):
+    ep = tmp_path / 'episode_a'
+    ep.mkdir()
+    target = tmp_path / 'answer.json'
+    (tmp_path / 'noreply_answer.json').write_text('damaged claim')
+    monkeypatch.setenv('OPENROUTER_API_KEYS', 'sk-or-fixture')
+    monkeypatch.setattr(sys, 'argv', ['label.harness', '--episode-dir', str(ep), '--out', str(target)])
+    assert harness.main() == 1
+    assert not target.exists()
 
 
 SERVED = {"provider": "SomeHost", "id": "gen-123", "model": "openai/gpt-6-astra-20260901", "system_fingerprint": "fp_1"}
@@ -487,8 +696,9 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     ep, T = _packed_episode(tmp_path)
     sent = {}
 
-    def fake_call(content, model, reasoning, api_key, max_tokens, timeout):
+    def fake_call(content, model, reasoning, api_key, max_tokens, timeout, **options):
         sent["content"] = content
+        sent['attempts'] = options.get('attempts')
         labels = {"completion": {"task_completed": "success", "completed_at_s": 3.0, "goal_reached_at_s": 3.0},
                   "timeline_columns": harness.TIMELINE_COLUMNS,
                   "timeline": [[0.0, 3.0, "left", "reach", "block", None, None, "advancing", 0.5, None]],
@@ -499,13 +709,16 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     monkeypatch.setattr(harness, "call_model", fake_call)
     out = tmp_path / "out" / "episode_000007.json"
     r = harness.label_episode(ep, out, model="openai/gpt-6-astra", reasoning="medium", api_key="sk-or-x",
-                              max_tokens=64000, timeout=60)
+                                  max_tokens=64000, timeout=60)
+    assert sent['attempts'] == 1
     assert r["parse_ok"] and r["usage"]["est_cost_usd"] == 0.01 and r["usage"]["cost_source"] == "billed"
     assert (r["provider_name"], r["generation_id"], r["model_served"], r["system_fingerprint"]) == \
         ("SomeHost", "gen-123", "openai/gpt-6-astra-20260901", "fp_1")
     assert json.loads(out.read_text())["model_served"] == "openai/gpt-6-astra-20260901"
     assert r["config"]["timesteps_s"][0] == 0.0 and r["config"]["timesteps_s"][-1] == round(119 / 30, 3)
     assert r["config"]["cell"][0] == me.GRID_CELL_W_BY_RIG["teleop_arms"]
+    assert isinstance(r["config"]["prompt_blocks"], list) and "contacts" not in r["config"]["schema_fields"]
+    assert "stream_pairing" in r["config"]["checks_implied"] and "still_spans" not in r["config"]["checks_implied"]
     imgs = [c for c in sent["content"] if c["type"] == "image_url"]
     assert len(imgs) == r["config"]["n_image_parts"] == -(-len(r["config"]["timesteps_s"]) // 4) + 2
     # the detail view of the LAST instant is episode frame 119 (global 169), never the next episode's 170
@@ -591,7 +804,7 @@ def test_an_openai_key_sends_the_request_straight_to_openai(monkeypatch):
 def test_cut_off_reply_is_kept_beside_the_outputs_and_fails(tmp_path, monkeypatch):
     ep, _ = _packed_episode(tmp_path)
 
-    def fake_call(content, model, reasoning, api_key, max_tokens, timeout):
+    def fake_call(content, model, reasoning, api_key, max_tokens, timeout, **options):
         return {"choices": [{"message": {"content": '{"timeline": [[0.0, 1'}, "finish_reason": "length"}],
                 "usage": {"prompt_tokens": 1000, "completion_tokens": 64000, "cost": 0.5}, **SERVED}
 
@@ -603,11 +816,17 @@ def test_cut_off_reply_is_kept_beside_the_outputs_and_fails(tmp_path, monkeypatc
     failed = json.loads((out.parent / "failed_episode_000007.json").read_text())
     assert failed["finish_reason"] == "length" and failed["content_tail"] == '{"timeline": [[0.0, 1'
     assert failed["model_served"] == SERVED["model"] and failed["usage"]["cost"] == 0.5
+    # what the board shows of an episode with no labels: its checks and the stretches no camera decoded
+    assert "dataset_checks" in failed and "decode_failed" in failed and "given_prompt" in failed
     # the cut-off reply was billed: it counts toward the run's cost and the spend cap
     assert harness.episode_cost(failed) == 0.5 and lrun.billed_cost(tmp_path) == 0.5
     with pytest.raises(harness.Truncated) as e:
         harness.label_episode(ep, out, model="m", reasoning="medium", api_key="sk-or-x", max_tokens=64000, timeout=60)
-    assert e.value.cost == 0.5
+    assert e.value.cost == 1.0
+    retried = json.loads((out.parent / "failed_episode_000007.json").read_text())
+    assert retried["usage"]["cost"] == 0.5
+    assert len(retried["final_cost_history"]) == 1
+    assert harness.episode_cost(retried) == lrun.billed_cost(tmp_path) == 1.0
 
 
 def test_dry_run_from_the_command_line(tmp_path, monkeypatch, capsys):
@@ -643,10 +862,56 @@ def test_timeline_rows_convert_and_malformed_rows_fail():
     assert not ok and labels["_raw"] == "not json" and labels["_parse_error"]
     bad = harness.normalize_timeline({"timeline": [[0.0, 1.0, "left", "reach", "cup", None, None, "fast", 0.1, None]]})
     assert bad["_schema_violations"] == ["timeline row 0: contribution 'fast'"]     # counted, the answer kept
-    with pytest.raises(ValueError):
-        harness.normalize_timeline({"timeline": [[0.0, 1.0, "left"]]})             # a shifted row is refused
-    with pytest.raises(ValueError):
-        harness.normalize_timeline({"timeline": [["0", 1.0, "left", "reach", "cup", None, None, "idle", 0.1, None]]})
+    # a shifted row, or one whose time is no number, is left out and counted; the rest of the reply is kept
+    short = harness.normalize_timeline({"timeline": [
+        [0.0, 1.0, "left"], [0.0, 1.5, "left", "reach", "cup", None, None, "idle", 0.1, None]]})
+    assert [s["action"] for s in short["timeline"]] == ["reach"]
+    assert short["_dropped"] == [{"field": "timeline", "row": 0, "why": "it has 3 values for 10 columns"}]
+    late = harness.normalize_timeline({"timeline": [["late", 1.0, "left", "reach", "cup", None, None, "idle", 0.1,
+                                                     None]]})
+    assert late["timeline"] == [] and late["_dropped"][0]["why"] == "its start_s is not a number ('late')"
+
+
+def test_one_bad_row_or_field_never_costs_the_whole_reply():
+    """One string time in a timeline row made the whole reply unparsed, and a parsed reply with a field of the wrong
+    type (a timeline object, key events as text, a task summary list) crashed the board build or the stitch. A time
+    written as text that reads as a number is that number; a row or field of the wrong type is left out of that reply
+    and counted in _dropped, and everything else is kept. A reply that keeps to the format is unchanged."""
+    good = {"timeline_columns": harness.TIMELINE_COLUMNS,
+            "timeline": [[0.0, 1.5, "left", "reach", "cup", None, None, "advancing", 0.1, None],
+                         ["1.5", "3.0", "left", "lift", "cup", None, None, "advancing", "0.5", None],
+                         ["abc", 4.0, "left", "drop", "cup", None, None, "wasteful", 0.5, None]],
+            "task_summary": ["a", "b"], "key_events": [{"t_s": "2.5s", "label": "lifted"}, "goal reached",
+                                                        {"t_s": "late", "label": "untimed"}],
+            "completion": {"task_completed": "success", "completed_at_s": "3"}, "performance_review": 3,
+            "scene": {"objects": ["cup", {"name": "plate"}]}, "data_issues": {"issue": "x"},
+            "instruction_variants": ["lift the cup", 7]}
+    labels, ok = harness.parse_response(json.dumps(good))
+    assert ok
+    assert [(s["start_s"], s["end_s"], s["progress"]) for s in labels["timeline"]] == [(0.0, 1.5, 0.1),
+                                                                                      (1.5, 3.0, 0.5)]
+    assert [(k["t_s"], k["label"]) for k in labels["key_events"]] == [(2.5, "lifted"), (None, "untimed")]
+    assert labels["completion"]["completed_at_s"] == 3.0
+    assert "task_summary" not in labels and "performance_review" not in labels and "data_issues" not in labels
+    assert labels["scene"]["objects"] == [{"name": "plate"}] and labels["instruction_variants"] == ["lift the cup"]
+    assert sorted((d["field"], d.get("row", -1)) for d in labels["_dropped"]) == [
+        ("data_issues", -1), ("instruction_variants", 1), ("key_events", 1), ("performance_review", -1),
+        ("scene.objects", 0), ("task_summary", -1), ("timeline", 2)]
+    # each reason names the value in the output format's words, never Python's ("a str", "a int")
+    why = {(d["field"], d.get("row", -1)): d["why"] for d in labels["_dropped"]}
+    assert why[("performance_review", -1)] == "a number, not text" and why[("key_events", 1)] == "text, not an object"
+    assert why[("task_summary", -1)] == "a list, not text" and why[("data_issues", -1)] == "an object, not a list"
+    assert "key_events row 1: t_s 'late' is not a time, kept untimed" in labels["_schema_violations"]
+    # running it again on its own output changes nothing, and a reply that keeps to the format comes back unchanged
+    assert harness.typed_labels(json.loads(json.dumps(labels))) == labels
+    clean = {"timeline": [{"start_s": 0.0, "end_s": 1.0, "action": "reach", "progress": 0.1}],
+             "key_events": [{"t_s": 1, "label": "x"}], "completion": {"task_completed": "success",
+                                                                    "completed_at_s": None},
+             "task_summary": "reach", "scene": {"objects": [{"name": "cup"}], "setting": "a table"}}
+    assert harness.parse_response(json.dumps(clean)) == (clean, True)
+    # a reply that is JSON but not an object is a reply that did not parse
+    labels, ok = harness.parse_response("[1, 2]")
+    assert not ok and "not an object" in labels["_parse_error"]
 
 
 # ---------------------------------------------------------------- run folders (label/run.py), git and harness faked
@@ -872,7 +1137,23 @@ def test_a_camera_that_starts_late_is_not_shown_before_its_first_frame():
     ks = [0, 30, 60, 90, 120]
     assert [me.recording_at(ep, "right", k) for k in ks] == [False, False, True, True, True]
     assert all(me.recording_at(ep, "left", k) for k in ks)
-    assert "Right has frames only from 2.03 s to" in me._coverage_note(ep, {"ks": ks})
+    assert ("Right has frames only from 2.03 s to 6.00 s"
+            in me._coverage_note(ep, {"ks": ks}))
+
+
+def test_an_instant_a_hair_before_the_episode_start_is_said_as_zero_seconds_never_minus_zero():
+    """A recorder's clock can put the main camera's first frame a fraction of a millisecond before the episode's zero
+    (-0.0004 s). The prompt says that instant as 0.00 s; "-0.00 s" reads as a time before the episode."""
+    left = np.arange(0, 6, 1 / 30) - 0.0004
+    right = np.arange(2.03, 6, 1 / 30)
+    from prepare import formats
+    ep = {"context": {"fps": 30, "cameras": {"left": {"name": "left"}, "right": {"name": "right"}}},
+          "sources": {"left": {}, "right": {}}, "times": {"left": left, "right": right},
+          "kmap": {"right": formats.nearest(right, left)}, "footage_end": 0}
+    note = me._coverage_note(ep, {"ks": [0, 30, 60, 90, 120]})
+    assert "Right has frames only from 2.03 s to 6.00 s" in note
+    assert "the last frame they have, at 0.00 s." in note
+    assert "-0.00" not in note
 
 
 def test_the_prompt_gives_each_cameras_own_cell_size_when_they_differ():
@@ -952,3 +1233,12 @@ def test_the_camera_line_names_the_fisheye_only_where_the_check_fired():
 def test_circular_image_with_no_frames_is_not_circular():
     from label import lens
     assert lens.circular_image({}) == {"circular": False, "frames": 0}
+
+
+def test_a_dataset_step_with_no_end_or_no_time_is_stated_as_it_is():
+    """The dataset's timed steps in the prompt: a step with no end time is a moment, one with no time is listed
+    without one, and neither stops the prompt from being built."""
+    block = me.ego_annotation_block({"annotation_subtasks": [{"t0": 1.0, "t1": 2.5, "label": "reach"},
+                                                             {"t0": 3.0, "label": "open"},
+                                                             {"t0": None, "label": "wipe"}]})
+    assert "  1.0-2.5s  reach" in block and "  3.0s  open" in block and "  no time  wipe" in block

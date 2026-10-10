@@ -1,0 +1,96 @@
+"""Invalid saved times retain their labels without requesting an impossible frame."""
+import copy
+import json
+import subprocess
+
+import pytest
+
+from board import static
+from board.to_board import _time
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), -float('inf')])
+@pytest.mark.parametrize('field', ['completion', 'task', 'reached'])
+def test_nonfinite_saved_goal_times_do_not_request_frames_or_change_labels(value, field):
+    if field == 'task':
+        saved = {'tasks': [{'task': 'lift', 'completed_at_s': value}]}
+    elif field == 'reached':
+        saved = {'completion': {'task_completed': 'success_then_undone', 'goal_reached_at_s': value}}
+    else:
+        saved = {'completion': {'completed_at_s': value}}
+    original = json.dumps(saved)
+    assert _time(value) is None
+    assert static.goal_times(saved) == []
+    assert json.dumps(saved) == original
+
+
+def test_finite_saved_goal_requests_keep_their_exact_times_and_order():
+    saved = {'tasks': [{'task': 'first', 'completed_at_s': 0.123456789},
+                       {'task': 'second', 'completed_at_s': '2.34567891'},
+                       {'task': 'invalid', 'completed_at_s': float('nan')}]}
+    original = copy.deepcopy(saved)
+    assert static.goal_times(saved) == [0.123456789, 2.34567891]
+    assert static.ms_key(static.goal_times(saved)[0]) == 123
+    assert static.ms_key(static.goal_times(saved)[1]) == 2346
+    assert json.dumps(saved) == json.dumps(original)
+
+
+def test_invalid_numeric_strings_do_not_request_goal_frames():
+    saved = {'tasks': [{'task': 'lift', 'completed_at_s': value}
+                       for value in ('nan', 'inf', '-inf', 'unknown', None)]}
+    assert static.goal_times(saved) == []
+
+
+def test_integer_outside_float_range_does_not_request_a_goal_frame():
+    value = 10 ** 1000
+    saved = {'completion': {'completed_at_s': value}}
+    assert static.goal_times(saved) == []
+    assert saved['completion']['completed_at_s'] == value
+
+
+@pytest.mark.parametrize('value', [1e308, -1e308, 1e20, 1e100, 1e250])
+@pytest.mark.parametrize('field', ['completion', 'task', 'reached'])
+def test_saved_times_without_an_exact_browser_frame_key_do_not_request_frames(value, field):
+    if field == 'task':
+        saved = {'tasks': [{'task': 'lift', 'completed_at_s': value}]}
+    elif field == 'reached':
+        saved = {'completion': {'task_completed': 'success_then_undone', 'goal_reached_at_s': value}}
+    else:
+        saved = {'completion': {'completed_at_s': value}}
+    original = json.dumps(saved)
+    assert static.goal_times(saved) == []
+    assert json.dumps(saved) == original
+
+
+def test_negative_saved_goal_time_does_not_guess_a_picture_at_zero():
+    saved = {'completion': {'completed_at_s': -0.1}}
+    assert static.goal_times(saved) == []
+    assert saved['completion']['completed_at_s'] == -0.1
+
+
+def test_planned_millisecond_keys_match_browser_decimal_lookup():
+    saved = {'tasks': [{'task': 'frame', 'completed_at_s': value}
+                       for value in (0, 0.123456789, 2.34567891, 1e20)]}
+    planned = static.goal_times(saved)
+    code = 'console.log(JSON.stringify(JSON.parse(process.argv[1]).map(t=>String(Math.round(t*1000)))))'
+    browser = json.loads(subprocess.check_output(['node', '-e', code, json.dumps(planned)], text=True))
+    assert [str(static.ms_key(value)) for value in planned] == browser
+    assert planned == [0, 0.123456789, 2.34567891]
+
+
+@pytest.mark.parametrize('field', ['completion', 'tasks', 'reached'])
+@pytest.mark.parametrize('t', [(2**52+1)/1000, (2**52+3)/1000])
+def test_saved_goal_with_a_different_browser_key_is_withheld(t, field):
+    if field == 'completion':
+        saved = {'completion': {'completed_at_s': t}}
+    elif field == 'tasks':
+        saved = {'tasks': [{'task': 'lift', 'start_s': 0, 'completed_at_s': t}]}
+    else:
+        saved = {'completion': {'task_completed': 'success_then_undone', 'goal_reached_at_s': t}}
+    before = json.dumps(saved)
+    assert static.goal_times(saved) == []
+    assert json.dumps(saved) == before
+
+@pytest.mark.parametrize('t', [(2**52)/1000, (2**52+2)/1000, 0.123456789123, 2.34567891])
+def test_usable_existing_keys_remain_admitted(t):
+    assert static.goal_times({'completion': {'completed_at_s': t}}) == [t]

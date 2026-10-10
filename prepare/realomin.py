@@ -33,6 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
@@ -89,8 +90,8 @@ def mux(packets: list[bytes], ts: list[int], out: Path) -> list[int]:
     return ts
 
 
-# an uploaded MCAP in this layout (both grippers' cameras and poses) is read by this adapter
-UPLOAD = "mcap"
+# Uploads use recorded pose and gripper fields through the generic reader.
+UPLOAD = None
 
 
 def recognizes(topics: list[str]) -> bool:
@@ -174,6 +175,9 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
            "cameras": {v: {"name": v, "width": wh[0], "height": wh[1], "desc": CAMERA_DESC[v]}
                        for v in ("left", "right")},
            "source": {"mcap": rel}}
+    ctx["state_actor_contract"] = {
+        "actors": ["left", "right"], "source": "recording schema maps robot0 to left and robot1 to right"}
+    formats.record_state_groups(ctx, [(topic, None, 7) for topic in POSE_TOPICS])
     src = {"left": {"packed": str((ep / "left.mp4").resolve()), "base_s": 0.0, "n_frames": int(len(npts["left"]))},
            "right": {"packed": str((ep / "right.mp4").resolve()), "base_s": 0.0, "n_frames": int(len(npts["right"])),
                      "kmap": "kmap_right.npy"}}
@@ -183,7 +187,7 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
             **{t.replace("/vio/eef_pose", "/sim/robot_info"): None for t in POSE_TOPICS}}
     formats.write_signals(ep, ctx, formats.mcap_signals([mcap_path], left_t / 1e9, used))
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1))
+    write_atomic(ep / "context.json", ctx, indent=1)
     return ctx
 
 

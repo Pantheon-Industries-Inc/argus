@@ -32,12 +32,12 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 
-# an uploaded LeRobot dataset with Galaxea's layout (state split per arm part, coarse and fine task indices, a quality
-# index) is read by this adapter, so its joints, timed sub-steps and quality tag come along
-UPLOAD = "lerobot"
+# Uploads use structural LeRobot fields. Published preparation and sampling stay available here.
+UPLOAD = None
 GALAXEA_COLUMNS = ("observation.state.left_arm", "observation.state.right_arm", "observation.state.left_gripper",
                    "observation.state.right_gripper", "coarse_task_index", "task_index", "quality_index")
 
@@ -92,7 +92,7 @@ def convert_upload(item: dict, rig: str, out: Path, dataset: str) -> dict:
     meta = meta_from(get, item["root"]["rel"] or root.name)
     eidx = int(item["row"]["eidx"])
     ep = next(e for e in meta["episodes"] if int(e["episode_index"]) == eidx)
-    return write_episode(meta, ep, get, out / formats.episode_name(item["name"]), dataset)
+    return write_episode(meta, ep, get, out / (item.get("output_name") or formats.episode_name(item["name"])), dataset)
 
 
 def episode_dir_name(folder: str, index: int) -> str:
@@ -194,14 +194,20 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     # state does not show
     from prepare import formats
     if state_note:
-        ctx["state_note"] = state_note
+        formats.no_state(ctx, formats.StateNote(state_note, "layout"))
+    if kind != "none":
+        feats = info.get("features") or {}
+        formats.record_state_groups(ctx, [(f"observation.state.{side}_arm",
+            (formats.value_names(feats.get(f"observation.state.{side}_arm", {}).get("names"), 6) or []) +
+            (formats.value_names(feats.get(f"observation.state.{side}_gripper", {}).get("names"), 1) or []), 7)
+            for side in ("left", "right")])
     arm_cols = set(GALAXEA_COLUMNS[:4]) | {"action.left_arm", "action.left_gripper", "action.right_arm",
                                             "action.right_gripper"}
     formats.write_signals(ep_dir, ctx, formats.recorded_signals(
-        df, set(GALAXEA_COLUMNS[4:]) | (arm_cols if kind != "none" else set()), n))
+        df, set(GALAXEA_COLUMNS[4:]) | (arm_cols if kind != "none" else set()), n, features=info.get("features")))
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(coarse + "\n")
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=2))
+    write_atomic(ep_dir / "context.json", ctx, indent=2)
     return ctx
 
 

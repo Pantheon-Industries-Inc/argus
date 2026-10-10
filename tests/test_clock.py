@@ -2,6 +2,7 @@
 file holds; a camera that started first never plays early; goal frames and the footage download take the clip's own
 frame times at any rate."""
 import io
+import json
 import shutil
 import subprocess
 
@@ -52,6 +53,7 @@ def test_a_camera_that_started_first_never_plays_early(tmp_path):
     early = np.arange(36) / 30 + 1.0 - 0.2          # started 0.2 s (6 frames) before the main camera
     late = np.arange(24) / 30 + 1.0 + 0.2
     np.savez(ep / "times.npz", exo=main, left=early, right=late)
+    (ep / "context.json").write_text(json.dumps({"clock_zero_s": 1.0}))
     sources = {"exo": {"packed": "a"}, "left": {"packed": "b"}, "right": {"packed": "c"}}
     off = clips.start_offsets(ep, sources, 30.0)
     assert off["left"] == (0.0, 6)

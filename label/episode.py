@@ -14,6 +14,8 @@ What the model is told about the episode, and where each fact comes from:
 - still spans: from the recorded state, true by construction (state.still_spans), as the recording's claim.
 - recorded motion between consecutive instants: from the recorded state, as a claim to check.
 - sampling: exactly what state.sample_frames did.
+- which of these are said at all: each part that depends on data the episode may not hold is a block (BLOCKS) with a
+  test of the episode folder, so an episode without that data gets no word of it and is asked for no field of it.
 - a fisheye lens: only where the camera's own frames show a circular image with black corners (label/lens.py).
 Nothing else is said about field of view or the lens, nor about lighting, object identities, or what a gripper
 reading implies.
@@ -39,9 +41,12 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -49,7 +54,10 @@ from checks import timebase
 from label import frames as mf
 from label import lens
 from label import prompts
+from label import sensor_evidence as se
 from label import state as ms
+from prepare.signal_alignment import ALIGNED_CAMERA, ALIGNED_ASSUMED, placement_text
+from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, STATE_WHY, UNREADABLE
 
 FPS = 30
 VIEW_ORDER = ("exo", "left", "right")          # harness view keys with a role: the scene camera, the two mounted ones
@@ -83,7 +91,10 @@ CONTACT_EVERY_S = 4.0
 CONTACT_MAX = 8
 CONTACT_MIN_CHANGE = 0.25    # of the channel's own range over the episode, between consecutive instants
 CONTACT_MIN_GAP_S = 2.0
-PAIRED_SPAN_SLACK_S = 0.1   # a paired camera is shown at an instant up to this far outside its own first and last frame
+# A camera paired by time is shown at an instant up to this far outside its own first and last frame: a pairing
+# tolerance, whether its nearest frame still stands for that instant (a wrist camera whose first frame comes 0.034 s
+# after the anchor's), not the edge a stream may miss without a data issue (prepare/formats.py edge_slack)
+PAIRED_SPAN_SLACK_S = 0.1
 GRID_GUTTER = 84
 GRID_HEADER = 30
 
@@ -95,6 +106,13 @@ def is_episode_dir(ep_dir: Path) -> bool:
 def load(ep_dir: Path) -> dict:
     ep_dir = Path(ep_dir)
     ctx = json.loads((ep_dir / "context.json").read_text())
+    from prepare.formats import clock_context
+    ctx = clock_context(ctx)
+    from label.dictionary_editor import for_episode
+    owner = (ctx.get("piece") or {}).get("of") or (ctx.get("data_dictionary") or {}).get("episode_id") or ep_dir.name
+    resolved = for_episode(ep_dir, owner)
+    if resolved is not None:
+        ctx["data_dictionary"] = resolved
     src = json.loads((ep_dir / "sources.json").read_text())
     for v, d in src.items():
         if "n_frames" not in d:
@@ -111,23 +129,82 @@ def load(ep_dir: Path) -> dict:
         state, action = z["state"], (z["action"] if "action" in z.files else None)
     ep = {"dir": ep_dir, "context": ctx, "sources": src, "state": state,
           "action": action, "times": None, "kmap": {}, "signals": {}}
-    if ctx.get("signals"):
-        # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals)
+    if ctx.get("signals") and not ctx.get("state_unaligned"):
+        # the recording's other per-frame numbers, under the dataset's names (prepare/formats.py recorded_signals), with
+        # each one's shape and value names (a 16 x 16 pressure map; fx, fy, fz) and everything else its reader wrote,
+        # so a field a reader adds reaches the checks without being listed here. Signals on the frames of a camera
+        # taken out of the episode, with nothing to place them on the others (state_unaligned), are not read. One whose
+        # rows stop short of the episode's frames has no reading past them (label/signals.py pad_rows)
+        from label import signals as sg
         z = np.load(ep_dir / "signals.npz")
-        ep["signals"] = {s["name"]: z[s["key"]] for s in ctx["signals"]}
+        ep["signals"] = {s["name"]: sg.pad_rows(sg.columns(z[s["key"]]), len(state)) for s in ctx["signals"]}
+        ep["signal_meta"] = {s["name"]: {k: v for k, v in s.items() if k not in ("name", "key")}
+                             for s in ctx["signals"]}
+        from label.dictionary_context import field_interpretation
+        for name, meta in ep["signal_meta"].items():
+            interpretation = field_interpretation(ctx, name)
+            if interpretation:
+                meta["dictionary"] = interpretation
     if ctx.get("real_times"):
         # datasets with real per-frame capture times (ABC-130k, RealOmin): every time shown uses them, and
         # each camera's frames are decoded by their exact pts
-        t = np.load(ep_dir / ctx["real_times"])
-        ep["times"] = {k: t[k] for k in t.files}
+        from prepare.camera_clock import load_times
+        t = load_times(ep_dir, ctx)
+        zero = float(ctx.get("clock_zero_s") or 0.0)
+        ep["times"] = {k: t[k] if k.endswith("_pts") else t[k] - zero for k in t}
+        if ctx.get("presentation_times"):
+            original = load_times(ep_dir, ctx, recorded=True)
+            ep["recorded_times"] = {k: original[k] if k.endswith("_pts") else original[k] - zero for k in original}
     for v, d in src.items():
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
+    # each camera's depth stream, when the recording has one (label/depth.py)
+    from label import depth as dp
+    recorded_depth = dp.load(ep_dir)
+    ep["depth"] = {v: e for v, e in recorded_depth.items() if v in src}
+    ep['additional_depth'] = {v: e for v, e in recorded_depth.items() if v not in src}
     return ep
 
 
 def ep_fps(ep: dict) -> float:
     return float(ep["context"].get("fps") or FPS)
+
+
+# a reply's time may lie this far past the edge of the footage it labels (a reply rounding its last time up) before the
+# board flags it (board/build.py steps_outside, label/pieces.py outside_part)
+STEP_SLACK_S = 0.5
+# a number written as text: plain ASCII digits with an optional sign, point and exponent. Python's float also reads
+# "1_000" and digits of other scripts, which no dataset or reply means as a time
+NUMBER_TEXT = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)
+
+
+def number(x) -> float | None:
+    """A number as a dataset or the model writes it: a finite number, or text that reads as one (NUMBER_TEXT: "12.5",
+    or a time "12.5s"). Anything else (none, a word, NaN, true or false) is no number, None, and a time that is none is
+    shown untimed. Negative zero is zero, so no time prints as "-0.0s". One rule, so the prompt, the parts of a long
+    recording, the reply's parse and the board read every time alike."""
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, str):
+        x = x.strip().removesuffix("s").strip()
+        if not NUMBER_TEXT.fullmatch(x):
+            return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError, OverflowError):      # an integer too large for a float is no time either
+        return None
+    return v + 0.0 if math.isfinite(v) else None
+
+
+def _seconds_number(t: float, places: int) -> str:
+    """Round displayed seconds once, removing the sign when the rounded value is zero."""
+    return f"{round(float(t), places) + 0.0:.{places}f}"
+
+
+def tenths(t: float) -> str:
+    """A time as the prompt gives a dataset's label time, to the tenth of a second, never as -0.0s: a time that rounds
+    to zero is zero, not a time before the episode."""
+    return _seconds_number(t, 1) + "s"
 
 
 def order_views(keys) -> list[str]:
@@ -157,6 +234,13 @@ def frame_time(ep: dict, k: int) -> float:
     if ep.get("times") is not None:
         return float(ep["times"][anchor(ep)][k])
     return k / ep_fps(ep)
+
+
+def seconds(t: float) -> str:
+    """A time as the prompt says it, to the hundredth of a second. A recorder's clock can put a frame a hair before
+    the episode's zero, and that instant is said as 0.00 s, never as -0.00 s, which reads as a time before the
+    episode."""
+    return _seconds_number(t, 2) + " s"
 
 
 def describe_spans(ep: dict, spans) -> list[dict]:
@@ -190,32 +274,53 @@ def state_kind(ep: dict) -> str:
     return k
 
 
+def state_span(ep: dict) -> tuple[int, int]:
+    """The anchor frames [a, b) the recorded state covers: all of them, or context.json state_span when the state was
+    moved onto another camera's frames and covers only part of them (board/clips.py reanchor, which leaves no value
+    outside it). Every use of the state stays inside it."""
+    T = int(len(ep["state"]))
+    sp = ep["context"].get("state_span")
+    if isinstance(sp, (list, tuple)) and len(sp) == 2:
+        a, b = max(0, int(sp[0])), min(T, int(sp[1]))
+        if a < b:
+            return a, b
+    return 0, T
+
+
 def plan(ep: dict) -> dict:
-    """Frames to send plus the deterministic checks we report ourselves."""
+    """Frames to send plus the deterministic checks we report ourselves. With no usable arm state, the quiet spans of
+    the signals choose the extra instants (pl["quiet_spans"])."""
     T = int(len(ep["state"]))
     r, kind, fps = rig(ep), state_kind(ep), ep_fps(ep)
     windows = {v: int(ep["sources"][v]["n_frames"]) for v in views(ep)}
-    # the state follows the anchor camera's frames; a camera paired to the anchor by real time (kmap) has
-    # its own frame count and is matched through the map, so only unpaired cameras must equal the state
+    # the episode is the anchor camera's frames, which the state's rows follow. A camera paired to the anchor by real
+    # time (kmap) is matched through its map, which must cover every anchor frame; any other camera only shows its own
+    # frames, and one that ends before the anchor has no frame past its end (_decode_view), so it never decides how
+    # long the episode is or whether the state lines up
     a = anchor(ep)
-    paired = {v for v in windows if v != a and v in ep["kmap"] and len(ep["kmap"][v]) >= windows[a]}
+    short_maps = [len(km) for v, km in ep["kmap"].items() if v != a and v in windows and len(km) < windows[a]]
+    # state_unaligned: the camera the state was recorded on was taken out of the episode, and nothing places the state
+    # on the cameras left (board/clips.py drop_cameras), so it is never treated as aligned
+    sa, sb = state_span(ep)
     checks = {"state_frames": T, "camera_frames": windows,
-              "camera_windows_match_state": all(n == T for v, n in windows.items() if v not in paired)}
+              "camera_windows_match_state": not ep["context"].get("state_unaligned")
+              and windows[a] == T and not short_maps}
     if ep.get("action") is not None and r == "teleop_arms" and kind == "joints" and ep["state"].shape[1] == 14:
         # sped-up recording (the rig's loop ran below the rate its samples are stamped at): a report
         # field computed from the leader/follower joint lag, not a claim made to the model. It reads the 12 arm
         # joints of two arms (timebase.JOINTS), as measure_folder does, so a one-arm recording is not measured
-        checks["timebase"] = timebase.timebase_check(ep["state"], ep["action"],
+        checks["timebase"] = timebase.timebase_check(ep["state"][sa:sb], ep["action"][sa:sb],
                                                ep["context"].get("timebase_neighbour_lag_frames"), ep_fps(ep))
     if kind != "none" and checks["camera_windows_match_state"]:
-        spans = ms.still_spans(ep["state"], fps=fps, kind=kind, grip_range=ms.gripper_full_range(ep["context"]))
+        spans = [(x + sa, y + sa) for x, y in ms.still_spans(ep["state"][sa:sb], fps=fps, kind=kind,
+                                                            grip_range=ms.gripper_full_range(ep["context"]))]
         n = T
     else:
-        # video only, or a dataset defect (the cameras do not cover the same frames as the state): label the
-        # video as shipped over the anchor frames every camera not paired to it by time also has, and make no
-        # state claims (the defect is reported in checks)
+        # video only, or a dataset defect (the anchor's frames are not the state's rows): label the video as shipped
+        # over the anchor's frames that every camera paired to it by time has a map for, and make no state claims (the
+        # defect is reported in checks)
         spans = []
-        n = min([windows[a]] + [w for v, w in windows.items() if v != a and v not in paired])
+        n = min([windows[a]] + short_maps)
     if ep["context"].get("stream_checks"):
         checks["streams"] = ep["context"]["stream_checks"].get("streams")
     if ep["context"].get("stream_pairing"):
@@ -223,9 +328,30 @@ def plan(ep: dict) -> dict:
         # report field, never a claim made to the model)
         checks["stream_pairing"] = ep["context"]["stream_pairing"]
     every = SAMPLE_EVERY_S[r]
-    ks = ms.sample_frames(n, spans, fps=fps, moving_every_s=every, still_every_s=every)
-    pl = {"n": n, "ks": ks, "spans": spans, "checks": checks,
-          "state_usable": checks["camera_windows_match_state"]}
+    sample_spans, quiet = spans, None
+    if not (kind != "none" and checks["camera_windows_match_state"]) and ep.get("signals"):
+        # no arm state to find still spans in: the instant every moving signal falls quiet, and the instant it moves
+        # again, are sent as an arm's still span would give them (label/signals.py quiet_spans), never as a claim
+        from label import signals as sg
+        quiet = sg.quiet_spans({k: np.asarray(v)[:n] for k, v in ep["signals"].items()},
+                               int(round(ms.MIN_STILL_S * fps)))
+        sample_spans = quiet
+    ks = ms.sample_frames(n, sample_spans, fps=fps, moving_every_s=every, still_every_s=every)
+    zero = ep["context"].get("clock_zero_s")
+    if zero is not None and ep.get("times") is not None:
+        # a camera that started before the episode's clock (kept for an episode labelled already, board/clips.py
+        # reanchor) is main: nothing before the clock's start is sampled, and its first frame at the start is
+        before = [k for k in range(n) if frame_time(ep, k) < -0.5 / fps]
+        if before and len(before) < n:
+            ks = sorted({k for k in ks if k > before[-1]} | {before[-1] + 1})
+    if kind != "none" and checks["camera_windows_match_state"] and (sa, sb) != (0, T):
+        # a state that covers part of the episode: its first and last frame are instants too, so the recorded motion
+        # covers all of it and stops there (_motion_table)
+        ks = sorted(set(ks) | {sa, sb - 1})
+    pl = {"n": n, "ks": ks, "spans": spans, "checks": checks, "state_span": (sa, sb),
+          "state_usable": checks["camera_windows_match_state"], "touch": touch_verdicts(ep, n)}
+    if quiet is not None:
+        pl["quiet_spans"] = quiet
     pl["contact"] = contact_instants(ep, pl)
     return pl
 
@@ -279,13 +405,15 @@ def contact_views(ep: dict, pl: dict) -> list[tuple[int, list[str]]]:
             rng = float(np.nanmax(v) - np.nanmin(v))
             if rng > 1e-6 and abs(float(v[k] - v[a])) / rng >= CONTACT_MIN_CHANGE:
                 who.append(g)
-        vs = [mounted[g] for g in who if g < len(mounted)] if len(mounted) > 1 else mounted
+        mapped = actor_views(ep)
+        vs = [mapped[g] for g in who if g < len(mapped) and mapped[g] is not None]
         out.append((k, (["exo"] if "exo" in views(ep) else []) + (vs or mounted)))
     return out
 
 
 def actors(ep: dict) -> list[str]:
-    """Names of the arms or grippers in state order (7 values each): left then right, or the one.
+    """Unique names of the native seven value groups in state order, using each group's recorded claims.
+    Only an old context without native group metadata retains the legacy left then right convention.
     On a person (ego), the actors are their own two hands."""
     if rig(ep) == "ego_head":
         return ["left", "right"]
@@ -293,20 +421,81 @@ def actors(ep: dict) -> list[str]:
         # video only: the actors are the mounted cameras' own, or both when no single mounted camera names one
         mounted = [v for v in views(ep) if v in MOUNTED]
         return [mounted[0]] if len(mounted) == 1 else ["left", "right"]
-    if ep["state"].shape[1] == 14:
+    ctx = ep["context"]
+    count = ep["state"].shape[1] // 7
+    identities = ctx.get("state_identities")
+    noun = "gripper" if rig(ep) == "handheld_gripper" else "arm"
+    if isinstance(identities, list) and len(identities) == count and all(isinstance(i, dict) for i in identities):
+        if count > 1 or any(i.get("status") != "absent" for i in identities):
+            from prepare.formats import state_contract_actors
+            contract = state_contract_actors(ctx, count)
+            sides = [i.get("side") if i.get("status") == "known" else
+                     contract[g] if contract and i.get("status") == "absent" else None
+                     for g, i in enumerate(identities)]
+            return [side if side and sides.count(side) == 1 else
+                    f"{side} (recorded group {g + 1})" if side else
+                    f"recorded {noun}" + (f" {g + 1}" if count > 1 else "") + " (side unknown)"
+                    for g, side in enumerate(sides)]
+    if (ctx.get("state_identity") or {}).get("status") == "conflict":
+        return [f"recorded {noun} (side unknown)"]
+    recorded = ep["context"].get("state_actors")
+    if isinstance(recorded, list) and len(recorded) == count \
+            and all(isinstance(name, str) and name for name in recorded) and len(set(recorded)) == count:
+        return recorded
+    if count == 2:
         return ["left", "right"]
-    # the one arm or gripper is named by its own mounted camera, never by an extra camera that sorts after it
+    from prepare.formats import recorded_state_side
+    source = ctx.get("source") or {}
+    side = ctx.get("state_side") if "state_side" in ctx else recorded_state_side(
+        source.get("state") if source.get("format") == "hdf5" else None)
+    if side in MOUNTED:
+        return [side]
+    # A unique mounted view names the one actor. Two mounted views establish no side for a single state stream.
     mounted = [v for v in views(ep) if v in MOUNTED]
-    return [cam_name(ep, (mounted or views(ep)[:1])[-1])]
+    if len(mounted) == 1:
+        return [cam_name(ep, mounted[0])]
+    return [f"recorded {noun} (side unknown)"]
 
 
-def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=()):
+def actor_views(ep: dict) -> list[str | None]:
+    """Mounted view in recorded group order, with no wrist assigned to unknown or duplicate side claims."""
+    names = actors(ep)
+    vs = views(ep)
+    if len(names) == 2:
+        return [name if name in MOUNTED and name in vs else None for name in names]
+    if state_kind(ep) != "none" and (ep["context"].get("state_identity") or {}).get("status") == "conflict":
+        return [None]
+    mounted = [v for v in vs if v in MOUNTED]
+    name = names[0]
+    if name in MOUNTED:
+        return [name if name in mounted else None]
+    return [mounted[0] if len(mounted) == 1 and name == cam_name(ep, mounted[0]) else None]
+
+
+def _decode_error(e: Exception) -> bool:
+    """Whether e is the decoder failing on a file that is there (PyAV's errors, the frame reader's own): a fault of the
+    recording, which costs only the frames it hits. A file that is missing or cannot be opened (OSError, including
+    PyAV's FileNotFoundError and PermissionError) is a fault on our side and is never one of these."""
+    import av
+    return isinstance(e, (av.error.FFmpegError, mf.FrameError)) and not isinstance(e, OSError)
+
+
+def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail_ks=(), failed: set | None = None,
+                 damaged: set | None = None):
     """Frames for anchor indices ks. A camera paired to the anchor by real time (kmap) is decoded at
     its own frame nearest each anchor frame; results are keyed by the anchor index. With widths, a frame wider
-    than the widest of them is kept full size only at detail_ks, and otherwise only at those widths."""
+    than the widest of them is kept full size only at detail_ks, and otherwise only at those widths.
+
+    A camera never fails its episode over its own data. It may have fewer frames than the anchor (a camera that stopped
+    first), or its file may end before its own last frame (an upload's every camera one frame short), and then the
+    instants after its last frame have no frame. Its file may not decode, or be damaged partway, and then each instant
+    is decoded on its own, so only the instants it cannot decode lose its frame; those go into failed, when given, and
+    those whose frame the decoder marks as damaged (label/frames.py DamagedFrame) into damaged too. A missing file
+    still raises (_decode_error)."""
     s = ep["sources"][v]
     km = ep["kmap"].get(v)
     own = [int(km[k]) for k in ks] if km is not None else list(ks)
+    mine = [j for j in own if j < int(s["n_frames"])]      # the instants past the camera's last frame have none
     pts = ep["times"].get(f"{v}_pts") if ep.get("times") is not None else None
     keep = None
     if widths:
@@ -314,29 +503,251 @@ def _decode_view(ep: dict, v: str, ks: list[int], gate=None, widths=None, detail
         top = max(widths)
         keep = lambda j, im: im if (j in full or im.width <= top) else mf.Shrunk(im, widths)
 
-    def run():
-        return mf.extract_frames(s["packed"], s["base_s"], int(s["n_frames"]), own, pts=pts, fps=ep_fps(ep), keep=keep)
-    if gate is not None:
+    def run(js):
+        def go():
+            return mf.extract_frames(s["packed"], s["base_s"], int(s["n_frames"]), js, pts=pts, fps=ep_fps(ep),
+                                     keep=keep, tail_ok=True)
+        if gate is None:
+            return go()
         with gate:
-            got = run()
-    else:
-        got = run()
-    return {k: got[j] for k, j in zip(ks, own)}
+            return go()
+    try:
+        got = run(mine)
+    except Exception as e:
+        if not _decode_error(e):
+            raise
+        got, bad, hurt = {}, set(), set()
+        for j in sorted(set(mine)):
+            try:
+                got.update(run([j]))
+            except Exception as e1:
+                if not _decode_error(e1):
+                    raise
+                bad.add(j)
+                if isinstance(e1, mf.DamagedFrame):
+                    hurt.add(j)
+        if failed is not None:
+            failed.update(k for k, j in zip(ks, own) if j in bad)
+        if damaged is not None:
+            damaged.update(k for k, j in zip(ks, own) if j in hurt)
+    held = placeholder_instants(ep, ks).get(v, set())
+    if failed is not None:
+        failed.update(held)
+    if damaged is not None:
+        damaged.update(held)
+    return {k: got[j] for k, j in zip(ks, own) if j in got and k not in held}
+
+
+class _CaptureSearch:
+    """Nearest remaining capture by time, with earlier indices winning ties. Removed failures are skipped through
+    compressed successor and predecessor links, so each missing sample cannot walk the same failed stretch again.
+    Captures and equal-time group starts are indexed once; each unsuccessful decode removes its index once."""
+
+    def __init__(self, captures):
+        self.captures = np.asarray(captures)
+        self.order = np.argsort(self.captures, kind="stable")
+        self.times = self.captures[self.order]
+        self.starts = np.searchsorted(self.times, self.times)
+        self.positions = np.empty(len(self.order), dtype=int)
+        self.positions[self.order] = np.arange(len(self.order))
+        self.after = list(range(len(self.order) + 1))
+        self.before = list(range(len(self.order) + 1))
+
+    @staticmethod
+    def _find(links, i):
+        while links[i] != i:
+            links[i] = links[links[i]]
+            i = links[i]
+        return i
+
+    def discard(self, k):
+        i = int(self.positions[k])
+        self.after[i] = self._find(self.after, i + 1)
+        self.before[i + 1] = self._find(self.before, i)
+
+    def nearest(self, k):
+        target = self.captures[k]
+        bound = int(np.searchsorted(self.times, target))
+        right = self._find(self.after, bound)
+        left = self._find(self.before, bound) - 1
+        # A predecessor points to the last surviving index of its time group. Choose the group's first survivor,
+        # since stable sorting makes it the earliest original index, including ties across two distinct times.
+        left = self._find(self.after, int(self.starts[left])) if left >= 0 else -1
+        candidates = [i for i in (left, right) if 0 <= i < len(self.order)]
+        if not candidates:
+            return None
+        i = min(candidates, key=lambda i: (abs(self.times[i] - target), int(self.order[i])))
+        return int(self.order[i])
 
 
 def frames(ep: dict, pl: dict, gate=None, widths=None, detail_ks=()) -> dict:
-    """{view: {k: PIL image}} for every planned k, decoded exactly (raises otherwise). With widths (the cell widths
-    a request can be built at), frames outside detail_ks are kept only at those widths (label/frames.py Shrunk)."""
+    """{view: {k: PIL image}} for every planned k a camera has a frame at. With widths (the cell widths a request can
+    be built at), frames outside detail_ks are kept only at those widths (label/frames.py Shrunk).
+
+    An instant no camera has a frame at is named and replaced by a nearby readable frame at its own time. When the
+    episode's last instants are past every
+    camera's last frame (an upload whose every camera's file ends a frame before the episode does), the last frame any
+    camera has takes their place, so the last detail view is the end of the footage (ep["footage_end"]). The episode
+    keeps what it found for the prompt and the request: ep["no_frame"], the instants each camera has no frame at,
+    which recording_at then reports as not recording, so every grid and view leaves it out there; ep["decode_failed"],
+    the instants inside a camera's own recording (_in_span) its file could not be decoded at, before its last frame
+    or, for a file none of whose frames decodes, all of them (_coverage_note, decode_failures). A frame the decoder
+    marks as damaged and a placeholder frame (placeholder_instants) did not decode, wherever they are in the file, so
+    the model is never shown either as footage. Raises only when no camera has any frame."""
     vs = views(ep)
+    failed, damaged = {v: set() for v in vs}, {v: set() for v in vs}
     with ThreadPoolExecutor(max_workers=len(vs)) as ex:
-        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks) for v in vs}
-        return {v: f.result() for v, f in futs.items()}
+        futs = {v: ex.submit(_decode_view, ep, v, pl["ks"], gate, widths, detail_ks, failed[v], damaged[v])
+                for v in vs}
+        got = {v: f.result() for v, f in futs.items()}
+    for v, hit in placeholder_instants(ep, pl["ks"]).items():
+        if v in got:
+            for k in hit:
+                got[v].pop(k, None)
+            failed[v] |= hit
+            damaged[v] |= hit
+    ks = sorted(set(pl["ks"]))
+    # an instant some camera can show: decoded there and inside its own recording (a camera paired by time that was
+    # not recording has only its nearest frame, from another time, which is never shown)
+    keep = [k for k in ks if any(k in got[v] and _in_span(ep, v, k) for v in vs)]
+    unavailable = [k for k in ks if k not in keep]
+    ep["unavailable_instants"] = unavailable
+    ep["fallback_instants"] = {}
+
+    def usable(k):
+        more = {v: _decode_view(ep, v, [k], gate, widths, detail_ks, failed[v], damaged[v])
+                if _in_span(ep, v, k) else {} for v in vs}
+        for v, hit in placeholder_instants(ep, [k]).items():
+            more.get(v, {}).pop(k, None)
+            failed[v] |= hit
+            damaged[v] |= hit
+        for v in vs:
+            got[v].update(more[v])
+        return any(k in more[v] and _in_span(ep, v, k) for v in vs)
+
+    # The sampling schedule can land entirely on damaged rows. Search the episode's real frame indices before
+    # concluding that it has no footage. Keep unknown and usable captures in a nearest-time index; every known
+    # failure leaves it once, so later missing targets skip whole damaged stretches.
+    if unavailable:
+        search = _CaptureSearch(np.fromiter((frame_time(ep, k) for k in range(pl["n"])), dtype=float))
+        for k in unavailable:
+            search.discard(k)
+    kept = set(keep)
+    for missing in unavailable:
+        while (k := search.nearest(missing)) is not None:
+            if k in kept or usable(k):
+                kept.add(k)
+                ep["fallback_instants"][missing] = k
+                break
+            search.discard(k)
+        if not kept:
+            break
+    keep = sorted(kept)
+    if not keep:
+        raise mf.FrameError(f"{ep.get('dir', '?')}: no camera has a decodable frame")
+    ep.pop("footage_end", None)
+    if unavailable:
+        past = [k for k in ks if k > keep[-1] and not any(k in damaged[v] for v in vs)]
+        if past:
+            # the frames before the first instant past every camera's end, back to the last instant kept (decoded
+            # again at full size, for the detail view): the latest any camera has takes the end's place
+            for k in range(min(past) - 1, keep[-1] - 1, -1):
+                more = {v: _decode_view(ep, v, [k], gate) for v in vs}
+                for v in placeholder_instants(ep, [k]):
+                    more.get(v, {}).pop(k, None)
+                if any(k in more[v] and _in_span(ep, v, k) for v in vs):
+                    for v in vs:
+                        got[v].update(more[v])
+                    keep = sorted(set(keep) | {k})
+                    ep["footage_end"] = k
+                    break
+        pl["ks"] = keep
+        if pl.get("contact"):
+            pl["contact"] = [k for k in pl["contact"] if k in keep]
+        # Replacement grid cells stay small; only the new first and last detail views need their native pixels.
+        if widths:
+            for k in (keep[0], keep[-1]):
+                if k not in detail_ks:
+                    for v in vs:
+                        if k in got[v]:
+                            got[v].update(_decode_view(ep, v, [k], gate))
+    ep["no_frame"] = {v: {k for k in keep if k not in got[v]} for v in vs if any(k not in got[v] for k in keep)}
+    # a damaged stretch is an instant the camera could not decode before its last frame (the instants after it are
+    # where its file ended), or a damaged or placeholder frame anywhere; a camera with no frame at all that failed to
+    # decode does not decode anywhere. Only an instant inside the camera's own recording counts: a camera paired by
+    # time that was not recording there has only its nearest frame, from another time, so the instant is where its
+    # video starts or ends (_coverage_note), even when that frame does not decode. It is recorded whether or not
+    # another camera shows the instant, so an instant that left the request is still flagged
+    bad = {v: sorted(k for k in failed[v] if _in_span(ep, v, k) and (not got[v] or k < max(got[v]) or k in damaged[v]))
+           for v in vs}
+    ep["decode_failed"] = {v: ks_ for v, ks_ in bad.items() if ks_}
+    ep["undecodable"] = {v for v in ep["decode_failed"] if not got[v]}
+    return got
 
 
-def recording_at(ep: dict, v: str, k: int) -> bool:
-    """Whether camera v was recording at anchor instant k (within PAIRED_SPAN_SLACK_S of its own first and last frame).
-    A camera paired to the anchor by real time (kmap) that started later or stopped earlier was not: its nearest frame
-    there is its first or last, taken at another time, so it is not shown under this instant's time."""
+def frame_runs(ks) -> list[list[int]]:
+    """Frame indices as runs [[first, last], ...] of consecutive ones, how context.json keeps a set of frames short
+    (placeholder_frames)."""
+    ks = np.unique(np.asarray(list(ks), dtype=np.int64))
+    if not len(ks):
+        return []
+    cuts = np.flatnonzero(np.diff(ks) > 1) + 1
+    return [[int(r[0]), int(r[-1])] for r in np.split(ks, cuts)]
+
+
+def runs_within(runs, a: int, b: int) -> list[list[int]]:
+    """Runs of frames (frame_runs) cut to the frames [a, b) and counted from a, for an episode cut to those frames (a
+    part of a long recording, label/pieces.py; an episode trimmed to the minutes cap, prepare/formats.py)."""
+    out = []
+    for x, y in runs:
+        x, y = max(int(x), a), min(int(y), b - 1)
+        if x <= y:
+            out.append([x - a, y - a])
+    return out
+
+
+def placeholder_instants(ep: dict, ks) -> dict:
+    """{view: the instants of ks at which the camera's frame is a placeholder}: a black frame the reader wrote where an
+    image did not decode, so a camera of images one per table row keeps the rows on their frames (context.json
+    placeholder_frames, runs of anchor frames, prepare/formats.py placeholder_frames). It is no footage, and frames
+    treats it as a frame that did not decode."""
+    out = {}
+    for v, runs in (ep["context"].get("placeholder_frames") or {}).items():
+        hit = {int(k) for k in ks if any(x <= int(k) <= y for x, y in runs)}
+        if hit:
+            out[v] = hit
+    return out
+
+
+def decode_failures(ep: dict) -> list[dict]:
+    """The stretches each camera's file could not be decoded at (frames), for the run's record and the board
+    (board/build.py reader_issues): [{"camera", "t0_s", "t1_s", "what"}], on the recording's clock (a part of a long
+    recording adds where it starts, label/pieces.py). Labelling never writes into the episode folder."""
+    from board.clips import camera_label
+    off = float((ep["context"].get("piece") or {}).get("t0_s") or 0.0)
+    out = []
+    for v, ks in (ep.get("decode_failed") or {}).items():
+        # a placeholder is flagged by the reader already, over its whole stretch (frames_not_decodable)
+        held = placeholder_instants(ep, ks).get(v, set())
+        ks = [k for k in ks if k not in held]
+        if not ks:
+            continue
+        t0, t1 = round(frame_time(ep, min(ks)) + off, 3), round(frame_time(ep, max(ks)) + off, 3)
+        name = camera_label(v, ep["context"])
+        if v in (ep.get("undecodable") or ()):
+            what = f"The {name} video could not be decoded, so the labels have no frame of it."
+        else:
+            when = f"at {seconds(t0)}" if t0 == t1 else f"from {seconds(t0)} to {seconds(t1)}"
+            what = f"The {name} video could not be decoded {when}, so the labels have no frame of it there."
+        out.append({"camera": v, "t0_s": t0, "t1_s": t1, "what": what})
+    return out
+
+
+def _in_span(ep: dict, v: str, k: int) -> bool:
+    """Whether anchor instant k is within camera v's own recording (within PAIRED_SPAN_SLACK_S of its first and last
+    frame). A camera paired to the anchor by real time (kmap) that started later or stopped earlier was not recording
+    there: its nearest frame is its first or last, taken at another time, so it is not shown under this instant's
+    time."""
     km = (ep.get("kmap") or {}).get(v)
     t = ep["times"] if ep.get("times") is not None else None
     if km is None or t is None or v not in t:
@@ -346,6 +757,14 @@ def recording_at(ep: dict, v: str, k: int) -> bool:
     # the anchor's (ABC-130k's wrists, 0.034 s) is shown as usual
     tk = frame_time(ep, k)
     return float(t[v][0]) - PAIRED_SPAN_SLACK_S <= tk <= float(t[v][-1]) + PAIRED_SPAN_SLACK_S
+
+
+def recording_at(ep: dict, v: str, k: int) -> bool:
+    """Whether camera v has a frame to show at anchor instant k: inside its own recording (_in_span), and decoded
+    there (frames, ep["no_frame"])."""
+    if k in (ep.get("no_frame") or {}).get(v, ()):
+        return False
+    return _in_span(ep, v, k)
 
 
 def timesteps(ep: dict, pl: dict, imgs: dict, cell_w: int, quality: int = 90):
@@ -385,6 +804,186 @@ def fullres_stack(ep: dict, imgs: dict, k: int, label: str, t_s: float, only: li
     buf = io.BytesIO()
     g.save(buf, format="JPEG", quality=90)
     return buf.getvalue()
+
+
+DEPTH_SCALE_INSTANTS = 12   # sampled instants whose depth readings set a camera's colour scale
+
+
+def _depth_frames(ep: dict, pl: dict) -> dict:
+    """{view: {k: depth array}} at the detail instants (first, contact, last), and ep["depth_range"] {view: (near, far)}
+    from those and up to DEPTH_SCALE_INSTANTS sampled instants spread over the episode."""
+    from label import depth as dp
+    d = ep.get("depth") or {}
+    if not d:
+        return {}
+    ks = pl["ks"]
+    detail = sorted({ks[0], ks[-1], *(pl.get("contact") or [])})
+    spread = [ks[int(i)] for i in np.linspace(0, len(ks) - 1, min(DEPTH_SCALE_INSTANTS, len(ks)))]
+    out, rng = {}, {}
+    for v in order_views(d):
+        got = dp.at_anchor(ep, d, v, sorted(set(detail) | set(spread)))
+        # the upload's range for depth with no stated unit (prepare/formats.py measure_depth_ranges), else the
+        # range of this episode's readings
+        r = tuple(d[v]["range"]) if d[v].get("range") else dp.scale_range(got.values())
+        if r is None:
+            continue
+        rng[v] = r
+        out[v] = {k: got[k] for k in detail if k in got}
+    ep["depth_range"] = rng
+    return out
+
+
+def depth_stack(ep: dict, depth_at: dict, vs: list[str], k: int, label: str) -> bytes:
+    """The depth pictures of cameras vs at instant k, coloured on each camera's episode scale (label/depth.py), at
+    detail size, stacked top to bottom with a name strip that gives the scale."""
+    from PIL import Image, ImageDraw
+    from label import depth as dp
+    ims = []
+    for v in vs:
+        im = dp.picture(depth_at[v][k], ep["depth"][v], ep["depth_range"].get(v))
+        if im.width > DETAIL_MAX_W:
+            im = im.resize(detail_size(im.width, im.height), Image.NEAREST)
+        ims.append((v, im))
+    w = max(im.width for _, im in ims)
+    strip = 26
+    g = Image.new("RGB", (w, sum(im.height + strip for _, im in ims)), (18, 18, 20))
+    dr = ImageDraw.Draw(g)
+    y = 0
+    for v, im in ims:
+        dr.text((6, y + 5), f"{cam_name(ep, v)} depth   {label}   t={frame_time(ep, k):.2f}s", fill=(255, 220, 0))
+        g.paste(im, (0, y + strip))
+        y += im.height + strip
+    return dp.to_jpeg(g)
+
+
+def _contact_views(ep: dict, c: dict) -> tuple[list[str], list[str], list[str]]:
+    """(the camera the strips show, the cameras the strongest moment shows, those of them with depth). The strips show
+    the camera closest to the touch: the head camera on a person, the camera on the contact's own arm or gripper when
+    there is one, else the scene camera. The strongest moment adds the scene camera, so where the object is stays
+    clear."""
+    vs = views(ep)
+    if rig(ep) == "ego_head":
+        near = vs[:1]
+    else:
+        own = [v for v in vs if v in MOUNTED and c.get("hand") == v]
+        mounted = [v for v in vs if v in MOUNTED]
+        near = own or (mounted[:1] if len(mounted) == 1 and c.get("hand") is None else []) or vs[:1]
+    peak = near + [v for v in vs[:1] if v not in near]
+    return near, peak, [v for v in peak if v in (ep.get("depth") or {})]
+
+
+def _frame_at(ep: dict, t_s: float) -> int:
+    n = int(len(ep["state"]))
+    ts = np.array([frame_time(ep, k) for k in range(n)])
+    return int(np.clip(np.argmin(np.abs(ts - t_s)), 0, n - 1))
+
+
+def contact_image(ep: dict, c: dict, gate=None) -> tuple[bytes, dict] | None:
+    """(picture, strips) of one contact: for each camera shown (_contact_views) five frames around the signal's begin
+    (STRIP_OFFSETS_S) and three around its end (END_OFFSETS_S), each strip only when the contact has it in the clip
+    (contact_strips), then the strongest moment with the cameras' depth and
+    the touch sensor's maps (the contact's 2-D signals, bright away from rest on the upload's scale). strips gives each
+    strip's frame times ({"begin": [...], "end": [...]}), which checks/contacts.py reads the model's frame numbers
+    against. None when its frames cannot be decoded."""
+    from PIL import Image, ImageDraw
+    from label import depth as dp
+    vs, pvs, dvs = _contact_views(ep, c)
+    t_end = frame_time(ep, len(ep["state"]) - 1)
+    strips = []
+    begin, end = contact_strips(c)
+    # a contact placed from both starts says so on its picture: its begin and end are the placement's, not recorded
+    by = ", " + contact_placement(c) if c.get("aligned_by") else ""
+    if begin:
+        strips.append((f"touch begins by the recording{by}",
+                       [min(max(c["start_s"] + o, 0.0), t_end) for o in STRIP_OFFSETS_S]))
+    if end:
+        strips.append((f"touch ends by the recording{by}",
+                       [min(max(c["end_s"] + o, 0.0), t_end) for o in END_OFFSETS_S]))
+    kp = _frame_at(ep, c["peak_s"])
+    ks = sorted({_frame_at(ep, t) for _, ts in strips for t in ts} | {kp})
+    try:
+        got = {v: _decode_view(ep, v, ks if v in vs else [kp], gate) for v in dict.fromkeys(vs + pvs)}
+    except Exception:
+        return None
+    font = mf._grid_font(16)
+    pad, strip_h = 8, 24
+    blocks = []                                   # (title, [(label, PIL)] rows)
+    for title, ts in strips:
+        rows = []
+        for v in vs:
+            cells = []
+            for i, t in enumerate(ts):
+                k = _frame_at(ep, t)
+                if not recording_at(ep, v, k) or k not in got[v]:
+                    continue
+                im = got[v][k]
+                im = im.resize((STRIP_CELL_W, int(round(im.height * STRIP_CELL_W / im.width))))
+                cells.append((f"{i + 1}   {frame_time(ep, k):.2f}s", im))
+            rows.append((cam_name(ep, v), cells))
+        blocks.append((title, rows))
+    peak = []
+    for v in pvs:
+        im = got[v].get(kp)
+        if im is None or not recording_at(ep, v, kp):      # past the camera's last frame, or where it does not decode
+            continue
+        peak.append((f"{cam_name(ep, v)}   {frame_time(ep, kp):.2f}s",
+                     im.resize((PEAK_CELL_W, int(round(im.height * PEAK_CELL_W / im.width))))))
+    if dvs:
+        d = ep.get("depth") or {}
+        rng = ep.get("depth_range") or {}
+        for v in dvs:
+            fr = dp.at_anchor(ep, d, v, [kp]).get(kp)
+            if fr is not None:
+                im = dp.picture(fr, d[v], rng.get(v))
+                size = (PEAK_CELL_W, int(round(im.height * PEAK_CELL_W / im.width)))
+                peak.append((f"{cam_name(ep, v)} depth", im.resize(size, Image.NEAREST)))
+    for nm in c["signals"]:
+        tile = _map_tile(ep, nm, kp)
+        if tile is not None:
+            peak.append((nm, tile))
+    blocks.append(("strongest", [("", peak)]))
+    widths = [sum(im.width for _, im in cells) + pad * max(len(cells) - 1, 0)
+              for _, rows in blocks for _, cells in rows]
+    w = max(widths + [640]) + 2 * pad
+    h = sum(strip_h + sum(strip_h + max((im.height for _, im in cells), default=0) for _, cells in rows)
+            for _, rows in blocks) + strip_h
+    g = Image.new("RGB", (w, h), (18, 18, 20))
+    dr = ImageDraw.Draw(g)
+    dr.text((pad, 4), f"contact {c['id']}   {c.get('hand') or 'hand not named'}   {', '.join(c['signals'])}   "
+                      f"{c['start_s']:.2f}-{c['end_s']:.2f}s", font=font, fill=(255, 220, 0))
+    y = strip_h
+    for title, rows in blocks:
+        dr.text((pad, y + 4), title, font=font, fill=(255, 220, 0))
+        y += strip_h
+        for cam, cells in rows:
+            x = pad
+            for lab, im in cells:
+                dr.text((x + 2, y + 4), (cam + "   " if cam and x == pad else "") + lab, font=font,
+                        fill=(230, 230, 230))
+                g.paste(im, (x, y + strip_h))
+                x += im.width + pad
+            y += strip_h + max((im.height for _, im in cells), default=0)
+    times = {("begin" if "begins" in title else "end"): [round(frame_time(ep, _frame_at(ep, t)), 3) for t in ts]
+             for title, ts in strips}
+    return mf.to_jpeg(g, None, 88), times
+
+
+def _map_tile(ep: dict, name: str, k: int):
+    """A 2-D touch signal at frame k as grey cells, bright away from rest on the upload's scale; None for a signal that
+    is not a map."""
+    from PIL import Image
+    from label import signals as sg
+    m = (ep.get("signal_meta") or {}).get(name) or {}
+    shape = m.get("shape") or []
+    if len(shape) != 2 or name not in (ep.get("signals") or {}):
+        return None
+    a = ep["signals"][name]
+    d, swing = sg.distance_at(a, min(k, len(a) - 1), m.get("rest"), m.get("swing"))
+    row = d.reshape(int(shape[0]), int(shape[1]))
+    g = np.where(np.isfinite(row), np.clip(row / swing, 0, 1) if swing > 0 else 0.0, 0.0)
+    cell = max(1, MAP_TILE_PX // max(int(shape[0]), int(shape[1])))
+    return Image.fromarray((g * 255).astype(np.uint8), "L").resize((int(shape[1]) * cell, int(shape[0]) * cell),
+                                                                    Image.NEAREST).convert("RGB")
 
 
 def _rig_nouns(r: str) -> dict:
@@ -428,10 +1027,12 @@ def _camera_facts(ep: dict, v: str) -> str:
             "the rest of the image moves whenever the gripper moves.")
 
 
-def camera_desc(ep: dict) -> str:
+def camera_desc(ep: dict, recorded: bool = True) -> str:
     vs, r = views(ep), rig(ep)
     n = _rig_nouns(r)
     cams = ep["context"].get("cameras") or {}
+    unknown_mount = {v for v in vs if cams.get(v, {}).get("mounting") == "unspecified"}
+    mounted = [v for v in vs if v in MOUNTED and v not in unknown_mount]
     res = sorted({f"{c.get('width')}x{c.get('height')}" for c in cams.values() if c.get("width")})
     rec = f" (recording {', '.join(res)} at {ep_fps(ep):g} fps)" if res else ""
     count = "There is exactly 1 camera; every grid row and every image strip is labelled with its name" \
@@ -439,8 +1040,7 @@ def camera_desc(ep: dict) -> str:
                               "with one of these names")
     s = (f"Cameras in this episode, as named in the dataset{rec}. {count}:\n"
          + "\n".join(_camera_line(ep, v) for v in vs) + "\n")
-    if not any(v not in MOUNTED for v in vs):
-        mounted = [v for v in vs if v in MOUNTED]
+    if not unknown_mount and not any(v not in MOUNTED for v in vs):
         s += (f"No camera in this episode is off the {n['actor'] if len(mounted) == 1 else n['actors']}: the "
               f"whole scene is seen only through {'that camera' if len(mounted) == 1 else 'those cameras'}, so "
               "reconstruct the layout and where things end up from what it shows.\n")
@@ -457,7 +1057,7 @@ def camera_desc(ep: dict) -> str:
               "pixels. If a stream's content contradicts its name (a mounted camera that shows a fixed view "
               f"or the reverse, two {n['actor']} streams swapped or identical, a black or frozen stream), "
               "describe what the view actually is and record it as a data issue.")
-    if r != "ego_head" and any(v in MOUNTED for v in vs):
+    if r != "ego_head" and mounted:
         s += (f" A mounted camera turns with its {n['actor']}, so where it looks changes through the episode: "
               "sometimes down onto the work, sometimes along or across it. Work out its direction at each instant "
               "from the frame itself (the perspective of the table or floor, which faces of an object are in view, "
@@ -468,7 +1068,12 @@ def camera_desc(ep: dict) -> str:
               "that fills a view looking along the table is a side, and only a view looking down on an object shows "
               "its top. So an object changed state only when views from comparable directions, or the camera that "
               "is not mounted, show the change, never because a mounted camera now sees it from elsewhere.")
-    if "left" in vs and "right" in vs:
+    if unknown_mount:
+        s += (" Camera labels identify views; they do not establish which arm owns a view. "
+              "Determine camera placement and arm identity from the pixels and explicit recorded identities. "
+              "Do not report a camera metadata mismatch merely because a side-named camera is fixed: "
+              "its mounting was not declared.")
+    elif "left" in vs and "right" in vs:
         s += (f" In the output, \"left\", \"right\" and \"both\" name the streams: an action is \"left\" when "
               "the left stream's own gripper makes the contact, \"right\" likewise, "
               f"\"both\" when the two act together. The other {n['actor']} often appears inside a view, and an "
@@ -476,13 +1081,14 @@ def camera_desc(ep: dict) -> str:
               "This naming is bookkeeping only; it does not settle whether the names are right. Whether each "
               "stream really sits on the side its name says is a separate question for the pixels: where the "
               f"other {n['actor']} and the scene appear in it once you have worked out from the frame how that camera "
-              "is turned at that instant, and which recorded motion its view follows.")
+              "is turned at that instant" + (", and which recorded motion its view follows." if recorded else "."))
     elif r == "ego_head":
         s += (" In the output, \"left\", \"right\" and \"both\" name the person's own left and right hands, "
               "as seen from their head. Which hand is which follows the person's body (the forearm it belongs to, "
               "the thumb side), not which half of the image it is in, because hands cross the midline and reach "
               "across.")
-    elif len([v for v in vs if v in MOUNTED]) == 1:
+    elif (state_kind(ep) != "none" and len(actors(ep)) == 1
+          and len([v for v in vs if v in MOUNTED]) == 1 and actor_views(ep)[0] is not None):
         s += f" In the output, the \"arm\" field always names the one {n['actor']}: \"{actors(ep)[0]}\"."
     return s
 
@@ -494,54 +1100,6 @@ def _detail_desc(native: tuple) -> str:
         return f"up to {DETAIL_MAX_W} px wide"
     dw, dh = detail_size(w, h)
     return f"the full {w}x{h}" if (dw, dh) == (w, h) else f"{dw}x{dh} (the recording is {w}x{h})"
-
-
-def sampling_desc(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple) -> str:
-    r, kind = rig(ep), state_kind(ep)
-    n = _rig_nouns(r)
-    names = ", ".join(cam_name(ep, v) for v in views(ep))
-    every = SAMPLE_EVERY_S[r]
-    s = (
-        f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
-        "bottom), COLUMNS are instants left to right, and each column is headed with its exact time in "
-        "seconds from the episode's first frame. Read each grid left to right and the grids in order. "
-        "The times are exact: use them, do not invent your own. Each grid cell is the camera frame "
-        f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's first and last instant are "
-        f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
-        "small detail (lettering, a display, fine alignment)."
-        + (" So are the instants just after a gripper's recorded value changes sharply, where something is "
-           "usually picked up or put down, from the scene camera and that gripper's own camera ("
-           + ", ".join(f"{frame_time(ep, k):.2f}" for k in pl.get("contact") or []) + " s): use them to read what "
-           "is held and how it is left. The value only chose where to look closer; what is held is read from "
-           "the frames." if pl.get("contact") else "")
-        + "\n"
-        f"Which instants you get: one every {every:g} s for the whole episode, plus its first and last "
-        "frame." + _coverage_note(ep, pl))
-    sig = _signals_table(ep, pl)
-    if kind == "none":
-        what = ("no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state")
-        return s + ((f"\nRECORDED STATE: none; this dataset records {what}, so the video is all there is."
-                     if not sig else f"\nRECORDED STATE: no {n['actor']} state in the layout our checks read.")
-                    + sig + BETWEEN_INSTANTS)
-    if not pl.get("state_usable", True):
-        return s + ("\nRECORDED STATE: not given. This episode's cameras do not cover the same frames "
-                    "as its recorded state, so the state cannot be aligned to the video." + BETWEEN_INSTANTS)
-    src = ("joint encoders" if kind == "joints" else
-           "recorded end-effector poses" if r == "teleop_arms" else "tracked gripper poses")
-    if pl["spans"]:
-        sp = ", ".join(f"{d['start_s']:.2f}-{d['end_s']:.2f}s" for d in describe_spans(ep, pl["spans"]))
-        s += (f"\nRECORDED STILL SPANS, from the dataset's {src}: {sp}. Over each span the recording says "
-              f"no {n['actor']} moved and none opened or closed. This is the recording's claim, not a "
-              f"fact: check it. {'An' if n['actor'][0] in 'aeiou' else 'A'} {n['actor']} that is really still "
-              "shows a steady view in its own camera"
-              + (" unless something that carries it moves, which the other recorded signals below may show; the "
-                 f"claim covers only the {n['actors']}" if sig else "")
-              + ". If the views show motion during a span, the recording is "
-              f"wrong there. If the views hold steady and the scene still changes, the {n['actors']} did not do it: "
-              "say what you see.")
-    else:
-        s += f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
-    return s + _motion_table(ep, pl) + sig + BETWEEN_INSTANTS
 
 
 def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
@@ -573,61 +1131,436 @@ def _cell_sizes(ep: dict, cell_w: int, cell_h: int) -> str:
 
 
 def _coverage_note(ep: dict, pl: dict) -> str:
-    """A camera that has no frame at some instants (recording_at): when it records, so its empty cells are read as
-    what they are."""
-    gaps = []
+    """A camera that has no frame at some instants (recording_at), said so its empty cells are read as what they are:
+    the instants before its video starts or after it ends (a camera paired by time that was not recording, _in_span,
+    or a camera whose file ends first, frames), each said the same way for both, and the instants its file could not be
+    decoded at (all of them for a file none of whose frames decodes). One camera can have more than one of these, and
+    each is said; the sentence after them speaks of one camera or of several by how many cameras they name. When every
+    camera's file ends before the episode does, the last instant is the last frame they have (frames,
+    ep["footage_end"]), which is said too."""
+    gaps, ended, broken, never = [], [], [], []
+    at = lambda ks: ", ".join(seconds(frame_time(ep, k)) for k in sorted(ks))
     for v in views(ep):
         if all(recording_at(ep, v, k) for k in pl["ks"]):
             continue
-        t = ep["times"][v]
-        gaps.append(f"{cam_name(ep, v)} has frames only from {float(t[0]):.2f} s to {float(t[-1]):.2f} s")
-    if not gaps:
-        return ""
-    s = "; ".join(gaps)
-    return (" " + s[0].upper() + s[1:] + ", so its cells are empty at the instants outside that time, and it is "
-            "left out of a detail view there.")
+        name = cam_name(ep, v)
+        if not all(_in_span(ep, v, k) for k in pl["ks"]):
+            t = ep["times"][v]
+            gaps.append(f"{name} has frames only from {seconds(t[0])} to {seconds(t[-1])}")
+        if v in (ep.get("undecodable") or ()):
+            never.append((name, f"{name}'s video could not be decoded at any instant"))
+            continue
+        # the instants of the request it could not decode (one no camera could show has left the request)
+        bad = set((ep.get("decode_failed") or {}).get(v) or ()) & set(pl["ks"])
+        out_of = [k for k in pl["ks"] if not recording_at(ep, v, k) and k not in bad]
+        t = (ep.get("times") or {}).get(v) if (ep.get("kmap") or {}).get(v) is not None else None
+        before = [k for k in out_of if t is not None and frame_time(ep, k) < float(t[0])]
+        after = [k for k in out_of if k not in before]
+        after = [k for k in after if _in_span(ep, v, k)]
+        if after:
+            ended.append((name, f"{name}'s video ends before the episode does, so it has no frame at {at(after)}"))
+        if bad:
+            broken.append((name, f"{name}'s video could not be decoded at {at(bad)}"))
+    out = ""
+    if gaps:
+        one = len(gaps) == 1
+        s = "; ".join(gaps)
+        out += (" " + s[0].upper() + s[1:] + f", so {'its' if one else 'their'} cells are empty at the instants "
+                f"outside that time, and {'it is' if one else 'they are'} left out of a detail view there.")
+    gone_tail = "{Its} cells at those times are empty, and {it} {is_} left out of a detail view there."
+    never_tail = "{Its} cells are all empty, and {it} {is_} left out of every detail view."
+    for parts, tail in ((ended + broken, gone_tail), (never, never_tail)):
+        if not parts:
+            continue
+        one = len({name for name, _ in parts}) == 1
+        words = {"its": "its" if one else "their", "Its": "Its" if one else "Their", "it": "it" if one else "they",
+                 "is_": "is" if one else "are"}
+        s = "; ".join(said for _, said in parts)
+        out += " " + s[0].upper() + s[1:] + ". " + tail.format(**words)
+    if ep.get("footage_end") is not None:
+        out += (" Every camera's video ends before the episode does, so the last instant is the last frame they have, "
+                f"at {seconds(frame_time(ep, ep['footage_end']))}.")
+    if ep.get("unavailable_instants"):
+        out += f" No camera could be decoded at the planned instants {at(ep['unavailable_instants'])}."
+        replacements = ep.get("fallback_instants") or {}
+        if replacements:
+            out += " The available replacement frames are shown at their own times: " + "; ".join(
+                f"{seconds(frame_time(ep, k))} for the unavailable instant {seconds(frame_time(ep, missing))}"
+                for missing, k in replacements.items()) + "."
+    return out
 
 
 def _num(x: float) -> str:
     return f"{float(x):.3g}"
 
 
+def _depth_note(ep: dict) -> str:
+    """Which cameras also record depth, and that each detail view is followed by their depth: what the input is, never
+    how to read it."""
+    d = ep.get("depth") or {}
+    if not d:
+        return ""
+    names = ", ".join(cam_name(ep, v) for v in order_views(d))
+    # a depth stream that stops before its camera has no reading at the instants past it (prepare/formats.py
+    # depth_kmap -1), where no depth view follows
+    gaps = [cam_name(ep, v) for v in order_views(d) if "km" in d[v] and (np.asarray(d[v]["km"]) < 0).any()]
+    clocks = ep["context"].get("camera_clock") or {}
+    depth_clocks = ep["context"].get("depth_camera_clock") or {}
+    assumed = bool(clocks or depth_clocks)
+    invalid = any(isinstance(note, dict) and note.get("clock_problem")
+                  for notes in (clocks, depth_clocks) for note in notes.values())
+    if invalid:
+        # A malformed side clock does not qualify depth paired only to a valid anchor and its own valid clock.
+        relevant = [clocks.get(anchor(ep)), *(clocks.get(v) for v in d), *depth_clocks.values()]
+        assumed = any(relevant)
+        invalid = any(isinstance(note, dict) and note.get("clock_problem") for note in relevant)
+    qualification = "".join(f" {cam_name(ep, v)} depth. {note['what']}" for v, note in depth_clocks.items()
+                            if v in d and isinstance(note, dict) and note.get("clock_problem"))
+    precision = (". Depth is paired using assumed presentation times. "
+                 + ("An unusable recorded clock does not establish exact capture instants." if invalid else
+                    "Shared timestamps do not establish exact capture instants.") + qualification) if assumed else " at that instant."
+    return (f"\nDEPTH: {names} {'records' if len(d) == 1 else 'record'} depth as well as colour. Each detail view is "
+            "followed by the depth from the same "
+            + ("camera's depth sensor" if len(d) == 1 else "cameras' depth sensors")
+            + precision
+            + (f" {', '.join(gaps)} {'has' if len(gaps) == 1 else 'have'} no depth for part of the episode; a detail "
+               "view there is followed by no depth." if gaps else ""))
+
+
+CONTACT_VIEWS_MAX = 8             # contacts shown per episode, the strongest first, at most one per CONTACT_EVERY_S
+STRIP_OFFSETS_S = (-0.3, -0.15, 0.0, 0.15, 0.3)   # the frames of the begin strip, around the signal's begin
+END_OFFSETS_S = (-0.15, 0.0, 0.15)                # the frames of the end strip: the begin strip pins the clock
+STRIP_CELL_W = 192
+PEAK_CELL_W = 288
+MAP_TILE_PX = 160
+
+
+def contact_strips(c: dict) -> tuple[bool, bool]:
+    """(begin, end): whether a contact's picture (contact_image) has a begin strip and an end strip, and so whether the
+    prompt describes each and asks for its frame (contacts_block). A contact already touching at the first frame
+    (from_start) has no begin in the clip, and one still touching at the last (to_end) no end: label/pieces.py
+    write_pieces sets them for every contact that crosses one of our cuts."""
+    return not c.get("from_start"), not c.get("to_end")
+
+
+def chosen_contacts(ep: dict, contacts: list[dict]) -> list[dict]:
+    """The contacts shown to the model: the strongest, at most CONTACT_VIEWS_MAX and one per CONTACT_EVERY_S of
+    footage, in time order."""
+    if not contacts:
+        return []
+    dur = frame_time(ep, len(ep["state"]) - 1) if len(ep["state"]) else 0.0
+    cap = min(CONTACT_VIEWS_MAX, max(1, int(round(dur / CONTACT_EVERY_S))))
+    best = sorted(contacts, key=lambda c: -float(c.get("peak_strength") or 0))[:cap]
+    return sorted(best, key=lambda c: c["start_s"])
+
+
+# a contact timed by a signal placed from both starts (label/contacts.py mark_aligned): its times are the placement's
+CONTACT_ASSUMED = (" (these times are placed from both starts, as the touch signal shares no clock with the cameras, "
+                   "so they are not recorded times)")
+
+
+def contact_placement(c: dict) -> str:
+    """Name the particular assumption a contact inherits, preserving existing common start wording."""
+    return placement_text(c.get("aligned_by"))
+
+
+def _contact_timing(c: dict) -> str:
+    by = c.get("aligned_by")
+    if by == ALIGNED_ASSUMED:
+        return CONTACT_ASSUMED
+    if by == ALIGNED_CAMERA:
+        return " (these times use the assumed camera presentation clock, not measured capture times)"
+    return f" (these times are {placement_text(by)}, not measured contact times)" if by else ""
+
+
+def _contact_line(c: dict) -> str:
+    hand = f"{c['hand']} hand" if c.get("hand") else "hand not named by the recording"
+    when = (f"{c['start_s']:.2f} s" + (" (already touching at the first frame)" if c.get("from_start") else "")
+            + f" to {c['end_s']:.2f} s" + (" (still touching at the last frame)" if c.get("to_end") else "")
+            + f", strongest at {c['peak_s']:.2f} s"
+            + _contact_timing(c))
+    where = []
+    for nm, r in (c.get("regions") or {}).items():
+        if nm == "active_signals":
+            continue
+        where.append(f"{nm}: {r['cells']} cells, rows {r['rows'][0]}-{r['rows'][1]} and columns "
+                     f"{r['columns'][0]}-{r['columns'][1]} of {r['of'][0]} x {r['of'][1]}")
+    act = (c.get("regions") or {}).get("active_signals")
+    if act:
+        where.append("active: " + ", ".join(act))
+    return (f"  {c['id']}: {hand}, from {', '.join(c['signals'])}, {when}"
+            + (f"; at its strongest {'; '.join(where)}" if where else "")
+            + (f"; it weakens and comes back at {', '.join(f'{x:.2f}' for x in c['dips_s'])} s"
+               if c.get("dips_s") else ""))
+
+
+def touch_verdicts(ep: dict, n: int) -> frozenset:
+    """The names of the episode's signals that measure touch, the one rule labelling uses for it (the contacts shown
+    and the per-instant readout), judged once per plan (plan()["touch"]): one judgement of a 16 x 16 glove takes over a
+    second, and judging again at every presence test cost a 450 s episode about two minutes per request. A part of a
+    long recording carries the whole recording's verdict in its signal entry ("touch", label/pieces.py write_pieces),
+    because touch is judged once, on the whole recording: a part that falls inside a long press has no rest of its
+    own, and its slice alone would not read as touch. Any other signal is judged by label/signals.py is_touch (its name
+    says so and its numbers behave like touch, on the upload's scale) over its first n frames, the frames the prompt
+    covers (plan()["n"])."""
+    from label import signals as sg
+    from label.dictionary_context import field_interpretation
+    meta = ep.get("signal_meta") or {}
+    out = set()
+    for name, a in (ep.get("signals") or {}).items():
+        m = meta.get(name) or {}
+        role = field_interpretation(ep["context"], name).get("role")
+        permission = sg.touch_cache_permission(name, role, m.get("touch_role"))
+        if permission is False:
+            continue
+        # read as stored (a float32 skin is never copied whole as float64, label/signals.py CHUNK_VALUES)
+        stored = "touch" in m and (permission is None or m.get("touch_role") == "touch")
+        if m["touch"] if stored else sg.is_touch(name, a[:n], m.get("rest"), m.get("swing"), role=role):
+            out.add(name)
+    return frozenset(out)
+
+
+def _touch(ep: dict, pl: dict) -> frozenset:
+    """plan()["touch"], or for a plan made by hand without it, the verdicts made now."""
+    if "touch" not in pl:
+        return touch_verdicts(ep, pl["n"])
+    from label import signals as sg
+    from label.dictionary_context import field_interpretation
+    return frozenset(name for name in pl["touch"] if sg.touch_cache_permission(
+        name, field_interpretation(ep["context"], name).get("role"),
+        (ep.get("signal_meta") or {}).get(name, {}).get("touch_role")) is not False)
+
+
+def touch_contacts(ep: dict, pl: dict, contacts) -> list[dict]:
+    """The contacts timed by at least one touch signal of the episode (touch_verdicts). A context.json prepared before
+    is_touch can hold a contact found from a signal that only behaved like touch (an intervention flag, odometry); it
+    is not shown."""
+    touch = _touch(ep, pl)
+    return [c for c in contacts or [] if any(nm in touch for nm in c.get("signals") or [])]
+
+
+def contacts_block(ep: dict, pl: dict) -> str:
+    """The episode's contacts as the recording gives them (label/contacts.py), what each contact picture shows, and
+    what to return for them. Empty when no contact is timed by a touch signal (touch_contacts)."""
+    shown = touch_contacts(ep, pl, ep.get("contacts_shown"))
+    if not shown:
+        return ""
+    rest = [c for c in touch_contacts(ep, pl, ep.get("contacts")) if c["id"] not in {x["id"] for x in shown}]
+    depth = any(_contact_views(ep, c)[2] for c in shown)
+    # each strip is described, and its frame asked for, only for the contacts whose picture has it (contact_strips)
+    begin = [c["id"] for c in shown if contact_strips(c)[0]]
+    end = [c["id"] for c in shown if contact_strips(c)[1]]
+    lacking = lambda have, why: ("" if len(have) == len(shown) else
+                                 f" (not for {_and_list([c['id'] for c in shown if c['id'] not in have])}, {why})")
+    only = lambda have: "" if len(have) == len(shown) else f"for {_and_list(have)} only, "
+    picture = ((["five frames around the time the signal says the touch begins, numbered 1 to 5"
+                 + lacking(begin, "already touching at the first frame")] if begin else [])
+               + ([f"three{'' if begin else ' frames'} around the time {'it' if begin else 'the signal'} says the "
+                   "touch ends, numbered 1 to 3" + lacking(end, "still touching at the last frame")] if end else []))
+    return ("\nCONTACTS: the recording's touch signals say a hand is touching something in these spans. They are the "
+            "recording's claims, to check against the frames:\n" + "\n".join(_contact_line(c) for c in shown) + "\n"
+            + (("  The signals record more contacts that are not shown: "
+                + "; ".join(f"{c['id']} {c['start_s']:.2f}-{c['end_s']:.2f} s"
+                            + (" " + contact_placement(c) if c.get("aligned_by") else "") for c in rest)
+                + ".\n") if rest else "")
+            + "After the detail views, each contact above has one picture: " + "".join(p + ", " for p in picture)
+            + ("and " if picture else "") + "the moment it is strongest"
+            + (" with that camera's depth" if depth else "")
+            + " and the touch sensor's reading, each frame with its time. Return, beside the other fields:\n"
+            '  "contacts": [{"id": "<c1, ...>", "touch_seen": "yes" | "no" | "unclear", '
+            + (f'"first_touch_frame": <{only(begin)}1-5, the first frame of the begin strip in which the hand is '
+               'touching, or null>, ' if begin else "")
+            + (f'"last_touch_frame": <{only(end)}1-3, the last frame of the end strip in which it is still touching, '
+               'or null>, ' if end else "")
+            + '"hand": "left" | "right" | "both" | "unclear", "object": "<what it touches>", '
+            '"grip": "<how the hand holds or presses it>", "action": "<what the contact does in the task>", '
+            '"slip": "yes" | "no" | "unclear", "notes": "<or null>"}], one per contact shown,\n'
+            '  "contacts_missing": [{"t_s": <float>, "hand": "left" | "right" | "unclear", "object": "<name>"}], each '
+            "moment a hand clearly takes hold of or presses something that no contact of the recording covers.\n")
+
+
+SIGNAL_TABLE_MIN_CHARS = 12000
+SIGNAL_TABLE_CHARS_PER_INSTANT = 400
+SIGNAL_TABLE_MAX_CHARS = 96000
+
+
+def signal_readout_budget(instants: int) -> int:
+    """Keep the small readout allowance and grow with selected instants, up to a fixed character cap.
+    Retained 28 to 134 instant recordings need more room than the old fixed 12000 characters; 400 per instant
+    permits dozens of numeric rows without allowing a long recording to grow the prompt without limit.
+    This counts characters, not provider tokens, and excludes descriptor and omission text.
+    """
+    return min(SIGNAL_TABLE_MAX_CHARS, max(SIGNAL_TABLE_MIN_CHARS,
+                                         SIGNAL_TABLE_CHARS_PER_INSTANT * instants))
+
+
 def _signals_table(ep: dict, pl: dict) -> str:
     """The recording's other per-frame numbers (ep["signals"], under the dataset's own names): every one listed once
-    with the range each of its values takes over the episode, and over each recorded still span how much each one
-    changed. The still span is the claim they bear on (a mobile base can drive while the arms are still), so their
-    values are spent there, not repeated at every instant. They are shown, not interpreted: the model reads what each
-    is from its name and the robot's description."""
+    with its shape, its value names and the range its values take (label/signals.py describe); over each recorded
+    still span how much each one changed (the claim they bear on: a mobile base can drive while the arms are still);
+    and the values at every sampled instant (_signal_readout), except a touch signal's, whose timing is given once as
+    the episode's contacts (contacts_block). They are shown, not interpreted: the model reads what each is from its
+    name and the robot's description."""
+    from label import signals as sg
+    from label.dictionary_context import field_interpretation
     sig = ep.get("signals") or {}
     if not sig:
         return ""
+    meta = ep.get("signal_meta") or {}
     n = pl["n"]
-    arrs = {k: np.asarray(a[:n], dtype=np.float64) for k, a in sig.items()}
-    lines = []
+    # as stored: every number below is the one a float64 copy would give (largest and smallest readings are exact in
+    # any precision, and their differences are taken in float64), with no whole copy of a large signal
+    arrs = {k: a[:n] for k, a in sig.items()}
+    lines, still, wherever = [], [], []
     for name, a in arrs.items():
-        d = a.shape[1]
-        head = f"  {name} ({d} value{'s' if d > 1 else ''})"
-        if not len(a):
-            continue
-        lo, hi = a.min(axis=0), a.max(axis=0)
-        if (hi == lo).all():
-            lines.append(f"{head}: " + (_num(lo[0]) if d == 1 else "[" + ", ".join(_num(x) for x in lo) + "]")
-                         + " throughout")
-        else:
-            lines.append(f"{head}: " + ", ".join(_num(l) if l == h else f"{_num(l)} to {_num(h)}" for l, h in zip(lo, hi)))
+        interpretation = field_interpretation(ep["context"], name)
+        wording = _interpretation_words(interpretation)
+        try:
+            if not len(a):
+                lines.append(f"  {name}: no rows, so no reading at any frame" + wording)
+                continue
+            if _constant(a):
+                # a value repeated wherever it reads (a setting, a calibration, or a sensor that sent nothing new):
+                # named once, as the same at every frame only when it reads at every frame
+                complete = np.isfinite(a).all(axis=1)
+                v = a[complete][0] if complete.any() else sg.finite_range(a)[0]
+                said = name + (f" {_num(v[0])}" if len(v) == 1 else
+                               " [" + ", ".join(_num(x) for x in v) + "]" if len(v) <= sg.PER_VALUE_MAX else "")
+                said += wording
+                gaps = sg.gap_words(a)
+                if gaps:
+                    wherever.append(f"{said} ({gaps})")
+                else:
+                    still.append(said)
+                continue
+            m = meta.get(name) or {}
+            lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
+                                     fps=ep_fps(ep), aligned_by=m.get("aligned_by"),
+                                     camera_aligned_by=m.get("camera_aligned_by"),
+                                     clock_problem=m.get("clock_problem"), source_rows=m.get("source_rows"),
+                                     camera_frames=m.get("camera_frames")) + wording)
+        except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
+            lines.append(f"  {name}: could not be read ({type(e).__name__})")
+    if still:
+        lines.append("  The same at every frame: " + "; ".join(still))
+    if wherever:
+        lines.append("  The same wherever it reads: " + "; ".join(wherever))
     if pl["spans"]:
         lines.append("  Over each recorded still span, the largest change of any one value of each signal (a signal "
                      "that did not change is left out):")
         for a0, b0 in pl["spans"]:
-            ch = [f"{name} {_num(c)}" for name, a in arrs.items()
-                  if (c := float((a[a0:b0 + 1].max(axis=0) - a[a0:b0 + 1].min(axis=0)).max())) > 0]
+            ch = []
+            for name, a in arrs.items():
+                seg = a[a0:b0 + 1]
+                lo, hi = sg.finite_range(seg)
+                c = float(np.nanmax(hi - lo)) if np.isfinite(seg).any() else 0.0
+                if c > 0:
+                    ch.append(f"{name} {_num(c)}")
             lines.append(f"    {frame_time(ep, a0):.2f}-{frame_time(ep, min(b0, n - 1)):.2f}s: "
                          + ("; ".join(ch) if ch else "none changed"))
+    lines += _readout_of(ep, pl)[0]
+    interpretation_note = ("Dictionary meanings and roles are attributed interpretations, not recorded facts. "
+                           if any(field_interpretation(ep["context"], name) for name in arrs) else
+                           "They are not interpreted for you: read what each is from its name and the robot's description above. ")
     return ("\nOTHER RECORDED SIGNALS: every other number the dataset records per frame, under the dataset's own "
             "name, with the range each of its values takes over the episode (one that never changes is given as its "
-            "value). They are not interpreted for you: read what each is from its name and the robot's description "
-            "above. Like the rest of the recording they are claims to check against the video; a camera carried by "
+            "value). " + interpretation_note + "Like the rest of the recording they are claims to check against the video; a camera carried by "
             "something they show moving (a mobile base, a torso) moves with it.\n" + "\n".join(lines))
+
+
+def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
+    """(lines, whole): the values of the signals at every sampled instant, and the signals every row of which is in
+    them. A touch signal has no rows (its timing is given once as the episode's contacts, contacts_block, so the frames
+    are read on their own first and the contacts are checked against them; touch is the rule the contacts shown follow,
+    touch_verdicts), nor has a signal that never changes or has no reading. The rows are ranked by how much their
+    values move over the episode (label/signals.py movements) and kept when they fit the allowance for the selected
+    instants, then printed in the signals' own order. An oversized row does not prevent smaller rows being shown.
+    Every signal left out, whole or in part, is named with its size and rate; original value names remain in metadata.
+    """
+    from label import signals as sg
+    from label.dictionary_context import field_interpretation
+    sig = ep.get("signals") or {}
+    meta = ep.get("signal_meta") or {}
+    n = pl["n"]
+    arrs = {k: a[:n] for k, a in sig.items()}      # as stored; label/signals.py reads them in float64 pieces
+    touch = _touch(ep, pl)
+    ks = pl["ks"]
+    rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)
+    for i, (name, a) in enumerate(arrs.items()):
+        try:
+            if name in touch or not len(a) or not np.isfinite(a).any() or _constant(a):
+                continue
+            m = meta.get(name) or {}
+            role = field_interpretation(ep["context"], name).get("role")
+            got = sg.summary_rows(name, a, ks, m.get("shape"), m.get("names"), role=role)
+            mv = sg.movements(a)
+            by_value = sg.per_value(name, a.shape[1], m.get("shape"), m.get("names"), role=role)
+        except Exception:  # noqa: BLE001 - named as not read in the signals' list (_signals_table), the rest are given
+            continue
+        for j, (lb, v) in enumerate(got):
+            rows.append((float(mv[j]) if by_value else float(np.median(mv)), i, j, name, lb, v))
+    if not rows:
+        return [], frozenset()
+    lines = []
+    head = "    at: " + " ".join(f"{frame_time(ep, k):.2f}" for k in ks)
+    text = {(r[1], r[2]): f"    {r[4]}: " + " ".join(r[5]) for r in rows}
+    budget = signal_readout_budget(len(ks))
+    room, chosen = budget - len(head), set()
+    skipped, kept_after_skip = False, False
+    for r in sorted(rows, key=lambda r: (-r[0], r[1], r[2])):
+        if len(text[r[1], r[2]]) > room:
+            skipped = True
+            continue
+        kept_after_skip |= skipped
+        chosen.add((r[1], r[2]))
+        room -= len(text[r[1], r[2]])
+    if chosen:
+        lines.append("  Each signal that changes, at every instant you receive (seconds in the first row; \"-\" is "
+                     "no reading):")
+        lines += [head] + [text[r[1], r[2]] for r in rows if (r[1], r[2]) in chosen]
+    left = {}
+    for r in rows:
+        if (r[1], r[2]) not in chosen:
+            left.setdefault(r[3], []).append(r)
+    if left:
+        named = _and_list([_left_out(nm, arrs[nm], meta.get(nm) or {}, len(left[nm]), sum(r[3] == nm for r in rows))
+                           for nm in left])
+        reason = (", because these move least and there is no more room." if chosen else
+                  ", because not even one row fits.")
+        if kept_after_skip or budget != SIGNAL_TABLE_MIN_CHARS:
+            reason = (f", because rows are ranked by movement and kept when they fit the {budget} character budget."
+                      if chosen else f", because no row fits the {budget} character budget after the times row.")
+        lines.append("  The values at each instant leave out " + named + reason)
+    return lines, frozenset(r[3] for r in rows if r[3] not in left)
+
+
+def _readout_of(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
+    """The readout episode_text made once for this prompt (pl["readout"]), or, for a block text called on its own,
+    made now. Only episode_text sets pl["readout"], and only on its own copy of the plan, never on plan()'s."""
+    return pl["readout"] if "readout" in pl else _signal_readout(ep, pl)
+
+
+def _constant(a: np.ndarray) -> bool:
+    """Whether a signal has a reading and each of its values never changes over the episode wherever it reads: named
+    once with its value, and given no rows at each instant (_signals_table says where it has no reading)."""
+    from label import signals as sg
+    lo, hi = sg.finite_range(a)
+    return bool(np.isfinite(a).any() and (hi == lo).all())
+
+
+def _left_out(name: str, a: np.ndarray, m: dict, n_left: int, n_rows: int) -> str:
+    """One signal left out of the values at each instant: its name, its size, its rate when known, and how many of its
+    rows were left out when some of them were shown."""
+    shape = m.get("shape")
+    size = (" x ".join(str(int(x)) for x in shape) + " values" if shape and len(shape) > 1
+            else f"{a.shape[1]} value{'s' if a.shape[1] > 1 else ''}")
+    rate = f", {_num(m['rate_hz'])} Hz" if m.get("rate_hz") else ""
+    part = f", {n_left} of its {n_rows} rows" if n_left < n_rows else ""
+    return f"{name} ({size}{rate}{part})"
+
+
+def _and_list(xs: list[str]) -> str:
+    return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
 
 
 BETWEEN_INSTANTS = (
@@ -649,9 +1582,11 @@ def _motion_table(ep: dict, pl: dict) -> str:
     cameras. Mounted cameras are rigid on their gripper, so a real move shows in that camera."""
     names, kind, n = actors(ep), state_kind(ep), _rig_nouns(rig(ep))
     st = ep["state"][:pl["n"]]
+    sa, sb = pl.get("state_span") or (0, len(st))
+    ks = [k for k in pl["ks"] if sa <= k < sb]
     rows = []
     if kind == "ee_pose":
-        for r in ms.recorded_motion(st, pl["ks"], names):
+        for r in ms.recorded_motion(st, ks, names):
             parts = [f"{a} {g['move_cm']:.1f}, {g['max_step_cm']:.1f}, {g['turn_deg']:.0f}, "
                      f"{g['open_a']:.2f}>{g['open_b']:.2f}" for a, g in r["grippers"].items()]
             rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
@@ -663,7 +1598,7 @@ def _motion_table(ep: dict, pl: dict) -> str:
                  "AND the recorded turn is near 0 deg (the pose stopped updating); a recorded single-frame "
                  "step of several cm with no jump in the view at that moment")
     else:
-        for r in ms.recorded_joint_motion(st, pl["ks"], names):
+        for r in ms.recorded_joint_motion(st, ks, names):
             parts = [f"{a} {g['max_deg']:.1f}, {g['max_step_deg']:.1f}, {g['grip_a']:.2f}>{g['grip_b']:.2f}"
                      for a, g in r["arms"].items()]
             rows.append(f"  {frame_time(ep, r['a']):.2f}-{frame_time(ep, r['b']):.2f}s | " + " | ".join(parts))
@@ -691,7 +1626,27 @@ def _motion_table(ep: dict, pl: dict) -> str:
         "depends on the lens, the distance to the scene and the direction of travel. Likewise never compare "
         "how open the fingers look with the gripper number: its scale is not a picture of how wide the "
         "fingers look, so only the timing of a change can be compared with the video.\n"
+        + (f"The recorded state covers only {seconds(frame_time(ep, sa))} to {seconds(frame_time(ep, sb - 1))} of "
+           "the episode, so the rows stop there and nothing is recorded outside it.\n"
+           if (sa, sb) != (0, len(st)) else "")
         + "\n".join(rows))
+
+
+def annotation_lines(ctx: dict) -> list[str]:
+    """Every dataset step with its declared time and success flag."""
+    def when(x):            # a step with no end time is a moment, one with no time is listed without one
+        t0, t1 = number(x.get("t0")), number(x.get("t1"))
+        return ("no time" if t0 is None else tenths(t0) if t1 is None or t1 == t0
+                else f"{tenths(t0)[:-1]}-{tenths(t1)}")
+    def label(x):
+        if "label" in x:
+            return x["label"]
+        if "text" in x:
+            return x["text"]
+        return "recorded annotation without a label or text: " + json.dumps(x, ensure_ascii=False, default=str)
+    lines = [f"  {when(x)}  {label(x)}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
+             for x in (ctx.get("annotation_subtasks") or []) if isinstance(x, dict)]
+    return lines
 
 
 def ego_annotation_block(ctx: dict) -> str:
@@ -700,18 +1655,360 @@ def ego_annotation_block(ctx: dict) -> str:
     if not goal and not subs:
         return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
-    lines = [f"  {x['t0']:.1f}-{x['t1']:.1f}s  {x['label']}" + ("" if x.get("ok", True) else "  (marked unsuccessful)")
-             for x in subs]
+    lines = annotation_lines(ctx)
     return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE (claims to check, see ABOUT THE DATASET'S ANNOTATION above):\n"
             + (f"  goal: \"{goal}\"\n" if goal else "")
             + ("  subtasks, with the times the dataset gives:\n" + "\n".join(lines) + "\n" if lines else "")
             + (f"  about these annotations: {ctx['annotation_note'].strip()}\n" if ctx.get("annotation_note") else ""))
 
 
-def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None) -> tuple[str, str]:
-    """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
-    identical for every episode of the dataset, then the facts about THIS episode (rig, cameras, frames,
-    recorded state, instruction)."""
+# ---------------------------------------------------------------- the episode prompt: a base and its blocks
+
+# Where a block's text goes in the episode prompt. The base fills the rest: the intro (who and what), the camera
+# paragraph, the frames paragraph, the sampling line, BETWEEN_INSTANTS and the task.
+PROMPT_SLOTS = ("intro", "frames_detail", "frames", "state", "signals", "after_frames", "after_task")
+
+
+@dataclass(frozen=True)
+class Block:
+    """One part of the episode prompt that exists only when the episode holds its data. present(ep, pl) tests the
+    loaded episode folder and the plan made from it, never the rig or the dataset's name; text(ep, pl) is what the
+    model is told; schema_fields are the output fields the text asks for beyond the rig's shared schema
+    (label/prompts.py); checks are the deterministic checks the same data feeds (reported, never told to the model),
+    under their keys in the episode's dataset_checks (plan's own, and those board/build.py add_context copies from
+    context.json and add_contacts writes).
+    An episode without the data gets neither the text nor the fields."""
+    name: str
+    slot: str
+    present: Callable[[dict, dict], bool]
+    text: Callable[[dict, dict], str]
+    schema_fields: tuple = ()
+    checks: tuple = ()
+
+
+def _has_signals(ep: dict, pl: dict) -> bool:
+    return bool(ep.get("signals"))
+
+
+def _has_state(ep: dict, pl: dict) -> bool:
+    return state_kind(ep) != "none" and bool(pl.get("state_usable", True))
+
+
+def _state_unaligned(ep: dict, pl: dict) -> bool:
+    return state_kind(ep) != "none" and not pl.get("state_usable", True)
+
+
+def _has_contacts(ep: dict, pl: dict) -> bool:
+    return bool(touch_contacts(ep, pl, ep.get("contacts_shown")))
+
+
+def _no_state(ep: dict, pl: dict) -> bool:
+    return state_kind(ep) == "none"
+
+
+def _has_collection_note(ep: dict, pl: dict) -> bool:
+    return bool(ep["context"].get("collection_note"))
+
+
+def _has_contact_views(ep: dict, pl: dict) -> bool:
+    return bool(pl.get("contact"))
+
+
+def _has_coverage(ep: dict, pl: dict) -> bool:
+    return bool(_coverage_note(ep, pl))
+
+
+def _has_depth(ep: dict, pl: dict) -> bool:
+    return bool(ep.get("depth"))
+
+
+def _has_uploader_notes(ep: dict, pl: dict) -> bool:
+    return bool(ep["context"].get("uploader_annotation"))
+
+
+def _collection_text(ep: dict, pl: dict) -> str:
+    return f"How the dataset cuts its recordings into episodes: {ep['context']['collection_note'].strip()}\n"
+
+
+def _contact_views_text(ep: dict, pl: dict) -> str:
+    return (" So are the instants just after a gripper's recorded value changes sharply, where something is "
+            "usually picked up or put down, from the scene camera and that gripper's own camera ("
+            + ", ".join(f"{frame_time(ep, k):.2f}" for k in pl["contact"]) + " s): use them to read what "
+            "is held and how it is left. The value only chose where to look closer; what is held is read from "
+            "the frames.")
+
+
+def _state_text(ep: dict, pl: dict) -> str:
+    """The recorded state, as the recording's claims: its still spans and the motion between consecutive instants."""
+    r, kind = rig(ep), state_kind(ep)
+    n = _rig_nouns(r)
+    src = ("joint encoders" if kind == "joints" else
+           "recorded end-effector poses" if r == "teleop_arms" else "tracked gripper poses")
+    if pl["spans"]:
+        sp = ", ".join(f"{d['start_s']:.2f}-{d['end_s']:.2f}s" for d in describe_spans(ep, pl["spans"]))
+        s = (f"\nRECORDED STILL SPANS, from the dataset's {src}: {sp}. Over each span the recording says "
+             f"no {n['actor']} moved and none opened or closed. This is the recording's claim, not a "
+             f"fact: check it. {'An' if n['actor'][0] in 'aeiou' else 'A'} {n['actor']} that is really still "
+             "shows a steady view in its own camera"
+             + (" unless something that carries it moves, which the other recorded signals below may show; the "
+                f"claim covers only the {n['actors']}" if _has_signals(ep, pl) else "")
+             + ". If the views show motion during a span, the recording is "
+             f"wrong there. If the views hold steady and the scene still changes, the {n['actors']} did not do it: "
+             "say what you see.")
+    else:
+        s = f"\nRECORDED STILL SPANS, from the dataset's {src}: none."
+    return s + _motion_table(ep, pl) + _dictionary_text(ep, pl)
+
+
+def _state_unaligned_text(ep: dict, pl: dict) -> str:
+    return ("\nRECORDED STATE: not given. This episode's cameras do not cover the same frames "
+            "as its recorded state, so the state cannot be aligned to the video." + _dictionary_text(ep, pl))
+
+
+# What in context["source"] says the reader found sensor data it did not read (prepare/formats.py write_signals,
+# convert_hdf5, plan_video): the arrays and signals it left out, and "sensors", the sensor files whose signals it read
+# (prepare/formats.py convert_video), so an episode with no signal from them has none read. With any of it, the
+# episode is never told its dataset records no state.
+UNREAD_SOURCE_KEYS = ("unused_signals", "unused_arrays", "sensors")
+
+
+# Request wording for the reader's shared reasons (prepare.state_notes). The note names the particular channel or
+# clock limitation; a leading sentence must hold even when other recorded channels use the footage clock.
+STATE_WORDING = {
+    LAYOUT: None,
+    NOT_RECORDED: "as the recording holds none",
+    UNREADABLE: "as a sensor file that may hold it could not be read",
+    SHORT: "as it does not cover the footage",
+    ASSUMED_CLOCK: "as a contributing state channel needs an assumed alignment with the cameras",
+}
+
+
+def _no_state_base_text(ep: dict, pl: dict) -> str:
+    """No arm state. With other signals the line says why, as the reader recorded it (state_why, STATE_WHY): "layout"
+    says none is in the layout our checks read, and every other reason that no state was read, why, and the reader's
+    note on it (not for "not_recorded", whose note only says the same). A context written before the reader recorded
+    state_why says the layout line, unless a signal whose name says joints or a state stops short of the episode: then
+    the layout is not why (an arm sensor file cut before the footage ends), and the line gives the reader's note on the
+    state, which says why. With no other signal, that the dataset records none, unless the reader wrote a note on the
+    state or left sensor data unread: then only that none was read, since "records no hand, head or device tracking"
+    was false for an MCAP whose hand tracks the reader did not read yet (2026-10-02 audit). There the note and the lists
+    of unread channels go to the board, never to the model: they name the checks and channels that did not run ("the
+    checks on recorded motion ..."), which would put the words about a recorded motion back into a video only prompt;
+    with other signals the prompt is a recording's already. A state_why other than "not_recorded" counts as a note:
+    the state is there but was not read, so only that none was read; "not_recorded" and no state_why read as before."""
+    r = rig(ep)
+    n = _rig_nouns(r)
+    ctx = ep["context"]
+    if _has_signals(ep, pl):
+        from label import signals as sg
+        meta = ep.get("signal_meta") or {}
+        # a signal of several values whose name says joints or a state (label/signals.py names_joints_or_state), and
+        # only one whose every value is at each instant in the readout below (_signal_readout): one left out of it in
+        # whole or in part, or with no rows there (constant, no reading, touch), is not named. The line says only what
+        # is true by construction: what the names say, and "under their own names" only when every value has one
+        joints = [nm for nm, a in ep["signals"].items() if nm in _readout_of(ep, pl)[1] and np.shape(a)[1] > 1
+                  and sg.names_joints_or_state(nm)
+                  and sg.per_value(nm, np.shape(a)[1], (meta.get(nm) or {}).get("shape"),
+                                   (meta.get(nm) or {}).get("names"))]
+        one = len(joints) == 1
+        named = all(len((meta.get(nm) or {}).get("names") or []) == np.shape(ep["signals"][nm])[1] for nm in joints)
+        # a joints or state signal with no reading over part of the episode says the state's data stops short (a sensor
+        # file cut before the footage ends), so the layout is not why none was read: the reader's own note says why
+        short = [nm for nm, a in ep["signals"].items() if sg.names_joints_or_state(nm) and len(a[:pl["n"]])
+                 and np.isnan(np.asarray(a[:pl["n"]], dtype=np.float64)).all(axis=1).any()]
+        note = (ctx.get("state_note") or "").strip()
+        why = ctx.get("state_why")
+        # An absent designated state field does not prove absence in another recorded observation layout. Inspect
+        # preserved values even when their readout is constant or outside the table budget; commands are not state.
+        if why == NOT_RECORDED and any((sg.names_joints_or_state(nm) if np.shape(a)[1] > 1
+                                       else sg.names_scalar_observed_state(nm))
+                                      and np.isfinite(a[:pl["n"]]).any()
+                                      for nm, a in ep["signals"].items()):
+            why = LAYOUT
+        if r == "ego_head" and (why == LAYOUT or why is None and not (short and note)):
+            head = "no tracked actor state was read; the recorded signals below retain their own shapes and names."
+        elif why == LAYOUT or why is None and not (short and note):
+            head = f"no {n['actor']} state in the layout our checks read."
+        else:
+            reason = STATE_WORDING.get(why) if why is not None else None
+            # a recording that holds no state needs no note: the reader's note can only say so again (the board
+            # shows it)
+            head = (f"no {n['actor']} state was read{f', {reason}' if reason else ''}."
+                    + (f" The reader's note on it: {note}" if note and why != NOT_RECORDED else ""))
+        return (f"\nRECORDED STATE: {head}"
+                + (f" The signal{'' if one else 's'} whose name{' says' if one else 's say'} joints or a state "
+                   f"({', '.join(joints)}) {'is' if one else 'are'} given value by value"
+                   + (" under their own names" if named else "") + " among the other recorded signals below."
+                   if joints else ""))
+    src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
+    # depth pictures follow the detail views of an episode with depth (the depth block), so there the video is not all
+    all_there_is = (("the cameras' colour and depth images are" if _has_depth(ep, pl) else "the video is")
+                    + " all there is.")
+    if ((ctx.get("state_note") or "").strip() or any(src.get(k) for k in UNREAD_SOURCE_KEYS)
+            or ctx.get("state_why") not in (None, NOT_RECORDED)):
+        return f"\nRECORDED STATE: none was read from this episode, so {all_there_is}"
+    what = "no hand, head or device tracking" if r == "ego_head" else "no robot or gripper state"
+    return f"\nRECORDED STATE: none; this dataset records {what}, so {all_there_is}"
+
+
+def _no_state_text(ep: dict, pl: dict) -> str:
+    interpretation = _dictionary_text(ep, pl)
+    if interpretation and not _has_signals(ep, pl) and any(field.get("kind") == "state" for field in
+            (ep["context"].get("data_dictionary") or {}).get("fields", [])):
+        actor = _rig_nouns(rig(ep))["actor"]
+        return f"\nRECORDED STATE: no {actor} state in the layout our checks read." + interpretation
+    return _no_state_base_text(ep, pl) + interpretation
+
+
+def _uploader_text(ep: dict, pl: dict) -> str:
+    # notes the person who uploaded the episode sent with it (a note file beside a video, an annotation channel in an
+    # MCAP), in whatever form they came
+    return ("\nTHE UPLOADER'S OWN NOTES FOR THIS EPISODE, as sent. They are claims to check against the "
+            "video, not ground truth; where the video contradicts them, record it as a data issue:\n"
+            + ep["context"]["uploader_annotation"].strip() + "\n")
+
+
+def _metadata_issues(ep: dict, pl: dict) -> str:
+    """Metadata failures and reader limits stay visible beside the claims that could be read."""
+    issues = [i["what"] for i in ep["context"].get("reader_issues", [])
+              if i.get("kind") in ("metadata_unreadable", "metadata_limit")]
+    return "\nUPLOADED METADATA COULD NOT BE FULLY READ:\n" + "\n".join(issues) + "\n" if issues else ""
+
+
+def _has_metadata_issues(ep: dict, pl: dict) -> bool:
+    """Only actual metadata failures or limits add their warning block."""
+    return any(i.get("kind") in ("metadata_unreadable", "metadata_limit")
+               for i in ep["context"].get("reader_issues", []))
+
+
+def _state_identity_issues(ep: dict, pl: dict) -> str:
+    issues = [i["what"] for i in ep["context"].get("reader_issues", [])
+              if i.get("kind") == "state_identity_conflict"]
+    text = "\nRECORDED ACTOR IDENTITY DISAGREES:\n" + "\n".join(issues) + "\n" if issues else ""
+    note = ep["context"].get("state_identity_note")
+    return text + ("\nRECORDED ACTOR GROUP IDENTITY:\n" + note + "\n" if note else "")
+
+
+def _has_state_identity_issues(ep: dict, pl: dict) -> bool:
+    return bool(ep["context"].get("state_identity_note")) or any(
+        i.get("kind") == "state_identity_conflict" for i in ep["context"].get("reader_issues", []))
+
+
+def _table_number_notes(ep: dict) -> list[str]:
+    """Numeric interpretation assumptions that qualify the table values shown to the model."""
+    return [issue["what"].strip() for issue in ep["context"].get("reader_issues") or []
+            if isinstance(issue, dict) and issue.get("kind") == "table_number_ambiguous"
+            and isinstance(issue.get("what"), str) and issue["what"].strip()]
+
+
+def _table_numbers_text(ep: dict, pl: dict) -> str:
+    return ("\nTABLE NUMBER INTERPRETATION, inferred while reading the tables:\n"
+            + "\n".join("  " + note for note in _table_number_notes(ep)) + "\n")
+
+
+def _has_table_numbers(ep: dict, pl: dict) -> bool:
+    return bool(_table_number_notes(ep))
+
+
+def _signal_clock_notes(ep: dict) -> list[str]:
+    """Unusable signal timing stays visible even when unequal row counts cannot be placed on footage."""
+    return [issue["what"] for issue in ep["context"].get("reader_issues") or []
+            if isinstance(issue, dict) and issue.get("kind") == "signal_timestamp_invalid" and issue.get("what")]
+
+
+def _signal_clocks_text(ep: dict, pl: dict) -> str:
+    return "\nRECORDED SIGNAL CLOCK LIMITS:\n" + "\n".join(_signal_clock_notes(ep)) + "\n"
+
+
+def _has_signal_clock_notes(ep: dict, pl: dict) -> bool:
+    return bool(_signal_clock_notes(ep))
+
+
+def _interpretation_words(entry):
+    if not entry:
+        return ""
+    role = "role " + entry["role"] if entry.get("role") else "role cleared"
+    meaning = entry.get("meaning") or ""
+    return f" [{entry.get('provenance', 'machine')} interpretation, {role}] {meaning}".rstrip()
+
+
+def _dictionary_text(ep: dict, pl: dict) -> str:
+    from label.dictionary_context import field_interpretation
+    lines = []
+    for field in (ep["context"].get("data_dictionary") or {}).get("fields", []):
+        if field.get("kind") not in ("state", "action"):
+            continue
+        entry = field_interpretation(ep["context"], field["name"], field["kind"])
+        if not entry:
+            continue
+        line = "  " + field["name"] + _interpretation_words(entry)
+        groups = [f"{group['name']} columns {group['start']} to {group['start'] + group['count'] - 1}"
+                  for group in entry.get("layout") or []]
+        if groups:
+            line += ". Proposed layout " + "; ".join(groups) + "."
+        lines.append(line)
+    return "\nDATA DICTIONARY INTERPRETATIONS\n" + "\n".join(lines) if lines else ""
+
+
+def _has_sensor_evidence(ep: dict, pl: dict) -> bool:
+    return bool((pl.get("sensor_evidence") or {}).get("sensors"))
+
+
+BLOCKS = (
+    Block("collection_note", "intro", _has_collection_note, _collection_text),
+    Block("contact_views", "frames_detail", _has_contact_views, _contact_views_text),
+    Block("coverage", "frames", _has_coverage, _coverage_note),
+    Block("depth", "frames", _has_depth, lambda ep, pl: _depth_note(ep), checks=("sensor_checks",)),
+    Block("state", "state", _has_state, _state_text,
+          checks=("timebase", "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")),
+    Block("state_unaligned", "state", _state_unaligned, _state_unaligned_text, checks=("camera_windows_match_state",)),
+    Block("no_state", "state", _no_state, _no_state_text),
+    Block("table_numbers", "signals", _has_table_numbers, _table_numbers_text),
+    Block("signal_clocks", "signals", _has_signal_clock_notes, _signal_clocks_text),
+    Block("signals", "signals", _has_signals, _signals_table, checks=("sensor_checks",)),
+    Block("contacts", "after_frames", _has_contacts, contacts_block,
+          schema_fields=("contacts", "contacts_missing"),
+          checks=("contact_checks",)),
+    Block("sensor_evidence", "signals", _has_sensor_evidence,
+          lambda ep, pl: se.prompt(pl["sensor_evidence"]),
+          schema_fields=("sensor_findings",)),
+    Block("uploader_notes", "after_task", _has_uploader_notes, _uploader_text),
+    Block("metadata_issues", "after_task", _has_metadata_issues, _metadata_issues),
+    Block("state_identity_issues", "after_task", _has_state_identity_issues, _state_identity_issues),
+)
+
+
+# The blocks that make an episode a recording rather than video only: with none of them, the shared instructions and
+# the camera paragraph say nothing of a recorded motion (label/prompts.py VIDEO_ONLY_CONTRACT_WORDING).
+RECORDED_BLOCKS = ("state", "state_unaligned", "signals")
+
+
+def present_blocks(ep: dict, pl: dict) -> list[Block]:
+    """The blocks whose data this episode holds, in prompt order."""
+    return [b for b in BLOCKS if b.present(ep, pl)]
+
+
+def is_recorded(ep: dict, pl: dict, blocks: list[Block] | None = None) -> bool:
+    """Whether shared motion wording has state or other signals behind it. Touch alone measures contact,
+    not actor motion; its sensor and contact blocks still remain present with their checks and schema fields.
+    """
+    return any(b.name in RECORDED_BLOCKS and (b.name != "signals" or any(
+        name not in _touch(ep, pl) for name in ep.get("signals", {})))
+        for b in (present_blocks(ep, pl) if blocks is None else blocks))
+
+
+def requested_schema(ep: dict, pl: dict, blocks: list[Block] | None = None) -> tuple:
+    """The output fields this episode's blocks ask for beyond the rig's shared schema."""
+    return tuple(f for b in (present_blocks(ep, pl) if blocks is None else blocks) for f in b.schema_fields)
+
+
+def implied_checks(ep: dict, pl: dict, blocks: list[Block] | None = None) -> tuple:
+    """The deterministic checks the data of this episode's blocks feeds, each named once (depth and the signals both
+    feed sensor_checks)."""
+    return tuple(dict.fromkeys(c for b in (present_blocks(ep, pl) if blocks is None else blocks) for c in b.checks))
+
+
+def _intro_head(ep: dict) -> str:
     ctx = ep["context"]
     r = rig(ep)
     n = _rig_nouns(r)
@@ -726,39 +2023,147 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
         else f"a person holds {k} handheld grippers, one per hand, and does the task with them")
     kind_of = ("one clip of first-person human video from the {d} dataset, collected to train robots and world "
                "models" if r == "ego_head" else "one episode of a robot-learning demonstration from the {d} dataset{w}")
-    intro = (
-        f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the episode exactly as "
-        "the dataset ships it, from its first recorded frame to its last; nothing was trimmed, cleaned or edited.\n"
-        + (f"How the dataset cuts its recordings into episodes: {ctx['collection_note'].strip()}\n"
-           if ctx.get("collection_note") else "")
-        + "\n" + camera_desc(ep) + "\n")
-    cams = ctx.get("cameras") or {}
-    c0 = cams.get(anchor(ep), {})
+    if ep.get("unavailable_instants"):
+        return (f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the available "
+                "sampled footage; unavailable instants and replacement frames are named below.\n")
+    return (f"You are labelling {kind_of.format(d=ctx.get('dataset'), w=what)}: {who}. You see the episode exactly as "
+            "the dataset ships it, from its first recorded frame to its last; nothing was trimmed, cleaned or "
+            "edited.\n")
+
+
+def _frames_head(ep: dict, cell_w: int, cell_h: int, native: tuple) -> str:
+    names = ", ".join(cam_name(ep, v) for v in views(ep))
+    ends = "first and last available instant" if ep.get("unavailable_instants") else "first and last instant"
+    # A retained parent zero may precede its first capture. Name that zero rather than claim the headings start
+    # at the first frame, while keeping the existing text for clocks whose first frame is zero.
+    first = frame_time(ep, 0)
+    origin = ("the episode clock's zero" if round(first, 2) != 0 else "the episode's first frame")
+    start = f"The first recorded frame is at {seconds(first)} on this clock. " if round(first, 2) != 0 else ""
+    assumed = ep["context"].get("camera_clock") or {}
+    precision = ("The column times are assumed presentation instants, not measured capture times. "
+                 "Use these times for this presentation. " if anchor(ep) in assumed else
+                 "The times are exact: use them, do not invent your own. ")
+    qualification = "".join(f"{cam_name(ep, v)}. {note['what']} " for v, note in assumed.items() if v in views(ep))
+    time_word = "assumed presentation time" if anchor(ep) in assumed else "exact time"
+    return (
+        f"\nFRAMES. You receive the episode as grid images: ROWS are the cameras ({names}, top to "
+        f"bottom), COLUMNS are instants left to right, and each column is headed with its {time_word} in "
+        f"seconds from {origin}. {start}Read each grid left to right and the grids in order. "
+        f"{precision}{qualification}Each grid cell is the camera frame "
+        f"downscaled to {_cell_sizes(ep, cell_w, cell_h)}. After the grids, the episode's {ends} are "
+        f"repeated larger, at {_detail_desc(native)}; use them for the start and end state and any "
+        "small detail (lettering, a display, fine alignment)." + _excluded_camera_clock_notes(ep))
+
+
+def _excluded_camera_clock_notes(ep: dict) -> str:
+    """Keep an excluded stream's clock issue scoped to its actual source, without adding it to sampled views."""
+    ctx = ep["context"]
+    notes = []
+    for entry in ctx.get("unshown_cameras") or []:
+        clock = entry.get("camera_clock") or {}
+        name = entry.get("name")
+        if not name or not clock.get("what"):
+            continue
+        issues = [i["what"] for i in ctx.get("reader_issues") or []
+                  if i.get("kind") == "camera_timestamp_repeated" and i.get("camera") == name and i.get("what")]
+        reason = str(entry.get("why") or "")
+        suffix = ". " + clock["what"]
+        if reason.endswith(suffix):
+            reason = reason[:-len(suffix)]
+        omitted = f"{name} is not shown to the model" + (f" because {reason}" if reason else "") + ". "
+        notes.append(omitted + " ".join(dict.fromkeys(issues or [clock["what"]])))
+    return " " + " ".join(notes) if notes else ""
+
+
+def _instants_line(ep: dict, pl: dict | None = None) -> str:
+    """Describe the selector's cadence and boundary instants without modifying its picks."""
+    spans = (pl.get("quiet_spans") or pl.get("spans") or []) if pl else []
+    boundaries = sorted({k for a, b in spans for k in (a, b + 1) if k in pl["ks"]}) if pl else []
+    extra = ""
+    if spans:
+        what = "quiet signal spans" if pl.get("quiet_spans") else "recorded still spans"
+        times = ", ".join(f"{frame_time(ep, k):.2f}" for k in boundaries)
+        extra = (f" Sampling restarts at the boundary instants of {what} ({times} s), at each span's start and "
+                 "the first frame after its end where available.")
+        if pl.get("quiet_spans"):
+            extra += " Signal quiet does not establish that an arm was still."
+    # when every camera's file ends before the episode does, the last instant is the last frame they have (frames)
+    last = "frame and the last frame its cameras have" if ep.get("footage_end") is not None else "and last frame"
+    cadence = ("within each stretch between boundaries" if spans else "for the whole episode")
+    if ep.get("unavailable_instants"):
+        return (f"Which instants are planned: one every {SAMPLE_EVERY_S[rig(ep)]:g} s {cadence}, plus its "
+                "first and last frame. Unavailable instants and available replacements are named below." + extra)
+    return (f"Which instants you get: one every {SAMPLE_EVERY_S[rig(ep)]:g} s {cadence}, plus its first "
+            f"{last}." + extra)
+
+
+def robot_annotation_block(ctx: dict) -> str:
+    """Dataset step claims, independent of the episode instruction."""
+    if not ctx.get("annotation_subtasks"):
+        return ""
+    lines = annotation_lines(ctx)
+    return ("\nTHE DATASET'S STEP ANNOTATIONS FOR THIS EPISODE (claims to check against the footage):\n"
+            + "These are the dataset's claims, not observed actions or an instruction. Check them against the footage; "
+              "an unsuccessful flag is the dataset's claim about the outcome.\n"
+            + ("  subtasks, with the times the dataset gives:\n" + "\n".join(lines) + "\n" if lines else "")
+            + (f"  about these annotations: {ctx['annotation_note'].strip()}\n" if ctx.get("annotation_note") else ""))
+
+
+def task_block(ep: dict) -> str:
+    """The task, part of the base: the dataset's instruction (robot rigs) or annotation (head camera). A head camera
+    with no annotation is told there is none, because its shared instructions always ask for goal_alignment."""
+    ctx = ep["context"]
+    if rig(ep) == "ego_head":
+        return ego_annotation_block(ctx)
+    given = (ctx.get("instruction") or "").strip()
+    annotations = robot_annotation_block(ctx)
+    if not given:
+        return annotations
+    label = "; ".join(ctx.get("task_label") or [])
+    # the rules for using the instruction are the same for every episode and live in the cached
+    # instructions (instruction_rules); only the instruction itself belongs to the episode
+    s = ("\nTHE TASK FOR THIS EPISODE WAS GIVEN TO YOU as the dataset's per-episode instruction:\n"
+         f"  \"{given}\"\nHow to use it is set out under ABOUT THE EPISODE'S INSTRUCTION above.\n")
+    if ctx.get("instruction_note"):
+        s += ctx["instruction_note"].strip() + "\n"
+    elif label:
+        s += (f"The dataset's coarse task label for this episode is \"{label}\"; the "
+              "instruction above is the dataset's per-episode annotation of it, and "
+              "the outcome is graded against it.\n")
+    return s + annotations
+
+
+def episode_text(ep: dict, pl: dict, cell_w: int, cell_h: int, native: tuple,
+                 blocks: list[Block] | None = None) -> str:
+    """The episode's part of the prompt: the base, with each present block (given, or found now) in its slot."""
+    got = dict.fromkeys(PROMPT_SLOTS, "")
+    blocks = present_blocks(ep, pl) if blocks is None else blocks
+    if _has_signals(ep, pl):
+        # the readout of the signals is made once: the signals block prints it and the state line names only the
+        # joint readings it shows whole
+        pl = {**pl, "readout": _signal_readout(ep, pl)}
+    for b in blocks:
+        got[b.slot] += b.text(ep, pl)
+    return (EPISODE_HEADER + _intro_head(ep) + got["intro"] + "\n" + camera_desc(ep, is_recorded(ep, pl, blocks))
+            + "\n"
+            + _frames_head(ep, cell_w, cell_h, native) + got["frames_detail"] + "\n" + _instants_line(ep, pl)
+            + got["frames"] + got["state"] + got["signals"] + BETWEEN_INSTANTS + got["after_frames"] + "\n"
+            + task_block(ep) + got["after_task"])
+
+
+def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=None,
+                 blocks: list[Block] | None = None) -> tuple[str, str]:
+    """(fixed, episode): the shared instructions (output schema, what the episode is, the data contract),
+    identical for every episode of the same rig, instruction presence and recorded or video only variant (is_recorded),
+    then the facts about THIS episode (episode_text). The present blocks are found once, unless the caller has them."""
+    ctx = ep["context"]
+    r = rig(ep)
+    c0 = (ctx.get("cameras") or {}).get(anchor(ep), {})
     native = (c0.get("width") or "native", c0.get("height") or "resolution")
     given = (ctx.get("instruction") or "").strip()
-    label = "; ".join(ctx.get("task_label") or [])
-    given_block = ""
-    if r == "ego_head":
-        given_block = ego_annotation_block(ctx)
-    elif given:
-        # the rules for using the instruction are the same for every episode and live in the cached
-        # instructions (instruction_rules); only the instruction itself belongs to the episode
-        given_block = ("\nTHE TASK FOR THIS EPISODE WAS GIVEN TO YOU as the dataset's per-episode instruction:\n"
-                       f"  \"{given}\"\nHow to use it is set out under ABOUT THE EPISODE'S INSTRUCTION above.\n")
-        if ctx.get("instruction_note"):
-            given_block += ctx["instruction_note"].strip() + "\n"
-        elif label:
-            given_block += (f"The dataset's coarse task label for this episode is \"{label}\"; the "
-                            "instruction above is the dataset's per-episode annotation of it, and "
-                            "the outcome is graded against it.\n")
-    if ctx.get("uploader_annotation"):
-        # notes the person who uploaded the episode sent with it (a note file beside a video, an annotation
-        # channel in an MCAP), in whatever form they came
-        given_block += ("\nTHE UPLOADER'S OWN NOTES FOR THIS EPISODE, as sent. They are claims to check against the "
-                        "video, not ground truth; where the video contradicts them, record it as a data issue:\n"
-                        + ctx["uploader_annotation"].strip() + "\n")
-    return (prompts.fixed_instructions(r, has_instruction=bool(given)) + prompts.example_block(r, example_dir),
-            EPISODE_HEADER + intro + sampling_desc(ep, pl, cell_w, cell_h, native) + "\n" + given_block)
+    blocks = present_blocks(ep, pl) if blocks is None else blocks
+    fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl, blocks))
+    return fixed + prompts.example_block(r, example_dir), episode_text(ep, pl, cell_w, cell_h, native, blocks)
 
 
 EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
@@ -766,11 +2171,16 @@ EPISODE_HEADER = "\n\nTHE EPISODE TO LABEL.\n\n"
 
 def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int | None = None,
                   max_cell_w: int | None = None, grid_cols: int = 4, grid_quality: int = 80,
-                  example_dir=None) -> dict:
+                  example_dir=None, inspect_evidence=False) -> dict:
     """Everything the harness sends for one episode (content parts), and what it records about it. cell_w fixes
     the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell."""
     ep = load(ep_dir)
     pl = plan(ep)
+    from label import contacts as lc
+    ep["contacts"] = touch_contacts(ep, pl, lc.of_episode(ep, _touch(ep, pl)))
+    ep["contacts_shown"] = chosen_contacts(ep, ep["contacts"])
+    if ep["contacts_shown"]:
+        pl["contact"] = []   # the touch signals' own contacts replace the views chosen from the gripper's value
     # An explicit cell width is used as given. The rig's default is the largest width whose grids fit the
     # request's image-size cap: a long episode at 448 px can exceed it, and is then sent at the next step
     # down rather than refused. Episodes that fit are unchanged.
@@ -779,9 +2189,13 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
         pl["contact"] = []   # wide cells already show contact in detail
     # full size is kept only where a detail view shows it: the first and last instant and the contact instants
     imgs = frames(ep, pl, gate, widths=widths, detail_ks={pl["ks"][0], pl["ks"][-1], *(pl.get("contact") or [])})
-    any_img = next(iter(imgs.values()))[pl["ks"][0]]
+    any_img = next(im[pl["ks"][0]] for im in imgs.values() if pl["ks"][0] in im)
     # a circular image with black corners names a fisheye lens in that camera's line (label/lens.py)
     ep["lens"] = {v: lens.circular_image(imgs[v]) for v in order_views(imgs)}
+    pl["sensor_evidence"] = se.build(ep, pl, shown={v: [k for k in pl["ks"] if k in im and recording_at(ep, v, k)]
+                                                  for v, im in imgs.items()}, images=imgs)
+    # depth at the detail instants, and one colour scale per camera from its readings at the sampled instants
+    depth_at = _depth_frames(ep, pl)
     if len(views(ep)) == 1:
         # one camera: a grid row holds 6 instants (still under 2048 px wide), halving the per-image overhead
         grid_cols = max(grid_cols, 6)
@@ -790,10 +2204,13 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                for k, vs in ((k, [v for v in vs if recording_at(ep, v, k)]) for k, vs in contact_views(ep, pl)) if vs]
     budget = (IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION - DETAIL_VIEW_BYTES_MAX
               - sum(len(j) for _, _, j in contact))
+    # the blocks follow from the episode and its plan, never from the cell width: found once, for every width and the
+    # record
+    blocks = present_blocks(ep, pl)
     for cell_w in widths:
         steps = timesteps(ep, pl, imgs, cell_w)
         cell_h = int(round(any_img.height * cell_w / any_img.width / 2)) * 2
-        fixed, episode = build_prompt(ep, pl, cell_w=cell_w, cell_h=cell_h, example_dir=example_dir)
+        fixed, episode = build_prompt(ep, pl, cell_w=cell_w, cell_h=cell_h, example_dir=example_dir, blocks=blocks)
         content, n_grids, grid_bytes = mf.build_content(fixed, episode, steps, cam_labels, grid_cols, detail,
                                                         grid_quality, gutter=GRID_GUTTER, header=GRID_HEADER)
         if grid_bytes <= budget:
@@ -803,12 +2220,16 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     # the first frame, the contact views in time order, then the last frame
     views_sent = []
     for k, name in ((pl["ks"][0], "first frame"), (pl["ks"][-1], "last frame")):
+        if ep.get("unavailable_instants") and ((name == "first frame" and k != 0)
+                                               or (name == "last frame" and k != pl["n"] - 1)):
+            name = name.replace("frame", "available frame")
         here = [v for v in order_views(imgs) if recording_at(ep, v, k)]
         views_sent.append((k, f"{name} of the episode",
                            cam_labels if len(here) == len(imgs) else [cam_name(ep, v) for v in here],
                            fullres_stack(ep, imgs, k, name, frame_time(ep, k), None if len(here) == len(imgs) else here)))
     views_sent[1:1] = [(k, "just after a sharp change of the recorded gripper value",
                         [cam_name(ep, v) for v in order_views(vs)], jpg) for k, vs, jpg in contact]
+    depth_sent = []
     for k, what, names, jpg in views_sent:
         extra_bytes += len(jpg)
         # the first and last views name every camera; a contact view names only its own cameras
@@ -818,12 +2239,44 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
         content.append({"type": "image_url", "image_url": {
             "url": "data:image/jpeg;base64," + base64.b64encode(jpg).decode("ascii"),
             "detail": detail}})
-    return {"content": content, "prompt": prompt, "plan": pl, "n_grids": n_grids,
-            "n_images": n_grids + len(views_sent), "image_bytes": grid_bytes + extra_bytes,
+        dv = [v for v in order_views(depth_at) if cam_name(ep, v) in names and k in depth_at[v]]
+        if dv:
+            djpg = depth_stack(ep, depth_at, dv, k, what)
+            extra_bytes += len(djpg)
+            depth_sent.append(round(frame_time(ep, k), 3))
+            dn = ", ".join(cam_name(ep, v) for v in dv)
+            content.append({"type": "text", "text": f"=== depth, {what}, t={frame_time(ep, k):.2f}s | "
+                                                    f"{'cameras' if len(dv) > 1 else 'camera'} {dn} ==="})
+            content.append({"type": "image_url", "image_url": {
+                "url": "data:image/jpeg;base64," + base64.b64encode(djpg).decode("ascii"), "detail": detail}})
+    contacts_sent, strips = [], {}
+    for c in ep.get("contacts_shown") or []:
+        got = contact_image(ep, c, gate)
+        if got is None:
+            continue
+        cjpg, strips[c["id"]] = got
+        extra_bytes += len(cjpg)
+        contacts_sent.append(c["id"])
+        content.append({"type": "text", "text": f"=== contact {c['id']}, {c.get('hand') or 'hand not named'}, "
+                                                f"{c['start_s']:.2f}-{c['end_s']:.2f}s ==="})
+        content.append({"type": "image_url", "image_url": {
+            "url": "data:image/jpeg;base64," + base64.b64encode(cjpg).decode("ascii"), "detail": detail}})
+    from label.evidence_access import Access, needs_inspection
+    access = Access(ep, pl['sensor_evidence'], plan=pl) if inspect_evidence and needs_inspection(ep, pl['sensor_evidence']) else None
+    return {**({"evidence_access": access} if inspect_evidence else {}), "sensor_evidence": pl["sensor_evidence"],
+            "content": content, "prompt": prompt, "plan": pl, "n_grids": n_grids,
+            "n_images": n_grids + len(views_sent) + len(depth_sent) + len(contacts_sent),
+            "image_bytes": grid_bytes + extra_bytes,
             "contact_s": [round(frame_time(ep, k), 3) for k in pl["contact"]],
             "given_prompt": (ep["context"].get("instruction") or "").strip() or None,
             "task_label": ep["context"].get("task_label"), "cam_labels": cam_labels,
             "cell": [cell_w, cell_h], "timesteps": [round(frame_time(ep, k), 3) for k in pl["ks"]], "lens": ep["lens"],
-            "grid_cols": grid_cols,
+            "grid_cols": grid_cols, "decode_failed": decode_failures(ep),
             "still_spans": describe_spans(ep, pl["spans"]), "views": views(ep),
-            "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s"}
+            "sampling": f"{rig(ep)}-every-{SAMPLE_EVERY_S[rig(ep)]:g}s",
+            "blocks": [b.name for b in blocks],
+            "schema_fields": list(requested_schema(ep, pl, blocks)),
+            "checks_implied": list(implied_checks(ep, pl, blocks)),
+            **({"depth_s": depth_sent, "depth_views": order_views(depth_at)} if depth_sent else {}),
+            **({"contact_views": {"shown": contacts_sent, "strips": strips}, "contacts": ep.get("contacts")}
+               if contacts_sent else {})}

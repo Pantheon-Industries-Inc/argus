@@ -3,6 +3,7 @@ real decoded video, every label consistency rule, and the sped-up recording scan
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from argparse import Namespace
@@ -14,6 +15,7 @@ import pytest
 
 from checks import capture_qc, label_consistency, stream_pairing, timebase
 from label import episode as me
+from prepare import formats
 
 REPO = Path(__file__).resolve().parent.parent
 T = 120
@@ -96,10 +98,41 @@ def test_stream_pairing_swapped_streams(tmp_path):
     assert r["left_vs_right"] > 0.9 and r["right_vs_left"] > 0.9
 
 
+def test_assumed_wrist_clock_does_not_qualify_pairing_or_jump_video(tmp_path):
+    s, vL, vR = two_grippers(1)
+    s[60:, 0] += 0.10
+    s[60:, 7] += 0.10
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"exo": levels_for(vL), "left": levels_for(vL), "right": levels_for(vR)})
+    ctx = json.loads((d / "context.json").read_text())
+    sources = json.loads((d / "sources.json").read_text())
+    finished = formats.finish_episode(d, ctx, sources, state=s,
+                                      times={"exo": np.arange(T) / 30, "left": np.arange(T) / 30,
+                                             "right": np.zeros(T)}, nominal_fps=30)
+    assert "right" in finished["camera_clock"] and "exo" not in finished["camera_clock"]
+    assert finished["state_kind"] == "ee_pose"
+    assert "not_assessed" in stream_pairing.pairing(d)
+    jump = stream_pairing.jumps(d)
+    assert jump["flagged"] is True
+    assert any(e["actor"] == "left" and e.get("visual_jump") is False for e in jump["events"])
+    assert any(e["actor"] == "right" and "not_assessed" in e for e in jump["events"])
+    capture = {c["check"]: c for c in capture_qc.run_episode(d)["checks"]}
+    assert capture["nonfinite_signal"]["status"] == "clear"
+    assert all("right" in capture[c]["why"] for c in capture_qc.CAMERA_MOTION_CHECKS)
+
+
 def test_stream_pairing_needs_two_mounted_streams(tmp_path):
     s, vL, _ = two_grippers()
     d = write_episode(tmp_path / "episode_000000", s[:, :7], {"right": levels_for(vL)})
     assert stream_pairing.pairing(d) is None
+
+
+def test_stream_pairing_and_jumps_need_state_on_anchor_frames(tmp_path):
+    s, vL, vR = two_grippers()
+    d = write_episode(tmp_path / "episode_000000", s[:-1],
+                      {"left": levels_for(vL), "right": levels_for(vR)})
+    assert "not_assessed" in stream_pairing.pairing(d)
+    assert "not_assessed" in stream_pairing.jumps(d)
 
 
 # ---------------------------------------------------------------- recorded_jumps
@@ -175,12 +208,130 @@ def test_capture_qc_frozen_camera_while_the_pose_moves(tmp_path):
     assert listed["gripper_never_acts"]["status"] == "not_applicable"      # no verified 0-1 gripper unit
 
 
+def test_a_camera_that_cannot_be_read_costs_only_its_own_capture_evidence(tmp_path):
+    """The frozen left camera of the test above, beside a right camera whose file is gone: reading every camera's
+    frames before the checks stopped at the missing file, so all 38 capture checks of the episode were errored. Only
+    the right camera is left out now, named with its error on the checks it was not run on, and the left camera's
+    frozen picture is still found."""
+    s, vL, vR = two_grippers(3)
+    frozen = vL.copy()
+    frozen[40:100] = 0.0
+    d = write_episode(tmp_path / "episode_000000", s, {"left": levels_for(frozen), "right": levels_for(vR)})
+    (d / "right.mp4").unlink()
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    assert listed["video_frozen_run"]["status"] == "fired" and [f["camera"] for f in r["flags"]
+                                                                if f["check"] == "video_frozen_run"] == ["left"]
+    assert "right" in listed["video_frozen_run"]["why"] and "FileNotFoundError" in listed["video_frozen_run"]["why"]
+    assert "FileNotFoundError" in r["metrics"]["cameras"]["right"]["error"]
+    assert listed["nonfinite_signal"]["status"] == "clear"
+    assert listed["episode_too_short"]["status"] in ("fired", "clear")
+    assert len([c for c in r["checks"] if c["status"] == "errored"]) < 10
+
+
 def test_capture_qc_live_camera(tmp_path):
     s, vL, vR = two_grippers(3)
     d = write_episode(tmp_path / "episode_000000", s, {"left": levels_for(vL), "right": levels_for(vR)})
     r = capture_qc.run_episode(d)
     assert "video_frozen_run" not in {f["check"] for f in r["flags"]}
     assert r["source"] == capture_qc.SOURCE and r["version"] == capture_qc.VERSION
+
+
+def test_capture_qc_assumed_wrist_clock_skips_its_frozen_motion_comparison(tmp_path):
+    s, vL, vR = two_grippers(3)
+    frozen = vR.copy()
+    frozen[40:100] = 0.0
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": levels_for(vL), "right": levels_for(frozen)},
+                      camera_clock={"right": {"clock_problem": "repeated timestamps"}})
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    assert not any(f["check"] == "video_frozen_run" and f["camera"] == "right" for f in r["flags"])
+    assert listed["nonfinite_signal"]["status"] == "clear"
+    assert listed["video_extreme_exposure"]["status"] in ("clear", "fired")
+
+
+def test_capture_qc_state_window_mismatch_withholds_video_motion(tmp_path):
+    s, vL, vR = two_grippers(3)
+    frozen = vL.copy()
+    frozen[40:100] = 0.0
+    d = write_episode(tmp_path / "episode_000000", s[:-1],
+                      {"left": levels_for(frozen), "right": levels_for(vR)})
+    listed = {c["check"]: c for c in capture_qc.run_episode(d)["checks"]}
+    assert listed["camera_state_alignment_mismatch"]["status"] == "fired"
+    assert listed["video_frozen_run"]["status"] == "not_applicable"
+    assert listed["nonfinite_signal"]["status"] == "clear"
+
+
+def test_capture_qc_placeholder_pixels_are_missing_frames(tmp_path):
+    s, vL, vR = two_grippers(3)
+    levels = levels_for(vL)
+    levels[20:70] = 0
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": levels, "right": levels_for(vR)},
+                      placeholder_frames={"left": [[20, 69]]})
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    camera = r["metrics"]["cameras"]["left"]
+    assert camera["decoded"] == T - 50
+    assert camera["extreme_exposure_fraction"] == 0
+    assert listed["video_decode_frame_count_mismatch"]["status"] == "fired"
+    assert "left: 70 of 120 usable frames" in listed["video_extreme_exposure"]["why"]
+    assert "left:" in listed["video_duplicate_frames"]["why"]
+    assert "left:" in listed["visual_change_unexplained_by_action"]["why"]
+    assert not any(f["check"] == "video_extreme_exposure" and f["camera"] == "left" for f in r["flags"])
+
+
+def test_capture_qc_placeholder_anchor_run_maps_to_native_frame(tmp_path):
+    s, vL, vR = two_grippers(3)
+    levels = levels_for(vL)
+    levels[19] = 0
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": levels, "right": levels_for(vR)},
+                      placeholder_frames={"left": [[20, 24]]})
+    km = np.arange(T)
+    km[20:25] = 19
+    np.save(d / "kmap_left.npy", km)
+    sources = json.loads((d / "sources.json").read_text())
+    sources["left"]["kmap"] = "kmap_left.npy"
+    (d / "sources.json").write_text(json.dumps(sources))
+    camera = capture_qc.run_episode(d)["metrics"]["cameras"]["left"]
+    assert camera["decoded"] == T - 1
+    assert camera["extreme_exposure_fraction"] == 0
+
+
+def test_capture_qc_trimmed_all_placeholder_window_has_no_pixel_assessment(tmp_path):
+    s, vL, _ = two_grippers(3)
+    levels = levels_for(vL)
+    levels[:40] = 0
+    d = write_episode(tmp_path / "episode_000000", s[:, :7], {"left": levels},
+                      placeholder_frames={"left": [[0, 39]]})
+    formats.trim_episode(d, 1.0)
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    camera = r["metrics"]["cameras"]["left"]
+    assert camera["frames"] == 30 and camera["decoded"] == 0
+    assert camera["repeated_frame_fraction"] is None
+    assert camera["longest_still_run_s"] is None
+    assert listed["video_decode_frame_count_mismatch"]["status"] == "fired"
+    for check in ("video_extreme_exposure", "video_low_contrast", "video_duplicate_frames",
+                  "video_frozen_run", *capture_qc.CAMERA_MOTION_CHECKS):
+        assert listed[check]["status"] == "not_applicable", check
+
+
+def test_capture_qc_frozen_motion_needs_usable_pairs_on_aligned_camera(tmp_path):
+    s, _, vR = two_grippers(3)
+    d = write_episode(tmp_path / "episode_000000", s,
+                      {"left": np.zeros(T), "right": levels_for(vR)},
+                      placeholder_frames={"left": [[0, T - 1]]},
+                      camera_clock={"right": {"clock_problem": "repeated timestamps"}})
+    r = capture_qc.run_episode(d)
+    listed = {c["check"]: c for c in r["checks"]}
+    assert listed["video_decode_frame_count_mismatch"]["status"] == "fired"
+    frozen = listed["video_frozen_run"]
+    assert frozen["status"] == "not_applicable"
+    assert "left" in frozen["why"] and "right" in frozen["why"]
+    assert listed["video_extreme_exposure"]["status"] in ("clear", "fired")
 
 
 # ---------------------------------------------------------------- the command line
@@ -439,12 +590,30 @@ def test_neighbour_lag_in_one_collection_is_the_neighbours_median(tmp_path):
     assert abs(ctx["timebase_neighbour_lag_frames"] - 4.0) < 0.3
 
 
+def test_measure_folder_resume_preserves_context_identity(tmp_path):
+    from label.evidence_access import source_proof, same_source_proof
+    for i in range(4):
+        _tb_episode(tmp_path, f'episode_B_{i:06d}', i, 'collection_B', lag=4)
+    timebase.measure_folder(tmp_path)
+    ep = tmp_path / 'episode_B_000001'
+    path = ep / 'context.json'
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    ctx = json.loads(path.read_text())
+    proof = source_proof(ctx, ep)
+    timebase.measure_folder(tmp_path)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    assert same_source_proof(proof, ctx, ep)
+    assert not same_source_proof([None], ctx, ep)
+    path.write_text(path.read_text() + ' ')
+    assert same_source_proof(proof, json.loads(path.read_text()), ep) is False
+
+
 def test_a_one_arm_recorders_folder_builds_its_request(tmp_path):
     """Our own capture stack with one arm (its follower joints and gripper, and its leader's commands): read as one
     episode with 7 values of joint state and the leader as action, which must build its request."""
     from prepare import formats
     from test_formats import recorder_folder
-    d = recorder_folder(tmp_path / "upload", n=90)
+    d = recorder_folder(tmp_path / "upload", n=90, duplicate_stamps=False)
     for p in list(d.iterdir()):
         if "right" in p.name:
             p.unlink()
@@ -537,3 +706,316 @@ def test_the_sped_up_lag_is_a_time_at_the_recordings_own_rate():
     assert tb.is_sped_up(3.4, 0.03, 0.0, 3.4, fps=15) is False
     assert tb.is_sped_up(1.7, 0.03, 0.0, 1.7, fps=15) is True
     assert "1.7 frames at 15 fps" in tb.rule_text(15)
+
+
+
+def test_a_pairing_check_that_crashes_is_recorded_as_errored(tmp_path, monkeypatch):
+    """A crash in one of the three checks is that check's result, with the error, never a missing one."""
+    def boom(d):
+        raise ValueError("boom")
+    monkeypatch.setitem(stream_pairing.MODES, "jumps", ("recorded_jumps", boom, "flagged"))
+    d, r, err = stream_pairing._safe("jumps", str(tmp_path / "episode_000000"))
+    assert err is None and r == {"error": "ValueError: boom", "flagged": False}
+
+
+def test_a_sensor_check_that_crashes_is_errored_and_the_others_are_kept(tmp_path, monkeypatch):
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    ctx = json.loads((ep / "context.json").read_text())
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+
+    def boom(e):
+        raise ValueError("boom")
+    monkeypatch.setattr(sc, "clock_findings", boom)
+    r = sc.run_episode(ep)
+    st = {c["check"]: c for c in r["checks"]}
+    assert st["clock_offset"]["status"] == "errored" and "ValueError: boom" in st["clock_offset"]["error"]
+    assert st["constant"]["status"] in ("fired", "clear") and st["no_reading"]["status"] in ("fired", "clear")
+
+
+def test_the_page_shows_a_check_that_crashed_as_an_error():
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("errored_checks.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_nan_state_row_is_left_out_and_too_few_readings_are_not_assessed(tmp_path):
+    """One NaN state row made stream pairing's correlations NaN and the gripper range NaN, both read as clear though
+    they measured nothing. Each is measured over the frames with a reading, giving what the whole state gives less
+    those frames; an arm or gripper with readings at under half its frames is not assessed, never clear."""
+    s, vL, vR = two_grippers()
+    s[40, 0:7] = np.nan                        # one left row
+    d = write_episode(tmp_path / "episode_000000", s, {"left": levels_for(vL), "right": levels_for(vR)})
+    r = stream_pairing.pairing(d)
+    assert r["crossed"] is False and r["left_vs_left"] > 0.9 and r["right_vs_right"] > 0.9
+    g = stream_pairing.grippers(d)
+    assert g["flagged"] is False and "not_assessed" not in g
+    assert g["actors"]["left"]["frames_without_reading"] == 1 and g["actors"]["left"]["min"] == pytest.approx(0.2)
+    s2 = s.copy()
+    s2[: T * 2 // 3, 7:14] = np.nan            # the right arm reads at a third of the frames
+    d2 = write_episode(tmp_path / "episode_000001", s2, {"left": levels_for(vL), "right": levels_for(vR)})
+    r = stream_pairing.pairing(d2)
+    assert set(r) == {"not_assessed"} and "right" in r["not_assessed"] and "too few to check" in r["not_assessed"]
+    g = stream_pairing.grippers(d2)
+    assert g["flagged"] is False and "right gripper" in g["not_assessed"] and "flat" not in g["actors"]["right"]
+    # a gripper found flat still fires beside one that could not be read
+    s2[:, 6] = 0.5
+    d3 = write_episode(tmp_path / "episode_000002", s2, {"left": levels_for(vL), "right": levels_for(vR)})
+    g = stream_pairing.grippers(d3)
+    assert g["flagged"] is True and "not_assessed" not in g and "not_assessed" in g["actors"]["right"]
+
+
+def test_a_one_dimensional_or_empty_signal_never_costs_the_others(tmp_path):
+    """A signal stored as one value per frame without a column crashed the episode's request and errored every signal
+    check, and a signal with no rows read clear on every check. The vector is read as one column, so it is checked and
+    shown like any other; the empty signal has no reading at any frame, the other checks name it as not run on it, and
+    the prompt names it. With no signal that has rows, the signal checks are not assessed, never clear."""
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.linspace(0, 1, 300).astype(np.float32)
+    z["s4"] = np.zeros((0, 3), np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe vector", "key": "s3", "dims": 1},
+                       {"name": "probe empty", "key": "s4", "dims": 3}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    r = sc.run_episode(ep)
+    st = {c["check"]: c for c in r["checks"]}
+    assert not any(c["status"] == "errored" for c in r["checks"])
+    assert any(n["check"] == "no_reading" and n["signal"] == "probe empty"
+               and n["evidence"] == "probe empty has no reading at 300 of 300 frames" for n in r["notes"])
+    assert st["no_reading"]["status"] == "fired" and "not_run_on" not in st["no_reading"]
+    assert st["pinned"]["status"] == "clear"
+    assert st["pinned"]["not_run_on"] == "probe empty (it has no reading at any frame)"
+    e = me.load(ep)
+    assert e["signals"]["probe vector"].shape == (300, 1)
+    pl = me.plan(e)
+    text = me._signals_table(e, pl)
+    assert "probe vector" in text and "probe empty: no rows, so no reading at any frame" in text
+    assert any("probe vector" in row for row in me._signal_readout(e, pl)[0])
+    only = tmp_path / "only" / "episode_000000"
+    shutil.copytree(ep, only)
+    np.savez(only / "signals.npz", s4=np.zeros((0, 3), np.float32))
+    (only / "context.json").write_text(json.dumps({**ctx, "state_kind": "none", "signals": ctx["signals"][-1:]}))
+    st = {c["check"]: c for c in sc.run_episode(only)["checks"]}
+    assert st["constant"]["status"] == "na" and st["constant"]["why"].startswith("no signal could be checked")
+    assert st["no_reading"]["status"] == "fired"
+
+
+def test_a_signal_that_stops_short_or_never_reads_is_counted_over_every_frame(tmp_path):
+    """A signal with rows for half the episode's frames was judged on its own rows, so it read as having a reading
+    throughout, and a signal with no reading at any frame was left out of the other checks without a word. Every
+    signal is judged over all the episode's frames: past its last row it has no reading, and one with no reading at
+    any frame is named by the other checks as not run on it."""
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.linspace(0, 1, 150).astype(np.float32).reshape(-1, 1)      # 150 rows of the episode's 300 frames
+    z["s4"] = np.full((300, 2), np.nan, np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe short", "key": "s3", "dims": 1},
+                       {"name": "probe unread", "key": "s4", "dims": 2}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    r = sc.run_episode(ep)
+    ev = {n["signal"]: n["evidence"] for n in r["notes"] if n["check"] == "no_reading"}
+    assert ev == {"probe short": "probe short has no reading at 150 of 300 frames",
+                  "probe unread": "probe unread has no reading at 300 of 300 frames"}
+    st = {c["check"]: c for c in r["checks"]}
+    assert st["pinned"]["not_run_on"] == "probe unread (it has no reading at any frame)"
+    assert "not_run_on" not in st["no_reading"]
+
+
+def test_a_signal_longer_than_the_episode_is_judged_over_the_episode_alone(tmp_path):
+    """A signal with rows past the episode's last frame was judged over all its rows: 150 rows with no reading after
+    the footage ends read as "no reading at 150 of 450 frames" for a signal that reads at every frame of the episode.
+    It is judged over the episode's frames only."""
+    from checks import sensors as sc
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.concatenate([np.linspace(0, 1, 300), np.full(150, np.nan)]).astype(np.float32).reshape(-1, 1)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe long", "key": "s3", "dims": 1}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    r = sc.run_episode(ep)
+    assert not [n for n in r["notes"] if n.get("signal") == "probe long"], r["notes"]
+
+
+def test_a_signal_with_fewer_rows_than_the_episode_never_costs_the_request(tmp_path):
+    """A moving signal with rows for half the episode's frames crashed the whole request where the instants are chosen
+    by where the signals fall quiet (label/signals.py quiet_spans stacks every signal over the episode's frames). It is
+    read with no reading past its last row, so the request is built and the prompt names the frames it has no reading
+    at."""
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    t = np.linspace(0, 6, 150, dtype=np.float32)
+    z["s3"] = np.stack([np.sin(t), np.cos(t)], axis=1)                    # 150 rows of the episode's 300 frames
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe short", "key": "s3", "dims": 2}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    e = me.load(ep)
+    a = e["signals"]["probe short"]
+    assert a.shape == (300, 2) and np.isfinite(a[:150]).all() and np.isnan(a[150:]).all()
+    pl = me.plan(e)
+    line = next(x for x in me._signals_table(e, pl).splitlines() if x.strip().startswith("probe short"))
+    assert line.endswith("; no reading at 150 of 300 frames"), line
+
+
+def test_a_state_that_stops_short_is_told_by_the_readers_note_not_as_a_layout(tmp_path):
+    """An arm sensor file cut at 17.6 s of 39.1 s leaves no state (its readings do not cover the footage), and the
+    RECORDED STATE line said the episode has no arm state in the layout our checks read, which is false: the layout is
+    fine and the arm data stops early. When a signal whose name says joints or a state has no reading over part of the
+    episode, the line gives the reader's own note on the state. A state that is all there in a layout the checks do not
+    read keeps the line as it was."""
+    from test_board_sensors import _episode
+    note = ("Labelled from the cameras, because the recorded arm state does not cover the footage's time: "
+            "/yam_left/joint_state has readings from 0.0 s to 5.0 s of the footage's 10.0 s.")
+
+    def line(stops_short: bool, state_note: str) -> str:
+        ep = _episode(tmp_path / f"eps_{stops_short}_{len(state_note)}")
+        z = dict(np.load(ep / "signals.npz"))
+        joints = np.tile(np.linspace(0, 1, 300, dtype=np.float32)[:, None], (1, 6))
+        if stops_short:
+            joints[150:] = np.nan
+        z["s3"] = joints
+        np.savez(ep / "signals.npz", **z)
+        ctx = json.loads((ep / "context.json").read_text())
+        ctx["signals"].append({"name": "/yam_left/joint_state joint_pos", "key": "s3", "dims": 6,
+                               "names": [f"j{i}" for i in range(6)]})
+        (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none", "state_note": state_note}))
+        e = me.load(ep)
+        return me._no_state_text(e, me.plan(e)).strip().splitlines()[0]
+    cut = line(True, note)
+    assert cut.startswith("RECORDED STATE: no arm state was read. The reader's note on it: " + note)
+    assert "layout" not in cut
+    layout = ("Labelled from the video: the recorded state has 6 values per frame, and our checks expect 7 per arm "
+              "(six joints and a gripper).")
+    assert line(False, layout).startswith("RECORDED STATE: no arm state in the layout our checks read.")
+
+
+def test_the_recorded_state_line_says_why_there_is_no_state_as_the_reader_recorded_it(tmp_path):
+    """The RECORDED STATE line said "no arm state in the layout our checks read" for recordings that hold no state at
+    all, whose sensor file could not be read (even when the other files cover the footage), whose state stops short or
+    sits on a clock placed from both starts. The reader records why in state_why: "layout" keeps the layout line, word
+    for word; every other reason says no state was read, why, and gives the reader's note. A context written before
+    state_why reads as it did."""
+    from test_board_sensors import _episode
+    note = "Labelled from the cameras, because the reader's note says so."
+    layout = "RECORDED STATE: no arm state in the layout our checks read."
+
+    def line(state_why, stops_short=False) -> str:
+        ep = _episode(tmp_path / f"eps_{state_why}_{stops_short}")
+        z = dict(np.load(ep / "signals.npz"))
+        joints = np.tile(np.linspace(0, 1, 300, dtype=np.float32)[:, None], (1, 6))
+        if stops_short:
+            joints[150:] = np.nan
+        z["s3"] = joints
+        np.savez(ep / "signals.npz", **z)
+        ctx = json.loads((ep / "context.json").read_text())
+        ctx["signals"].append({"name": "/yam_left/joint_state joint_pos", "key": "s3", "dims": 6,
+                               "names": [f"j{i}" for i in range(6)]})
+        ctx = {**ctx, "state_kind": "none", "state_note": note, **({"state_why": state_why} if state_why else {})}
+        (ep / "context.json").write_text(json.dumps(ctx))
+        e = me.load(ep)
+        return me._no_state_text(e, me.plan(e)).strip().splitlines()[0]
+    assert set(me.STATE_WHY) == {"layout", "not_recorded", "unreadable", "short", "assumed_clock"}
+    assert line("layout").startswith(layout + " The signal whose name says joints")
+    assert line("layout", stops_short=True).startswith(layout)
+    assert line("not_recorded").startswith("RECORDED STATE: no arm state in the layout our checks read.")
+    said = {"unreadable": "as a sensor file that may hold it could not be read",
+            "short": "as it does not cover the footage",
+            "assumed_clock": "as a contributing state channel needs an assumed alignment with the cameras"}
+    for why, reason in said.items():
+        # an unreadable sensor file whose other files cover the footage (no signal stops short) gives the note too;
+        # a recording that holds no state needs no note, which can only say so again
+        tail = f" The reader's note on it: {note} The signal whose name says joints"
+        assert line(why).startswith(f"RECORDED STATE: no arm state was read, {reason}.{tail}"), why
+    # no state_why: as before the reader wrote it
+    assert line(None).startswith(layout)
+    assert line(None, stops_short=True).startswith("RECORDED STATE: no arm state was read. The reader's note on it: "
+                                                   + note)
+
+
+def test_a_signal_the_same_wherever_it_reads_is_never_told_as_the_same_at_every_frame(tmp_path):
+    """A signal that read one value for half the episode and nothing after was told to the model as "The same at every
+    frame". It is the same wherever it reads, and the line says at how many frames it has no reading; a signal that
+    reads the same at every frame keeps its line."""
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    z["s3"] = np.concatenate([np.full((150, 2), 0.5), np.full((150, 2), np.nan)]).astype(np.float32)
+    z["s4"] = np.full((300, 1), 2.0, np.float32)
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"] += [{"name": "probe half", "key": "s3", "dims": 2}, {"name": "probe full", "key": "s4", "dims": 1}]
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none"}))
+    e = me.load(ep)
+    lines = me._signals_table(e, me.plan(e)).splitlines()
+    every = next(x for x in lines if x.strip().startswith("The same at every frame"))
+    assert "probe full 2" in every and "probe half" not in every, every
+    assert "  The same wherever it reads: probe half [0.5, 0.5] (no reading at 150 of 300 frames)" in lines, lines
+
+
+def test_with_no_signal_a_state_the_reader_could_not_read_is_never_told_as_not_recorded():
+    """With no other signal, no note and no unread list, the line said "this dataset records no robot or gripper
+    state" whatever the reader said: false when the state is in another layout, unreadable, short or on an assumed
+    clock. Those say none was read from this episode; a recording with no state, and a context with no state_why, read
+    as before."""
+    ep = {"context": {"dataset": "you/rig", "fps": 30, "profile": "teleop_arms", "state_kind": "none",
+                      "cameras": {"exo": {"width": 640, "height": 480}}},
+          "state": np.zeros((300, 0)), "sources": {"exo": {}}, "signals": {}}
+    pl = {"n": 300, "ks": [0, 150], "spans": [], "state_usable": False, "contact": []}
+
+    def line(why):
+        e = {**ep, "context": {**ep["context"], **({"state_why": why} if why else {})}}
+        return me._no_state_text(e, pl).strip()
+    records = "RECORDED STATE: none; this dataset records no robot or gripper state, so the video is all there is."
+    assert line(None) == records and line("not_recorded") == records
+    for why in ("layout", "unreadable", "short", "assumed_clock"):
+        assert line(why) == "RECORDED STATE: none was read from this episode, so the video is all there is.", why
+
+
+def test_a_joints_signal_longer_than_the_episode_is_judged_short_over_the_episode_alone(tmp_path):
+    """Rows past the episode's last frame with no reading made a joints signal read as stopping short, so a context
+    with no state_why gave the reader's note instead of the layout line. Only the episode's frames are judged."""
+    from test_board_sensors import _episode
+    ep = _episode(tmp_path / "eps")
+    z = dict(np.load(ep / "signals.npz"))
+    joints = np.tile(np.linspace(0, 1, 300, dtype=np.float32)[:, None], (1, 6))
+    z["s3"] = np.concatenate([joints, np.full((100, 6), np.nan, np.float32)])
+    np.savez(ep / "signals.npz", **z)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["signals"].append({"name": "/arm/joint_state joint_pos", "key": "s3", "dims": 6,
+                           "names": [f"j{i}" for i in range(6)]})
+    (ep / "context.json").write_text(json.dumps({**ctx, "state_kind": "none", "state_note": "a layout note"}))
+    e = me.load(ep)
+    assert me._no_state_text(e, me.plan(e)).strip().startswith(
+        "RECORDED STATE: no arm state in the layout our checks read.")
+
+
+def test_a_short_signal_of_whole_numbers_is_padded_with_no_reading():
+    """pad_rows kept the input's type, so a signal stored as whole numbers could not hold "no reading" past its rows."""
+    from label import signals as sg
+    a = sg.pad_rows(np.arange(6, dtype=np.int64).reshape(3, 2), 5)
+    assert a.dtype.kind == "f" and a.shape == (5, 2) and np.isnan(a[3:]).all() and a[2, 1] == 5
+
+
+def test_the_checks_write_context_json_without_loading_the_model_harness():
+    """The checks wrote context.json through label/harness.py, so every check step loaded the model harness to write a
+    file. The atomic write lives in label/atomic.py, which the checks, the board and the readers import alone."""
+    import subprocess
+    import sys
+    repo = Path(__file__).resolve().parent.parent
+    code = ("import sys; from label.atomic import write_atomic; import checks.capture_qc, checks.stream_pairing, "
+            "checks.sensors, checks.timebase, label.pieces; print('label.harness' in sys.modules)")
+    r = subprocess.run([sys.executable, "-c", code], cwd=repo, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and r.stdout.strip() == "False", r.stdout + r.stderr

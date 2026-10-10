@@ -10,7 +10,14 @@ footage comes from and its license (`dataset_source`, from board/dataset_sources
 prepare/ reads), the manifest's rules applied, and the label consistency check (checks/label_consistency.py:
 annotations that contradict themselves are reported in label_consistency, never used to edit a label). A
 recording labelled in parts carries the parts it was stitched from and the issues set aside at our cuts
-(carry_pieces), and an outcome or severity outside its known values is shown as "unclear" (normalize_enums).
+(carry_pieces), and an outcome or severity outside its known values is shown as "unclear" (normalize_enums). An
+episode whose model reply did not parse or was cut off is on the board too, with its footage, checks and sensors, no
+labels, the reply itself, and a data issue saying so (label_failure); a rerun's reply of that kind never replaces a
+label that parsed. So is every episode that got no reply at all (the spend cap reached, a request that could not be
+built), saying why, and on an entry whose run labels every episode of its folder (labels_every_episode) every
+prepared episode the run never reached; one whose reply the board cannot read, with the reply and the error; and one
+whose context.json does not read, with its labels and an issue saying so (context_unreadable): one episode never stops
+the build.
 
 manifest.json. Paths are absolute or relative to the board folder; a run given as RUNS/<dataset>/latest is that
 dataset's newest finished run that is not a dry run (run ids start with their start time).
@@ -21,10 +28,13 @@ dataset's newest finished run that is not a dry run (run ids start with their st
         "run": "../../runs/molmo/latest",                     a run folder: run.json and out/
         "episodes": "../../episodes/molmo/quickstart",        the prepared episodes the run labelled
         "rules": [...],                                       optional: definitions applied after labelling
-        "file_prefix": "..."},                                optional: a prefix for its board file names
+        "file_prefix": "...",                                 optional: a prefix for its board file names
+        "labels_every_episode": true},                        optional: the run labels every episode of the folder,
+                                                              so one it has no reply for is listed (own_data_entry)
        ...],
      "comparisons": [...],                                    optional: other models' runs (compare/metrics.py)
-     "hands": {"src": KEYPOINT_RUN, "clips": CLIPS}}          optional: hand pose overlay (board/hands.py)
+     "hands": {"src": KEYPOINT_RUN, "clips": CLIPS},          optional: hand pose overlay (board/hands.py)
+     "sensors": false}                                        optional: no sensors files (board/sensors.py)
 
 configs/quickstart/board.json is a complete manifest for the quickstart runs.
 
@@ -73,23 +83,32 @@ folder the board plays. They go to BOARD/hands/, one file per label file, timed 
 the episode page draws over the footage, and to BOARD/hand_keypoints/, a download in the dataset video's own
 pixels and frame times (board/hands.py). Neither goes into qa/, so nothing the board counts or exports as labels
 includes them. The keypoints are for non-commercial use only, which every file says.
+
+Episodes whose prepared folder has other signals (signals.npz: a force, joint velocities, a pressure map) or depth
+streams (depth.json) get a sensors file each in BOARD/sensors/, with BOARD/sensors/index.json listing them
+(board/sensors.py), which the episode page draws under its timeline. Nothing in the manifest is needed: the build reads
+the dataset entries' "episodes" folders, and a board none of whose episodes has either gets no sensors/ and the same
+BUILT.json as before. "sensors": false in the manifest turns it off. Like hands/, nothing that reads qa/ reads it.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
 import sys
 from pathlib import Path
 
-from board.to_board import convert, label_outputs
+from board.to_board import (and_list, convert, dumps, field_words, label_failed, label_outputs, off_schema_text,
+                            typed)
 from checks import label_consistency
+from label.atomic import write_atomic
 
 SEVERITIES = ["low", "medium", "high"]
 # the deterministic checks copied from context.json into the episode's dataset_checks
-CONTEXT_CHECKS = ("stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc")
+CONTEXT_CHECKS = ("stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "sensor_checks")
 # the public datasets' publishers and licenses, by the Hub repository an episode's context.json names
 SOURCES = {k: v for k, v in json.loads((Path(__file__).resolve().parent / "dataset_sources.json").read_text()).items()
            if not k.startswith("_")}
@@ -113,8 +132,9 @@ def episode_seconds(ctx: dict, ep_dir: Path | None = None) -> float | None:
         return float(ctx["duration_s"])
     if ep_dir is not None and ctx.get("real_times") and (ep_dir / ctx["real_times"]).exists():
         import numpy as np
-        z = np.load(ep_dir / ctx["real_times"])
-        cam = next((k for k in ("exo", "left", "right") if k in z.files), None)
+        from prepare.camera_clock import load_times
+        z = load_times(ep_dir, ctx)
+        cam = next((k for k in ("exo", "left", "right") if k in z), None)
         if cam is not None and len(z[cam]) > 1:
             t = z[cam].astype(float)
             return float(t[-1] - t[0] + np.median(np.diff(t)))
@@ -177,12 +197,225 @@ def apply_rules(d: dict, ctx: dict, rules: list) -> None:
             raise ValueError(f"unknown rule kind {kind!r}")
 
 
-def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
+# what the reader did not read of an upload, by kind (prepare/formats.py writes these into context["source"])
+READER_LEFT_OUT = (("unused_cameras", "cameras"), ("unused_signals", "signals"), ("unused_arrays", "arrays"),
+                   ("unused_depth", "depth"))
+
+
+def reader_notes(ctx: dict) -> dict | None:
+    """What the reader says about an episode beyond what it read: its note on the recorded state (state_note) and what
+    of the upload it did not read, each with its reason (context["source"] unused_*). The model never saw these. The
+    prompt states them only where they explain an absence (label/episode.py, the no state block); the board always
+    shows them, so a field the model never saw is never a silent gap. None when there is nothing to say."""
+    src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
+    left = {kind: [str(x) for x in src[key]] for key, kind in READER_LEFT_OUT
+            if isinstance(src.get(key), (list, tuple)) and src[key]}
+    note = ctx["state_note"].strip() if isinstance(ctx.get("state_note"), str) else ""
+    if not note and not left:
+        return None
+    return {**({"state_note": note} if note else {}), **({"left_out": left} if left else {})}
+
+
+_FAMILIES = None
+
+
+def label_failure(result: dict | None) -> list[dict]:
+    """The data issue of an episode whose model reply gave no labels (board/to_board.py label_failed): one entry of
+    kind model_reply_cut_off or model_reply_unparsed, which raises the family label-failed, so the episode is on the
+    board with its footage, checks and sensors and the filter finds it. A long recording stitched from the parts that
+    parsed (label/pieces.py stitch_run) has one entry of kind part_not_labelled per part that gave none, at its span,
+    with the start of that part's reply (reply_head) when it gave one. Nothing for a reply that parsed whole."""
+    if not isinstance(result, dict):
+        return []
+    st = result.get("stitched") if isinstance(result.get("stitched"), dict) else {}
+    gaps = [{"kind": "part_not_labelled", "t0_s": g.get("t0_s"), "t1_s": g.get("t1_s"),
+             "what": f"Part {g.get('part')} of {st.get('parts')} of this long recording, from {float(g['t0_s']):.1f} s "
+                     f"to {float(g['t1_s']):.1f} s, has no labels, as {g.get('why') or 'its reply gave none'}; the "
+                     "labels come from the other parts.",
+             **({"reply_head": g["raw_head"]} if g.get("raw_head") else {})}
+            for g in st.get("missing") or [] if isinstance(g, dict) and g.get("t0_s") is not None
+            and g.get("t1_s") is not None] if label_failed(result) is None else []
+    lf = label_failed(result)
+    if lf is None:
+        return gaps + off_schema(result)
+    rest = "so this episode has no labels; its footage, checks and sensors are shown as recorded"
+    if lf["status"] == "no_part":
+        def said(why: str) -> str:
+            w = str(why or "")
+            # a reason the harness recorded for no reply (the spend cap reached) is kept in brackets
+            detail = w[w.index("("):] if "no reply (" in w else ""
+            return ("was cut off at the output limit" if "cut off" in w else
+                    f"never answered {detail}".strip() if "no reply" in w else
+                    "has an output file that does not read" if "does not read" in w else
+                    "did not parse" if "parse" in w else w or "gave no labels")
+        each = [f"part {g.get('part')} {said(g.get('why'))}" for g in lf["parts"]]
+        listed = ", ".join(each[:-1]) + f" and {each[-1]}" if len(each) > 1 else each[0]
+        return [{"kind": "no_part_labelled",
+                 "what": f"No part of this long recording has labels: {listed}. It is shown with its footage, checks "
+                         "and sensors as recorded."}]
+    if lf["status"] == "no_reply":
+        return [{"kind": "model_no_reply",
+                 "what": "The model gave no reply for this episode "
+                         f"({str(lf.get('why') or 'no reason recorded').rstrip('.')}), {rest}."}]
+    if lf["status"] == "not_shown":
+        return [{"kind": "model_reply_not_shown",
+                 "what": f"The model's reply parsed but the board could not read it ({lf.get('error')}), {rest}; the "
+                         "reply is kept as it came."}]
+    if lf["status"] == "unreadable":
+        return [{"kind": "label_output_unreadable",
+                 "what": f"The labelling run's output file for this episode does not read ({lf.get('error')}), "
+                         f"{rest}."}]
+    if lf["status"] == "cut_off":
+        n = lf.get("out_tokens")
+        return [{"kind": "model_reply_cut_off",
+                 "what": f"The model's reply was cut off at the output limit{f' after {n:,} tokens' if n else ''} and "
+                         f"did not parse, {rest}."}]
+    return [{"kind": "model_reply_unparsed", "what": f"The model's reply did not parse as JSON, {rest}."}]
+
+
+# the fields every rig's output format asks for (label/prompts.py), named when a reply with no timeline leaves them out
+SCHEMA_KEYS = ("timeline", "task_summary", "key_events", "data_issues", "operator_mistakes")
+
+
+def off_schema(result: dict) -> list[dict]:
+    """The data issues of a reply that parsed but broke the output format, each field in plain words: one of kind
+    model_reply_off_schema when it has no timeline, or one that is not a list (it gave none of the steps every rig's
+    format asks for, so the episode has no steps; what else it left out and what it gave are named, and what it gave
+    is shown), and one of kind model_reply_fields_dropped naming the other rows and fields left out of what is shown
+    for being of the wrong type (board/to_board.py typed), for a long recording those of every part. Nothing for a
+    reply that keeps to the format."""
+    if "labels" not in result:
+        return []
+    out = []
+    raw = result["labels"] if isinstance(result["labels"], dict) else {}
+    labels, dropped = typed(result)
+    if not isinstance(labels.get("timeline"), list) and not result.get("stitched"):
+        from label.harness import json_kind
+        given = raw.get("timeline")
+        lead = ("The model's reply has no timeline" if given is None else
+                f"The model's reply gives its timeline as {json_kind(given)}, not a list")
+        missing = [field_words(k) for k in SCHEMA_KEYS if k != "timeline" and raw.get(k) is None]
+        # what it gives in the output format: a field given as null is not given, and the timeline is named above
+        gave = sorted(field_words(k) for k, v in labels.items()
+                      if not str(k).startswith("_") and k != "timeline" and v is not None)
+        wrong = [x for x in dropped if "row" not in x and x.get("field") != "timeline"]
+        rest = (f"gives only the {and_list(gave)}; what it gives is shown." if gave else
+                "nothing else it gives keeps to the output format." if wrong else "gives nothing else.")
+        said = f"It leaves out the {and_list(missing)}, and {rest}" if missing else (
+            f"It {rest}" if gave or not wrong else rest[0].upper() + rest[1:])
+        out.append({"kind": "model_reply_off_schema", "what": f"{lead}, so this episode has no steps. {said}"})
+        # the timeline is named there once, never again among the fields left out
+        dropped = [x for x in dropped if x.get("field") != "timeline" or "row" in x]
+    left = off_schema_text(dropped)
+    if left:
+        out.append({"kind": "model_reply_fields_dropped",
+                    "what": f"The model's reply broke the output format, so {left} left out of what is shown; the rest "
+                            "of its labels are shown."})
+    return out
+
+
+def steps_outside(d: dict, result: dict | None = None) -> list[dict]:
+    """The data issue of a reply whose times do not fit the episode, every time the page draws at the episode's edge:
+    kind model_steps_outside_episode, naming how many steps lie past the episode's end, start before it and end before
+    they start, and how many key events lie outside it, and for a long recording labelled in parts (result, its
+    stitched record) how many steps and key events of each part lie outside that part's own footage, which the stitch
+    put in a neighbouring part's (label/pieces.py outside_part). They are kept as the model gave them; the page draws
+    the timeline to the episode's length with each time outside it at its edge, which the sentence says only when there
+    is one. A time within STEP_SLACK_S of an edge is a rounding. The episode's edges are judged only when its length
+    is a known number (not estimated)."""
+    from label.episode import STEP_SLACK_S
+    dur = d.get("duration_s")
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    one = lambda xs, a, b: a if len(xs) == 1 else b
+    said, edge, parts = [], False, []
+    if num(dur) and math.isfinite(dur) and dur > 0 and not d.get("duration_estimated"):
+        lo, hi = -STEP_SLACK_S, dur + STEP_SLACK_S
+        steps = [e for e in d.get("event_labels") or [] if isinstance(e, dict)]
+        keys = [k for k in d.get("key_events") or [] if isinstance(k, dict)]
+        past = [e for e in steps if any(num(e.get(k)) and e[k] > hi for k in ("t_s", "end_s"))]
+        early = [e for e in steps if any(num(e.get(k)) and e[k] < lo for k in ("t_s", "end_s"))]
+        back = [e for e in steps if num(e.get("t_s")) and num(e.get("end_s")) and e["end_s"] < e["t_s"]]
+        stray = [k for k in keys if num(k.get("t_s")) and not lo <= k["t_s"] <= hi]
+        said = [f"{len(past)} of its {len(steps)} steps {one(past, 'lies', 'lie')} past the episode's end at "
+                f"{dur:.1f} s" if past else "",
+                f"{len(early)} {one(early, 'starts', 'start')} before the episode does" if early else "",
+                f"{len(back)} {one(back, 'ends before it starts', 'end before they start')}" if back else "",
+                f"{len(stray)} of its {len(keys)} key events {one(stray, 'lies', 'lie')} outside the episode"
+                if stray else ""]
+        edge = bool(past or early or stray)
+    st = (result or {}).get("stitched") if isinstance((result or {}).get("stitched"), dict) else {}
+    for p in st.get("outside_part") or []:
+        if not isinstance(p, dict) or not (num(p.get("t0_s")) and num(p.get("t1_s"))):
+            continue
+        n, k = int(p.get("steps") or 0), int(p.get("key_events") or 0)
+        what = [f"{n} {'step' if n == 1 else 'steps'}" if n else "", f"{k} key {'event' if k == 1 else 'events'}"
+                if k else ""]
+        what = [x for x in what if x]
+        if what:
+            parts.append(f"{' and '.join(what)} of part {p.get('part')} {'lies' if n + k == 1 else 'lie'} outside that "
+                         f"part's footage, from {p['t0_s']:.1f} s to {p['t1_s']:.1f} s")
+    said = [x for x in said if x] + parts
+    if not said:
+        return []
+    # a part's span holds commas, so a list with one is told with semicolons
+    listed = (and_list(said) if not parts else said[0] if len(said) == 1
+              else "; ".join(said[:-1]) + f"; and {said[-1]}")
+    return [{"kind": "model_steps_outside_episode",
+             "what": f"The model's timeline does not fit the episode: {listed}. They are kept as given"
+                     + (", and the timeline is drawn to the episode's length with the times outside it at its edge."
+                        if edge else ".")}]
+
+
+def reader_issues(ctx: dict, result: dict | None = None) -> list[dict]:
+    """The problems an episode was kept and flagged with, each with the family it raises (board/families.py
+    reader_family), so the page shows each as a data issue under that family's name: context.json reader_issues
+    ({"kind", "what", and optionally "camera", "signal", "t0_s", "t1_s"}: a camera clip shorter than the episode or a
+    camera that does not decode among them, board/clips.py record_cameras), then a model reply that gave no labels
+    (label_failure), then the stretches the labelling run could not decode a camera's file at, from its record
+    (decode_failed, label/episode.py decode_failures), as kind camera_decode_failed. An entry without a kind and a
+    sentence says nothing and is left out."""
+    global _FAMILIES
+    if _FAMILIES is None:
+        from board.families import Families
+        _FAMILIES = Families()
+    found = list(ctx.get("reader_issues") or []) + label_failure(result)
+    found += [{"kind": "camera_decode_failed", **x} for x in (result or {}).get("decode_failed") or []
+              if isinstance(x, dict)]
+    return [{**x, "family": _FAMILIES.reader_family(str(x["kind"]))} for x in found
+            if isinstance(x, dict) and x.get("kind") and isinstance(x.get("what"), str) and x["what"].strip()]
+
+
+def add_reader_issues(d: dict, ctx: dict, result: dict | None = None) -> None:
+    """The episode's reader_issues (reader_issues) into its dataset_checks, when it has any."""
+    issues = reader_issues(ctx, result)
+    if issues:
+        d["dataset_checks"] = d.get("dataset_checks") or {}
+        d["dataset_checks"]["reader_issues"] = issues
+
+
+def dataset_label(s: dict) -> dict:
+    """One of the dataset's timed labels for the board: its start and end in seconds, a label with no end time a
+    moment (its end its start), and a time that is not a number null, which the page shows untimed."""
+    from label.episode import number
+    t0, t1 = number(s.get("t0")), number(s.get("t1"))
+    # OpenAoE labels stored before prepare/openaoe.py hand_phrase
+    return {"t0": t0, "t1": t1 if t1 is not None or s.get("t1") is not None else t0,
+            "label": str(s["label"]).replace("(both hand)", "(both hands)")}
+
+
+def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) -> None:
     """What the episode's context.json adds to its label: the rig, the real length, the deterministic checks, the
     dataset's own labels (timed segments, as OpenAoE, Galaxea and Gen-HumanEgo ship them, and episode-level status
     and spans, as HABIT does), so a claim that they disagree with the footage can be judged on the board, and the
-    dataset's publisher and license, which travel with its labels into every download."""
+    dataset's publisher and license, which travel with its labels into every download. result is the labelling run's
+    own output, for the contacts it found when the context has none (add_contacts)."""
+    from prepare.formats import clock_context
+    ctx = clock_context(ctx)
     d["_rig"] = ctx.get("profile")
+    mounting = {view: camera['mounting'] for view, camera in (ctx.get('cameras') or {}).items()
+                if camera.get('mounting')}
+    if mounting:
+        d['camera_mounting'] = mounting
     if ctx.get("dataset") in SOURCES:
         d["dataset_source"] = SOURCES[ctx["dataset"]]
     # the sampled timesteps end before the last frame and are sparse in still spans, so the length comes from
@@ -194,14 +427,143 @@ def add_context(d: dict, ctx: dict, ep_dir: Path) -> None:
         if ctx.get(key) is not None:
             d["dataset_checks"] = d.get("dataset_checks") or {}
             d["dataset_checks"][key] = capture_names(ctx[key]) if key == "capture_qc" else ctx[key]
-    subs = [s for s in ctx.get("annotation_subtasks") or [] if s.get("label") and s.get("t1") is not None]
+    add_reader_issues(d, ctx, result)
+    outside = [{**x, "family": _FAMILIES.reader_family(x["kind"])} for x in steps_outside(d, result)]
+    if outside:
+        d["dataset_checks"] = d.get("dataset_checks") or {}
+        d["dataset_checks"]["reader_issues"] = (d["dataset_checks"].get("reader_issues") or []) + outside
+    subs = [s for s in ctx.get("annotation_subtasks") or [] if isinstance(s, dict) and s.get("label")]
     if subs:
-        d["dataset_labels"] = [{"t0": float(s["t0"]), "t1": float(s["t1"]), "label": s["label"].replace(
-            "(both hand)", "(both hands)")} for s in subs]   # OpenAoE labels stored before prepare/openaoe.py hand_phrase
+        d["dataset_labels"] = [dataset_label(s) for s in subs]
         if ctx.get("annotation_note"):
             d["dataset_labels_note"] = ctx["annotation_note"]
     if isinstance(ctx.get("publisher_labels"), dict):
         d["dataset_episode_labels"] = ctx["publisher_labels"]
+    notes = ctx.get("uploader_notes")
+    if notes is None and ctx.get("uploader_annotation"):
+        try:                       # an episode prepared before uploader_notes kept them only as the prompt's text
+            notes = json.loads(ctx["uploader_annotation"])
+        except ValueError:
+            notes = ctx["uploader_annotation"]
+    groups = uploader_groups(notes, ctx.get("clock_start_s"), d.get("duration_s"))
+    if groups:
+        d["uploader_notes"] = groups
+    rn = reader_notes(ctx)
+    if rn:
+        d["reader_notes"] = rn
+    # the cameras the model is not shown, which board clips cut like any other (board/clips.py unshown_views): the page
+    # plays each, named as not shown to the model, with why; one board clips could not cut (record_unshown) has no
+    # clip, so it is left out of what the page plays and of its note, and its problem stays on the episode
+    from board.clips import UNSHOWN_NOT_DECODABLE, unshown_views
+    uncut = {x.get("camera") for x in ctx.get("reader_issues") or []
+             if isinstance(x, dict) and x.get("kind") == UNSHOWN_NOT_DECODABLE}
+    unshown = [{"view": v, "name": str(e.get("name") or v), "why": str(e.get("why") or "")}
+               for v, e in unshown_views(ctx) if v not in uncut]
+    if unshown:
+        d["unshown_cameras"] = unshown
+    add_contacts(d, ctx, result)
+    if ctx.get('signals') and (Path(ep_dir) / 'signals.npz').exists():
+        from checks.tactile_quality import for_episode
+        try:
+            # Preserve reviewed saved warnings until explicitly refreshed.
+            if 'tactile_qc' not in d:
+                d['tactile_qc'] = for_episode(Path(ep_dir), d.get('contacts') or [],
+                                            ((result or {}).get('contact_views') or {}).get('strips') or {})
+        except (OSError, ValueError, KeyError) as error:
+            if 'tactile_qc' not in d:
+                d['tactile_qc'] = {'version': 1, 'warnings': [],
+                                   'checks': {'readings': 'errored'}, 'error': type(error).__name__}
+    from board.dictionary_projection import apply as apply_dictionary
+    apply_dictionary(d, ctx, ep_dir)
+
+
+UPLOADER_LIST_MAX = 24       # a list of more numbers than this (a calibration matrix is 16) is summarised by its length
+
+
+def uploader_groups(notes, start_s, dur_s) -> list[dict]:
+    """The notes an upload sent with an episode (prepare/formats.py uploader_notes), as sent, for the board: each table
+    row that names the episode as one group, the notes read from its files as another, every value under its own
+    name. A number that is a time on the recorder's clock (seconds, ms, us or ns from its size, landing within the
+    episode once its first frame's time clock_start_s is taken off) also carries that moment in the episode, so the
+    board can jump to it. Only a recorder clock far from zero is read this way, so a count or an index is never taken
+    for a time."""
+    if notes in (None, "", {}, []):
+        return []
+    near = start_s is not None and dur_s and abs(float(start_s)) > 100 * float(dur_s)
+
+    def when(v):
+        if not near or isinstance(v, bool):
+            return None
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        for scale in (1.0, 1e-3, 1e-6, 1e-9):
+            t = x * scale - float(start_s)
+            if -0.5 <= t <= float(dur_s) + 0.5:
+                return round(max(0.0, min(t, float(dur_s))), 3)
+        return None
+
+    def flat(x, path, out):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                flat(v, path + [str(k)], out)
+        elif isinstance(x, list) and x and any(isinstance(i, dict) for i in x):
+            for i, v in enumerate(x):
+                flat(v, path + [str(i + 1)] if len(x) > 1 else path, out)
+        else:
+            if isinstance(x, list):
+                v = (", ".join(str(i) for i in x) if len(x) <= UPLOADER_LIST_MAX
+                     else f"{len(x)} values, {', '.join(str(i) for i in x[:4])}, ...")
+            else:
+                v = str(x)
+            item = {"name": " / ".join(path) or "note", "value": v}
+            t = when(x)
+            if t is not None:
+                item["t"] = t
+            out.append(item)
+
+    groups = []
+    if isinstance(notes, dict) and isinstance(notes.get("table rows"), list):
+        for r in notes["table rows"]:
+            r = dict(r) if isinstance(r, dict) else {"row": r}
+            table = r.pop("table", None)
+            out = []
+            flat(r, [], out)
+            groups.append({"title": f"Row of {table}" if table else "Table row", "kind": "row", "items": out})
+        notes = notes.get("notes")
+    if notes not in (None, "", {}, []):
+        out = []
+        flat(notes, [], out)
+        groups.append({"title": "Notes in the files", "kind": "notes", "items": out})
+    return groups
+
+
+def add_contacts(d: dict, ctx: dict, result: dict | None = None) -> None:
+    """The recording's contacts (context["contacts"], label/contacts.py), each with the model's answer when it was shown
+    ("seen"), and the check of one against the other (checks/contacts.py) in dataset_checks["contact_checks"]. An
+    episode prepared before contacts were measured has none in its context; labelling found them on the recording
+    (label/episode.py build_request, label/pieces.py write_pieces) and its result holds them, so those are used."""
+    recorded = ctx.get("contacts") or (result or {}).get("contacts") or []
+    if not recorded:
+        for k in ("contacts_model", "contact_views"):
+            d.pop(k, None)
+        return
+    from checks import contacts as cc
+    from label import contacts as lc
+    # a contact timed by a signal placed from both starts says so, also one found before contacts carried it
+    recorded = lc.mark_aligned(recorded, {s["name"]: s for s in ctx.get("signals") or []
+                                          if isinstance(s, dict) and s.get("name")})
+    seen = {c.get("id"): c for c in d.pop("contacts_model", None) or []}
+    views = d.pop("contact_views", None) or {}
+    shown = set(views.get("shown") or [])
+    d["contacts"] = [{**c, **({"seen": seen[c["id"]]} if c["id"] in seen else {}), "shown": c["id"] in shown}
+                     for c in recorded]
+    res = cc.check({"contacts": list(seen.values()), "contacts_missing": d.get("contacts_missing") or []}, recorded,
+                   views.get("strips") or {}, float(ctx.get("fps") or 30))
+    if res is not None:
+        d["dataset_checks"] = d.get("dataset_checks") or {}
+        d["dataset_checks"]["contact_checks"] = res
 
 
 def carry_pieces(d: dict, r: dict, ctx: dict) -> None:
@@ -240,8 +602,8 @@ def normalize_enums(x, key: str | None = None):
 # the episode's context a comparison label carries from the board's own label, so the page lays out the same player
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
-                "dataset_episode_labels", "dataset_source", "camera_views", "camera_labels", "timesteps_s",
-                "task_label")
+                "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels", "camera_mounting",
+                "timesteps_s", "task_label", "reader_notes", "unshown_cameras", "data_dictionary")
 
 
 def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict) -> dict:
@@ -302,13 +664,13 @@ def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict
                 info.update({"out_tokens": r.get("out_tokens"), "tail": (r.get("tail") or "")[-1500:]})
             d["_compare"] = info
             (out / m["key"]).mkdir(exist_ok=True)
-            (out / m["key"] / f).write_text(json.dumps(d))
+            write_atomic(out / m["key"] / f, d, indent=None, serializer=dumps)
             srcs[m["key"]] = r["status"]
             written[m["key"]] += 1
         if srcs:
             index["episodes"][f] = srcs
-    (out / "index.json").write_text(json.dumps(index, separators=(",", ":")))
-    (out / "metrics.json").write_text(json.dumps(mc.public(metrics), separators=(",", ":")))
+    write_atomic(out / "index.json", index, indent=None, serializer=dumps, separators=(",", ":"))
+    write_atomic(out / "metrics.json", mc.public(metrics), indent=None, serializer=dumps, separators=(",", ":"))
     return {"models": {m["key"]: {"run_id": m["run_id"], "files": written[m["key"]]} for m in models},
             "episodes": len(index["episodes"])}
 
@@ -336,6 +698,25 @@ def build_hands(board: Path, spec: dict, qa_new: Path, episodes: dict) -> dict:
             "head_camera_files_without_keypoints": len(res["head_camera_files_without_keypoints"]),
             "bytes": res["bytes"],
             "keypoints": {"written": kres["written"], "skipped": len(kres["skipped"]), "bytes": kres["bytes"]}}
+
+
+def build_sensors(board: Path, episodes: dict) -> dict | None:
+    """The sensors files of the episodes with signals or depth (board/sensors.py), written to BOARD/sensors.new and
+    renamed into place with qa/; None, and nothing written, when no episode has either. episodes maps a board file to
+    its prepared episode folder."""
+    from board import sensors as bs
+    have = {f: ep for f, ep in episodes.items()
+            if (Path(ep) / "signals.npz").exists() or (Path(ep) / "depth.json").exists()}
+    if not have:
+        return None
+    out = board / "sensors.new"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir()
+    res = bs.build(have, out)
+    for sk in res["skipped"]:
+        print(f"sensors: skipped {sk['file']}: {sk['skip']}", file=sys.stderr)
+    return {"written": res["written"], "skipped": len(res["skipped"]), "bytes": res["bytes"]}
 
 
 def resolve_run(p: Path) -> Path:
@@ -366,22 +747,31 @@ def _rerun_folder(r: dict, run: Path, name: str) -> Path | None:
     return None
 
 
-def entry_labels(entry: dict, here: Path) -> tuple[Path, dict]:
+def entry_labels(entry: dict, here: Path, skipped: list | None = None) -> tuple[Path, dict]:
     """A manifest entry's run folder and {board file: (the entry's episode name, output file, output, the run it
     came from)} for every label it holds (board/to_board.py label_outputs), each rerun's label in place of the base
-    run's for the episodes it labelled (the module docstring). here is the board folder, resolved."""
+    run's for the episodes it labelled (the module docstring). here is the board folder, resolved. skipped, when
+    given, gets one line per file of the runs that is no reply (label_outputs), which BUILT.json names."""
     run = resolve_run(_path(entry["run"], here))
     pre = entry.get("file_prefix") or ""
-    outs, _ = label_outputs(run / "out")
+    outs, skip = label_outputs(run / "out")
+    if skipped is not None:
+        skipped += skip
     by_name = {name: (f, r, run) for name, (f, r) in outs.items()}
     if entry.get("reruns"):
         eps = _path(entry["episodes"], here)
         own = {p.resolve(): p.name for p in eps.iterdir() if p.name.startswith("episode_")}
         for rr in entry["reruns"]:
             rrun = resolve_run(_path(rr["run"], here))
-            for rname, (f, r) in label_outputs(rrun / "out")[0].items():
+            routs, rskip = label_outputs(rrun / "out")
+            if skipped is not None:
+                skipped += [f"{rrun.name}/{x}" for x in rskip]
+            for rname, (f, r) in routs.items():
                 folder = _rerun_folder(r, rrun, rname)
-                if folder in own:
+                if folder not in own:
+                    continue
+                # a rerun's reply that gave no labels never replaces a label that parsed
+                if label_failed(r) is None or label_failed((by_name.get(own[folder]) or (None, {}))[1]) is not None:
                     by_name[own[folder]] = (f, r, rrun)
     return run, {(name.replace("episode_", f"episode_{pre}", 1) if pre else name) + ".json": (name, f, r, src)
                  for name, (f, r, src) in by_name.items()}
@@ -405,6 +795,114 @@ def _swap(board: Path, name: str, keep: bool) -> None:
         new.rename(old)
 
 
+def unlabelled(entry: dict, eps: Path, run: Path, labels: dict) -> dict:
+    """{board file: (episode name, None, output, run)} for every prepared episode of an entry whose run labels every
+    episode of its folder (labels_every_episode, board/rules.py own_data_entry) that no run of it has an output for:
+    the run never recorded a reply for it (stopped before it, or written before the harness kept why), so it is shown
+    with its footage, checks and sensors and says so (label_failed no_reply). Nothing for an entry whose run labelled
+    a chosen few of the folder's episodes: the others were never sent."""
+    if not entry.get("labels_every_episode"):
+        return {}
+    pre = entry.get("file_prefix") or ""
+    have = {name for name, _, _, _ in labels.values()}
+    out = {}
+    for d in sorted(eps.glob("episode_*")) if eps.is_dir() else []:
+        if d.name in have or not (d / "context.json").exists():
+            continue
+        fname = (d.name.replace("episode_", f"episode_{pre}", 1) if pre else d.name) + ".json"
+        out[fname] = (d.name, None, {"episode_dir": str(d), "parse_ok": False,
+                                     "no_reply": "the labelling run recorded no reply for it"}, run)
+    return out
+
+
+def not_shown(r: dict, e: Exception) -> dict:
+    """An output whose reply parsed but which the board could not read: what the request recorded, the reply as text,
+    and the error (board/to_board.py label_failed not_shown), so the episode is still built."""
+    keep = ("episode_dir", "model", "reasoning_effort", "config", "usage", "dataset_checks", "decode_failed",
+            "given_prompt", "prompt_mode", "task_label", "arm_still_spans")
+    try:
+        raw = json.dumps(r.get("labels"), indent=1, default=str)
+    except (TypeError, ValueError):
+        raw = str(r.get("labels"))
+    return {**{k: r[k] for k in keep if k in r and isinstance(r[k], (dict, list, str, int, float))}, "parse_ok": False,
+            "board_error": f"{type(e).__name__}: {e}"[:300], "raw": raw}
+
+
+def read_context(ep_dir: Path) -> tuple[dict, str | None]:
+    """(the episode's context.json, why it does not read): {} and None when it has none, {} and the error when it does
+    not parse as an object (a file cut mid write)."""
+    p = ep_dir / "context.json"
+    if not p.exists():
+        return {}, None
+    try:
+        ctx = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        return {}, f"{type(e).__name__}: {e}"[:300]
+    return (ctx, None) if isinstance(ctx, dict) else ({}, f"it holds {type(ctx).__name__}, not an object")
+
+
+def context_unreadable(why: str) -> dict:
+    """The issue of an episode whose context.json the board could not use (kind context_unreadable): it is shown with
+    the model's reply as it came, labels or not, and without what the context gives (its length, checks, the reader's
+    issues and notes). The error is kept apart from the sentence, for whoever looks into it."""
+    return {"kind": "context_unreadable", "error": why,
+            "what": "This episode's recorded details (its length, checks and the reader's notes) could not be read, so "
+                    "they are not shown; the model's reply is shown as it came."}
+
+
+def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path, ctx: dict,
+                 unread: str | None = None) -> dict:
+    """One episode's board file: its label (board/to_board.py convert), provenance, context (ctx, its context.json, or
+    {} with why it did not read in unread), rules, consistency check and the parts it was stitched from."""
+    d = convert(r, entry["dataset"])
+    d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"], "slice": info.get("slice")}
+    if manifest.get("labels_license"):
+        d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
+    if ctx:
+        add_context(d, ctx, eps / name, r)
+    else:
+        # a reply that gave no labels is flagged with or without a context, beside a context that did not read
+        add_reader_issues(d, {"reader_issues": [context_unreadable(unread)]} if unread else {}, r)
+    # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
+    apply_rules(d, ctx, entry.get("rules") or [])
+    d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))
+    if "duration_s" not in d and d.get("timesteps_s"):
+        # no context: the last sampled time plus one sampling step, marked as an estimate
+        ts = [float(t) for t in d["timesteps_s"]]
+        step = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 0.0
+        d["duration_s"], d["duration_estimated"] = round(ts[-1] + step, 3), True
+    if fname != name + ".json":
+        # the board finds clips by episode_id; the run's own name stays for the hand pose keypoints
+        d["_meta"] = {**(d.get("_meta") or {}), "episode_id": Path(fname).stem, "run_episode": name}
+    carry_pieces(d, r, ctx)
+    return normalize_enums(d)
+
+
+def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path) -> dict:
+    """episode_file, which never stops the build. The context is read once (read_context). When the file cannot be
+    built, the context is tried alone, with no reply: one it fails on (a capture record that is not an object) does not
+    read either, and the episode is built with its labels and a context_unreadable issue, so a fault of the context is
+    never blamed on the reply. Otherwise the reply is what the board could not read, and the episode is built with the
+    reply as text and the error (not_shown)."""
+    ctx, unread = read_context(eps / name)
+    try:
+        return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread)
+    except Exception as e:  # noqa: BLE001 - the context or the reply: found below, the build goes on
+        err = e
+    if ctx:
+        try:
+            add_context({}, ctx, eps / name)
+        except Exception as e:  # noqa: BLE001 - the context does not read
+            print(f"board: {fname}: the context could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+            ctx, unread = {}, f"{type(e).__name__}: {e}"[:300]
+            try:
+                return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread)
+            except Exception as e2:  # noqa: BLE001 - the reply does not read either
+                err = e2
+    print(f"board: {fname}: the reply could not be read ({type(err).__name__}: {err})", file=sys.stderr)
+    return episode_file(entry, manifest, fname, name, not_shown(r, err), info, eps, ctx, unread)
+
+
 def build(board: Path) -> dict:
     manifest = json.loads((board / "manifest.json").read_text())
     here = board.resolve()
@@ -416,54 +914,40 @@ def build(board: Path) -> dict:
     board_src = {}      # board file -> the run output its label came from
     episodes = {}       # board file -> its prepared episode folder
     for entry in manifest.get("datasets", []):
-        run, labels = entry_labels(entry, here)
+        skipped: list = []
+        run, labels = entry_labels(entry, here, skipped)
         infos = {}
         eps = _path(entry["episodes"], here)
+        labels.update(unlabelled(entry, eps, run, labels))
         for fname, (name, src, r, from_run) in sorted(labels.items()):
             info = infos.get(from_run) or infos.setdefault(from_run, json.loads((from_run / "run.json").read_text()))
-            d = convert(r, entry["dataset"])
-            d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"],
-                         "slice": info.get("slice")}
-            ctx_p = eps / name / "context.json"
-            ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
-            if manifest.get("labels_license"):
-                d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
-            if ctx:
-                add_context(d, ctx, eps / name)
+            d = guarded_episode_file(entry, manifest, fname, name, r, info, eps)
+            if (eps / name / "context.json").exists():
                 episodes[fname] = eps / name
-            # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
-            apply_rules(d, ctx, entry.get("rules") or [])
-            d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))
-            if "duration_s" not in d and d.get("timesteps_s"):
-                # no context: the last sampled time plus one sampling step, marked as an estimate
-                ts = [float(t) for t in d["timesteps_s"]]
-                step = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 0.0
-                d["duration_s"], d["duration_estimated"] = round(ts[-1] + step, 3), True
             dest = new / fname
-            if fname != name + ".json":
-                # the board finds clips by episode_id; the run's own name stays for the hand pose keypoints
-                d["_meta"] = {**(d.get("_meta") or {}), "episode_id": dest.stem, "run_episode": name}
             if dest.exists():
                 raise RuntimeError(f"{dest.name} comes from two manifest entries; a board holds one label per "
                                    "episode (file_prefix separates datasets whose episode names repeat)")
-            carry_pieces(d, r, ctx)
-            d = normalize_enums(d)
-            dest.write_text(json.dumps(d))
-            board_src[fname] = src
+            write_atomic(dest, d, indent=None, serializer=dumps)
+            if src is not None:
+                board_src[fname] = src
         counts[entry["dataset"]] = {"run_id": json.loads((run / "run.json").read_text())["run_id"],
-                                    "episodes": len(labels)}
+                                    "episodes": len(labels), **({"skipped": skipped} if skipped else {})}
         # BUILT.json names the run that was used, so the board's inputs stay traceable
         built_entries.append(dict(entry, run=os.path.relpath(run, here)) if run != _path(entry["run"], here)
                              else entry)
     compared = build_comparisons(board, manifest, new, board_src) if manifest.get("comparisons") else None
     hands = build_hands(board, manifest["hands"], new, episodes) if manifest.get("hands") else None
+    sensors = build_sensors(board, episodes) if manifest.get("sensors", True) is not False else None
     _swap(board, "qa", True)
     _swap(board, "compare", compared is not None)
     _swap(board, "hands", hands is not None)
     _swap(board, "hand_keypoints", hands is not None)
+    _swap(board, "sensors", sensors is not None)
     built = {"manifest": {**manifest, "datasets": built_entries}, "counts": counts,
-             **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {})}
-    (board / "BUILT.json").write_text(json.dumps(built, indent=1))
+             **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {}),
+             **({"sensors": sensors} if sensors else {})}
+    write_atomic(board / "BUILT.json", built, indent=1, serializer=dumps)
     return built
 
 

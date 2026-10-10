@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
+from label.atomic import write_atomic
+
 
 def read_list(path: Path) -> list[str]:
     """The episode lines of a list file, stripped, in file order."""
@@ -90,6 +92,6 @@ def stamp(out: Path, adapter: str, since: float) -> int:
         src = ctx.setdefault("source", {})
         src.setdefault("adapter", adapter)
         src["adapter_commit"] = sha
-        c.write_text(json.dumps(ctx, indent=1, default=str))
+        write_atomic(c, ctx, indent=1, default=str)
         n += 1
     return n

@@ -15,6 +15,9 @@ None of it goes into the prompt. This runs, in order:
   capture_qc         the capture checks of public-dataset-adapter (clocks, exposure, frozen or duplicated
                      frames, motion the video does not show), with the per-rig calibration in capture_qc.py
                      (python -m checks.capture_qc)
+  sensor_checks      the other signals (a glove's pressure, a fingertip's force, hand poses) and the depth streams:
+                     no reading, dead or pinned values, a sensor slower than the camera, depth with no readings,
+                     frozen depth, depth far in time from colour (python -m checks.sensors)
 
 Two checks do not run here:
 
@@ -35,7 +38,7 @@ ap.add_argument("--force", action="store_true", help="recompute episodes that al
 a = ap.parse_args()
 extra = ["--jobs", str(a.jobs)] + (["--force"] if a.force else [])
 steps = [["checks.stream_pairing"], ["checks.stream_pairing", "--jumps"], ["checks.stream_pairing", "--grippers"],
-         ["checks.capture_qc"]]
+         ["checks.capture_qc"], ["checks.sensors"]]
 for step in steps:
     print(f"== {' '.join(step)}", flush=True)
     rc = subprocess.run([sys.executable, "-m", *step, *extra, *a.roots]).returncode

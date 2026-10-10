@@ -89,6 +89,48 @@ def test_public_label_leaves_out_how_the_label_was_made():
     assert not set(serve.PRIVATE_KEYS) & set(serve.episode_view(dict(d)))
 
 
+def test_the_page_is_given_the_checks_a_rule_withheld_with_the_reason():
+    """A check a manifest rule withheld (drop_check) is still on the page, named with the rule's reason; the check's
+    stored result stays in the label file."""
+    d = {"dataset": "molmo", "_withheld_checks": {"gripper_channels": {"reason": "one-armed tasks",
+                                                                       "result": {"flagged": True}}}}
+    view = serve.episode_view(d)
+    assert view["set_aside_checks"] == [{"check": "gripper_channels", "reason": "one-armed tasks", "status": "fired"}]
+    assert "_withheld_checks" not in view
+    assert "set_aside_checks" not in serve.episode_view({"_withheld_checks": [3]})
+    # a withheld check that stopped with an error says so, never clear
+    err = serve.episode_view({"_withheld_checks": {"recorded_jumps": {"reason": "r", "result": {
+        "error": "ValueError: boom", "flagged": False}}}})
+    assert err["set_aside_checks"] == [{"check": "recorded_jumps", "reason": "r", "status": "errored",
+                                        "error": "ValueError: boom"}]
+
+
+def test_a_withheld_check_reads_as_what_it_found():
+    """A withheld check read clear whatever it found: the capture checks and the sensor checks keep their findings in
+    a list of checks, and a check that measured nothing says so in not_assessed. Each reads as it came out: an error,
+    not assessed with why, or how many of its own checks that ran fired and errored."""
+    st = serve.withheld_status
+    assert st({"not_assessed": "the right arm reads at too few frames", "flagged": False}) == {
+        "status": "not_assessed", "why": "the right arm reads at too few frames"}
+    capture = {"checks": [{"status": "fired"}, {"status": "fired"}, {"status": "clear"},
+                          {"status": "not_applicable"}, {"status": "errored"}], "not_assessed": {"x": "y"}}
+    assert st(capture) == {"status": "errored", "fired": 2, "errored": 1, "of": 4}
+    sensors = {"flagged": False, "notes": [{"check": "constant"}], "checks": [{"status": "fired"}, {"status": "clear"},
+                                                                             {"status": "na"}]}
+    assert st(sensors) == {"status": "fired", "fired": 1, "errored": 0, "of": 2}
+    assert st({"checks": [{"status": "na"}]})["status"] == "not_assessed"
+    assert st({"checks": [{"status": "clear"}]})["status"] == "clear"
+    assert st({"crossed": False, "left_vs_left": 0.9})["status"] == "clear"
+
+
+def test_a_withheld_check_that_flagged_reads_fired_even_with_no_check_listed():
+    """A withheld result that says it flagged, with no check of its own listed or none that ran, read not assessed."""
+    st = serve.withheld_status
+    assert st({"flagged": True, "checks": []}) == {"status": "fired", "fired": 0, "errored": 0, "of": 0}
+    assert st({"flagged": True, "checks": [{"status": "na"}]})["status"] == "fired"
+    assert st({"flagged": False, "checks": []})["status"] == "not_assessed"
+
+
 def test_render_index_fills_every_placeholder():
     page = serve.render_index("Data <Board>", {"mode": "api", "compare": False}, "trial <one>")
     assert "<title>Data &lt;Board&gt;</title>" in page and '<span class="ph-board">trial &lt;one&gt;</span>' in page
@@ -142,7 +184,7 @@ def test_frames_are_kept_on_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(serve, "_FRAME_DIR", tmp_path / "frames")
     monkeypatch.setattr(serve, "FFMPEG", "/no/ffmpeg/here")
     monkeypatch.setattr(serve, "_FRAME_CACHE", serve.OrderedDict())
-    key = (str(clip), int(clip.stat().st_mtime), 1.5, 640)
+    key = (str(clip), clip.stat().st_size, clip.stat().st_mtime_ns, 1.5, 640)
     (tmp_path / "frames").mkdir()
     (tmp_path / "frames" / (serve.hashlib.sha1(repr(key).encode()).hexdigest() + ".jpg")).write_bytes(b"jpeg")
     assert serve.extract_frame(clip, 1.5, 640) == b"jpeg"
@@ -179,6 +221,7 @@ def _serve(monkeypatch, board: Path, clips: Path):
     monkeypatch.setattr(serve, "COMPARE_DIR", (board / "compare").resolve())
     monkeypatch.setattr(serve, "HANDS_DIR", (board / "hands").resolve())
     monkeypatch.setattr(serve, "KEYPOINTS_DIR", (board / "hand_keypoints").resolve())
+    monkeypatch.setattr(serve, "SENSORS_DIR", (board / "sensors").resolve())
     monkeypatch.setattr(serve, "BOARD_NAME", serve.board_name(board))
     monkeypatch.setattr(serve, "_LIST_CACHE", {})
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), serve.Handler)
@@ -278,6 +321,32 @@ def _output(ep_dir: Path, model: str, head: bool, parsed: bool = True) -> dict:
             "labels": labels if parsed else {"_raw": "{", "_parse_error": "JSONDecodeError"}}
 
 
+def _sensors(ep: Path) -> None:
+    """The teleop episode's other signals and depth (board/sensors.py reads them): a gripper's effort that rests and
+    rises, a 4 x 4 pressure map, a constant flag, and a depth stream on its main camera; and the contact prepare found
+    in the effort (label/contacts.py)."""
+    import numpy as np
+    n = 300
+    eff = np.zeros((n, 1), np.float32)
+    eff[60:120] = 4.0
+    pmap = (3072.0 + np.random.default_rng(0).normal(0, 2, (n, 16))).astype(np.float32)   # a real sensor's noise
+    pmap[150:200, 6] -= 3072.0 - 1800.0
+    np.savez(ep / "signals.npz", s0=eff, s1=pmap, s2=np.ones((n, 1), np.float32))
+    np.save(ep / "depth_kmap_exo.npy", np.arange(n))
+    (ep / "depth.json").write_text(json.dumps({"exo": {"packed": str(ep / "depth.mkv"), "base_s": 0.0, "n_frames": n,
+                                                        "kmap": "depth_kmap_exo.npy", "scale_m": None}}))
+    (ep / "sources.json").write_text(json.dumps({"exo": {"packed": str(ep / "exo.mp4"), "base_s": 0.0,
+                                                          "n_frames": n}}))
+    ctx = json.loads((ep / "context.json").read_text())
+    (ep / "context.json").write_text(json.dumps({**ctx, "fps": 30, "n_state_frames": n, "depth": {"exo": {
+        "units": "relative", "scale_m": None}}, "signals": [
+        {"name": "gripper effort", "key": "s0", "dims": 1},
+        {"name": "pressure", "key": "s1", "dims": 16, "shape": [4, 4]},
+        {"name": "health", "key": "s2", "dims": 1, "names": ["ok"]}], "contacts": [
+        {"id": "c1", "hand": "right", "signals": ["gripper effort"], "start_s": 2.0, "peak_s": 2.5, "end_s": 3.967,
+         "from_start": False, "to_end": False, "peak_strength": 1.0, "regions": {}, "dips_s": []}]}))
+
+
 def _built_board(tmp: Path) -> Path:
     """Three datasets, one episode each (a public teleop dataset, a public head-camera dataset with hand keypoints,
     and a dataset of your own), built by board/build.py, and one other model over two of the episodes, one of whose
@@ -291,11 +360,23 @@ def _built_board(tmp: Path) -> Path:
         ep = tmp / "episodes" / ds / f"episode_{i:06d}"
         ep.mkdir(parents=True)
         (ep / "context.json").write_text(json.dumps({"dataset": hub, "profile": rig, "duration_s": 10.0}))
+        if ds == "molmo":
+            _sensors(ep)
         run = tmp / "runs" / ds / "r1"
         (run / "out").mkdir(parents=True)
         (run / "run.json").write_text(json.dumps({"run_id": "r1", "code": "abc1234", "kind": "full", "status": "done",
                                                   "slice": str(ep.parent)}))
-        (run / "out" / f"{ep.name}.json").write_text(json.dumps(_output(ep, "openai/gpt-6-astra", rig == "ego_head")))
+        # the dataset of your own: its model reply did not parse, so its episode has no labels
+        out = _output(ep, "openai/gpt-6-astra", rig == "ego_head", ds != "mine")
+        if ds == "molmo":
+            # the model's answer for the episode's one contact, and a grasp it saw that no contact covers
+            out["labels"]["contacts"] = [{"id": "c1", "touch_seen": "yes", "first_touch_frame": 3,
+                                          "last_touch_frame": 2, "hand": "right", "object": "cup", "grip": "pinch",
+                                          "action": "lifts it", "slip": "no", "notes": None}]
+            out["labels"]["contacts_missing"] = [{"t_s": 7.0, "hand": "left", "object": "lid"}]
+            out["contact_views"] = {"shown": ["c1"], "strips": {"c1": {"begin": [1.7, 1.85, 2.0, 2.15, 2.3],
+                                                                       "end": [3.817, 3.967, 4.117]}}}
+        (run / "out" / f"{ep.name}.json").write_text(json.dumps(out))
         entries.append({"dataset": ds, "run": str(run), "episodes": str(ep.parent)})
         if ds != "mine":
             (cmp_slice / ep.name).symlink_to(ep)
@@ -363,6 +444,10 @@ def _smoke(page: str, base: str) -> dict:
 def _check_smoke(res: dict) -> None:
     assert res["episodes"] == 3 and res["rendered"] >= 5 and res["rendered_comparisons"] >= 2
     assert res["footage_lines"] == 2 and res["keypoint_links"] == 1 and res["compare_view"]
+    assert res["sensors_panels"] == 1          # the teleop episode's signals and depth, drawn under its timeline
+    # the episode whose reply did not parse: one line in place of the label sections, and its card says no labels
+    assert res["no_label_pages"] == 1 and res["answered_on_failed"] == 0 and res["no_label_cards"] == 1
+    assert res["touch_lanes"] == 1 and res["contact_cards"] == 1 and res["contact_checks"] == 1   # and its contact
     (lb,) = res["labellers"]
     assert lb["key"] == "other" and lb["episodes"] == 2 and "not Astra&rsquo;s labels" in lb["note"]
     assert "labels by Other model" in lb["band"]
@@ -519,3 +604,43 @@ def test_the_list_is_encoded_once_and_follows_the_files(server):
     f.write_text(json.dumps(d))
     code, _, body = _get(server + "/api/episodes")
     assert code == 200 and any(e.get("episode_prompt") == d["episode_prompt"] for e in json.loads(body))
+
+
+
+def test_a_long_recording_with_a_part_not_labelled_never_reads_complete_on_its_card(tmp_path):
+    d = _episode("mine", "teleop_arms",
+                 tasks=[{"task": "a", "outcome": "success"}, {"task": "b", "outcome": "success"}],
+                 _stitched={"parts": 3, "cuts_s": [300.0, 600.0], "missing": [{"part": 2, "t0_s": 300.0,
+                                                                              "t1_s": 600.0, "why": "x"}]})
+    rec = serve._rail_record(tmp_path / "episode_000001.json", d)
+    assert rec["parts_missing"] == 1 and rec["parts"] == 3
+    assert "parts_missing" not in serve._rail_record(tmp_path / "episode_000001.json", _episode("mine", "teleop_arms"))
+    r = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("card_outcome.js")),
+                        str(Path(__file__).resolve().parent.parent / "board" / "serve.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_board_file_with_a_number_that_is_not_finite_is_served_as_json_a_browser_reads(server):
+    """A board file built before non finite numbers were written as null still loads: the server writes them as null
+    in the episode, the list and the export, never as NaN, which the page's JSON.parse rejects."""
+    qa = serve.HERE
+    d = json.loads((qa / "episode_000001.json").read_text())
+    d["dataset_checks"] = {"stream_pairing": {"left_vs_left": float("nan"), "crossed": False}}
+    d["event_labels"][0]["t_s"] = float("nan")
+    d["duration_s"] = float("inf")
+    (qa / "episode_000001.json").write_text(json.dumps(d))
+
+    def strict(body: bytes):
+        def no(c):
+            raise ValueError(f"{c} is not JSON")
+        return json.loads(body, parse_constant=no)
+    code, _, body = _get(server + "/api/episode?file=episode_000001.json")
+    assert code == 200 and strict(body)["dataset_checks"]["stream_pairing"]["left_vs_left"] is None
+    code, _, body = _get(server + "/api/episodes")
+    assert code == 200 and len(strict(body)) == 3
+    code, _, body = _get(server + "/api/episode?file=episode_000001.json&download=1")
+    assert code == 200 and strict(body)["event_labels"][0]["t_s"] is None
+    code, _, body = _get(server + "/api/export", {"Content-Type": "application/json"},
+                         json.dumps({"files": ["episode_000001.json"]}).encode())
+    assert code == 200 and strict(body.decode().splitlines()[0])["duration_s"] is None

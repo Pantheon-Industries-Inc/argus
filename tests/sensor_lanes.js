@@ -1,0 +1,56 @@
+// The sensors panel's words for a signal (board/serve.py snWhat, snErrorsHtml): a signal the reader placed on the
+// video from both starts, because no clock was shared ("aligned_by", prepare/formats.py mark_assumed), says so in its
+// lane, and a signal the board could not draw is named with the reason, under the lanes it did draw.
+//
+//   node tests/sensor_lanes.js [PAGE_SOURCE]     (default board/serve.py)
+//
+// Prints nothing and exits 0 when every case holds; prints each failure and exits 1 otherwise.
+'use strict';
+const {src, piece} = require('./page_functions')(process.argv[2]);
+const T = new Function('const snNum = v => String(v);' + piece('esc') + piece('placementText') + piece('snWhat') + piece('snErrorsHtml')
+  + piece('snStillHtml') + 'return {snWhat, snErrorsHtml, snStillHtml};')();
+
+let bad = 0;
+const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };
+
+check(T.snWhat({dims: 1, aligned_by: 'assumed start'}).includes('placed from both starts, as no clock is shared'),
+  'a signal placed by an assumed start says so');
+check(!T.snWhat({dims: 1}).includes('both starts'), 'any other signal says nothing of it');
+check(T.snWhat({dims: 1, aligned_by: 'assumed camera clock'}).includes('assumed camera presentation clock')
+  && !T.snWhat({dims: 1, aligned_by: 'assumed camera clock'}).includes('both starts'),
+  'camera placement never becomes an assumed common start');
+check(T.snWhat({dims: 1, aligned_by: 'coarse clock', camera_aligned_by: 'assumed camera clock'})
+  .includes('assumed camera presentation clock')
+  && !T.snWhat({dims: 1, aligned_by: 'coarse clock', camera_aligned_by: 'assumed camera clock'}).includes('both starts'),
+  'camera uncertainty remains beside a signal clock assumption');
+check(T.snWhat({dims: 1, aligned_by: 'row per frame'}).includes('placed one row per frame, as it has as many rows as the video has frames')
+  && !T.snWhat({dims: 1, aligned_by: 'row per frame'}).includes('both starts'), 'a table placed row by row says so');
+check(T.snErrorsHtml([]) === '' && T.snErrorsHtml(undefined) === '', 'no error, nothing drawn');
+const h = T.snErrorsHtml([{name: 'pressure <map>', error: 'ValueError: boom'}, {name: 'glove', error: 'KeyError: x'}]);
+check(h.includes('pressure &lt;map&gt;') && h.includes('ValueError: boom') && h.includes('glove')
+  && h.includes('could not be drawn'), 'each signal the board could not draw is named with the reason');
+// a signal that never changes is listed as constant, and one with no reading at any frame as having no reading, never
+// as constant (board/sensors.py signal_doc)
+const st = T.snStillHtml({constant: [{name: 'health', dims: 1, value: [1]}], none: [{name: 'glove <l>', dims: 3}]});
+check(st.includes('Constant through this episode: health (1).')
+  && st.includes('No reading at any frame: glove &lt;l&gt; '
+  + '(3 values).') && !/Constant[^<]*glove/.test(st), 'a signal with no reading is named as such, not as constant');
+check(T.snStillHtml({constant: [], none: []}) === '', 'nothing still, nothing drawn');
+// one value is "1 value"; a signal the same wherever it reads but with no reading at some frames is never constant
+// through the episode, and says at how many frames it has no reading
+const one = T.snStillHtml({constant: [], none: [{name: 'grip', dims: 1}]});
+check(one.includes('grip (1 value)') && !one.includes('1 values'), 'one value is said in the singular');
+const gap = T.snStillHtml({constant: [{name: 'force', dims: 2, value: [1, 2], no_reading_frames: 150, frames: 300}],
+  none: []});
+check(!gap.includes('Constant through this episode') && gap.includes('The same wherever it reads: force (1, 2), with '
+  + 'no reading at 150 of 300 frames.'), 'a constant with gaps says where it has no reading');
+const partial = T.snStillHtml({constant: [{name: 'qpos', dims: 2, value: null, partial_reading_frames: 2,
+  frames: 3}], none: []});
+check(!partial.includes('Constant through this episode') && !partial.includes('no reading at')
+  && partial.includes('partial reading at 2 of 3 frames'), 'partial values do not make a whole row unread');
+check(!partial.includes(':'), 'the partial status uses a sentence break');
+const mixed = T.snStillHtml({constant: [{name: 'qpos', dims: 2, value: [1, 2], no_reading_frames: 1,
+  partial_reading_frames: 1, frames: 3}], none: []});
+check(!mixed.includes(':') && mixed.includes('no reading at 1 of 3 frames')
+  && mixed.includes('partial reading at 1 of 3 frames'), 'mixed gaps preserve both counts without a colon');
+process.exit(bad ? 1 : 0);

@@ -1,5 +1,5 @@
 {
- "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, completion the outcomes that raise it, and datasets limits a family to those datasets.",
+ "_about": "The families of flagged issues, read by the board's problem filter through board/families.py, which states how an issue is matched to a family and which issues count. An issue belongs to the first family below whose tags, names (the plain names in tag_names.json) or text it matches, else to a family named after its tag. Order matters only where two families could claim the same issue (a blur patch the model filed as a camera fault is privacy blur). checks names deterministic check flags that raise the family, reader_issues the kinds of problem an episode was kept and flagged with (context.json reader_issues) that raise it, completion the outcomes that raise it, and datasets limits a family to those datasets. list is data for a fault in the recording, the scene or the label, mistake for an operator mistake, labelling for a model reply that gave no labels and handling for a limit of how we read or showed the recording or a property of the recording that is not a fault in it (a camera that is not colour); the last two are shown on the episode and never counted. Every reader_issues kind written by the readers and board has one explicit entry here. Unknown kinds from older saved jobs remain visible through the fallback family.",
  "families": [
   {
    "slug": "privacy-blur",
@@ -81,6 +81,165 @@
     "realomin"
    ],
    "why": "counted only where flagged episodes were confirmed on the frames as grippers that moved without recording"
+  },
+  {
+   "slug": "camera-undecodable",
+   "list": "data",
+   "name": "Camera video does not decode",
+   "reader_issues": [
+    "camera_not_decodable",
+    "camera_decode_failed",
+    "frames_not_decodable",
+    "unshown_camera_not_decodable"
+   ]
+  },
+  {
+   "slug": "clip-frames",
+   "list": "data",
+   "name": "Camera video does not cover the episode",
+   "reader_issues": [
+    "clip_frame_count",
+    "camera_short"
+   ]
+  },
+  {
+   "slug": "main-camera-short",
+   "list": "data",
+   "name": "Main camera covers less than the other cameras",
+   "reader_issues": [
+    "main_camera_short"
+   ]
+  },
+  {
+   "slug": "depth-missing",
+   "list": "data",
+   "name": "Depth missing or does not decode",
+   "reader_issues": [
+    "depth_not_decodable",
+    "depth_partial",
+    "depth_not_read",
+    "depth_clip_partial"
+   ]
+  },
+  {
+   "slug": "sensor-file-damaged",
+   "list": "data",
+   "name": "Sensor file damaged or cut short",
+   "reader_issues": [
+    "mcap_file_damaged",
+    "sensor_file_cut"
+   ]
+  },
+  {
+   "slug": "signal-partial",
+   "list": "data",
+   "name": "Signal starts late or stops early",
+   "reader_issues": [
+    "signal_partial_span"
+   ]
+  },
+  {
+   "slug": "task-files-disagree",
+   "list": "data",
+   "name": "Uploaded files name different tasks",
+   "reader_issues": [
+    "task_files_disagree"
+   ]
+  },
+  {
+   "slug": "annotation-unresolved",
+   "list": "data",
+   "name": "Recorded annotations have invalid boundaries or structure",
+   "reader_issues": [
+    "annotation_unresolved"
+   ]
+  },
+  {
+   "slug": "device-metadata-disagree",
+   "list": "data",
+   "name": "Recorded device or resolution claims disagree",
+   "reader_issues": [
+    "device_metadata_disagree"
+   ]
+  },
+  {
+   "slug": "recorded-rate-mismatch",
+   "list": "handling",
+   "name": "Camera cadence differs from the declared rate",
+   "reader_issues": [
+    "recorded_rate_mismatch"
+   ],
+   "why": "encoded timestamps differing from a declared rate do not establish damaged footage; original timestamps and frame indices remain available"
+  },
+  {
+   "slug": "metadata-unreadable",
+   "list": "data",
+   "name": "Uploaded metadata could not be read",
+   "reader_issues": [
+    "metadata_unreadable"
+   ]
+  },
+  {
+   "slug": "label-failed",
+   "list": "labelling",
+   "name": "Model reply gave no labels",
+   "reader_issues": [
+    "model_reply_unparsed",
+    "model_reply_cut_off",
+    "part_not_labelled",
+    "label_output_unreadable",
+    "no_part_labelled",
+    "model_no_reply",
+    "model_reply_not_shown"
+   ]
+  },
+  {
+   "slug": "label-format",
+   "list": "labelling",
+   "name": "Model reply broke the output format",
+   "reader_issues": [
+    "model_reply_off_schema",
+    "model_reply_fields_dropped"
+   ]
+  },
+  {
+   "slug": "label-times",
+   "list": "labelling",
+   "name": "Model times do not fit the episode",
+   "reader_issues": [
+    "model_steps_outside_episode"
+   ]
+  },
+  {
+   "slug": "read-with-a-limit",
+   "list": "handling",
+   "name": "Read or shown with a limit of ours",
+   "reader_issues": [
+    "table_downsampled",
+    "signal_summarised",
+    "depth_clip_failed",
+    "depth_clip_timing",
+    "camera_offset",
+    "metadata_limit",
+    "sensor_metadata_not_read"
+   ]
+  },
+  {
+   "slug": "not-colour-camera",
+   "list": "handling",
+   "name": "Labelled from a camera that is not colour",
+   "reader_issues": [
+    "camera_not_colour"
+   ],
+   "why": "a recording whose only camera is infrared, thermal or a mask has that as a property, not a fault in it, so it is shown and never counted"
+  },
+  {
+   "slug": "context-unreadable",
+   "list": "handling",
+   "name": "Episode details could not be read",
+   "reader_issues": [
+    "context_unreadable"
+   ]
   },
   {
    "slug": "out-of-view",
@@ -167,6 +326,130 @@
    "name": "Scale or display unreadable",
    "names": [
     "Scale or display unreadable"
+   ]
+  },
+  {
+   "slug": "sensor-clock-outside",
+   "list": "data",
+   "name": "Sensor recording is outside the footage",
+   "reader_issues": [
+    "sensor_outside_footage"
+   ]
+  },
+  {
+   "slug": "sensor-clock-coarse",
+   "list": "data",
+   "name": "Sensor clock stamps cannot place every row precisely",
+   "reader_issues": [
+    "signal_clock_coarse"
+   ]
+  },
+  {
+   "slug": "table-number-inferred",
+   "list": "handling",
+   "name": "Ambiguous table numbers were read by an inferred convention",
+   "reader_issues": [
+    "table_number_ambiguous"
+   ]
+  },
+  {
+   "slug": "camera-clock-repeated",
+   "list": "data",
+   "name": "Distinct camera frames share recorded timestamps",
+   "reader_issues": [
+    "camera_timestamp_repeated"
+   ]
+  },
+  {
+   "slug": "camera-clock-invalid",
+   "list": "data",
+   "name": "Recorded camera timestamps cannot order the frames",
+   "reader_issues": [
+    "camera_timestamp_invalid",
+    "capture_timestamp_invalid"
+   ]
+  },
+  {
+   "slug": "signal-clock-invalid",
+   "list": "data",
+   "name": "Recorded signal timestamps do not settle every reading's timing",
+   "reader_issues": [
+    "signal_timestamp_invalid"
+   ]
+  },
+  {
+   "slug": "camera-unaligned",
+   "list": "data",
+   "name": "Camera files cannot be aligned",
+   "reader_issues": [
+    "camera_not_aligned"
+   ]
+  },
+  {
+   "slug": "signal-bad-values",
+   "list": "data",
+   "name": "Signal values could not be read",
+   "reader_issues": [
+    "signal_bad_cells",
+    "signal_not_finite"
+   ]
+  },
+  {
+   "slug": "signal-gap",
+   "list": "data",
+   "name": "Signal has missing readings",
+   "reader_issues": [
+    "signal_gap"
+   ]
+  },
+  {
+   "slug": "signal-alignment-assumed",
+   "list": "data",
+   "name": "Signal placement needs an assumption",
+   "reader_issues": [
+    "signal_alignment_assumed"
+   ]
+  },
+  {
+   "slug": "state-identity-conflict",
+   "list": "data",
+   "name": "Recorded actor identity disagrees",
+   "reader_issues": [
+    "state_identity_conflict"
+   ]
+  },
+  {
+   "slug": "state-filled",
+   "list": "data",
+   "name": "Missing state readings were filled",
+   "reader_issues": [
+    "state_filled"
+   ]
+  },
+  {
+   "slug": "state-unaligned",
+   "list": "data",
+   "name": "Recorded state cannot be aligned",
+   "reader_issues": [
+    "state_unaligned"
+   ]
+  },
+  {
+   "slug": "state-partial",
+   "list": "data",
+   "name": "Recorded state covers only part of the footage",
+   "reader_issues": [
+    "state_partial"
+   ]
+  },
+  {
+   "slug": "table-length",
+   "list": "data",
+   "name": "Table rows or span differ from the footage",
+   "reader_issues": [
+    "table_short",
+    "table_long",
+    "table_span_differs"
    ]
   }
  ]

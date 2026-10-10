@@ -41,6 +41,7 @@ import numpy as np
 from label import episode as me
 from label import frames as mf
 from label import state as ms
+from label.atomic import write_atomic
 
 SMALL_W = 64          # image change is measured on a 64-px-wide grey copy of each frame
 
@@ -104,25 +105,79 @@ def actor_speed(ep: dict, g: int) -> np.ndarray:
 
 
 def _corr(a: np.ndarray, b: np.ndarray) -> float | None:
+    """The correlation over the steps where both have a reading (a NaN state row has no speed on either side of it)."""
     n = min(len(a), len(b))
-    a, b = a[:n], b[:n]
-    if n < 3 or a.std() < 1e-9 or b.std() < 1e-9:
+    ok = np.isfinite(a[:n]) & np.isfinite(b[:n])
+    a, b = a[:n][ok], b[:n][ok]
+    if len(a) < 3 or a.std() < 1e-9 or b.std() < 1e-9:
         return None
     return round(float(np.corrcoef(a, b)[0, 1]), 3)
 
 
+# a check of the recorded state runs on the frames that have a reading; with readings at fewer than this share of the
+# frames it measures too little to say anything, and says it was not assessed rather than clear
+MIN_READ_SHARE = 0.5
+
+
+def too_few(values: np.ndarray, what: str) -> str | None:
+    """Why a check is not assessed on these values (one per frame or frame step) when fewer than MIN_READ_SHARE of them
+    have a reading, else None."""
+    n, ok = len(values), int(np.isfinite(values).sum())
+    if n and ok >= MIN_READ_SHARE * n:
+        return None
+    return f"{what} has a reading at only {ok} of {n} frames, too few to check"
+
+
+def unaligned(ep: dict) -> dict | None:
+    """{"not_assessed": why} for an episode whose recorded state is not on its cameras' frames (context.json
+    state_unaligned: the camera it was recorded on was taken out, board/clips.py drop_cameras), so a check that compares
+    the state with the video is not run on it; None otherwise."""
+    why = ep["context"].get("state_unaligned")
+    if why:
+        return {"not_assessed": f"The recorded state is not on these cameras' frames. {why}"}
+    if not me.plan(ep)["checks"]["camera_windows_match_state"]:
+        return {"not_assessed": "The recorded state does not match the anchor camera's frame window."}
+    return None
+
+
+def camera_alignment_reason(ep: dict, cam: str) -> str | None:
+    """An assumed camera or anchor clock cannot place this camera against recorded state motion."""
+    clocks = ep["context"].get("camera_clock") or {}
+    affected = [v for v in {cam, me.anchor(ep)} if v in clocks]
+    return (f"Camera placement for {', '.join(sorted(affected))} uses assumed presentation timing."
+            if affected else None)
+
+
 def pairing(ep_dir: Path) -> dict | None:
     """context["stream_pairing"]: the four stream-vs-actor correlations and crossed (None when a correlation is
-    undefined), or None for an episode without left and right mounted streams and two recorded actors."""
+    undefined), or None for an episode without left and right mounted streams and two recorded actors. Measured over
+    the frames the state covers (label/episode.py state_span), and not assessed when the state is not on the cameras'
+    frames (unaligned)."""
     ep = me.load(ep_dir)
     if not {"left", "right"} <= set(me.views(ep)) or ep["state"].shape[1] < 14:
         return None
-    T = len(ep["state"])
+    if unaligned(ep):
+        return unaligned(ep)
+    reasons = [camera_alignment_reason(ep, v) for v in ("left", "right")]
+    if any(reasons):
+        return {"not_assessed": " ".join(dict.fromkeys(r for r in reasons if r))}
+    mapped = me.actor_views(ep)
+    if set(mapped) != {"left", "right"}:
+        return {"not_assessed": "The recorded actor identities do not establish one actor for each mounted camera."}
+    a, b = me.state_span(ep)
+    left, right = mapped.index("left"), mapped.index("right")
+    names = me.actors(ep)
+    vL, vR = actor_speed(ep, left), actor_speed(ep, right)
+    # measured over the frame steps with a reading on both sides; an arm with too few of them is not compared at all
+    why = [w for w in (too_few(vL[a:b - 1], f"The recorded state of {names[left]}"),
+                       too_few(vR[a:b - 1], f"The recorded state of {names[right]}")) if w]
+    if why:
+        return {"not_assessed": ". ".join(why)}
     mL, mR = stream_motion(ep, "left"), stream_motion(ep, "right")
-    vL, vR = actor_speed(ep, 0), actor_speed(ep, 1)
-    n = min(len(mL), len(mR), T - 1)
-    r = {"left_vs_left": _corr(mL[:n], vL[:n]), "right_vs_right": _corr(mR[:n], vR[:n]),
-         "left_vs_right": _corr(mL[:n], vR[:n]), "right_vs_left": _corr(mR[:n], vL[:n])}
+    n = min(len(mL), len(mR), b - 1)
+    span = slice(a, n)
+    r = {"left_vs_left": _corr(mL[span], vL[span]), "right_vs_right": _corr(mR[span], vR[span]),
+         "left_vs_right": _corr(mL[span], vR[span]), "right_vs_left": _corr(mR[span], vL[span])}
     if any(x is None for x in r.values()):
         r["crossed"] = None
     else:
@@ -159,23 +214,28 @@ def _steps(ep: dict, g: int) -> tuple[np.ndarray, np.ndarray]:
 
 def jumps(ep_dir: Path) -> dict | None:
     """context["recorded_jumps"]: up to 3 candidate leaps per actor, each with its camera's image change when the
-    actor has a mounted camera, and flagged when a leap has no matching image change; None on video-only rigs."""
+    actor has a mounted camera, and flagged when a leap has no matching image change; None on video-only rigs. Only
+    the steps inside the frames the state covers count (label/episode.py state_span), and it is not assessed when the
+    state is not on the cameras' frames (unaligned)."""
     ep = me.load(ep_dir)
     kind = me.state_kind(ep)
     if kind == "none":
         return None                         # nothing recorded to jump
+    if unaligned(ep):
+        return unaligned(ep)
+    sa, sb = me.state_span(ep)
     unit = "cm" if kind == "ee_pose" else "deg"
-    vs = set(me.views(ep))
-    # an actor is named by its camera's view key (left, right) on two-gripper rigs, but by the camera's display
-    # name on single-gripper ones ("gripper"), so map display names back to view keys or the camera is never checked
-    by_name = {me.cam_name(ep, v): v for v in vs}
+    mapped = me.actor_views(ep)
     events = []
     for g, name in enumerate(me.actors(ep)):
-        cam = name if name in vs else by_name.get(name)
+        cam = mapped[g]
         st, dts = _steps(ep, g)
-        if len(st) < 10:
+        inside = np.zeros(len(st), dtype=bool)
+        inside[sa:max(sa, sb - 1)] = True
+        st = np.where(inside & np.isfinite(st), st, 0.0)
+        if inside.sum() < 10:
             continue
-        p95 = float(np.percentile(st, 95))
+        p95 = float(np.percentile(st[inside], 95))
         thr = max(JUMP_FLOOR[kind], JUMP_FACTOR * p95)
 
         def isolated(i: int) -> bool:
@@ -186,7 +246,11 @@ def jumps(ep_dir: Path) -> dict | None:
             ev = {"actor": name, "t_s": round(me.frame_time(ep, i + 1), 3), "step": round(float(st[i]), 2),
                   "unit": unit, "typical_p95": round(p95, 3), "dt_s": round(float(dts[i]), 3), "camera": cam}
             if cam is not None:
-                ev.update(_camera_at(ep, cam, i))
+                reason = camera_alignment_reason(ep, cam)
+                if reason:
+                    ev["not_assessed"] = reason
+                else:
+                    ev.update(_camera_at(ep, cam, i))
             events.append(ev)
     flagged = [e for e in events if e.get("visual_jump") is False]
     return {"events": events, "flagged": len(flagged) > 0,
@@ -221,17 +285,29 @@ def _camera_at(ep: dict, cam: str, i: int) -> dict:
 
 def grippers(ep_dir: Path) -> dict | None:
     """context["gripper_channels"]: each actor's gripper range and whether it is flat, and flagged when one is;
-    None on video-only rigs."""
+    None on video-only rigs. Read over the frames with a reading; a gripper with too few of them (too_few) is not
+    assessed, with why, and the check says so unless another gripper is flat."""
     ep = me.load(ep_dir)
     if me.state_kind(ep) == "none":
         return None
-    s = np.asarray(ep["state"], dtype=np.float64)
-    out = {}
+    a, b = me.state_span(ep)                # the frames the state covers
+    s = np.asarray(ep["state"], dtype=np.float64)[a:b]
+    out, unread = {}, []
     for g, name in enumerate(me.actors(ep)):
         v = s[:, 7 * g + 6]
+        why = too_few(v, f"The recorded {name} gripper")
+        if why:
+            out[name] = {"not_assessed": why}
+            unread.append(why)
+            continue
+        gaps = int((~np.isfinite(v)).sum())
+        v = v[np.isfinite(v)]
         out[name] = {"min": round(float(v.min()), 5), "max": round(float(v.max()), 5),
-                     "flat": bool(np.ptp(v) <= 1e-9 * max(1.0, float(np.abs(v).max())))}
-    return {"actors": out, "flagged": any(a["flat"] for a in out.values()),
+                     "flat": bool(np.ptp(v) <= 1e-9 * max(1.0, float(np.abs(v).max()))),
+                     **({"frames_without_reading": gaps} if gaps else {})}
+    flagged = any(x.get("flat") for x in out.values())
+    return {"actors": out, "flagged": flagged,
+            **({"not_assessed": ". ".join(unread)} if unread and not flagged else {}),
             "rule": "a gripper whose recorded value is exactly the same at every frame of the episode"}
 
 
@@ -242,10 +318,12 @@ MODES = {"pairing": ("stream_pairing", pairing, "crossed"),
 
 
 def _safe(mode: str, d: str) -> tuple[str, dict | None, str | None]:
+    """One check's result on one episode. A check that crashes is that check's result, {"error": why, its finding's
+    field false}, which the board shows as an error, never a missing result; the other checks run on as usual."""
     try:
         return d, MODES[mode][1](Path(d)), None
-    except Exception as e:  # reported per episode, never silently skipped
-        return d, None, f"{type(e).__name__}: {e}"[:300]
+    except Exception as e:  # recorded as the check's result, never silently skipped
+        return d, {"error": f"{type(e).__name__}: {e}"[:300], MODES[mode][2]: False}, None
 
 
 def main():
@@ -277,10 +355,13 @@ def main():
                 failed += 1
                 print(f"FAILED {Path(d).name}: {err}", flush=True)
                 continue
+            if r and r.get("error"):
+                failed += 1
+                print(f"ERRORED {Path(d).name}: {r['error']}", flush=True)
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx[key] = r
-            p.write_text(json.dumps(ctx, indent=1))
+            write_atomic(p, ctx, indent=1)
             if r and r.get(field):
                 found += 1
                 print(f"{key.upper()} {Path(d).name} {r}", flush=True)

@@ -35,6 +35,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
@@ -109,10 +110,17 @@ def measured_fps(t_ns: np.ndarray) -> float:
     return round(1e9 / float(np.median(d)), 2) if len(d) else float(NOMINAL_FPS)
 
 
-def interp(stream: dict, q: np.ndarray) -> np.ndarray:
-    x = np.asarray(stream["t"], dtype=np.float64)
-    y = np.asarray(stream["pos"], dtype=np.float64)
-    return np.stack([np.interp(q, x, y[:, j]) for j in range(y.shape[1])], axis=1)
+def interp(stream: dict, q: np.ndarray) -> tuple[np.ndarray | None, tuple[float, float] | None]:
+    """A stream's rows on the frame times q (ns), as the readers place an arm (formats.fill_rows): (None, the gap in
+    seconds) when it has no reading for longer than the slack the readers allow, which a line would draw as motion."""
+    return formats.fill_rows(q / 1e9, np.asarray(stream["t"], dtype=np.float64) / 1e9,
+                             np.asarray(stream["pos"], dtype=np.float64))
+
+
+def read_fields(state, action) -> dict:
+    """{topic: {"position"}} of the arm channels read as the state, and of the command channels when they were read as
+    the action, for mcap_signals to leave out; positions that were not read stay signals (formats.state_fields)."""
+    return {t: {"position"} for t in (ARM if state is not None else ()) + (ARM_ACT if action is not None else ())}
 
 
 def gaps(t_ns: list[int]) -> dict:
@@ -137,8 +145,8 @@ def prepare_one(ep_path: str, raw_root: Path, out_root: Path, force: bool, keep_
     return "ok"
 
 
-# an uploaded MCAP in this layout (a scene camera, both wrist cameras, both arms) is read by this adapter
-UPLOAD = "mcap"
+# Uploads use structural MCAP fields. Published preparation and sampling stay available here.
+UPLOAD = None
 
 
 def recognizes(topics: list[str]) -> bool:
@@ -183,10 +191,15 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
             checks["streams"][topic] = gaps(vid["t"])
         sources[v] = src
     q = t_top.astype(np.float64)
-    L, Lg, R, Rg = (interp(d["robot"][t], q) for t in ARM)
-    La, Lga, Ra, Rga = (interp(d["robot"][t], q) for t in ARM_ACT)
-    state = np.concatenate([L[:, :6], Lg[:, :1], R[:, :6], Rg[:, :1]], axis=1).astype(np.float32)
-    action = np.concatenate([La[:, :6], Lga[:, :1], Ra[:, :6], Rga[:, :1]], axis=1).astype(np.float32)
+    placed = {t: interp(d["robot"][t], q) for t in ARM + ARM_ACT}
+    gap = next(((t, placed[t][1]) for t in ARM if placed[t][1]), None)
+    state = action = None
+    if gap is None:
+        L, Lg, R, Rg = (placed[t][0] for t in ARM)
+        state = np.concatenate([L[:, :6], Lg[:, :1], R[:, :6], Rg[:, :1]], axis=1).astype(np.float32)
+        if not any(placed[t][1] for t in ARM_ACT):
+            La, Lga, Ra, Rga = (placed[t][0] for t in ARM_ACT)
+            action = np.concatenate([La[:, :6], Lga[:, :1], Ra[:, :6], Rga[:, :1]], axis=1).astype(np.float32)
     for t in ARM:
         checks["streams"][t] = gaps(d["robot"][t]["t"])
     meta = d["meta"]
@@ -195,7 +208,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
     context = {
         "dataset": REPO,
         "profile": "teleop_arms",
-        "state_kind": "joints",
+        "state_kind": "joints" if state is not None else "none",
         # checked by eye against the wrist frames (fingers wide at 1.00, pinched at 0.08) and across 40
         # episodes (arms start at a median 0.99 and close to a median minimum of 0.04)
         "gripper_value": "0 = jaws shut, 1 = fully open (checked against the wrist frames)",
@@ -210,7 +223,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
                              "(its /instruction message); it is the goal you grade against."),
         "operator_id": meta.get("operator_id"),
         "station": station,
-        "n_state_frames": int(len(state)),
+        "n_state_frames": int(len(q)),
         "real_times": "times.npz",
         "cameras": {v: {"key": topic, "name": name,
                         "width": meta.get(f"{'top' if v == 'exo' else v}_camera_width"),
@@ -221,13 +234,19 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         "stream_checks": checks,
     }
     # every other number the arms record (joint velocities and torques), under the dataset's names (formats.mcap_signals)
-    formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], t_top / 1e9,
-                                                                {t: {"position"} for t in ARM + ARM_ACT}))
-    np.savez(ep_dir / "state.npz", state=state, action=action)
+    formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], t_top / 1e9, read_fields(state, action)))
+    if gap is not None:
+        formats.no_state(context, formats.StateNote(
+            f"Labelled from the cameras, because the recorded arm state {gap[0]} "
+            f"{formats.gap_words(gap[1], float(q[0]) / 1e9)}.", "short"))
+    if state is not None:
+        formats.record_state_groups(context, [(ARM[0], None, 7), (ARM[2], None, 7)])
+        np.savez(ep_dir / "state.npz", **({"state": state, "action": action} if action is not None else
+                                          {"state": state}))
     np.savez(ep_dir / "times.npz", **times)
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text(context["instruction"] + "\n")
-    (ep_dir / "context.json").write_text(json.dumps(context, indent=2))
+    write_atomic(ep_dir / "context.json", context, indent=2)
     return context
 
 

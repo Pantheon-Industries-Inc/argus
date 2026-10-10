@@ -6,6 +6,7 @@
     python -m board static site --board BOARD --clips CLIPS       the same board as plain files for a CDN
     python -m board to_board --in-dir RUN/out --out-dir OUT --dataset NAME   one run's outputs as board files
     python -m board hands build|verify ...                        the hand pose overlay files (board build runs it)
+    python -m board sensors --qa BOARD/qa --episodes EPS --out OUT the sensors panel files (board build runs it)
 
 Each command takes --help.
 """
@@ -13,7 +14,8 @@ import importlib
 import sys
 
 COMMANDS = {"build": "board.build", "clips": "board.clips", "serve": "board.serve", "static": "board.static",
-            "to_board": "board.to_board", "hands": "board.hands"}
+            "to_board": "board.to_board", "hands": "board.hands",
+            "sensors": "board.sensors"}
 if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
     print(__doc__)
     raise SystemExit(0 if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help") else 2)

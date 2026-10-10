@@ -312,6 +312,8 @@ def test_response_status_of_each_kind_of_output(tmp_path):
     assert unparsed["status"] == "unparsed" and unparsed["cost"] == 0.07 and unparsed["error"] == "JSONDecodeError"
     cut = metrics.response(ms["m2"], "episode_c")
     assert cut["status"] == "cut_off" and cut["cost"] == 0.09 and cut["latency"] is None
+    # the board's own label of a cut-off episode is its failed_ file, which reads as cut off
+    assert metrics.read_output(cut["path"])["status"] == "cut_off"
     assert metrics.response(ms["m2_ex"], "episode_c")["status"] == "no_response"   # the run finished without it
     assert metrics.response({**ms["m2_ex"], "status": "running"}, "episode_c")["status"] == "pending"
 

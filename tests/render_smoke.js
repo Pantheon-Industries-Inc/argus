@@ -21,7 +21,7 @@ const boot = '\nloadEpisodes();\n';
 if (!m[1].endsWith(boot)) { console.error('the page does not end with loadEpisodes()'); process.exit(2); }
 const pageJs = m[1].slice(0, -boot.length) + `
 globalThis.__smoke = {eps: () => ALL_EPS, cmp: () => CMP, by: () => BY_EPS, kp: () => KP_INDEX,
-                      active: () => _activeFile};
+                      sn: () => SN_INDEX, loadSensors, active: () => _activeFile};
 `;
 
 let failure = null;
@@ -29,6 +29,7 @@ const fail = (what, e) => { if (!failure) failure = what + ': ' + (e && e.stack 
 process.on('unhandledRejection', e => fail('unhandled rejection', e));
 process.on('uncaughtException', e => fail('uncaught exception', e));
 
+const created = [];           // every element the page creates (its list cards among them)
 // ---- a stub DOM: every element takes any property and call, and keeps what the page writes into it ----
 const noop = () => {};
 function makeEl(id) {
@@ -72,10 +73,13 @@ function makeEl(id) {
 const byId = new Map();
 const doc = {
   getElementById: (id) => { if (!byId.has(id)) byId.set(id, makeEl(id)); return byId.get(id); },
-  createElement: () => makeEl(), createDocumentFragment: () => makeEl(), querySelector: () => makeEl(), querySelectorAll: () => [],
+  createElement: () => { const el = makeEl(); created.push(el); return el; },
+  createDocumentFragment: () => makeEl(), querySelector: () => makeEl(), querySelectorAll: () => [],
   addEventListener: noop, removeEventListener: noop, body: makeEl('body'), documentElement: makeEl(),
   exitFullscreen: noop, fullscreenElement: null, activeElement: null,
 };
+// the sensors panel lays itself out only while its slot is on the page: the stub body holds that one element
+doc.body.contains = (el) => !!el && el.id === 'sn-slot';
 const store = new Map();
 let inflight = 0, rafs = 0;
 const ctx = {
@@ -96,7 +100,7 @@ const ctx = {
   matchMedia: () => ({matches: false, addEventListener: noop, addListener: noop}),
   addEventListener: noop, removeEventListener: noop, alert: (m) => fail('alert', m), performance,
   innerWidth: 1440, innerHeight: 900, devicePixelRatio: 1,
-  AbortController, URL, URLSearchParams, TextEncoder, TextDecoder, Blob, JSON, Math, Date, Promise,
+  AbortController, URL, URLSearchParams, TextEncoder, TextDecoder, Blob, JSON, Math, Date, Promise, atob,
   IntersectionObserver: function () { return {observe: noop, disconnect: noop, unobserve: noop}; },
   ResizeObserver: function () { return {observe: noop, disconnect: noop, unobserve: noop}; },
   CSS: {supports: () => true, escape: s => s},
@@ -124,17 +128,36 @@ async function settle() {
       finally { rendered.push({file: S.active(), cmp: !!d._compare, src: doc.getElementById('current-ep-src').innerHTML}); }
     };
   }
-  const out = {episodes: 0, rendered: 0, labellers: [], compare_view: false, footage_lines: 0, keypoint_links: 0};
+  const out = {episodes: 0, rendered: 0, labellers: [], compare_view: false, footage_lines: 0, keypoint_links: 0,
+               sensors_panels: 0, touch_lanes: 0, contact_cards: 0, contact_checks: 0, no_label_pages: 0,
+               answered_on_failed: 0, no_label_cards: 0};
   try {
     if (!failure) { await ctx.loadEpisodes(); await settle(); }
     const eps = failure ? [] : S.eps();
     out.episodes = eps.length;
     for (const e of eps) {
       if (failure) break;
+      doc.getElementById('sn-slot').innerHTML = '';
       await ctx.setDataset(e.dataset, e.file); await settle();
+      // an episode with a sensors file: its panel, once the file is in (the render fills it when it arrives)
+      if ((S.sn() || {})[e.file]) { await S.loadSensors(e.file); await settle(); }
+      if (doc.getElementById('sn-slot').innerHTML.includes('class="section sn-h"')) out.sensors_panels++;
+      // an episode with contacts: its Touch lane, its contact cards and its contact checks
+      const left = doc.getElementById('left-col').innerHTML;
+      if (left.includes('id="lane-touch"')) out.touch_lanes++;
+      if (left.includes('id="tc-cards"')) out.contact_cards++;
+      if (left.includes('Contact checks')) out.contact_checks++;
+      // an episode whose reply gave no labels: one line in place of the label sections, and none of them drawn
+      const right = doc.getElementById('right-col').innerHTML;
+      if (left.includes('class="no-labels"')) out.no_label_pages++;
+      if (e.label_failed && ['Key events', 'Was the task completed', 'Object relationships', 'Workspace inventory']
+        .some(w => left.includes(w)) || e.label_failed && right.includes('Dense timeline')) out.answered_on_failed++;
       if (doc.getElementById('current-ep-src').innerHTML.startsWith('Footage: ')) out.footage_lines++;
       if (!doc.getElementById('kp-dl').hidden) out.keypoint_links++;
     }
+    // the list's cards, each built with createElement: the episode whose reply gave no labels says so
+    out.no_label_cards = new Set(created.filter(el => el.className === 'ep-card' && /&gt;no labels&lt;|>no labels</
+      .test(el.innerHTML)).map(el => el.dataset.file)).size;
     const cmp = failure ? null : S.cmp();
     for (const mdl of (cmp && cmp.models) || []) {
       if (failure) break;

@@ -20,12 +20,15 @@ PIECE_MAX_S, so none of them is cut.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import shutil
 from pathlib import Path
 
 import numpy as np
+
+from label.atomic import write_atomic
 
 # the longest recording the published board labels in one request is 443 s (OpenAoE); a recording longer than
 # this is labelled in parts, so an upload is never sent to the model in a longer request than the board's
@@ -63,6 +66,9 @@ def motion(ep: dict) -> tuple[np.ndarray, np.ndarray]:
 
 
 def video_motion(ep: dict, n: int) -> np.ndarray:
+    """The anchor camera's grey-level change between consecutive frames, per frame. A stretch of the video that does
+    not decode has no change measured (0, as a still stretch); decoding goes on after it, seeking further ahead each
+    time the decoder fails again, so one damaged stretch never stops the recording from being cut."""
     import av
     from label import episode as me
     from label import frames as mf
@@ -79,21 +85,29 @@ def video_motion(ep: dict, n: int) -> np.ndarray:
             b0, step = mf.base_frame(s["base_s"], me.ep_fps(ep)), mf.frame_pts_step(st.time_base, me.ep_fps(ep))
             targets = [(b0 + k) * step for k in range(n)]
         index = {p: k for k, p in enumerate(targets)}
-        c.seek(targets[0], stream=st, backward=True, any_frame=False)
-        prev = None
-        for fr in c.decode(st):
-            k = index.get(fr.pts)
-            if k is None:
-                if fr.pts is not None and fr.pts > targets[-1]:
-                    break
-                continue
-            g = fr.reformat(width=64, height=max(2, int(round(fr.height * 64 / fr.width))), format="gray").to_ndarray()
-            g = g.astype(np.int16)
-            if prev is not None:
-                out[k] = np.abs(g - prev).mean()
-            prev = g
-            if k == n - 1:
+        start, seen, skip = 0, -1, 1
+        while start < n:
+            prev = None
+            try:
+                c.seek(targets[start], stream=st, backward=True, any_frame=False)
+                for fr in c.decode(st):
+                    k = index.get(fr.pts)
+                    if k is None:
+                        if fr.pts is not None and fr.pts > targets[-1]:
+                            break
+                        continue
+                    g = fr.reformat(width=64, height=max(2, int(round(fr.height * 64 / fr.width))),
+                                    format="gray").to_ndarray().astype(np.int16)
+                    if prev is not None and k > seen:
+                        out[k] = np.abs(g - prev).mean()
+                    prev, seen = g, max(seen, k)
+                    if k == n - 1:
+                        break
                 break
+            except av.error.FFmpegError as e:
+                if isinstance(e, OSError):      # a file that is gone or cannot be opened is our fault, never data's
+                    raise
+                start, skip = max(start, seen + 1) + skip, skip * 2
     return out
 
 
@@ -118,8 +132,8 @@ def choose_cuts(t: np.ndarray, m: np.ndarray, max_s: float) -> list[dict]:
         if not len(idx):
             idx = np.array([int(np.searchsorted(t, target))])
         k = int(idx[np.argmin(sm[idx])])
-        cuts.append({"frame": k, "t_s": round(float(t[k] - t[0]), 3), "still": bool(sm[k] <= still_level),
-                     "motion": round(float(sm[k]), 4), "target_s": round(target - float(t[0]), 1)})
+        cuts.append({"frame": k, "t_s": round(float(t[k]), 3), "still": bool(sm[k] <= still_level),
+                     "motion": round(float(sm[k]), 4), "target_s": round(target, 1)})
         prev_t = float(t[k])
     return cuts
 
@@ -133,20 +147,43 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     """Write one sidecar folder per part under pieces_root (named <episode>__pNN) and record the cuts in the
     episode's context (context["pieces"]). Returns the part folders."""
     from label import episode as me
+    from prepare.formats import CLOCK_TIME_KEYS, shift_context_times
     ep_dir = Path(ep_dir)
+    stored = json.loads((ep_dir / "context.json").read_text())
     ep = me.load(ep_dir)
     ctx = ep["context"]
     t, m = motion(ep)
     cuts = choose_cuts(t, m, piece_max(ctx))
     n = len(t)
     bounds = [0] + [c["frame"] for c in cuts] + [n]
-    total = duration(ctx)
+    # The parent's first capture need not be zero. Join offsets and typed metadata use its consumer clock, while
+    # each part's arrays start at its own first capture. Keep the last part through the actual final capture.
+    step = float(np.median(np.diff(t))) if len(t) > 1 else 1.0 / me.ep_fps(ep)
+    total = max(duration(ctx), float(t[-1]) + step)
     a = me.anchor(ep)
     fps = me.ep_fps(ep)
     src = ep["sources"]
     z = np.load(ep_dir / "state.npz") if (ep_dir / "state.npz").exists() else None
     zs = np.load(ep_dir / "signals.npz") if ctx.get("signals") else None
     tz = dict(np.load(ep_dir / ctx["real_times"])) if ctx.get("real_times") else None
+    presentation = dict(np.load(ep_dir / ctx["presentation_times"])) if ctx.get("presentation_times") else None
+    touch = {}
+    if zs is not None:
+        # touch is judged once, on the whole recording, and each part's signal entries carry the verdict
+        # (label/episode.py touch_verdicts): a part that falls inside a long press has no rest of its own, so its slice
+        # alone would not read as touch and the part would lose the contact the recording shows
+        from label import signals as sg
+        from label.dictionary_context import field_interpretation
+        touch = {s["name"]: bool(sg.is_touch(s["name"], np.asarray(zs[s["key"]][:n], dtype=np.float64), s.get("rest"),
+                                             s.get("swing"), role=field_interpretation(ctx, s["name"]).get("role")))
+                 for s in ctx["signals"] if s["key"] in zs.files}
+    # the recording's contacts, found once on the whole recording when its context has none (prepared before contacts
+    # were measured, or measuring them failed), so no part's labelling finds contacts on its own slice; the recording's
+    # context.json is not given them. They are found with the verdicts just made, so no signal is judged twice
+    contacts = None
+    if "contacts" in ctx or ctx.get("signals"):
+        from label import contacts as lc
+        contacts = lc.of_episode(ep, frozenset(nm for nm, v in touch.items() if v))
     out = []
     count = len(bounds) - 1
     for i in range(count):
@@ -156,13 +193,18 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if d.exists():
             shutil.rmtree(d)
         d.mkdir(parents=True)
-        t0, t1 = float(t[k0] - t[0]), (float(t[k1] - t[0]) if k1 < n else total)
-        new_src, new_times = {}, {}
+        t0, t1 = float(t[k0]), (float(t[k1]) if k1 < n else total)
+        new_src, new_times, new_presentation = {}, {}, {}
         for v, s in src.items():
             s2 = {kk: vv for kk, vv in s.items() if kk != "kmap"}
             km = ep["kmap"].get(v)
-            if v == a or km is None:
+            if v == a:
                 j0, j1 = k0, k1
+            elif km is None:
+                # a camera not paired by time shares the anchor's frame index up to its own last frame, so a part past
+                # that has none of it (label/episode.py _decode_view)
+                own = int(s["n_frames"])
+                j0, j1 = min(k0, own), min(k1, own)
             else:
                 j0, j1 = int(km[k0]), int(km[k1 - 1]) + 1
                 np.save(d / f"kmap_{v}.npy", (np.asarray(km[k0:k1]) - j0).astype(np.int32))
@@ -173,15 +215,47 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             else:
                 s2["base_s"] = round(float(s["base_s"]) + j0 / fps, 9)
             if tz is not None and v in tz:
-                new_times[v] = tz[v][j0:j1] - float(tz[a][k0])
+                origin = float(presentation.get(a, tz[a])[k0]) if presentation else float(tz[a][k0])
+                new_times[v] = tz[v][j0:j1] - origin
+                if presentation and v in presentation:
+                    new_presentation[v] = presentation[v][j0:j1] - origin
             new_src[v] = s2
         c2 = {kk: vv for kk, vv in ctx.items() if kk not in (
             "stream_pairing", "recorded_jumps", "gripper_channels", "capture_qc", "stream_checks", "pieces",
-            "instruction", "instruction_note", "real_times", "timebase_neighbour_lag_frames")}
+            "instruction", "instruction_note", "real_times", "timebase_neighbour_lag_frames",
+            "clock_zero_s")}  # a part's times start at its own first frame, never on the recording's clock zero
+        held = {v: r for v, r in ((v, me.runs_within(r, k0, k1))
+                                  for v, r in (ctx.get("placeholder_frames") or {}).items()) if r}
+        c2.pop("placeholder_frames", None)
+        if held:
+            c2["placeholder_frames"] = held       # on the part's own frames
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
                   piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3)})
-        note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total)} recording, from "
-                f"{fmt_clock(t0)} to {fmt_clock(t1)} of it. The labelling pipeline cut the recording into parts at "
+        if ctx.get('recorded_mcap_fields') or ctx.get('recorded_sensor_fields'):
+            c2['retained_evidence_root'] = str(Path(ctx.get('retained_evidence_root') or ep_dir).resolve())
+        if ctx.get("recorded_camera_ns"):
+            c2["recorded_camera_ns"] = str((ep_dir / ctx["recorded_camera_ns"]).resolve())
+        if ctx.get("recorded_container_times"):
+            c2["recorded_container_times"] = {**ctx["recorded_container_times"],
+                "file": str((ep_dir / ctx["recorded_container_times"]["file"]).resolve())}
+        if ctx.get("unshown_cameras"):
+            from prepare.camera_clock import unshown_span
+            c2["unshown_cameras"] = unshown_span(ep_dir, ctx["unshown_cameras"], t0, t1,
+                                                float(ctx.get("clock_zero_s") or 0.0), shift=True)
+        c2 = shift_context_times(c2, -t0)
+        parent_notes = []
+        if t0:
+            for issue in c2.get("reader_issues") or []:
+                if (isinstance(issue, dict) and isinstance(issue.get("what"), str) and issue["what"]
+                        and any(isinstance(issue.get(key), (int, float)) and not isinstance(issue.get(key), bool)
+                                for key in CLOCK_TIME_KEYS["reader_issues"])):
+                    # The typed markers move to the part clock. Copied prose remains the recording's evidence.
+                    issue["what"] = "Full recording clock note. " + issue["what"]
+                    parent_notes.append(issue["what"])
+        interval = (f"{fmt_clock(t0)} to {fmt_clock(t1)} on the full recording clock" if float(t[0]) else
+                    f"{fmt_clock(t0)} to {fmt_clock(t1)} of it")
+        note = (f"this clip is part {i + 1} of {count} of one continuous {fmt_clock(total - float(t[0]))} recording, from "
+                f"{interval}. The labelling pipeline cut the recording into parts at "
                 "moments of little motion to label it; activity that carries across a cut is expected, and a part "
                 "that starts or ends in the middle of an activity is how we cut it, not a truncated or cut-off "
                 "recording.")
@@ -190,30 +264,68 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                      f"\"{ctx['instruction'].strip()}\". This part may show only some of it.")
         if ctx.get("collection_note"):
             note += " " + ctx["collection_note"].strip()
+        if parent_notes:
+            note += " " + " ".join(parent_notes)
         c2["collection_note"] = note
         if new_times:
             np.savez(d / "times.npz", **new_times)
             c2["real_times"] = "times.npz"
+        if new_presentation:
+            np.savez(d / ctx["presentation_times"], **new_presentation)
+        if contacts is not None:
+            # the recording's contacts that overlap the part, on its clock and clipped to it, keeping their ids so the
+            # parts' answers join back into one list
+            c2["contacts"] = [{**c, "start_s": round(max(c["start_s"], t0) - t0, 3),
+                               "end_s": round(min(c["end_s"], t1) - t0, 3),
+                               "peak_s": round(min(max(c["peak_s"], t0), t1) - t0, 3),
+                               "from_start": c["from_start"] or c["start_s"] < t0,
+                               "to_end": c["to_end"] or c["end_s"] > t1,
+                               "dips_s": [round(x - t0, 3) for x in c.get("dips_s") or [] if t0 <= x <= t1]}
+                              for c in contacts if c["end_s"] >= t0 and c["start_s"] < t1]
+        if (ep_dir / "depth.json").exists():
+            # each camera's depth frames for the part's anchor frames; the depth files and their times are the
+            # recording's own pts; their scalar capture times move with the part's colour capture times
+            dj = json.loads((ep_dir / "depth.json").read_text())
+            for v, e in dj.items():
+                np.save(d / e["kmap"], np.asarray(np.load(ep_dir / e["kmap"])[k0:k1]))
+            write_atomic(d / "depth.json", dj, indent=1)
+            if (ep_dir / "depth_times.npz").exists():
+                with np.load(ep_dir / "depth_times.npz") as dt:
+                    origin = float(t[k0]) + float(ctx.get("clock_zero_s") or 0.0)
+                    np.savez(d / "depth_times.npz", **{key: dt[key] if key.endswith("_pts") else dt[key] - origin
+                                                      for key in dt.files})
+            if ctx.get("depth_presentation_times"):
+                with np.load(ep_dir / ctx["depth_presentation_times"]) as dt:
+                    np.savez(d / ctx["depth_presentation_times"], **{key: dt[key] - origin for key in dt.files})
         if z is not None:
             arrs = {kk: z[kk][k0:k1] for kk in z.files}
             np.savez(d / "state.npz", **arrs)
         if zs is not None:          # the context lists the recording's other signals, so the part carries its rows
             np.savez(d / "signals.npz", **{kk: zs[kk][k0:k1] for kk in zs.files})
+            # copies, so the recording's own context.json keeps its entries as prepare wrote them
+            c2["signals"] = [{**s, "touch": touch[s["name"]],
+                              **({"touch_role": "touch"} if sg.touch_permission(
+                                  s["name"], field_interpretation(ctx, s["name"]).get("role")) is True else {})}
+                             if s["name"] in touch else s for s in ctx["signals"]]
         if ctx.get("annotation_subtasks"):
             # the dataset's timed subtasks are on the recording's clock; the part is shown those that overlap it, on
-            # its own clock and clipped to it
-            # (a step with no end time is a moment)
-            subs = [(x, float(x.get("t0") or 0.0), float(x["t1"] if x.get("t1") is not None else x.get("t0") or 0.0))
+            # its own clock and clipped to it (a step with no end time is a moment), and every part is shown those
+            # with no time the board can read (none, or not a number), untimed, as a short episode's prompt names them
+            subs = [(x, me.number(x.get("t0")),
+                     me.number(x["t1"]) if x.get("t1") is not None else me.number(x.get("t0")))
                     for x in ctx["annotation_subtasks"] if isinstance(x, dict)]
             c2["annotation_subtasks"] = [
-                {**x, "t0": round(max(a, t0) - t0, 3), **({"t1": round(min(b, t1) - t0, 3)} if "t1" in x else {})}
-                for x, a, b in subs if b >= t0 and a < t1]
-        (d / "sources.json").write_text(json.dumps(new_src, indent=1))
-        (d / "context.json").write_text(json.dumps(c2, indent=1, default=str))
+                {**x, "t0": None, **({"t1": None} if "t1" in x else {})} if a is None else
+                {**x, "t0": round(max(a, t0) - t0, 3),
+                 **({"t1": round(min(a if b is None else b, t1) - t0, 3) if b is not None else None} if "t1" in x
+                    else {})}
+                for x, a, b in subs if a is None or ((a if b is None else b) >= t0 and a < t1)]
+        write_atomic(d / "sources.json", new_src, indent=1)
+        write_atomic(d / "context.json", c2, indent=1, default=str)
         (d / "instruction.txt").write_text("\n")
         out.append(d)
-    ctx["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
-    (ep_dir / "context.json").write_text(json.dumps(ctx, indent=1, default=str))
+    stored["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
+    write_atomic(ep_dir / "context.json", stored, indent=1, default=str)
     return out
 
 
@@ -239,57 +351,239 @@ def write_units(job: Path, eps: Path) -> dict:
 
 
 def _write_or_reuse(d: Path, proot: Path) -> list[Path]:
+    from label.evidence_access import same_source_proof, source_proof
     ctx = json.loads((d / "context.json").read_text())
     names = (ctx.get("pieces") or {}).get("parts") or []
-    if names and all((proot / n / "context.json").exists() for n in names):
-        return [proot / n for n in names]          # a resumed job reuses its parts (their labels depend on them)
-    return write_pieces(d, proot)
+    proof_path = proot / f".{d.name}.source_proof.json"
+    if names and not proof_path.exists() and not any((proot / n).exists() for n in names):
+        # A different job may have cut this source before. This job has no saved parts or paid replies to reuse.
+        parts = write_pieces(d, proot)
+        ctx = json.loads((d / "context.json").read_text())
+        write_atomic(proof_path, source_proof(ctx, d))
+        return parts
+    if names:
+        try:
+            saved = json.loads(proof_path.read_text())
+        except (OSError, ValueError):
+            raise RuntimeError(f"{d.name}: existing pieces have no verifiable source proof; use an explicit fresh job")
+        if not same_source_proof(saved, ctx, d):
+            raise RuntimeError(f"{d.name}: prepared source changed since pieces were cut; use an explicit fresh job")
+        if not all((proot / n / "context.json").exists() for n in names):
+            raise RuntimeError(f"{d.name}: a saved piece is missing; use an explicit fresh job")
+        return [proot / n for n in names]
+    parts = write_pieces(d, proot)
+    ctx = json.loads((d / "context.json").read_text())
+    write_atomic(proof_path, source_proof(ctx, d))
+    return parts
+
+
+def _read(p: Path) -> tuple[dict | None, str | None]:
+    """(the output file's JSON, None), or (None, why) when it does not read."""
+    try:
+        r = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        return None, f"its output file does not read ({type(e).__name__}: {e})"[:300]
+    return (r, None) if isinstance(r, dict) else (None, "its output file is not a JSON object")
+
+
+def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
+    """A part's reply from a run's out/ folder: (its result, None) when it parsed and its labels can be read (their
+    fields of the wrong type left out, label/harness.py typed_labels), else (what came back, why it gave no labels):
+    not parsing, cut off at the output limit (the harness's failed_<part>.json), an output file that does not read, or
+    no reply at all, with why when the harness recorded it (noreply_<part>.json)."""
+    from label.harness import typed_labels
+    q, f, nr = src / f"{name}.json", src / f"failed_{name}.json", src / f"noreply_{name}.json"
+    r, bad = _read(q) if q.exists() else (None, None)
+    if bad:
+        return None, bad
+    if r and r.get("parse_ok"):
+        if not isinstance(r.get("labels"), dict):
+            return r, "its labels are not a JSON object"
+        return {**r, "labels": typed_labels(copy.deepcopy(r["labels"]))}, None
+    if r:
+        return r, "the model's reply did not parse"
+    if f.exists():
+        r, bad = _read(f)
+        return r, bad or "the model's reply was cut off at the output limit"
+    if nr.exists():
+        r, _ = _read(nr)
+        if r and r.get("no_reply"):
+            return r, f"the model gave no reply ({r['no_reply']})"
+    return None, "the model gave no reply"
+
+
+def _raw_head(r: dict | None) -> str:
+    """The start of a part's reply that gave no labels, as the board keeps one (board/to_board.py RAW_HEAD)."""
+    lab = (r or {}).get("labels") if isinstance((r or {}).get("labels"), dict) else {}
+    raw = lab.get("_raw") if lab.get("_raw") is not None else (r or {}).get("content_tail") or ""
+    return str(raw)[:3000]
 
 
 def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
-    """out/: the short episodes' results from job/run/out as labelled, and one stitched result per long recording.
-    A recording with a part that is missing or did not parse is left out and listed under "incomplete"."""
+    """out/: the short episodes' replies from job/run/out as they came, and one stitched result per long recording.
+
+    A recording is stitched from the parts that parsed; a part that did not parse, was cut off or never came is a gap,
+    named in the result's stitched["missing"] with its span and why (the board flags it at that span, board/build.py
+    reader_issues), and the recording is listed under "incomplete". A recording none of whose parts parsed is still
+    written, as a reply that gave no labels, so the board shows its footage, checks and sensors and says why; it is
+    listed under "unlabelled"."""
     src = Path(job) / "run" / "out"
-    out.mkdir(parents=True, exist_ok=True)
-    res = {"stitched": 0, "incomplete": []}
-    for p in src.glob("episode_*.json"):
-        if "__p" not in p.stem:
-            shutil.copy(p, out / p.name)
-    for ep, parts in long_eps.items():
-        got = []
-        for n in parts:
-            q = src / f"{n}.json"
-            r = json.loads(q.read_text()) if q.exists() else None
-            if not r or not r.get("parse_ok"):
-                break
-            got.append((json.loads((Path(job) / "pieces" / n / "context.json").read_text()), r))
-        if len(got) != len(parts):
-            res["incomplete"].append(ep)
+    short_outputs = [p for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json"),
+                                  *src.glob("noreply_episode_*.json")] if "__p" not in p.stem]
+    # Upload resumes can skip the harness when every saved reply parsed. Verify
+    # the active reply for each unit before any result reaches a new export.
+    from label.harness import saved_input_problem
+    units = {p.stem.removeprefix('failed_').removeprefix('noreply_'):
+             Path(eps) / p.stem.removeprefix('failed_').removeprefix('noreply_') for p in short_outputs}
+    units.update({name: Path(job) / 'pieces' / name for parts in long_eps.values() for name in parts})
+    records = {}
+    for name, directory in sorted(units.items()):
+        record, _ = _part_reply(src, name)
+        records[name] = record
+        problem = saved_input_problem(record, directory) if record else None
+        if problem:
+            raise RuntimeError(f'{name}: {problem}; use an explicit fresh job to label changed inputs')
+    for parent, parts in long_eps.items():
+        proof_path = Path(job) / 'pieces' / f'.{parent}.source_proof.json'
+        if not proof_path.exists() and not any((records.get(name) or {}).get('input_identity') for name in parts):
             continue
-        (out / f"{ep}.json").write_text(json.dumps(stitch(Path(eps) / ep, got)))
-        res["stitched"] += 1
+        from label.evidence_access import same_source_proof
+        try:
+            proof = json.loads(proof_path.read_text())
+            directory = Path(eps) / parent
+            context = json.loads((directory / 'context.json').read_text())
+            current = same_source_proof(proof, context, directory)
+        except (OSError, ValueError, KeyError, TypeError):
+            current = False
+        if not current:
+            raise RuntimeError(f'{parent}: saved pieces have changed or missing input; '
+                               'use an explicit fresh job to label changed inputs')
+    out.mkdir(parents=True, exist_ok=True)
+    res = {"stitched": 0, "incomplete": [], "unlabelled": []}
+    # every short episode's reply as it came, a cut-off one (failed_<episode>.json) too: the board shows each
+    for p in short_outputs:
+        shutil.copy(p, out / p.name)
+    for ep, parts in long_eps.items():
+        got, missing, failed = [], [], []
+        for n in parts:
+            pc = json.loads((Path(job) / "pieces" / n / "context.json").read_text())
+            r, why = _part_reply(src, n)
+            if why is None:
+                got.append((pc, r))
+                continue
+            piece = pc["piece"]
+            # with the start of what came back, so the board can show it (board/to_board.py label_failed)
+            missing.append({"part": piece["index"], "t0_s": piece["t0_s"], "t1_s": piece["t1_s"], "why": why,
+                            **({"raw_head": _raw_head(r)} if _raw_head(r) else {})})
+            failed.append((pc, r))
+        if got:
+            result = stitch(Path(eps) / ep, got, missing)
+            from label.evidence_access import merge as merge_inspection
+            inspection = merge_inspection(got + [(pc, r) for pc, r in failed if r], Path(eps) / ep)
+            if inspection['parts']:
+                result['evidence_inspection'] = inspection
+            for pc, r in failed:
+                if not r:
+                    continue
+                u = r.get('usage') or {}
+                for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens',
+                            'cache_write_tokens', 'latency_s', 'est_cost_usd'):
+                    result['usage'][key] = round(result['usage'][key] + float(u.get(key) or 0), 4)
+                result['config']['pieces'][int(pc['piece']['index']) - 1].update(
+                    episode_dir=r.get('episode_dir'), cost_usd=u.get('est_cost_usd'),
+                    usage=u, provider=r.get('provider'), generation_id=r.get('generation_id'),
+                    finish_reason=r.get('finish_reason'), resolution_route=(r.get('config') or {}).get('resolution_route'))
+            routes = [((r or {}).get('config') or {}).get('resolution_route') or {}
+                      for _, r in sorted(got + failed, key=lambda item: item[0]['piece']['index'])]
+            result['config']['resolution_route']['parts'] = routes
+            result['config']['resolution_route']['cost_usd'] = round(
+                sum(float(route.get('cost_usd') or 0) for route in routes), 6)
+            result['decode_failed'] += [x for _, r in failed for x in (r or {}).get('decode_failed') or []]
+            write_atomic(out / f"{ep}.json", result, indent=None)
+            res["stitched"] += 1
+            if missing:
+                res["incomplete"].append(ep)
+            continue
+        write_atomic(out / f"{ep}.json", unlabelled(Path(eps) / ep, failed, missing), indent=None)
+        res["unlabelled"].append(ep)
     return res
+
+
+def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: list[dict]) -> dict:
+    """The result of a long recording none of whose parts gave labels: no labels, and stitched["missing"] with each
+    part's span and why (board/to_board.py label_failed reads it as no_part, and the board says why for each part),
+    with the first part's reply that came back, every part's undecodable stretches and cost, and the parts it was cut
+    into."""
+    first = next((r for _, r in failed if r), {}) or {}
+    raw = (first.get("labels") or {}).get("_raw") if isinstance(first.get("labels"), dict) else None
+    raw = raw if raw is not None else first.get("content_tail") or ""
+    whys = "; ".join(f"part {g['part']}: {g['why']}" for g in missing)
+    usage = {key: round(sum(float(((r or {}).get('usage') or {}).get(key) or 0) for _, r in failed), 4)
+             for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens',
+                         'cache_write_tokens', 'latency_s', 'est_cost_usd')}
+    count = len(missing)
+    from label.evidence_access import merge as merge_inspection
+    inspection = merge_inspection([(pc, r) for pc, r in failed if r], ep_dir)
+    from label.sensor_evidence import merge as merge_sensor
+    ctx = json.loads((Path(ep_dir) / 'context.json').read_text())
+    sensor = merge_sensor([(pc, r) for pc, r in failed if r], ctx, ep_dir=ep_dir)
+    cfg = dict(first.get('config') or {})
+    routes = [((r or {}).get('config') or {}).get('resolution_route') or {} for _, r in failed]
+    cfg['resolution_route'] = {'parts': routes,
+                               'cost_usd': round(sum(float(route.get('cost_usd') or 0) for route in routes), 6)}
+    cfg['pieces'] = [{**pc.get('piece', {}), 'episode_dir': (r or {}).get('episode_dir'),
+                      'usage': (r or {}).get('usage') or {}, 'provider': (r or {}).get('provider'),
+                      'generation_id': (r or {}).get('generation_id'), 'finish_reason': (r or {}).get('finish_reason'),
+                      'resolution_route': ((r or {}).get('config') or {}).get('resolution_route')}
+                     for pc, r in failed]
+    return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
+            **({'evidence_inspection': inspection} if inspection['parts'] else {}),
+            **({'sensor_evidence': sensor} if sensor['sensors'] else {}),
+            "config": cfg, "parse_ok": False, "no_part": True, "usage": usage,
+            "labels": {"_raw": raw, "_parse_error": f"no part of the recording returned labels that parse ({whys})"},
+            "stitched": {"parts": count, "cuts_s": [g["t0_s"] for g in missing[1:]], "missing": missing},
+            "decode_failed": [x for _, r in failed for x in (r or {}).get("decode_failed") or []]}
 
 
 # ---------------------------------------------------------------- stitching
 
 T_KEYS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
           "recovered_at_s")
+# a contact's strips and the answer that counts frames in each (label/episode.py contacts_block, checks/contacts.py)
+STRIP_FIELDS = {"begin": "first_touch_frame", "end": "last_touch_frame"}
 
 
 def _shift(x, dt: float):
-    """Every time field of a label structure shifted by dt seconds."""
+    """Every time field of a label structure shifted by dt seconds, one written as text that reads as a number
+    (label/episode.py number) as well; one that reads as none is left as it is."""
+    from label.episode import number
     if isinstance(x, list):
         return [_shift(v, dt) for v in x]
     if isinstance(x, dict):
         out = {}
         for k, v in x.items():
-            if k in T_KEYS and isinstance(v, (int, float)) and not isinstance(v, bool):
-                out[k] = round(float(v) + dt, 3)
+            if k in T_KEYS and number(v) is not None:
+                out[k] = round(number(v) + dt, 3)
             else:
                 out[k] = _shift(v, dt)
         return out
     return x
+
+
+def outside_part(lab: dict, t0: float, t1: float) -> dict:
+    """{"steps": n, "key_events": k} of one part's labels, already on the recording's clock: how many timeline steps
+    start or end, and how many key events lie, more than STEP_SLACK_S outside the part's own footage (t0 to t1). The
+    stitch keeps them where the model put them, in a neighbouring part's footage, so the board flags them
+    (board/build.py steps_outside). Empty when every time lies within the part."""
+    from label.episode import STEP_SLACK_S, number
+    lo, hi = t0 - STEP_SLACK_S, t1 + STEP_SLACK_S
+
+    def out(x) -> bool:
+        return x is not None and not lo <= x <= hi
+    n = sum(any(out(number(s.get(k))) for k in ("start_s", "end_s"))
+            for s in lab.get("timeline") or [] if isinstance(s, dict))
+    k = sum(out(number(e.get("t_s"))) for e in lab.get("key_events") or [] if isinstance(e, dict))
+    return {**({"steps": n} if n else {}), **({"key_events": k} if k else {})}
 
 
 def is_cut_artifact(iss: dict, part: int, count: int, t0: float, t1: float, cuts_s: list[float]) -> bool:
@@ -305,26 +599,35 @@ def is_cut_artifact(iss: dict, part: int, count: int, t0: float, t1: float, cuts
     return any(abs(float(ts) - c) <= CUT_GUARD_S for c in cuts_s)
 
 
-def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
+def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = ()) -> dict:
     """One labelling result for the whole recording from its parts' results [(part context, part result), ...]
     in order. Times are shifted onto the recording's clock; lists are joined; each part's task and outcome
-    become one entry of tasks; issues describing our cuts are set aside in _excluded with the reason."""
+    become one entry of tasks; issues describing our cuts are set aside in _excluded with the reason. missing names
+    the parts that gave no labels ({"part", "t0_s", "t1_s", "why"}, stitch_run): the recording is stitched from the
+    rest, its cuts are still every cut, and the record keeps the gaps under stitched["missing"]."""
     from label import episode as me
     ep_dir = Path(ep_dir)
     ep = me.load(ep_dir)
     pl = me.plan(ep)
-    count = len(parts)
-    cuts_s = [float(pc["piece"]["t0_s"]) for pc, _ in parts[1:]]
+    missing = sorted(missing, key=lambda g: g["part"])
+    count = len(parts) + len(missing)
+    starts = sorted([float(pc["piece"]["t0_s"]) for pc, _ in parts] + [float(g["t0_s"]) for g in missing])
+    cuts_s = starts[1:]
     L = {"scene": {"objects": [], "setting": ""}, "timeline": [], "key_events": [], "state_changes": [],
          "scene_graph": [], "recovery": [], "instruction_variants": [], "data_issues": [], "operator_mistakes": [],
          "tasks": []}
+    contacts_model, contacts_missing, views, strip_part = {}, [], {"shown": [], "strips": {}}, {}
     excluded, summaries, reviews, seen_obj = [], [], [], set()
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0, "est_cost_usd": 0.0,
              "cached_tokens": 0, "cache_write_tokens": 0, "latency_s": 0.0}
-    timesteps, still, part_info = [], [], []
-    for i, (pc, r) in enumerate(parts, start=1):
+    timesteps, still, part_info, dropped, outside = [], [], [], [], []
+    for n, (pc, r) in enumerate(parts, start=1):
+        i = int(pc["piece"].get("index") or n)      # the part's own number, with a gap where a part gave no labels
         t0, t1 = float(pc["piece"]["t0_s"]), float(pc["piece"]["t1_s"])
         lab = _shift(r.get("labels") or {}, t0)
+        off = outside_part(lab, t0, t1)
+        if off:
+            outside.append({"part": i, "t0_s": t0, "t1_s": t1, **off})
         for o in (lab.get("scene") or {}).get("objects") or []:
             key = str(o.get("name", "")).strip().lower()
             if key and key not in seen_obj:
@@ -339,8 +642,9 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
         for k in ("data_issues", "operator_mistakes"):
             for iss in lab.get(k) or []:
                 iss = {**iss, "part": i}
+                semantic = {key: value for key, value in iss.items() if key not in ('part', 'parts')}
                 same = next((x for x in L[k] if x.get("t_s") is None and iss.get("t_s") is None
-                             and x.get("category") == iss.get("category")), None)
+                             and {key: value for key, value in x.items() if key not in ('part', 'parts')} == semantic), None)
                 if same is not None:
                     # an issue about a whole part, reported by several parts, is one issue about the recording
                     same["parts"] = sorted(set(same.get("parts") or [same["part"]]) | {i})
@@ -351,6 +655,28 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
                                                "off at this point describes our cut, not the recording"})
                 else:
                     L[k].append(iss)
+        # a contact cut by one of our cuts is shown by each part it reaches, with the begin strip only in the part where
+        # it begins and the end strip only where it ends (label/episode.py contact_strips); each strip's times come from
+        # the part that showed it, on the recording's clock
+        cv = r.get("contact_views") or {}
+        for cid in cv.get("shown") or []:
+            if cid not in views["shown"]:
+                views["shown"].append(cid)
+                views["strips"][cid] = {}
+            for k, ts in ((cv.get("strips") or {}).get(cid) or {}).items():
+                if k not in views["strips"][cid]:
+                    views["strips"][cid][k] = [round(float(x) + t0, 3) for x in ts]
+                    strip_part[cid, k] = i
+        # the first answer that saw a contact is kept, with its first and last touch frame from the parts whose strips
+        # they count in
+        for c in lab.get("contacts") or []:
+            if not isinstance(c, dict):
+                continue
+            m = contacts_model.setdefault(c.get("id"), {k: v for k, v in c.items() if k not in STRIP_FIELDS.values()})
+            for k, field in STRIP_FIELDS.items():
+                if strip_part.get((c.get("id"), k)) == i and field in c:
+                    m[field] = c[field]
+        contacts_missing += [c for c in lab.get("contacts_missing") or [] if isinstance(c, dict)]
         summ = (lab.get("task_summary") or "").strip()
         if summ:
             summaries.append(summ)
@@ -364,6 +690,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
                                "objects": [], "outcome": (comp.get("task_completed") or "unclear"),
                                "success_predicate": comp.get("success_predicate") or "",
                                "completed_at_s": comp.get("completed_at_s"), "note": comp.get("reason") or ""})
+        # what each part's reply broke of the output format, left out of its labels (label/harness.py typed_labels)
+        dropped += [{**x, "part": i} for x in (r.get("labels") or {}).get("_dropped") or [] if isinstance(x, dict)]
         u = r.get("usage") or {}
         for k in usage:
             usage[k] = round(usage[k] + float(u.get(k) or 0), 4)
@@ -377,27 +705,62 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]]) -> dict:
     L["performance_review"] = " ".join(reviews)
     L["completion"] = {"task_completed": None, "success_predicate": None, "completed_at_s": None,
                        "goal_reached_at_s": None, "undone_at_s": None, "undone_by": None,
-                       "reason": f"a long recording labelled in {count} parts; each part's outcome is under tasks"}
+                       "reason": f"a long recording labelled in {count} parts; each part's outcome is under tasks"
+                                 + ("; " + "; ".join(f"part {g['part']} has no labels, as {g['why']}" for g in missing)
+                                    if missing else "")}
     for k in ("timeline",):
-        L[k].sort(key=lambda s: (s.get("start_s") or 0))
+        L[k].sort(key=lambda s: (s.get("start_s") is None, s.get("start_s") or 0))      # an untimed step last
     first = parts[0][1]
     ctx = ep["context"]
     cfg = dict(first.get("config") or {})
+    part_info = sorted(part_info + [{**g, "parse_ok": False} for g in missing], key=lambda x: x["part"])
     cfg.update(timesteps_s=timesteps, n_timesteps=len(timesteps), pieces=part_info)
     # each part routed its own cell width; the recording's route records every part's, and its cost is theirs summed
     routes = [(r.get("config") or {}).get("resolution_route") or {} for _, r in parts]
     cfg["resolution_route"] = {**(routes[0] or {}), "parts": routes,
                                "cost_usd": round(sum(float(x.get("cost_usd") or 0) for x in routes), 6)}
+    # each part's prompt had its own blocks (a contact or depth only some parts hold); the recording's record names
+    # every block, output field and implied check any part had, in the order they first appear
+    for k in ("prompt_blocks", "schema_fields", "checks_implied"):
+        got = [x for _, r in parts for x in (r.get("config") or {}).get(k) or []]
+        if got or k in cfg:
+            cfg[k] = list(dict.fromkeys(got))
+    # a contact of the recording is kept when the record of some part lists it; a part's record lists all its touch
+    # contacts, shown or left out by the cap, so one timed by a signal that is not touch (touch_contacts) is left out
+    asked = {c.get("id") for _, r in parts for c in r.get("contacts") or [] if isinstance(c, dict)}
+    # the recording's contacts as write_pieces gave them to the parts: stored, or found once on the whole recording
+    # when its context has none, with the touch verdicts write_pieces wrote into every part's signal entries, so the
+    # ids match and no signal is judged again (the plan's verdicts for parts written without them)
+    from label import contacts as lc
+    entries = parts[0][0].get("signals") or []
+    verdicts = (frozenset(s["name"] for s in entries if s["touch"]) if entries and all("touch" in s for s in entries)
+                else pl["touch"])
+    recorded = lc.of_episode(ep, verdicts) if asked else []
     if excluded:
         L["_excluded"] = excluded
+    if dropped:
+        L["_dropped"] = dropped
+    if views["shown"]:
+        L["contacts"], L["contacts_missing"] = list(contacts_model.values()), contacts_missing
+    from label.sensor_evidence import merge
+    sensor_evidence = merge(parts, ctx, ep_dir=ep_dir)
+    from label.evidence_access import merge as merge_inspection
+    evidence_inspection = merge_inspection(parts, ep_dir)
     return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
+            **({"sensor_evidence": sensor_evidence} if sensor_evidence["sensors"] else {}),
+            **({"evidence_inspection": evidence_inspection} if evidence_inspection['parts'] else {}),
             # each part inferred its own task, with the recording's task text given only as context (write_pieces), so
             # no part was graded against that text and the recording is not either
             "given_prompt": (ctx.get("instruction") or "").strip() or None, "prompt_mode": "inferred",
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
-            "stitched": {"parts": count, "cuts_s": cuts_s}}
+            "stitched": {"parts": count, "cuts_s": cuts_s, **({"missing": missing} if missing else {}),
+                         **({"outside_part": outside} if outside else {})},
+            # each part's undecodable stretches, already on the recording's clock (label/episode.py decode_failures)
+            "decode_failed": [x for _, r in parts for x in r.get("decode_failed") or []],
+            **({"contacts": [c for c in recorded if c.get("id") in asked], "contact_views": views}
+               if views["shown"] else {})}
 
 
 if __name__ == "__main__":

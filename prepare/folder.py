@@ -11,14 +11,27 @@ recorded state, and Gen-HumanEgo, with its goal and timed steps); any other MCAP
 joint channels and its text channels (the task, and on a head camera its timed steps). MCAP files with no camera
 beside an episode's videos are its recorded arm state.
 
---rig says what recorded it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers carried by
-a person) or ego_head (a camera worn on a person's head). A .txt or .json beside a video, or instruction.txt or
-annotations.json inside an episode folder, reaches the model as your annotation, a claim to check against the
-footage. --max-minutes stops after that much footage (default: no limit). prepare/formats.py documents every
-layout it accepts and what it does when metadata is missing.
+--rig says what recorded it: teleop_arms (one or two robot arms), handheld_gripper (one or two grippers carried by a
+person) or ego_head (a camera worn on a person's head). Your notes reach the model as claims to check against the
+footage. They are a .txt, .json, .jsonl or .md named as a video, and in an episode's folder (or the folder of a
+video that is the only episode there) the .txt or .json named for the episode, annotations.json, annotation.json,
+meta.json, instruction.txt, task.txt, annotations.jsonl and notes.txt. The task comes from a JSON note's task key,
+then instruction.txt or task.txt, then the .txt named for the episode, then a video's own .txt. A recorder's .json
+in the folder that names the task gives it to the episodes its name names, or to every episode there when its name
+names none. One naming an absent take keeps its task or note on its uploaded owners and reports the absent take;
+one naming only absent takes is not read. --max-minutes stops after that much footage
+(default: no limit). prepare/formats.py documents every layout it accepts and what it does when metadata is missing.
 
 Writes EPISODES/episode_<name>/ with context.json, sources.json, state.npz when the recording has usable state,
 times.npz and instruction.txt, and prints a report of what was read, used, skipped and why.
+MCAP and HDF5 container notes apply to their contained episodes. LeRobot notes use the recorded episode index.
+Outside files retain their filenames as uploader notes, and recorded instruction text keeps priority.
+Owned text notes remain notes even when their filenames do not qualify as tasks. Camera notes accept every
+own-note form on the same proven owners. LeRobot reserves official metadata at its actual meta paths;
+recorder notes at the root retain their full relative filenames. Failed metadata reads and note size limits
+are named in the report and episode issues, and successful format reads determine what was consumed.
+Process diagnostics and standard logs stay in source bookkeeping and saved arrays, outside model sensor claims.
+
 """
 from __future__ import annotations
 

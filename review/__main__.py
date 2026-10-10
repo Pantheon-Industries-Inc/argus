@@ -10,9 +10,11 @@ uploaded to Data Review get the same requests and the same board:
 
   1. convert  the data into episode sidecars (prepare/formats.py, the reader python -m prepare folder runs), with
               a report of what was read, used and left out (JOB/report.json)
-  2. checks   crossed camera streams, recorded jumps and flat gripper channels where the data has arm state
+  2. dictionary  interpret source fields when recorded descriptors leave their meanings uncertain
+  3. checks   crossed camera streams, recorded jumps and flat gripper channels where the data has arm state
               (checks.stream_pairing), sped-up recordings measured against their neighbours in the same folder
-              (checks.timebase measure_folder), and the capture checks (checks.capture_qc)
+              (checks.timebase measure_folder), the capture checks (checks.capture_qc), and the checks on the
+              other signals and depth streams where the data has them (checks.sensors)
   3. clips    browser-playable copies of each camera for the board (python -m board clips)
   4. dry run  every request built exactly as it would be sent, free. A recording longer than label/pieces.py's
               PIECE_MAX_S is labelled in parts cut at still moments
@@ -108,8 +110,8 @@ def main() -> int:
     from board import build as build_board
     from board import clips as board_clips
     from board import rules as board_rules
-    from checks import timebase
-    from label import pieces
+    from checks import capture_qc, timebase
+    from label import pieces, dictionary_stage
     from prepare import formats
 
     job = a.out.resolve()
@@ -130,14 +132,26 @@ def main() -> int:
         why = "; ".join(f"{f['name']}: {f['why']}" for f in rep["failed"][:3])
         raise SystemExit("no episode could be read" + (f" ({why})" if why else ""))
 
+    print('== dictionary', flush=True)
+    dictionary_stage.prepare(job, eps, [e['episode_id'] for e in rep['episodes']], free=a.free, cap=a.cap)
+
     if any(e["state_kind"] != "none" for e in rep["episodes"]):
         for flag in ([], ["--jumps"], ["--grippers"]):
             run_step(job, f"checks{''.join(flag).replace('--', '_')}",
                      [PY, "-m", "checks.stream_pairing", *flag, "--jobs", jobs, str(eps)], env)
         timebase.measure_folder(eps)
-    run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env)
-    # exit 1 is board clips saying no episode came out whole (clips/failed.json lists why), told below as the upload's
-    # own reason; any other failure of the step is still an error
+    # EXIT_FAILED is some episode's capture checks not running (its worker died twice): that episode's record has every
+    # check errored with the error, which the board shows, and the other episodes go on
+    if run_step(job, "checks_capture", [PY, "-m", "checks.capture_qc", "--jobs", jobs, str(eps)], env,
+                ok_codes=(0, capture_qc.EXIT_FAILED)):
+        print("capture checks could not run on some episodes; each is shown with its checks errored "
+              f"(log {job / 'logs' / 'checks_capture.log'})", flush=True)
+    if any((eps / e["episode_id"] / "signals.npz").exists() or (eps / e["episode_id"] / "depth.json").exists()
+           for e in rep["episodes"]):
+        run_step(job, "checks_sensors", [PY, "-m", "checks.sensors", "--jobs", jobs, str(eps)], env)
+    # exit 1 is board clips saying no episode came out at all (clips/failed.json lists why), told below as the upload's
+    # own reason; any other failure of the step is still an error. An episode with a camera that decodes is kept, and
+    # what was wrong with its other cameras goes into the report's notes
     rc = run_step(job, "clips", [PY, "-m", "board", "clips", "--episodes", str(eps), "--out", str(job / "clips"),
                                  "--jobs", jobs, "--clip-threads", "1"], env, ok_codes=(0, 1))
     left_out = board_clips.set_aside_failed(eps, job / "clips")
@@ -145,8 +159,9 @@ def main() -> int:
         board_clips.drop_from_report(rep, left_out)
         if not rep["episodes"]:
             raise SystemExit("no episode could be put on the board: " + "; ".join(f["why"] for f in left_out[:3]))
-        (job / "report.json").write_text(json.dumps(rep, indent=1))
-        print(f"left out, a camera file does not decode: {', '.join(f['name'] for f in left_out)}", flush=True)
+        print(f"left out, no camera file decodes: {', '.join(f['name'] for f in left_out)}", flush=True)
+    board_clips.note_camera_problems(rep, eps)
+    (job / "report.json").write_text(json.dumps(rep, indent=1))
     if rc != 0:
         raise SystemExit(f"clips exited {rc} with episodes still to put on the board (log {job / 'logs' / 'clips.log'})")
 
@@ -163,10 +178,21 @@ def main() -> int:
     info = {"run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
             "code": f"argus@{commit()}", "started_at": now(), "cap_usd": a.cap, "status": "running"}
     (run_dir / "run.json").write_text(json.dumps(info, indent=1))
-    run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
-                            str(run_dir / "out"), "--concurrency", str(a.concurrency), "--max-spend", str(a.cap)],
-             env, ok_codes=(0, 1))
-    info.update(status="done", finished_at=now())
+    remaining = round(a.cap - dictionary_stage.dictionary_spend(job)['reserved_usd'], 6)
+    if remaining > 0:
+        run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
+                                str(run_dir / "out"), "--concurrency", str(a.concurrency),
+                                "--max-spend", str(remaining)], env, ok_codes=(0, 1))
+    else:
+        print('label budget exhausted by dictionary reservation', flush=True)
+    spend = dictionary_stage.dictionary_spend(job)
+    label_cost = dictionary_stage.label_spend(job)
+    complete = spend['complete'] and dictionary_stage.label_spend_complete(job)
+    total = label_cost + (spend['cost_usd'] or 0.0)
+    info.update(status="done", finished_at=now(), dictionary=spend,
+                cost_usd=round(total, 6) if complete else None,
+                reserved_cost_usd=round(label_cost + spend['reserved_usd'], 6),
+                cost_complete=complete)
     (run_dir / "run.json").write_text(json.dumps(info, indent=1))
 
     print("== board", flush=True)
@@ -179,7 +205,9 @@ def main() -> int:
     (job / "manifest.json").write_text(json.dumps({"board": job.name, "datasets": [entry]}, indent=1))
     build_board.build(job)
     if st["incomplete"]:
-        print(f"not on the board, a part was not labelled: {', '.join(st['incomplete'])}", flush=True)
+        print(f"on the board with a part not labelled, flagged at its span: {', '.join(st['incomplete'])}", flush=True)
+    if st["unlabelled"]:
+        print(f"on the board with no labels, no part was labelled: {', '.join(st['unlabelled'])}", flush=True)
     print(f"done: python -m board serve --board {job} --clips {job / 'clips'}", flush=True)
     return 0
 

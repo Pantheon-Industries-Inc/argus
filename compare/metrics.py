@@ -149,10 +149,22 @@ def slice_episodes(eps: Path) -> list[str]:
 
 
 def read_output(p: Path) -> dict:
-    """A run output file's response: status, raw labels when parsed, usage, and the model that gave it."""
-    r = json.loads(p.read_text())
+    """A run output file's response: status, raw labels when parsed, usage, and the model that gave it. A file that
+    does not read is a response that did not parse."""
+    try:
+        r = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        return {"status": "unparsed", "error": f"the output file does not read: {e}"[:300], "raw": "", "cost": None,
+                "latency": None, "out_tokens": None, "path": p, "model": None}
     if r.get("dry_run"):
         return {"status": "pending"}
+    if p.name.startswith("failed_"):
+        # a failed_<episode>.json: the board's own label of an episode whose reply was cut off (board/to_board.py)
+        u = r.get("usage") or {}
+        cost = round(episode_cost(r), 6) if u.get("est_cost_usd") is not None else u.get("cost")
+        return {"status": "cut_off", "cost": cost, "latency": None, "out_tokens": u.get("completion_tokens"),
+                "finish_reason": r.get("finish_reason"), "tail": r.get("content_tail") or "", "path": p,
+                "model": r.get("model")}
     u = r.get("usage") or {}
     # the episode's billed cost: its model call and, for a routed episode, the routing call made for it
     cost = round(episode_cost(r), 6) if u.get("est_cost_usd") is not None else None
@@ -171,12 +183,8 @@ def response(model: dict, name: str) -> dict:
     if p.exists():
         return read_output(p)
     if f.exists():
-        r = json.loads(f.read_text())
-        u = r.get("usage") or {}
         # the harness records a cut-off reply's billed cost and its routing call like any other episode's
-        cost = round(episode_cost(r), 6) if u.get("est_cost_usd") is not None else u.get("cost")
-        return {"status": "cut_off", "cost": cost, "latency": None, "out_tokens": u.get("completion_tokens"),
-                "finish_reason": r.get("finish_reason"), "tail": r.get("content_tail") or "", "path": f}
+        return read_output(f)
     # only a run that finished (label/run.py writes "done", or "exit N" when some calls failed) has episodes it
     # will never answer; a running or interrupted run (killed from outside, then resumed) has episodes to come
     st = str(model.get("status") or "")

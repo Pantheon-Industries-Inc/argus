@@ -79,30 +79,33 @@ def _span_ok(seg: np.ndarray, tol: np.ndarray | None = None) -> bool:
     return bool((rng <= tol + 1e-12).all())
 
 
-def still_spans(state: np.ndarray, min_s: float = MIN_STILL_S, fps: float = FPS,
-                kind: str = "joints", grip_range: float | None = None) -> list[tuple[int, int]]:
-    """Maximal frame intervals [a, b] (inclusive) of at least min_s where every arm (or handheld
-    gripper) is at rest, by the whole-span range test above (grip_range: the gripper's full range, see
-    still_tolerance). Greedy left to right: grow a span while the range test holds; a span that cannot reach
-    min_s advances the start by one frame."""
-    s = np.asarray(state, dtype=np.float64)
+def spans_within(s: np.ndarray, tol: np.ndarray, need: int) -> list[tuple[int, int]]:
+    """Maximal frame intervals [a, b] (inclusive) of at least need frames over which every column's range stays within
+    tol. Greedy left to right: grow a span while the range test holds; a span that cannot reach need frames advances
+    the start by one frame. A column with missing readings (NaN) is tested where it has readings. still_spans' search,
+    shared with the quiet spans of signals (label/signals.py)."""
+    s = np.asarray(s)
+    s = s if np.issubdtype(s.dtype, np.floating) else s.astype(np.float64)   # a float32 signal is read as stored
     T = len(s)
-    need = int(round(min_s * fps))
     if T < need:
         return []
-    tol = still_tolerance(kind, s.shape[1], grip_range)
-    # cheap necessary condition: frame-to-frame motion within tolerance on every channel
-    d = np.abs(np.diff(s, axis=0))
-    calm = np.concatenate([[True], (d <= tol + 1e-12).all(1)])
+    # cheap necessary condition: frame-to-frame motion within tolerance on every channel (a missing reading: none),
+    # a few thousand rows at a time, each in float64
+    calm = np.ones(T, dtype=bool)
+    step = max(1, (1 << 21) // max(1, s.shape[1]))
+    for r0 in range(0, T - 1, step):
+        d = np.abs(np.diff(np.asarray(s[r0:r0 + step + 1], dtype=np.float64), axis=0))
+        calm[r0 + 1:r0 + 1 + len(d)] = (~(d > tol + 1e-12)).all(1)
     spans, i = [], 0
     while i + need <= T:
         if not calm[i]:
             i += 1
             continue
-        lo, hi = s[i].copy(), s[i].copy()
+        lo, hi = np.asarray(s[i], dtype=np.float64), np.asarray(s[i], dtype=np.float64).copy()
         j = i + 1
         while j < T:
-            lo2, hi2 = np.minimum(lo, s[j]), np.maximum(hi, s[j])
+            sj = np.asarray(s[j], dtype=np.float64)
+            lo2, hi2 = np.fmin(lo, sj), np.fmax(hi, sj)  # fmin and fmax skip a missing reading
             if ((hi2 - lo2) > tol + 1e-12).any():
                 break
             lo, hi = lo2, hi2
@@ -112,6 +115,20 @@ def still_spans(state: np.ndarray, min_s: float = MIN_STILL_S, fps: float = FPS,
             i = j
         else:
             i += 1
+    return spans
+
+
+def still_spans(state: np.ndarray, min_s: float = MIN_STILL_S, fps: float = FPS,
+                kind: str = "joints", grip_range: float | None = None) -> list[tuple[int, int]]:
+    """Maximal frame intervals [a, b] (inclusive) of at least min_s where every arm (or handheld
+    gripper) is at rest, by the whole-span range test above (grip_range: the gripper's full range, see
+    still_tolerance), found by spans_within."""
+    s = np.asarray(state, dtype=np.float64)
+    need = int(round(min_s * fps))
+    if len(s) < need:
+        return []
+    tol = still_tolerance(kind, s.shape[1], grip_range)
+    spans = spans_within(s, tol, need)
     for a, b in spans:  # invariant, so a caller can state it as fact
         assert _span_ok(s[a:b + 1], tol), (a, b)
     return spans

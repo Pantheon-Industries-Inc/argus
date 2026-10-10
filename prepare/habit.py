@@ -27,13 +27,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
 
-# an uploaded LeRobot dataset with HABIT's own columns (its error, intervention and person's-subtask marks) is read
-# by this adapter, so its end-effector state, instruction, person's parts and publisher labels come along
-UPLOAD = "lerobot"
+UPLOAD = None
 
 REPO = "configinc/HABIT"
 META_FILES = ("info.json", "episodes.jsonl", "tasks.jsonl", "subtasks.jsonl", "human_subtasks.jsonl")
@@ -75,7 +74,8 @@ def timed_parts(idx: np.ndarray, texts: dict, fps: float) -> list[str]:
 
 
 def _texts(p: Path) -> dict:
-    return {json.loads(line)["task_index"]: json.loads(line)["task"] for line in open(p)}
+    with open(p) as source:
+        return {json.loads(line)["task_index"]: json.loads(line)["task"] for line in source}
 
 
 def task_note(root: Path, df: pd.DataFrame, fps: float) -> str:
@@ -158,8 +158,8 @@ def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dic
                                  "intervention_spans_s": spans(df["is_intervention_segment"].to_numpy(), fps),
                                  "high_jerk_spans_s": spans(df["is_high_jerk_segment"].to_numpy(), fps),
                                  "sid": r.get("sid"), "unit_name": r.get("unit_name")})
-    ctx.pop("state_note", None)
-    (ep / "context.json").write_text(json.dumps(ctx, indent=1))
+    formats.drop_no_state(ctx)
+    write_atomic(ep / "context.json", ctx, indent=1)
     return ctx
 
 

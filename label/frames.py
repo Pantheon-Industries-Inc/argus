@@ -32,6 +32,12 @@ class FrameError(RuntimeError):
     """A frame could not be decoded exactly (off the grid, out of range, or missing)."""
 
 
+class DamagedFrame(FrameError):
+    """A frame the decoder marks as damaged (its data is cut short or corrupt): part of its picture is made up from
+    whatever was decoded before it, so it is no footage of that instant. A file cut off in the middle of a frame gives
+    one, and decoded after a seek it comes out smeared."""
+
+
 def frame_pts_step(time_base: Fraction, fps: float = FPS) -> int:
     step = Fraction(1) / Fraction(fps).limit_denominator(1000) / time_base
     if step.denominator != 1:
@@ -52,13 +58,16 @@ def base_frame(base_s: float, fps: float = FPS) -> int:
 
 
 def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[int], pts=None,
-                   fps: float = FPS, keep=None):
+                   fps: float = FPS, keep=None, tail_ok: bool = False):
     """Decode episode frames ks (indices into the episode, 0..n_frames-1) from a packed mp4.
     Returns {k: PIL.Image (RGB, native size)}. Raises FrameError unless every k is found at its
     exact pts. `pts` (one integer per episode frame) gives each frame's exact pts for files whose
     frames are not on a fixed grid (ABC-130k keeps real capture times); otherwise frame k sits at
     (base_s * fps + k) * step on the fixed frame grid. keep(k, image), when given, is what is kept of each frame
-    as soon as it is decoded (episode.py keeps most frames only at their cell widths)."""
+    as soon as it is decoded (episode.py keeps most frames only at their cell widths). tail_ok leaves out the frames
+    after the last one the file has (a camera whose file ends a frame before the episode does) instead of raising;
+    a frame missing before that, or a file with none of ks, still raises. A frame the decoder marks as damaged raises
+    DamagedFrame, and never passes as the camera's picture."""
     import av
     ks = sorted(set(int(k) for k in ks))
     if not ks:
@@ -95,6 +104,8 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
                     continue
                 if fr.pts != target:
                     raise FrameError(f"frame {k}: expected pts {target}, decoder gave {fr.pts} ({packed})")
+                if fr.is_corrupt:
+                    raise DamagedFrame(f"frame {k}: the decoder marks it damaged ({packed})")
                 im = upright(fr, geom)
                 out[k] = keep(k, im) if keep is not None else im
                 break
@@ -102,7 +113,7 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
                 seek_cost.append(n)
             last_k = k
     missing = [k for k in ks if k not in out]
-    if missing:
+    if missing and not (tail_ok and out and min(missing) > max(out)):
         raise FrameError(f"frames {missing[:5]} not decoded from {packed}")
     return out
 

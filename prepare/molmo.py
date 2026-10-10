@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare.formats import scalar
@@ -268,11 +269,15 @@ def prepare_episode(row: dict, raw_root: Path, out_root: Path, instruction: str,
     }
     for view, cam in context["cameras"].items():
         cam["desc"] = CAMERA_DESC[view]
+    from prepare import formats
+    formats.record_state_identity(context, "observation.state",
+                                  formats.value_names(feats.get("observation.state", {}).get("names"),
+                                                      state.shape[1]), state.shape[1])
     ep_dir.mkdir(parents=True, exist_ok=True)
     np.savez(ep_dir / "state.npz", state=state, action=action)
     (ep_dir / "sources.json").write_text(json.dumps(sources, indent=2))
     (ep_dir / "instruction.txt").write_text((instruction or "").strip() + "\n")
-    (ep_dir / "context.json").write_text(json.dumps(context, indent=2))
+    write_atomic(ep_dir / "context.json", context, indent=2)
     return "ok"
 
 

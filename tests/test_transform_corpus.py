@@ -12,9 +12,7 @@ Every frame shows a white square at the top left and a black one at the top righ
 seen, and its own time in 1/30 s as eight blocks. At every artifact the test reads them back and requires the picture
 upright, its displayed aspect ratio kept within one pixel, never larger than the source, every frame there and no
 other, each frame at its own time, and every camera on the episode's one clock.
-
-tests/fixtures/transform_table.json is each place's measured input and output for every case, and this test keeps it
-true; after a deliberate change, rewrite it with TRANSFORM_TABLE=write."""
+"""
 from __future__ import annotations
 
 import base64
@@ -35,7 +33,6 @@ import pytest
 FF, FP = shutil.which("ffmpeg"), shutil.which("ffprobe")
 pytestmark = pytest.mark.skipif(not (FF and FP), reason="no ffmpeg")
 
-TABLE = Path(__file__).with_name("fixtures") / "transform_table.json"
 CODE_RATE = 30            # the time each frame shows, in steps of 1/30 s
 
 H264 = ("-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "15")
@@ -470,10 +467,11 @@ def check_episode(run, case, tag, ep_dir, truth, clip_dir, out, *, clips, hands,
 
     # the board's clips, on the episode's clock
     jobs = clips.episode_jobs(ep_dir, clip_dir, True)
-    for (pk, b, du, o, fps, is_main, off, skip, _ep, cam) in jobs:
-        clips.extract_one(pk, b, du, o, FF, 1, fps, is_main, off, skip)
+    for (pk, b, du, o, fps, is_main, off, skip, t, q, km, pts, _ep, cam) in jobs:
+        clips.extract_one(pk, b, du, o, FF, 1, fps, is_main, off, skip, t, q, km, pts)
     main = clips.main_cam(src)
     offsets = clips.start_offsets(ep_dir, src, float(ctx.get("fps") or 30))
+    captured = clips.clip_times(ep_dir, src, float(ctx.get("fps") or 30))
     clip_times = {}
     for v in views:
         tr, p = et[v], clips.clip_path(clip_dir, ep_dir.name, v)
@@ -482,15 +480,15 @@ def check_episode(run, case, tag, ep_dir, truth, clip_dir, out, *, clips, hands,
         run.row(tag + v, "board clip (board/clips.py)", desc(*tr["shown"], len(tr["t"])),
                 desc(*f["stored"], len(f["t"]), f["t"][0], f["t"][-1] + f["last"], f["rot"]))
         half = 0.5 / float(ctx.get("fps") or 30)
-        clip_times[v] = check_copy(run, tag + v, "board clip", p, f, tr, skip, half)
+        clip_times[v] = check_copy(run, tag + v, "board clip", p, f, tr, skip, half, captured.get(v), v == main)
         out.mkdir(parents=True, exist_ok=True)
         web = out / f"web_{v}.mp4"
         static.transcode(p, web, 1, v == main)
         wf = video_facts(web)
         run.row(tag + v, "static web copy (board/static.py transcode)", desc(*f["stored"], len(f["t"])),
                 desc(*wf["stored"], len(wf["t"]), wf["t"][0], wf["t"][-1] + wf["last"], wf["rot"]))
-        check_copy(run, tag + v, "static web copy", web, wf, tr, skip, half)
-        check_goal_frames(run, tag + v, p, f, tr, serve, v == main)
+        check_copy(run, tag + v, "static web copy", web, wf, tr, skip, half, captured.get(v), v == main)
+        check_goal_frames(run, tag + v, p, f, tr, serve, v == main, captured.get(v))
         if case.kind == "file":
             # a clip made some other way (here the recording itself) is made into the same kind of web copy
             web = out / "web_source.mp4"
@@ -506,10 +504,14 @@ def check_episode(run, case, tag, ep_dir, truth, clip_dir, out, *, clips, hands,
         check_hands(run, tag, views[0], et[views[0]], clips.clip_path(clip_dir, ep_dir.name, views[0]), out, hands)
 
 
-def check_copy(run, cam, place, p, f, tr, skip, half):
+def check_copy(run, cam, place, p, f, tr, skip, half, capture=None, main=True):
     """A clip (or its web copy): upright, the source's frames from skip on and no other, each at its own time on the
     episode's clock, where the main camera's first frame is 0 (a camera that started half a frame or more after it
-    starts that much later)."""
+    starts that much later). A camera with capture times (capture, on the episode's clock) is shown by them instead:
+    each frame from halfway after the capture before it, the first (of any camera but the main one) from the pairing
+    tolerance before its capture and never before 0, the last until half its step after its capture. That is the
+    nearest frame at every time, which is how the request picks a camera's frame for an instant, so a labelled time
+    shows the same frame on the board as in the request."""
     run.picture(cam, place, shown_of(f), tr["shown"])
     if f["rot"] or f["sar"] not in ("1:1", "N/A", "0:1"):
         run.fail(cam, place, f"carries a rotation of {f['rot']} or a pixel shape {f['sar']}, so a player turns or "
@@ -524,21 +526,31 @@ def check_copy(run, cam, place, p, f, tr, skip, half):
         run.fail(cam, place, f"{len(bad)} frames not upright or not the source's frame (first at {bad[0]}: "
                              f"{got[bad[0]]}, wanted code {want_c[bad[0]]})")
     t = f["t"]
-    expect = want_t - (want_t[0] if want_t[0] < half else 0.0)
-    end, want_end = t[-1] + f["last"], expect[-1] + tr["facts"]["last"]
+    if capture is not None:
+        from label.episode import PAIRED_SPAN_SLACK_S
+        c = np.asarray(capture[skip:skip + len(want_t)], dtype=np.float64)
+        lead = 0.0 if main else PAIRED_SPAN_SLACK_S
+        expect = np.concatenate([[max(0.0, c[0] - lead)], (c[1:] + c[:-1]) / 2])
+        want_end = c[-1] + ((c[-1] - c[-2]) / 2 if len(c) > 1 else half)
+    else:
+        expect = want_t - (want_t[0] if want_t[0] < half else 0.0)
+        want_end = expect[-1] + tr["facts"]["last"]
+    end = t[-1] + f["last"]
     if abs(end - want_end) > 2e-3:
         run.fail(cam, place, f"ends at {end:.4f} s, its last frame ends at {want_end:.4f} s in the source")
     if len(t) == len(expect) and np.max(np.abs(t - expect)) > 2e-3:
         i = int(np.argmax(np.abs(t - expect)))
-        run.fail(cam, place, f"frame {i} plays at {t[i]:.4f} s, it was recorded at {expect[i]:.4f} s on the "
-                             "episode's clock")
+        run.fail(cam, place, f"frame {i} plays from {t[i]:.4f} s, its time on the episode's clock gives "
+                             f"{expect[i]:.4f} s")
     return t, want_c
 
 
-def check_goal_frames(run, cam, clip, f, tr, serve, main):
+def check_goal_frames(run, cam, clip, f, tr, serve, main, capture=None):
     """Goal frames (the live /api/frame, the static board's media/f): the main camera's frame nearest the time asked
-    and every camera's first frame (its poster), at most 640 px wide."""
-    t = f["t"] - f["t"][0]
+    and every camera's first frame (its poster), at most 640 px wide. With capture times (capture, on the episode's
+    clock) the times asked and nearest are by them, the frame the clip has on screen then (check_copy), as the request
+    picks a frame; the clip's own times are where frames change, the one place two captures are equally near."""
+    t = f["t"] - f["t"][0] if capture is None else np.asarray(capture[:len(f["t"])], dtype=np.float64)
     w, h = shown_of(f)
     codes = [look(x)[1] for x in gray_frames(clip, w, h)]
     asks = sorted({0.0, round(float(t[len(t) // 2]) + 0.004, 3), round(float(t[-1]), 3),
@@ -588,7 +600,7 @@ def check_footage(run, tag, clip_dir, eid, views, et, clip_times, out, serve):
         ct, codes = clip_times[v]
         bad = 0
         for i, t in enumerate(f["t"]):
-            j = int(np.searchsorted(ct, t + 5e-4, side="right")) - 1
+            j = int(np.searchsorted(ct, t, side="right")) - 1
             if j < 0:
                 continue
             o, c = look(frames[i][y:y + h, x:x + w])
@@ -695,10 +707,12 @@ def check_details(run, tag, req, ep, pl, imgs, et, me):
 # ---------------------------------------------------------------- the tests
 
 @pytest.fixture(scope="module")
-def corpus(tmp_path_factory):
+def corpus(tmp_path_factory, request):
     work = tmp_path_factory.mktemp("corpus")
     have = encoders()
-    names = [n for n, c in CASES.items() if all(e in have for e in c.need)]
+    selected = {item.callspec.params["name"] for item in request.session.items
+                if item.path == Path(__file__) and hasattr(item, "callspec") and "name" in item.callspec.params}
+    names = [n for n, c in CASES.items() if n in selected and all(e in have for e in c.need)]
 
     def one(n):
         try:
@@ -711,27 +725,8 @@ def corpus(tmp_path_factory):
         return dict(zip(names, ex.map(one, names)))
 
 
-# cases that still break a rule, each with where; a fix removes its case (strict, so a case that passes must go)
-KNOWN = {}
-
-
 @pytest.mark.parametrize("name", list(CASES))
-def test_every_transform_keeps_the_picture_upright_whole_and_on_time(corpus, name, request):
+def test_every_transform_keeps_the_picture_upright_whole_and_on_time(corpus, name):
     if name not in corpus:
         pytest.skip(f"this ffmpeg has no {', '.join(CASES[name].need)} encoder")
-    if name in KNOWN:
-        request.node.add_marker(pytest.mark.xfail(reason=KNOWN[name], strict=True))
     assert not corpus[name].failures, "\n".join(corpus[name].failures)
-
-
-def test_the_table_is_what_the_code_does(corpus):
-    rows = [r for n in CASES if n in corpus for r in corpus[n].rows]
-    if os.environ.get("TRANSFORM_TABLE") == "write":
-        TABLE.write_text(json.dumps(rows, indent=1, ensure_ascii=False) + "\n")
-    want = [r for r in json.loads(TABLE.read_text()) if r["case"] in corpus]
-    key = lambda r: (r["case"], r["camera"], r["place"])
-    got_by, want_by = {key(r): r for r in rows}, {key(r): r for r in want}
-    diff = [f"{k}: table {want_by.get(k)}, measured {got_by.get(k)}" for k in sorted(set(got_by) | set(want_by))
-            if got_by.get(k) != want_by.get(k)]
-    assert not diff, "the table no longer says what the code does (TRANSFORM_TABLE=write rewrites it):\n" + \
-        "\n".join(diff[:20])

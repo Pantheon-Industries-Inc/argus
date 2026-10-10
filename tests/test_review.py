@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from board import build as board_build
 from board import rules
@@ -18,6 +19,52 @@ from checks import timebase
 from test_formats import recorder_folder
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+@pytest.mark.parametrize('extra,cap,expected', [(False, 20.0, 'skipped'),
+                                                  (True, 20.0, 'success'),
+                                                  (True, .001, 'skipped')])
+def test_review_cli_raw_hdf_dictionary_gate(tmp_path, monkeypatch, extra, cap, expected):
+    import h5py
+    from review import __main__ as review_main
+    from label import dictionary, harness
+    upload = tmp_path / 'upload'
+    upload.mkdir()
+    with h5py.File(upload / 'recording.h5', 'w') as source:
+        source.attrs['fps'] = 10
+        source.create_dataset('timestamps', data=np.int64(1790000000000000000)
+                              + np.arange(12, dtype=np.int64) * 100000000)
+        camera = source.create_dataset('images/top', data=np.full((12, 36, 64, 3), 60, np.uint8))
+        if extra:
+            camera.attrs['calibration'] = 'fixture calibration'
+        source.create_dataset('observations/qpos', data=np.zeros((12, 14)))
+    job = tmp_path / 'job'
+    calls = []
+    def provider(content, model, reasoning, api_key, max_tokens, timeout):
+        paths = list((job / 'episodes').glob('episode_*'))
+        plan = dictionary.request_plan(dictionary.inventory(paths))
+        assert content == plan['content'] and max_tokens == plan['max_tokens']
+        calls.append(1)
+        ident = plan['field_ids'][0]
+        return {'choices': [{'message': {'content': json.dumps({'entries': [
+            {'id': ident, 'meaning': 'Reviewed recording descriptor', 'role': 'annotation'}]})}}],
+                'usage': {'cost': .01}}
+    class ReachedChecks(Exception):
+        pass
+    monkeypatch.setattr(harness, 'get_keys', lambda: ['sk-or-fixture'])
+    monkeypatch.setattr(harness, 'call_model_once', provider)
+    monkeypatch.setattr(review_main, 'run_step', lambda *a, **k: (_ for _ in ()).throw(ReachedChecks()))
+    monkeypatch.setattr(sys, 'argv', ['review', '--data', str(upload), '--rig', 'teleop_arms',
+                                      '--out', str(job), '--cap', str(cap)])
+    with pytest.raises(ReachedChecks):
+        review_main.main()
+    receipt = json.loads((job / 'dictionary_status.json').read_text())
+    assert receipt['status'] == expected
+    assert len(calls) == int(expected == 'success')
+    assert (job / 'dictionary.claim').exists() is (expected == 'success')
+    if expected == 'success':
+        ctx = json.loads(next((job / 'episodes').glob('episode_*/context.json')).read_text())
+        assert ctx['data_dictionary']['entries']
 
 
 def test_unknown_outcomes_and_severities_are_shown_as_unclear():
@@ -92,7 +139,7 @@ def test_review_runs_every_stage_on_a_recorders_folder_in_free_mode():
     builds every request without calling the model."""
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "upload"
-        recorder_folder(root, n=90)
+        recorder_folder(root, n=90, duplicate_stamps=False)
         job = Path(t) / "job"
         p = subprocess.run([sys.executable, "-m", "review", "--data", str(root), "--rig", "teleop_arms", "--out",
                             str(job), "--dataset", "mine", "--free"], cwd=REPO, capture_output=True, text=True)
@@ -141,8 +188,8 @@ def test_a_camera_file_that_does_not_decode_costs_only_its_own_episode(tmp_path)
 
 
 def test_an_episode_left_off_the_board_is_explained_with_the_boards_camera_names(tmp_path):
-    """A clip that comes out a frame short is not called undecodable, cameras are named as the board names them (never
-    extra1 or exo), and a reason every camera shares is said once."""
+    """Only an episode none of whose cameras decodes is left out, so its reason says that once for every camera, and a
+    single camera is named as the board names it (never exo or extra1)."""
     from board import clips
     ep = tmp_path / "episode_x"
     ep.mkdir()
@@ -150,16 +197,175 @@ def test_an_episode_left_off_the_board_is_explained_with_the_boards_camera_names
     (ep / "sources.json").write_text(json.dumps({v: {} for v in views}))
     ctx = {"profile": "teleop_arms", "cameras": {"extra1": {"name": "cam_low"}, "extra2": {"name": "cam_side"}}}
     (ep / "context.json").write_text(json.dumps(ctx))
-    short = "episode_x.mp4: clip has 195 frames, episode has 196"
-    assert clips.failed_reason({v: short for v in views}, ep) == \
-        "every camera's video has 195 frames where the episode has 196, so this episode was left out"
-    assert clips.failed_reason({"left": short, "extra1": short}, ep) == \
-        "the left wrist camera and cam_low camera videos have 195 frames where the episode has 196, so this episode was left out"
-    assert clips.failed_reason({"exo": "Command '...' returned non-zero exit status 183.", "right": short}, ep) == \
-        "the main camera video could not be decoded; the right wrist camera video has 195 frames where the episode " \
-        "has 196, so this episode was left out"
+    assert clips.failed_reason({v: "Command '...' returned non-zero exit status 183." for v in views}, ep) == \
+        "every camera's video could not be decoded, so this episode was left out"
+    assert clips.failed_reason({"extra1": "boom"}, ep) == "the cam_low camera video could not be decoded, so this " \
+                                                          "episode was left out"
     (ep / "context.json").write_text(json.dumps({"profile": "handheld_gripper"}))
     assert clips.failed_reason({"left": "boom"}, ep) == "the left gripper camera video could not be decoded, so this episode was left out"
+
+
+def _video(path: Path, frames: int) -> None:
+    from board import clips
+    subprocess.run([clips.find_ffmpeg(), "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "testsrc=size=160x120:rate=30", "-frames:v", str(frames), "-pix_fmt", "yuv420p", str(path)],
+                   check=True)
+
+
+def _two_camera_upload(tmp_path: Path, top: int = 30, wrist: int = 30) -> tuple[dict, Path, Path]:
+    """A video upload of one episode filmed by a top camera and a left wrist camera, read as an upload is (the
+    report, the episodes folder, the episode)."""
+    from prepare import formats
+    up = tmp_path / "up"
+    up.mkdir()
+    _video(up / "top.mp4", top)
+    _video(up / "wrist_left.mp4", wrist)
+    eps = tmp_path / "episodes"
+    rep = formats.convert(up, "teleop_arms", eps, "mine", float("inf"), grouping={})
+    return rep, eps, eps / rep["episodes"][0]["episode_id"]
+
+
+def _clips(eps: Path, out: Path) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-m", "board", "clips", "--episodes", str(eps), "--out", str(out)],
+                          cwd=REPO, capture_output=True, text=True)
+
+
+def _board_episode(tmp_path: Path, eps: Path, ep: Path) -> dict:
+    """The episode's file on a board built from a labelling run over it."""
+    from test_board import _output
+    run = tmp_path / "run"
+    (run / "out").mkdir(parents=True)
+    (run / "run.json").write_text(json.dumps({"run_id": "r1", "code": "abc1234", "kind": "upload", "status": "done"}))
+    (run / "out" / f"{ep.name}.json").write_text(json.dumps(_output(ep.name)))
+    board = tmp_path / "board"
+    board.mkdir()
+    (board / "manifest.json").write_text(json.dumps({"board": "b", "datasets": [
+        {"dataset": "mine", "run": str(run), "episodes": str(eps), "rules": rules.rules_for("teleop_arms")}]}))
+    board_build.build(board)
+    return json.loads((board / "qa" / f"{ep.name}.json").read_text())
+
+
+def test_a_camera_clip_a_frame_short_keeps_the_episode_and_is_a_data_issue(tmp_path):
+    """A camera whose clip comes out shorter than the episode (an upload's 63 s episode had 1890 frames in every
+    camera's clip where the episode has 1891, and lost the episode) keeps its episode and its clip as cut. The
+    mismatch is recorded in context.json, so it survives every rebuild, raises its data issue on the board, goes into
+    the job's report notes, and the episode is labelled with that camera's cell empty past its last frame."""
+    from board import clips
+    from board import serve
+    from label import episode as me
+    rep, eps, ep = _two_camera_upload(tmp_path)
+    _video(Path(json.loads((ep / "sources.json").read_text())["left"]["packed"]), 29)    # ends a frame early
+    out = tmp_path / "clips"
+    p = _clips(eps, out)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert clips.clip_frames(out / f"{ep.name}.mp4") == 30
+    assert clips.clip_frames(out / "wrist_left" / f"{ep.name}.mp4") == 29
+    assert json.loads((out / "failed.json").read_text()) == {}
+    assert clips.set_aside_failed(eps, out) == [] and ep.is_dir()
+    ctx = json.loads((ep / "context.json").read_text())
+    what = ("The left wrist camera video ends at 0.97 s, before the episode ends at 1.00 s, so it shows nothing after "
+            "that; 29 of the 30 frames its file lists could be read.")
+    assert ctx["reader_issues"] == [{"kind": "camera_short", "camera": "wrist_left", "what": what, "t0_s": 0.967,
+                                     "t1_s": 1.0, "clip_frames": 29, "episode_frames": 30}]
+    assert set(json.loads((ep / "sources.json").read_text())) == {"exo", "left"}
+    d = _board_episode(tmp_path, eps, ep)
+    # the canned label's steps run past this 1 s episode, which the board flags beside it (model_steps_outside_episode)
+    assert [x for x in d["dataset_checks"]["reader_issues"] if x["kind"] == "camera_short"] == [
+        {**ctx["reader_issues"][0], "family": "clip-frames"}]
+    assert "clip-frames" in serve._families(d)["families"]
+    clips.note_camera_problems(rep, eps)
+    assert rep["notes"] == ["episode_1: the left wrist camera video ends at 0.97 s, before the episode ends at "
+                            "1.00 s, so it shows nothing after that; 29 of the 30 frames its file lists could be read."]
+    assert rep["episodes"][0]["cameras"] == {"exo": "top", "left": "left"}
+    # labelling decodes the files themselves: the left camera has no frame at the last instant, so its cell is empty
+    req = me.build_request(ep)
+    texts = [c["text"] for c in req["content"] if c.get("type") == "text"]
+    last = [t for t in texts if t.startswith("=== detail view, last frame")]
+    assert len(last) == 1 and "| camera top ===" in last[0], last
+    assert ("Left's video ends before the episode does, so it has no frame at 0.97 s. Its cells at those times are "
+            "empty"
+            in req["prompt"])
+    # a rerun keeps the clip as cut and the record as it was
+    assert _clips(eps, out).returncode == 0
+    assert json.loads((ep / "context.json").read_text())["reader_issues"] == ctx["reader_issues"]
+
+
+def test_a_camera_that_does_not_decode_is_taken_out_and_the_episode_kept(tmp_path):
+    """The main camera's file is not a video: the episode keeps its wrist camera for labelling and the board, the main
+    camera is out of sources.json and the context's cameras (so nothing tries to decode it), the wrist camera, which
+    was paired to the main camera by time, is the main camera now, and the camera is recorded as not decodable."""
+    from board import clips
+    from board import serve
+    from label import episode as me
+    rep, eps, ep = _two_camera_upload(tmp_path, top=30, wrist=33)
+    assert json.loads((ep / "sources.json").read_text())["left"].get("kmap"), "the wrist must be paired by time"
+    Path(json.loads((ep / "sources.json").read_text())["exo"]["packed"]).write_bytes(b"not a video at all" * 50)
+    ctx = json.loads((ep / "context.json").read_text())
+    ctx["reader_issues"] = [{"kind": "already", "what": "an entry another step wrote is kept"}]
+    (ep / "context.json").write_text(json.dumps(ctx))
+    out = tmp_path / "clips"
+    p = _clips(eps, out)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (out / "wrist_left" / f"{ep.name}.mp4").exists() and not (out / f"{ep.name}.mp4").exists()
+    assert clips.set_aside_failed(eps, out) == [] and ep.is_dir()
+    src = json.loads((ep / "sources.json").read_text())
+    ctx = json.loads((ep / "context.json").read_text())
+    assert list(src) == ["left"] and "kmap" not in src["left"] and list(ctx["cameras"]) == ["left"]
+    what = "The main camera video could not be decoded, so this episode is shown and labelled without it."
+    assert ctx["reader_issues"] == [{"kind": "already", "what": "an entry another step wrote is kept"},
+                                    {"kind": "camera_not_decodable", "camera": "exo", "what": what}]
+    d = _board_episode(tmp_path, eps, ep)
+    fams = serve._families(d)["families"]
+    assert "camera-undecodable" in fams and "d:Already" in fams        # a kind no family names is a data issue too
+    clips.note_camera_problems(rep, eps)
+    assert rep["notes"] == ["episode_1: an entry another step wrote is kept",
+                            "episode_1: the main camera video could not be decoded, so this episode is shown and "
+                            "labelled without it."]
+    assert rep["episodes"][0]["cameras"] == {"left": "left"}
+    req = me.build_request(ep)
+    assert req["views"] == ["left"] and req["cam_labels"] == ["left"]
+    assert "There is exactly 1 camera" in req["prompt"] and "\n- top:" not in req["prompt"]
+    assert "\n- left:" in req["prompt"]
+
+
+def test_an_episode_none_of_whose_cameras_decodes_is_set_aside_with_its_reason(tmp_path):
+    from board import clips
+    rep, eps, ep = _two_camera_upload(tmp_path)
+    for v, s in json.loads((ep / "sources.json").read_text()).items():
+        Path(s["packed"]).write_bytes(b"not a video at all" * 50)
+    out = tmp_path / "clips"
+    assert _clips(eps, out).returncode == 1                   # no episode came out whole
+    left = clips.set_aside_failed(eps, out)
+    assert left == [{"name": ep.name, "why": "every camera's video could not be decoded, so this episode was left out"}]
+    assert not ep.exists() and (tmp_path / "episodes_unclipped" / ep.name).is_dir()
+    clips.drop_from_report(rep, left)
+    assert rep["episodes"] == [] and rep["failed"] == [{"name": "episode_1", "why": left[0]["why"]}]
+
+
+def test_review_runs_the_sensor_checks_as_data_review_does(tmp_path, monkeypatch):
+    """python -m review never ran checks.sensors, which Data Review runs after the capture checks on an upload whose
+    episodes have other signals or depth, so a folder reviewed here had no sensor checks on its board."""
+    import pytest
+    import review.__main__ as rv
+    root = tmp_path / "upload"
+    recorder_folder(root, n=30, duplicate_stamps=False)
+    steps = []
+
+    def record(job, step, cmd, env, ok_codes=(0,)):
+        steps.append((step, cmd[2] if len(cmd) > 2 else None))
+        if step == "clips":
+            raise SystemExit("stop after the checks")
+        return 0
+    monkeypatch.setattr(rv, "run_step", record)
+    monkeypatch.setattr(sys, "argv", ["python -m review", "--data", str(root), "--rig", "teleop_arms", "--out",
+                                      str(tmp_path / "job"), "--dataset", "mine", "--free"])
+    with pytest.raises(SystemExit, match="stop after the checks"):
+        rv.main()
+    ep = next((tmp_path / "job" / "episodes").glob("episode_*"))
+    assert (ep / "depth.json").exists() or (ep / "signals.npz").exists()
+    names = [s for s, _ in steps]
+    assert ("checks_sensors", "checks.sensors") in steps
+    assert names.index("checks_capture") < names.index("checks_sensors") < names.index("clips")
 
 
 def test_review_says_why_when_no_episode_can_be_put_on_the_board(tmp_path, monkeypatch):
@@ -168,7 +374,7 @@ def test_review_says_why_when_no_episode_can_be_put_on_the_board(tmp_path, monke
     import pytest
     import review.__main__ as rv
     root = tmp_path / "upload"
-    recorder_folder(root, n=30)
+    recorder_folder(root, n=30, duplicate_stamps=False)
     real = rv.run_step
 
     def fake(job, step, cmd, env, ok_codes=(0,)):

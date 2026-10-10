@@ -3,10 +3,17 @@
 families.json lists the families. Every flagged issue (a data issue or an operator mistake) belongs to exactly one
 family: the first listed family whose tags, plain names (tag_names.json) or text it matches, else a family named
 after its tag's plain name ("d:<name>" or "m:<name>"). A family can also be raised by one of the deterministic
-checks or by the episode's outcome, and then counts at any severity. A family limited to some datasets
-("datasets") is only matched on those. A family with "among" matches its text only on issues whose tag reads as
-one of those plain names, which is how one tag the model uses for several distinct problems (camera_fault: a
-camera turned away, a frozen image, glare) is split by what the issue says.
+checks or by the episode's outcome, and then counts at any severity. So does each problem an episode was kept and
+flagged with (context.json reader_issues, copied into dataset_checks by board/build.py): the listed family whose
+"reader_issues" names its kind, else a data family named after the kind ("d:<words of the kind>"). Only a family of a
+list in COUNTED_LISTS (a fault in the recording, an operator mistake) counts; a reader issue of a model reply that
+gave no labels (list "labelling") or of how we read or showed the recording (list "handling": a limit of ours, such as
+a table read every so many rows or a signal kept as its lowest, mean and highest value, or a property of the recording
+that is not a fault in it, such as a camera that is not colour) is shown on the episode and returned under
+not_counted, never in the counts or the filter. A family limited to some datasets ("datasets") is only matched on
+those. A family with "among" matches its text only on issues whose tag reads as one of those plain names, which is how
+one tag the model uses for several distinct problems
+(camera_fault: a camera turned away, a frozen image, glare) is split by what the issue says.
 
 What counts (Families.counts, the one statement of the rule):
   - a data issue at medium or high severity;
@@ -15,7 +22,7 @@ What counts (Families.counts, the one statement of the rule):
 Everything else is minor: kept and shown on the episode, left out of the counts and the filter.
 
     fam = Families()
-    c = fam.classify(episode)      # {"counted": {slug: [issues]}, "minor": {slug: [issues]}}
+    c = fam.classify(episode)      # {"counted": {slug: [issues]}, "minor": {...}, "not_counted": {...}}
 """
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LISTS = {"data_issues": "data", "operator_mistakes": "mistake"}
+COUNTED_LISTS = set(LISTS.values())
 
 
 def _sev(i: dict) -> str:
@@ -72,8 +80,23 @@ class Families:
     def catalog(self) -> dict:
         """The listed families, in order, for a page: slug -> name, list, and whether only a check raises it."""
         return {f["slug"]: {"name": f["name"], "list": f["list"],
-                            "check": bool(f.get("checks")) and not (f.get("names") or f.get("tags") or f.get("text"))}
+                            "check": bool(f.get("checks") or f.get("reader_issues"))
+                            and not (f.get("names") or f.get("tags") or f.get("text"))}
                 for f in self.defs}
+
+    def reader_family(self, kind: str) -> str:
+        """The family a reader issue of this kind raises: the listed family that names the kind, else "d:" and the
+        kind's words."""
+        for f in self.defs:
+            if kind in (f.get("reader_issues") or []):
+                return f["slug"]
+        w = str(kind or "reader issue").replace("_", " ")
+        return "d:" + w[:1].upper() + w[1:]
+
+    def list_of(self, slug: str) -> str:
+        """The list a family is on: a listed family's own, else data for "d:" and mistake for "m:"."""
+        f = next((f for f in self.defs if f["slug"] == slug), None)
+        return f["list"] if f else "mistake" if str(slug).startswith("m:") else "data"
 
     def counts(self, key: str, i: dict) -> bool:
         """Whether an issue of this list ("data_issues" or "operator_mistakes") counts (the module docstring)."""
@@ -99,8 +122,10 @@ class Families:
 
     def classify(self, d: dict) -> dict:
         """The episode's families: counted ones with the issues that count under each (empty when a check or the
-        outcome raised it), and minor ones that nothing counted."""
+        outcome raised it), minor ones that nothing counted, and not_counted, the families of reader issues that are
+        no fault in the recording (a list outside COUNTED_LISTS), shown on the episode and never counted."""
         counted, minor = collections.defaultdict(list), collections.defaultdict(list)
+        not_counted = {}
         ds = d.get("dataset")
         for key in LISTS:
             for i in d.get(key) or []:
@@ -117,7 +142,12 @@ class Families:
             if (any(check_hit(d, k) for k in f.get("checks") or [])
                     or outcomes & set(f.get("completion") or [])):
                 counted.setdefault(f["slug"], [])
-        return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted}}
+        for x in (d.get("dataset_checks") or {}).get("reader_issues") or []:
+            if isinstance(x, dict) and x.get("kind"):
+                fam = self.reader_family(str(x["kind"]))
+                (counted if self.list_of(fam) in COUNTED_LISTS else not_counted).setdefault(fam, [])
+        return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted},
+                "not_counted": {k: v for k, v in not_counted.items() if k not in counted}}
 
     def hands_hidden_seconds(self, d: dict) -> float | None:
         """For head-camera footage, the seconds in which the wearer's hands are out of view (the dense timeline marks
@@ -125,4 +155,5 @@ class Families:
         if d.get("_rig") != "ego_head":
             return None
         return union_seconds([(float(e["t_s"]), float(e["end_s"])) for e in d.get("event_labels") or []
-                              if e.get("hands_visible") is False and e.get("end_s") is not None])
+                              if e.get("hands_visible") is False and e.get("t_s") is not None
+                              and e.get("end_s") is not None])
