@@ -301,6 +301,13 @@ assert(!strip.innerHTML.includes('Rejected warning'));
 wire.sync(0);assert(strip.hidden,'backward seek clears the presentation queue');
 assert.equal(JSON.stringify(E),original,'presentation preserves recorded annotations');
 wire.dispose();assert.equal(pending,null,'episode cleanup cancels pending presentation');
+const withContact=api.sensorEvidence({sensor_evidence:{version:1,findings},contacts:[
+ {id:'reported-slip',start_s:2.4,end_s:2.6,shown:true,seen:{slip:'yes',touch_seen:'yes'}}
+]});
+const contactWire=api.setupSensorEvidence(withContact,()=>{},()=>{},()=>{},null,null,()=>{},presentation);
+contactWire.sync(2.46244);contactWire.setCapacity(200);
+assert(strip.innerHTML.includes('Slip reported'),'the shared dock preserves existing contact anomalies');
+contactWire.dispose();
 """
     subprocess.run(['node', '-e', script, str(SOURCE),
                     str(HERE / 'fixtures/overlapping_sensor_findings.json')], check=True)

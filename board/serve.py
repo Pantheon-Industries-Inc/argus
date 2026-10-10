@@ -5105,6 +5105,14 @@ function sensorEvidence(d) {
     findingIndex: insights.length + i, start: w.start_s, end: w.end_s, t: w.start_s,
     headline: w.headline, detail: w.detail, kind: 'quality', priority: 6, generic: true, evidence: []
   }))];
+  // Keep existing contact anomalies visible when a sensor finding or quality card owns the dock.
+  for (const anomaly of [...contacts, ...moments].filter(f => f.priority >= 3)) {
+    const moment = Number.isFinite(anomaly.t);
+    overlayFindings.push({...anomaly, findingIndex: overlayFindings.length, kind: 'anomaly',
+      start: moment ? anomaly.t : anomaly.start,
+      end: moment ? anomaly.t + 1.5 : anomaly.end,
+      t: moment ? anomaly.t : anomaly.start, generic: true, evidence: []});
+  }
   return {contacts, moments, insights, overlayFindings, grip, warnings, recordingFindings: recordingFindings(d)};
 }
 function activeSensorEvidence(E, t) {
@@ -5212,7 +5220,7 @@ function gripFindingStripHtml(f, G = null, pager = '') {
     <span class="gf-meta"><span class="gf-phase${f.phase === 'Now' ? ' is-now' : ''}">${esc(f.phase)}</span>
       <span class="gf-time">${fmtT(f.start)} to ${fmtT(f.end)}</span>${pager}</span>
     <button type="button" class="gf-title" title="Replay this finding">${f.generic ? genericSensorHeadlineHtml(f.headline) : gripFingerHtml(f.headline)}</button>
-    ${f.kind === 'quality' ? '' : gripOverlayPressureHtml(G, f, 2)}</span>
+    ${f.kind === 'insight' ? gripOverlayPressureHtml(G, f, 2) : ''}</span>
     <span class="gf-inspect" aria-hidden="true">↗</span>`;
 }
 function sensorEvidenceOverlayHtml(e) {
@@ -5558,7 +5566,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
   }
   function schedulePresentation() {
     if (!presentation) return;
-    const key = !blocked && presentationVisible && displayedGrip && deferred.has(displayedGrip.findingIndex)
+    const key = strip && !blocked && presentationVisible && displayedGrip && deferred.has(displayedGrip.findingIndex)
       ? displayedGrip.findingIndex : null;
     if (key === presentationKey) return;
     cancelPresentation();
@@ -5651,7 +5659,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
       }
       strip.hidden = !displayedGrip;
       strip.classList?.toggle('sensor-quality', displayedGrip?.kind === 'quality');
-      if (displayedGrip && displayedGrip.kind !== 'quality') syncGripOverlayPressure(E.grip, displayedGrip, t, strip, 2);
+      if (displayedGrip && displayedGrip.kind === 'insight') syncGripOverlayPressure(E.grip, displayedGrip, t, strip, 2);
     }
     for (const line of document.querySelectorAll('[data-se-trace]')) {
       const p = profiles[+line.dataset.seTrace];
@@ -5660,7 +5668,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
       line.setAttribute('x1', x); line.setAttribute('x2', x);
     }
     const measurements = profiles.map(p => sensorProfileHtml(p, t)).join('');
-    const selected = displayedGrip && displayedGrip.kind !== 'quality' ? displayedGrip : (E.insights || [])[0];
+    const selected = displayedGrip && displayedGrip.kind === 'insight' ? displayedGrip : (E.insights || [])[0];
     if (selected && (!plottedGrip || selected.findingIndex !== plottedGrip.findingIndex)) {
       const panel = document.getElementById('grip-evidence-panel');
       if (panel) panel.innerHTML = gripEvidencePanelHtml(E.grip, selected);
