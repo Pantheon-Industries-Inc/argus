@@ -1,0 +1,124 @@
+{
+  "audit_optical_handoff.json": {
+    "_rig": "handheld_gripper",
+    "camera_views": [
+      "exo",
+      "left",
+      "right",
+      "extra1",
+      "extra2",
+      "extra3",
+      "extra4"
+    ],
+    "camera_labels": [
+      "head_left",
+      "left",
+      "right",
+      "left_tactile_left",
+      "left_tactile_right",
+      "right_tactile_left",
+      "right_tactile_right"
+    ],
+    "unshown_cameras": [
+      {
+        "view": "unshown1",
+        "name": "observation.images.head_right",
+        "why": "the other eye of a stereo camera the model is shown"
+      }
+    ],
+    "sensor_evidence": {
+      "version": 1,
+      "findings": [
+        {
+          "start_s": 12.0,
+          "end_s": 15.966666666666667,
+          "inspect_s": 13.0,
+          "headline": "Right tactile response changes during the handoff and transport",
+          "detail": "The right tactile images show a changing localized response while the module remains held, beyond the externally visible fact of grasping it.",
+          "observation": "From 12.0 to 13.0 s, right_tactile_right develops a more distinct bright green angular region in its upper-central area. A broad curved color boundary and local marker-pattern change become clearer in right_tactile_left during 14.0-15.97 s.",
+          "claim": "These image changes are consistent with redistribution of contact on the right finger pads as support transfers and the module is reoriented. They do not establish calibrated force or confirmed slip.",
+          "alternative": "Changing pad illumination or small elastic settling during reorientation could contribute to the response; the one-second sampling does not resolve the transition.",
+          "confidence": "medium",
+          "adds_beyond_video": true,
+          "claim_type": "image_response_change",
+          "evidence": [
+            {
+              "sensor_id": "camera:extra4",
+              "time_s": [
+                12.0,
+                13.0,
+                14.0,
+                15.966666666666667
+              ],
+              "detail": "Upper-central green angular response becomes pronounced after the left gripper releases and persists during transport."
+            },
+            {
+              "sensor_id": "camera:extra3",
+              "time_s": [
+                12.0,
+                14.0,
+                15.0,
+                15.966666666666667
+              ],
+              "detail": "A curved color boundary and localized marker-pattern change are more apparent in the later held-module samples."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "episode_waveform_sound_probe.json": {
+    "_rig": "handheld_gripper",
+    "camera_views": [
+      "right",
+      "extra1",
+      "extra2",
+      "extra3",
+      "extra4"
+    ],
+    "camera_labels": [
+      "gripper",
+      "d360_1_compressed",
+      "realsense",
+      "realsense_compressed",
+      "realsense_infra1_rect"
+    ]
+  },
+  "audit_umi_rgb.json": {
+    "_rig": "handheld_gripper",
+    "camera_views": [
+      "left",
+      "right"
+    ],
+    "camera_labels": [
+      "left",
+      "right"
+    ]
+  },
+  "audit_ego_rgb.json": {
+    "_rig": "ego_head",
+    "camera_views": [
+      "exo"
+    ],
+    "camera_labels": [
+      "head"
+    ]
+  },
+  "audit_franka.json": {
+    "_rig": "teleop_arms",
+    "camera_views": [
+      "exo",
+      "left",
+      "right"
+    ],
+    "camera_labels": [
+      "top_camera",
+      "left",
+      "right"
+    ],
+    "camera_mounting": {
+      "left": "unspecified",
+      "right": "unspecified"
+    }
+  }
+}

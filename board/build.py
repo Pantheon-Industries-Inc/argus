@@ -603,7 +603,7 @@ def normalize_enums(x, key: str | None = None):
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
                 "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels", "camera_mounting",
-                "timesteps_s", "task_label", "reader_notes", "unshown_cameras", "data_dictionary")
+                "timesteps_s", "task_label", "reader_notes", "unshown_cameras", "data_dictionary", "camera_presentation")
 
 
 def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict) -> dict:

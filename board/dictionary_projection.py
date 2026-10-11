@@ -29,6 +29,21 @@ def apply(shown: dict, ctx: dict, episode_dir: Path, owner: str | None = None) -
     if dictionary is not None:
         shown['data_dictionary'] = dictionary
     effective_ctx = {**ctx, **({'data_dictionary': dictionary} if dictionary is not None else {})}
+    # Camera presentation follows current exact bindings, including human overrides.
+    # It does not reassign cameras or alter the clock on which labels were produced.
+    from label.dictionary_context import prepared_interpretation
+    from label import signals as sg
+    presentation = {}
+    for view in (ctx.get('cameras') or {}):
+        role = sg._role(prepared_interpretation(effective_ctx, view, 'camera').get('role'))
+        if role:
+            presentation[view] = {'role': 'tactile' if role in
+                ('tactile_image', 'optical_tactile', 'touch', 'tactile') else 'scene' if role in
+                ('scene', 'scene_camera', 'rgb_camera', 'head_camera', 'ego_camera', 'wrist_camera', 'external_camera')
+                else 'other'}
+    shown.pop('camera_presentation', None)
+    if presentation:
+        shown['camera_presentation'] = presentation
     if isinstance(shown.get('evidence_inspection'), dict):
         from label.evidence_access import same_source_proof, withhold_stale_untimed, resolve_piece
         inspection = shown['evidence_inspection']

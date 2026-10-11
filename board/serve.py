@@ -1541,6 +1541,9 @@ section.right { overflow-y: auto; padding: 22px 28px; }
 .gf-copy { display: grid; gap: 9px; }
 .gf-title { font-size: 16px; line-height: 1.3; font-weight: 400; }
 .gf-detail { font-size: 12px; line-height: 1.45; color: rgba(255,255,255,.85); }
+.cam-section { grid-column: 1 / -1; padding: 8px 10px 2px; color: var(--fg-2); font: 500 11px var(--sans); }
+aside.left .cam-row .cam-cell.cam-wrist.cam-tactile video { max-height: 150px; object-fit: contain; }
+@media (max-width: 600px) { aside.left .cam-row .cam-cell.cam-wrist.cam-tactile video { max-height: 105px; } }
 .gf-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
 .gf-phase { display: inline-block; padding: 4px 8px; border: 1px solid rgba(255,255,255,.4);
   border-radius: 4px; background: rgba(255,255,255,.12); color: #fff;
@@ -1661,15 +1664,15 @@ aside.left .grip-strip .sensor-overlay { position: static; order: 2; max-width: 
 .sensor-overlay-stack.tight .gf-pressure { display: none; }
 .cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack {
   width: min(300px, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 24px)); }
-.cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack.tight .grip-finding-overlay { padding: 6px 8px; }
-.cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack.tight .gf-copy { gap: 4px; }
-.cam-row-grippers:not(.cam-row-single) .sensor-overlay-stack.tight .gf-title { font-size: 13px; line-height: 1.3; }
+.sensor-overlay-stack.tight .grip-finding-overlay { padding: 6px 8px; }
+.sensor-overlay-stack.tight .gf-copy { gap: 4px; }
+.sensor-overlay-stack.tight .gf-title { font-size: 13px; line-height: 1.3; }
+aside.left .cam-row-grippers:has(.sensor-overlay-stack) .cam-cell.cam-exo { grid-column: 1 / span 2; }
 .sensor-overlay-stack .sensor-quality { border-left-color: #f1c85a; }
 .gf-pager { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; font-size: 10px; }
 .gf-pager button { border: 0; padding: 2px 6px; color: inherit; background: rgba(255,255,255,.1);
   border-radius: 3px; font: inherit; cursor: pointer; }
 @media (max-width: 600px) {
-  aside.left .cam-row-grippers:has(.sensor-overlay-stack) .cam-cell.cam-exo { grid-column: 1 / span 2; }
   .sensor-overlay-stack { width: min(260px, 54%, calc(100% - var(--fx-left, 0px) - var(--fx-right, 0px) - 16px));
     left: calc(var(--fx-left, 0px) + 8px); }
 }
@@ -2882,7 +2885,7 @@ async function fetchEpisodeOnce(file) {
   if (!STATIC) return (await fetch(episodeUrl(file), {cache: 'no-store'})).json();
   const rec = ALL_EPS.find(e => e.file === file);
   if (rec) await ensureDataset(datasetOf(rec));
-  return (await fetch(episodeUrl(file))).json();
+  return (await fetch(episodeUrl(file), {cache: 'no-cache'})).json();
 }
 function fetchEpisode(file) {
   let p = _epCache.get(file);
@@ -2978,8 +2981,28 @@ function frameSrcOf(file, eidEnc, cam, t) {
 // and the side cells' (a head camera is shown alone)
 function episodeCams(d) {
   const views = (d.camera_views && d.camera_views.length) ? d.camera_views : ['exo', 'left', 'right'];
-  const main = views.includes('exo') ? 'exo' : views[0];
-  return {views, main, side: d._rig === 'ego_head' ? [] : views.filter(v => v !== main && v !== 'exo')};
+  let main = views.includes('exo') ? 'exo' : views[0];
+  const roles = d.camera_presentation || {};
+  if (roles[main] && roles[main].role === 'tactile')
+    main = views.find(v => roles[v] && roles[v].role === 'scene') || main;
+  return {views, main, side: d._rig === 'ego_head' ? [] : views.filter(v => v !== main)};
+}
+// Presentation roles do not change prepared camera IDs, model inputs or the labelled clock.
+function cameraPresentation(d, view, name) {
+  const declared = (d.camera_presentation || {})[view];
+  if (declared && ['scene', 'tactile', 'other'].includes(declared.role)) return declared.role;
+  const sensor = ((d.sensor_evidence || {}).sensors || []).find(s => s.id === 'camera:' + view);
+  if (sensor && sensor.kind === 'image') return 'tactile';
+  const words = String(name || view).toLowerCase().split(/[^a-z0-9]+/).map(w => w.replace(/[0-9]+$/, ''));
+  if (words.some(w => ['tactile','touch','visuotactile','haptic','taxel','skin','gelsight','digit','xense','heatmap'].includes(w))) return 'tactile';
+  return 'scene';
+}
+function supportingCameras(d) {
+  const {views, side} = episodeCams(d);
+  const shown = side.map(view => ({view, name: (d.camera_labels || [])[views.indexOf(view)] || view}));
+  const unshown = unshownCams(d).map(u => ({view: u.view, name: u.name || u.view, unshown: u}));
+  return [...shown, ...unshown].map(c => ({...c, role: cameraPresentation(d, c.view, c.name)}))
+    .sort((a, b) => Number(a.role === 'tactile') - Number(b.role === 'tactile'));
 }
 // the listed episodes as JSON Lines: the server joins them, a static build fetches and joins them here
 async function exportBlob(files) {
@@ -3235,7 +3258,7 @@ function setAsideHtml(d) {
 }
 // The cameras the model is not shown (board/build.py unshown_cameras: more extra cameras than it is shown, a stereo
 // camera's second eye, every camera but one on a head rig, an infrared, thermal or mask video). Each plays in a cell
-// of its own after the other cameras, synced as a side camera, named as not shown to the model, and one line under the
+// of its own among supporting cameras by role, synced as a side camera, named as not shown to the model, and one line under the
 // cameras says why for each. Nothing is drawn for an episode the model was shown whole.
 function unshownCams(d) {
   return (Array.isArray(d.unshown_cameras) ? d.unshown_cameras : []).filter(u => u && u.view);
@@ -3243,7 +3266,7 @@ function unshownCams(d) {
 // kept: the footage playing now moves into the new cells (renderEp keepVideo), so they get no source of their own
 function unshownCellsHtml(d, eidEnc, kept) {
   return unshownCams(d).map(u => `
-        <div class="cam-cell cam-wrist cam-unshown">
+        <div class="cam-cell cam-wrist cam-unshown${cameraPresentation(d, u.view, u.name) === 'tactile' ? ' cam-tactile' : ''}">
           <span class="cam-label">${esc(u.name || u.view)}, not shown to the model</span>
           <video id="video-${esc(u.view)}" preload="auto" muted playsinline${kept ? ''
             : ` src="${esc(videoSrc(eidEnc, u.view))}"${posterAttr(eidEnc, u.view)}`} `
@@ -5060,11 +5083,13 @@ function sensorEvidence(d) {
     if (!f || f.review_status === 'rejected' || (grip.generic && f.adds_beyond_video !== true) || !finite(f.start_s) || !finite(f.end_s)
       || f.end_s < f.start_s || !text(f.headline)) continue;
     insights.push({findingIndex: insights.length, start: f.start_s, end: f.end_s, index: -1, priority: 3, kind: 'insight',
-      headline: grip.generic ? text(f.headline) : gripFingerCopy(text(f.headline)),
+      headline: grip.generic ? text(typeof f.overlay_headline === 'string' && text(f.overlay_headline)
+        ? f.overlay_headline : f.headline) : gripFingerCopy(text(f.headline)),
       detail: grip.generic ? text(f.detail) : gripFingerCopy(text(f.detail)), reading: grip.generic ? 'Recorded sensor evidence' : 'Relative grip loading',
       visual: f.confidence === 'high' ? 'High confidence' : f.confidence === 'medium' ? 'Medium confidence' : 'Low confidence',
       t: finite(f.inspect_s) && f.inspect_s >= f.start_s && f.inspect_s <= f.end_s ? f.inspect_s : f.start_s,
       timing: '', alternative: text(f.alternative), observation: text(f.observation), claim: text(f.claim),
+      overlayDetail: typeof f.overlay_detail === 'string' ? text(f.overlay_detail) : '',
       quotedTimeOffset: finite(f.quoted_time_offset_s) ? f.quoted_time_offset_s : 0,
       generic: !!grip.generic, evidence: grip.generic && Array.isArray(f.evidence) ? f.evidence : [],
       addsBeyond: f.adds_beyond_video === true || f.adds_beyond_rgb_pose === true, cellGroups: Array.isArray(f.cell_groups) ? f.cell_groups : []});
@@ -5220,6 +5245,7 @@ function gripFindingStripHtml(f, G = null, pager = '') {
     <span class="gf-meta"><span class="gf-phase${f.phase === 'Now' ? ' is-now' : ''}">${esc(f.phase)}</span>
       <span class="gf-time">${fmtT(f.start)} to ${fmtT(f.end)}</span>${pager}</span>
     <button type="button" class="gf-title" title="Replay this finding">${f.generic ? genericSensorHeadlineHtml(f.headline) : gripFingerHtml(f.headline)}</button>
+    ${f.kind === 'insight' && f.generic && (f.overlayDetail || f.claim || f.detail) ? `<span class="gf-detail">${esc(f.overlayDetail || f.claim || f.detail)}</span>` : ''}
     ${f.kind === 'insight' ? gripOverlayPressureHtml(G, f, 2) : ''}</span>
     <span class="gf-inspect" aria-hidden="true">↗</span>`;
 }
@@ -5572,6 +5598,9 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     cancelPresentation();
     if (key == null) return;
     presentationKey = key;
+    const explanation = displayedGrip.generic ? displayedGrip.overlayDetail || displayedGrip.claim || displayedGrip.detail || '' : '';
+    const words = (displayedGrip.headline + ' ' + explanation).trim().split(/\s+/).length;
+    const readingMs = Math.max(3500, 1000 + words * 220);
     presentationTimer = presentation.schedule(() => {
       presentationTimer = null; presentationKey = null;
       if (disposed) return;
@@ -5585,7 +5614,7 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
       deferred.delete(key); presented.add(key);
       if (chosenGrip === key) chosenGrip = null;
       wire.sync(currentTime);
-    });
+    }, readingMs);
   }
   let blocked = false, previousTime = null, previousBlocked = false, previousFinding = null, currentCandidates = [];
   const wire = {setCapacity(height) {
@@ -6235,7 +6264,7 @@ function renderEp(d, opts) {
   // dataset's own labels are shown, and one line stands in for every section the model would have answered
   const noLabels = !cmpInfo && !!d._label_failed;
   // switching source keeps the playing footage: the same video elements move into the new layout
-  const keep = opts.keepVideo && document.getElementById('video') ? {
+  const keep = opts.keepVideo && document.getElementById('video')?.dataset.view === episodeCams(d).main ? {
     video: document.getElementById('video'),
     side: [...document.querySelectorAll('.cam-cell.cam-wrist video:not(.dp-vid)')].map(el => [el.id, el])} : null;
   // a new episode: stop the old episode's videos now, so their downloads end instead of running on until the detached
@@ -6511,8 +6540,9 @@ function renderEp(d, opts) {
     const i = camViews.indexOf(v);
     return (d.camera_labels && i >= 0 && d.camera_labels[i]) || v;
   };
-  const hasTop = mainCam === 'exo';
-  const sideCams = camViews.filter(v => v !== mainCam && v !== 'exo');
+  const hasTop = camViews.includes('exo');
+  const sideCams = episodeCams(d).side;
+  const supportCams = supportingCameras(d);
   const camLabel = v => (d.camera_mounting || {})[v] === 'unspecified' ? `${camNameOf(v)} camera`
     : v === 'exo' ? 'exo' : (v !== 'left' && v !== 'right') ? camNameOf(v)
     : (hasTop ? `${v} wrist` : `${camNameOf(v)}${camNameOf(v) === 'gripper' ? '' : ' gripper'}`);
@@ -6820,7 +6850,7 @@ function renderEp(d, opts) {
         <div class="cam-cell cam-exo">
           ${isEgo ? '' : `<span class="cam-label">${esc(camLabel(mainCam))}</span>`}
           <button class="fs-btn" id="fs-btn" title="fullscreen (keeps overlays)">&#9974;</button>
-          <video id="video" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${esc(videoUrl)}"${posterAttr(eidEnc,
+          <video id="video" data-view="${esc(mainCam)}" controls controlslist="nofullscreen" preload="auto" playsinline${keep ? '' : ` src="${esc(videoUrl)}"${posterAttr(eidEnc,
             mainCam)}`}></video>${dpHtml(mainCam, dpViews)}
           ${isEgo ? '<canvas class="hp-canvas" id="hp-canvas" aria-hidden="true"></canvas>' : ''}
           ${isEgo ? `<div class="top-hud" id="top-hud"><div class="top-hud-in">
@@ -6839,14 +6869,20 @@ function renderEp(d, opts) {
           </div>` : ''}
           ${gripOnly ? '' : notesHtml}
         </div>
-        ${isEgo ? '' : sideCams.map(v => `
-        <div class="cam-cell cam-wrist">
+        ${supportCams.map((c, i) => {
+          const v = c.view;
+          const section = c.role === 'tactile' && (i === 0 || supportCams[i - 1].role !== 'tactile')
+            ? '<div class="cam-section">Tactile cameras</div>' : '';
+          if (c.unshown) return section + unshownCellsHtml({...d, unshown_cameras: [c.unshown]}, eidEnc, !!keep);
+          return section + `
+        <div class="cam-cell cam-wrist${c.role === 'tactile' ? ' cam-tactile' : ''}">
           <span class="cam-label">${esc(camLabel(v))}</span>
           <video id="${sideId(v)}" preload="auto" muted playsinline${gripOnly
             ? ' controls' : ''}${keep ? '' : ` src="${esc(v === 'left' ? videoUrlWL : v === 'right' ? videoUrlWR
             : videoSrc(eidEnc, v))}"${posterAttr(eidEnc, v)}`} onloadedmetadata="this.currentTime=0.03"></video>${dpHtml(v,
             dpViews)}
-        </div>`).join('')}${unshownCellsHtml(d, eidEnc, !!keep)}
+        </div>`;
+        }).join('')}
       </div>${unshownNote(d)}
       ${gripOnly ? `<div class="grip-strip">${sideCams.length ? '' : `<p class="grip-note">A single-arm task: the dataset records one gripper camera.</p>`}${notesHtml}</div>` : ''}
     </div>
@@ -7500,7 +7536,7 @@ function renderEp(d, opts) {
   }
   let tcWire = null;            // the Touch lane and its card (setupTouch), on an episode with contacts
   evidenceWire = setupSensorEvidence(evidence, seek, on, (k, t) => { if (tcWire) tcWire.inspect(k, t); }, d, _activeFile, scheduleTopPlacement,
-    {schedule: fn => setTimeout(fn, 3500), cancel: id => clearTimeout(id)});
+    {schedule: (fn, ms) => setTimeout(fn, ms), cancel: id => clearTimeout(id)});
   window._epCleanup.push(() => evidenceWire.dispose());
   if (gripFindingOverlay) {
     let sensorInView = false;

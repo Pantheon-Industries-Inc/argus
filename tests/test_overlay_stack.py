@@ -280,10 +280,11 @@ const E=api.sensorEvidence({sensor_evidence:{version:1,findings},tactile_qc:{ver
  {start_s:2.4,end_s:2.6,headline:'Rejected warning',review_status:'rejected'}
 ]}});
 const original=JSON.stringify(E);
-let pending=null;
-const presentation={schedule(fn){pending=fn;return fn;},cancel(){pending=null;}};
+let pending=null, readingMs=0;
+const presentation={schedule(fn,ms){pending=fn;readingMs=ms;return fn;},cancel(){pending=null;}};
 const wire=api.setupSensorEvidence(E,()=>{},()=>{},()=>{},null,null,()=>{},presentation);
 wire.sync(1.1);wire.setCapacity(200);assert(strip.innerHTML.includes(findings[0].headline));
+assert(readingMs>3500,'the recorded explanation needs more reading time than a headline alone');
 wire.sync(2.46244);wire.sync(4.1);
 assert(strip.innerHTML.includes(findings[0].headline),'first finding retains its reading time');
 assert(pending,'concurrent findings must progress without manual selection');
