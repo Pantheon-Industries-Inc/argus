@@ -115,3 +115,23 @@ def test_split_pass_divides_long_events_only_inside_them():
     res = passes.annotate(fp, passes.Settings(passes=1, split=True), lambda c, p: Reply(text=replies[p]))
     assert [(e.start_s, e.end_s, e.label) for e in res.events] == [
         (0.0, 2.5, "pick up cup"), (2.5, 6.0, "wipe table"), (6.5, 7.5, "tap")]
+
+
+def test_refine_asks_fewer_boundaries_per_request_when_the_images_do_not_fit(monkeypatch):
+    fp = _footage(8.0)
+    events = [passes.Event(i * 1.0, i * 1.0 + 0.8, f"e{i}") for i in range(4)]
+    asked = []
+
+    def fitting(build, cell_w, budget=passes.IMAGE_BUDGET_BYTES):
+        images = build(160)
+        if len({c.split()[3] for c, _ in images if "close-up" in c}) > 2:  # more than two boundaries never fit
+            raise passes.PassError("too big")
+        return images
+
+    def call(content, purpose):
+        asked.append(len({c["text"].split()[3] for c in content if c["type"] == "text" and c["text"].startswith("=== close-up")}))
+        return Reply(text='{"boundaries": []}')
+
+    monkeypatch.setattr(passes, "fitting", fitting)
+    passes.refine(fp, passes.Settings(), call, [], [], events)
+    assert asked == [2, 2, 2, 2]

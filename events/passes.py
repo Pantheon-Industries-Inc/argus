@@ -287,9 +287,18 @@ def split(footage: Footage, settings: Settings, call: Caller, calls: list, notes
 
 def refine(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,
            events: list[Event]) -> list[Event]:
-    overview = sheets(footage, footage.times(OVERVIEW_FPS), OVERVIEW_COLS, OVERVIEW_ROWS, cell_w=OVERVIEW_CELL_W)
-    for b0 in range(0, len(events), NAME_BATCH):
-        batch = list(enumerate(events[b0:b0 + NAME_BATCH], start=b0))
+    overviews: dict[int, list] = {}
+
+    def overview(w: int) -> list:
+        """The whole recording at 1 fps; its cells narrow with the close-ups' when a request must shrink."""
+        w = min(OVERVIEW_CELL_W, w)
+        if w not in overviews:
+            overviews[w] = sheets(footage, footage.times(OVERVIEW_FPS), OVERVIEW_COLS, OVERVIEW_ROWS, cell_w=w)
+        return overviews[w]
+
+    b0, size = 0, NAME_BATCH
+    while b0 < len(events):
+        batch = list(enumerate(events[b0:b0 + size], start=b0))
         ids, lines = [], []
         for i, e in batch:
             for edge, t in (("start", e.start_s), ("end", e.end_s)):
@@ -304,7 +313,14 @@ def refine(footage: Footage, settings: Settings, call: Caller, calls: list, note
                 for caption, jpeg in sheets(footage, ts, REFINE_COLS, 5, cell_w=w):
                     out.append((f"=== close-up for {bid} ===\n" + caption, jpeg))
             return out
-        images = fitting(lambda w: overview + closeups(w), REFINE_CELL_W)
+        try:
+            images = fitting(lambda w: overview(w) + closeups(w), REFINE_CELL_W)
+        except PassError:
+            if size == 1:
+                raise
+            size = max(1, size // 2)  # many cameras: fewer boundaries per request rather than none
+            continue
+        b0 += len(batch)
         text = prompts.REFINE.format(overview_step=1 / OVERVIEW_FPS, window=REFINE_WINDOW_S,
                                      boundaries="\n".join(lines), **_header(settings, footage))
         reply = call(_content(text, images), "refine")
