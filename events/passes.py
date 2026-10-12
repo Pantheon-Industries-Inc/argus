@@ -77,6 +77,7 @@ class Settings:
     skills: list[str] | None = None
     parts: list[str] | None = None
     passes: int = 3
+    split: bool = False  # after finding, look inside each longer event for several (first-person video)
     summary: bool = False  # a fourth call judging the whole episode: task, outcome, scene and issues
 
 
@@ -99,6 +100,8 @@ def annotate(footage: Footage, settings: Settings, call: Caller, name_call: Call
     calls: list[dict] = []
     notes: list[str] = []
     events = find(footage, settings, call, calls)
+    if settings.split and events:
+        events = split(footage, settings, call, calls, notes, events)
     if settings.passes >= 2 and events:
         events = refine(footage, settings, call, calls, notes, events)
     if settings.passes >= 3 and events:
@@ -208,6 +211,58 @@ def find(footage: Footage, settings: Settings, call: Caller, calls: list) -> lis
         except (KeyError, TypeError, ValueError):
             continue
     return clean(events, footage.duration_s)
+
+
+SPLIT_MIN_S = 3.0
+SPLIT_BATCH = 6
+SPLIT_FPS = 4
+SPLIT_CELL_W = 320
+
+
+def split(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,
+          events: list[Event]) -> list[Event]:
+    """Every event of at least SPLIT_MIN_S is shown again at 4 fps and may come back as several. Only times inside
+    the event are accepted; an answer outside it, or none, keeps the event as found."""
+    long_ = [i for i, e in enumerate(events) if e.end_s - e.start_s >= SPLIT_MIN_S]
+    out: dict[int, list[Event]] = {}
+    for b0 in range(0, len(long_), SPLIT_BATCH):
+        idx = long_[b0:b0 + SPLIT_BATCH]
+        lines = [f"- e{i}: {events[i].start_s:.2f}-{events[i].end_s:.2f} s, found as \"{events[i].label}\"" for i in idx]
+
+        def build(w: int, idx=idx) -> list:
+            imgs = []
+            for i in idx:
+                ts = footage.times(SPLIT_FPS, events[i].start_s, events[i].end_s)
+                for caption, jpeg in sheets(footage, ts, 4, 4, cell_w=w):
+                    imgs.append((f"=== e{i} ===\n" + caption, jpeg))
+            return imgs
+        images = fitting(build, SPLIT_CELL_W)
+        text = prompts.SPLIT.format(events="\n".join(lines), **_header(settings, footage))
+        reply = call(_content(text, images), "split")
+        _record(calls, "split", reply, len(images))
+        doc = parse_json(reply.text)
+        for r in (doc.get("events") if isinstance(doc, dict) else None) or []:
+            if not isinstance(r, dict) or not isinstance(r.get("id"), str) or not r["id"][1:].isdigit():
+                continue
+            i = int(r["id"][1:])
+            if i not in idx:
+                continue
+            e = events[i]
+            parts = []
+            for p in r.get("parts") or []:
+                try:
+                    a, b, lab = float(p["start_s"]), float(p["end_s"]), str(p["label"]).strip()
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if e.start_s - 0.5 <= a < b <= e.end_s + 0.5 and lab:
+                    parts.append(Event(max(a, e.start_s), min(b, e.end_s), lab))
+            if len(parts) > 1:
+                out[i] = parts
+                notes.append(f"split e{i} into {len(parts)}")
+    merged = []
+    for i, e in enumerate(events):
+        merged.extend(out.get(i, [e]))
+    return clean(merged, footage.duration_s)
 
 
 def refine(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,

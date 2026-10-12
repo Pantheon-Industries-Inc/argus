@@ -49,6 +49,25 @@ miss now is lost: later steps can move boundaries and rename events but never ad
 Answer with JSON only: {{"events": [{{"start_s": 0.0, "end_s": 0.0, "label": "..."}}]}}
 The recording lasts {duration:.2f} s."""
 
+SPLIT = """\
+You are checking whether events found in a recording of manipulation are each really one event.
+{cameras}
+{instruction}
+
+{convention}
+
+For each event below you get its own close sheets, at 4 instants per second from its start to its end, each tile
+headed with its time in seconds. Look for a second completed manipulation inside it: the hand lets go of one object
+and takes another, or an object is put down and something else is done before it is taken up again. When the
+event holds several, list each with its start, end and a short label, in order, covering only what happens; when it
+is one event, return it unchanged.
+
+Events to check:
+{events}
+
+Answer with JSON only: {{"events": [{{"id": "e3", "parts": [{{"start_s": 0.0, "end_s": 0.0, "label": "..."}}]}}]}}
+with one entry per event listed."""
+
 REFINE = """\
 You are checking the start and end times of events already found in a recording of manipulation.
 {cameras}

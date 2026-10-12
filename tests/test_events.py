@@ -94,3 +94,13 @@ def test_summary_pass_is_strict_about_outcome():
     replies["summary"] = '{"task_summary": "x", "outcome": "maybe"}'
     with pytest.raises(passes.PassError):
         passes.annotate(fp, passes.Settings(passes=1, summary=True), lambda c, p: Reply(text=replies[p]))
+
+
+def test_split_pass_divides_long_events_only_inside_them():
+    fp = _footage(10.0)
+    replies = {"find": '{"events": [{"start_s": 0.0, "end_s": 6.0, "label": "tidy"}, {"start_s": 6.5, "end_s": 7.5, "label": "tap"}]}',
+               "split": '{"events": [{"id": "e0", "parts": [{"start_s": 0.0, "end_s": 2.5, "label": "pick up cup"}, '
+                        '{"start_s": 2.5, "end_s": 6.0, "label": "wipe table"}, {"start_s": 8.0, "end_s": 9.0, "label": "outside"}]}]}'}
+    res = passes.annotate(fp, passes.Settings(passes=1, split=True), lambda c, p: Reply(text=replies[p]))
+    assert [(e.start_s, e.end_s, e.label) for e in res.events] == [
+        (0.0, 2.5, "pick up cup"), (2.5, 6.0, "wipe table"), (6.5, 7.5, "tap")]

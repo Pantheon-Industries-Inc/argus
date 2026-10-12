@@ -108,7 +108,7 @@ def _commit() -> str:
 
 def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | None, reasoning: str,
         convention: str, ids: list[str] | None, name_model: str | None = None, name_reasoning: str | None = None,
-        resume: Path | None = None) -> Path:
+        resume: Path | None = None, split_long: bool = False) -> Path:
     from events import footage as fo
     from events.model import Spend, SpendCapReached, openrouter
     from events.passes import Settings, annotate
@@ -119,6 +119,7 @@ def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | 
         meta = json.loads((out / "run.json").read_text())
         model, reasoning, passes, convention = meta["model"], meta["reasoning"], meta["passes"], meta["convention"]
         name_model, name_reasoning = meta.get("name_model"), meta.get("name_reasoning")
+        split_long = meta.get("split_long_ego", False)
         picks = [e for e in meta["episodes"] if not (out / "out" / f"{e}.json").exists()]
         meta.setdefault("resumed", []).append({"at": time.strftime("%Y%m%d-%H%M%S"), "commit": _commit(),
                                                "episodes": picks, "cap_usd": cap})
@@ -130,7 +131,7 @@ def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | 
         slug = name or f"{model.split('/')[-1]}_{reasoning}_p{passes}_{which}"
         out = RUNS / f"{stamp}_{slug}_{_commit()}"
         meta = {"model": model, "reasoning": reasoning, "name_model": name_model, "name_reasoning": name_reasoning,
-                "passes": passes, "split": which, "convention": convention,
+                "passes": passes, "split": which, "split_long_ego": split_long, "convention": convention,
                 "commit": _commit(), "cap_usd": cap, "episodes": picks, "started": stamp}
     (out / "out").mkdir(parents=True, exist_ok=True)
     spend = Spend(cap)
@@ -145,7 +146,7 @@ def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | 
         try:
             fp = fo.decode([fo.Camera("camera", RAW / f"{eid}.mp4")])
             settings = Settings(convention=convention, rig=RIG[source(eid)], instruction=gold[eid]["instruction"],
-                                passes=passes)
+                                passes=passes, split=split_long and RIG[source(eid)] == "ego_head")
             res = annotate(fp, settings, call, name_call)
             doc = {"id": eid, "duration_s": fp.duration_s, **res.to_dict(), "seconds": round(time.monotonic() - t0, 1)}
             dest.write_text(json.dumps(doc, indent=1))
@@ -383,6 +384,7 @@ def main() -> int:
     p.add_argument("--split", default="dev", choices=["dev", "test", "all"])
     p.add_argument("--ids", nargs="*", default=None)
     p.add_argument("--passes", type=int, default=3)
+    p.add_argument("--split-long", action="store_true", help="on first-person video, look inside longer events")
     p.add_argument("--name-model", default=None, help="name the events with this model (default: --model)")
     p.add_argument("--name-reasoning", default=None)
     p.add_argument("--convention", default="wgo")
@@ -404,7 +406,7 @@ def main() -> int:
         if not a.model and not a.resume:
             raise SystemExit("--model or --resume")
         run(a.model, a.split, a.passes, a.cap, a.jobs, a.name, a.reasoning, a.convention, a.ids, a.name_model,
-            a.name_reasoning, a.resume)
+            a.name_reasoning, a.resume, a.split_long)
     else:
         report = score(a.run, a.gold, a.judge, a.jobs)
         print(summary(report))
