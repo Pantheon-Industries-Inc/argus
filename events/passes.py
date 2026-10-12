@@ -282,7 +282,7 @@ def split(footage: Footage, settings: Settings, call: Caller, calls: list, notes
     merged = []
     for i, e in enumerate(events):
         merged.extend(out.get(i, [e]))
-    return clean(merged, footage.duration_s)
+    return clean(merged, footage.duration_s, per_part=_per_part(settings))
 
 
 def refine(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,
