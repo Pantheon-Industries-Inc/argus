@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 GRID_FPS = 8
-CELL_MAX_W = 448
+CELL_MAX_W = 768  # the widest any pass shows; the find pass shrinks to 448, the naming atlases keep this
 JPEG_QUALITY = 88
 
 

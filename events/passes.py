@@ -35,7 +35,7 @@ OVERVIEW_COLS, OVERVIEW_ROWS = 8, 6
 OVERVIEW_CELL_W = 224
 NAME_PER_ROLE = 5
 NAME_BATCH = 8
-NAME_ATLAS_MAX_PX = 1800 * 1800  # an atlas past this splits into parts; its pictures are never shrunk
+NAME_ATLAS_MAX_PX = 2400 * 2400  # an atlas past this splits into parts; its pictures are never shrunk
 MIN_EVENT_S = 0.1
 
 
@@ -232,20 +232,25 @@ def refine(footage: Footage, settings: Settings, call: Caller, calls: list, note
     return clean(events, footage.duration_s)
 
 
-def _instants(e: Event | None, n: int) -> list[float]:
+def _instants(e: Event | None, n: int, ends: bool = False) -> list[float]:
+    """n instants spread over the event: centred in n equal parts, or, with ends, from its first to its last instant
+    (the event being named shows where it starts and how it is left)."""
     if e is None:
         return []
+    span = e.end_s - e.start_s
     if n == 1:
         return [(e.start_s + e.end_s) / 2]
-    span = e.end_s - e.start_s
+    if ends:
+        return [e.start_s + span * j / (n - 1) for j in range(n)]
     return [e.start_s + span * (j + 0.5) / n for j in range(n)]
 
 
 def _atlas_parts(tiles: list, roles: list, footage: Footage) -> list[tuple[list, list]]:
     """The atlas's tiles in as few chronological parts as keep each part under NAME_ATLAS_MAX_PX: an oversized atlas
     splits rather than shrinking its pictures."""
-    w, h = max((s for s in footage.sizes.values()), default=(448, 252))
-    w, h = min(w, 448), min(h, round(h * 448 / w)) if w > 448 else h
+    from events.footage import CELL_MAX_W
+    w, h = max((s for s in footage.sizes.values()), default=(CELL_MAX_W, CELL_MAX_W * 9 // 16))
+    w, h = (CELL_MAX_W, round(h * CELL_MAX_W / w)) if w > CELL_MAX_W else (w, h)
     tile_px = (w + 4) * (h * max(1, len(footage.cameras)) + 34)
     per = max(NAME_PER_ROLE, (NAME_ATLAS_MAX_PX // max(1, tile_px)) // NAME_PER_ROLE * NAME_PER_ROLE)
     return [(tiles[i:i + per], roles[i:i + per]) for i in range(0, len(tiles), per)]
@@ -262,7 +267,7 @@ def name(footage: Footage, settings: Settings, call: Caller, calls: list, notes:
             nxt = events[i + 1] if i + 1 < len(events) else None
             tiles, roles, seen = [], [], set()
             for role, ev in (("prev", prev), ("this", e), ("next", nxt)):
-                for t in _instants(ev, NAME_PER_ROLE):
+                for t in _instants(ev, NAME_PER_ROLE, ends=role == "this"):
                     k = footage.index(t)
                     if k in seen:  # a capture shared by two roles appears once, under the earlier role
                         continue
