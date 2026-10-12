@@ -106,6 +106,8 @@ def annotate(footage: Footage, settings: Settings, call: Caller, name_call: Call
         events = refine(footage, settings, call, calls, notes, events)
     if settings.passes >= 3 and events:
         events = name(footage, settings, name_call or call, calls, notes, events)
+        if _per_part(settings):
+            events = clean(events, footage.duration_s, per_part=True)
     summary = summarize(footage, settings, name_call or call, calls, events) if settings.summary else None
     return Result(events, calls, notes, summary)
 
@@ -169,21 +171,39 @@ def _content(text: str, images: list[tuple[str, bytes]]) -> list:
     return content
 
 
-def clean(events: list[Event], duration: float) -> list[Event]:
-    """Order, clip to the recording, drop empty events and resolve overlaps at the midpoint of the overlap."""
-    out = []
+def clean(events: list[Event], duration: float, per_part: bool = False) -> list[Event]:
+    """Order by start, clip to the recording, drop empty events and resolve overlaps at the midpoint of the overlap.
+
+    per_part: events may overlap unless they share a body part (the sx_label convention, where the two hands may
+    act at once), so only events sharing a part are split, and an event whose parts are not known yet is left as
+    found. Otherwise every overlap is split (one actor at a time, as WGO-Bench counts events)."""
+    out: list[Event] = []
     for e in sorted(events, key=lambda e: (e.start_s, e.end_s)):
         e.start_s, e.end_s = max(0.0, min(e.start_s, duration)), max(0.0, min(e.end_s, duration))
         if e.end_s - e.start_s < MIN_EVENT_S or not e.label.strip():
             continue
-        if out and e.start_s < out[-1].end_s:
-            mid = (e.start_s + out[-1].end_s) / 2
-            out[-1].end_s = max(out[-1].start_s + MIN_EVENT_S, mid)
-            e.start_s = out[-1].end_s
-            if e.end_s - e.start_s < MIN_EVENT_S:
-                continue
+        if per_part:
+            last = {}
+            for k in out:
+                for p in k.parts:
+                    last[p] = k
+            rivals = list({id(k): k for p in e.parts if (k := last.get(p)) is not None}.values())
+        else:
+            rivals = out[-1:]
+        start = e.start_s
+        for prev in rivals:
+            if start < prev.end_s:
+                prev.end_s = max(prev.start_s + MIN_EVENT_S, (start + prev.end_s) / 2)
+                e.start_s = max(e.start_s, prev.end_s)
+        if e.end_s - e.start_s < MIN_EVENT_S:
+            continue
         out.append(e)
-    return out
+    return sorted(out, key=lambda e: (e.start_s, e.end_s))
+
+
+def _per_part(settings: Settings) -> bool:
+    """Whether the convention lets two parts act at once (sx_label: the two hands)."""
+    return settings.convention == "sx_label"
 
 
 def find(footage: Footage, settings: Settings, call: Caller, calls: list) -> list[Event]:
@@ -210,7 +230,7 @@ def find(footage: Footage, settings: Settings, call: Caller, calls: list) -> lis
             events.append(Event(float(r["start_s"]), float(r["end_s"]), str(r["label"]).strip()))
         except (KeyError, TypeError, ValueError):
             continue
-    return clean(events, footage.duration_s)
+    return clean(events, footage.duration_s, per_part=_per_part(settings))
 
 
 SPLIT_MIN_S = 3.0
@@ -305,7 +325,7 @@ def refine(footage: Footage, settings: Settings, call: Caller, calls: list, note
     for e in events:
         if e.end_s < e.start_s:
             e.start_s, e.end_s = e.end_s, e.start_s
-    return clean(events, footage.duration_s)
+    return clean(events, footage.duration_s, per_part=_per_part(settings))
 
 
 def _instants(e: Event | None, n: int, ends: bool = False) -> list[float]:

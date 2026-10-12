@@ -35,6 +35,17 @@ def test_clean_orders_clips_and_splits_overlaps():
     assert [(e.label, e.start_s, e.end_s) for e in out] == [("a", 0, 5.5), ("b", 5.5, 9)]
 
 
+def test_clean_per_part_splits_only_events_sharing_a_part():
+    E = passes.Event
+    evs = [E(0, 6, "pick cup", parts=["right_gripper"]), E(1, 5, "pick lid", parts=["left_gripper"]),
+           E(4, 9, "fold cloth", parts=["left_gripper", "right_gripper"]), E(2, 3, "unnamed")]
+    out = passes.clean(evs, 20.0, per_part=True)
+    got = [(e.label, e.start_s, e.end_s) for e in out]
+    # the two hands overlap freely; the both-hands fold splits against each hand's last event; an event whose
+    # parts are not known yet is left as found
+    assert got == [("pick cup", 0, 5.0), ("pick lid", 1, 4.5), ("unnamed", 2, 3), ("fold cloth", 5.0, 9)]
+
+
 def test_parse_json_reads_fenced_and_chatty_replies():
     assert parse_json('```json\n{"events": []}\n```') == {"events": []}
     assert parse_json('Here you go: {"a": 1} hope it helps') == {"a": 1}

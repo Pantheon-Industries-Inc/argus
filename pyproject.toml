@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Audit robot-learning datasets and annotate every episode densely with a vision-language model and deterministic checks."
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = "==3.11.*"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "av==18.1.0",
     "h5py>=3.16.0",
