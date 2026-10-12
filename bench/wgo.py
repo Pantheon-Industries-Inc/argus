@@ -113,16 +113,29 @@ def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | 
     from events.model import Spend, SpendCapReached, openrouter
     from events.passes import Settings, annotate
     gold = json.loads((GOLD / "videodb.json").read_text())
-    picks = ids or episodes(which)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    slug = name or f"{model.split('/')[-1]}_{reasoning}_p{passes}_{which}"
-    out = RUNS / f"{stamp}_{slug}_{_commit()}"
+    if resume is not None:
+        # finish a run: the same settings, only the episodes with no output (failed or never started)
+        out = resume
+        meta = json.loads((out / "run.json").read_text())
+        model, reasoning, passes, convention = meta["model"], meta["reasoning"], meta["passes"], meta["convention"]
+        name_model, name_reasoning = meta.get("name_model"), meta.get("name_reasoning")
+        picks = [e for e in meta["episodes"] if not (out / "out" / f"{e}.json").exists()]
+        meta.setdefault("resumed", []).append({"at": time.strftime("%Y%m%d-%H%M%S"), "commit": _commit(),
+                                               "episodes": picks, "cap_usd": cap})
+        for e in picks:
+            (out / "out" / f"{e}.error.txt").unlink(missing_ok=True)
+    else:
+        picks = ids or episodes(which)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        slug = name or f"{model.split('/')[-1]}_{reasoning}_p{passes}_{which}"
+        out = RUNS / f"{stamp}_{slug}_{_commit()}"
+        meta = {"model": model, "reasoning": reasoning, "name_model": name_model, "name_reasoning": name_reasoning,
+                "passes": passes, "split": which, "convention": convention,
+                "commit": _commit(), "cap_usd": cap, "episodes": picks, "started": stamp}
     (out / "out").mkdir(parents=True, exist_ok=True)
     spend = Spend(cap)
     call = openrouter(model, reasoning=reasoning, spend=spend)
     name_call = openrouter(name_model, reasoning=name_reasoning or reasoning, spend=spend) if name_model else None
-    meta = {"model": model, "reasoning": reasoning, "name_model": name_model, "name_reasoning": name_reasoning, "passes": passes, "split": which, "convention": convention,
-            "commit": _commit(), "cap_usd": cap, "episodes": picks, "started": stamp}
     (out / "run.json").write_text(json.dumps(meta, indent=1))
     lock = threading.Lock()
 
