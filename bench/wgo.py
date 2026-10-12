@@ -107,7 +107,7 @@ def _commit() -> str:
 
 
 def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | None, reasoning: str,
-        convention: str, ids: list[str] | None) -> Path:
+        convention: str, ids: list[str] | None, name_model: str | None = None, name_reasoning: str | None = None) -> Path:
     from events import footage as fo
     from events.model import Spend, SpendCapReached, openrouter
     from events.passes import Settings, annotate
@@ -119,7 +119,8 @@ def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | 
     (out / "out").mkdir(parents=True, exist_ok=True)
     spend = Spend(cap)
     call = openrouter(model, reasoning=reasoning, spend=spend)
-    meta = {"model": model, "reasoning": reasoning, "passes": passes, "split": which, "convention": convention,
+    name_call = openrouter(name_model, reasoning=name_reasoning or reasoning, spend=spend) if name_model else None
+    meta = {"model": model, "reasoning": reasoning, "name_model": name_model, "name_reasoning": name_reasoning, "passes": passes, "split": which, "convention": convention,
             "commit": _commit(), "cap_usd": cap, "episodes": picks, "started": stamp}
     (out / "run.json").write_text(json.dumps(meta, indent=1))
     lock = threading.Lock()
@@ -131,7 +132,7 @@ def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | 
             fp = fo.decode([fo.Camera("camera", RAW / f"{eid}.mp4")])
             settings = Settings(convention=convention, rig=RIG[source(eid)], instruction=gold[eid]["instruction"],
                                 passes=passes)
-            res = annotate(fp, settings, call)
+            res = annotate(fp, settings, call, name_call)
             doc = {"id": eid, "duration_s": fp.duration_s, **res.to_dict(), "seconds": round(time.monotonic() - t0, 1)}
             dest.write_text(json.dumps(doc, indent=1))
             return eid, f"ok {len(res.events)} events ${doc['cost_usd']:.4f}"
@@ -240,6 +241,13 @@ class Judge:
         raise RuntimeError(f"judge gave no verdict for {ref!r} / {pred!r}")
 
 
+DURATION_BINS = ("<2s", "2-4s", "4-8s", "8-16s", ">=16s")
+
+
+def duration_bin(d: float) -> str:
+    return "<2s" if d < 2 else "2-4s" if d < 4 else "4-8s" if d < 8 else "8-16s" if d < 16 else ">=16s"
+
+
 def _f1(tp: int, n_pred: int, n_gold: int) -> dict:
     p = tp / n_pred if n_pred else 0.0
     r = tp / n_gold if n_gold else 0.0
@@ -291,9 +299,24 @@ def score(run_dir: Path, ref: str, judge_model: str | None, jobs: int) -> dict:
             for i, j in rec[key]["pairs"]:
                 matched += 1
                 tp += verdicts[(rec["instruction"], rec["gold_labels"][j], rec["labels"][i])]
-        return {"segment": _f1(matched, n_pred, n_gold), "semantic": _f1(tp, n_pred, n_gold),
-                "label_accuracy": round(tp / matched, 4) if matched else 0.0,
-                "matched": matched, "accepted": tp, "predicted": n_pred, "gold": n_gold}
+        out = {"segment": _f1(matched, n_pred, n_gold), "semantic": _f1(tp, n_pred, n_gold),
+               "label_accuracy": round(tp / matched, 4) if matched else 0.0,
+               "matched": matched, "accepted": tp, "predicted": n_pred, "gold": n_gold}
+        if len(eids) > 1:
+            per = [tally([e], key) for e in eids]
+            out["macro"] = {"semantic_f1": round(sum(p["semantic"]["f1"] for p in per) / len(per), 4),
+                            "segment_f1": round(sum(p["segment"]["f1"] for p in per) / len(per), 4)}
+            bins: dict[str, list[int]] = {b: [0, 0] for b in DURATION_BINS}
+            for eid in eids:
+                rec = per_ep.get(eid)
+                hit = {j for _i, j in rec[key]["pairs"]} if rec else set()
+                for j, seg in enumerate(gold[eid]["segments"]):
+                    b = duration_bin(seg["end_sec"] - seg["start_sec"])
+                    bins[b][1] += 1
+                    bins[b][0] += j in hit
+            out["temporal_recall_by_duration"] = {b: {"recall": round(m / n, 4) if n else None, "matched": m, "gold": n}
+                                                  for b, (m, n) in bins.items()}
+        return out
 
     by_src: dict[str, list[str]] = {}
     for eid in meta["episodes"]:
@@ -320,8 +343,15 @@ def summary(report: dict) -> str:
     for key, by in report["scores"].items():
         lines.append(f"  {key}:")
         for s, v in by.items():
+            macro = v.get("macro") or {}
             lines.append(f"    {s:8s} semF1 {v['semantic']['f1']*100:5.1f}  segF1 {v['segment']['f1']*100:5.1f}  "
-                         f"labelAcc {v['label_accuracy']*100:5.1f}  ({v['accepted']}/{v['matched']} of {v['gold']} gold, {v['predicted']} pred)")
+                         f"labelAcc {v['label_accuracy']*100:5.1f}  macro sem/seg {macro.get('semantic_f1', 0)*100:5.1f}/"
+                         f"{macro.get('segment_f1', 0)*100:5.1f}  ({v['accepted']}/{v['matched']} of {v['gold']} gold, "
+                         f"{v['predicted']} pred)")
+        short = by["all"].get("temporal_recall_by_duration", {})
+        if short:
+            lines.append("    recall by gold duration: " + "  ".join(
+                f"{b} {x['matched']}/{x['gold']}" for b, x in short.items()))
     return "\n".join(lines)
 
 
@@ -338,6 +368,8 @@ def main() -> int:
     p.add_argument("--split", default="dev", choices=["dev", "test", "all"])
     p.add_argument("--ids", nargs="*", default=None)
     p.add_argument("--passes", type=int, default=3)
+    p.add_argument("--name-model", default=None, help="name the events with this model (default: --model)")
+    p.add_argument("--name-reasoning", default=None)
     p.add_argument("--convention", default="wgo")
     p.add_argument("--cap", type=float, required=True, help="stop starting calls once this many dollars are spent")
     p.add_argument("--jobs", type=int, default=6)
@@ -354,7 +386,8 @@ def main() -> int:
     elif a.cmd == "split":
         split()
     elif a.cmd == "run":
-        run(a.model, a.split, a.passes, a.cap, a.jobs, a.name, a.reasoning, a.convention, a.ids)
+        run(a.model, a.split, a.passes, a.cap, a.jobs, a.name, a.reasoning, a.convention, a.ids, a.name_model,
+            a.name_reasoning)
     else:
         report = score(a.run, a.gold, a.judge, a.jobs)
         print(summary(report))

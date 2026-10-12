@@ -19,7 +19,7 @@ BG = (18, 18, 20)
 
 
 def sheet(tiles: list[tuple[float, dict[str, bytes]]], cameras: list[str], cols: int, *, roles: list[str] | None = None,
-          cell_w: int | None = None, quality: int = 88) -> bytes:
+          cell_w: int | None = None, quality: int = 88, png: bool = False) -> bytes:
     """One JPEG sheet. tiles: [(t_s, {camera: jpeg})]. roles, when given, is one word per tile shown after the time.
     cell_w, when given, shrinks every picture to at most that width (never enlarges)."""
     from PIL import Image, ImageDraw
@@ -50,12 +50,16 @@ def sheet(tiles: list[tuple[float, dict[str, bytes]]], cameras: list[str], cols:
                 g.paste(im, (x + (w - im.width) // 2, yy))
             yy += h + GAP
     buf = io.BytesIO()
-    g.save(buf, format="JPEG", quality=quality)
+    if png:
+        g.save(buf, format="PNG", optimize=True)
+    else:
+        g.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
 
 
-def image_part(jpeg: bytes, detail: str = "high") -> dict:
-    return {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii"),
+def image_part(data: bytes, detail: str = "high") -> dict:
+    mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii"),
                                                "detail": detail}}
 
 

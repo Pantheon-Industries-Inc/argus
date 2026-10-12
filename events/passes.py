@@ -35,7 +35,7 @@ OVERVIEW_COLS, OVERVIEW_ROWS = 8, 6
 OVERVIEW_CELL_W = 224
 NAME_PER_ROLE = 5
 NAME_BATCH = 8
-NAME_CELL_W = 320
+NAME_ATLAS_MAX_PX = 1800 * 1800  # an atlas past this splits into parts; its pictures are never shrunk
 MIN_EVENT_S = 0.1
 
 
@@ -75,14 +75,16 @@ class Result:
                 "cost_usd": round(sum(c.get("cost_usd") or 0.0 for c in self.calls), 6)}
 
 
-def annotate(footage: Footage, settings: Settings, call: Caller) -> Result:
+def annotate(footage: Footage, settings: Settings, call: Caller, name_call: Caller | None = None) -> Result:
+    """name_call, when given, names the events with another (usually stronger) model: finding and timing events
+    take most of the images, naming takes few, so a stronger namer costs little."""
     calls: list[dict] = []
     notes: list[str] = []
     events = find(footage, settings, call, calls)
     if settings.passes >= 2 and events:
         events = refine(footage, settings, call, calls, notes, events)
     if settings.passes >= 3 and events:
-        events = name(footage, settings, call, calls, notes, events)
+        events = name(footage, settings, name_call or call, calls, notes, events)
     return Result(events, calls, notes)
 
 
@@ -195,6 +197,16 @@ def _instants(e: Event | None, n: int) -> list[float]:
     return [e.start_s + span * (j + 0.5) / n for j in range(n)]
 
 
+def _atlas_parts(tiles: list, roles: list, footage: Footage) -> list[tuple[list, list]]:
+    """The atlas's tiles in as few chronological parts as keep each part under NAME_ATLAS_MAX_PX: an oversized atlas
+    splits rather than shrinking its pictures."""
+    w, h = max((s for s in footage.sizes.values()), default=(448, 252))
+    w, h = min(w, 448), min(h, round(h * 448 / w)) if w > 448 else h
+    tile_px = (w + 4) * (h * max(1, len(footage.cameras)) + 34)
+    per = max(NAME_PER_ROLE, (NAME_ATLAS_MAX_PX // max(1, tile_px)) // NAME_PER_ROLE * NAME_PER_ROLE)
+    return [(tiles[i:i + per], roles[i:i + per]) for i in range(0, len(tiles), per)]
+
+
 def name(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,
          events: list[Event]) -> list[Event]:
     from events.sheets import sheet
@@ -204,19 +216,22 @@ def name(footage: Footage, settings: Settings, call: Caller, calls: list, notes:
         for i, e in batch:
             prev = events[i - 1] if i > 0 else None
             nxt = events[i + 1] if i + 1 < len(events) else None
-            tiles, roles = [], []
+            tiles, roles, seen = [], [], set()
             for role, ev in (("prev", prev), ("this", e), ("next", nxt)):
-                seen = set()
                 for t in _instants(ev, NAME_PER_ROLE):
                     k = footage.index(t)
-                    if k in seen:
+                    if k in seen:  # a capture shared by two roles appears once, under the earlier role
                         continue
                     seen.add(k)
                     tiles.append((k / 8, footage.at(t)))
                     roles.append(role)
             lines.append(f"- e{i}: {e.start_s:.2f}-{e.end_s:.2f} s (found as \"{e.label}\")")
-            atlases.append((f"=== atlas for e{i}: {e.start_s:.2f}-{e.end_s:.2f} s ===",
-                            sheet(tiles, footage.cameras, NAME_PER_ROLE, roles=roles, cell_w=NAME_CELL_W)))
+            mapping = "; ".join(f"{r}: " + ", ".join(f"{t:.2f}s" for (t, _c), rr in zip(tiles, roles) if rr == r)
+                                for r in ("prev", "this", "next") if r in roles)
+            for part, (tt, rr) in enumerate(_atlas_parts(tiles, roles, footage)):
+                atlases.append((f"=== atlas for e{i}{f' (part {part + 1})' if part else ''}: "
+                                f"{e.start_s:.2f}-{e.end_s:.2f} s; tiles by role: {mapping} ===",
+                                sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, png=True)))
         text = prompts.NAME.format(events="\n".join(lines),
                                    vocabulary=prompts.vocabulary_line(settings.skills, settings.parts),
                                    **_header(settings, footage))

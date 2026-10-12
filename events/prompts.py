@@ -38,6 +38,8 @@ across the whole recording, read left to right then top to bottom, each tile hea
 {instruction}
 
 List every event in the recording, in time order, with its start and end time in seconds and a short label.
+Report the actions that were actually completed in the pictures, not the task's intended outcome: an instruction
+may name steps that never happen, and the recording may hold actions the instruction does not mention.
 
 {convention}
 
@@ -73,8 +75,9 @@ do not add or drop events.
 {cameras}
 {instruction}
 
-For each event you get one atlas: up to five instants from the previous event (prev), up to five from this event
-(this) and up to five from the next event (next), each tile headed with its time and role. Name only what happens
+For each event you get one atlas (lossless, sometimes in parts): up to five instants from the previous event (prev),
+up to five from this event (this) and up to five from the next event (next), in time order, each tile headed with
+its time and role; the atlas caption maps every tile time to its role. Name only what happens
 during "this"; use prev and next to tell where an object came from and where it ends up.
 
 {convention}
@@ -85,7 +88,11 @@ Events to name:
 Answer with JSON only: {{"events": [{{"id": "e3", "label": "...", "skill": "...", "parts": ["..."],
 "objects": ["..."], "destination": "... or null"}}]}} with one entry per event listed. The label is one short
 self-contained phrase in the imperative ("pick up the blue mug from the shelf and place it in the sink"), naming
-the object by colour, material or position when that tells it apart from similar objects."""
+the object by colour, material or position when that tells it apart from similar objects. Name objects as specifically
+as the pictures allow ("the stainless steel cup", "the black toy wheel", never "the item" or "the piece"); say where
+an object is put relative to a nearby object ("next to the grey bag"); when a tool is used, name the tool and what it
+acts on ("use the green screwdriver to tighten the screw on the wheel"). Describe everything done in the interval, in
+order, joined with "then" when there is more than one step."""
 
 
 DENSITY = {
