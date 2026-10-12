@@ -39,6 +39,21 @@ NAME_ATLAS_MAX_PX = 2400 * 2400  # an atlas past this splits into parts; its pic
 MIN_EVENT_S = 0.1
 
 
+# A request's images, as bytes before base64: OpenRouter refuses more than 30 MB of downloaded image content, and
+# base64 adds a third, so the passes keep each request under this and step their cells down to fit.
+IMAGE_BUDGET_BYTES = 18 * 1024 * 1024
+CELL_STEPS = (448, 384, 320, 256, 224, 192, 160)
+
+
+def fitting(build, cell_w: int, budget: int = IMAGE_BUDGET_BYTES):
+    """build(cell_w) -> [(caption, bytes)], at the widest cell width at or under cell_w whose images fit the budget."""
+    for w in [cell_w] + [c for c in CELL_STEPS if c < cell_w]:
+        images = build(w)
+        if sum(len(b) for _c, b in images) <= budget:
+            return images
+    raise PassError(f"the request's images exceed {budget} bytes even at {CELL_STEPS[-1]} px cells")
+
+
 class PassError(RuntimeError):
     """A pass could not produce a usable answer."""
 
@@ -173,7 +188,7 @@ def find(footage: Footage, settings: Settings, call: Caller, calls: list) -> lis
     while len(footage.times(fps)) > MAX_FIND_IMAGES * FIND_COLS * FIND_ROWS and fps > 1:
         fps //= 2
     times = footage.times(fps)
-    images = sheets(footage, times, FIND_COLS, FIND_ROWS, cell_w=FIND_CELL_W)
+    images = fitting(lambda w: sheets(footage, times, FIND_COLS, FIND_ROWS, cell_w=w), FIND_CELL_W)
     text = prompts.FIND.format(step=1 / fps, duration=footage.duration_s, **_header(settings, footage))
     rows = None
     for _attempt in range(2):  # one retry: a find pass that does not parse leaves the episode with nothing
@@ -200,19 +215,25 @@ def refine(footage: Footage, settings: Settings, call: Caller, calls: list, note
     overview = sheets(footage, footage.times(OVERVIEW_FPS), OVERVIEW_COLS, OVERVIEW_ROWS, cell_w=OVERVIEW_CELL_W)
     for b0 in range(0, len(events), NAME_BATCH):
         batch = list(enumerate(events[b0:b0 + NAME_BATCH], start=b0))
-        ids, lines, closeups = [], [], []
+        ids, lines = [], []
         for i, e in batch:
             for edge, t in (("start", e.start_s), ("end", e.end_s)):
                 bid = f"e{i}.{edge}"
                 ids.append((bid, i, edge, t))
                 lines.append(f"- {bid}: the {edge} of \"{e.label}\" ({e.start_s:.2f}-{e.end_s:.2f} s), proposed at {t:.2f} s")
+
+        def closeups(w: int, ids=ids) -> list:
+            out = []
+            for bid, _i, _edge, t in ids:
                 ts = footage.times(8, t - REFINE_WINDOW_S, t + REFINE_WINDOW_S)
-                for caption, jpeg in sheets(footage, ts, REFINE_COLS, 5, cell_w=REFINE_CELL_W):
-                    closeups.append((f"=== close-up for {bid} ===\n" + caption, jpeg))
+                for caption, jpeg in sheets(footage, ts, REFINE_COLS, 5, cell_w=w):
+                    out.append((f"=== close-up for {bid} ===\n" + caption, jpeg))
+            return out
+        images = fitting(lambda w: overview + closeups(w), REFINE_CELL_W)
         text = prompts.REFINE.format(overview_step=1 / OVERVIEW_FPS, window=REFINE_WINDOW_S,
                                      boundaries="\n".join(lines), **_header(settings, footage))
-        reply = call(_content(text, overview + closeups), "refine")
-        _record(calls, "refine", reply, len(overview) + len(closeups))
+        reply = call(_content(text, images), "refine")
+        _record(calls, "refine", reply, len(images))
         doc = parse_json(reply.text)
         got = {}
         for r in (doc.get("boundaries") if isinstance(doc, dict) else None) or []:
@@ -256,31 +277,52 @@ def _atlas_parts(tiles: list, roles: list, footage: Footage) -> list[tuple[list,
     return [(tiles[i:i + per], roles[i:i + per]) for i in range(0, len(tiles), per)]
 
 
+def _atlas(footage: Footage, events: list[Event], i: int) -> tuple[str, list[tuple[str, bytes]]]:
+    """Event i's request line and its atlas images: prev, this and next instants, each capture once."""
+    from events.sheets import sheet
+    e = events[i]
+    prev = events[i - 1] if i > 0 else None
+    nxt = events[i + 1] if i + 1 < len(events) else None
+    tiles, roles, seen = [], [], set()
+    for role, ev in (("prev", prev), ("this", e), ("next", nxt)):
+        for t in _instants(ev, NAME_PER_ROLE, ends=role == "this"):
+            k = footage.index(t)
+            if k in seen:  # a capture shared by two roles appears once, under the earlier role
+                continue
+            seen.add(k)
+            tiles.append((k / 8, footage.at(t)))
+            roles.append(role)
+    mapping = "; ".join(f"{r}: " + ", ".join(f"{t:.2f}s" for (t, _c), rr in zip(tiles, roles) if rr == r)
+                        for r in ("prev", "this", "next") if r in roles)
+    images = []
+    for part, (tt, rr) in enumerate(_atlas_parts(tiles, roles, footage)):
+        caption = (f"=== atlas for e{i}{f' (part {part + 1})' if part else ''}: {e.start_s:.2f}-{e.end_s:.2f} s; "
+                   f"tiles by role: {mapping} ===")
+        png = sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, png=True)
+        # lossless unless one event's atlas alone would crowd the request's image budget
+        images.append((caption, png if len(png) <= IMAGE_BUDGET_BYTES // NAME_BATCH
+                       else sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, quality=95)))
+    return f"- e{i}: {e.start_s:.2f}-{e.end_s:.2f} s (found as \"{e.label}\")", images
+
+
 def name(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,
          events: list[Event]) -> list[Event]:
-    from events.sheets import sheet
-    for b0 in range(0, len(events), NAME_BATCH):
-        batch = list(enumerate(events[b0:b0 + NAME_BATCH], start=b0))
-        lines, atlases = [], []
-        for i, e in batch:
-            prev = events[i - 1] if i > 0 else None
-            nxt = events[i + 1] if i + 1 < len(events) else None
-            tiles, roles, seen = [], [], set()
-            for role, ev in (("prev", prev), ("this", e), ("next", nxt)):
-                for t in _instants(ev, NAME_PER_ROLE, ends=role == "this"):
-                    k = footage.index(t)
-                    if k in seen:  # a capture shared by two roles appears once, under the earlier role
-                        continue
-                    seen.add(k)
-                    tiles.append((k / 8, footage.at(t)))
-                    roles.append(role)
-            lines.append(f"- e{i}: {e.start_s:.2f}-{e.end_s:.2f} s (found as \"{e.label}\")")
-            mapping = "; ".join(f"{r}: " + ", ".join(f"{t:.2f}s" for (t, _c), rr in zip(tiles, roles) if rr == r)
-                                for r in ("prev", "this", "next") if r in roles)
-            for part, (tt, rr) in enumerate(_atlas_parts(tiles, roles, footage)):
-                atlases.append((f"=== atlas for e{i}{f' (part {part + 1})' if part else ''}: "
-                                f"{e.start_s:.2f}-{e.end_s:.2f} s; tiles by role: {mapping} ===",
-                                sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, png=True)))
+    """Name every event, at most NAME_BATCH per request and within the request's image budget."""
+    built = [_atlas(footage, events, i) for i in range(len(events))]
+    batches, cur, size = [], [], 0
+    for i, (_line, images) in enumerate(built):
+        n = sum(len(b) for _c, b in images)
+        if cur and (len(cur) == NAME_BATCH or size + n > IMAGE_BUDGET_BYTES):
+            batches.append(cur)
+            cur, size = [], 0
+        cur.append(i)
+        size += n
+    if cur:
+        batches.append(cur)
+    for idx in batches:
+        batch = [(i, events[i]) for i in idx]
+        lines = [built[i][0] for i in idx]
+        atlases = [img for i in idx for img in built[i][1]]
         text = prompts.NAME.format(events="\n".join(lines),
                                    vocabulary=prompts.vocabulary_line(settings.skills, settings.parts),
                                    **_header(settings, footage))
