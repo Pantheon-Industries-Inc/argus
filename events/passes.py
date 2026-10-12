@@ -384,9 +384,11 @@ def _atlas(footage: Footage, events: list[Event], i: int) -> tuple[str, list[tup
         caption = (f"=== atlas for e{i}{f' (part {part + 1})' if part else ''}: {e.start_s:.2f}-{e.end_s:.2f} s; "
                    f"tiles by role: {mapping} ===")
         cell = name_cell_w(footage)
-        png = sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, cell_w=cell, png=True)
-        # lossless unless one event's atlas alone would crowd the request's image budget
-        images.append((caption, png if len(png) <= IMAGE_BUDGET_BYTES // NAME_BATCH
+        # lossless unless one event's atlas alone would crowd the request's image budget; past two cameras an atlas
+        # always would, and an optimized PNG of one costs seconds of CPU before it is thrown away, so it is JPEG
+        png = (sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, cell_w=cell, png=True)
+               if len(footage.cameras) <= 2 else None)
+        images.append((caption, png if png is not None and len(png) <= IMAGE_BUDGET_BYTES // NAME_BATCH
                        else sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, cell_w=cell, quality=95)))
     return f"- e{i}: {e.start_s:.2f}-{e.end_s:.2f} s (found as \"{e.label}\")", images
 
