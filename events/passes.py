@@ -341,12 +341,22 @@ def _instants(e: Event | None, n: int, ends: bool = False) -> list[float]:
     return [e.start_s + span * (j + 0.5) / n for j in range(n)]
 
 
+def name_cell_w(footage: Footage) -> int:
+    """The naming atlases' picture width: the full cell for one or two cameras, narrower for more, so a tile of
+    four stacked cameras holds about the pixels of two (a four-camera UMI rig at 768 px made every event its own
+    request of three 9-megapixel parts, minutes per call)."""
+    from events.footage import CELL_MAX_W
+    cams = max(1, len(footage.cameras))
+    return CELL_MAX_W if cams <= 2 else CELL_MAX_W * 2 // cams
+
+
 def _atlas_parts(tiles: list, roles: list, footage: Footage) -> list[tuple[list, list]]:
     """The atlas's tiles in as few chronological parts as keep each part under NAME_ATLAS_MAX_PX: an oversized atlas
     splits rather than shrinking its pictures."""
     from events.footage import CELL_MAX_W
+    cell = name_cell_w(footage)
     w, h = max((s for s in footage.sizes.values()), default=(CELL_MAX_W, CELL_MAX_W * 9 // 16))
-    w, h = (CELL_MAX_W, round(h * CELL_MAX_W / w)) if w > CELL_MAX_W else (w, h)
+    w, h = (cell, round(h * cell / w)) if w > cell else (w, h)
     tile_px = (w + 4) * (h * max(1, len(footage.cameras)) + 34)
     per = max(NAME_PER_ROLE, (NAME_ATLAS_MAX_PX // max(1, tile_px)) // NAME_PER_ROLE * NAME_PER_ROLE)
     return [(tiles[i:i + per], roles[i:i + per]) for i in range(0, len(tiles), per)]
@@ -373,10 +383,11 @@ def _atlas(footage: Footage, events: list[Event], i: int) -> tuple[str, list[tup
     for part, (tt, rr) in enumerate(_atlas_parts(tiles, roles, footage)):
         caption = (f"=== atlas for e{i}{f' (part {part + 1})' if part else ''}: {e.start_s:.2f}-{e.end_s:.2f} s; "
                    f"tiles by role: {mapping} ===")
-        png = sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, png=True)
+        cell = name_cell_w(footage)
+        png = sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, cell_w=cell, png=True)
         # lossless unless one event's atlas alone would crowd the request's image budget
         images.append((caption, png if len(png) <= IMAGE_BUDGET_BYTES // NAME_BATCH
-                       else sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, quality=95)))
+                       else sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, cell_w=cell, quality=95)))
     return f"- e{i}: {e.start_s:.2f}-{e.end_s:.2f} s (found as \"{e.label}\")", images
 
 
