@@ -107,7 +107,8 @@ def _commit() -> str:
 
 
 def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | None, reasoning: str,
-        convention: str, ids: list[str] | None, name_model: str | None = None, name_reasoning: str | None = None) -> Path:
+        convention: str, ids: list[str] | None, name_model: str | None = None, name_reasoning: str | None = None,
+        resume: Path | None = None) -> Path:
     from events import footage as fo
     from events.model import Spend, SpendCapReached, openrouter
     from events.passes import Settings, annotate
@@ -147,7 +148,7 @@ def run(model: str, which: str, passes: int, cap: float, jobs: int, name: str | 
             eid, msg = fut.result()
             with lock:
                 print(f"{eid}: {msg}  (spent ${spend.spent:.4f})", flush=True)
-    meta["spent_usd"] = round(spend.spent, 6)
+    meta["spent_usd"] = round(meta.get("spent_usd", 0.0) + spend.spent, 6)
     (out / "run.json").write_text(json.dumps(meta, indent=1))
     print(out)
     return out
@@ -363,7 +364,8 @@ def main() -> int:
     p.add_argument("--macrodata-gold", type=Path, default=None)
     sub.add_parser("split")
     p = sub.add_parser("run")
-    p.add_argument("--model", required=True)
+    p.add_argument("--model", default=None)
+    p.add_argument("--resume", type=Path, default=None, help="finish this run: its episodes with no output")
     p.add_argument("--reasoning", default="low")
     p.add_argument("--split", default="dev", choices=["dev", "test", "all"])
     p.add_argument("--ids", nargs="*", default=None)
@@ -386,8 +388,10 @@ def main() -> int:
     elif a.cmd == "split":
         split()
     elif a.cmd == "run":
+        if not a.model and not a.resume:
+            raise SystemExit("--model or --resume")
         run(a.model, a.split, a.passes, a.cap, a.jobs, a.name, a.reasoning, a.convention, a.ids, a.name_model,
-            a.name_reasoning)
+            a.name_reasoning, a.resume)
     else:
         report = score(a.run, a.gold, a.judge, a.jobs)
         print(summary(report))

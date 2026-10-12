@@ -6,6 +6,7 @@ sends the same content through its metered, traced and rate-limited effect door,
 """
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import threading
@@ -67,7 +68,7 @@ class Spend:
             self.spent += usd or 0.0
 
 
-def openrouter(model: str, *, reasoning: str | None = "low", max_tokens: int = 16000, timeout: int = 600,
+def openrouter(model: str, *, reasoning: str | None = "low", max_tokens: int = 32000, timeout: int = 600,
                spend: Spend | None = None, on_reply: Callable[[str, list, Reply], None] | None = None) -> Caller:
     from label import harness
     keys = harness.get_keys()
@@ -78,7 +79,17 @@ def openrouter(model: str, *, reasoning: str | None = "low", max_tokens: int = 1
         if spend is not None:
             spend.check()
         t0 = time.monotonic()
-        resp = harness.call_model(content, model, reasoning or "low", keys[0], max_tokens, timeout)
+        for attempt in range(3):
+            try:
+                resp = harness.call_model(content, model, reasoning or "low", keys[0], max_tokens, timeout)
+                break
+            except (http.client.HTTPException, ConnectionError) as e:
+                # a connection dropped mid-answer (long image requests through a proxy): the call may have been
+                # billed, so this is a laptop and bench convenience; production calls go through the platform's
+                # effect door, which never resends an unsettled paid call
+                if attempt == 2:
+                    raise
+                time.sleep(5 * (attempt + 1))
         usage = resp.get("usage") or {}
         msg = (resp.get("choices") or [{}])[0].get("message") or {}
         reply = Reply(text=msg.get("content") or "", usage=usage, cost=harness._cost(usage),
