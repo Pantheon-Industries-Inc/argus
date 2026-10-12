@@ -31,6 +31,8 @@ class Camera:
     path: Path
     start_s: float = 0.0  # the episode's start in the file (packed files); 0 for one file per episode
     end_s: float | None = None  # the episode's end in the file, or the file's end
+    times: list[float] | None = None  # each frame's time in seconds, in decode order, when the file's pts are not
+    # the episode's clock (a stream remuxed out of an MCAP keeps its log times beside it)
 
 
 @dataclass
@@ -88,7 +90,7 @@ def decode(cameras: list[Camera], cell_max_w: int = CELL_MAX_W) -> Footage:
         with av.open(str(cam.path)) as c:
             s = c.streams.video[0]
             s.codec_context.thread_count = 2
-            if cam.start_s > 0:
+            if cam.start_s > 0 and cam.times is None:
                 c.seek(int(cam.start_s / s.time_base), stream=s, backward=True, any_frame=False)
             pending = None  # [frame, jpeg or None]: the latest frame decoded, encoded only once it is kept
             next_k, last_t = 0, 0.0
@@ -100,10 +102,15 @@ def decode(cameras: list[Camera], cell_max_w: int = CELL_MAX_W) -> Footage:
                     pending[1] = _jpeg(im, cell_max_w)
                 by_k[k] = pending[1]
 
-            for fr in c.decode(s):
-                if fr.pts is None:
+            for n, fr in enumerate(c.decode(s)):
+                if cam.times is not None:
+                    if n >= len(cam.times):
+                        break
+                    t = cam.times[n] - cam.start_s
+                elif fr.pts is None:
                     continue
-                t = float(fr.pts * s.time_base) - cam.start_s
+                else:
+                    t = float(fr.pts * s.time_base) - cam.start_s
                 if t < -1e-6:
                     continue
                 if cam.end_s is not None and t > cam.end_s - cam.start_s + 1e-6:

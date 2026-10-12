@@ -78,3 +78,19 @@ def test_times_are_grid_instants_including_both_ends():
     fp = _footage(4.0)
     assert fp.times(4)[:3] == [0.0, 0.25, 0.5] and fp.times(4)[-1] == 4.0
     assert fp.times(8, 1.0, 1.5) == [1.0, 1.125, 1.25, 1.375, 1.5]
+
+
+def test_summary_pass_is_strict_about_outcome():
+    import pytest
+    fp = _footage()
+    replies = {"find": '{"events": [{"start_s": 0.5, "end_s": 2.0, "label": "pick cup"}]}',
+               "summary": '{"task_summary": "put the cup in the bowl", "matches_given": null, "outcome": "success", '
+                          '"goal_reached_at_s": 3.0, "reason": "cup inside bowl at the end", "scene": {"setting": "table", '
+                          '"objects": [{"name": "cup", "location": "left"}]}, "issues": [{"kind": "operator_mistake", '
+                          '"category": "drop", "severity": "bogus", "t_s": 1.0, "note": "cup slips"}, {"kind": "x"}]}'}
+    res = passes.annotate(fp, passes.Settings(passes=1, summary=True), lambda c, p: Reply(text=replies[p]))
+    assert res.summary["outcome"] == "success" and res.summary["issues"] == [
+        {"kind": "operator_mistake", "category": "drop", "severity": "medium", "t_s": 1.0, "note": "cup slips"}]
+    replies["summary"] = '{"task_summary": "x", "outcome": "maybe"}'
+    with pytest.raises(passes.PassError):
+        passes.annotate(fp, passes.Settings(passes=1, summary=True), lambda c, p: Reply(text=replies[p]))

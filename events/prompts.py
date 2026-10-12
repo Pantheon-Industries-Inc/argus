@@ -109,6 +109,36 @@ def convention_text(convention: str, rig: str) -> str:
     return CONVENTIONS[convention].format(density=DENSITY.get(rig, ""))
 
 
+SUMMARY = """\
+You are reviewing a recording of manipulation whose events are already listed with their times.
+{cameras}
+{instruction}
+
+First comes the whole recording at one instant every {overview_step:.0f} s, then its first and its last instant at full
+size. Every tile is headed with its time in seconds.
+
+The events found in the recording:
+{events}
+
+Judge the recording as a whole, from the pictures. Treat the instruction and the event list as claims to check.
+- task_summary: the task actually demonstrated, as the most specific end state the demonstrator worked toward.
+- matches_given: whether that is the given instruction (true, false, or null when none was given).
+- outcome: "success" when the demonstrated task's end state is reached and still holds at the end, "partial" when
+  part of it is, "failure" when it is not, "unclear" when the pictures cannot tell; goal_reached_at_s is the first
+  instant the end state holds (null unless success or partial); reason says what in the pictures decided it.
+- scene: the setting in a few words, and the objects that matter, each with where it starts.
+- issues: what would make this recording bad training data. kind "operator_mistake" for something the demonstrator
+  did wrong (a drop, a collision, a fumbled grasp, an unnecessary detour, an undone step); kind "data_issue" for a
+  problem with the recording itself (a camera blocked or out of focus, frozen or skipped frames, the instruction not
+  matching what was done, the task cut off). Give each a short category, a severity (low, medium or high), the time
+  it happens (or null) and a note naming what is seen. An empty list when there is none.
+
+Answer with JSON only: {{"task_summary": "...", "matches_given": true, "outcome": "success",
+"goal_reached_at_s": 0.0, "reason": "...", "scene": {{"setting": "...", "objects": [{{"name": "...",
+"location": "..."}}]}}, "issues": [{{"kind": "operator_mistake", "category": "...", "severity": "low", "t_s": 0.0,
+"note": "..."}}]}}"""
+
+
 def instruction_line(instruction: str | None) -> str:
     if not instruction:
         return "No task instruction was given: infer what the person or robot is doing from the pictures."

@@ -62,6 +62,7 @@ class Settings:
     skills: list[str] | None = None
     parts: list[str] | None = None
     passes: int = 3
+    summary: bool = False  # a fourth call judging the whole episode: task, outcome, scene and issues
 
 
 @dataclass
@@ -69,9 +70,11 @@ class Result:
     events: list[Event]
     calls: list[dict]
     notes: list[str]
+    summary: dict | None = None
 
     def to_dict(self) -> dict:
-        return {"events": [asdict(e) for e in self.events], "calls": self.calls, "notes": self.notes,
+        return {"events": [asdict(e) for e in self.events], "summary": self.summary, "calls": self.calls,
+                "notes": self.notes,
                 "cost_usd": round(sum(c.get("cost_usd") or 0.0 for c in self.calls), 6)}
 
 
@@ -85,7 +88,48 @@ def annotate(footage: Footage, settings: Settings, call: Caller, name_call: Call
         events = refine(footage, settings, call, calls, notes, events)
     if settings.passes >= 3 and events:
         events = name(footage, settings, name_call or call, calls, notes, events)
-    return Result(events, calls, notes)
+    summary = summarize(footage, settings, name_call or call, calls, events) if settings.summary else None
+    return Result(events, calls, notes, summary)
+
+
+OUTCOMES = ("success", "partial", "failure", "unclear")
+SEVERITIES = ("low", "medium", "high")
+ISSUE_KINDS = ("operator_mistake", "data_issue")
+
+
+def summarize(footage: Footage, settings: Settings, call: Caller, calls: list, events: list[Event]) -> dict:
+    """The episode as a whole: what task was done, whether it succeeded, the scene and what is wrong with it.
+    Strict: a reply missing the outcome fails the episode rather than inventing one."""
+    from events.sheets import sheet
+    overview = sheets(footage, footage.times(OVERVIEW_FPS), OVERVIEW_COLS, OVERVIEW_ROWS, cell_w=OVERVIEW_CELL_W)
+    ends = [("=== first instant ===", sheet([(0.0, footage.at(0.0))], footage.cameras, 1, png=True)),
+            ("=== last instant ===", sheet([(footage.duration_s, footage.at(footage.duration_s))], footage.cameras, 1,
+                                          png=True))]
+    listing = "\n".join(f"- {e.start_s:.2f}-{e.end_s:.2f} s: {e.label}" for e in events) or "- none found"
+    text = prompts.SUMMARY.format(overview_step=1 / OVERVIEW_FPS, events=listing, **_header(settings, footage))
+    reply = call(_content(text, overview + ends), "summary")
+    _record(calls, "summary", reply, len(overview) + len(ends))
+    doc = parse_json(reply.text)
+    if not isinstance(doc, dict) or doc.get("outcome") not in OUTCOMES or not str(doc.get("task_summary") or "").strip():
+        raise PassError("summary: the reply has no task and outcome")
+    issues = []
+    for r in doc.get("issues") or []:
+        if not isinstance(r, dict) or r.get("kind") not in ISSUE_KINDS or not str(r.get("note") or "").strip():
+            continue
+        t = r.get("t_s")
+        issues.append({"kind": r["kind"], "category": str(r.get("category") or r["kind"]).strip(),
+                       "severity": r.get("severity") if r.get("severity") in SEVERITIES else "medium",
+                       "t_s": float(t) if isinstance(t, (int, float)) else None, "note": str(r["note"]).strip()})
+    scene = doc.get("scene") if isinstance(doc.get("scene"), dict) else {}
+    goal = doc.get("goal_reached_at_s")
+    return {"task_summary": str(doc["task_summary"]).strip(),
+            "matches_given": doc.get("matches_given") if isinstance(doc.get("matches_given"), bool) else None,
+            "outcome": doc["outcome"], "goal_reached_at_s": float(goal) if isinstance(goal, (int, float)) else None,
+            "reason": str(doc.get("reason") or "").strip(),
+            "scene": {"setting": str(scene.get("setting") or "").strip(),
+                      "objects": [{"name": str(o.get("name")), "location": str(o.get("location") or "")}
+                                  for o in scene.get("objects") or [] if isinstance(o, dict) and o.get("name")]},
+            "issues": issues}
 
 
 def _header(settings: Settings, footage: Footage) -> dict:
