@@ -135,3 +135,35 @@ def test_refine_asks_fewer_boundaries_per_request_when_the_images_do_not_fit(mon
     monkeypatch.setattr(passes, "fitting", fitting)
     passes.refine(fp, passes.Settings(), call, [], [], events)
     assert asked == [2, 2, 2, 2]
+
+
+def _four_camera_footage(moving: str, duration=4.0):
+    import io
+    from PIL import Image
+
+    def jpeg(shade):
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 36), (shade, shade, shade)).save(buf, format="JPEG")
+        return buf.getvalue()
+
+    n = int(duration * 8)
+    still = jpeg(40)
+    cams = ["head_left", "head_right", "wrist_left", "wrist_right"]
+    cells = {c: {k: (jpeg(40 + (k % 2) * 150) if c == moving else still) for k in range(n + 1)} for c in cams}
+    return Footage(duration_s=duration, cells=cells, sizes={c: (64, 36) for c in cams})
+
+
+def test_naming_shows_the_heads_and_the_acting_wrist():
+    chosen = passes.NameViews(fixed=["head_left", "head_right"], choose=["wrist_left", "wrist_right"],
+                              by_part={"left_gripper": "wrist_left", "right_gripper": "wrist_right"})
+    settings = passes.Settings(convention="sx_label", name_views=chosen)
+    fp = _four_camera_footage("wrist_right")
+    e = passes.Event(0.5, 2.5, "pick")
+    assert passes.views(fp, settings, e) == ["head_left", "head_right", "wrist_right"]
+    # parts that name one wrist decide without looking at motion
+    e.parts = ["left_gripper"]
+    assert passes.views(fp, settings, e) == ["head_left", "head_right", "wrist_left"]
+    # two cameras or no choice configured: every camera, as before
+    assert passes.views(fp, passes.Settings(), e) == fp.cameras
+    line, images = passes._atlas(fp, [passes.Event(0.5, 2.5, "pick")], 0, settings)
+    assert "each tile stacks head_left, head_right, wrist_right" in images[0][0]

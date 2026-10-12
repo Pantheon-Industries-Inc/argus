@@ -70,6 +70,16 @@ class Event:
 
 
 @dataclass
+class NameViews:
+    """Which cameras a naming atlas shows on a rig with more than two: always ``fixed`` (the head pair), plus the
+    one camera of ``choose`` that films the acting part, by ``by_part`` when the event's parts name exactly one, or
+    else the one with the most motion during the event. The namer sees at most len(fixed) + 1 views."""
+    fixed: list[str]
+    choose: list[str]
+    by_part: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class Settings:
     convention: str = "wgo"
     rig: str = "ego_head"
@@ -79,6 +89,7 @@ class Settings:
     passes: int = 3
     split: bool = False  # after finding, look inside each longer event for several (first-person video)
     summary: bool = False  # a fourth call judging the whole episode: task, outcome, scene and issues
+    name_views: NameViews | None = None  # past two cameras: which views each naming atlas shows
 
 
 @dataclass
@@ -357,31 +368,67 @@ def _instants(e: Event | None, n: int, ends: bool = False) -> list[float]:
     return [e.start_s + span * (j + 0.5) / n for j in range(n)]
 
 
-def name_cell_w(footage: Footage) -> int:
-    """The naming atlases' picture width: the full cell for one or two cameras, narrower for more, so a tile of
-    four stacked cameras holds about the pixels of two (a four-camera UMI rig at 768 px made every event its own
-    request of three 9-megapixel parts, minutes per call)."""
+def name_cell_w(cameras: int) -> int:
+    """The naming atlases' picture width: the full cell for one or two stacked cameras, 384 px for more, so a tile
+    of three or four stacked cameras stays near the pixels of two (a four-camera UMI rig at 768 px made every event
+    its own request of three 9-megapixel parts, minutes per call)."""
     from events.footage import CELL_MAX_W
-    cams = max(1, len(footage.cameras))
-    return CELL_MAX_W if cams <= 2 else CELL_MAX_W * 2 // cams
+    return CELL_MAX_W if cameras <= 2 else min(CELL_MAX_W, 384)
 
 
-def _atlas_parts(tiles: list, roles: list, footage: Footage) -> list[tuple[list, list]]:
+def motion(footage: Footage, camera: str, e: Event) -> float:
+    """How much one camera's picture changes during the event: the mean absolute difference of consecutive grid
+    instants, on 32-px-wide grey thumbnails."""
+    import io as _io
+
+    from PIL import Image, ImageChops, ImageStat
+    by_k = footage.cells.get(camera) or {}
+    ks = [k for k in range(footage.index(e.start_s), footage.index(e.end_s) + 1) if k in by_k]
+    if len(ks) < 2:
+        return 0.0
+    thumbs = []
+    for k in ks:
+        im = Image.open(_io.BytesIO(by_k[k]))
+        im.draft("L", (64, 64))
+        thumbs.append(im.convert("L").resize((32, max(1, round(32 * im.height / im.width)))))
+    return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean[0] for a, b in zip(thumbs, thumbs[1:])) / (len(ks) - 1)
+
+
+def views(footage: Footage, settings: Settings, e: Event) -> list[str]:
+    """The cameras event e's naming atlas stacks, top to bottom."""
+    cams = footage.cameras
+    chosen = settings.name_views
+    if chosen is None or len(cams) <= 2:
+        return cams
+    fixed = [c for c in chosen.fixed if c in cams]
+    candidates = [c for c in chosen.choose if c in cams]
+    named = list(dict.fromkeys(chosen.by_part[p] for p in e.parts if chosen.by_part.get(p) in candidates))
+    if len(named) == 1:
+        return fixed + named
+    if not candidates:
+        return fixed or cams
+    pool = named or candidates
+    return fixed + [max(pool, key=lambda c: motion(footage, c, e))]
+
+
+def _atlas_parts(tiles: list, roles: list, footage: Footage, cameras: list[str]) -> list[tuple[list, list]]:
     """The atlas's tiles in as few chronological parts as keep each part under NAME_ATLAS_MAX_PX: an oversized atlas
     splits rather than shrinking its pictures."""
     from events.footage import CELL_MAX_W
-    cell = name_cell_w(footage)
-    w, h = max((s for s in footage.sizes.values()), default=(CELL_MAX_W, CELL_MAX_W * 9 // 16))
+    cell = name_cell_w(len(cameras))
+    w, h = max((footage.sizes[c] for c in cameras if c in footage.sizes), default=(CELL_MAX_W, CELL_MAX_W * 9 // 16))
     w, h = (cell, round(h * cell / w)) if w > cell else (w, h)
-    tile_px = (w + 4) * (h * max(1, len(footage.cameras)) + 34)
+    tile_px = (w + 4) * (h * max(1, len(cameras)) + 34)
     per = max(NAME_PER_ROLE, (NAME_ATLAS_MAX_PX // max(1, tile_px)) // NAME_PER_ROLE * NAME_PER_ROLE)
     return [(tiles[i:i + per], roles[i:i + per]) for i in range(0, len(tiles), per)]
 
 
-def _atlas(footage: Footage, events: list[Event], i: int) -> tuple[str, list[tuple[str, bytes]]]:
+def _atlas(footage: Footage, events: list[Event], i: int, settings: Settings | None = None
+           ) -> tuple[str, list[tuple[str, bytes]]]:
     """Event i's request line and its atlas images: prev, this and next instants, each capture once."""
     from events.sheets import sheet
     e = events[i]
+    cams = views(footage, settings, e) if settings is not None else footage.cameras
     prev = events[i - 1] if i > 0 else None
     nxt = events[i + 1] if i + 1 < len(events) else None
     tiles, roles, seen = [], [], set()
@@ -396,23 +443,24 @@ def _atlas(footage: Footage, events: list[Event], i: int) -> tuple[str, list[tup
     mapping = "; ".join(f"{r}: " + ", ".join(f"{t:.2f}s" for (t, _c), rr in zip(tiles, roles) if rr == r)
                         for r in ("prev", "this", "next") if r in roles)
     images = []
-    for part, (tt, rr) in enumerate(_atlas_parts(tiles, roles, footage)):
+    shown = "" if cams == footage.cameras else f"; each tile stacks {', '.join(cams)}"
+    for part, (tt, rr) in enumerate(_atlas_parts(tiles, roles, footage, cams)):
         caption = (f"=== atlas for e{i}{f' (part {part + 1})' if part else ''}: {e.start_s:.2f}-{e.end_s:.2f} s; "
-                   f"tiles by role: {mapping} ===")
-        cell = name_cell_w(footage)
+                   f"tiles by role: {mapping}{shown} ===")
+        cell = name_cell_w(len(cams))
         # lossless unless one event's atlas alone would crowd the request's image budget; past two cameras an atlas
         # always would, and an optimized PNG of one costs seconds of CPU before it is thrown away, so it is JPEG
-        png = (sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, cell_w=cell, png=True)
+        png = (sheet(tt, cams, NAME_PER_ROLE, roles=rr, cell_w=cell, png=True)
                if len(footage.cameras) <= 2 else None)
         images.append((caption, png if png is not None and len(png) <= IMAGE_BUDGET_BYTES // NAME_BATCH
-                       else sheet(tt, footage.cameras, NAME_PER_ROLE, roles=rr, cell_w=cell, quality=95)))
+                       else sheet(tt, cams, NAME_PER_ROLE, roles=rr, cell_w=cell, quality=95)))
     return f"- e{i}: {e.start_s:.2f}-{e.end_s:.2f} s (found as \"{e.label}\")", images
 
 
 def name(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,
          events: list[Event]) -> list[Event]:
     """Name every event, at most NAME_BATCH per request and within the request's image budget."""
-    built = [_atlas(footage, events, i) for i in range(len(events))]
+    built = [_atlas(footage, events, i, settings) for i in range(len(events))]
     batches, cur, size = [], [], 0
     for i, (_line, images) in enumerate(built):
         n = sum(len(b) for _c, b in images)
