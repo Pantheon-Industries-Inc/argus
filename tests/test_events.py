@@ -222,3 +222,20 @@ def test_refine_and_name_requests_run_together_and_land_on_their_own_events(monk
     res = passes.annotate(fp, passes.Settings(), call)
     assert peak[0] > 1
     assert [(round(e.start_s, 2), e.label) for e in res.events] == [(k * 2 + 0.3, f"named {k}") for k in range(4)]
+
+
+def test_find_samples_more_sparsely_when_its_pictures_do_not_fit(monkeypatch):
+    fp = _footage(8.0)
+    real_fitting = passes.fitting
+    monkeypatch.setattr(passes, "sheets", lambda footage, times, *a, **k: [("x", b"\0" * 100 * len(times))])
+    # a budget the 4 fps sheets (33 instants) break at every cell width, and 2 fps (17 instants) fits
+    monkeypatch.setattr(passes, "fitting", lambda build, w, budget=2000: real_fitting(build, w, budget))
+    asked = []
+
+    def call(content, purpose):
+        asked.append(next(c["text"] for c in content if c["type"] == "text"))
+        return Reply(text='{"events": [{"start_s": 0.5, "end_s": 2.0, "label": "pick cup"}]}')
+
+    res = passes.annotate(fp, passes.Settings(passes=1), call)
+    assert [e.label for e in res.events] == ["pick cup"] and len(asked) == 1
+    assert "sampled every 0.50 s" in asked[0]

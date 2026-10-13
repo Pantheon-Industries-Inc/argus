@@ -238,8 +238,15 @@ def find(footage: Footage, settings: Settings, call: Caller, calls: list) -> lis
     fps = FIND_FPS
     while len(footage.times(fps)) > MAX_FIND_IMAGES * FIND_COLS * FIND_ROWS and fps > 1:
         fps //= 2
-    times = footage.times(fps)
-    images = fitting(lambda w: sheets(footage, times, FIND_COLS, FIND_ROWS, cell_w=w), FIND_CELL_W)
+    while True:  # a request whose pictures do not fit even at the smallest cells samples more sparsely instead
+        times = footage.times(fps)
+        try:
+            images = fitting(lambda w: sheets(footage, times, FIND_COLS, FIND_ROWS, cell_w=w), FIND_CELL_W)
+            break
+        except PassError:
+            if fps <= 1:
+                raise
+            fps //= 2
     text = prompts.FIND.format(step=1 / fps, duration=footage.duration_s, **_header(settings, footage))
     rows = None
     for _attempt in range(2):  # one retry: a find pass that does not parse leaves the episode with nothing
