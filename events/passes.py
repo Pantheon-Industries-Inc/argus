@@ -182,6 +182,23 @@ def _content(text: str, images: list[tuple[str, bytes]]) -> list:
     return content
 
 
+CALL_WORKERS = 4
+"""How many of one pass's requests are in flight at once: refine and name batches do not depend on each other, and
+a floor episode's thirty requests one after another took longer than its Job's hour."""
+
+
+def _ask_all(call: Caller, asks: list[tuple[list, str]]) -> list[Reply]:
+    """Every request's reply, in order, at most CALL_WORKERS at once; each runs in a copy of the caller's context so
+    its trace span stays under the reading's."""
+    if len(asks) <= 1:
+        return [call(content, purpose) for content, purpose in asks]
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(CALL_WORKERS, len(asks))) as pool:
+        futures = [pool.submit(contextvars.copy_context().run, call, content, purpose) for content, purpose in asks]
+        return [f.result() for f in futures]
+
+
 def clean(events: list[Event], duration: float, per_part: bool = False) -> list[Event]:
     """Order by start, clip to the recording, drop empty events and resolve overlaps at the midpoint of the overlap.
 
@@ -309,46 +326,50 @@ def refine(footage: Footage, settings: Settings, call: Caller, calls: list, note
 
     b0, size = 0, NAME_BATCH
     while b0 < len(events):
-        batch = list(enumerate(events[b0:b0 + size], start=b0))
-        ids, lines = [], []
-        for i, e in batch:
-            for edge, t in (("start", e.start_s), ("end", e.end_s)):
-                bid = f"e{i}.{edge}"
-                ids.append((bid, i, edge, t))
-                lines.append(f"- {bid}: the {edge} of \"{e.label}\" ({e.start_s:.2f}-{e.end_s:.2f} s), proposed at {t:.2f} s")
+        wave = []  # up to CALL_WORKERS requests, built just before they are asked so their pictures are not all held
+        while b0 < len(events) and len(wave) < CALL_WORKERS:
+            batch = list(enumerate(events[b0:b0 + size], start=b0))
+            ids, lines = [], []
+            for i, e in batch:
+                for edge, t in (("start", e.start_s), ("end", e.end_s)):
+                    bid = f"e{i}.{edge}"
+                    ids.append((bid, i, edge, t))
+                    lines.append(f"- {bid}: the {edge} of \"{e.label}\" ({e.start_s:.2f}-{e.end_s:.2f} s), proposed at {t:.2f} s")
 
-        def closeups(w: int, ids=ids) -> list:
-            out = []
-            for bid, _i, _edge, t in ids:
-                ts = footage.times(8, t - REFINE_WINDOW_S, t + REFINE_WINDOW_S)
-                for caption, jpeg in sheets(footage, ts, REFINE_COLS, 5, cell_w=w):
-                    out.append((f"=== close-up for {bid} ===\n" + caption, jpeg))
-            return out
-        try:
-            images = fitting(lambda w: overview(w) + closeups(w), REFINE_CELL_W)
-        except PassError:
-            if size == 1:
-                raise
-            size = max(1, size // 2)  # many cameras: fewer boundaries per request rather than none
-            continue
-        b0 += len(batch)
-        text = prompts.REFINE.format(overview_step=1 / OVERVIEW_FPS, window=REFINE_WINDOW_S,
-                                     boundaries="\n".join(lines), **_header(settings, footage))
-        reply = call(_content(text, images), "refine")
-        _record(calls, "refine", reply, len(images))
-        doc = parse_json(reply.text)
-        got = {}
-        for r in (doc.get("boundaries") if isinstance(doc, dict) else None) or []:
+            def closeups(w: int, ids=ids) -> list:
+                out = []
+                for bid, _i, _edge, t in ids:
+                    ts = footage.times(8, t - REFINE_WINDOW_S, t + REFINE_WINDOW_S)
+                    for caption, jpeg in sheets(footage, ts, REFINE_COLS, 5, cell_w=w):
+                        out.append((f"=== close-up for {bid} ===\n" + caption, jpeg))
+                return out
             try:
-                got[str(r["id"])] = float(r["t_s"])
-            except (KeyError, TypeError, ValueError):
+                images = fitting(lambda w: overview(w) + closeups(w), REFINE_CELL_W)
+            except PassError:
+                if size == 1:
+                    raise
+                size = max(1, size // 2)  # many cameras: fewer boundaries per request rather than none
                 continue
-        for bid, i, edge, t in ids:
-            if bid not in got:
-                notes.append(f"refine kept {bid}: no answer")
-                continue
-            new = min(max(got[bid], t - REFINE_WINDOW_S), t + REFINE_WINDOW_S)
-            setattr(events[i], f"{edge}_s", new)
+            b0 += len(batch)
+            text = prompts.REFINE.format(overview_step=1 / OVERVIEW_FPS, window=REFINE_WINDOW_S,
+                                         boundaries="\n".join(lines), **_header(settings, footage))
+            wave.append((ids, _content(text, images), len(images)))
+        replies = _ask_all(call, [(content, "refine") for _ids, content, _n in wave])
+        for (ids, _content_, n), reply in zip(wave, replies):
+            _record(calls, "refine", reply, n)
+            doc = parse_json(reply.text)
+            got = {}
+            for r in (doc.get("boundaries") if isinstance(doc, dict) else None) or []:
+                try:
+                    got[str(r["id"])] = float(r["t_s"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+            for bid, i, edge, t in ids:
+                if bid not in got:
+                    notes.append(f"refine kept {bid}: no answer")
+                    continue
+                new = min(max(got[bid], t - REFINE_WINDOW_S), t + REFINE_WINDOW_S)
+                setattr(events[i], f"{edge}_s", new)
     for e in events:
         if e.end_s < e.start_s:
             e.start_s, e.end_s = e.end_s, e.start_s
@@ -491,15 +512,17 @@ def _name_some(settings: Settings, call: Caller, calls: list, notes: list, foota
         size += n
     if cur:
         batches.append(cur)
+    asks = []
     for idx in batches:
-        batch = [(i, events[i]) for i in idx]
         lines = [built[i][0] for i in idx]
         atlases = [img for i in idx for img in built[i][1]]
         text = prompts.NAME.format(events="\n".join(lines),
                                    vocabulary=prompts.vocabulary_line(settings.skills, settings.parts),
                                    **_header(settings, footage))
-        reply = call(_content(text, atlases), "name")
-        _record(calls, "name", reply, len(atlases))
+        asks.append((_content(text, atlases), "name"))
+    for idx, (content, _p), reply in zip(batches, asks, _ask_all(call, asks)):
+        batch = [(i, events[i]) for i in idx]
+        _record(calls, "name", reply, sum(1 for c in content if c["type"] == "image_url"))
         doc = parse_json(reply.text)
         got = {}
         for r in (doc.get("events") if isinstance(doc, dict) else None) or []:

@@ -190,3 +190,32 @@ def test_naming_shows_the_heads_and_the_acting_wrist():
     assert passes.views(fp, passes.Settings(), e) == fp.cameras
     line, images = passes._atlas(fp, [passes.Event(0.5, 2.5, "pick")], 0, settings)
     assert "each tile stacks head_left, head_right, wrist_right" in images[0][0]
+
+
+def test_refine_and_name_requests_run_together_and_land_on_their_own_events(monkeypatch):
+    import threading
+    import time
+    monkeypatch.setattr(passes, "NAME_BATCH", 1)
+    fp = _footage(8.0)
+    find = ('{"events": [' + ", ".join(
+        f'{{"start_s": {k * 2 + 0.2}, "end_s": {k * 2 + 1.6}, "label": "step {k}"}}' for k in range(4)) + "]}")
+    live, peak, lock = [0], [0], threading.Lock()
+
+    def call(content, purpose):
+        if purpose == "find":
+            return Reply(text=find)
+        text = next(c["text"] for c in content if c["type"] == "text")
+        k = next(k for k in range(4) if f"- e{k}" in text)
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.05)
+        with lock:
+            live[0] -= 1
+        if purpose == "refine":
+            return Reply(text=f'{{"boundaries": [{{"id": "e{k}.start", "t_s": {k * 2 + 0.3}}}]}}')
+        return Reply(text=f'{{"events": [{{"id": "e{k}", "label": "named {k}", "skill": "pick", "parts": ["right"]}}]}}')
+
+    res = passes.annotate(fp, passes.Settings(), call)
+    assert peak[0] > 1
+    assert [(round(e.start_s, 2), e.label) for e in res.events] == [(k * 2 + 0.3, f"named {k}") for k in range(4)]
