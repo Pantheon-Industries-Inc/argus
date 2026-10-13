@@ -151,7 +151,7 @@ def test_refine_asks_fewer_boundaries_per_request_when_the_images_do_not_fit(mon
     def fitting(build, cell_w, budget=passes.IMAGE_BUDGET_BYTES):
         images = build(160)
         if len({c.split()[3] for c, _ in images if "close-up" in c}) > 2:  # more than two boundaries never fit
-            raise passes.PassError("too big")
+            raise passes.ImageBudgetError("too big")
         return images
 
     def call(content, purpose):
@@ -239,3 +239,12 @@ def test_find_samples_more_sparsely_when_its_pictures_do_not_fit(monkeypatch):
     res = passes.annotate(fp, passes.Settings(passes=1), call)
     assert [e.label for e in res.events] == ["pick cup"] and len(asked) == 1
     assert "sampled every 0.50 s" in asked[0]
+
+
+def test_pictures_that_never_fit_are_an_image_budget_error():
+    """The footage decides it, so the Step can fail the episode without reading it again."""
+    import pytest
+
+    with pytest.raises(passes.ImageBudgetError):
+        passes.fitting(lambda w: [("cell", b"x" * 64)], 160, budget=10)
+    assert issubclass(passes.ImageBudgetError, passes.PassError)

@@ -51,11 +51,16 @@ def fitting(build, cell_w: int, budget: int = IMAGE_BUDGET_BYTES):
         images = build(w)
         if sum(len(b) for _c, b in images) <= budget:
             return images
-    raise PassError(f"the request's images exceed {budget} bytes even at {CELL_STEPS[-1]} px cells")
+    raise ImageBudgetError(f"the request's images exceed {budget} bytes even at {CELL_STEPS[-1]} px cells")
 
 
 class PassError(RuntimeError):
     """A pass could not produce a usable answer."""
+
+
+class ImageBudgetError(PassError):
+    """A request's pictures do not fit its budget at any size the pass may use: the footage decides it, so reading
+    the episode again cannot change it, unlike a reply that does not parse."""
 
 
 @dataclass
@@ -243,7 +248,7 @@ def find(footage: Footage, settings: Settings, call: Caller, calls: list) -> lis
         try:
             images = fitting(lambda w: sheets(footage, times, FIND_COLS, FIND_ROWS, cell_w=w), FIND_CELL_W)
             break
-        except PassError:
+        except ImageBudgetError:
             if fps <= 1:
                 raise
             fps //= 2
@@ -352,7 +357,7 @@ def refine(footage: Footage, settings: Settings, call: Caller, calls: list, note
                 return out
             try:
                 images = fitting(lambda w: overview(w) + closeups(w), REFINE_CELL_W)
-            except PassError:
+            except ImageBudgetError:
                 if size == 1:
                     raise
                 size = max(1, size // 2)  # many cameras: fewer boundaries per request rather than none
