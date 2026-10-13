@@ -488,24 +488,26 @@ def _unnamed(settings: Settings, e: Event) -> bool:
 def name(footage: Footage, settings: Settings, call: Caller, calls: list, notes: list,
          events: list[Event]) -> list[Event]:
     """Name every event, at most NAME_BATCH per request and within the request's image budget; the events a reply
-    left without a known skill are asked once more, on their own requests (a reading with an unnamed event is
-    refused whole, so one short request here saves re-reading the episode)."""
+    left without a known skill are asked once more, one event per request (a reading with an unnamed event is
+    refused whole, and a namer that ran out of output tokens on a full batch is likelier to answer for one)."""
     built = [_atlas(footage, events, i, settings) for i in range(len(events))]
     _name_some(settings, call, calls, notes, footage, events, built, list(range(len(events))))
     again = [i for i, e in enumerate(events) if _unnamed(settings, e)]
     if again:
         notes.append(f"name asked again for {len(again)} event(s) without a known skill")
-        _name_some(settings, call, calls, notes, footage, events, built, again)
+        _name_some(settings, call, calls, notes, footage, events, built, again, per_request=1)
     return events
 
 
 def _name_some(settings: Settings, call: Caller, calls: list, notes: list, footage: Footage, events: list[Event],
-               built: list, which: list[int]) -> None:
+               built: list, which: list[int], per_request: int = 0) -> None:
+    """Name the events ``which``, at most ``per_request`` (else NAME_BATCH) per request."""
+    per_request = per_request or NAME_BATCH
     batches, cur, size = [], [], 0
     for i in which:
         _line, images = built[i]
         n = sum(len(b) for _c, b in images)
-        if cur and (len(cur) == NAME_BATCH or size + n > IMAGE_BUDGET_BYTES):
+        if cur and (len(cur) == per_request or size + n > IMAGE_BUDGET_BYTES):
             batches.append(cur)
             cur, size = [], 0
         cur.append(i)

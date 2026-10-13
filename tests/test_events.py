@@ -88,11 +88,13 @@ def test_three_passes_with_a_scripted_model():
 
 def test_naming_asks_again_only_for_events_left_without_a_known_skill():
     fp = _footage()
-    find = '{"events": [{"start_s": 0.4, "end_s": 1.9, "label": "pick cup"}, {"start_s": 2.0, "end_s": 3.5, "label": "place cup"}]}'
+    find = ('{"events": [{"start_s": 0.4, "end_s": 1.9, "label": "pick cup"}, {"start_s": 2.0, "end_s": 3.5, "label": "place cup"}, '
+            '{"start_s": 3.6, "end_s": 3.9, "label": "let go"}]}')
     names = iter([
         '{"events": [{"id": "e0", "label": "pick up the cup", "skill": "pick", "parts": ["right"]}, '
         '{"id": "e1", "label": "put the cup down", "skill": "juggle"}]}',
         '{"events": [{"id": "e1", "label": "put the cup down", "skill": "place", "parts": ["right"]}]}',
+        '{"events": [{"id": "e2", "label": "let go of the cup", "skill": "release", "parts": ["right"]}]}',
     ])
     asked = []
 
@@ -100,12 +102,13 @@ def test_naming_asks_again_only_for_events_left_without_a_known_skill():
         if purpose != "name":
             return Reply(text=find if purpose == "find" else '{"boundaries": []}')
         text = next(c["text"] for c in content if c["type"] == "text")
-        asked.append([i for i in ("e0:", "e1:") if f"- {i}" in text])
+        asked.append([i for i in ("e0:", "e1:", "e2:") if f"- {i}" in text])
         return Reply(text=next(names))
 
-    res = passes.annotate(fp, passes.Settings(skills=["pick", "place"]), call)
-    assert asked == [["e0:", "e1:"], ["e1:"]]
-    assert [e.skill for e in res.events] == ["pick", "place"]
+    res = passes.annotate(fp, passes.Settings(skills=["pick", "place", "release"]), call)
+    # e1 (a skill outside the vocabulary) and e2 (no answer) are each asked again, one per request
+    assert asked == [["e0:", "e1:", "e2:"], ["e1:"], ["e2:"]]
+    assert [e.skill for e in res.events] == ["pick", "place", "release"]
 
 
 def test_times_are_grid_instants_including_both_ends():
