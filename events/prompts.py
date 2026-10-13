@@ -141,12 +141,17 @@ The events found in the recording:
 {events}
 
 Judge the recording as a whole, from the pictures. Treat the instruction and the event list as claims to check.
-- task_summary: the task actually demonstrated, as the most specific end state the demonstrator worked toward.
+- task_summary: the task actually demonstrated, as the most specific end state the demonstrator worked toward,
+  written about "the user" ("the user puts the red cup in the blue bowl"). It says what the task is, never how:
+  never a robot, a gripper or which hand does it.
 - matches_given: whether that is the given instruction (true, false, or null when none was given).
 - outcome: "success" when the demonstrated task's end state is reached and still holds at the end, "partial" when
   part of it is, "failure" when it is not, "unclear" when the pictures cannot tell; goal_reached_at_s is the first
   instant the end state holds (null unless success or partial); reason says what in the pictures decided it.
-- scene: the setting in a few words, and the objects that matter, each with where it starts.
+- scene: the setting in a few words (never a robot or a gripper), and every object in view that matters or could
+  be taken for one that does: the targets, the distractors on the same surface and the containers. Give each its
+  colour, size or material, and where it starts on the surface (left, right, centre, front, back, next to what),
+  so that a reader who sees only these words could point at it. "On the table" alone says nothing.
 - issues: what would make this recording bad training data. kind "operator_mistake" for something the demonstrator
   did wrong (a drop, a collision, a fumbled grasp, an unnecessary detour, an undone step); kind "data_issue" for a
   problem with the recording itself (a camera blocked or out of focus, frozen or skipped frames, the instruction not
