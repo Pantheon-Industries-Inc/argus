@@ -49,6 +49,23 @@ def _manifest_identity(ep_dir):
     return manifest
 
 
+def _first_difference(left, right, path="request"):
+    """Name the differing input without dumping encoded images into CI logs."""
+    if type(left) is type(right) and isinstance(left, dict):
+        if left.keys() != right.keys():
+            return f"{path}: different keys {sorted(left.keys() ^ right.keys())}"
+        for key in left:
+            if left[key] != right[key]:
+                return _first_difference(left[key], right[key], f"{path}.{key}")
+    elif type(left) is type(right) and isinstance(left, list):
+        if len(left) != len(right):
+            return f"{path}: different lengths {len(left)} != {len(right)}"
+        for index, (a, b) in enumerate(zip(left, right)):
+            if a != b:
+                return _first_difference(a, b, f"{path}[{index}]")
+    return f"{path}: {repr(left)[:180]} != {repr(right)[:180]}"
+
+
 def assert_same_model_inputs(left, right, *, cli_stamp=False):
     """Keep exact model inputs, clocks, ownership and exclusions across relocation."""
     identities = []
@@ -71,4 +88,4 @@ def assert_same_model_inputs(left, right, *, cli_stamp=False):
         normalized["sensor_evidence"]["source_proof"] = proofs
         normalized["plan"]["sensor_evidence"]["source_proof"] = proofs
         identities.append(normalized)
-    assert identities[0] == identities[1]
+    assert identities[0] == identities[1], _first_difference(identities[0], identities[1])
