@@ -196,11 +196,10 @@ def test_subsecond_footage_replacement_gets_a_new_clip(tmp_path, monkeypatch):
     monkeypatch.setattr(clips, 'frame_lengths', lambda p: None)
     calls = []
     def encode(cmd, **kwargs):
-        assert kwargs['timeout'] == 300
         calls.append(cmd)
         Path(cmd[-1]).write_bytes(source.read_bytes())
         return subprocess.CompletedProcess(cmd, 0, '', '')
-    monkeypatch.setattr(serve.subprocess, 'run', encode)
+    monkeypatch.setattr(serve, '_run_footage', encode)
     first, _ = serve.footage('episode_x')
     timestamp = source.stat().st_mtime_ns
     source.write_bytes(b'new')

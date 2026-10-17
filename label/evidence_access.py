@@ -1478,18 +1478,28 @@ def recover_selection_reservations(doc):
 
 def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0.0,
              reserve_dispatch=None, settle_dispatch=None, force_refresh=False,
-             image_limit=500, image_bytes_limit=16_000_000):
+             image_limit=500, image_bytes_limit=16_000_000, refresh_id=None, ledger_managed=False):
     """Durable, bounded model selections. A dispatch with an uncertain outcome is never replayed."""
+    if ledger_managed and (not callable(reserve_dispatch) or not callable(settle_dispatch)):
+        raise ValueError('ledger-managed inspection requires reservation and settlement callbacks')
     digest = hashlib.sha256((access.signature() + packed(base_content)).encode()).hexdigest()
     path = Path(cache_path)
     doc = {'version': 1, 'digest': digest, 'status': 'complete', 'rounds': [], 'cost_usd': 0.0, 'limitations': []}
-    if force_refresh and path.exists():
+    already_refreshed = False
+    if force_refresh and refresh_id is not None and path.exists():
+        try:
+            already_refreshed = json.loads(path.read_text()).get('refresh_id') == refresh_id
+        except (OSError, ValueError, AttributeError):
+            pass
+    if force_refresh and path.exists() and not already_refreshed:
         # Keep the original durable receipt and its claim files for accounting and inspection.
         refresh = uuid.uuid4().hex
         path.rename(path.with_name(path.name + '.previous.' + refresh))
         for claim in path.parent.glob(path.name + '.round*.claim'):
             claim.rename(claim.with_name(claim.name + '.previous.' + refresh))
         doc.update(input_digest=digest, digest=hashlib.sha256((digest + refresh).encode()).hexdigest())
+    if force_refresh and refresh_id is not None:
+        doc['refresh_id'] = refresh_id
     if path.exists():
         try:
             doc = json.loads(path.read_text())
@@ -1529,7 +1539,7 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
             reserve = reserve_cost(content) if callable(reserve_cost) else reserve_cost
             if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve <= 0:
                 reserve = MAX_SELECTION_COST
-            if doc.get('status') == 'incomplete' or doc['cost_usd'] + reserve > MAX_SELECTION_COST:
+            if doc.get('status') == 'incomplete' or (not ledger_managed and doc['cost_usd'] + reserve > MAX_SELECTION_COST):
                 doc.update(status='incomplete')
                 doc['limitations'].append('Inspection selection stopped at the cost or dispatch boundary.')
                 break

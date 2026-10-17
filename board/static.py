@@ -62,7 +62,9 @@ from functools import lru_cache
 import json
 import math
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -154,15 +156,58 @@ def ms_key(t: float) -> int:
     return math.floor(t * 1000 + 0.5)   # Preserve existing keys; goal_times checks browser agreement.
 
 
+def _durable_metadata(path: str, version: tuple) -> bool:
+    """Only reuse durable hashes on local filesystems with change-time semantics."""
+    if os.name != 'posix' or version[-1] % 1_000_000_000 == 0:
+        return False
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        buffer = ctypes.create_string_buffer(4096)
+        if libc.statfs(os.fsencode(path), ctypes.byref(buffer)):
+            return False
+        if sys.platform == 'darwin':
+            return buffer.raw[72:88].split(b'\0', 1)[0] in (b'apfs', b'hfs')
+        if sys.platform.startswith('linux'):
+            kind = ctypes.c_ulong.from_buffer(buffer).value
+            return kind in {0xEF53, 0x58465342, 0x9123683E, 0x2FC12FC1, 0x01021994, 0x794C7630}
+    except (AttributeError, OSError):
+        pass
+    return False
+
+
 @lru_cache(maxsize=8192)
 def _source_digest(path: str, version: tuple) -> str:
+    # ctime also changes on in-place edits whose size and restored mtime match.
+    # Coarse timestamps and Windows creation-time semantics cannot certify reuse.
+    cacheable = _durable_metadata(path, version)
+    cache = Path(os.environ.get('BOARD_SOURCE_DIGEST_CACHE') or
+                 Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'argus/source-digests.sqlite3')
+    key = json.dumps([path, version])
+    if cacheable:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(cache, timeout=1) as db:
+                db.execute('CREATE TABLE IF NOT EXISTS digests (path TEXT PRIMARY KEY, version TEXT, digest TEXT)')
+                row = db.execute('SELECT digest FROM digests WHERE path=? AND version=?', (path, key)).fetchone()
+            if row and re.fullmatch(r'[0-9a-f]{64}', row[0]) and _source_version(Path(path)) == version:
+                return row[0]
+        except (OSError, sqlite3.Error):
+            pass  # A missing, busy, or damaged cache costs a hash, never an identity.
     h = hashlib.sha256()
     with open(path, 'rb') as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             h.update(chunk)
     if _source_version(Path(path)) != version:
         raise ValueError('Media changed while its identity was being read')
-    return h.hexdigest()
+    digest = h.hexdigest()
+    if cacheable:
+        try:
+            with sqlite3.connect(cache, timeout=1) as db:
+                db.execute('INSERT OR REPLACE INTO digests VALUES (?, ?, ?)', (path, key, digest))
+        except (OSError, sqlite3.Error):
+            pass
+    return digest
 
 
 def _source_version(path: Path) -> tuple:
@@ -546,9 +591,14 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
                  keypoints: Path | None = None, frames: list | None = None, sensors: Path | None = None,
                  dictionary_job: Path | None = None, media: list | None = None) -> str:
     h = hashlib.sha1()
-    # Export policy and presentation helpers affect the bytes served under this ID.
-    for source in sorted(HERE_DIR.glob('*.py')) + [HERE_DIR / 'families.json', HERE_DIR / 'tag_names.json']:
-        h.update(source.name.encode() + source.read_bytes())
+    # Export helpers import other production packages. Conservatively include
+    # their code and bundled JSON without depending on a manually maintained
+    # transitive import list. Tests, run outputs, and VCS metadata are excluded.
+    root = HERE_DIR.parent
+    packages = [p for p in root.iterdir() if p.is_dir() and (p / '__init__.py').is_file()]
+    for source in sorted(p for package in packages for p in package.rglob('*')
+                         if p.is_file() and p.suffix in ('.py', '.json')):
+        h.update(source.relative_to(root).as_posix().encode() + source.read_bytes())
     for ref in sorted(media or []):
         h.update(f'media|{ref}\n'.encode())
     if compare is not None:
@@ -799,8 +849,9 @@ def cmd_site(a):
                        if p.is_file() and p.name != 'BUILD.json'}
         if old_payload != new_payload:
             raise ValueError('An existing build id cannot be reused for changed public content; use a new build id')
-        from board.build import exchange_directories
-        exchange_directories(out, stage)
+        # Public payload equality above means only the build receipt needs an
+        # update. No directory exchange capability is needed for --force.
+        write_atomic(out / 'BUILD.json', public_build_manifest(build))
         shutil.rmtree(stage)
     else:
         stage.rename(out)

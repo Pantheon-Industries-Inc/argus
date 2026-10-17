@@ -5,6 +5,7 @@
 EPISODES are folders of prepared episode_* folders. For each episode this reads signals.npz and depth.json (written by
 prepare/formats.py) and writes context["sensor_checks"]; `python -m board build` copies it into the episode's
 dataset_checks, and the board lists it under Checks. None of it goes into the prompt.
+Failed and obsolete assessments are retried; exit 3 indicates recorded partial failure.
 
 Like the signals the model is shown (label/signals.py), nothing here knows what a sensor is called. Each check reads
 how the numbers behave:
@@ -44,6 +45,7 @@ from label import depth as dp
 from label import episode as me
 from label import signals as sg
 from label.atomic import write_atomic
+from checks import EXIT_PARTIAL
 
 NO_READING_SHARE = 0.2
 PINNED_SHARE = 0.1
@@ -51,6 +53,7 @@ DEPTH_INVALID_SHARE = 0.5
 DEPTH_OFFSET_FRAMES = 2.0
 DEPTH_SAMPLES = 24
 CLOCK_OFFSET_FRAMES = 1.0
+VERSION = 1
 
 NAMES = {"no_reading": "Signal has no reading at many frames", "partial_reading": "Signal has partial readings",
          "constant": "Signal never changes",
@@ -300,6 +303,25 @@ def _safe(d: str):
                    "checks": [{"check": c, "name": NAMES[c], "status": "errored", "error": err} for c in NAMES]}, None
 
 
+def needs_check(ctx: dict) -> bool:
+    versions = ctx.get('check_versions')
+    if (not isinstance(versions, dict) or type(versions.get('sensor_checks')) is not int
+            or versions['sensor_checks'] != VERSION or 'sensor_checks' not in ctx):
+        return True
+    result = ctx['sensor_checks']
+    if result is None:
+        return False
+    if not isinstance(result, dict) or result.get('error'):
+        return True
+    checks = result.get('checks')
+    if not isinstance(checks, list) or not all(isinstance(row, dict) for row in checks):
+        return True
+    names = [row.get('check') for row in checks]
+    return (not all(isinstance(name, str) for name in names) or len(names) != len(set(names))
+            or set(names) != set(NAMES)
+            or any(row.get('status') not in ('clear', 'fired', 'na') for row in checks))
+
+
 def main():
     ap = argparse.ArgumentParser(prog="python -m checks.sensors", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -311,7 +333,7 @@ def main():
     for root in a.roots:
         for d in sorted(root.glob("episode_*")):
             ctx_path = d / "context.json"
-            if ctx_path.exists() and (a.force or "sensor_checks" not in json.loads(ctx_path.read_text())):
+            if ctx_path.exists() and (a.force or needs_check(json.loads(ctx_path.read_text()))):
                 eps.append(str(d))
     print(f"episodes to check: {len(eps)}", flush=True)
     done = fired = failed = 0
@@ -332,22 +354,23 @@ def main():
                     if c["check"] == "dead_values":
                         c["status"] = "fired"
             done += 1
-            if err:
+            errors = [check for check in (r or {}).get('checks', []) if check.get('status') == 'errored']
+            if err or (r and r.get('error')) or errors:
                 failed += 1
-                print(f"FAILED {Path(d).name}: {err}", flush=True)
-                continue
-            if r and r.get("error"):
-                failed += 1
-                print(f"ERRORED {Path(d).name}: {r['error']}", flush=True)
+                reason = err or r.get('error') or errors[0].get('error', 'sensor checks could not finish')
+                print(f"ERRORED {Path(d).name}: {reason}", flush=True)
             p = Path(d) / "context.json"
             ctx = json.loads(p.read_text())
             ctx["sensor_checks"] = r
+            versions = ctx.get('check_versions')
+            ctx['check_versions'] = {**(versions if isinstance(versions, dict) else {}), 'sensor_checks': VERSION}
             write_atomic(p, ctx, indent=1)
             if r and r["notes"]:
                 fired += 1
                 print(f"SENSORS {Path(d).name}: " + "; ".join(n["evidence"] for n in r["notes"][:4]), flush=True)
     print(f"done {done} with_notes={fired} failed={failed}", flush=True)
+    return EXIT_PARTIAL if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

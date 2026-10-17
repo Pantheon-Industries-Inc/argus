@@ -9,10 +9,10 @@
 'use strict';
 const {src, piece} = require('./page_functions')(process.argv[2]);
 const stubs = 'const buildPhrase = e => esc(e.verb_class || ""); const armLabel = a => a || "-";'
-  + 'const contribClass = c => c || ""; const tagName = (c) => String(c || "").replace(/_/g, " ");'
+  + 'const tagName = (c) => String(c || "").replace(/_/g, " ");'
   + 'const famName = s => ({"gripper-flat": "Recorded gripper opening never changes"})[s] || s;'
   + 'const OUR_CHECKS = [["gripper_channels", "flagged", "gripper-flat"]];';
-const T = new Function(stubs + piece('esc') + piece('fmtT') + piece('untimedRows') + piece('foundWords')
+const T = new Function(stubs + piece('esc') + piece('fmtT') + piece('contribText') + piece('contribClass') + piece('untimedRows') + piece('foundWords')
   + piece('setAsideHtml')
   + 'return {untimedRows, setAsideHtml};')();
 
@@ -26,6 +26,9 @@ check(u.steps.length === 1 && u.steps[0].includes('wipe &lt;b&gt;') && u.steps[0
   && !u.steps[0].includes('data-t'), 'an untimed step is a row with no time and nothing to seek to');
 check(u.keys.length === 1 && u.keys[0].includes('lid open') && u.keys[0].includes('no time')
   && !u.keys[0].includes('data-t'), 'an untimed key event is a row with no time');
+const malformed = T.untimedRows({event_labels:[{t_s:null,verb_class:'lift the object',contribution:42}]});
+check(malformed.steps.length===1 && malformed.steps[0].includes('lift the object'),
+  'one malformed contribution does not hide the rest of the paid annotation');
 check(T.untimedRows({}).steps.length === 0 && T.untimedRows({}).keys.length === 0, 'nothing untimed, no rows');
 
 check(T.setAsideHtml({}) === '' && T.setAsideHtml({_excluded: [], set_aside_checks: []}) === '',

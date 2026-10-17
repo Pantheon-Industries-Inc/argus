@@ -70,6 +70,10 @@ const wire=interactive.setupSensorEvidence(pair,()=>seeks++,(el,event,fn)=>callb
   null,null,()=>placements++);
 wire.sync(2.46244);assert.deepEqual(buttons.map(b=>b['aria-pressed']),['false','true']);
 callbacks.get(buttons[0])();assert.deepEqual(buttons.map(b=>b['aria-pressed']),['true','false']);
+wire.sync(2.48);assert.deepEqual(buttons.map(b=>b['aria-pressed']),['true','false'],
+ 'playing through concurrent findings preserves the selected active evidence');
+wire.sync(3.02);assert.deepEqual(buttons.map(b=>b['aria-pressed']),['false','true'],
+ 'selection expires with its display window instead of keeping a stale overlay');
 callbacks.get(buttons[1])();assert.deepEqual(buttons.map(b=>b['aria-pressed']),['false','true']);
 const previousSeeks=seeks,previousPlacements=placements;
 callbacks.get(strip)({target:{closest:()=>({dataset:{sensorFinding:'1'}})}});
@@ -310,17 +314,19 @@ def test_temporary_frame_load_failure_retries_only_live_local_frames():
     script = r'''
 const assert=require('assert'),{piece}=require(process.argv[1])();
 (async()=>{
- let attempts=0,revoked=0,clock=0;
+ let attempts=0,revoked=0,clock=0,hidden=true;
  const now={now:()=>clock},wait=(fn,ms)=>{clock+=ms;fn();};
  const urlApi=class extends URL{};
  urlApi.createObjectURL=()=> 'blob:ready';urlApi.revokeObjectURL=()=>revoked++;
  const image={tagName:'IMG',isConnected:true,currentSrc:'https://board.example/api/frame?id=x&t=1',
-  src:'https://board.example/api/frame?id=x&t=1',addEventListener(event,fn){this.loaded=fn;}};
+  src:'https://board.example/api/frame?id=x&t=1',
+  closest:()=>({classList:{remove(name){assert.equal(name,'nofr');hidden=false;}}}),
+  addEventListener(event,fn){if(event==='load')this.loaded=fn;}};
  const responses=[...Array.from({length:5},()=>({status:503,ok:false,headers:{get:()=> '1'}})),
   {status:200,ok:true,blob:async()=>({})}];
  const api=new Function('fetch','URL','location','setTimeout','Date',piece('retryFrameImage')+'return retryFrameImage;')(
   async()=>{attempts++;return responses.shift();},urlApi,{href:'https://board.example/',origin:'https://board.example'},wait,now);
- await api(image);assert.equal(attempts,6);assert.equal(image.src,'blob:ready');image.loaded();assert.equal(revoked,1);
+ await api(image);assert.equal(attempts,6);assert.equal(image.src,'blob:ready');image.loaded();assert.equal(revoked,1);assert(!hidden,'recovered goal pixels must become visible');
  await api({...image,currentSrc:'https://external.example/api/frame?id=x'});assert.equal(attempts,6);
  await api({...image,isConnected:false});assert.equal(attempts,6);
  await api({...image,currentSrc:'https://board.example/media/missing.jpg'});assert.equal(attempts,6);

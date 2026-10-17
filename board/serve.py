@@ -40,6 +40,7 @@ Environment:
     BOARD_FOOTAGE_DIR          where the videos made to download are kept (default BOARD/footage)
     BOARD_FOOTAGE_CONCURRENCY  videos made at once (default 1)
     BOARD_FOOTAGE_THREADS      threads each is made on (default 2)
+    BOARD_FOOTAGE_STALL_TIMEOUT seconds without advancing media or output bytes (default 300)
 
 board/static.py renders the same page with a static data source, so a CDN can serve the board with no server.
 """
@@ -364,8 +365,9 @@ def _under(base: Path, p: Path) -> bool:
 FOOTAGE_GAP = 8
 FOOTAGE_FPS = 30
 FOOTAGE_TAG = f"footage-v4-h264-crf20-veryfast-{FOOTAGE_FPS}fps-gap{FOOTAGE_GAP}"   # a new recipe makes new files
-_FOOTAGE_SEM = threading.Semaphore(int(os.environ.get("BOARD_FOOTAGE_CONCURRENCY", 1)))
+_FOOTAGE_SEM = threading.BoundedSemaphore(max(1, int(os.environ.get("BOARD_FOOTAGE_CONCURRENCY", 1))))
 _FOOTAGE_THREADS = int(os.environ.get("BOARD_FOOTAGE_THREADS", 2))
+_FOOTAGE_STALL_TIMEOUT = max(1.0, float(os.environ.get('BOARD_FOOTAGE_STALL_TIMEOUT', 300)))
 _FOOTAGE_LOCKS: dict = {}
 _FOOTAGE_LOCKS_LOCK = threading.Lock()
 
@@ -531,7 +533,6 @@ def footage_command(inputs: list, t0: float, t1: float, out: Path, threads: int 
                   str(threads), "-filter_complex_threads", "1", "-movflags", "+faststart", str(out)]
 
 
-@_bounded_work(threading.BoundedSemaphore(max(1, int(os.environ.get('BOARD_FOOTAGE_CONCURRENCY', 1)))))
 def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     """(file, download name) of the episode's video from t0 to t1 s (the whole episode by default), made now if it
     was not made before; None when the episode has no clip. Raises RuntimeError when ffmpeg fails."""
@@ -553,8 +554,6 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     t1 = round(dur if t1 is None else max(0.0, min(float(t1), dur)), 3)
     if t1 - t0 < 1.0 / FOOTAGE_FPS:
         return None
-    if t1 - t0 > 3600:
-        raise ValueError('Footage spans are limited to one hour')
     if any(pr[0] * pr[1] > 16_777_216 or pr[3] > 120 for pr in probes):
         raise ValueError('Camera dimensions or frame rate exceed the footage limit')
     whole = t0 == 0 and t1 >= round(dur, 3)
@@ -570,7 +569,42 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
         _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
                          max_files=_FOOTAGE_DISK_FILES, protect=out)
         return out, name
-    with _footage_lock(key):                       # a second request for the same span waits for the first one's file
+    return _uncached_footage(key, out, name, cams, probes, t0, t1)
+
+
+def _run_footage(cmd: list) -> subprocess.CompletedProcess:
+    """Bound stalled work while allowing a progressing encode of any duration."""
+    progress_cmd = [*cmd[:-1], '-progress', 'pipe:1', '-stats_period', '5', cmd[-1]]
+    last_progress, last_values = time.monotonic(), (0, 0)
+    with subprocess.Popen(progress_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+        try:
+            while True:
+                try:
+                    stdout, stderr = process.communicate(timeout=min(5.0, _FOOTAGE_STALL_TIMEOUT))
+                    return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired as error:
+                    output = error.output or b''
+                    if isinstance(output, str):
+                        output = output.encode()
+                    times = re.findall(rb'out_time_us=(\d+)', output)
+                    try:
+                        size = Path(cmd[-1]).stat().st_size
+                    except OSError:
+                        size = 0
+                    values = (max((int(value) for value in times), default=0), size)
+                    if any(value > previous for value, previous in zip(values, last_values)):
+                        last_progress, last_values = time.monotonic(), values
+                    if time.monotonic() - last_progress >= _FOOTAGE_STALL_TIMEOUT:
+                        raise subprocess.TimeoutExpired(cmd, _FOOTAGE_STALL_TIMEOUT)
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+
+
+@_bounded_work(_FOOTAGE_SEM)
+def _uncached_footage(key, out, name, cams, probes, t0, t1):
+    with _footage_lock(key):
         if out.is_file():
             return out, name
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -580,8 +614,7 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
         cmd[-1:-1] = ['-fs', str(_FOOTAGE_DISK_BYTES)]
         nice = shutil.which("nice")
         try:
-            with _FOOTAGE_SEM:
-                r = subprocess.run(([nice, "-n", "19"] if nice else []) + cmd, capture_output=True, text=True, timeout=300)
+            r = _run_footage(([nice, "-n", "19"] if nice else []) + cmd)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise

@@ -21,6 +21,10 @@ TIME_BASE_DEN = 1_000_000   # microseconds: some ABC frames are stamped only 1 u
 NOMINAL_FPS = 30            # only a one-frame tolerance for the muxer's own shift
 
 
+class UnsupportedPacketOrder(ValueError):
+    """Source packets lack enough clock information to associate reordered pictures."""
+
+
 def check_packet_order(path, fmt: str) -> None:
     """Reject actual display reordering; a codec's B-frame capability alone does not establish it."""
     import av
@@ -37,7 +41,7 @@ def check_packet_order(path, fmt: str) -> None:
                 index += 1
             for frame in packet.decode():
                 if frame.pts is None or frame.pts <= last:
-                    raise ValueError("Cannot copy reordered Annex-B frames with B-frames: messages do not establish both "
+                    raise UnsupportedPacketOrder("Cannot copy reordered Annex-B frames with B-frames: messages do not establish both "
                                      "presentation and decode timestamps.")
                 last = frame.pts
 

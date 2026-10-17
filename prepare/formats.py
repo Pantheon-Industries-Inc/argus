@@ -5554,13 +5554,14 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
         for v, key in vmap.items():
             mp4, base, to = row["videos"][key]
             try:
-                pr = packed_video_window(Path(mp4), base, to)
+                pr = packed_video_window(Path(mp4), base, to, fps=fps)
             except Exception as error:
                 broken[key] = plain_error(error)
                 continue
             n = len(pr["pts"])
             sources[v] = {"packed": str(mp4), "base_s": base, "n_frames": n, "camera_key": key}
-            expected = (base + np.arange(n) / fps) / float(pr["time_base"])
+            # Rounded v3 offsets still denote the same publisher frame on a CFR grid.
+            expected = ((round(base * fps) + np.arange(n)) / fps) / float(pr["time_base"])
             grid[v] = bool(np.allclose(pr["pts"], expected, rtol=0, atol=1e-4))
             pts[v] = pr["pts"]
             if not grid[v]:
@@ -5697,7 +5698,7 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
         if isinstance(src, tuple):
             mp4, base, to = src
             try:
-                facts = packed_video_window(Path(mp4), base, to)
+                facts = packed_video_window(Path(mp4), base, to, fps=fps)
             except Exception:
                 e = None
             else:
@@ -5752,8 +5753,9 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
             leave(key, "stored in colour, so it holds no distances")
             continue
         t_all = pr["pts"].astype(np.float64) * float(pr["time_base"])
-        sel = (t_all >= base - 1e-6) & (t_all < to - 1e-6) if base is not None else np.ones(len(t_all), dtype=bool)
-        if not sel.any():
+        lo, hi = packed_window_indices(pr, base, to, fps=fps) if base is not None else (0, len(t_all))
+        sel = slice(lo, hi)
+        if hi <= lo:
             leave(key, "no depth frame falls inside this episode's window of its packed file")
             continue
         td = t_all[sel] - (base if base is not None else t_all[sel][0])
@@ -5831,18 +5833,69 @@ def _packed_video_probe(path: str, version: tuple) -> dict:
     return probe(Path(path))
 
 
-def packed_video_window(path: Path, base: float, stop: float) -> dict:
+def packed_video_window(path: Path, base: float, stop: float, *, fps: float | None = None) -> dict:
     """Exact encoded PTS inside a declared half-open LeRobot episode window."""
     if not np.isfinite([base, stop]).all() or stop <= base:
         raise ValueError("invalid packed video episode window")
     stat = path.stat()
     facts = _packed_video_probe(str(path.resolve()), (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino))
-    tb = float(facts["time_base"])
-    lo, hi = np.searchsorted(facts["pts"], [(base - 1e-7) / tb, (stop - 1e-7) / tb], side="left")
+    lo, hi = packed_window_indices(facts, base, stop, fps=fps)
     pts = facts["pts"][lo:hi]
     if not len(pts):
         raise ValueError("no video packet covers the owned episode window")
-    return {**facts, "pts": pts}
+    return {**{key: value for key, value in facts.items() if key != '_packed_windows'}, "pts": pts}
+
+
+def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float | None = None) -> tuple[int, int]:
+    """Half-open ownership at the precision of LeRobot v3's microsecond metadata.
+
+    Proven CFR files retain label.frames' established grid contract. Otherwise compare microsecond-stored
+    boundaries to encoded times rounded to that same precision. A shared boundary
+    therefore excludes its frame from the preceding episode and includes it in the following episode. Boundaries
+    with finer recorded precision retain it, and VFR timestamps need not follow a nominal frame grid.
+    """
+    if not np.isfinite([base, stop]).all() or stop <= base:
+        raise ValueError("invalid packed video episode window")
+    from label.frames import FrameError, base_frame, frame_pts_step
+    rate = fps or facts.get('fps')
+    # The source-version probe is shared by every episode in a packed file. Cache its derived clocks and grid
+    # proof too, so selecting each episode does not scan the entire shared recording again.
+    memo = facts.setdefault('_packed_windows', {})
+    key = ('step', rate)
+    if key not in memo:
+        found_step = None
+        if rate and np.isfinite(rate) and rate > 0:
+            try:
+                candidate = frame_pts_step(facts['time_base'], rate)
+            except FrameError:
+                pass
+            else:
+                if np.all(np.asarray(facts['pts']) % candidate == 0):
+                    found_step = candidate
+        memo[key] = found_step
+    step = memo[key]
+    indices = []
+    for boundary in (base, stop):
+        rounded = round(boundary, 6)
+        # Float arithmetic on metadata can add a few binary ULPs, which convey no additional source precision.
+        microseconds = abs(boundary - rounded) <= 2 * abs(np.spacing(boundary))
+        if step is not None and microseconds:
+            # Keep the existing packed CFR ownership contract (including older rounded publisher offsets), but
+            # only after the encoded timestamps prove this grid. Never infer a CFR clock from nominal FPS alone.
+            try:
+                frame = base_frame(boundary, rate)
+            except FrameError:
+                pass
+            else:
+                indices.append(int(np.searchsorted(facts['pts'], frame * step, side='left')))
+                continue
+        if 'seconds' not in memo:
+            memo['seconds'] = np.asarray(facts['pts'], dtype=np.float64) * float(facts['time_base'])
+        if microseconds and 'microseconds' not in memo:
+            memo['microseconds'] = np.round(memo['seconds'], 6)
+        clock = memo['microseconds'] if microseconds else memo['seconds']
+        indices.append(int(np.searchsorted(clock, rounded if microseconds else boundary, side='left')))
+    return tuple(indices)
 
 
 def _stream_facts(p: Path) -> dict:
@@ -5929,7 +5982,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             return
         source = row["videos"][key]
         path, base, stop = source if isinstance(source, tuple) else (source, 0.0, None)
-        facts = packed_video_window(Path(path), base, stop) if stop is not None else probe(Path(path))
+        facts = packed_video_window(Path(path), base, stop, fps=fps) if stop is not None else probe(Path(path))
         if not len(facts["pts"]):
             raise ValueError("no video packet covers the owned episode window")
         paths[key], prs[key], bases[key] = Path(path), facts, float(base)
@@ -8339,6 +8392,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
     books: dict[str, str] = {}            # a recorder's own log and diagnostics topics, named and not read
     kinds: dict[str, str] = {}            # each topic's message type
     decode_errors: dict[tuple[Path, str], int] = {}
+    schema_errors: dict[tuple[Path, str], str] = {}
     clock_sources: dict[str, set] = {}
     clock_errors: dict[str, set] = {}
     damaged: list = []                    # files whose index is whole but whose messages stop at damage (mcap_messages)
@@ -8355,6 +8409,9 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
                     decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
                 try:
                     decoded = decs[ch.id](msg.data) if decs[ch.id] else None
+                except McapSchemaError as error:
+                    schema_errors[(Path(p), ch.topic)] = str(error)
+                    continue
                 except Exception:
                     key = (Path(p), ch.topic)
                     decode_errors[key] = decode_errors.get(key, 0) + 1
@@ -8393,6 +8450,9 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
                     r["v"].append(vals)
                     r["set"] |= was_set
     out = Signals()
+    out.issues += [{"kind": "mcap_schema_unreadable", "signal": topic,
+                    "what": f"{path.name}: {topic} schema could not be read: {reason}. Other channels were retained."}
+                   for (path, topic), reason in sorted(schema_errors.items())]
     out.issues += [{"kind": "mcap_message_unreadable", "signal": topic,
                     "what": f"{path.name}: {count} messages on {topic} could not be decoded; later messages were retained."}
                    for (path, topic), count in sorted(decode_errors.items())]
@@ -8749,13 +8809,35 @@ def third_arm_camera_desc(topics: list[str]) -> str:
             "out from each frame where it looks")
 
 
+class McapSchemaError(ValueError):
+    """A channel's recorded schema cannot be parsed by its supported decoder."""
+
+
 def _decoder_for(encoding: str, schema, facs: list):
     """A function decoding one message payload, or None: JSON channels by json, the rest by whichever
     installed factory (protobuf, ROS 2) knows the encoding."""
     if encoding == "json":
         return lambda b: json.loads(b)
+    from mcap.exceptions import McapError
+    from google.protobuf.message import DecodeError
     for f in facs:
-        d = f.decoder_for(encoding, schema)
+        try:
+            d = f.decoder_for(encoding, schema)
+        except Exception as error:
+            # Decoder factories parse untrusted source schemas here, before the first payload is read. Normalize
+            # their documented parser/descriptor failures into the same per-channel boundary as payload failures.
+            # RuntimeError, AssertionError and unrelated implementation failures still propagate.
+            supported_factory = type(f).__module__ in ('mcap_ros2.decoder', 'mcap_ros1.decoder', 'mcap_protobuf.decoder')
+            source_error = supported_factory and (
+                isinstance(error, (McapError, DecodeError, ValueError, TypeError, KeyError,
+                                   NameError, SyntaxError, NotImplementedError)) or type(error).__module__.startswith(
+                                       ('mcap_ros2._vendor.rosidl_adapter', 'mcap_ros1._vendor.genmsg')))
+            if not source_error:
+                raise
+            reason = f"{schema.name if schema is not None else encoding}: {plain_error(error)}"
+            def unreadable_schema(data, reason=reason):
+                raise McapSchemaError(reason)
+            return unreadable_schema
         if d is not None:
             return d
     return None
@@ -8827,6 +8909,13 @@ def retain_mcap_fields(path: Path, ep: Path, ctx: dict, *, archive_name="recorde
                 decs[channel.id] = _decoder_for(channel.message_encoding, schema, factories)
             try:
                 decoded = decs[channel.id](msg.data) if decs[channel.id] else None
+            except McapSchemaError as schema_error:
+                decoded = None
+                if not any(i.get('kind') == 'mcap_schema_unreadable' and i.get('signal') == channel.topic
+                           for i in ctx.get('reader_issues', [])):
+                    add_issue(ctx, 'mcap_schema_unreadable',
+                              f'{path.name}: {channel.topic} schema could not be read: {schema_error}. '
+                              'Other channels were retained.', signal=channel.topic)
             except Exception:
                 decoded = None
             capture, error = mcap_capture_stamp(decoded)
@@ -9094,7 +9183,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 if decs[ch.id] is None:
                     undecodable.add(f"{ch.topic} ({ch.message_encoding})")
                     continue
-                dec = decs[ch.id](msg.data)
+                try:
+                    dec = decs[ch.id](msg.data)
+                except McapSchemaError:
+                    undecodable.add(f"{ch.topic} ({ch.message_encoding})")
+                    continue
                 capture_stamp, stamp_error = mcap_capture_stamp(dec, schema=schema, message_encoding=ch.message_encoding)
                 stamp = capture_stamp if capture_stamp is not None else int(msg.log_time)
                 if ch.topic in view_of_topic or ch.topic in depth_of:
@@ -9148,23 +9241,53 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 raise
             # a damaged tail (recording cut off): keep every frame read before it
             item.setdefault("notes", []).append("The file ends early; every frame before the cut was used.")
-    counts = {t: w.close() for t, w in writers.items()}
+    from prepare.remux import UnsupportedPacketOrder
+    import av
+    counts, camera_failures = {}, {}
+    for topic, writer in writers.items():
+        try:
+            counts[topic] = writer.close()
+        except (UnsupportedPacketOrder, av.error.FFmpegError) as error:
+            # One raw camera's unsupported packet order or corrupt bitstream does not invalidate its neighbors.
+            camera_failures[topic] = plain_error(error)
+            writer.out.unlink(missing_ok=True)
     depth = {}
     for t, dw in dwriters.items():
         if dw.close():
             depth[depth_of[t]] = {"path": ep / f"depth_{depth_of[t]}.mkv", "real": None, "scale_m": dw.scale_m,
                                   "source": t, "storage": dw.storage}
     missing = [t for t in vmap.values() if not counts.get(t)]
-    if missing and len(missing) == len(vmap):
+    for t in missing:              # a camera with no readable frames is left out; the others are labelled
+        v = view_of_topic[t]
+        unused.append(f"{t} (no readable frames)")
+        del vmap[v]
+    if not vmap:
+        # A rig can select only one camera. If it fails, another readable camera already retained for the board
+        # can supply the episode rather than losing every good stream with the selected camera.
+        readable = [topic for topic in video_topics if counts.get(topic)]
+        fallback, _ = pick_cameras(readable, rig, all_topics) if readable else ({}, [])
+        for view, topic in fallback.items():
+            writer = writers[topic]
+            target = ep / f'{view}.mp4'
+            if writer.out != target:
+                writer.out.replace(target)
+                writer.out = target
+            unshown_of.pop(topic, None)
+            view_of_topic[topic] = view
+            unused = [name for name in unused if name != topic]
+        vmap.update(fallback)
+        not_colour = [topic for topic in vmap.values() if not_rgb(topic)]
+        if fallback and camera_selection is not None:
+            camera_selection += (f" The selected camera had no readable frames; "
+                                 f"{next(iter(fallback.values()))} supplies the readable fallback view.")
+    if not vmap:
+        if camera_failures:
+            raise ValueError('; '.join(f'{topic}: {reason}' for topic, reason in camera_failures.items()))
         encodings = sorted({u.rsplit(" (", 1)[-1].rstrip(")") for u in undecodable})
         if encodings:
             raise ValueError(f"its camera channels ({', '.join(missing)}) are in the {' and '.join(encodings)} message "
                              "encoding, which we do not decode; MCAP messages in JSON, Protobuf, ROS 1 or ROS 2 work")
         raise ValueError(f"no frame could be decoded from {', '.join(missing)}")
-    for t in missing:              # a camera with no readable frames is left out; the others are labelled
-        v = view_of_topic[t]
-        unused.append(f"{t} (no readable frames)")
-        del vmap[v]
     files = {v: (t, ep / f"{v}.mp4") for v, t in vmap.items()}
     shapes = {topic: next(iter(writer.source_sizes)) if len(writer.source_sizes) == 1 else None
               for topic, writer in writers.items()}
@@ -9207,8 +9330,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                                             'Their synchronization is unverified; browse by source frame, not event time.')
     for topic, error in clock_errors:
         add_issue(extra, "capture_timestamp_invalid", error, camera=topic)
-    for t in missing:
-        add_issue(extra, "camera_not_decodable", f"No frame of the camera {t} could be decoded, so it is not shown.",
+    for t in sorted(set(missing) | set(camera_failures)):
+        reason = f" {camera_failures[t]}" if t in camera_failures else ''
+        add_issue(extra, "camera_not_decodable", f"No frame of the camera {t} could be decoded, so it is not shown.{reason}",
                   camera=t)
     from label import episode as me
     un = []

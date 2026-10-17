@@ -48,7 +48,8 @@ def test_pairing_modes_retry_errors_and_invalidate_old_results(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize('failure_module,failure_code,expected_sensors', [
-    ('checks.capture_qc', 3, True), ('checks.stream_pairing', 3, True), ('checks.capture_qc', 2, False)])
+    ('checks.capture_qc', 3, True), ('checks.stream_pairing', 3, True),
+    ('checks.sensors', 3, True), ('checks.capture_qc', 2, False)])
 def test_checks_aggregate_continues_only_recorded_partial_failures(
         monkeypatch, failure_module, failure_code, expected_sensors):
     modules = []
@@ -85,7 +86,7 @@ def test_review_continues_recorded_pairing_and_capture_failures(tmp_path, monkey
         modules.append(cmd[2])
         if cmd[2] == 'board':
             raise ReachedClips()
-        return SimpleNamespace(returncode=3 if cmd[2] in ('checks.stream_pairing', 'checks.capture_qc') else 0)
+        return SimpleNamespace(returncode=3 if cmd[2] in ('checks.stream_pairing', 'checks.capture_qc', 'checks.sensors') else 0)
 
     monkeypatch.setattr(review, 'verified_preparation', prepared)
     monkeypatch.setattr(dictionary_stage, 'prepare', lambda *a, **k: None)
@@ -104,3 +105,41 @@ def test_generated_check_versions_do_not_change_recorded_context_identity(tmp_pa
     before = review.file_identity(context, context=True)
     context.write_text(json.dumps({'fps': 30, 'stream_pairing': None, 'check_versions': {'stream_pairing': 1}}))
     assert review.file_identity(context, context=True) == before
+
+
+def test_sensor_cli_retries_repaired_input_and_reports_partial_failure(tmp_path):
+    import subprocess
+    import numpy as np
+    from test_label import _packed_mp4
+    from checks import sensors
+    movie = tmp_path / 'sensor.mp4'
+    _packed_mp4(movie, 4)
+    sources = {'exo': {'packed': str(movie), 'base_s': 0, 'n_frames': 4}}
+    context = {'fps': 30, 'state_kind': 'none', 'profile': 'ego_head', 'n_state_frames': 4,
+               'signals': [{'name': 'pressure', 'key': 'p', 'shape': [1]}]}
+    for name in ('episode_good', 'episode_bad'):
+        ep = tmp_path / name
+        ep.mkdir()
+        (ep / 'context.json').write_text(json.dumps(context))
+        np.savez(ep / 'signals.npz', p=np.arange(4).reshape(-1, 1))
+    (tmp_path / 'episode_good/sources.json').write_text(json.dumps(sources))
+    def run():
+        return subprocess.run([sys.executable, '-m', 'checks.sensors', '--jobs', '1', str(tmp_path)],
+                              text=True, capture_output=True, timeout=30)
+    first = run()
+    assert first.returncode == 3, first.stdout + first.stderr
+    bad = json.loads((tmp_path / 'episode_bad/context.json').read_text())['sensor_checks']
+    assert all(check['status'] == 'errored' for check in bad['checks'])
+    good_path = tmp_path / 'episode_good/context.json'
+    good_before = good_path.read_bytes()
+    good = json.loads(good_before)['sensor_checks']
+    assert set(check['check'] for check in good['checks']) == set(sensors.NAMES)
+    assert not any(check['status'] == 'errored' for check in good['checks'])
+    (tmp_path / 'episode_bad/sources.json').write_text(json.dumps(sources))
+    repaired = run()
+    assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+    assert 'episodes to check: 1' in repaired.stdout
+    assert good_path.read_bytes() == good_before
+    bad = json.loads((tmp_path / 'episode_bad/context.json').read_text())['sensor_checks']
+    assert not any(check['status'] == 'errored' for check in bad['checks'])
+    assert 'episodes to check: 0' in run().stdout

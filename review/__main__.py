@@ -23,15 +23,16 @@ in the job and each prepared episode:
               rig's rules, plus fixed_window when the reader found fixed-length files)
 
 Serve the result with `python -m board serve --board JOB --clips JOB/clips`. The model key comes from
-OPENROUTER_API_KEYS, as for python -m label.
+OPENROUTER_API_KEYS, as for python -m label. Downloads allow 24 hours by default;
+REVIEW_DOWNLOAD_DEADLINE sets a different finite duration in seconds. A stalled read still times out after 30 seconds.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import hashlib
-import math
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -49,7 +50,7 @@ REPO = Path(__file__).resolve().parent.parent
 PY = sys.executable
 DOWNLOAD_MAX_BYTES = int(os.environ.get('REVIEW_DOWNLOAD_MAX_BYTES', 20 * 1024**3))
 DOWNLOAD_TIMEOUT = 30
-DOWNLOAD_DEADLINE = 1800
+DOWNLOAD_DEADLINE = 24 * 3600
 
 
 def now() -> str:
@@ -82,6 +83,9 @@ def fetch(data: str, job: Path, *, allow_download=True) -> Path:
     """Keep different URL resources distinct without exposing access parameters."""
     if not data.startswith(('http://', 'https://')):
         return Path(data).resolve()
+    deadline = float(os.environ.get('REVIEW_DOWNLOAD_DEADLINE', DOWNLOAD_DEADLINE))
+    if not math.isfinite(deadline) or deadline <= 0:
+        raise ValueError('REVIEW_DOWNLOAD_DEADLINE must be positive finite seconds')
     resource = hashlib.sha256(data.encode()).hexdigest()
     basename = Path(urllib.parse.urlsplit(data).path).name or 'data'
     dest = job / 'upload' / resource / basename
@@ -93,7 +97,7 @@ def fetch(data: str, job: Path, *, allow_download=True) -> Path:
         temporary = None
         try:
             started = time.monotonic()
-            with urllib.request.urlopen(data, timeout=min(DOWNLOAD_TIMEOUT, DOWNLOAD_DEADLINE)) as response, tempfile.NamedTemporaryFile(
+            with urllib.request.urlopen(data, timeout=min(DOWNLOAD_TIMEOUT, deadline)) as response, tempfile.NamedTemporaryFile(
                     dir=dest.parent, prefix='.download-', delete=False) as output:
                 temporary = Path(output.name)
                 length = response.headers.get('Content-Length')
@@ -105,7 +109,7 @@ def fetch(data: str, job: Path, *, allow_download=True) -> Path:
                 raw = getattr(getattr(response, 'fp', None), 'raw', None)
                 connection = getattr(raw, '_sock', None)
                 while True:
-                    remaining = DOWNLOAD_DEADLINE - (time.monotonic() - started)
+                    remaining = deadline - (time.monotonic() - started)
                     if remaining <= 0:
                         raise ValueError('Download exceeds the configured time limit')
                     if connection is not None and connection.fileno() >= 0:
@@ -113,10 +117,10 @@ def fetch(data: str, job: Path, *, allow_download=True) -> Path:
                     try:
                         chunk = read(64 * 1024)
                     except TimeoutError as error:
-                        if time.monotonic() - started >= DOWNLOAD_DEADLINE:
+                        if time.monotonic() - started >= deadline:
                             raise ValueError('Download exceeds the configured time limit') from error
                         raise
-                    if time.monotonic() - started >= DOWNLOAD_DEADLINE:
+                    if time.monotonic() - started >= deadline:
                         raise ValueError('Download exceeds the configured time limit')
                     if not chunk:
                         break
@@ -331,7 +335,10 @@ def main() -> int:
               f"(log {job / 'logs' / 'checks_capture.log'})", flush=True)
     if any((eps / e["episode_id"] / "signals.npz").exists() or (eps / e["episode_id"] / "depth.json").exists()
            for e in rep["episodes"]):
-        run_step(job, "checks_sensors", [PY, "-m", "checks.sensors", "--jobs", jobs, str(eps)], env)
+        if run_step(job, "checks_sensors", [PY, "-m", "checks.sensors", "--jobs", jobs, str(eps)], env,
+                    ok_codes=(0, EXIT_PARTIAL)):
+            print(f"sensor checks could not finish on some episodes; usable results and errors are retained "
+                  f"(log {job / 'logs/checks_sensors.log'})", flush=True)
     # exit 1 is board clips saying no episode came out at all (clips/failed.json lists why), told below as the upload's
     # own reason; any other failure of the step is still an error. An episode with a camera that decodes is kept, and
     # what was wrong with its other cameras goes into the report's notes

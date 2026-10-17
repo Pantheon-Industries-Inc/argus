@@ -647,11 +647,12 @@ def prepare_upload(job: Path, episodes: list[Path], api_key, call_model, *, dry_
             try:
                 response = call_model(content, MODEL, REASONING, key, max_tokens=token_limit, timeout=timeout)
             except KeyExhausted as error:
-                if (error.verified_unpaid is not True or type(error.http_status) is not int
-                        or error.http_status not in (401, 402)):
+                if error.verified_unpaid is not True:
                     raise
                 attempt.update(state='rejected unpaid', http_status=error.http_status,
                                http_attempt=1, verified_unpaid=True, cost_usd=0.0)
+                if error.rejection_code:
+                    attempt['rejection_code'] = error.rejection_code
                 result['cost_usd'] = 0.0
                 _save(receipt, result)
                 if index + 1 == len(keys):

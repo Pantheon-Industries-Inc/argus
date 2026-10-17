@@ -2186,8 +2186,9 @@ function fmtDur(s) { return s == null ? '' : (s >= 60 ? (s / 60).toFixed(1) + ' 
 // what "both" means on the open episode's rig: a head camera films a person's hands, a handheld rig two grippers
 let ARM_NOUN = 'arms';
 function armLabel(a) { return a === 'both' ? `both ${ARM_NOUN}` : (a || '?'); }
+function contribText(c) { return typeof c === 'string' ? c.toLowerCase() : ''; }
 function contribClass(c) {
-  c = (c || '').toLowerCase();
+  c = contribText(c);
   return c === 'advancing' ? 'adv' : (c === 'wasteful' ? 'waste' : (c === 'idle' ? 'idle' : 'none'));
 }
 const epListEl = document.getElementById('ep-list');
@@ -2226,7 +2227,10 @@ async function retryFrameImage(image) {
         if (!image.isConnected || image.src !== source) return;
         const objectUrl = URL.createObjectURL(blob);
         const release = () => URL.revokeObjectURL(objectUrl);
-        image.addEventListener('load', release, {once: true});
+        image.addEventListener('load', () => {
+          image.closest('.goal-frame')?.classList.remove('nofr');
+          release();
+        }, {once: true});
         image.addEventListener('error', release, {once: true});
         image.src = objectUrl;
         return;
@@ -2699,7 +2703,7 @@ function readerIssueRows(d) {
 // goes and nothing to seek to; the key events are numbered on from the timed ones (first).
 function untimedRows(d, first = 1) {
   const steps = (d.event_labels || []).filter(e => e && e.t_s == null).map(e => {
-    const cl = (e.contribution || '').toLowerCase() || '-';
+    const cl = contribText(e.contribution) || '-';
     return `<div class="ev untimed">
         <span class="t">no time</span>
         <span class="who"><span class="arm ${esc(e.arm || '')}">${esc(armLabel(e.arm))}</span></span>
@@ -5096,12 +5100,12 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     if (disposed) return;
     const delta = previousTime == null ? 0 : t - previousTime;
     if (delta < -1e-6) chosenGrip = null;
-    if (delta > 0) chosenGrip = null;
     if (explicitFindingIndex != null) chosenGrip = explicitFindingIndex;
     const allFindings = E.overlayFindings || E.insights || [];
     const available = displayGripFindings(E, t, presentationWindows);
     const explicit = allFindings.find(f => f.findingIndex === chosenGrip);
-    if (explicit && explicit.start <= t && !available.some(f => f.findingIndex === explicit.findingIndex))
+    // Paused inspection can revisit a superseded finding; playback still obeys its display window.
+    if (explicit && delta <= 0 && explicit.start <= t && !available.some(f => f.findingIndex === explicit.findingIndex))
       available.push({...explicit, phase: t <= explicit.end + 1e-6 ? 'Now' : 'Earlier'});
     available.sort((a, b) => Number(b.phase === 'Now') - Number(a.phase === 'Now')
       || b.priority - a.priority || b.start - a.start);
@@ -5813,7 +5817,7 @@ function renderEp(d, opts) {
   // Outcome counts (for the dense-timeline count badge)
   const contribs = {advancing: 0, wasteful: 0, idle: 0};
   for (const e of eventLabels) {
-    const c = (e.contribution || '').toLowerCase();
+    const c = contribText(e.contribution);
     if (c in contribs) contribs[c]++;
   }
 
@@ -6451,7 +6455,7 @@ function renderEp(d, opts) {
       </div>`;
     } else {
       const e = it.e; const cc = contribClass(e.contribution);
-      const cl = (e.contribution || '').toLowerCase() || '-';
+      const cl = contribText(e.contribution) || '-';
       feedHtml += `<div class="ev" data-t="${esc(e.t_s)}" data-idx="${idx}">
         <span class="t">${fmtT(e.t_s)}</span>
         <span class="who"><span class="arm ${esc(e.arm || '')}">${esc(armLabel(e.arm))}</span></span>
@@ -6692,7 +6696,7 @@ function renderEp(d, opts) {
       } return; }
     const ev = w.ev;
     const cc = contribClass(ev.contribution);
-    const cl = (ev.contribution || '').toLowerCase() || '-';
+    const cl = contribText(ev.contribution) || '-';
     const goalT = comp.completed_at_s;
     const atEpisodeGoal = goalT != null && t >= goalT - 0.3 && t <= goalT + 3.0;
     const atTaskGoal = taskGoalTimes.some(gt => t >= gt - 0.3 && t <= gt + 3.0);

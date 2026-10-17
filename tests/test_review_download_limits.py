@@ -69,3 +69,12 @@ def test_download_completed_body_keeps_every_chunk(tmp_path):
         dest = review.fetch(url, tmp_path)
     assert dest.read_bytes() == b'x' * 100
     assert not list((tmp_path / 'upload').rglob('.download-*'))
+
+
+def test_download_duration_override_allows_a_slow_healthy_transfer(tmp_path, monkeypatch):
+    monkeypatch.setattr(review, 'DOWNLOAD_DEADLINE', .05)
+    monkeypatch.setenv('REVIEW_DOWNLOAD_DEADLINE', '.5')
+    with download_server(first_delay=.12, count=2) as url:
+        dest = review.fetch(url, tmp_path)
+    assert dest.read_bytes() == b'xx'
+    assert not list((tmp_path / 'upload').rglob('.download-*'))

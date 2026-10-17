@@ -3,7 +3,9 @@
     python -m board build BOARD          BOARD/manifest.json in; BOARD/qa/, BOARD/BUILT.json out
 
 A board serves the episode files in BOARD/qa. Those files are derived: every build regenerates them from the runs
-listed in BOARD/manifest.json and nothing else, so a board never shows a stale or mixed set of labels. Each file is
+listed in BOARD/manifest.json and nothing else. Publication exchanges each derived directory when supported;
+otherwise per-file replacements keep it available, with rollback on failure. Concurrent readers of that fallback
+can briefly see files from both generations. Each file is
 the run's label (board/to_board.py) with its provenance (`_run`: run id, code commit, kind, slice), the episode's
 rig and length, the deterministic dataset checks and the dataset's own labels from its context.json, where the
 footage comes from and its license (`dataset_source`, from board/dataset_sources.json, for the public datasets
@@ -93,12 +95,14 @@ BUILT.json as before. "sensors": false in the manifest turns it off. Like hands/
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import math
 import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from board.to_board import (and_list, convert, dumps, field_words, label_failed, label_outputs, off_schema_text,
@@ -811,7 +815,7 @@ def exchange_directories(left: Path, right: Path) -> None:
     import ctypes
     import sys
     libc = ctypes.CDLL(None, use_errno=True)
-    if sys.platform == 'darwin':
+    if sys.platform == 'darwin' and hasattr(libc, 'renamex_np'):
         exchange = libc.renamex_np
         exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
         result = exchange(os.fsencode(left), os.fsencode(right), 2)
@@ -820,10 +824,67 @@ def exchange_directories(left: Path, right: Path) -> None:
         exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
         result = exchange(-100, os.fsencode(left), -100, os.fsencode(right), 2)
     else:
-        raise OSError('Atomic directory exchange is unavailable on this platform')
+        raise OSError(errno.ENOTSUP, 'Atomic directory exchange is unavailable on this platform')
     if result:
         code = ctypes.get_errno()
         raise OSError(code, os.strerror(code))
+
+
+def _install_tree(source: Path, destination: Path) -> None:
+    """Replace regular files atomically without removing the live directory."""
+    incoming = {p.relative_to(source): p for p in source.rglob('*') if p.is_file()}
+    for rel, path in sorted(incoming.items()):
+        target = destination / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix='.argus-publish-', dir=target.parent)
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            shutil.copy2(path, temporary)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    for path in destination.rglob('*'):
+        if path.is_file() and path.relative_to(destination) not in incoming:
+            path.unlink()
+    for path in sorted(destination.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+
+
+def publish_directory(old: Path, new: Path) -> None:
+    """Prefer a generation exchange; fall back to per-file publication and rollback.
+
+    Unsupported filesystems keep the live directory and every open file reader.
+    New readers can observe mixed generations during the portable fallback.
+    A complete backup restores the previous generation if publication fails.
+    """
+    try:
+        exchange_directories(old, new)
+        return
+    except OSError as error:
+        if error.errno not in {errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL, errno.EXDEV}:
+            raise
+    # Derived outputs contain regular files. Reject links before touching live data.
+    if any(p.is_symlink() for root in (old, new) for p in [root, *root.rglob('*')]):
+        raise OSError(errno.ENOTSUP, 'Portable directory publication requires regular files')
+    backup_root = Path(tempfile.mkdtemp(prefix=f'.{old.name}.rollback-', dir=old.parent))
+    backup = backup_root / 'previous'
+    try:
+        shutil.copytree(old, backup)
+    except BaseException:
+        shutil.rmtree(backup_root)
+        raise
+    try:
+        _install_tree(new, old)
+    except BaseException:
+        try:
+            _install_tree(backup, old)
+        except BaseException as restore_error:
+            raise RuntimeError(f'Publication rollback failed; previous data is preserved at {backup}') from restore_error
+        shutil.rmtree(backup_root)
+        raise
+    shutil.rmtree(backup_root)
 
 
 def _swap(board: Path, name: str, keep: bool) -> None:
@@ -834,7 +895,7 @@ def _swap(board: Path, name: str, keep: bool) -> None:
             shutil.rmtree(old)
         return
     if old.exists():
-        exchange_directories(old, new)
+        publish_directory(old, new)
         shutil.rmtree(new)
     else:
         new.rename(old)

@@ -47,6 +47,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -145,7 +146,7 @@ def _verified_final_cost(usage: dict, model: str) -> tuple[float | None, str]:
 
 
 def call_model(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
-               *, attempts: int = 6) -> dict:
+               *, attempts: int = 6, pricing_quote=None) -> dict:
     if not is_openrouter_key(api_key):
         return _call_openai(content, model, reasoning, api_key, max_tokens, timeout, attempts=attempts)
     if content and content[0].get("type") == "text" and len(content[0].get("text", "")) > 4000:
@@ -163,12 +164,18 @@ def call_model(content: list, model: str, reasoning: str, api_key: str, max_toke
         # recorded cost and spend cap uses what was actually charged
         "usage": {"include": True},
     }
+    if pricing_quote is not None:
+        if pricing_quote.get('model') != model:
+            raise ValueError('pricing quote does not match the requested model')
+        body['provider'] = {'max_price': pricing_quote['provider_max_price']}
     return _post(OPENROUTER_URL, body, api_key, timeout, attempts=attempts)
 
 
-def call_model_once(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int) -> dict:
+def call_model_once(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
+                    *, pricing_quote=None) -> dict:
     """One HTTP attempt for a paid call. A failed dispatch may already have been billed."""
-    return call_model(content, model, reasoning, api_key, max_tokens, timeout, attempts=1)
+    return call_model(content, model, reasoning, api_key, max_tokens, timeout, attempts=1,
+                      **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
 
 
 def _call_openai(content: list, model: str, reasoning: str, api_key: str, max_tokens: int, timeout: int,
@@ -232,16 +239,21 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
 def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, api_key: str, max_tokens: int,
                   timeout: int, cell_w: int = 0, example_dir: str | None = None, dry_run: bool = False,
                   reserve_final=None, reserve_selection=None, settle_selection=None, force_refresh=False,
-                  sample_fps=None, task_mode=None, dataset_note=None, require_known_pricing=False) -> dict:
+                  sample_fps=None, task_mode=None, dataset_note=None, require_known_pricing=False,
+                  inspection_refresh_id=None) -> dict:
     context = json.loads((Path(ep_dir) / 'context.json').read_text())
     resolved = policy.resolve(context, model=model, reasoning=reasoning, sample_fps=sample_fps,
                               task_mode=task_mode, dataset_note=dataset_note)
     model, reasoning = resolved['model'], resolved['reasoning']
-    if not dry_run and require_known_pricing and (not model.startswith('openai/')
-            or model.split('/', 1)[-1] not in OPENAI_PRICES):
-        raise ValueError(f'No verified pricing rates for {model}; a spend cap requires known rates')
     if not dry_run and not is_openrouter_key(api_key) and not model.startswith('openai/'):
         raise ValueError(f'{model} requires an OpenRouter key; no request was dispatched.')
+    pricing_quote = None
+    if not dry_run and require_known_pricing and (not model.startswith('openai/')
+            or model.split('/', 1)[-1] not in OPENAI_PRICES):
+        if not is_openrouter_key(api_key):
+            raise ValueError(f'No verified pricing rates for {model}; a spend cap requires known rates')
+        from label import pricing
+        pricing_quote = pricing.quote(model, timeout)
     identity = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
                               cell_w=cell_w, example_dir=example_dir, sample_fps=sample_fps,
                               task_mode=task_mode, dataset_note=dataset_note)
@@ -288,12 +300,15 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                    "prompt_blocks": req["blocks"], "schema_fields": req["schema_fields"],
                    "checks_implied": req["checks_implied"]},
     }
+    if pricing_quote is not None:
+        fields['config']['pricing_quote'] = pricing_quote
     return _call_and_record(ep_dir, out_path, req["content"], req["image_bytes"], fields, model=model,
                             reasoning=reasoning, api_key=api_key, max_tokens=max_tokens, timeout=timeout,
                             dry_run=dry_run, prompt_text=req["prompt"], evidence_access=req["evidence_access"],
                             reserve_final=reserve_final, reserve_selection=reserve_selection,
                             settle_selection=settle_selection, force_refresh=force_refresh,
-                            require_known_pricing=require_known_pricing)
+                            require_known_pricing=require_known_pricing, inspection_refresh_id=inspection_refresh_id,
+                            pricing_quote=pricing_quote)
 
 
 def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int, cell_w: int,
@@ -507,8 +522,14 @@ def episode_cost(result: dict) -> float:
             + auxiliary_cost(route, routing=True) + auxiliary_cost(inspection))
 
 
-def final_cost_bound(content: list, max_tokens: int, *, model=DEFAULT_MODEL, require_known_pricing=True) -> float:
+def final_cost_bound(content: list, max_tokens: int, *, model=DEFAULT_MODEL, require_known_pricing=True,
+                     pricing_quote=None) -> float:
     """Reserve a generous input allowance and the full output limit before dispatch."""
+    if pricing_quote is not None:
+        if pricing_quote.get('model') != model:
+            raise ValueError('pricing quote does not match the requested model')
+        from label import pricing
+        return pricing.cost_bound(content, max_tokens, pricing_quote)
     tiers = OPENAI_PRICES.get(model.split('/', 1)[-1]) if model.startswith('openai/') else None
     if tiers is None and require_known_pricing:
         raise ValueError(f'No verified pricing rates for {model}; a spend cap requires known rates')
@@ -581,12 +602,18 @@ def parse_response(text: str) -> tuple[dict, bool]:
         completion = labels.get('completion')
         if isinstance(completion, dict) and completion.get('task_completed') is not None and completion['task_completed'] not in (
                 'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
-            raise ValueError('completion.task_completed has an unknown outcome')
-        for row in labels.get('timeline') or []:
+            _violation(labels, 'completion.task_completed has an unknown outcome')
+            outcome = completion['task_completed']
+            if isinstance(outcome, str) and outcome.strip().lower() in (
+                    'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
+                completion['task_completed'] = outcome.strip().lower()
+        for index, row in enumerate(labels.get('timeline') or []):
             progress = row.get('progress')
+            if isinstance(progress, str) and me.number(progress) is not None:
+                progress = row['progress'] = me.number(progress)
             if progress is not None and (type(progress) not in (int, float) or not math.isfinite(progress)
                                          or not 0 <= progress <= 1):
-                raise ValueError('timeline progress must be a finite number from 0 to 1')
+                _violation(labels, f'timeline row {index}: progress {progress!r} must be a finite number from 0 to 1')
         if had_rows and not labels.get('timeline') and not any(labels.get(k) for k in LIST_FIELDS[1:] + DICT_FIELDS + TEXT_FIELDS):
             raise ValueError('no usable timeline rows remain')
         if not substantive_annotation(labels):
@@ -609,12 +636,19 @@ def _drop(labels: dict, field: str, row, why: str) -> None:
     labels.setdefault("_dropped", []).append({"field": field, **({"row": row} if row is not None else {}), "why": why})
 
 
+def _violation(labels: dict, why: str) -> None:
+    violations = labels.setdefault('_schema_violations', [])
+    if why not in violations:
+        violations.append(why)
+
+
 def normalize_timeline(labels: dict) -> dict:
     """The output format sends each timeline segment as one array in the column order of timeline_columns.
     Convert it back to one object per segment, validating every row, so everything downstream sees the usual
-    format. A time or a progress written as a number in text ("2.0") is read as that number. A row with the wrong
-    number of values, or a time or a progress that is not a number, is left out and recorded in _dropped (a shifted
-    column would silently corrupt the labels), and the other rows are kept. A value that is missing or outside a
+    format. A time or a progress written as a number in text ("2.0") is read as that number. Rows with ambiguous
+    column mappings or unparseable times are left out and recorded in _dropped. A shortened row may omit only
+    trailing notes and must match the expected column types. Full-width rows retain malformed noncritical fields
+    with schema violations. A value that is missing or outside a
     field's allowed set (a progress or a contribution of null) is kept as the model wrote it and listed in
     _schema_violations, so one bad field is counted, not a reason to discard a valid answer."""
     tl = labels.get("timeline")
@@ -636,18 +670,39 @@ def normalize_timeline(labels: dict) -> dict:
         if isinstance(row, dict):
             out.append(row)
             continue
-        if not isinstance(row, list) or len(row) != len(cols):
+        missing_notes = isinstance(row, list) and cols[-1] == 'notes' and len(row) == len(cols) - 1
+        if not isinstance(row, list) or (len(row) != len(cols) and not missing_notes):
             n = len(row) if isinstance(row, list) else "?"
             _drop(labels, "timeline", i, f"it has {n} values for {len(cols)} columns")
             continue
         seg = dict(zip(cols, row))
         bad = None
+        for key in ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes'):
+            if seg.get(key) is not None and not isinstance(seg[key], str):
+                why = f'its {key} is not text ({seg[key]!r})'
+                if missing_notes:
+                    bad = why
+                    break
+                _violation(labels, f'timeline row {i}: {why}')
+        if 'hands_visible' in seg and seg['hands_visible'] is not None and type(seg['hands_visible']) is not bool:
+            why = f'its hands_visible is not true or false ({seg["hands_visible"]!r})'
+            if missing_notes:
+                bad = why
+            else:
+                _violation(labels, f'timeline row {i}: {why}')
+        if missing_notes and 'contribution' in cols and seg.get('contribution') not in ('advancing', 'wasteful', 'idle'):
+            bad = 'missing trailing notes cannot be distinguished from shifted columns'
         for k in ("start_s", "end_s", "progress"):
+            if bad:
+                break
             if k == "progress" and seg.get(k) is None:
                 labels.setdefault("_schema_violations", []).append(f"timeline row {i}: progress null")
             elif k in seg and (isinstance(seg[k], bool) or not isinstance(seg[k], (int, float))):
                 v = me.number(seg[k])
                 if v is None:
+                    if k == 'progress' and not missing_notes:
+                        _violation(labels, f'timeline row {i}: progress {seg[k]!r} must be a finite number from 0 to 1')
+                        continue
                     bad = f"its {k} is not a number ({seg[k]!r})"
                     break
                 seg[k] = v
@@ -869,7 +924,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                      reasoning: str, api_key: str, max_tokens: int, timeout: int, dry_run: bool = False,
                      prompt_text: str = "", evidence_access=None, reserve_final=None,
                      reserve_selection=None, settle_selection=None, force_refresh=False,
-                     require_known_pricing=False) -> dict:
+                     require_known_pricing=False, inspection_refresh_id=None, pricing_quote=None) -> dict:
     """Send one request (or, in a dry run, record exactly what would be sent) and write the result."""
     fields = {**fields, **(_billing_fields(out_path) if 'final_cost_history' not in fields else {})}
     def verify_inputs():
@@ -902,7 +957,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         fields['evidence_inspection'] = evidence_access.record()
         if not dry_run:
             def select(parts):
-                response = call_model_once(parts, model, reasoning, api_key, ea.MAX_SELECTION_TOKENS, min(timeout, 120))
+                response = call_model_once(parts, model, reasoning, api_key, ea.MAX_SELECTION_TOKENS, min(timeout, 120),
+                    **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
                 usage = response.get('usage') or {}
                 cost, _ = _verified_final_cost(usage, model)
                 if cost is not None:
@@ -911,7 +967,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             # Reserve the maximum output and a conservative input allowance before each selection dispatch.
             def reserve(parts):
                 return final_cost_bound(parts, ea.MAX_SELECTION_TOKENS, model=model,
-                                        require_known_pricing=require_known_pricing)
+                                        require_known_pricing=require_known_pricing,
+                                        **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
             cache = Path(out_path).parent / '.evidence' / (Path(out_path).name + '.inspection.json')
             if force_refresh and cache.exists():
                 persist_final_claim(Path(out_path).with_name(f'noreply_{Path(out_path).name}'), {
@@ -921,7 +978,10 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             try:
                 doc, extra = ea.discover(evidence_access, content, select, cache, reserve_cost=reserve,
                                         reserve_dispatch=reserve_selection, settle_dispatch=settle_selection,
-                                        force_refresh=force_refresh, image_limit=MAX_IMAGES, image_bytes_limit=IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION)
+                                        force_refresh=force_refresh, refresh_id=inspection_refresh_id,
+                                        ledger_managed=(pricing_quote is not None and reserve_selection is not None
+                                                        and settle_selection is not None),
+                                        image_limit=MAX_IMAGES, image_bytes_limit=IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION)
             except Exception as error:
                 doc = evidence_access.record()
                 if cache.exists():
@@ -987,7 +1047,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                               "est_input_tokens": round(est_img + est_text)}}
         write_atomic(out_path, result)
         return result
-    bound = final_cost_bound(content, max_tokens, model=model, require_known_pricing=require_known_pricing)
+    bound = final_cost_bound(content, max_tokens, model=model, require_known_pricing=require_known_pricing,
+                             **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
     claim_path = Path(out_path).with_name(f'noreply_{Path(out_path).name}')
     fields['config']['request_images']['dispatch_status'] = 'dispatch_claimed'
     claim = {"episode_dir": str(ep_dir), "model": model, "reasoning_effort": reasoning, **fields,
@@ -1005,7 +1066,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             raise
     t_start = time.time()
     try:
-        resp = call_model_once(content, model, reasoning, api_key, max_tokens, timeout)
+        resp = call_model_once(content, model, reasoning, api_key, max_tokens, timeout,
+            **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
     except KeyExhausted as error:
         if error.verified_unpaid:
             fields['config']['request_images']['dispatch_status'] = 'not_dispatched'
@@ -1305,6 +1367,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
 
     def work_claimed(ep):
         prior_cost = episode_cost(_billing_fields(out_for(ep)))
+        inspection_refresh_id = uuid.uuid4().hex if force else None
         reserved = [0.0]
         selection_accounted = [0.0]
         def reserve_selection(amount):
@@ -1352,7 +1415,8 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
             try:
                 r = label_episode(ep, out_for(ep), api_key=key, reserve_final=reserve_final,
                                   reserve_selection=reserve_selection, settle_selection=settle_selection,
-                                  force_refresh=force, require_known_pricing=max_spend > 0, **label_kw)
+                                  force_refresh=force, inspection_refresh_id=inspection_refresh_id,
+                                  require_known_pricing=max_spend > 0, **label_kw)
                 _release_memory()
                 c = episode_cost(r)
                 with spend_lock:
