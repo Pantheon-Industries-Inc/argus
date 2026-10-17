@@ -1021,3 +1021,19 @@ def test_the_checks_write_context_json_without_loading_the_model_harness():
             "checks.sensors, checks.timebase, label.pieces; print('label.harness' in sys.modules)")
     r = subprocess.run([sys.executable, "-c", code], cwd=repo, capture_output=True, text=True, timeout=120)
     assert r.returncode == 0 and r.stdout.strip() == "False", r.stdout + r.stderr
+
+
+def test_pairing_motion_marks_repeated_or_missing_observations_unknown(tmp_path):
+    import av
+    clip = tmp_path / 'camera.mp4'
+    write_video(clip, [50, 70, 100])
+    with av.open(str(clip)) as container:
+        pts = np.array([frame.pts for frame in container.decode(video=0)])
+    ep = {'sources': {'left': {'packed': str(clip), 'base_s': 0., 'n_frames': 3}},
+          'context': {'fps': 30}, 'times': {'left_pts': pts},
+          'kmap': {'left': np.array([0, 0, 1, 1, 2])}}
+    motion = stream_pairing.stream_motion(ep, 'left')
+    np.testing.assert_allclose(motion, [np.nan, 20, np.nan, 30], atol=1, equal_nan=True)
+    # A missing native frame makes both neighboring changes unknown, not stationary.
+    ep['times']['left_pts'] = np.array([pts[0], (pts[0] + pts[1]) // 2, pts[2]])
+    assert np.isnan(stream_pairing.stream_motion(ep, 'left')).all()

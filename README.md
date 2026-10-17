@@ -58,7 +58,7 @@ cd argus
 uv sync --frozen
 ```
 
-Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py#L1046) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py#L1046) in your shell or secret manager. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py#L21). Keep inputs and outputs under the ignored [`data/`](.gitignore#L1) directory.
+Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py#L1132) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py#L1132) in your shell or secret manager. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py#L21). Keep inputs and outputs under the ignored [`data/`](.gitignore#L1) directory.
 
 Prepare and inspect base requests without model calls.
 
@@ -75,7 +75,7 @@ uv run python -m review --data path/to/dataset --rig teleop_arms \
 uv run python -m board serve --board data/review/mine --clips data/review/mine/clips
 ```
 
-[`--data`](review/__main__.py#L209) accepts a folder, file, archive or HTTP(S) URL. Set [`--rig`](review/__main__.py#L210) to [`teleop_arms`](review/__main__.py#L210), [`handheld_gripper`](review/__main__.py#L210) or [`ego_head`](review/__main__.py#L210) for teleop, UMI or human ego, respectively. Argus detects the format and available evidence; RGB-only data follows the same pipeline without requiring sensor inputs. [Data Review](https://data.pantheon.inc/review) uses the same default policy, though its deployed version and upload limits can differ.
+[`--data`](review/__main__.py#L257) accepts a folder, file, archive or HTTP(S) URL. Set [`--rig`](review/__main__.py#L258) to [`teleop_arms`](review/__main__.py#L258), [`handheld_gripper`](review/__main__.py#L258) or [`ego_head`](review/__main__.py#L258) for teleop, UMI or human ego, respectively. Argus detects the format and available evidence; RGB-only data follows the same pipeline without requiring sensor inputs. [Data Review](https://data.pantheon.inc/review) uses the same default policy, though its deployed version and upload limits can differ.
 
 | Default or optional setting | Behavior |
 |---|---|
@@ -86,7 +86,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 
 Each recording produces one public episode. Long recordings are split to fit API request limits and rejoined on the original timeline; internal chunk boundaries are not treated as recording truncation. Session mode annotates activities within the recording. Preparation limits, missing chunks and processing failures are reported alongside any usable results.
 
-Rerunning a review job with the same [`--out`](review/__main__.py#L211) preserves its settings and reuses outputs whose inputs and selected evidence still match. Changes to paid request semantics require a new job. [`--free`](review/__main__.py#L213) skips paid field interpretation, image-detail routing and evidence selection, so it previews base requests rather than the full paid evidence path. Spending caps account for all applicable calls and outstanding reservations; unresolved charges stay reserved.
+Rerunning a review job with the same [`--out`](review/__main__.py#L259) preserves its settings and reuses outputs whose inputs and selected evidence still match. Changes to paid request semantics require a new job. [`--free`](review/__main__.py#L261) skips paid field interpretation, image-detail routing and evidence selection, so it previews base requests rather than the full paid evidence path. Spending caps account for all applicable calls and outstanding reservations; unresolved charges stay reserved.
 
 ## Results and further use
 
@@ -101,13 +101,13 @@ This is an excerpt from a tactile episode's downloadable JSON. Evidence IDs reso
       {
         "start_s": 54.0,
         "end_s": 55.0,
-        "headline": "The held module's contact shifts during insertion",
-        "overlay_detail": "The pad deforms during seating; this does not establish that the module slipped.",
+        "headline": "The final module's contact reshapes before the grip opens",
+        "overlay_detail": "The pad deforms while the jaw reading stays steady; this does not establish that the module slipped.",
         "confidence": "medium",
         "evidence": [
           {
             "sensor_id": "camera:extra4",
-            "time_s": [54.0, 55.0]
+            "time_s": [53.0, 54.0, 55.0]
           }
         ]
       }
@@ -116,7 +116,7 @@ This is an excerpt from a tactile episode's downloadable JSON. Evidence IDs reso
 }
 ```
 
-A review job contains prepared [`episodes/`](review/__main__.py#L258), base requests in [`dry/`](review/__main__.py#L307), model inputs and receipts in [`run/`](review/__main__.py#L316), rejoined labels in [`run_final/`](review/__main__.py#L344), and the board. Action phases distinguish advancing, wasteful and idle behavior. Sensor findings include evidence, confidence and alternative explanations; inconclusive evidence need not produce a finding. Exports omit internal access metadata.
+A review job contains prepared [`episodes/`](review/__main__.py#L304), base requests in [`dry/`](review/__main__.py#L355), model inputs and receipts in [`run/`](review/__main__.py#L364), rejoined labels in [`run_final/`](review/__main__.py#L245), and the board. Action phases distinguish advancing, wasteful and idle behavior. Sensor findings include evidence, confidence and alternative explanations; inconclusive evidence need not produce a finding. Exports omit internal access metadata.
 
 Field definitions supplied by the dataset publisher or user override inferred meanings and layouts without changing recorded measurements. Changes to source data or field interpretations invalidate stale findings. Shared footage retains its source license and access policy.
 
@@ -134,7 +134,7 @@ uv run python -m label --dataset mine --episodes data/episodes/mine/all --kind d
 uv run python -m label --dataset mine --episodes data/episodes/mine/all --kind full --cap 20
 ```
 
-Public adapters are [`molmo`](prepare/molmo.py), [`abc130k`](prepare/abc130k.py), [`galaxea`](prepare/galaxea.py), [`habit`](prepare/habit.py), [`fastumi`](prepare/fastumi.py), [`realomin`](prepare/realomin.py), [`egocentric100k`](prepare/egocentric100k.py), [`genhumanego`](prepare/genhumanego.py) and [`openaoe`](prepare/openaoe.py); [`configs/slices/`](configs/slices/) records published selections. Generic readers preserve source fields instead of applying corpus-release cropping or task selection.
+Public adapters are [`molmo`](prepare/molmo.py), [`abc130k`](prepare/abc130k.py), [`galaxea`](prepare/galaxea.py), [`habit`](prepare/habit.py), [`fastumi`](prepare/fastumi.py), [`realomin`](prepare/realomin.py), [`egocentric100k`](prepare/egocentric100k.py), [`genhumanego`](prepare/genhumanego.py) and [`openaoe`](prepare/openaoe.py); [`configs/slices/`](configs/slices/) records published selections. Generic readers preserve source fields instead of applying corpus-release cropping or task selection. Raw video packets with frame reordering are rejected when decode timestamps are unavailable.
 
 For example, download and prepare the single MolmoAct2 episode listed in the quickstart:
 
@@ -145,7 +145,7 @@ uv run python -m prepare molmo prepare --episodes configs/quickstart/teleop.txt 
 
 The adapter retrieves the source files needed for that episode, including shared video packs, and preserves its camera offsets and state/action trajectories. Preparation makes no model calls.
 
-For a custom board, create [`data/boards/mine/manifest.json`](configs/quickstart/board.json) with the dataset, prepared episodes and run paths. [configs/quickstart/board.json](configs/quickstart/board.json) shows the structure with published-dataset severity rules. Use [`python -m board build`](board/build.py), [`clips`](board/clips.py), [`serve`](board/serve.py#L1123), and [`static media`](board/static.py#L44)/[`static site`](board/static.py#L45); each takes [`--help`](board/__main__.py). Refresh the board after changing field definitions. To edit them in the local viewer, add [`--dictionary-job JOB`](board/serve.py#L1135) to [`board serve`](board/serve.py#L1123).
+For a custom board, create [`data/boards/mine/manifest.json`](configs/quickstart/board.json) with the dataset, prepared episodes and run paths. [configs/quickstart/board.json](configs/quickstart/board.json) shows the structure with published-dataset severity rules. Use [`python -m board build`](board/build.py), [`clips`](board/clips.py), [`serve`](board/serve.py#L1330), and [`static media`](board/static.py#L44)/[`static site`](board/static.py#L45); each takes [`--help`](board/__main__.py). Refresh the board after changing field definitions. To edit them in the local viewer, add [`--dictionary-job JOB`](board/serve.py#L1343) to [`board serve`](board/serve.py#L1330).
 
 Export the same review job as a static viewer by preparing the media first, then building the site:
 
@@ -154,9 +154,9 @@ uv run python -m board static media --board data/review/mine --clips data/review
 uv run python -m board static site --board data/review/mine --clips data/review/mine/clips
 ```
 
-The site is written to [`data/review/mine/static/<build_id>/`](board/static.py#L598), with shared media in [`data/review/mine/static/media/`](board/static.py#L447).
+The site is written to [`data/review/mine/static/<build_id>/`](board/static.py#L634), with shared media in [`data/review/mine/static/media/`](board/static.py#L463).
 
-Paid staged runs require a clean tracked checkout. [`--resume RUN --why "reason"`](label/run.py#L154) retains the run and remaining budget. Repeat [`--dataset`](label/run.py#L146), [`--episodes`](label/run.py#L147) and [`--kind`](label/run.py#L148); pass the original harness options after [`--`](label/run.py#L156). [`python -m label.reparse RUN`](label/reparse.py) reparses stored replies without another call. Receipts survive failures. [`board grids`](board/grids.py) reconstructs base request grids only when original input hashes can be verified; detail/sensor images are counted but not reconstructed there.
+Paid staged runs require a clean tracked checkout. [`--resume RUN --why "reason"`](label/run.py#L159) retains the run and remaining budget. Repeat [`--dataset`](label/run.py#L151), [`--episodes`](label/run.py#L152) and [`--kind`](label/run.py#L153); pass the original harness options after [`--`](label/run.py#L161). [`python -m label.reparse RUN`](label/reparse.py) reparses stored replies and rebinds their evidence without another call. Capped runs refuse models whose prices are unknown. Receipts survive failures. [`board grids`](board/grids.py) reconstructs base request grids only when original input hashes can be verified; detail/sensor images are counted but not reconstructed there.
 
 [`checks.timebase scan`](checks/timebase.py#L325) proposes clock corrections; inspect them before [`apply`](checks/timebase.py#L331). Capture, source and sensor check failures are distinct from clean results. Optional hand pose uses [`board/hand_pose/modal_app.py`](board/hand_pose/modal_app.py) and [`board/hands.py`](board/hands.py); it is separate from ordinary annotation and has the licenses below.
 
@@ -174,7 +174,7 @@ uv run python -m gate prepare
 uv run python -m gate label --kind full --cap 20
 ```
 
-Comparison caps apply per model run and gate caps per recording setup. Sampling may differ by model: compare saved requests before claiming identical inputs. [`--with-example`](compare/__main__.py#L211) supplies a reference annotation; [`--routes`](compare/__main__.py#L216) reuses resolution choices. [gate/selection.json](gate/selection.json) and [gate/cases.json](gate/cases.json) define the selected cases; [`gate score`](gate/score.py) evaluates the supplied runs.
+Comparison caps apply per model run and gate caps per recording setup. Sampling may differ by model: compare saved requests before claiming identical inputs. [`--with-example`](compare/__main__.py#L211) supplies a reference annotation; [`--routes`](compare/__main__.py#L216) reuses resolution choices. [gate/selection.json](gate/selection.json) and [gate/cases.json](gate/cases.json) define the selected cases; [`gate score`](gate/score.py) evaluates the supplied runs. Its text checks test literal presence, not semantic correctness; ambiguous object claims require review and remain unresolved.
 
 [`uv run --frozen --offline pytest -q -ra`](.github/workflows/ci.yml) runs offline tests; viewer tests also require Node.js. CI uses the locked environment, Node, ffmpeg and ffprobe without provider credentials or dataset access. Secret scans cover the committed tree and reachable history; they do not grant permission to publish uploaded data.
 

@@ -8,6 +8,7 @@ import io
 import json
 import math
 import re
+import uuid
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -43,7 +44,7 @@ IMPLEMENTATION_SHA256 = hashlib.sha256(b''.join(path.read_bytes() for path in (
 PREPARED_CONTEXT = frozenset('''episode_id episode_index dataset profile robot_type state_kind state_note state_why
 state_unaligned fps duration_s n_state_frames real_times clocks clock_start_s clock_zero_s presentation_times
 cameras depth signals source instruction instruction_note task_label capture_qc sensor_checks stream_checks
-stream_pairing reader_issues contacts unshown_cameras recorded_jumps gripper_channels gripper_value piece
+stream_pairing check_versions reader_issues contacts unshown_cameras recorded_jumps gripper_channels gripper_value piece
 packaging collection_note data_dictionary retained_evidence_root recorded_camera_ns recorded_mcap_fields recorded_hdf5_metadata'''.split())
 PREPARED_CONTEXT = PREPARED_CONTEXT | {'represented_source_members', 'annotation_policy', 'task_mode', 'state_contract', 'trimmed',
                                      'recorded_table_fields', 'table_field_inventory'}
@@ -1364,6 +1365,11 @@ class Access:
                 else:
                     converted.append({'sensor_id': r['id'], 'time_s': ts})
             if reason is None:
+                cited = [t for ref in converted for t in ref['time_s']]
+                if (not cited or max(cited) < finding['start_s'] - 1e-9
+                        or min(cited) > finding['end_s'] + 1e-9):
+                    reason = 'cited samples do not overlap or bracket the finding interval'
+            if reason is None:
                 # Context images can support part of an event covered by measured evidence.
                 # Require continuous inspected coverage across the cited windows, including both ends.
                 covered_until, has_start = finding['start_s'], False
@@ -1426,7 +1432,8 @@ def rejected_selection_proof(record):
     """A durable unpaid rejection has explicit HTTP and numeric receipt types, never diagnostic prose."""
     def attempt(row):
         return (isinstance(row, dict) and row.get('state') == 'rejected unpaid'
-                and type(row.get('http_status')) is int and row['http_status'] in (401, 402)
+                and type(row.get('http_status')) is int and (row['http_status'] in (401, 402)
+                    or row['http_status'] == 429 and row.get('rejection_code') == 'insufficient_quota')
                 and type(row.get('http_attempt')) is int and row['http_attempt'] == 1
                 and type(row.get('cost_usd')) in (int, float) and row['cost_usd'] == 0
                 and math.isfinite(row['cost_usd']) and row.get('verified_unpaid') is True)
@@ -1470,12 +1477,19 @@ def recover_selection_reservations(doc):
 
 
 def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0.0,
-             reserve_dispatch=None, settle_dispatch=None,
+             reserve_dispatch=None, settle_dispatch=None, force_refresh=False,
              image_limit=500, image_bytes_limit=16_000_000):
     """Durable, bounded model selections. A dispatch with an uncertain outcome is never replayed."""
     digest = hashlib.sha256((access.signature() + packed(base_content)).encode()).hexdigest()
     path = Path(cache_path)
     doc = {'version': 1, 'digest': digest, 'status': 'complete', 'rounds': [], 'cost_usd': 0.0, 'limitations': []}
+    if force_refresh and path.exists():
+        # Keep the original durable receipt and its claim files for accounting and inspection.
+        refresh = uuid.uuid4().hex
+        path.rename(path.with_name(path.name + '.previous.' + refresh))
+        for claim in path.parent.glob(path.name + '.round*.claim'):
+            claim.rename(claim.with_name(claim.name + '.previous.' + refresh))
+        doc.update(input_digest=digest, digest=hashlib.sha256((digest + refresh).encode()).hexdigest())
     if path.exists():
         try:
             doc = json.loads(path.read_text())
@@ -1485,7 +1499,7 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
             doc = {'version': 1, 'digest': digest, 'status': 'incomplete', 'rounds': [],
                    'cost_usd': MAX_SELECTION_COST, 'cost_is_conservative_estimate': True,
                    'limitations': ['Saved inspection receipt is unreadable; no automatic retry.']}
-        if doc.get('digest') != digest:
+        if doc.get('input_digest', doc.get('digest')) != digest:
             doc.update(status='incomplete', limitations=['Inspection inputs changed; no automatic paid retry.'])
             return {**access.record(), **doc}, []
     extra = []
@@ -1562,7 +1576,8 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
                 from label.errors import KeyExhausted
                 if isinstance(error, KeyExhausted) and error.verified_unpaid:
                     saved.update(state='rejected unpaid', http_status=error.http_status,
-                                 http_attempt=1, verified_unpaid=True, cost_usd=0.0)
+                                 http_attempt=1, verified_unpaid=True, cost_usd=0.0,
+                                 **({'rejection_code': error.rejection_code} if error.rejection_code else {}))
                     write_atomic(path, doc)
                     if settle_dispatch is not None:
                         settle_dispatch(reserve, 0.0)

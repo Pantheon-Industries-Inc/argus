@@ -21,6 +21,27 @@ TIME_BASE_DEN = 1_000_000   # microseconds: some ABC frames are stamped only 1 u
 NOMINAL_FPS = 30            # only a one-frame tolerance for the muxer's own shift
 
 
+def check_packet_order(path, fmt: str) -> None:
+    """Reject actual display reordering; a codec's B-frame capability alone does not establish it."""
+    import av
+    with av.open(str(path), format=fmt) as source:
+        stream = source.streams.video[0]
+        if not stream.codec_context.has_b_frames:
+            return
+        stream.codec_context.thread_count = 1
+        index, last = 0, -1
+        for packet in source.demux(stream):
+            if packet.size:
+                # Dummy packet identities survive decoding, exposing picture order without inventing source times.
+                packet.pts = packet.dts = index
+                index += 1
+            for frame in packet.decode():
+                if frame.pts is None or frame.pts <= last:
+                    raise ValueError("Cannot copy reordered Annex-B frames with B-frames: messages do not establish both "
+                                     "presentation and decode timestamps.")
+                last = frame.pts
+
+
 def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.ndarray:
     """Copy Annex-B frames packet for packet into an mp4 whose pts are the frames' real capture times
     (rounded to the microsecond time base). No re-encode. Returns the pts in the written file, one per frame."""
@@ -38,6 +59,7 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
     try:
         with av.open(raw, format={"h264": "h264", "h265": "hevc"}[fmt]) as src, av.open(str(out), "w") as dst:
             ist = src.streams.video[0]
+            check_packet_order(raw, {"h264": "h264", "h265": "hevc"}[fmt])
             ost = dst.add_stream_from_template(ist)
             ost.time_base = Fraction(1, TIME_BASE_DEN)
             i = 0

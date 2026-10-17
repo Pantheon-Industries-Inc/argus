@@ -777,9 +777,9 @@ def test_legacy_resume_diagnostic_does_not_change_settled_spend(tmp_path):
     out.mkdir(parents=True)
     (out / 'episode_a.json').write_text(json.dumps({
         'parse_ok': True, 'labels': {}, 'usage': {'est_cost_usd': .2}}))
-    assert harness.run_batch([ep], out, keys=['sk-or-fixture'], concurrency=1, force=False) == 0
+    assert harness.run_batch([ep], out, keys=['sk-or-fixture'], concurrency=1, force=False) == 1
     diagnostic = json.loads((out / 'stale_episode_a.json').read_text())
-    assert diagnostic['status'] == 'unverified'
+    assert diagnostic['status'] == 'stale'
     assert label_spend(job) == pytest.approx(.2)
     assert label_spend_complete(job) is True
 
@@ -815,7 +815,7 @@ def test_rgb_request_and_model_call_are_unchanged(tmp_path, monkeypatch):
         calls.append(content)
         assert content == baseline['content']
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": []}'}}]}
+                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
     monkeypatch.setattr(harness, 'call_model', provider)
     result = harness.label_episode(ep, tmp_path / 'rgb.json', model='openai/gpt-6-astra', reasoning='medium',
                                    api_key='fixture', max_tokens=2000, timeout=10, cell_w=128)
@@ -1120,8 +1120,23 @@ def test_source_proof_covers_depth_presentation_and_retained_camera_assets(tmp_p
 def test_resolved_annotation_policy_does_not_opt_rgb_into_inspection(tmp_path):
     from label.source_eligibility import needs_extra_evidence
     ctx = {'state_kind': 'none', 'annotation_policy': {'sample_fps': 1, 'task_mode': 'session'},
-           'task_mode': 'session'}
+           'task_mode': 'session', 'check_versions': {'stream_pairing': 1}}
     ep = {'dir': tmp_path, 'context': ctx, 'signals': {}, 'sources': {}}
     assert not needs_extra_evidence(ctx)
     assert not ea.needs_inspection(ep, {})
-    assert {'annotation_policy', 'task_mode'} <= ea.PREPARED_CONTEXT
+    inspected = access(tmp_path, **ctx, recorded_metadata={'material': 'steel'})
+    fields = {field['name']: field for field in inspected.inventory()}
+    generated = inspected.inspect({'field_id': fields['check_versions']['id'], 'mode': 'metadata'})
+    original = inspected.inspect({'field_id': fields['recorded_metadata']['id'], 'mode': 'metadata',
+                                  'pointer': '/material'})
+    def finding(receipt, headline):
+        return {'headline': headline, 'start_s': None, 'end_s': None, 'adds_beyond_video': True,
+                'evidence': [{'evidence_id': receipt['id'], 'pointer': receipt['pointer']}]}
+    version_finding = finding(generated, 'Generated algorithm version appears in metadata')
+    material_finding = finding(original, 'Recorded material constrains interpretation')
+    bound = inspected.bind([version_finding, material_finding])
+    assert bound['untimed_findings'] == [material_finding]
+    assert [row['finding'] for row in bound['unbound_findings']] == [version_finding]
+    assert fields['check_versions']['kind'] == 'context'
+    assert fields['recorded_metadata']['kind'] == 'metadata'
+    assert {'annotation_policy', 'task_mode', 'check_versions'} <= ea.PREPARED_CONTEXT

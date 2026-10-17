@@ -460,7 +460,8 @@ def test_resume_source_identity_skips_same_input_and_stops_changed_input(tmp_pat
 
     def fake_label(path, target, *, api_key, **kw):
         calls.append(path)
-        result = {'parse_ok': True, 'input_identity': harness.input_identity(path, model='m', reasoning='medium',
+        result = {'parse_ok': True, 'labels': {'task_summary': 'Wait beside the visible workspace.'},
+                  'input_identity': harness.input_identity(path, model='m', reasoning='medium',
                   max_tokens=100, cell_w=0, example_dir=None)}
         target.write_text(json.dumps(result))
         return result
@@ -483,7 +484,7 @@ def test_resume_legacy_reply_is_marked_unverified_without_a_paid_call(tmp_path, 
     (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
     out = tmp_path / 'out'
     out.mkdir()
-    (out / f'{ep.name}.json').write_text(json.dumps({'parse_ok': True}))
+    (out / f'{ep.name}.json').write_text(json.dumps({'parse_ok': True, 'labels': {'task_summary': 'Wait beside the visible workspace.'}}))
     monkeypatch.setattr(harness, 'label_episode', lambda *args, **kwargs: pytest.fail('unexpected paid call'))
     assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
                              model='m', reasoning='medium', max_tokens=100, timeout=30) == 0
@@ -548,7 +549,7 @@ def test_spend_cap_stops_new_episodes(tmp_path, monkeypatch):
     def provider(*args, **kwargs):
         calls.append(1)
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": []}'}}]}
+                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
     monkeypatch.setattr(harness, 'call_model', provider)
     out = tmp_path / 'out'
     assert harness.run_batch(episodes, out, keys=['sk-or-a'], concurrency=1, force=False,
@@ -571,7 +572,8 @@ def test_an_episode_that_got_no_reply_says_why_until_it_gets_one(tmp_path, monke
     def fake_label(ep, out, *, api_key, **kw):
         if state["fail"] and ep.name.endswith("1"):
             raise ValueError("the request could not be built")
-        out.write_text(json.dumps({"parse_ok": True, "usage": {"est_cost_usd": 0.1}}))
+        out.write_text(json.dumps({"parse_ok": True, "labels": {"task_summary": "Wait beside the visible workspace."},
+                                  "usage": {"est_cost_usd": 0.1}}))
         return {"usage": {"est_cost_usd": 0.1}}
 
     monkeypatch.setattr(harness, "label_episode", fake_label)
@@ -847,7 +849,7 @@ def test_successful_reply_without_verifiable_usage_keeps_final_reservation(tmp_p
     calls = []
     def provider(*args, **kwargs):
         calls.append(1)
-        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}],
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}],
                 **({'usage': usage} if usage is not None else {})}
     monkeypatch.setattr(harness, 'call_model', provider)
     result = harness._call_and_record(tmp_path, out, [{'type': 'text', 'text': 'test'}], 0, {},
@@ -885,7 +887,7 @@ def test_run_batch_does_not_replay_successful_reply_with_missing_usage(tmp_path,
         calls.append(('selection' if selection is not None else 'final', kwargs.get('attempts')))
         if selection is not None:
             return selection
-        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
     monkeypatch.setattr(harness, 'call_model', provider)
     out = tmp_path / 'job' / 'run' / 'out'
     args = dict(keys=['sk-or-fixture'], concurrency=1, force=False, model='openai/gpt-6-astra',
@@ -1129,7 +1131,7 @@ def test_dry_run_from_the_command_line(tmp_path, monkeypatch, capsys):
 def test_timeline_rows_convert_and_malformed_rows_fail():
     rows = {"timeline_columns": harness.TIMELINE_COLUMNS,
             "timeline": [[0.0, 1.5, "left", "reach", "cup", None, None, "advancing", 0.1, None],
-                         [1.5, 2.0, "right", "grasp", "cup", None, "in gripper", "advancing", 0.2]]}
+                         [1.5, 2.0, "right", "grasp", "cup", None, "in gripper", "advancing", 0.2, None]]}
     out = harness.normalize_timeline(rows)
     assert "timeline_columns" not in out
     assert out["timeline"][1] == {"start_s": 1.5, "end_s": 2.0, "arm": "right", "action": "grasp", "object": "cup",
@@ -1212,7 +1214,8 @@ def _fake_harness(monkeypatch, calls, cost=0.5, rc=0):
         calls.append({"cmd": cmd, "env": env, "cwd": cwd})
         out = Path(cwd) / "out"
         out.mkdir(exist_ok=True)
-        (out / "episode_a.json").write_text(json.dumps({"parse_ok": True, "usage": {"est_cost_usd": cost}}))
+        (out / "episode_a.json").write_text(json.dumps({"parse_ok": True, "labels": {"task_summary": "Wait beside the visible workspace."},
+                                                                      "usage": {"est_cost_usd": cost}}))
         stdout.write(f"done=1 failed=0 skipped=0 total_cost=${cost:.2f} out_dir={out} retired_keys=0\n")
         return subprocess.CompletedProcess(cmd, rc)
     monkeypatch.setattr(lrun.subprocess, "run", fake_run)

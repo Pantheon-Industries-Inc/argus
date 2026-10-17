@@ -84,7 +84,7 @@ def pose_state(paths, q, clock):
                 if decoded is None:
                     failures.append(channel.topic + ' cannot be decoded')
                     continue
-                stamp, error = f.mcap_capture_stamp(decoded)
+                stamp, error = f.mcap_capture_stamp(decoded, schema=schema, message_encoding=channel.message_encoding)
                 kind = 'capture' if stamp is not None else 'arrival'
                 if error or kind != clock:
                     failures.append(channel.topic + ' has invalid or incompatible pose timing')

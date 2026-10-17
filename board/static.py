@@ -28,7 +28,7 @@ page loads is a plain file:
                                          re-timing), named by their content like the other media, so a new build
                                          does not upload them again
 
-Media names carry a hash of the source clip's size and mtime and of the encode settings, so a media file
+Media names carry a hash of the source clip's content and of the encode settings, so a media file
 never changes under its name (cache it forever), a re-cut clip gets a new name, and builds share media.
 The site step writes these names whether or not the media exists yet, so a build made before the
 transcode finishes is already complete once it does.
@@ -58,6 +58,7 @@ import argparse
 import concurrent.futures as cf
 import datetime as dt
 import hashlib
+from functools import lru_cache
 import json
 import math
 import os
@@ -153,12 +154,27 @@ def ms_key(t: float) -> int:
     return math.floor(t * 1000 + 0.5)   # Preserve existing keys; goal_times checks browser agreement.
 
 
+@lru_cache(maxsize=8192)
+def _source_digest(path: str, version: tuple) -> str:
+    h = hashlib.sha256()
+    with open(path, 'rb') as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            h.update(chunk)
+    if _source_version(Path(path)) != version:
+        raise ValueError('Media changed while its identity was being read')
+    return h.hexdigest()
+
+
+def _source_version(path: Path) -> tuple:
+    st = path.stat()
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
 def src_sig(p: Path) -> str:
     try:
-        st = p.stat()
-        return f"{st.st_size}-{st.st_mtime_ns}"
-    except OSError:
-        return "missing"
+        return _source_digest(str(p.resolve()), _source_version(p))
+    except FileNotFoundError:
+        return 'missing'
 
 
 def _h(s: str, n: int) -> str:
@@ -455,7 +471,7 @@ def cmd_media(a):
     print(f"frames: {len(fjobs)} to extract", flush=True)
 
     def do_frame(j):
-        jpg = sa.extract_frame(j[0], j[1], 640)
+        jpg = sa.extract_frame(j[0], j[1], 640, _wait=True)
         if not jpg:
             return False
         j[2].parent.mkdir(parents=True, exist_ok=True)
@@ -527,8 +543,18 @@ def _git_commit() -> str:
 
 
 def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path | None = None,
-                 keypoints: Path | None = None, frames: list | None = None, sensors: Path | None = None, dictionary_job: Path | None = None) -> str:
+                 keypoints: Path | None = None, frames: list | None = None, sensors: Path | None = None,
+                 dictionary_job: Path | None = None, media: list | None = None) -> str:
     h = hashlib.sha1()
+    # Export policy and presentation helpers affect the bytes served under this ID.
+    for source in sorted(HERE_DIR.glob('*.py')) + [HERE_DIR / 'families.json', HERE_DIR / 'tag_names.json']:
+        h.update(source.name.encode() + source.read_bytes())
+    for ref in sorted(media or []):
+        h.update(f'media|{ref}\n'.encode())
+    if compare is not None:
+        for source in sorted(compare.glob('*/*.json')):
+            if source.name in files:
+                h.update(source.relative_to(compare).as_posix().encode() + source.read_bytes())
     for f in files:
         gp = qa.parent / 'grids' / Path(f).stem / 'grids.json'
         if gp.is_file():
@@ -537,14 +563,16 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
         for f in ["index.json", *files]:
             sp = sensors / f
             if sp.exists():
-                st = sp.stat()
-                h.update(f"sensors|{f}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+                h.update(f"sensors|{f}|".encode() + sp.read_bytes())
     # the frames on disk are part of the build (the page lists only those), so a build made before the media finish
     # gets a new id once they have
     for rel in frames or []:
         h.update(f"frame|{rel}\n".encode())
     if keypoints is not None:
         h.update(hashlib.sha1((keypoints / "index.json").read_bytes()).digest())
+        for f in files:
+            if (keypoints / f).is_file():
+                h.update(f.encode() + (keypoints / f).read_bytes())
     for name in ("index.json", "metrics.json"):
         if compare is not None and (compare / name).exists():
             h.update(hashlib.sha1((compare / name).read_bytes()).digest())
@@ -552,8 +580,7 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
         for f in files:
             hp = hands / f
             if hp.exists():
-                st = hp.stat()
-                h.update(f"hands|{f}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+                h.update(f"hands|{f}|".encode() + hp.read_bytes())
     newest = 0
     for f in files:
         st = (qa / f).stat()
@@ -561,7 +588,7 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
             current = sa.current_label(json.loads((qa / f).read_text()), dictionary_job, f)
             h.update(dumps(current, sort_keys=True).encode())
         newest = max(newest, st.st_mtime)
-        h.update(f"{f}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+        h.update(f.encode() + (qa / f).read_bytes())
     h.update(hashlib.sha1(sa.INDEX_HTML.encode()).digest())
     h.update(ENC_TAG.encode() + FRAME_TAG.encode())
     return f"{dt.datetime.fromtimestamp(newest):%Y%m%d}-{h.hexdigest()[:8]}"
@@ -595,7 +622,15 @@ def cmd_site(a):
     keypoints = keypoints_dir(a.qa, a.keypoints)
     sensors = sensors_dir(a.qa, getattr(a, "sensors", None))
     present = sorted(f["rel"] for e in eps for f in e["frames"].values() if (a.out / "media" / f["rel"]).exists())
-    bid = a.build_id or build_id_for(a.qa, files, compare, hands, keypoints, present, sensors, getattr(a, "dictionary_job", None))
+    identity = build_id_for(a.qa, files, compare, hands, keypoints, present, sensors,
+                            getattr(a, "dictionary_job", None),
+                            media=sorted(m['rel'] for e in eps for m in e['media'].values()))
+    # Page settings and board metadata also change the exported site.
+    presentation = dumps([a.title, a.public_base, sa.board_name(a.board), sa.labels_license(a.board),
+                          sa.read_header(getattr(a, 'header', None))], sort_keys=True)
+    bid = a.build_id or identity + '-' + _h(presentation, 8)
+    if not bid or Path(bid).name != bid or bid.startswith('.'):
+        raise ValueError('build id must be a single visible directory name')
     out = a.out / bid
     if out.exists() and not a.force:
         print(f"{out} exists (a build id names one set of inputs); pass --force to rewrite it")
@@ -757,11 +792,20 @@ def cmd_site(a):
     # Operational paths stay outside the publication root, including its media.
     root_key = hashlib.sha256(str(a.out.resolve()).encode()).hexdigest()[:16]
     receipt = a.out.resolve().parent / '.argus-build-receipts' / root_key / f'{bid}.json'
-    write_atomic(receipt, build)
     if out.exists():
-        out.rename(a.out / f".{bid}.old.{int(time.time())}")
-    stage.rename(out)
-    (a.out / "LATEST").write_text(bid + "\n")
+        old_payload = {p.relative_to(out).as_posix(): p.read_bytes() for p in out.rglob('*')
+                       if p.is_file() and p.name != 'BUILD.json'}
+        new_payload = {p.relative_to(stage).as_posix(): p.read_bytes() for p in stage.rglob('*')
+                       if p.is_file() and p.name != 'BUILD.json'}
+        if old_payload != new_payload:
+            raise ValueError('An existing build id cannot be reused for changed public content; use a new build id')
+        from board.build import exchange_directories
+        exchange_directories(out, stage)
+        shutil.rmtree(stage)
+    else:
+        stage.rename(out)
+    write_atomic(receipt, build)
+    write_atomic(a.out / 'LATEST', bid + '\n', serializer=lambda value, **kwargs: value)
     print(json.dumps({k: v for k, v in build.items() if k != "missing_media"}, indent=1))
     print(f"wrote {out}; {len(missing)} media files not yet made")
     return 0

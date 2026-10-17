@@ -90,7 +90,7 @@ const c0 = T.tcCardHtml(contact('c1', 'right', 0, 4.25, {...seen('yes', {hand: '
   dips_s: [1.24, 3]}), 0, 'yes');
 check(c0.includes('Right hand, contact c1') && c0.includes('Already touching at the start')
   && c0.includes('ends <span data-t="4.25">4.3s</span>'), 'the card\'s hand and times');
-check(c0.includes('The frames show the left hand, and the signal\'s name says right'), 'a hand the frames disagree on');
+check(c0.includes('The frames show the left hand, and the signal&#39;s name says right'), 'a hand the frames disagree on');
 check(!c0.includes('>Notes<'), 'a null note is left out');
 check(c0.includes('1.2s and 3.0s: its strength falls under half its peak and comes back'), 'the dips');
 const c3 = T.tcCardHtml(contact('c3', 'right', 0, 1, {shown: false, to_end: true}), 2, 'unshown');

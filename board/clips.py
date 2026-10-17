@@ -269,7 +269,7 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
            *(["-movie_timescale", str(DISPLAY_TICKS_PER_S)] if dense else []),
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True, timeout=600)
         # A zero final packet duration hides a readable frame from the count used to slice its capture times.
         frame_lengths(tmp)
         got = clip_frames(tmp)

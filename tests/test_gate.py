@@ -50,7 +50,8 @@ def test_each_kind_of_fact_is_judged():
     held = {"held": {"named": "fork", "not_named": "chopstick"}}
     fork = {"timeline": [{"action": "pick up", "object": "fork"}], "task_summary": "Set the table."}
     assert score.judge(held, fork)[0]
-    assert score.judge(held, {"timeline": [{"object": "fork"}, {"action": "the fork, not chopsticks"}]})[0]
+    unresolved = score.judge(held, {"timeline": [{"object": "fork"}, {"action": "the fork, not chopsticks"}]})
+    assert not unresolved[0] and unresolved[1][0].startswith('needs review:')
     wrong = score.judge(held, {"timeline": [{"object": "chopsticks"}]})
     assert not wrong[0] and wrong[1][0].startswith("claims chopstick") and "never names a fork" in wrong[1]
     ego = {"named": ["sew"], "max_issue_sev": "low"}

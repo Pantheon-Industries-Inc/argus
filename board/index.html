@@ -2197,8 +2197,49 @@ const rightCol = document.getElementById('right-col');
 
 // every string the page shows goes through here; the model's en and em dashes read as plain hyphens on the page
 // (the episode JSON keeps the model's text as written)
-function esc(s) { return String(s ?? '').replace(/[\u2013\u2014]/g, '-').replace(/[&<>"]/g,
-  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function esc(s) { return String(s ?? '').replace(/[\u2013\u2014]/g, '-').replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function safeExternalUrl(value) {
+  if (typeof value !== 'string') return '';
+  try {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) ? url.href : '';
+  } catch (_) { return ''; }
+}
+
+async function retryFrameImage(image) {
+  if (image?.tagName !== 'IMG' || !image.isConnected) return;
+  const source = image.currentSrc || image.src;
+  let url;
+  try { url = new URL(source, location.href); } catch (_) { return; }
+  if (url.origin !== location.origin || !url.pathname.endsWith('/api/frame') || image._frameRetry === source) return;
+  image._frameRetry = source;
+  // Leave enough time for the renderer's bounded encode work to release a slot.
+  const deadline = Date.now() + 30000;
+  for (let attempt = 0; Date.now() < deadline; attempt++) {
+    if (!image.isConnected || image.src !== source) return;
+    let response;
+    try {
+      response = await fetch(source, {cache: 'no-store'});
+      if (response.ok) {
+        const blob = await response.blob();
+        if (!image.isConnected || image.src !== source) return;
+        const objectUrl = URL.createObjectURL(blob);
+        const release = () => URL.revokeObjectURL(objectUrl);
+        image.addEventListener('load', release, {once: true});
+        image.addEventListener('error', release, {once: true});
+        image.src = objectUrl;
+        return;
+      }
+      if (response.status !== 503) return;
+    } catch (_) { response = null; }
+    const delay = Math.min(2000, Math.max(250, 1000 * (Number(response?.headers.get('Retry-After')) || 2 ** attempt)));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return;
+    await new Promise(resolve => setTimeout(resolve, Math.min(delay, remaining)));
+  }
+}
+
 function isNullish(v) { return v == null || (typeof v === 'string' && v.toLowerCase() === 'null'); }
 function fmtT(t) { return Number.isFinite(t) ? t.toFixed(1) + 's' : '-'; }
 // a key event's kind as the model tagged it, in plain words ("subgoal_complete" reads "subgoal complete")
@@ -2550,7 +2591,7 @@ function buildVideoMenu() {
       + `inputmode="decimal" aria-label="To, in seconds" value="${st ? st.t1.toFixed(1) : (dur ? dur.toFixed(1) : '')}">`
       + ` s<button type="button" class="vd-go">Download</button></div></div>`
     + (cams.length > 1 ? `<div class="vd-cams">Each camera on its own</div><div class="vd-cam-row">`
-      + cams.map(c => `<a role="menuitem" href="api/video?id=${eidEnc}&cam=${c}&download=1" download>${esc(name(c))}`
+      + cams.map(c => `<a role="menuitem" href="api/video?id=${eidEnc}&cam=${encodeURIComponent(c)}&download=1" download>${esc(name(c))}`
         + `</a>`).join('') + `</div>` : '')
     + `<div class="vd-status" id="vd-status" role="status"></div>`;
 }
@@ -2616,7 +2657,7 @@ const DS_ORDER = ['molmo', 'abc130k', 'galaxea', 'habit', 'fastumi', 'realomin',
 // by board/build.py); nothing for a dataset that has no entry, such as your own
 function datasetSourceHtml(s) {
   if (!s || !s.name || !s.license) return '';
-  const link = (url, text) => url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(text)}</a>`
+  const link = (url, text) => safeExternalUrl(url) ? `<a href="${esc(safeExternalUrl(url))}" target="_blank" rel="noreferrer">${esc(text)}</a>`
     : esc(text);
   return `Footage: ${link(s.hub, s.name)}${s.publisher ? ` (${esc(s.publisher)})` : ''}, ${link(s.license_url,
     s.license)}`;
@@ -2915,7 +2956,7 @@ async function setDataset(ds, keepFile) {
 (() => {
   const lic = BOARD.labels_license, el = document.getElementById('dl-lic');
   if (!lic || !el) return;
-  const name = lic.url ? `<a href="${esc(lic.url)}" target="_blank" rel="noreferrer">${esc(lic.name)}</a>` : esc(lic.name);
+  const name = safeExternalUrl(lic.url) ? `<a href="${esc(safeExternalUrl(lic.url))}" target="_blank" rel="noreferrer">${esc(lic.name)}</a>` : esc(lic.name);
   el.innerHTML = `Labels${lic.by ? ` by ${esc(lic.by)}` : ''}, licensed ${name}. The footage keeps each dataset's license.`;
   el.hidden = false;
 })();
@@ -7815,6 +7856,8 @@ async function renderEpisodeTable(order, first) {
 // run before newer datasets were added), which shows only the old datasets and
 // empty categories. Force a fresh load in that case.
 window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
+
+window.addEventListener('error', event => { void retryFrameImage(event.target); }, true);
 
 loadEpisodes();
 </script>

@@ -34,9 +34,10 @@ RIGS = ("teleop", "handheld", "ego")
 SEV = {"low": 1, "medium": 2, "high": 3}
 # the provider's prompt cache: a read costs a tenth of the input price, a write 1.25 times it
 CACHE_READ, CACHE_WRITE = 0.1 * PRICE_IN, 1.25 * PRICE_IN
-# a sentence that names a word in order to deny it ("rather than chopsticks", "the instruction says chopsticks")
-DENIAL = re.compile(r"\b(not|no|rather than|instead of|instruction|instructed|asked|given|named|called|says|mentions)\b",
-                    re.I)
+def literal_pattern(term: str, *, plural=False):
+    """Literal words/phrases, with an explicit optional regular s plural for held objects."""
+    suffix = 's?' if plural and not term.lower().endswith('s') else ''
+    return re.compile(r'(?<!\w)' + re.escape(term) + suffix + r'(?!\w)', re.I)
 
 
 def load_cases() -> dict:
@@ -114,16 +115,23 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         ok.append(rel in case["align"])
         ok[-1] or why.append(f"alignment {rel}")
     if "issue" in case:
-        sevs = [i.get("severity") for i in _matches(labels.get("data_issues"), case["issue"])]
-        need = SEV[case.get("sev", "low")]
-        ok.append(any(SEV.get(s, 0) >= need for s in sevs))
-        ok[-1] or why.append("issue missing" if not sevs else f"issue at {sevs}")
+        matches = _matches(labels.get('data_issues'), case['issue'])
+        sevs = [i.get('severity') for i in matches]
+        meets = bool(matches)
+        if 'sev' in case:
+            meets = any(SEV.get(severity, 0) >= SEV[case['sev']] for severity in sevs)
+        ok.append(meets)
+        meets or why.append('issue missing' if not matches else f'issue at {sevs}')
     if "mistake" in case:
         ok.append(bool(_matches(labels.get("operator_mistakes"), case["mistake"])))
         ok[-1] or why.append("mistake missing")
     if "named" in case:
         text = " ".join(texts_handled(labels)).lower()
-        miss = [w for w in case["named"] if w not in text]
+        groups = [[term] if isinstance(term, str) else term for term in case["named"]]
+        if not all(isinstance(group, list) and group and all(isinstance(w, str) and w for w in group)
+                   for group in groups):
+            raise ValueError('named facts require words, phrases or explicit alternatives')
+        miss = [' / '.join(group) for group in groups if not any(literal_pattern(w).search(text) for w in group)]
         ok.append(not miss)
         miss and why.append(f"never names {miss}")
     if "max_issue_sev" in case:
@@ -133,12 +141,25 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         over and why.append(f"issues above {case['max_issue_sev']}: {over}")
     if "held" in case:
         texts = texts_handled(labels)
-        wrong, right = case["held"]["not_named"], case["held"]["named"]
-        claimed = [t for t in texts if wrong in t.lower() and not DENIAL.search(t)]
-        named = any(re.search(rf"\b{right}s?\b", t, re.I) for t in texts)
-        ok.append(not claimed and named)
-        claimed and why.append(f"claims {wrong}: {claimed[0][:80]}")
-        named or why.append(f"never names a {right}")
+        wrong, right = case['held']['not_named'], case['held']['named']
+        wrong_pattern, right_pattern = literal_pattern(wrong, plural=True), literal_pattern(right, plural=True)
+        # The prompt defines timeline.object as the object acted on. Other prose
+        # can quote instructions or deny a claim; its meaning requires review.
+        objects = [step['object'] for step in labels.get('timeline') or []
+                   if isinstance(step, dict) and isinstance(step.get('object'), str)]
+        claimed = [text for text in objects if wrong_pattern.search(text)]
+        references = [text for text in texts if wrong_pattern.search(text)]
+        named = any(right_pattern.search(text) for text in objects)
+        ok.append(not references and named)
+        if claimed:
+            why.append(f'claims {wrong} in timeline.object: {claimed[0][:80]}')
+        elif references:
+            why.append(f'needs review: {wrong} appears in prose; handling cannot be determined: {references[0][:80]}')
+        if not named:
+            if any(right_pattern.search(text) for text in texts):
+                why.append(f'needs review: no structured timeline.object claim for {right}')
+            else:
+                why.append(f'never names a {right}')
     return all(ok), why
 
 
@@ -149,21 +170,30 @@ def score(runs: list[Path]) -> dict:
 
     def rig_stats(rig):
         return per.setdefault(rig, {"cases": 0, "met": 0, "asked": 0, "parsed": 0, "flags": 0, "cost": {},
-                                    "cache_reads": [], "failures": [], "flagged": []})
+                                    "cache_reads": [], "failures": [], "flagged": [], "unresolved": 0})
     seen = set()
+    selected_runs = []
+    owners = {}
     for run in runs:
+        out = Path(run) / 'out'
+        selected = []
+        for file in sorted(out.glob('*.json')):
+            name = file.stem.removeprefix('failed_')
+            if name not in role or (name != file.stem and (out / f'{name}.json').exists()):
+                continue
+            if name in owners:
+                raise ValueError(f'Duplicate gate episode {name}: {owners[name]} and {file}; score the runs separately')
+            owners[name] = file
+            selected.append((name, file))
+        selected_runs.append((Path(run), selected))
+    for run, selected in selected_runs:
         # a setup whose run wrote no output at all still scores, every episode as "no output"
         rj = Path(run) / "run.json"
         ds = str(json.loads(rj.read_text()).get("dataset") or "") if rj.exists() else ""
         if ds.startswith("gate_") and ds[5:] in sel:
             rig_stats(ds[5:])
         out = Path(run) / "out"
-        for f in sorted(out.glob("*.json")):
-            name = f.stem.removeprefix("failed_")
-            if name not in role:
-                continue
-            if name != f.stem and (out / f"{name}.json").exists():
-                continue        # a cut-off reply asked again on a resume: the later reply is the result
+        for name, f in selected:
             seen.add(name)
             rig, r = role[name]
             p = rig_stats(rig)
@@ -190,6 +220,7 @@ def score(runs: list[Path]) -> dict:
             case = case_for(name, cases)
             if case:
                 met, why = judge(case, labels)
+                p["unresolved"] += any(reason.startswith("needs review:") for reason in why)
                 p["cases"] += 1
                 p["met"] += met
                 met or p["failures"].append(f"{name}: {'; '.join(why)}")
@@ -232,7 +263,7 @@ def main() -> int:
             continue
         p, c = per[rig], per[rig]["cost_sample"]
         print(f"{rig:9s} cases {p['met']}/{p['cases']}  parse {p['parsed']}/{p['asked']}  flags {p['flags']}  "
-              f"cost sample {c['episodes']} episodes, {c['hours'] * 60:.1f} min: ${c['billed_per_hour']}/h billed, "
+              f"needs review {p['unresolved']}  cost sample {c['episodes']} episodes, {c['hours'] * 60:.1f} min: ${c['billed_per_hour']}/h billed, "
               f"${c['cold_per_hour']}/h cold")
         for ds, x in p["cost_by_dataset"].items():
             print(f"    {ds:15s} {x['episodes']:3d} episodes {x['minutes']:6.1f} min  ${x['billed_per_hour']}/h billed")

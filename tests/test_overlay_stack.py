@@ -288,3 +288,48 @@ def test_retained_scene_clip_size_keeps_original_model_query_clock(tmp_path):
     assert qualified['unshown1'][6] == .2
     assert clips.main_cam(sources) == 'exo'
     assert {name: (episode / name).read_bytes() for name in before} == before
+
+
+def test_dataset_and_license_urls_cannot_turn_into_executable_links():
+    script = r'''
+const assert=require('assert'),{piece}=require(process.argv[1])();
+const api=new Function(piece('esc')+piece('safeExternalUrl')+piece('datasetSourceHtml')
+ +'return {esc,safeExternalUrl,datasetSourceHtml};')();
+assert.equal(api.esc("' onclick='x"),'&#39; onclick=&#39;x');
+for(const url of ['javascript:alert(1)','JaVaScRiPt:alert(1)','java\nscript:alert(1)','data:text/html,<script>x</script>']) {
+ assert.equal(api.safeExternalUrl(url),'');
+ assert(!api.datasetSourceHtml({name:'Dataset',license:'Public',hub:url,license_url:url}).includes('href='));
+}
+const html=api.datasetSourceHtml({name:'Dataset',license:'Public',hub:'https://example.com/data?q=a&b=c'});
+assert(html.includes('href="https://example.com/data?q=a&amp;b=c"'));
+'''
+    subprocess.run(['node', '-e', script, str(HERE / 'page_functions.js')], check=True)
+
+
+def test_temporary_frame_load_failure_retries_only_live_local_frames():
+    script = r'''
+const assert=require('assert'),{piece}=require(process.argv[1])();
+(async()=>{
+ let attempts=0,revoked=0,clock=0;
+ const now={now:()=>clock},wait=(fn,ms)=>{clock+=ms;fn();};
+ const urlApi=class extends URL{};
+ urlApi.createObjectURL=()=> 'blob:ready';urlApi.revokeObjectURL=()=>revoked++;
+ const image={tagName:'IMG',isConnected:true,currentSrc:'https://board.example/api/frame?id=x&t=1',
+  src:'https://board.example/api/frame?id=x&t=1',addEventListener(event,fn){this.loaded=fn;}};
+ const responses=[...Array.from({length:5},()=>({status:503,ok:false,headers:{get:()=> '1'}})),
+  {status:200,ok:true,blob:async()=>({})}];
+ const api=new Function('fetch','URL','location','setTimeout','Date',piece('retryFrameImage')+'return retryFrameImage;')(
+  async()=>{attempts++;return responses.shift();},urlApi,{href:'https://board.example/',origin:'https://board.example'},wait,now);
+ await api(image);assert.equal(attempts,6);assert.equal(image.src,'blob:ready');image.loaded();assert.equal(revoked,1);
+ await api({...image,currentSrc:'https://external.example/api/frame?id=x'});assert.equal(attempts,6);
+ await api({...image,isConnected:false});assert.equal(attempts,6);
+ await api({...image,currentSrc:'https://board.example/media/missing.jpg'});assert.equal(attempts,6);
+ assert.equal(clock,5000,'a normally busy renderer can recover after five seconds');
+ let failures=0;clock=0;
+ const down=new Function('fetch','URL','location','setTimeout','Date',piece('retryFrameImage')+'return retryFrameImage;')(
+  async()=>{failures++;return {status:503,ok:false,headers:{get:()=> '100000'}};},urlApi,
+  {href:'https://board.example/',origin:'https://board.example'},wait,now);
+ await down({...image,src:'https://board.example/api/frame?id=other',currentSrc:'https://board.example/api/frame?id=other'});assert.equal(clock,30000,'retry window is bounded');assert(failures<=16,'busy responses do not cause a retry storm');
+})().catch(error=>{console.error(error);process.exit(1);});
+'''
+    subprocess.run(['node', '-e', script, str(HERE / 'page_functions.js')], check=True)

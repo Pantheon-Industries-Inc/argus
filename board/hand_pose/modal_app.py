@@ -324,6 +324,8 @@ def full(specs: str, force: bool = False):
             break
         todo = infra
     print(f"ok={len(ok)} failed={len(failed)}", flush=True)
+    if failed:
+        raise SystemExit(1)
 
 
 @app.local_entrypoint()

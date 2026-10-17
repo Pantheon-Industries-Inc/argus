@@ -131,13 +131,13 @@ def _verified_final_cost(usage: dict, model: str) -> tuple[float | None, str]:
                 return float(value), source
         except OverflowError:
             pass
-    if not _complete_token_usage(usage):
+    if (not _complete_token_usage(usage) or not model.startswith("openai/")
+            or model.split("/", 1)[-1] not in OPENAI_PRICES):
         return None, "unverified"
     try:
         listed = openai_list_cost(model, usage)
-        estimated = usage["prompt_tokens"] * PRICE_IN + usage["completion_tokens"] * PRICE_OUT
-        cost = max(estimated, listed) if listed is not None else estimated
-        if math.isfinite(cost) and cost >= 0:
+        cost = listed
+        if cost is not None and math.isfinite(cost) and cost >= 0:
             return cost, "estimate"
     except OverflowError:
         pass
@@ -206,8 +206,14 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
             text = e.read().decode(errors="replace")[:500]
             last = f"HTTP {e.code}: {text[:300]}"
             if is_key_exhausted(e.code, text):
-                if e.code in (401, 402) and attempt == 0:
-                    raise KeyExhausted(last, http_status=e.code, first_attempt=True)
+                quota = None
+                try:
+                    quota = json.loads(text).get('error', {}).get('code')
+                except (ValueError, AttributeError):
+                    pass
+                if attempt == 0 and (e.code in (401, 402) or (
+                        url == OPENAI_URL and e.code == 429 and quota == 'insufficient_quota')):
+                    raise KeyExhausted(last, http_status=e.code, first_attempt=True, rejection_code=quota)
                 raise RuntimeError(last)
             if e.code in (429, 500, 502, 503, 504, 529):
                 if attempt + 1 == attempts:
@@ -226,11 +232,14 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
 def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, api_key: str, max_tokens: int,
                   timeout: int, cell_w: int = 0, example_dir: str | None = None, dry_run: bool = False,
                   reserve_final=None, reserve_selection=None, settle_selection=None, force_refresh=False,
-                  sample_fps=None, task_mode=None, dataset_note=None) -> dict:
+                  sample_fps=None, task_mode=None, dataset_note=None, require_known_pricing=False) -> dict:
     context = json.loads((Path(ep_dir) / 'context.json').read_text())
     resolved = policy.resolve(context, model=model, reasoning=reasoning, sample_fps=sample_fps,
                               task_mode=task_mode, dataset_note=dataset_note)
     model, reasoning = resolved['model'], resolved['reasoning']
+    if not dry_run and require_known_pricing and (not model.startswith('openai/')
+            or model.split('/', 1)[-1] not in OPENAI_PRICES):
+        raise ValueError(f'No verified pricing rates for {model}; a spend cap requires known rates')
     if not dry_run and not is_openrouter_key(api_key) and not model.startswith('openai/'):
         raise ValueError(f'{model} requires an OpenRouter key; no request was dispatched.')
     identity = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
@@ -283,7 +292,8 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                             reasoning=reasoning, api_key=api_key, max_tokens=max_tokens, timeout=timeout,
                             dry_run=dry_run, prompt_text=req["prompt"], evidence_access=req["evidence_access"],
                             reserve_final=reserve_final, reserve_selection=reserve_selection,
-                            settle_selection=settle_selection)
+                            settle_selection=settle_selection, force_refresh=force_refresh,
+                            require_known_pricing=require_known_pricing)
 
 
 def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int, cell_w: int,
@@ -497,8 +507,15 @@ def episode_cost(result: dict) -> float:
             + auxiliary_cost(route, routing=True) + auxiliary_cost(inspection))
 
 
-def final_cost_bound(content: list, max_tokens: int) -> float:
+def final_cost_bound(content: list, max_tokens: int, *, model=DEFAULT_MODEL, require_known_pricing=True) -> float:
     """Reserve a generous input allowance and the full output limit before dispatch."""
+    tiers = OPENAI_PRICES.get(model.split('/', 1)[-1]) if model.startswith('openai/') else None
+    if tiers is None and require_known_pricing:
+        raise ValueError(f'No verified pricing rates for {model}; a spend cap requires known rates')
+    # Uncapped custom models retain a provisional hold if their provider loses the cost receipt.
+    # This fallback is never used to authorize a capped dispatch.
+    rates = tiers or OPENAI_PRICES[DEFAULT_MODEL.split('/', 1)[-1]]
+    price_in, price_out = max(t[0] for t in rates), max(t[2] for t in rates)
     import io
     from PIL import Image
     text_bytes = sum(len(c.get('text', '').encode('utf-8')) for c in content if c.get('type') == 'text')
@@ -508,8 +525,7 @@ def final_cost_bound(content: list, max_tokens: int) -> float:
             raw = base64.b64decode(part['image_url']['url'].split(',', 1)[1])
             with Image.open(io.BytesIO(raw)) as image:
                 images += estimate_image_tokens(*image.size)
-    return round((text_bytes + 4 * images + 1024) * max(PRICE_IN, 2.0e-5)
-                 + max_tokens * max(PRICE_OUT, 7.5e-5), 6)
+    return round((text_bytes + 4 * images + 1024) * price_in + max_tokens * price_out, 6)
 
 
 def persist_final_claim(path: Path, claim: dict) -> None:
@@ -560,7 +576,22 @@ def parse_response(text: str) -> tuple[dict, bool]:
         labels = json.loads(fenced.group(1) if fenced else text)
         if not isinstance(labels, dict):
             raise ValueError(f"the reply is {json_kind(labels)}, not an object")
-        return typed_labels(normalize_timeline(labels)), True
+        had_rows = bool(labels.get('timeline'))
+        labels = typed_labels(normalize_timeline(labels))
+        completion = labels.get('completion')
+        if isinstance(completion, dict) and completion.get('task_completed') is not None and completion['task_completed'] not in (
+                'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
+            raise ValueError('completion.task_completed has an unknown outcome')
+        for row in labels.get('timeline') or []:
+            progress = row.get('progress')
+            if progress is not None and (type(progress) not in (int, float) or not math.isfinite(progress)
+                                         or not 0 <= progress <= 1):
+                raise ValueError('timeline progress must be a finite number from 0 to 1')
+        if had_rows and not labels.get('timeline') and not any(labels.get(k) for k in LIST_FIELDS[1:] + DICT_FIELDS + TEXT_FIELDS):
+            raise ValueError('no usable timeline rows remain')
+        if not substantive_annotation(labels):
+            raise ValueError('the reply contains no substantive annotation content')
+        return labels, True
     except Exception as e:
         return {"_raw": text, "_parse_error": f"{type(e).__name__}: {e}"[:300]}, False
 
@@ -590,13 +621,22 @@ def normalize_timeline(labels: dict) -> dict:
     if not isinstance(tl, list) or not any(isinstance(r, list) for r in tl):
         labels.pop("timeline_columns", None)
         return labels
-    cols = labels.pop("timeline_columns", None) or TIMELINE_COLUMNS
+    cols = labels.pop("timeline_columns", None)
+    if cols is None:
+        cols = TIMELINE_COLUMNS
+    if (not isinstance(cols, list) or not cols or any(not isinstance(c, str) or not c for c in cols)
+            or len(set(cols)) != len(cols)):
+        for i, row in enumerate(tl):
+            if isinstance(row, list):
+                _drop(labels, 'timeline', i, 'timeline columns must be unique nonempty names')
+        labels['timeline'] = [r for r in tl if isinstance(r, dict)]
+        return labels
     out = []
     for i, row in enumerate(tl):
         if isinstance(row, dict):
             out.append(row)
             continue
-        if not isinstance(row, list) or not (len(cols) - 1 <= len(row) <= len(cols)):
+        if not isinstance(row, list) or len(row) != len(cols):
             n = len(row) if isinstance(row, list) else "?"
             _drop(labels, "timeline", i, f"it has {n} values for {len(cols)} columns")
             continue
@@ -631,6 +671,53 @@ DICT_FIELDS = ("scene", "completion", "goal_alignment")
 TEXT_FIELDS = ("task_summary", "performance_review", "viewpoint")
 TIME_FIELDS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
                "recovered_at_s")
+
+
+def substantive_annotation(labels: dict) -> bool:
+    """Require an observed action, task, result, description, or quality finding from a supported schema.
+
+    Partial replies remain readable. Empty containers, time-only rows, and classification metadata
+    cannot establish that an episode was annotated.
+    """
+    def text(row, key):
+        return isinstance(row, dict) and isinstance(row.get(key), str) and bool(row[key].strip())
+
+    if any(text(labels, key) for key in ('task_summary', 'performance_review')):
+        return True
+    content_fields = {'timeline': 'action', 'tasks': 'task', 'key_events': 'label',
+                      'data_issues': 'issue', 'operator_mistakes': 'issue', 'recovery': 'failure'}
+    if any(text(row, key) for field, key in content_fields.items() for row in labels.get(field) or []):
+        return True
+    completion = labels.get('completion') or {}
+    if completion.get('task_completed') in ('success', 'success_then_undone', 'failure', 'partial', 'unclear'):
+        return True
+    alignment = labels.get('goal_alignment') or {}
+    if (type(alignment.get('matches_given')) is bool
+            and alignment.get('relation') in ('aligned', 'narrower', 'broader', 'different', 'unrelated')):
+        return True
+    scene = labels.get('scene') or {}
+    if text(scene, 'setting') or any(text(row, 'name') for row in scene.get('objects') or []):
+        return True
+    if any(text(row, 'object') and text(row, 'from') and text(row, 'to')
+           for row in labels.get('state_changes') or []):
+        return True
+    if any(isinstance(row.get('relations'), list) and any(isinstance(value, str) and value.strip()
+               for value in row['relations']) for row in labels.get('scene_graph') or []):
+        return True
+    if any(text(row, 'headline') and isinstance(row.get('evidence'), list) and row['evidence']
+           for field in ('sensor_findings', 'evidence_findings') for row in labels.get(field) or []):
+        return True
+    if any(text(row, 'view') and text(row, 'evidence') and row.get('content') in ('scene', 'sensor', 'unclear')
+           for row in labels.get('camera_observations') or []):
+        return True
+    return any(text(row, 'object') for field in ('contacts', 'contacts_missing') for row in labels.get(field) or [])
+
+
+def annotation_complete(record: dict) -> bool:
+    """Revalidate saved acceptance flags using the current parser before treating a reply as complete."""
+    if record.get('parse_ok') is not True or not isinstance(record.get('labels'), dict):
+        return False
+    return parse_response(json.dumps(record['labels']))[1]
 
 
 def _times(x: dict, where: str, labels: dict) -> None:
@@ -781,7 +868,8 @@ def camera_observation_sources_match(parent, child, views) -> bool:
 def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int, fields: dict, *, model: str,
                      reasoning: str, api_key: str, max_tokens: int, timeout: int, dry_run: bool = False,
                      prompt_text: str = "", evidence_access=None, reserve_final=None,
-                     reserve_selection=None, settle_selection=None) -> dict:
+                     reserve_selection=None, settle_selection=None, force_refresh=False,
+                     require_known_pricing=False) -> dict:
     """Send one request (or, in a dry run, record exactly what would be sent) and write the result."""
     fields = {**fields, **(_billing_fields(out_path) if 'final_cost_history' not in fields else {})}
     def verify_inputs():
@@ -816,27 +904,24 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             def select(parts):
                 response = call_model_once(parts, model, reasoning, api_key, ea.MAX_SELECTION_TOKENS, min(timeout, 120))
                 usage = response.get('usage') or {}
-                if any(type(usage.get(k)) in (int, float) for k in ('cost', 'list_cost')) or all(
-                        type(usage.get(k)) in (int, float) for k in ('prompt_tokens', 'completion_tokens')):
-                    response.setdefault('usage', {})['cost'] = _cost(usage)
+                cost, _ = _verified_final_cost(usage, model)
+                if cost is not None:
+                    response.setdefault('usage', {})['cost'] = cost
                 return response
             # Reserve the maximum output and a conservative input allowance before each selection dispatch.
             def reserve(parts):
-                import io
-                from PIL import Image
-                text_tokens = sum(len(c.get('text', '')) for c in parts) / 3
-                image_tokens = 0
-                for part in parts:
-                    if part.get('type') == 'image_url':
-                        raw = base64.b64decode(part['image_url']['url'].split(',', 1)[1])
-                        with Image.open(io.BytesIO(raw)) as image:
-                            image_tokens += estimate_image_tokens(*image.size)
-                return (text_tokens + image_tokens) * PRICE_IN + ea.MAX_SELECTION_TOKENS * PRICE_OUT
+                return final_cost_bound(parts, ea.MAX_SELECTION_TOKENS, model=model,
+                                        require_known_pricing=require_known_pricing)
             cache = Path(out_path).parent / '.evidence' / (Path(out_path).name + '.inspection.json')
+            if force_refresh and cache.exists():
+                persist_final_claim(Path(out_path).with_name(f'noreply_{Path(out_path).name}'), {
+                    'episode_dir': str(ep_dir), 'model': model, 'reasoning_effort': reasoning, **fields,
+                    'parse_ok': False, 'final_dispatch_outcome': 'not dispatched', 'final_reserved_usd': 0.0,
+                    'no_reply': 'Inspection refresh requested; earlier receipts retained in billing history.'})
             try:
                 doc, extra = ea.discover(evidence_access, content, select, cache, reserve_cost=reserve,
                                         reserve_dispatch=reserve_selection, settle_dispatch=settle_selection,
-                                        image_limit=MAX_IMAGES, image_bytes_limit=IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION)
+                                        force_refresh=force_refresh, image_limit=MAX_IMAGES, image_bytes_limit=IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION)
             except Exception as error:
                 doc = evidence_access.record()
                 if cache.exists():
@@ -902,7 +987,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                               "est_input_tokens": round(est_img + est_text)}}
         write_atomic(out_path, result)
         return result
-    bound = final_cost_bound(content, max_tokens)
+    bound = final_cost_bound(content, max_tokens, model=model, require_known_pricing=require_known_pricing)
     claim_path = Path(out_path).with_name(f'noreply_{Path(out_path).name}')
     fields['config']['request_images']['dispatch_status'] = 'dispatch_claimed'
     claim = {"episode_dir": str(ep_dir), "model": model, "reasoning_effort": reasoning, **fields,
@@ -927,7 +1012,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             write_atomic(claim_path, {**claim, 'final_dispatch_outcome': 'not dispatched',
                 'final_reserved_usd': 0.0, 'no_reply': 'final request rejected before processing',
                 'final_rejection': {'http_status': error.http_status, 'http_attempt': 1,
-                                    'state': 'rejected unpaid', 'cost_usd': 0.0}})
+                                    'state': 'rejected unpaid', 'cost_usd': 0.0,
+                                    **({'rejection_code': error.rejection_code} if error.rejection_code else {})}})
         else:
             fields['config']['request_images']['dispatch_status'] = 'outcome_unknown'
             write_atomic(claim_path, {**claim, 'final_dispatch_outcome': 'unverified',
@@ -1118,7 +1204,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
         if p.exists():
             try:
                 primary = json.loads(p.read_text())
-                if primary.get("parse_ok") or primary.get("dry_run"):
+                if annotation_complete(primary) or primary.get("dry_run"):
                     candidates = [p]
             except (OSError, ValueError, AttributeError):
                 pass
@@ -1137,7 +1223,10 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 return True
             records.append((q, record))
         if len(records) == 1 and records[0][0] == p and records[0][1].get('input_identity') is None:
-            unverified[ep.name] = f"saved output {p.name} predates input proof"
+            if not dry and not annotation_complete(records[0][1]):
+                stale[ep.name] = f'saved output {p.name} has no usable annotation or input proof; use --force to refresh'
+            else:
+                unverified[ep.name] = f"saved output {p.name} predates input proof"
             return True
         if len(records) == 1 and records[0][0].name.startswith('noreply_') and (
                 records[0][1].get('input_identity') is None and
@@ -1163,11 +1252,22 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 stale[ep.name] = f"saved output {q.name} has changed or missing input; use --force to refresh"
                 return True
         if any(record.get('final_dispatch_outcome') in ('claimed', 'unverified') for _, record in records):
+            if not dry and any(record.get('parse_ok') is True and not annotation_complete(record) for _, record in records):
+                stale[ep.name] = 'saved annotation is unusable and its charge is unresolved; use --force to refresh explicitly'
             return True
         if not p.exists():
             return False
         record = json.loads(p.read_text())
-        return bool(record.get("dry_run")) if dry else bool(record.get("parse_ok"))
+        if dry:
+            return bool(record.get('dry_run'))
+        complete = annotation_complete(record)
+        if record.get('parse_ok') is True and not complete:
+            try:
+                _billing_fields(p)
+            except (OSError, ValueError, TypeError, AttributeError):
+                stale[ep.name] = 'saved annotation is unusable and its billing cannot be verified; reconcile it before retrying'
+                return True
+        return complete
 
     stale, unverified = {}, {}
     todo = [ep for ep in episodes if not is_done(ep)]
@@ -1252,12 +1352,12 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
             try:
                 r = label_episode(ep, out_for(ep), api_key=key, reserve_final=reserve_final,
                                   reserve_selection=reserve_selection, settle_selection=settle_selection,
-                                  force_refresh=force, **label_kw)
+                                  force_refresh=force, require_known_pricing=max_spend > 0, **label_kw)
                 _release_memory()
                 c = episode_cost(r)
                 with spend_lock:
                     spent["usd"] += c - reserved[0] - selection_accounted[0] - prior_cost
-                return ("ok", ep, c)
+                return ("invalid" if r.get("parse_ok") is False and not r.get("dry_run") else "ok", ep, c)
             except KeyExhausted as e:
                 if not e.verified_unpaid:
                     failure = out_for(ep).with_name(f'noreply_{out_for(ep).name}')
@@ -1329,10 +1429,15 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
         for f in as_completed([ex.submit(work, ep) for ep in todo]):
             status, ep, info = f.result()
-            no_reply(ep, None if status == "ok" else str(info), kind='spend_cap' if status == 'skip' else None)
+            no_reply(ep, None if status in ("ok", "invalid") else str(info), kind='spend_cap' if status == 'skip' else None)
             if status == "ok":
                 done += 1
                 total_cost += float(info or 0)
+            elif status == "invalid":
+                failed += 1
+                total_cost += float(info or 0)
+                fails.append(f"FAIL {ep.name}: annotation did not parse")
+                print(f"FAIL {ep.name}: annotation did not parse", file=sys.stderr, flush=True)
             elif status == "skip":
                 skipped += 1
                 try:

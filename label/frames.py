@@ -76,7 +76,7 @@ def extract_frames(packed: str | Path, base_s: float, n_frames: int, ks: list[in
         raise FrameError(f"requested frames {ks[0]}..{ks[-1]} outside the episode's 0..{n_frames - 1}")
     if pts is not None and len(pts) != n_frames:
         raise FrameError(f"{len(pts)} pts given for {n_frames} frames ({packed})")
-    b0 = base_frame(base_s, fps)
+    b0 = base_frame(base_s, fps) if pts is None else None
     from prepare import display
     geom = display.geometry(str(packed))
     out = {}

@@ -60,7 +60,9 @@ from pathlib import Path
 
 import numpy as np
 
+from checks import EXIT_PARTIAL
 from checks.vendor import public_dataset_adapter_qc as up
+from checks.camera_intervals import to_anchor
 from label import episode as me
 from label import frames as mf
 from label.atomic import write_atomic
@@ -384,27 +386,6 @@ def _features(ep: dict, v: str, d: dict) -> dict:
     return {"n": n, "decoded": int(got.sum()), "error": d["error"], "fps": fps,
             "means": means.astype(np.float32), "stds": stds.astype(np.float32),
             "pair": pair.astype(np.float32), "pchange": pchange.astype(np.float32)}
-
-
-def to_anchor(ep: dict, v: str, own: np.ndarray, T: int) -> np.ndarray | None:
-    """Per-anchor-interval values (len T-1) from a camera's own per-frame-pair values (len n-1).
-    A camera without a kmap must have exactly the anchor's frames. With a kmap, interval i sums the
-    camera's own changes from frame km[i] to km[i+1]; NaN when the camera has no new frame there."""
-    km = ep["kmap"].get(v)
-    n = len(own) + 1
-    if km is None:
-        return own[:T - 1].astype(np.float64) if n == T else None
-    km = np.asarray(km, dtype=np.int64)[:T]
-    if len(km) < T:
-        return None
-    km = np.clip(km, 0, n - 1)
-    finite = np.isfinite(own)
-    cum = np.concatenate([[0.0], np.cumsum(np.where(finite, own, 0.0))])
-    bad = np.concatenate([[0], np.cumsum(~finite)])
-    a, b = km[:-1], km[1:]
-    out = cum[b] - cum[a]
-    out[(b <= a) | ((bad[b] - bad[a]) > 0)] = np.nan
-    return out
 
 
 def _camera_or_failure(ep: dict, v: str) -> dict:
@@ -1591,9 +1572,8 @@ def run_episode(ep_dir: Path | str) -> dict:
 
 # ------------------------------------------------------------------------------------------ CLI
 
-# the exit status when some episode's checks could not run because its worker stopped: every episode still has a
-# record (those with every check errored), so a caller goes on and reads the errored checks from the records
-EXIT_FAILED = 3
+# Each episode still has a record, including the checks that could not finish.
+EXIT_FAILED = EXIT_PARTIAL
 
 
 def _one(d: str) -> tuple[str, dict, str | None, float]:
@@ -1634,10 +1614,17 @@ def _alone(d: str) -> tuple[str, dict, str | None, float]:
 
 
 def needs_check(ctx: dict) -> bool:
-    """Whether an episode is checked without --force: it has no record, or its record is one written because its
-    worker stopped (worker_stopped), which says nothing about the episode, so a rerun checks it again."""
+    """Retry missing results, interrupted workers and assessments with errored checks."""
     cq = ctx.get("capture_qc")
-    return not isinstance(cq, dict) or bool(cq.get("worker_stopped"))
+    if not isinstance(cq, dict) or cq.get("worker_stopped") or cq.get("version") != VERSION:
+        return True
+    checks = cq.get("checks")
+    if not isinstance(checks, list) or not checks or not all(isinstance(c, dict) for c in checks):
+        return True
+    names = [c.get("check") for c in checks]
+    if not all(isinstance(n, str) for n in names) or len(names) != len(set(names)) or set(names) != set(CHECKS):
+        return True
+    return any(c.get("status") not in ("clear", "fired", "not_applicable") for c in checks)
 
 
 def main() -> int:
@@ -1664,10 +1651,13 @@ def main() -> int:
     def record(d: str, r: dict, err: str | None, secs: float) -> None:
         nonlocal done, flagged, failed
         done += 1
-        if err:
+        errors = [c for c in r.get("checks", []) if c.get("status") == "errored"]
+        if err or errors:
             failed += 1
-            r = {**r, "worker_stopped": True}
-            print(f"FAILED {Path(d).name}: {err}", flush=True)
+            if err:
+                r = {**r, "worker_stopped": True}
+            reason = err or errors[0].get("why", "capture checks could not run")
+            print(f"FAILED {Path(d).name}: {reason}", flush=True)
         p = Path(d) / "context.json"
         ctx = json.loads(p.read_text())
         ctx["capture_qc"] = r

@@ -32,7 +32,11 @@ Environment:
     BOARD_FRAME_CACHE          frames kept in memory (default 800); raise it so every goal frame of a large board
                                stays cached
     BOARD_FFMPEG_CONCURRENCY   ffmpeg processes cutting frames at once (default 4)
-    BOARD_FRAME_DIR            a folder that keeps every frame cut, so a restarted server does not cut them again
+    BOARD_FRAME_DIR            a bounded frame cache reused after a server restart
+    BOARD_FRAME_DISK_BYTES     frame disk budget (default 512 MiB)
+    BOARD_FRAME_DISK_FILES     maximum cached frame files (default 4000)
+    BOARD_FOOTAGE_DISK_BYTES   footage disk budget (default 2 GiB)
+    BOARD_FOOTAGE_DISK_FILES   maximum cached footage files (default 128)
     BOARD_FOOTAGE_DIR          where the videos made to download are kept (default BOARD/footage)
     BOARD_FOOTAGE_CONCURRENCY  videos made at once (default 1)
     BOARD_FOOTAGE_THREADS      threads each is made on (default 2)
@@ -55,6 +59,9 @@ import shutil
 import socketserver
 import subprocess
 import threading
+import time
+from contextlib import contextmanager
+from functools import lru_cache, wraps
 import urllib.parse
 from collections import OrderedDict
 from pathlib import Path
@@ -90,8 +97,7 @@ _FRAME_CACHE = OrderedDict()
 _FRAME_CACHE_MAX = int(os.environ.get("BOARD_FRAME_CACHE", 800))
 _FRAME_LOCK = threading.Lock()
 _FFMPEG_SEM = threading.Semaphore(int(os.environ.get("BOARD_FFMPEG_CONCURRENCY", 4)))
-# BOARD_FRAME_DIR keeps every frame cut on disk as well, so a restarted server (a deploy) serves the posters and goal
-# frames it cut before without running ffmpeg again; the key holds the clip's mtime, so a rebuilt clip is cut anew
+# BOARD_FRAME_DIR retains a bounded disk cache. File metadata invalidates replaced source clips.
 _FRAME_DIR = Path(os.environ["BOARD_FRAME_DIR"]) if os.environ.get("BOARD_FRAME_DIR") else None
 
 
@@ -103,7 +109,8 @@ def _clip_times(mp4: Path) -> list:
     """The clip's frame times on the episode clock (sorted presentation times), read once per clip
     version; [] when they cannot be read."""
     try:
-        key = (str(mp4), mp4.stat().st_size, mp4.stat().st_mtime_ns)
+        st = mp4.stat()
+        key = (str(mp4), st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
     except OSError:
         return []
     hit = _CLIP_TIMES.get(key)
@@ -129,7 +136,8 @@ def _shown_from_halfway(mp4: Path) -> bool:
     sets HALFWAY_TAG as the clip's comment), so the frame a time shows is the one on screen then."""
     from board.clips import HALFWAY_TAG
     try:
-        key = (str(mp4), mp4.stat().st_size, mp4.stat().st_mtime_ns)
+        st = mp4.stat()
+        key = (str(mp4), st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
     except OSError:
         return False
     if key in _CLIP_HALFWAY:
@@ -148,25 +156,112 @@ def _shown_from_halfway(mp4: Path) -> bool:
     return hit
 
 
-def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
-    """One JPEG from mp4 at time t (seconds), at most max_w wide, or None when it cannot be cut."""
-    if not FFMPEG or not mp4.exists():
-        return None
-    try:
-        st = mp4.stat()
-        key = (str(mp4), st.st_size, st.st_mtime_ns, max(0.0, float(t)), int(max_w))
-    except OSError:
-        return None
+class CacheBusy(RuntimeError):
+    pass
+
+
+def _bounded_work(semaphore):
+    def decorate(fn):
+        @wraps(fn)
+        def run(*args, **kwargs):
+            if not semaphore.acquire(blocking=kwargs.pop('_wait', False)):
+                raise CacheBusy('Media preparation is busy; try again shortly')
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                semaphore.release()
+        return run
+    return decorate
+
+
+_DISK_CACHE_LOCK = threading.Lock()
+_FRAME_DISK_BYTES = int(os.environ.get('BOARD_FRAME_DISK_BYTES', 512 * 1024**2))
+_FRAME_DISK_FILES = int(os.environ.get('BOARD_FRAME_DISK_FILES', 4000))
+_FOOTAGE_DISK_BYTES = int(os.environ.get('BOARD_FOOTAGE_DISK_BYTES', 2 * 1024**3))
+_FOOTAGE_DISK_FILES = int(os.environ.get('BOARD_FOOTAGE_DISK_FILES', 128))
+
+
+def _trim_disk_cache(folder: Path, suffix: str, *, max_bytes: int, max_files: int, protect=None):
+    with _DISK_CACHE_LOCK:
+        entries = []
+        temporary = re.compile(r'(?:[a-f0-9]{40}\.[0-9]+\.[0-9]+\.part|'
+                               r'[a-f0-9]{20}\.[0-9]+\.[0-9]+\.part(?:\.len)?\.mp4)')
+        for path in folder.glob('*.part*'):
+            if not temporary.fullmatch(path.name):
+                continue
+            try:
+                if path.stat().st_mtime < time.time() - 600:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
+        length = {'.jpg': 40, '.mp4': 20}.get(suffix)
+        if length is None:
+            raise ValueError('Unknown media cache suffix')
+        owned = re.compile(r'[a-f0-9]{' + str(length) + '}' + re.escape(suffix))
+        for path in folder.glob('*' + suffix):
+            if not owned.fullmatch(path.name):
+                continue
+            try:
+                st = path.stat()
+                entries.append((st.st_mtime_ns, path, st.st_size))
+            except OSError:
+                continue
+        total, count = sum(x[2] for x in entries), len(entries)
+        for _, path, size in sorted(entries):
+            if total <= max_bytes and count <= max_files:
+                break
+            if path == protect:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+                total -= size
+                count -= 1
+            except OSError:
+                continue
+
+
+_FRAME_WORK_SEM = threading.BoundedSemaphore(max(1, int(os.environ.get('BOARD_FFMPEG_CONCURRENCY', 4))))
+
+
+def _cached_frame(key, disk: Path | None) -> bytes | None:
     with _FRAME_LOCK:
         hit = _FRAME_CACHE.get(key)
         if hit is not None:
             _FRAME_CACHE.move_to_end(key)
             return hit
-    disk = _FRAME_DIR / (hashlib.sha1(repr(key).encode()).hexdigest() + ".jpg") if _FRAME_DIR else None
-    if disk is not None and disk.is_file():
-        out = disk.read_bytes()
-        _remember_frame(key, out)
-        return out
+    if disk is not None:
+        try:
+            out = disk.read_bytes()
+            _remember_frame(key, out)
+            return out
+        except OSError:
+            pass
+    return None
+
+
+def extract_frame(mp4: Path, t: float, max_w: int = 640, *, _wait=False) -> bytes | None:
+    """Serve cached JPEGs immediately; admit only bounded uncached extraction work."""
+    if not math.isfinite(t) or not 0 <= t <= 604800 or not 1 <= max_w <= 1920:
+        raise ValueError('Frame time must be between 0 and 604800 seconds, and width between 1 and 1920')
+    try:
+        st = mp4.stat()
+        key = (str(mp4), st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, float(t), int(max_w))
+    except OSError:
+        return None
+    disk = _FRAME_DIR / (hashlib.sha1(repr(key).encode()).hexdigest() + '.jpg') if _FRAME_DIR else None
+    hit = _cached_frame(key, disk)
+    if hit is not None:
+        return hit
+    if not FFMPEG:
+        return None
+    return _extract_uncached_frame(mp4, t, max_w, key, disk, _wait=_wait)
+
+
+@_bounded_work(_FRAME_WORK_SEM)
+def _extract_uncached_frame(mp4, t, max_w, key, disk):
+    hit = _cached_frame(key, disk)
+    if hit is not None:
+        return hit
     # Clips hold exactly the episode's own frames, their first at the clip's start. The frame shown is the clip's
     # own frame nearest t, from its frame times (any rate, variable or not): for a clip timed by capture times, whose
     # frames come on halfway after the capture before each, the one on screen at t; for any other, the one whose time
@@ -208,20 +303,29 @@ def extract_frame(mp4: Path, t: float, max_w: int = 640) -> bytes | None:
         _remember_frame(key, out)
         if disk is not None:
             try:
+                if len(out) > _FRAME_DISK_BYTES:
+                    return out
                 disk.parent.mkdir(parents=True, exist_ok=True)
                 tmp = disk.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part")
                 tmp.write_bytes(out)
                 tmp.replace(disk)
+                _trim_disk_cache(disk.parent, '.jpg', max_bytes=_FRAME_DISK_BYTES, max_files=_FRAME_DISK_FILES,
+                                 protect=disk)
             except OSError:
                 pass                      # the disk copy is only a cache
+            finally:
+                if 'tmp' in locals():
+                    tmp.unlink(missing_ok=True)
     return out
 
 
 def _remember_frame(key, jpg: bytes) -> None:
     with _FRAME_LOCK:
+        if len(jpg) > 16 * 1024**2:
+            return
         _FRAME_CACHE[key] = jpg
         _FRAME_CACHE.move_to_end(key)
-        while len(_FRAME_CACHE) > _FRAME_CACHE_MAX:
+        while len(_FRAME_CACHE) > max(0, _FRAME_CACHE_MAX) or sum(map(len, _FRAME_CACHE.values())) > 128 * 1024**2:
             _FRAME_CACHE.popitem(last=False)
 
 
@@ -266,18 +370,58 @@ _FOOTAGE_LOCKS: dict = {}
 _FOOTAGE_LOCKS_LOCK = threading.Lock()
 
 
+_LABEL_INDEX_LOCK = threading.Lock()
+_LABEL_INDEX = {}
+_LABEL_INDEX_ROOT = None
+_LABEL_INDEX_CHECKED = 0.0
+
+
+@contextmanager
+def _footage_lock(key):
+    with _FOOTAGE_LOCKS_LOCK:
+        entry = _FOOTAGE_LOCKS.setdefault(key, [threading.Lock(), 0])
+        entry[1] += 1
+    try:
+        with entry[0]:
+            yield
+    finally:
+        with _FOOTAGE_LOCKS_LOCK:
+            entry[1] -= 1
+            if not entry[1]:
+                _FOOTAGE_LOCKS.pop(key, None)
+
+
 def footage_label(eid: str) -> dict:
-    """Current label owning this media identity; label filenames can include a dataset prefix."""
-    for path in sorted(HERE.glob('*.json')):
-        if not _under(HERE, path):
-            continue
+    """Index episode IDs once and read only labels changed since the previous scan."""
+    global _LABEL_INDEX_ROOT, _LABEL_INDEX_CHECKED
+    with _LABEL_INDEX_LOCK:
+        if _LABEL_INDEX_ROOT != HERE or time.monotonic() - _LABEL_INDEX_CHECKED >= 1:
+            previous = dict(_LABEL_INDEX) if _LABEL_INDEX_ROOT == HERE else {}
+            _LABEL_INDEX.clear()
+            for path in sorted(HERE.glob('*.json')):
+                if not _under(HERE, path):
+                    continue
+                try:
+                    st = path.stat()
+                    sig = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+                    old = previous.get(path.name)
+                    if old is not None and old[0] == sig:
+                        _LABEL_INDEX[path.name] = old
+                        continue
+                    label = json.loads(path.read_text())
+                    identity = ((label.get('_meta') or {}).get('episode_id') or path.stem) if isinstance(label, dict) else None
+                    _LABEL_INDEX[path.name] = (sig, identity)
+                except (OSError, ValueError, TypeError, AttributeError):
+                    continue
+            _LABEL_INDEX_ROOT, _LABEL_INDEX_CHECKED = HERE, time.monotonic()
+        path = next((HERE / name for name, (_, identity) in _LABEL_INDEX.items() if identity == eid), None)
+    if path is not None:
         try:
             label = json.loads(path.read_text())
-            if not isinstance(label, dict) or ((label.get('_meta') or {}).get('episode_id') or path.stem) != eid:
-                continue
-            return current_label(label, DICTIONARY_JOB, path.name)
+            if ((label.get('_meta') or {}).get('episode_id') or path.stem) == eid:
+                return current_label(label, DICTIONARY_JOB, path.name)
         except (OSError, ValueError, TypeError, AttributeError):
-            continue
+            pass
     return {}
 
 
@@ -324,6 +468,13 @@ def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
 
 
 def _probe(p: Path) -> tuple:
+    st = p.stat()
+    version = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    return _probe_versioned(p, version)
+
+
+@lru_cache(maxsize=2048)
+def _probe_versioned(p: Path, version: tuple) -> tuple:
     """(width, height, duration s, frame rate) of a clip. The duration runs to the end of its last frame (its
     time plus its own length), which a variable-rate recording's container duration can stop short of. The rate is
     one over the clip's usual step between frames: a clip timed by capture times (board/clips.py retime) starts with
@@ -380,9 +531,12 @@ def footage_command(inputs: list, t0: float, t1: float, out: Path, threads: int 
                   str(threads), "-filter_complex_threads", "1", "-movflags", "+faststart", str(out)]
 
 
+@_bounded_work(threading.BoundedSemaphore(max(1, int(os.environ.get('BOARD_FOOTAGE_CONCURRENCY', 1)))))
 def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     """(file, download name) of the episode's video from t0 to t1 s (the whole episode by default), made now if it
     was not made before; None when the episode has no clip. Raises RuntimeError when ffmpeg fails."""
+    if not math.isfinite(t0) or (t1 is not None and not math.isfinite(t1)):
+        raise ValueError('Footage times must be finite')
     label = footage_label(eid)
     cams = footage_cams(MP4_DIR, eid, label)
     if not cams or not FFMPEG:
@@ -399,30 +553,54 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     t1 = round(dur if t1 is None else max(0.0, min(float(t1), dur)), 3)
     if t1 - t0 < 1.0 / FOOTAGE_FPS:
         return None
+    if t1 - t0 > 3600:
+        raise ValueError('Footage spans are limited to one hour')
+    if any(pr[0] * pr[1] > 16_777_216 or pr[3] > 120 for pr in probes):
+        raise ValueError('Camera dimensions or frame rate exceed the footage limit')
     whole = t0 == 0 and t1 >= round(dur, 3)
     name = f"{eid}.mp4" if whole else f"{eid}_{t0:.1f}-{t1:.1f}s.mp4"
-    key = hashlib.sha1(json.dumps([eid, t0, t1, FOOTAGE_TAG, [(str(p), p.stat().st_size, int(p.stat().st_mtime))
-                                                             for _, p in cams]]).encode()).hexdigest()[:20]
+    versions = [(str(p), st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
+                for _, p in cams for st in [p.stat()]]
+    key = hashlib.sha1(json.dumps([eid, t0, t1, FOOTAGE_TAG, versions]).encode()).hexdigest()[:20]
     out = FOOTAGE_DIR / f"{key}.mp4"
     if out.is_file():
+        if out.stat().st_size > _FOOTAGE_DISK_BYTES:
+            out.unlink(missing_ok=True)
+            raise ValueError('Prepared footage exceeds the disk cache budget')
+        _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
+                         max_files=_FOOTAGE_DISK_FILES, protect=out)
         return out, name
-    with _FOOTAGE_LOCKS_LOCK:
-        lock = _FOOTAGE_LOCKS.setdefault(key, threading.Lock())
-    with lock:                       # a second request for the same span waits for the first one's file
+    with _footage_lock(key):                       # a second request for the same span waits for the first one's file
         if out.is_file():
             return out, name
         out.parent.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
         cmd = footage_command([(p, pr[:2], pr[3]) for (_, p), pr in zip(cams, probes)], t0, t1, tmp, _FOOTAGE_THREADS)
+        # ffmpeg exits successfully at -fs, so reject a capped file before publishing it.
+        cmd[-1:-1] = ['-fs', str(_FOOTAGE_DISK_BYTES)]
         nice = shutil.which("nice")
-        with _FOOTAGE_SEM:
-            r = subprocess.run(([nice, "-n", "19"] if nice else []) + cmd, capture_output=True, text=True)
+        try:
+            with _FOOTAGE_SEM:
+                r = subprocess.run(([nice, "-n", "19"] if nice else []) + cmd, capture_output=True, text=True, timeout=300)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         if r.returncode != 0 or not tmp.is_file():
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"the video could not be made: {(r.stderr or '').strip()[-300:]}")
-        from board.clips import frame_lengths
-        frame_lengths(tmp)           # some ffmpeg builds leave the last frame 0 s long, so it is never shown
-        os.replace(tmp, out)
+        try:
+            if tmp.stat().st_size >= _FOOTAGE_DISK_BYTES:
+                raise ValueError('Prepared footage exceeds the disk cache budget')
+            from board.clips import frame_lengths
+            frame_lengths(tmp)
+            os.replace(tmp, out)
+            if out.stat().st_size > _FOOTAGE_DISK_BYTES:
+                out.unlink(missing_ok=True)
+                raise ValueError('Prepared footage exceeds the disk cache budget')
+            _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
+                             max_files=_FOOTAGE_DISK_FILES, protect=out)
+        finally:
+            tmp.unlink(missing_ok=True)
     return out, name
 
 
@@ -753,6 +931,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = gzipped if gzipped is not None else gzip.compress(body, compresslevel=5)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if code == 503:
+            self.send_header("Retry-After", "1")
         if gz:
             self.send_header("Content-Encoding", "gzip")
             self.send_header("Vary", "Accept-Encoding")
@@ -766,7 +946,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         can stream/seek without downloading the whole thing first; download names the saved file."""
         try:
             st = p.stat()
-        except FileNotFoundError:
+        except OSError:
             self._send(404, {"error": "not found"})
             return
         size = st.st_size
@@ -800,7 +980,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = end - start + 1
         try:
             f = open(p, "rb")
-        except FileNotFoundError:
+        except OSError:
             self._send(404, {"error": "not found"})
             return
 
@@ -857,7 +1037,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         p = HERE / fname
         if not fname or not _under(HERE, p) or not p.is_file() or p.suffix != '.json':
             return self._send(404, {'error': 'No such episode.'})
-        d = json.loads(p.read_text())
+        try:
+            d = json.loads(p.read_text())
+            if not isinstance(d, dict) or not isinstance(d.get('data_dictionary') or {}, dict):
+                raise ValueError('Invalid dictionary document')
+        except (OSError, ValueError):
+            return self._send(500, {'error': 'The saved data dictionary is unreadable.'})
         if DICTIONARY_JOB is None:
             return self._send(200, public_json({**(d.get('data_dictionary') or {}), 'editable': False}))
         try:
@@ -882,7 +1067,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            files = json.loads(self.rfile.read(n) or b"{}").get("files") or []
+            if not 0 < n <= 1024 * 1024:
+                raise ValueError('invalid export request size')
+            payload = json.loads(self.rfile.read(n))
+            if not isinstance(payload, dict) or not isinstance(payload.get('files'), list):
+                raise ValueError('files must be an array')
+            files = payload['files']
+            if len(files) > 10000 or any(not isinstance(f, str) for f in files):
+                raise ValueError('invalid file list')
         except (ValueError, json.JSONDecodeError):
             self._send(400, {"error": "bad request"})
             return
@@ -892,7 +1084,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not _under(HERE, p) or not p.is_file() or p.suffix != ".json":
                 self._send(404, {"error": f"no such file: {fname}"})
                 return
-            lines.append(dumps(public_label(current_label(json.loads(p.read_text()), DICTIONARY_JOB, p.name)), separators=(",", ":")))
+            try:
+                label = json.loads(p.read_text())
+                if not isinstance(label, dict):
+                    raise ValueError('Invalid label')
+                lines.append(dumps(public_label(current_label(label, DICTIONARY_JOB, p.name)), separators=(',', ':')))
+            except (OSError, ValueError, TypeError, AttributeError):
+                return self._send(500, {'error': 'An episode could not be read for export.'})
         body = ("\n".join(lines) + "\n").encode()
         gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
         if gz:
@@ -1078,7 +1276,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 got = footage(eid, t0, t1)
-            except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, KeyError) as e:
+            except CacheBusy as error:
+                return self._send(503, {'error': str(error)})
+            except ValueError as error:
+                return self._send(400, {'error': str(error)})
+            except (RuntimeError, OSError, subprocess.SubprocessError, KeyError) as e:
                 logging.getLogger(__name__).error("Footage preparation failed", exc_info=True)
                 self._send(500, {"error": "The requested footage could not be prepared.",
                                  "stage": "footage preparation"})
@@ -1103,7 +1305,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 w = int((q.get("w") or ["640"])[0])
             except ValueError:
                 w = 640
-            jpg = extract_frame(mp4, t, w) if _under(MP4_DIR, mp4) else None
+            try:
+                jpg = extract_frame(mp4, t, w) if _under(MP4_DIR, mp4) else None
+            except CacheBusy as error:
+                return self._send(503, {'error': str(error)})
+            except ValueError as error:
+                return self._send(400, {'error': str(error)})
             if not jpg:
                 self._send(404, {"error": "frame not available"})
                 return
@@ -1127,6 +1334,7 @@ def main(argv=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", type=Path, required=True, help="a board folder (its qa/ holds the episode files)")
     ap.add_argument("--clips", type=Path, required=True, help="the clips folder board clips wrote")
+    ap.add_argument("--host", default="127.0.0.1", help="listen address (default 127.0.0.1)")
     ap.add_argument("--port", type=int, default=PORT, help=f"the port to listen on (default {PORT})")
     ap.add_argument("--title", default=PAGE_TITLE, help=f"the page title, in the header and the browser tab "
                                                         f"(default {PAGE_TITLE!r})")
@@ -1143,12 +1351,15 @@ def main(argv=None) -> int:
     SENSORS_DIR = (a.board / "sensors").resolve()
     FOOTAGE_DIR = Path(os.environ.get("BOARD_FOOTAGE_DIR") or (a.board / "footage")).resolve()
     PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
+    if _FRAME_DIR is not None:
+        _trim_disk_cache(_FRAME_DIR, '.jpg', max_bytes=_FRAME_DISK_BYTES, max_files=_FRAME_DISK_FILES)
+    _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES, max_files=_FOOTAGE_DISK_FILES)
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     # socketserver's default listen backlog is 5: a burst of visitors (or a proxy opening many connections at once)
     # overflows it and those connections wait on SYN retries for up to a minute
     socketserver.ThreadingTCPServer.request_queue_size = 128
     socketserver.ThreadingTCPServer.daemon_threads = True
-    with socketserver.ThreadingTCPServer(("127.0.0.1" if DICTIONARY_JOB else "", PORT), Handler) as httpd:
+    with socketserver.ThreadingTCPServer(("127.0.0.1" if DICTIONARY_JOB else a.host, PORT), Handler) as httpd:
         print(f"board at http://localhost:{PORT} ({len(list_episodes())} episodes from {HERE}, clips from {MP4_DIR})",
               flush=True)
         httpd.serve_forever()

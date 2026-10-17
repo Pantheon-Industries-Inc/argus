@@ -400,6 +400,7 @@ def bind(doc, findings):
             if (type(start) not in (float, int) or type(end) not in (float, int) or not math.isfinite(start)
                     or not math.isfinite(end) or end < start or not isinstance(f.get('headline'), str) or not f['headline'].strip()):
                 reason = 'invalid finding interval or headline'
+            cited = []
             refs = f.get('evidence')
             if not isinstance(refs, list) or not refs:
                 reason = 'no structured evidence references'
@@ -432,8 +433,13 @@ def bind(doc, findings):
                 if (not isinstance(ts, list) or not ts or any(type(t) not in (int, float) or not math.isfinite(t)
                         or not any(abs(t - known) < .0001 for known in available) for t in ts)):
                     reason = 'citation is not an available supplied sample'; break
+                cited.extend(ts)
                 if reason is None and (start < min(supplied) or end > max(supplied)):
                     reason = 'finding exceeds the evidence clock'; break
+            # Samples may supply event evidence, or bracket it for a context comparison.
+            # An event interval need not end exactly at its discrete sample instants.
+            if reason is None and (not cited or max(cited) < start - .0001 or min(cited) > end + .0001):
+                reason = 'cited samples do not overlap or bracket the finding interval'
         if reason:
             result['unbound_findings'].append({'finding': copy.deepcopy(f), 'reason': reason})
         else:

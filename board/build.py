@@ -806,13 +806,37 @@ def label_sources(manifest: dict, board: Path) -> dict:
     return {f: out for e in manifest.get("datasets", []) for f, (_, out, _, _) in entry_labels(e, here)[1].items()}
 
 
+def exchange_directories(left: Path, right: Path) -> None:
+    """Exchange existing directory names atomically, preserving both on failure."""
+    import ctypes
+    import sys
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == 'darwin':
+        exchange = libc.renamex_np
+        exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        result = exchange(os.fsencode(left), os.fsencode(right), 2)
+    elif sys.platform.startswith('linux') and hasattr(libc, 'renameat2'):
+        exchange = libc.renameat2
+        exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        result = exchange(-100, os.fsencode(left), -100, os.fsencode(right), 2)
+    else:
+        raise OSError('Atomic directory exchange is unavailable on this platform')
+    if result:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
 def _swap(board: Path, name: str, keep: bool) -> None:
-    """Replaces BOARD/<name> with BOARD/<name>.new (derived files only; the runs they came from are untouched).
-    Without keep, the old folder is removed and nothing replaces it."""
-    old, new = board / name, board / f"{name}.new"
+    """Publish derived files without removing the live directory before replacement."""
+    old, new = board / name, board / f'{name}.new'
+    if not keep:
+        if old.exists():
+            shutil.rmtree(old)
+        return
     if old.exists():
-        shutil.rmtree(old)
-    if keep:
+        exchange_directories(old, new)
+        shutil.rmtree(new)
+    else:
         new.rename(old)
 
 

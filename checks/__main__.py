@@ -30,6 +30,8 @@ import argparse
 import subprocess
 import sys
 
+from checks import EXIT_PARTIAL
+
 ap = argparse.ArgumentParser(prog="python -m checks", description=__doc__,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("roots", nargs="+", metavar="EPISODES", help="folders of prepared episode_* folders")
@@ -39,8 +41,12 @@ a = ap.parse_args()
 extra = ["--jobs", str(a.jobs)] + (["--force"] if a.force else [])
 steps = [["checks.stream_pairing"], ["checks.stream_pairing", "--jumps"], ["checks.stream_pairing", "--grippers"],
          ["checks.capture_qc"], ["checks.sensors"]]
+status = 0
 for step in steps:
     print(f"== {' '.join(step)}", flush=True)
     rc = subprocess.run([sys.executable, "-m", *step, *extra, *a.roots]).returncode
-    if rc:
+    if rc == EXIT_PARTIAL:
+        status = EXIT_PARTIAL
+    elif rc:
         raise SystemExit(rc)
+raise SystemExit(status)

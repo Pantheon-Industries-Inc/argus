@@ -159,8 +159,13 @@ assert.deepEqual(cameraApi.supportingCameras(retained).map(c=>c.view),['exo']);
 assert.equal(cameraApi.episodeCams({camera_views:['exo','left'],camera_presentation:{exo:{role:'other'},left:{role:'scene'}}}).main,'left');
 
 // Seeks show the destination, without replaying annotations from skipped footage.
-const seekStrip={innerHTML:'',hidden:true,querySelectorAll:()=>[]};
-global.document={getElementById:id=>id==='grip-finding-overlay'?seekStrip:null,querySelectorAll:()=>[]};
+const cards=[];
+const seekStrip={hidden:true,get innerHTML(){return cards.map(c=>c.innerHTML).join('');},
+ querySelectorAll:()=>[...cards],querySelector:q=>cards.find(c=>q.includes('"'+c.dataset.sensorFinding+'"')),
+ append:c=>cards.push(c)};
+const createElement=()=>({dataset:{},innerHTML:'',querySelector:()=>({classList:{toggle(){}}}),
+ remove(){cards.splice(cards.indexOf(this),1);}});
+global.document={createElement,getElementById:id=>id==='grip-finding-overlay'?seekStrip:null,querySelectorAll:()=>[]};
 const view=E.setupSensorEvidence(E.sensorEvidence({sensor_evidence:{version:1,findings:[
  {start_s:1,end_s:1.1,headline:'Brief source change',adds_beyond_video:true}]}}),()=>{},()=>{},()=>{});
 view.sync(1.05);assert(seekStrip.innerHTML.includes('Brief source change'));

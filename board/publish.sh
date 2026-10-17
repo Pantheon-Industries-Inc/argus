@@ -73,8 +73,13 @@ PY
 
 media
 echo "== build $BID -> $DEST/$BID"
-"${RC[@]}" copy "$B" "$DEST/$BID" --ignore-existing --exclude "index*.html" --exclude "BUILD.json" "${IMM[@]}"
-"${RC[@]}" copyto "$B/index.html" "$DEST/$BID/index.html" "${PAGE[@]}"
+"${RC[@]}" copy "$B" "$DEST/$BID" --immutable --checksum --exclude "index*.html" --exclude "BUILD.json" "${IMM[@]}"
+# Verify small public data by bytes even when the destination cannot compare hashes.
+# Large media retain content-addressed names and are not read again by this check.
+if [ "${DRY_RUN:-0}" != 1 ]; then
+  "${RC[@]}" check "$B" "$DEST/$BID" --download --exclude "index*.html" --exclude "BUILD.json"
+fi
+"${RC[@]}" copyto "$B/index.html" "$DEST/$BID/index.html" --immutable --checksum "${PAGE[@]}"
 echo "== root index.html -> build $BID"
 "${RC[@]}" copyto "$B/index.public.html" "$DEST/index.html" "${PAGE[@]}"
 echo "uploaded $BID$DRY"

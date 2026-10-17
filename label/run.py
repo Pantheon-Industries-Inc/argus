@@ -23,13 +23,14 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-from label.harness import get_keys, is_openrouter_key
+from label.harness import annotation_complete, get_keys, is_openrouter_key
 from label.dictionary_stage import output_spend
 from label.atomic import write_atomic
 
@@ -61,7 +62,8 @@ def parsed(run: Path, eps: list[str]) -> int:
     n = 0
     for e in eps:
         try:
-            n += bool(json.loads((run / "out" / f"{e}.json").read_text()).get("parse_ok"))
+            record = json.loads((run / "out" / f"{e}.json").read_text())
+            n += isinstance(record, dict) and annotation_complete(record)
         except (OSError, ValueError):
             pass
     return n
@@ -73,11 +75,14 @@ def billed_cost(run: Path) -> float:
 
 
 def footage_hours(slice_dir: Path, names: list[str]) -> float:
-    """Hours of recording in these episodes of the slice, from each context.json's state frame count and fps."""
+    """Hours of recording from declared spans, with legacy frame-count fallback."""
     s = 0.0
     for n in names:
         c = json.loads((slice_dir / n / "context.json").read_text())
-        s += (c.get("n_state_frames") or 0) / float(c.get("fps") or 30)
+        duration = c.get('duration_s')
+        if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
+            duration = (c.get('n_state_frames') or 0) / float(c.get('fps') or 30)
+        s += duration
     return s / 3600
 
 

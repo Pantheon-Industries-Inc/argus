@@ -341,9 +341,9 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
             for v, e in dj.items():
                 np.save(d / e["kmap"], np.asarray(np.load(ep_dir / e["kmap"])[k0:k1]))
             write_atomic(d / "depth.json", dj, indent=1)
+            origin = float(t[k0]) + float(ctx.get("clock_zero_s") or 0.0)
             if (ep_dir / "depth_times.npz").exists():
                 with np.load(ep_dir / "depth_times.npz") as dt:
-                    origin = float(t[k0]) + float(ctx.get("clock_zero_s") or 0.0)
                     np.savez(d / "depth_times.npz", **{key: dt[key] if key.endswith("_pts") else dt[key] - origin
                                                       for key in dt.files})
             if ctx.get("depth_presentation_times"):

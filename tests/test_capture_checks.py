@@ -540,3 +540,28 @@ def test_a_crash_reading_the_state_costs_only_the_checks_that_read_it(monkeypatc
               "video_low_contrast", "video_duplicate_frames", "episode_too_short", "state_time_too_short"):
         assert R[c]["status"] in ("fired", "clear"), (c, R[c])
     assert not [c for c, r in R.items() if c not in need and r["status"] == "errored"]
+
+
+def test_complete_capture_failure_fails_cli_and_retries_after_input_repair(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+    ep = tmp_path / 'episode_broken'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'fps': 30}))
+    monkeypatch.setattr(cq, 'ProcessPoolExecutor', ThreadPoolExecutor)
+    monkeypatch.setattr(sys, 'argv', ['checks.capture_qc', '--jobs', '1', str(tmp_path)])
+    assert cq.main() == cq.EXIT_FAILED
+    ctx = json.loads((ep / 'context.json').read_text())
+    assert all(c['status'] == 'errored' for c in ctx['capture_qc']['checks'])
+    assert cq.needs_check(ctx)
+    # The next invocation must reassess the saved failure when inputs become usable.
+    good = cq.format_result({'checks': {c: {'status': 'clear', 'events': []} for c in cq.CHECKS},
+                             'cameras': {}, 'actors': {}, 'episode': {}})
+    for cached in [{'checks': None}, {'checks': [None]}, {'checks': [{'check': []}]}, {'checks': []},
+                   {**good, 'version': cq.VERSION - 1}, {**good, 'checks': good['checks'][:-1]}]:
+        assert cq.needs_check({'capture_qc': cached})
+    monkeypatch.setattr(cq, 'run_episode', lambda _: good)
+    assert cq.main() == 0
+    assert not cq.needs_check(json.loads((ep / 'context.json').read_text()))
+    assert capsys.readouterr().out.count('episodes to check: 1') == 2

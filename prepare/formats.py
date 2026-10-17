@@ -5550,26 +5550,24 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
             k0 = next(iter(vmap.values()))
             pr0 = probe(row["videos"][k0][0])
             fps = measured_fps(seconds(pr0)) or pr0["fps"] or 30.0
-        sources, cameras, broken = {}, {}, {}
+        sources, cameras, broken, pts, grid = {}, {}, {}, {}, {}
         for v, key in vmap.items():
             mp4, base, to = row["videos"][key]
-            n = int(round((to - base) * fps))
+            try:
+                pr = packed_video_window(Path(mp4), base, to)
+            except Exception as error:
+                broken[key] = plain_error(error)
+                continue
+            n = len(pr["pts"])
             sources[v] = {"packed": str(mp4), "base_s": base, "n_frames": n, "camera_key": key}
-            # the size as the file is shown (prepare/display.py, as probe gives it): info.json's video.width and
-            # video.height are the stored frame's, which a display rotation turns (a wrist camera mounted on its side)
-            vi = (feats.get(key) or {}).get("info") or {}
-            w, h = _shown_size(mp4)
-            codec = vi.get("video.codec")
-            if not w or not codec:
-                try:
-                    pr = _stream_facts(mp4)
-                except Exception as e:
-                    # a packed file that cannot be opened leaves this camera out (open_cameras), never the episode
-                    sources.pop(v)
-                    broken[key] = plain_error(e)
-                    continue
-                w, h, codec = w or pr["width"], h or pr["height"], codec or pr["codec"]
-            cameras[v] = describe({"key": key, "name": _short(key, v), "width": w, "height": h, "codec": codec}, v, key, rig)
+            expected = (base + np.arange(n) / fps) / float(pr["time_base"])
+            grid[v] = bool(np.allclose(pr["pts"], expected, rtol=0, atol=1e-4))
+            pts[v] = pr["pts"]
+            if not grid[v]:
+                add_issue(extra, "recorded_rate_mismatch", f"{key} PTS do not follow the declared {fps:g} Hz grid. "
+                          "Frames remain mapped by their recorded indices; original encoded PTS are retained separately.",
+                          camera=key)
+            cameras[v] = camera_entry(v, key, pr, rig)
             if key in descs:
                 cameras[v]["desc"] = descs[key]
                 cameras[v]['role_provenance'] = 'adapter'
@@ -5584,15 +5582,19 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
         state, action, kind, note, fixes = state_on_frames(df, state, action, n_frames, fps, kind, note)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
                "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_frames),
-               "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length")}, **extra}
-        set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps))
+               "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length"), "frames_on_grid": grid}, **extra}
+        set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps, ep=ep))
         if note or notes:
             no_state(ctx, lerobot_state_note(note, notes))
         for i in fixes:
             add_issue(ctx, **i)
         lerobot_annotations(ctx, r, df, row.get("data"))
         write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
-        ctx = finish_episode(ep, ctx, sources, state if kind != "none" else None, action,
+        times = None
+        if not all(grid.values()):
+            times = {key: value for v in sources for key, value in
+                     ((v, np.arange(len(pts[v])) / fps), (f"{v}_pts", pts[v]))}
+        ctx = finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
                               signals=lerobot_recorded_signals(ep, ctx, r, df, _used_columns(kind, state, action, state_columns,
                                                        action_columns) | set(hold_back), ctx["n_state_frames"]))
         archive_lerobot_state(ep, ctx, df, row.get("data"))
@@ -5639,7 +5641,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
            "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_video),
            "cameras": cameras, "stream_checks": {"frames_on_grid": grid, "episode_length_meta": row.get("length")},
            **extra}
-    set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps))
+    set_unshown(ctx, lerobot_unshown(row, unshown_keys, rig, list(vmap.values()), fps, ep=ep))
     if note or notes:
         no_state(ctx, lerobot_state_note(note, notes))
     for i in fixes:
@@ -5683,7 +5685,7 @@ def colour_depth_views(r: dict, row: dict, vmap: dict) -> dict:
 
 
 def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
-                    fps: float | None) -> list[tuple[str, dict | None]]:
+                    fps: float | None, *, ep: Path | None = None) -> list[tuple[str, dict | None]]:
     """[(camera, its unshown_entry)] of the episode's cameras the model is not shown (pick_cameras' unused), for the
     board (set_unshown): a packed camera by its window of the shared file, a per episode file whole."""
     out = []
@@ -5694,8 +5696,19 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
         why = unshown_why(k, rig, shown)
         if isinstance(src, tuple):
             mp4, base, to = src
-            e = unshown_entry(k, mp4, why, base_s=base, n_frames=int(round((to - base) * float(fps or 30.0))),
-                              fps=fps)
+            try:
+                facts = packed_video_window(Path(mp4), base, to)
+            except Exception:
+                e = None
+            else:
+                rate = fps or measured_fps(seconds(facts)) or facts["fps"] or 30.0
+                e = unshown_entry(k, mp4, why, base_s=base, n_frames=len(facts["pts"]), fps=rate)
+                if e and ep is not None:
+                    name = f"unshown{len(out) + 1}_times.npz"
+                    clock = np.arange(len(facts["pts"])) / rate
+                    ep.mkdir(parents=True, exist_ok=True)
+                    np.savez(ep / name, capture=clock, presentation=clock, pts=facts["pts"])
+                    e["camera_times"] = name
         else:
             e = unshown_entry(k, src, why)
         out.append((k, e))
@@ -5812,6 +5825,26 @@ def state_on_frames(df, state, action, n: int, fps: float | None, kind: str, not
     return st, act, kind, note, issues
 
 
+@functools.lru_cache(maxsize=16)
+def _packed_video_probe(path: str, version: tuple) -> dict:
+    """Scan a shared packed file once per source version, not once for every episode it owns."""
+    return probe(Path(path))
+
+
+def packed_video_window(path: Path, base: float, stop: float) -> dict:
+    """Exact encoded PTS inside a declared half-open LeRobot episode window."""
+    if not np.isfinite([base, stop]).all() or stop <= base:
+        raise ValueError("invalid packed video episode window")
+    stat = path.stat()
+    facts = _packed_video_probe(str(path.resolve()), (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino))
+    tb = float(facts["time_base"])
+    lo, hi = np.searchsorted(facts["pts"], [(base - 1e-7) / tb, (stop - 1e-7) / tb], side="left")
+    pts = facts["pts"][lo:hi]
+    if not len(pts):
+        raise ValueError("no video packet covers the owned episode window")
+    return {**facts, "pts": pts}
+
+
 def _stream_facts(p: Path) -> dict:
     with open_video(p) as c:
         st = c.streams.video[0]
@@ -5896,10 +5929,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             return
         source = row["videos"][key]
         path, base, stop = source if isinstance(source, tuple) else (source, 0.0, None)
-        facts = probe(Path(path))
-        if stop is not None:
-            seconds_ = facts["pts"].astype(np.float64) * float(facts["time_base"])
-            facts = {**facts, "pts": facts["pts"][(seconds_ >= base - 1e-7) & (seconds_ < stop - 1e-7)]}
+        facts = packed_video_window(Path(path), base, stop) if stop is not None else probe(Path(path))
         if not len(facts["pts"]):
             raise ValueError("no video packet covers the owned episode window")
         paths[key], prs[key], bases[key] = Path(path), facts, float(base)
@@ -6905,7 +6935,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
 
     q = np.asarray(q, dtype=np.float64)
 
-    def filled(a):
+    def filled(a, kind):
         # frames with no reading take the readings around them across no gap longer than the slack (fill_rows), else
         # (None, why): no frame has a reading, or a gap is longer
         ok = np.isfinite(a).all(axis=1)
@@ -6914,6 +6944,15 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
         if ok.all():
             return a, None
         rows, gap = fill_rows(q, q[ok], a[ok])
+        if rows is not None:
+            if kind == "ee_pose" and ok.sum() > 1:
+                from scipy.spatial.transform import Rotation, Slerp
+                missing_times = np.clip(q[~ok], q[ok][0], q[ok][-1])
+                for start in range(0, a.shape[1], JOINT_DIMS):
+                    angles = slice(start + 3, start + 6)
+                    rotations = Rotation.from_euler("xyz", a[ok, angles])
+                    rows[~ok, angles] = Slerp(q[ok], rotations)(missing_times).as_euler("xyz")
+            rows[ok] = a[ok]  # Recorded rows keep their original angular representation.
         return rows, (gap_words(gap, q[0]) if gap else None)
     notes, read, failed, filled_at = [], [], {}, {}
     source_claims = {name: physical(name) if H5_JOINT_ACTION.search(physical(name)) else name for name in cands}
@@ -6972,7 +7011,7 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             fail(name, f"{note} The recorded state is the HDF5 array {name}." if note else None, "layout")
             continue
         miss = np.flatnonzero(~np.isfinite(a).all(axis=1))
-        a, why = filled(a)
+        a, why = filled(a, kind)
         if a is None:
             fail(name, f"Labelled from the video: the recorded state {name} has no reading on any frame."
                          if why == "has no reading on any frame" else
@@ -7006,7 +7045,8 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
                                                    shape[1], rig, meta.get(name, {}).get("names"))[0]
                      and (meta.get(k) or {}).get("aligned_by") not in (COARSE_CLOCK, ALIGNED_CAMERA)
                      and not (meta.get(k) or {}).get("clock_problem")
-                     and filled(np.asarray(signals[k], dtype=np.float64))[0] is not None), None)
+                     and filled(np.asarray(signals[k], dtype=np.float64),
+                                state_layout(shape[1], rig, meta[k].get("names"))[0])[0] is not None), None)
     combined_names = [value for _, _, names in arms for value in names]
     if state_layout(len(combined_names), rig, combined_names)[0] == "none":
         return None, None, None, None, StateNote(
@@ -7030,7 +7070,9 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             "prepare.formats:hdf5", kind, combined_names, units, action=command)
     action = None
     if all(acts):
-        action = np.concatenate([filled(np.asarray(signals.pop(k), dtype=np.float64))[0] for k in acts], axis=1)
+        action = np.concatenate([
+            filled(np.asarray(signals.pop(k), dtype=np.float64),
+                   state_layout(len(meta[k]["names"]), rig, meta[k]["names"])[0])[0] for k in acts], axis=1)
     for name, _, _ in arms:
         signals.pop(name)
         if name in filled_at and hasattr(signals, "issues"):
@@ -7965,55 +8007,52 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
         chans = [(t, s) for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not TEXT_TOPIC.search(t)]
         decs, skip, seen, damaged = {}, set(), set(), []
         with open(p, "rb") as fh:
-            try:
-                for schema, ch, msg in mcap_messages(fh, p, [t for t, _ in chans], damaged):
-                    seen.add(ch.topic)
-                    if ch.topic in skip:
-                        continue
-                    if ch.id not in decs:
-                        decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
-                    try:
-                        m = decs[ch.id](msg.data) if decs[ch.id] else None
-                        row = _joint_row(m) if m is not None else None
-                    except Exception:
-                        m, row = None, None
-                    if row is None:
-                        if ch.topic not in found:
-                            skip.add(ch.topic)        # not a joint channel (health, status, poses)
-                        continue
-                    c = found.setdefault(ch.topic, {"groups": NameSets(), "rows": [], "clocks": set(), "clock_errors": []})
-                    stamp, error = mcap_capture_stamp(m) if capture_clock else (None, None)
-                    c["clocks"].add("capture" if stamp is not None else "arrival")
-                    if error:
-                        c["clock_errors"].append(error)
-                    names = _joint_names(m, len(row))
-                    i, row = name_group(c["groups"], names, row)
-                    if i is None:
-                        continue                      # a channel of more name sets than an arm has: not read here
-                    if i == len(c["rows"]):
-                        c["rows"].append({"t": [], "pos": [], "fields": set()})
-                    r = c["rows"][i]
-                    message_units = {}
-                    for unit_key in ("unit", "units"):
-                        value = _field(m, unit_key)
-                        if value is not None:
-                            message_units[unit_key] = list(value) if not isinstance(value, str) and hasattr(
-                                value, "__len__") else value
-                    claims = [state_units(metadata, names, len(row))
-                              for metadata in (dict(ch.metadata or {}), message_units)]
-                    units = []
-                    for index in range(len(row)):
-                        values = {claim[index] for claim in claims if claim[index] is not None}
-                        units.append(next(iter(values)) if len(values) == 1 else
-                                     "conflicting units" if values else None)
-                    if names is not None:
-                        units = [units[names.index(name)] for name in c["groups"][i][0]]
-                    r["units"] = units if "units" not in r or r["units"] == units else ["conflicting units"] * len(row)
-                    r["t"].append((stamp if stamp is not None else msg.log_time) / 1e9)
-                    r["pos"].append(row)
-                    r["fields"] |= _joint_fields(m)
-            except Exception:
-                pass                                  # a cut-off file: the messages before the cut are kept
+            for schema, ch, msg in mcap_messages(fh, p, [t for t, _ in chans], damaged):
+                seen.add(ch.topic)
+                if ch.topic in skip:
+                    continue
+                if ch.id not in decs:
+                    decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
+                try:
+                    m = decs[ch.id](msg.data) if decs[ch.id] else None
+                except Exception:
+                    continue  # A malformed message does not classify the whole topic as non-joint.
+                row = _joint_row(m) if m is not None else None
+                if row is None:
+                    if ch.topic not in found:
+                        skip.add(ch.topic)        # not a joint channel (health, status, poses)
+                    continue
+                c = found.setdefault(ch.topic, {"groups": NameSets(), "rows": [], "clocks": set(), "clock_errors": []})
+                stamp, error = mcap_capture_stamp(m, schema=schema, message_encoding=ch.message_encoding) if capture_clock else (None, None)
+                c["clocks"].add("capture" if stamp is not None else "arrival")
+                if error:
+                    c["clock_errors"].append(error)
+                names = _joint_names(m, len(row))
+                i, row = name_group(c["groups"], names, row)
+                if i is None:
+                    continue                      # a channel of more name sets than an arm has: not read here
+                if i == len(c["rows"]):
+                    c["rows"].append({"t": [], "pos": [], "fields": set()})
+                r = c["rows"][i]
+                message_units = {}
+                for unit_key in ("unit", "units"):
+                    value = _field(m, unit_key)
+                    if value is not None:
+                        message_units[unit_key] = list(value) if not isinstance(value, str) and hasattr(
+                            value, "__len__") else value
+                claims = [state_units(metadata, names, len(row))
+                          for metadata in (dict(ch.metadata or {}), message_units)]
+                units = []
+                for index in range(len(row)):
+                    values = {claim[index] for claim in claims if claim[index] is not None}
+                    units.append(next(iter(values)) if len(values) == 1 else
+                                 "conflicting units" if values else None)
+                if names is not None:
+                    units = [units[names.index(name)] for name in c["groups"][i][0]]
+                r["units"] = units if "units" not in r or r["units"] == units else ["conflicting units"] * len(row)
+                r["t"].append((stamp if stamp is not None else msg.log_time) / 1e9)
+                r["pos"].append(row)
+                r["fields"] |= _joint_fields(m)
         lost = damaged_unread(p, chans, seen, damaged, q) if unread is not None else []
         if lost:
             unread.append((Path(p), lost, bool(seen)))
@@ -8299,6 +8338,9 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
     sets: dict[tuple, NameSets] = {}      # (topic, field): its name sets (name_group)
     books: dict[str, str] = {}            # a recorder's own log and diagnostics topics, named and not read
     kinds: dict[str, str] = {}            # each topic's message type
+    decode_errors: dict[tuple[Path, str], int] = {}
+    clock_sources: dict[str, set] = {}
+    clock_errors: dict[str, set] = {}
     damaged: list = []                    # files whose index is whole but whose messages stop at damage (mcap_messages)
     for p in paths:
         everything = mcap_channels(p)
@@ -8308,46 +8350,54 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
                  and not (t in used and used[t] is None) and t not in books]
         decs = {}
         with open(p, "rb") as fh:
-            try:
-                for schema, ch, msg in mcap_messages(fh, p, chans, damaged):
-                    if ch.id not in decs:
-                        decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
-                    try:
-                        decoded = decs[ch.id](msg.data) if decs[ch.id] else None
-                        nums = _numbers(decoded) if decoded is not None else {}
-                    except Exception:
-                        nums = {}
-                    for field, (vals, was_set, names, shape) in list(nums.items()):
-                        # a field the reader already shows (the state) is still grouped, so the name sets beside it
-                        # keep the label that tells them from it
-                        u = used.get(ch.topic) or ()
-                        if field in u or (field, frozenset(names) if names else None) in u:
-                            name_group(sets.setdefault((ch.topic, field), NameSets()), names, vals)
-                            continue
-                        # samples in time beside a sample rate (a contact microphone's 512 samples at 48 kHz): kept as
-                        # their loudness, root mean square and peak, not as 512 channels
-                        parent = field.rsplit(".", 1)[0] if "." in field else ""
-                        sib = nums.get(parent) if parent != field else None
-                        rate = next((x for n_, x in zip((sib or [None, None, []])[2] or [], (sib or [[]])[0])
-                                     if SAMPLE_RATE_KEY.match(str(n_))), None) if sib else None
-                        kind = None
-                        if rate and len(vals) >= SAMPLES_MIN and shape is None:
-                            x = np.asarray(vals, dtype=np.float64)
-                            vals, names, kind = [float(np.sqrt(np.mean(x ** 2))), float(np.max(np.abs(x)))], \
-                                ["root mean square", "peak"], {"kind": "samples", "sample_rate": float(rate)}
-                        i, vals = name_group(sets.setdefault((ch.topic, field), NameSets()), names, vals)
-                        if i is None:
-                            continue
-                        r = rows.setdefault((ch.topic, field, i),
-                                            {"t": [], "v": [], "d": len(vals), "set": False, "names": names,
-                                             "shape": shape, "topic": ch.topic, "kind": kind})
-                        stamp, _ = mcap_capture_stamp(decoded) if capture_clock else (None, None)
-                        r["t"].append((stamp if stamp is not None else msg.log_time) / 1e9)
-                        r["v"].append(vals)
-                        r["set"] |= was_set
-            except Exception:
-                pass                                  # a cut-off file: the messages before the cut are kept
+            for schema, ch, msg in mcap_messages(fh, p, chans, damaged):
+                if ch.id not in decs:
+                    decs[ch.id] = _decoder_for(ch.message_encoding, schema, facs)
+                try:
+                    decoded = decs[ch.id](msg.data) if decs[ch.id] else None
+                except Exception:
+                    key = (Path(p), ch.topic)
+                    decode_errors[key] = decode_errors.get(key, 0) + 1
+                    continue
+                nums = _numbers(decoded) if decoded is not None else {}
+                stamp, clock_error = mcap_capture_stamp(
+                    decoded, schema=schema, message_encoding=ch.message_encoding) if capture_clock else (None, None)
+                clock_sources.setdefault(ch.topic, set()).add("capture" if stamp is not None else "arrival")
+                if clock_error:
+                    clock_errors.setdefault(ch.topic, set()).add(clock_error)
+                for field, (vals, was_set, names, shape) in list(nums.items()):
+                    # a field the reader already shows (the state) is still grouped, so the name sets beside it
+                    # keep the label that tells them from it
+                    u = used.get(ch.topic) or ()
+                    if field in u or (field, frozenset(names) if names else None) in u:
+                        name_group(sets.setdefault((ch.topic, field), NameSets()), names, vals)
+                        continue
+                    # samples in time beside a sample rate (a contact microphone's 512 samples at 48 kHz): kept as
+                    # their loudness, root mean square and peak, not as 512 channels
+                    parent = field.rsplit(".", 1)[0] if "." in field else ""
+                    sib = nums.get(parent) if parent != field else None
+                    rate = next((x for n_, x in zip((sib or [None, None, []])[2] or [], (sib or [[]])[0])
+                                 if SAMPLE_RATE_KEY.match(str(n_))), None) if sib else None
+                    kind = None
+                    if rate and len(vals) >= SAMPLES_MIN and shape is None:
+                        x = np.asarray(vals, dtype=np.float64)
+                        vals, names, kind = [float(np.sqrt(np.mean(x ** 2))), float(np.max(np.abs(x)))], \
+                            ["root mean square", "peak"], {"kind": "samples", "sample_rate": float(rate)}
+                    i, vals = name_group(sets.setdefault((ch.topic, field), NameSets()), names, vals)
+                    if i is None:
+                        continue
+                    r = rows.setdefault((ch.topic, field, i),
+                                        {"t": [], "v": [], "d": len(vals), "set": False, "names": names,
+                                         "shape": shape, "topic": ch.topic, "kind": kind})
+                    r["t"].append((stamp if stamp is not None else msg.log_time) / 1e9)
+                    r["v"].append(vals)
+                    r["set"] |= was_set
     out = Signals()
+    out.issues += [{"kind": "mcap_message_unreadable", "signal": topic,
+                    "what": f"{path.name}: {count} messages on {topic} could not be decoded; later messages were retained."}
+                   for (path, topic), count in sorted(decode_errors.items())]
+    out.issues += [{"kind": "capture_timestamp_invalid", "signal": topic, "what": error}
+                   for topic, errors in sorted(clock_errors.items()) for error in sorted(errors)]
     out.left_out += sorted(books.items())
     out.issues += [damaged_issue(p, t0, t1, q, missing) for p, t0, t1, missing in damaged]
     named, by_field = {}, {}
@@ -8363,6 +8413,11 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
         for i, r in sorted(field_rows.items()):
             named[name + (group_label(groups[i]) if n_sets > 1 else "")] = r
     rows = named
+    for r in rows.values():
+        # Files can overlap, and capture stamps can differ from MCAP log order. Sort pairs before any clock logic.
+        order = np.argsort(r["t"], kind="stable")
+        r["t"] = np.asarray(r["t"])[order].tolist()
+        r["v"] = np.asarray(r["v"])[order].tolist()
     # bookkeeping values (a counter, a device clock) leave the row; a row that names its sensor per message is split
 
     def no_counters(name, r):
@@ -8427,6 +8482,12 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
         a, var, gaps = place_on_frames(t, v, q)
         out.add(name, a, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
         out.meta[name]["rate_hz"] = round(rate, 2)
+        if capture_clock:
+            clocks = clock_sources[r["topic"]]
+            errors = clock_errors.get(r["topic"], set())
+            out.meta[name]["clock_source"] = next(iter(clocks)) if len(clocks) == 1 else "mixed capture and arrival stamps"
+            if errors or len(clocks) > 1:
+                out.meta[name]["clock_problem"] = "; ".join(sorted(errors)) if errors else "mixed capture and arrival stamps"
         if coarse is not None:
             out.meta[name]["aligned_by"] = COARSE_CLOCK
             out.issues.append(coarse_issue(name, coarse))
@@ -8441,8 +8502,9 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
             vn = f"{name} variation within each frame"
             out.add(vn, var, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
             out.meta[vn].update(rate_hz=round(rate, 2), variation_of=name)
-            if "aligned_by" in out.meta[name]:
-                out.meta[vn]["aligned_by"] = out.meta[name]["aligned_by"]
+            for key in ("aligned_by", "clock_source", "clock_problem"):
+                if key in out.meta[name]:
+                    out.meta[vn][key] = out.meta[name][key]
     if sparse:
         out.left_out.append((", ".join(sparse[:6]) + (f" and {len(sparse) - 6} more" if len(sparse) > 6 else ""),
                              "one message each, so settings or reports rather than a reading over time"))
@@ -8722,8 +8784,9 @@ def mcap_capture_fields(decoded) -> dict | None:
     return {str(name): value for name, value, _ in _msg_items(stamp) if isinstance(value, (int, float, str, bool))}
 
 
-def mcap_capture_stamp(decoded) -> tuple[int | None, str | None]:
-    """Read explicitly structured capture stamps without interpreting an unlabelled numeric clock."""
+def mcap_capture_stamp(decoded, *, schema=None, message_encoding=None) -> tuple[int | None, str | None]:
+    """Read structured capture stamps. Placement can supply ROS schema context to reject uninitialized headers.
+    Without that context the native archive retains even a zero stamp exactly as declared."""
     values = mcap_capture_fields(decoded)
     if values is None:
         return None, None
@@ -8734,6 +8797,12 @@ def mcap_capture_stamp(decoded) -> tuple[int | None, str | None]:
             or not 0 <= nanos < 1_000_000_000:
         return None, "The declared capture timestamp is not integral seconds and nanoseconds in range."
     total = int(seconds) * 1_000_000_000 + int(nanos)
+    ros = (message_encoding in ("ros1", "cdr") or schema is not None and (
+        schema.encoding in ("ros1msg", "ros2msg") or
+        re.fullmatch(r"[A-Za-z0-9_]+_msgs/(?:msg/)?[A-Za-z0-9_]+", schema.name)))
+    if total == 0 and ros and _field(decoded, "timestamp") is None and _field(decoded, "header") is not None:
+        return None, ("The ROS header capture timestamp is zero (uninitialized); MCAP log time is used for "
+                      "display, with synchronization unverified.")
     if not np.iinfo(np.int64).min < total <= np.iinfo(np.int64).max:
         return None, "The declared capture timestamp is outside the retained integer clock range."
     return total, None
@@ -9013,7 +9082,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         if decs[ch.id] is None:
                             raise ValueError('CameraInfo encoding could not be decoded')
                         info = decs[ch.id](msg.data)
-                        capture, _ = mcap_capture_stamp(info)
+                        capture, _ = mcap_capture_stamp(info, schema=schema, message_encoding=ch.message_encoding)
                         stamp = capture if capture is not None else int(msg.log_time)
                         registration.observe(ch.topic, info, stamp, camera_info=True)
                         capture_ns.setdefault(ch.topic, []).append(stamp)
@@ -9026,7 +9095,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     undecodable.add(f"{ch.topic} ({ch.message_encoding})")
                     continue
                 dec = decs[ch.id](msg.data)
-                capture_stamp, stamp_error = mcap_capture_stamp(dec)
+                capture_stamp, stamp_error = mcap_capture_stamp(dec, schema=schema, message_encoding=ch.message_encoding)
                 stamp = capture_stamp if capture_stamp is not None else int(msg.log_time)
                 if ch.topic in view_of_topic or ch.topic in depth_of:
                     registration.observe(ch.topic, dec, stamp)
@@ -9533,6 +9602,8 @@ class FrameWriter:
             try:
                 with av.open(str(raw), format=self.kind) as src, av.open(str(self.out), "w") as dst:
                     ist = src.streams.video[0]
+                    from prepare.remux import check_packet_order
+                    check_packet_order(raw, self.kind)
                     ost = dst.add_stream_from_template(ist)
                     ost.time_base = Fraction(1, TIME_BASE_DEN)
                     i = 0
