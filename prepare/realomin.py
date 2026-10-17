@@ -37,7 +37,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
-from prepare.remux import remux  # each frame's capture time as its pts
+from prepare.remux import UnsupportedPacketOrder, remux  # each frame's capture time as its pts
 
 REPO = "genrobot2025/10Kh-RealOmin-OpenData"
 CAMERA_TOPICS = {"/robot0/sensor/camera0/compressed": "left", "/robot1/sensor/camera0/compressed": "right"}
@@ -80,10 +80,16 @@ def nal_types(b: bytes) -> set[int]:
         i = j + 3
 
 
+class MissingCameraKeyframe(ValueError):
+    """No packet establishes a decodable start for this camera."""
+
+
 def mux(packets: list[bytes], ts: list[int], out: Path) -> list[int]:
     """The H.264 packets from the first one carrying SPS, PPS and an IDR frame, stream-copied into out with each
     packet's own capture time as its pts (prepare/remux.py); returns the capture times of the packets written."""
-    first = next(i for i, p in enumerate(packets) if {7, 8, 5} <= nal_types(p))
+    first = next((i for i, p in enumerate(packets) if {7, 8, 5} <= nal_types(p)), None)
+    if first is None:
+        raise MissingCameraKeyframe("No camera packet contains SPS, PPS and an IDR frame.")
     packets, ts = packets[first:], ts[first:]
     t = np.asarray(ts, dtype=np.int64)
     remux(packets, (t - t[0]) / 1e9, "h264", out)
@@ -131,40 +137,51 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
                 grip[GRIPPER_TOPICS[ch.topic]][0].append(t)
                 grip[GRIPPER_TOPICS[ch.topic]][1].append(float(d.value))
     ep.mkdir(parents=True, exist_ok=True)
-    cts = {}
-    for v in ("left", "right"):
-        cts[v] = np.asarray(mux(cam[v][1], cam[v][0], ep / f"{v}.mp4"), dtype=np.int64)
     import av
-    npts = {}
+    cts, npts, sizes, failures = {}, {}, {}, {}
     for v in ("left", "right"):
-        with av.open(str(ep / f"{v}.mp4")) as c:
+        out = ep / f"{v}.mp4"
+        try:
+            cts[v] = np.asarray(mux(cam[v][1], cam[v][0], out), dtype=np.int64)
+        except (MissingCameraKeyframe, UnsupportedPacketOrder, av.error.FFmpegError) as error:
+            failures[v] = formats.plain_error(error)
+            out.unlink(missing_ok=True)
+            continue
+        with av.open(str(out)) as c:
             st = c.streams.video[0]
             npts[v] = np.asarray(sorted(p.pts for p in c.demux(st) if p.pts is not None and not p.is_discard),
                                  dtype=np.int64)
-            wh = (st.codec_context.width, st.codec_context.height)
-        if len(npts[v]) != len(cts[v]):         # remux wrote one packet per frame message, each at its capture time
+            sizes[v] = (st.codec_context.width, st.codec_context.height)
+        if len(npts[v]) != len(cts[v]):
             raise RuntimeError(f"{v}.mp4: {len(npts[v])} frames in the file but {len(cts[v])} capture times")
-    t0 = int(cts["left"][0])
-    left_t = cts["left"]
+    if not cts:
+        raise RuntimeError(f"{rel}: no readable camera remains: {failures}")
+    anchor = next(iter(cts))
+    t0 = int(cts[anchor][0])
+    anchor_t = cts[anchor]  # both actors' state rows follow the surviving anchor camera
     state = []
     for v in ("left", "right"):
         pt = np.asarray(pose[v][0], dtype=np.int64)
         pv = np.asarray(pose[v][1], dtype=np.float64)
         gt = np.asarray(grip[v][0], dtype=np.int64)
         gv = np.asarray(grip[v][1], dtype=np.float64)
-        ip, ig = formats.nearest(pt, left_t), formats.nearest(gt, left_t)
+        ip, ig = formats.nearest(pt, anchor_t), formats.nearest(gt, anchor_t)
         state.append(np.concatenate([pv[ip, :3], quat_to_rpy(pv[ip, 3:7]), gv[ig, None]], axis=1))
     state = np.concatenate(state, axis=1).astype(np.float32)
     np.savez(ep / "state.npz", state=state)
-    kmap = formats.nearest(cts["right"], left_t).astype(np.int64)
-    np.save(ep / "kmap_right.npy", kmap)
-    np.savez(ep / "times.npz", left=(left_t - t0) / 1e9, left_pts=npts["left"],
-             right=(cts["right"] - t0) / 1e9, right_pts=npts["right"])
+    times, src = {}, {}
+    for v, stamps in cts.items():
+        times[v], times[v + "_pts"] = (stamps - t0) / 1e9, npts[v]
+        src[v] = {"packed": str((ep / f"{v}.mp4").resolve()), "base_s": 0.0, "n_frames": len(stamps)}
+        if v != anchor:
+            np.save(ep / f"kmap_{v}.npy", formats.nearest(stamps, anchor_t).astype(np.int64))
+            src[v]["kmap"] = f"kmap_{v}.npy"
+    np.savez(ep / "times.npz", **times)
     task = task_of(rel)
     ctx = {"dataset": REPO, "profile": "handheld_gripper", "state_kind": "ee_pose", "episode_id": ep.name,
            "robot_type": "two handheld GenDAS grippers with wrist fisheye cameras",
-           "fps": formats.measured_fps((left_t - t0) / 1e9) or 30.0,     # the left camera's real rate, not assumed
-           "n_state_frames": int(len(left_t)), "real_times": "times.npz", "instruction": task,
+           "fps": formats.measured_fps((anchor_t - t0) / 1e9) or 30.0,     # the anchor camera's real rate, not assumed
+           "n_state_frames": int(len(anchor_t)), "real_times": "times.npz", "instruction": task,
            "instruction_note": ("This instruction is only the task category of the folder the dataset files the clip "
                                 "under; the dataset ships no per-episode instruction, so judge alignment loosely."),
            "task_label": [task],
@@ -172,20 +189,20 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
            "gripper_value": ("the measured opening width in metres, about 0 = jaws shut and about 0.10 = fully open "
                              "(checked against the gripper camera frames)"),
            "gripper_range": [0.0, 0.10],
-           "cameras": {v: {"name": v, "width": wh[0], "height": wh[1], "desc": CAMERA_DESC[v]}
-                       for v in ("left", "right")},
+           "cameras": {v: {"name": v, "width": sizes[v][0], "height": sizes[v][1], "desc": CAMERA_DESC[v]}
+                       for v in cts},
            "source": {"mcap": rel}}
     ctx["state_actor_contract"] = {
         "actors": ["left", "right"], "source": "recording schema maps robot0 to left and robot1 to right"}
     formats.record_state_groups(ctx, [(topic, None, 7) for topic in POSE_TOPICS])
-    src = {"left": {"packed": str((ep / "left.mp4").resolve()), "base_s": 0.0, "n_frames": int(len(npts["left"]))},
-           "right": {"packed": str((ep / "right.mp4").resolve()), "base_s": 0.0, "n_frames": int(len(npts["right"])),
-                     "kmap": "kmap_right.npy"}}
+    for v, error in failures.items():
+        topic = next(topic for topic, view in CAMERA_TOPICS.items() if view == v)
+        formats.add_issue(ctx, "camera_not_decodable", f"Camera {topic} was left out: {error}", camera=topic)
     # every other number the grippers record (each one's IMU), under the dataset's names (formats.mcap_signals); the
     # pose and the opening are the state, and /robotN/sim/robot_info repeats the pose
     used = {**{t: {"pose.position", "pose.orientation"} for t in POSE_TOPICS}, **{t: {""} for t in GRIPPER_TOPICS},
             **{t.replace("/vio/eef_pose", "/sim/robot_info"): None for t in POSE_TOPICS}}
-    formats.write_signals(ep, ctx, formats.mcap_signals([mcap_path], left_t / 1e9, used))
+    formats.write_signals(ep, ctx, formats.mcap_signals([mcap_path], anchor_t / 1e9, used))
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
     write_atomic(ep / "context.json", ctx, indent=1)
     return ctx

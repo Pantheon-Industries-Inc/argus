@@ -86,7 +86,9 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 
 Each recording produces one public episode. Long recordings are split to fit API request limits and rejoined on the original timeline; internal chunk boundaries are not treated as recording truncation. Session mode annotates activities within the recording. Preparation limits, missing chunks and processing failures are reported alongside any usable results.
 
-Rerunning a review job with the same [`--out`](review/__main__.py#L263) preserves its settings and reuses outputs whose inputs and selected evidence still match. Changes to paid request semantics require a new job. [`--free`](review/__main__.py#L265) skips paid field interpretation, image-detail routing and evidence selection, so it previews base requests rather than the full paid evidence path. Spending caps account for all applicable calls and outstanding reservations; unresolved charges stay reserved.
+Rerunning a review job with the same [`--out`](review/__main__.py#L263) preserves its settings and reuses outputs whose inputs and selected evidence still match. Changes to paid request semantics require a new job. [`--free`](review/__main__.py#L265) skips paid field interpretation, image-detail routing and evidence selection, so it previews base requests rather than the full paid evidence path. Spending caps account for all applicable calls and outstanding reservations; unresolved charges stay reserved. Inspection blocked by the cap resumes when the allowance increases, before final annotation is dispatched.
+
+For models without locally verified rates, reservations use the full published context window and can exceed the expected request cost. Capped runs reject native search models whose search fees have no enforceable ceiling.
 
 ## Results and further use
 

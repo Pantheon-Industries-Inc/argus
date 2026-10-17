@@ -15,11 +15,13 @@ EPISODES/episode_<id>/ with context.json (the goal as the instruction and the ti
 annotation_subtasks, both claims for the model to check), sources.json (pointing at cam2.mp4) and times.npz (the
 recorded frame times). A copy extracted before the recorded times were kept has no times.npz, and its
 context.source.frame_times says its times are nominal. The dataset asks you to accept its terms on Hugging Face,
-so HF_TOKEN must be set.
+so HF_TOKEN must be set. If camera2 cannot be read, a readable headset camera keeps its own identity and calibration;
+publisher timed claims remain source metadata because their clock is not established for that fallback.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +30,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import formats
 from prepare import hub
-from prepare.remux import remux  # each frame's recorded time as its pts (shared with ABC-130k, RealOmni)
+from prepare.remux import UnsupportedPacketOrder, remux  # each frame's recorded time as its pts (shared with ABC-130k, RealOmni)
 
 REPO = "genrobot2025/Gen-HumanEgo"
 CAMERA_TOPIC = "/robot0/sensor/camera2/compressed"
@@ -54,29 +56,37 @@ def _annotation(a) -> dict | None:
 
 
 def extract(mcap: Path, raw: Path, rel: str) -> None:
-    """cam2.mp4 and meta.json for one episode MCAP."""
+    """Extract the forward camera, or a readable headset camera with its own identity and calibration."""
     from mcap.reader import make_reader
     from mcap_protobuf.decoder import DecoderFactory
     raw.mkdir(parents=True, exist_ok=True)
-    ts, frames, ann, trv, fv_invalid, calib = [], [], None, None, 0, None
+    ts, frames, ann, trv, fv_invalid, calibrations = [], [], None, None, 0, {}
+    source_claims = []
     with open(mcap, "rb") as fh:
         r = make_reader(fh, decoder_factories=[DecoderFactory()])
         summ = r.get_summary()
+        camera_topics = sorted({ch.topic for ch in summ.channels.values()
+                                if re.fullmatch(r"/robot0/sensor/camera[0-9]+/compressed", ch.topic)})
+        calib_topics = [topic.rsplit("/", 1)[0] + "/camera_info" for topic in camera_topics]
         started = False
-        for _, ch, msg, d in r.iter_decoded_messages(topics=[CAMERA_TOPIC, CALIB_TOPIC, ANNOTATION_TOPIC,
+        for _, ch, msg, d in r.iter_decoded_messages(topics=[CAMERA_TOPIC, *calib_topics, ANNOTATION_TOPIC,
                                                              "/robot0/time_range_validity", "/robot0/frame_validity"]):
+            if ch.topic in (ANNOTATION_TOPIC, "/robot0/time_range_validity", "/robot0/frame_validity"):
+                from prepare.mcap_claims import snapshot
+                source_claims.append({"topic": ch.topic, "log_ns": int(msg.log_time),
+                                      "publish_ns": int(msg.publish_time), "fields": snapshot(d)})
             if ch.topic == CAMERA_TOPIC:
                 if not started:
                     b = d.data
                     o = 4 if b.startswith(b"\x00\x00\x00\x01") else 3 if b.startswith(b"\x00\x00\x01") else 0
-                    if not b or (b[o] & 0x1F) != 7:
+                    if len(b) <= o or (b[o] & 0x1F) != 7:
                         continue            # before the first SPS: dropped, so mp4 frame i is ts[i]
                     started = True
                 frames.append(bytes(d.data))
                 ts.append(msg.log_time)
-            elif ch.topic == CALIB_TOPIC:
-                # the head camera's calibration (Double Sphere: fx, fy, cx, cy, xi, alpha), used by the hand pose
-                calib = dict(w=d.width, h=d.height, model=d.distortion_model, D=list(d.D), T=list(d.T_b_c),
+            elif ch.topic in calib_topics:
+                # Each camera keeps its own calibration; fallback footage never inherits camera2 geometry.
+                calibrations[ch.topic.rsplit("/", 1)[0] + "/compressed"] = dict(w=d.width, h=d.height, model=d.distortion_model, D=list(d.D), T=list(d.T_b_c),
                              frame=d.frame_id)
             elif ch.topic == ANNOTATION_TOPIC:
                 ann = d
@@ -84,21 +94,53 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
                 trv = d
             else:
                 fv_invalid += 0 if d.is_valid else 1
-    if not frames:
-        raise RuntimeError(f"{rel}: the forward camera has no frame from its first SPS on")
-    # each frame at the time the headset recorded it: the MCAP carries no frame rate, and the camera can drop a
-    # frame or run off 30 fps, so a constant rate would put every later frame at the wrong time
-    t = (np.asarray(ts, dtype=np.int64) - ts[0]) / 1e9
-    remux(frames, t, "h264", raw / "cam2.mp4")
-    np.save(raw / TIMES, t)
+    import av
+    failures, selected = {}, None
+    for topic in [CAMERA_TOPIC, *(topic for topic in camera_topics if topic != CAMERA_TOPIC)]:
+        if topic != CAMERA_TOPIC:
+            ts, frames = [], []
+            started = False
+            with mcap.open("rb") as stream:
+                for _, _, msg, decoded in make_reader(stream, decoder_factories=[DecoderFactory()]).iter_decoded_messages(topics=[topic]):
+                    packet = bytes(decoded.data)
+                    if not started:
+                        offset = 4 if packet.startswith(b"\x00\x00\x00\x01") else 3 if packet.startswith(b"\x00\x00\x01") else 0
+                        if len(packet) <= offset or (packet[offset] & 0x1F) != 7:
+                            continue
+                        started = True
+                    ts.append(msg.log_time)
+                    frames.append(packet)
+        if not frames:
+            failures[topic] = "No frame from its first SPS on."
+            continue
+        name = topic.split("/")[-2].replace("camera", "cam")
+        camera_file, camera_times = name + ".mp4", name + "_times.npy"
+        t = (np.asarray(ts, dtype=np.int64) - ts[0]) / 1e9
+        try:
+            remux(frames, t, "h264", raw / camera_file)
+        except (UnsupportedPacketOrder, av.error.FFmpegError) as error:
+            failures[topic] = formats.plain_error(error)
+            (raw / camera_file).unlink(missing_ok=True)
+            continue
+        np.save(raw / camera_times, t)
+        selected = {"topic": topic, "file": camera_file, "times": camera_times,
+                    "calibration": calibrations.get(topic), "is_forward_camera": topic == CAMERA_TOPIC}
+        break
+    if selected is None:
+        raise RuntimeError(f"{rel}: no readable headset camera remains: {failures}")
     meta = {"rel": rel, "dur": (summ.statistics.message_end_time - summ.statistics.message_start_time) / 1e9,
-            "ann": _annotation(ann), "fv_invalid": fv_invalid, "calib2": calib}
+            "ann": _annotation(ann), "fv_invalid": fv_invalid,
+            "calib2": calibrations.get(CAMERA_TOPIC) if selected["is_forward_camera"] else None,
+            "selected_camera": selected, "camera_calibrations": calibrations, "camera_failures": failures,
+            "source_claims": source_claims}
     if len(ts) > 1:
         dt = np.diff(np.asarray(ts, dtype=np.int64)) / 1e6
         # drift_s: how far the last frame's recorded time is from where a 30 fps grid would put it
-        meta["cam2_dt"] = dict(clock="MCAP log time of each camera message", med=float(np.median(dt)),
+        meta["camera_timing"] = dict(clock="MCAP log time of each camera message", med=float(np.median(dt)),
                                max=float(dt.max()), n_gap50=int((dt > 50).sum()), n_gap100=int((dt > 100).sum()),
                                span_s=float(t[-1]), drift_s=float(t[-1] - (len(t) - 1) / 30))
+    if selected["is_forward_camera"]:
+        meta["cam2_dt"] = meta.get("camera_timing")
     if trv is not None:
         meta["invalid_ranges"] = [dict(t0=x.start_time_s, t1=x.end_time_s, code=x.invalid_code,
                                        msg=x.invalid_message) for x in trv.invalid_ranges]
@@ -128,14 +170,17 @@ def write_sidecar(raw: Path, dst: Path) -> dict:
     import av
     meta = json.loads((raw / "meta.json").read_text())
     ann = meta.get("ann") or {}
-    with av.open(str(raw / "cam2.mp4")) as c:
+    selected = meta.get("selected_camera") or {}
+    camera_file = selected.get("file", "cam2.mp4")
+    with av.open(str(raw / camera_file)) as c:
         st = c.streams.video[0]
         pts = sorted(p.pts for p in c.demux(st) if p.pts is not None and not p.is_discard)
         w, h = st.codec_context.width, st.codec_context.height
     n = len(pts)
-    recorded = np.load(raw / TIMES) if (raw / TIMES).exists() else None
+    times_file = raw / selected.get("times", TIMES)
+    recorded = np.load(times_file) if times_file.exists() else None
     if recorded is not None and len(recorded) != n:
-        raise RuntimeError(f"{raw.name}: {n} frames in cam2.mp4 but {len(recorded)} recorded frame times")
+        raise RuntimeError(f"{raw.name}: {n} frames in {camera_file} but {len(recorded)} recorded frame times")
     fps = (formats.measured_fps(recorded) if recorded is not None else None) or 30.0
     subs = []
     for seg in ann.get("segments") or []:
@@ -147,17 +192,31 @@ def write_sidecar(raw: Path, dst: Path) -> dict:
            "instruction": (ann.get("bold_mark") or "").strip() or None,
            "annotation_subtasks": subs,
            "task_label": [ann.get("sst") or ""],
-           "cameras": {"exo": {"name": "head", "width": w, "height": h, "desc": CAMERA_DESC}},
-           "source": {"mcap": meta.get("rel"), "duration_s": meta.get("dur"), "camera_timing": meta.get("cam2_dt"),
+           "cameras": {"exo": {"name": "head" if selected.get("is_forward_camera", True) else "headset camera",
+                "key": selected.get("topic", CAMERA_TOPIC), "width": w, "height": h,
+                "desc": CAMERA_DESC if selected.get("is_forward_camera", True) else
+                    f"a camera on the DAS-Ego headset ({selected['topic']}); its viewing direction is not established"}},
+           "source": {"mcap": meta.get("rel"), "duration_s": meta.get("dur"), "camera_timing": meta.get("camera_timing", meta.get("cam2_dt")),
                       "dataset_invalid_ranges": meta.get("invalid_ranges"),
                       "frame_valid_false": meta.get("fv_invalid"),
-                      "frame_times": FRAME_TIMES_RECORDED if recorded is not None else FRAME_TIMES_NOMINAL}}
+                      "frame_times": FRAME_TIMES_RECORDED if recorded is not None else FRAME_TIMES_NOMINAL,
+                      "selected_camera": selected.get("topic", CAMERA_TOPIC)}}
+    if selected and not selected.get("is_forward_camera"):
+        # The publisher annotation clock and frame-validity camera are not established by camera log times.
+        ctx["annotation_subtasks"] = []
+        ctx["source"].pop("dataset_invalid_ranges", None)
+        ctx["source"].pop("frame_valid_false", None)
+        ctx["source"]["claims_scope"] = {"source": "publisher recording", "camera": "unverified",
+                                         "clock_origin": "unverified"}
+        ctx["recorded_metadata"] = {"mcap_records": meta.get("source_claims") or []}
+    for topic, error in meta.get("camera_failures", {}).items():
+        formats.add_issue(ctx, "camera_not_decodable", f"Camera {topic} was left out: {error}", camera=topic)
     dst.mkdir(parents=True, exist_ok=True)
     if recorded is not None:
         # the recorded times place each frame; the file's own pts (the same times, rounded to its time base) find it
         np.savez(dst / "times.npz", exo=np.asarray(recorded, dtype=np.float64), exo_pts=np.asarray(pts, dtype=np.int64))
         ctx["real_times"] = "times.npz"
-    src = {"exo": {"packed": str((raw / "cam2.mp4").resolve()), "base_s": 0.0, "n_frames": n}}
+    src = {"exo": {"packed": str((raw / camera_file).resolve()), "base_s": 0.0, "n_frames": n}}
     (dst / "sources.json").write_text(json.dumps(src, indent=1))
     write_atomic(dst / "context.json", ctx, indent=1)
     return ctx

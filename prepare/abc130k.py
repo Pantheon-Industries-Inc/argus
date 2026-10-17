@@ -39,7 +39,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
-from prepare.remux import remux  # each frame's real capture time as its pts (shared with RealOmni, Gen-HumanEgo)
+from prepare.remux import UnsupportedPacketOrder, remux  # each frame's real capture time as its pts (shared with RealOmni, Gen-HumanEgo)
 
 REPO = "XDOF/ABC-130k"
 TIME_BASE_DEN = 1_000_000   # microseconds: some ABC frames are stamped only 1 us apart
@@ -166,31 +166,51 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         raise RuntimeError(f"{ep_name}: missing camera topics, has {sorted(d['video'])}")
     ep_dir.mkdir(parents=True, exist_ok=True)
     topics = {"exo": top, **VIEW_TOPIC}
-    t_top = np.asarray(d["video"][top]["t"], dtype=np.int64)
     # time zero is the first frame of any camera, so every camera's times (and pts) are >= 0
     t0 = int(min(d["video"][t]["t"][0] for t in topics.values()))
-    sources, times, checks = {}, {}, {"streams": {}}
+    import av
+    sources, times, checks, failures = {}, {}, {"streams": {}}, {}
+    kept = {}
     for v, topic in topics.items():
         vid = d["video"][topic]
         out = ep_dir / f"{v}.mp4"
         tv = np.asarray(vid["t"], dtype=np.int64)
         times[v] = (tv - t0) / 1e9
-        times[f"{v}_pts"] = remux(vid["data"], times[v], vid["format"], out)
+        try:
+            times[f"{v}_pts"] = remux(vid["data"], times[v], vid["format"], out)
+        except (UnsupportedPacketOrder, av.error.FFmpegError) as error:
+            failures[topic] = formats.plain_error(error)
+            times.pop(v)
+            out.unlink(missing_ok=True)
+            continue
+        kept[v] = topic
+    if not kept:
+        raise RuntimeError(f"{ep_name}: no readable camera remains: {failures}")
+    anchor = next(iter(kept))
+    anchor_t = np.asarray(d["video"][kept[anchor]]["t"], dtype=np.int64)
+    retained_t0 = min(d["video"][topic]["t"][0] for topic in kept.values())
+    for v, topic in kept.items():
+        vid = d["video"][topic]
+        tv = np.asarray(vid["t"], dtype=np.int64)
+        out = ep_dir / f"{v}.mp4"
+        if retained_t0 != t0:
+            times[v] = (tv - retained_t0) / 1e9
+            times[f"{v}_pts"] = remux(vid["data"], times[v], vid["format"], out)
         n = len(tv)
         src = {"packed": str(out.resolve()), "base_s": 0.0, "n_frames": n, "camera_key": topic,
                "codec": vid["format"], "pts_from": "times.npz"}
-        if v != "exo":
-            idx = formats.nearest(tv, t_top)
-            off = np.abs(tv[idx] - t_top) / 1e6
+        if v != anchor:
+            idx = formats.nearest(tv, anchor_t)
+            off = np.abs(tv[idx] - anchor_t) / 1e6
             checks["streams"][topic] = {**gaps(vid["t"]), "pair_offset_ms_max": round(float(off.max()), 1),
                                         "pair_offset_ms_median": round(float(np.median(off)), 2)}
-            if not (len(tv) == len(t_top) and np.array_equal(idx, np.arange(len(t_top)))):
+            if not (len(tv) == len(anchor_t) and np.array_equal(idx, np.arange(len(anchor_t)))):
                 np.save(ep_dir / f"kmap_{v}.npy", idx.astype(np.int32))
                 src["kmap"] = f"kmap_{v}.npy"
         else:
             checks["streams"][topic] = gaps(vid["t"])
         sources[v] = src
-    q = t_top.astype(np.float64)
+    q = anchor_t.astype(np.float64)
     placed = {t: interp(d["robot"][t], q) for t in ARM + ARM_ACT}
     gap = next(((t, placed[t][1]) for t in ARM if placed[t][1]), None)
     state = action = None
@@ -216,7 +236,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         "episode_id": ep_name,
         "split": split,
         "robot_type": "bimanual YAM station (2x 6-DoF YAM arms, parallel-jaw grippers)",
-        "fps": measured_fps(t_top),
+        "fps": measured_fps(anchor_t),
         "task_label": [task],
         "instruction": (d["instruction"] or meta.get("task_name") or "").strip(),
         "instruction_note": ("This instruction is the task name the recording rig stored for the episode "
@@ -230,11 +250,13 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
                         "height": meta.get(f"{'top' if v == 'exo' else v}_camera_height"),
                         "type": meta.get(f"{'top' if v == 'exo' else v}_camera_type"),
                         "desc": CAMERA_DESC[v]}
-                    for v, (name, topic) in cams.items()},
+                    for v, (name, topic) in cams.items() if v in kept},
         "stream_checks": checks,
     }
+    for topic, error in failures.items():
+        formats.add_issue(context, "camera_not_decodable", f"Camera {topic} was left out: {error}", camera=topic)
     # every other number the arms record (joint velocities and torques), under the dataset's names (formats.mcap_signals)
-    formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], t_top / 1e9, read_fields(state, action)))
+    formats.write_signals(ep_dir, context, formats.mcap_signals([mcap], anchor_t / 1e9, read_fields(state, action)))
     if gap is not None:
         formats.no_state(context, formats.StateNote(
             f"Labelled from the cameras, because the recorded arm state {gap[0]} "

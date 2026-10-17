@@ -5104,8 +5104,9 @@ function setupSensorEvidence(E, seek, on, inspectContact, d = null, file = null,
     const allFindings = E.overlayFindings || E.insights || [];
     const available = displayGripFindings(E, t, presentationWindows);
     const explicit = allFindings.find(f => f.findingIndex === chosenGrip);
-    // Paused inspection can revisit a superseded finding; playback still obeys its display window.
-    if (explicit && delta <= 0 && explicit.start <= t && !available.some(f => f.findingIndex === explicit.findingIndex))
+    // A manual inspection follows its source interval, even after another onset replaces its automatic card.
+    if (explicit && explicit.start <= t && t <= explicit.end + 1e-6
+        && !available.some(f => f.findingIndex === explicit.findingIndex))
       available.push({...explicit, phase: t <= explicit.end + 1e-6 ? 'Now' : 'Earlier'});
     available.sort((a, b) => Number(b.phase === 'Now') - Number(a.phase === 'Now')
       || b.priority - a.priority || b.start - a.start);
@@ -5875,8 +5876,9 @@ function renderEp(d, opts) {
     // green when the footage shows the given goal done (alone, or with more besides), red when it shows only part of
     // it or something else
     const matches = ga.matches_given !== false && (rel === 'aligned' || rel === 'narrower');
-    const cls = matches ? 'match' : 'nomatch';
-    const label = rel === 'narrower' && matches ? 'matches given goal and does more'
+    const known = !Object.hasOwn(ga, 'matches_given') || typeof ga.matches_given === 'boolean';
+    const cls = !known ? 'unknown' : matches ? 'match' : 'nomatch';
+    const label = !known ? 'goal match unclear' : rel === 'narrower' && matches ? 'matches given goal and does more'
       : matches ? 'matches given goal'
       : rel === 'broader' && ga.matches_given !== false ? 'only part of the given goal'
       : 'does not match given goal';
@@ -6104,7 +6106,7 @@ function renderEp(d, opts) {
   const recoveries = (d.recovery || []).map(r => ({
     failureT: r.failure_t_s,
     failure: r.failure || '',
-    recovered: (r.recovered != null) ? r.recovered : (r.recovered_at_s != null ? true : null),
+    recovered: Object.hasOwn(r, 'recovered') ? r.recovered : (r.recovered_at_s != null ? true : null),
     recoveredAt: (r.recovered_at_s != null) ? r.recovered_at_s : null,
     correction: r.correction || '',
     howToFix: r.how_to_fix || '',

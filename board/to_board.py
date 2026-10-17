@@ -98,9 +98,8 @@ def typed(result: dict) -> tuple[dict, list[dict]]:
     """(labels, dropped): a parsed reply's labels with every field of the type the output format gives it
     (label/harness.py typed_labels, which a reply parsed before it was written never went through), and what was left
     out for breaking the format ({"field", "row"?, "why"} per field or row). The run's own output is unchanged."""
-    from label.harness import typed_labels
-    labels = typed_labels(copy.deepcopy(result.get("labels") if isinstance(result.get("labels"), dict) else {}))
-    return labels, [x for x in labels.pop("_dropped", None) or [] if isinstance(x, dict)]
+    from board.label_projection import project
+    return project(result.get("labels") if isinstance(result.get("labels"), dict) else {})
 
 
 # the fields of the output format whose plain words are plural (the key events are, the timeline is), and the fields
@@ -158,6 +157,8 @@ def convert(result: dict, dataset: str | None = None) -> dict:
     off = {}
     for x in dropped:
         off[str(x.get("field"))] = off.get(str(x.get("field")), 0) + 1
+    violations = list(labels.get("_schema_violations") or [])
+    violations.extend(f"{x['field']}: {x['why']} ({x['value']!r})" for x in dropped if "value" in x)
     scene = labels.get("scene") if isinstance(labels.get("scene"), dict) else {}
     timeline = labels.get("timeline") or []
     eid = Path(result.get("episode_dir", "")).name
@@ -310,6 +311,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         },
         "_usage": result.get("usage"),
         **({"_off_schema": off} if off else {}),
+        **({"_schema_violations": violations} if violations else {}),
         **({"_label_failed": failed} if failed else {}),
     }
 

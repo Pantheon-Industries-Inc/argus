@@ -292,7 +292,7 @@ def test_premium_service_tier_does_not_inflate_standard_comparison_reserve(monke
     monkeypatch.setattr(pricing.urllib.request, 'urlopen', lambda *a, **kw: io.BytesIO(json.dumps(payload).encode()))
     quote = pricing.quote(model, 1)
     assert quote['provider_max_price']['prompt'] == 4.
-    assert pricing.cost_bound([], 64000, quote) == pytest.approx(9.28)
+    assert pricing.cost_bound([], 64000, quote) == pytest.approx(5.28)
 
 
 def test_provider_unit_conversion_does_not_lower_the_published_ceiling(monkeypatch):
@@ -362,7 +362,7 @@ def test_capped_non_openai_run_uses_provider_prices_and_enforces_them(tmp_path, 
     assert len(sent) == 3
 
 
-@pytest.mark.parametrize('cap', [8., 15.])
+@pytest.mark.parametrize('cap', [2., 8.])
 def test_quote_handles_published_opus_fee_shape_without_inventing_surcharges(tmp_path, monkeypatch, cap):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
@@ -384,7 +384,7 @@ def test_quote_handles_published_opus_fee_shape_without_inventing_surcharges(tmp
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
         model=model, reasoning='medium', max_tokens=64000, timeout=1, cell_w=128, max_spend=cap) == 0
-    if cap == 8.:
+    if cap == 2.:
         assert sent == ['GET']
         result = json.loads((out / ('noreply_' + ep.name + '.json')).read_text())
         assert harness.episode_cost(result) == 0
@@ -393,7 +393,7 @@ def test_quote_handles_published_opus_fee_shape_without_inventing_surcharges(tmp
         return
     assert sent == ['GET', 'POST', 'POST']
     result = json.loads((out / (ep.name + '.json')).read_text())
-    assert result['config']['pricing_quote']['input_usd_per_token'] == .000008
+    assert result['config']['pricing_quote']['input_usd_per_token'] == .000005
     assert result['evidence_inspection']['status'] == 'complete'
     assert result['evidence_inspection']['cost_usd'] == .01
 
@@ -433,3 +433,94 @@ def test_non_openai_provider_quote_still_obeys_dispatch_cap(tmp_path, monkeypatc
     assert sent == ['GET']
     receipt = json.loads((out / ('noreply_' + ep.name + '.json')).read_text())
     assert harness.episode_cost(receipt) == 0
+
+
+@pytest.mark.parametrize('contribution', [None, 'Advancing'])
+def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path, monkeypatch, contribution):
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    row = [0, .3, 'left', 'reach', 'cup', None, None, contribution, .2]
+    sent = []
+    def provider(request, timeout):
+        selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
+        sent.append('selection' if selection else 'final')
+        return answer({'requests': []} if selection else {'timeline': [row]})
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    out = tmp_path / 'out'
+    args = dict(keys=['sk-or-test'], concurrency=1, force=False, max_spend=1.,
+                model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, timeout=1, cell_w=128)
+    assert harness.run_batch([ep], out, **args) == 0
+    result = json.loads((out / (ep.name + '.json')).read_text())
+    assert result['parse_ok'] and result['labels']['timeline'][0]['action'] == 'reach'
+    assert result['labels']['timeline'][0]['contribution'] == contribution
+    assert result['labels']['_schema_violations']
+    assert harness.run_batch([ep], out, **args) == 0
+    assert sent == ['selection', 'final']
+
+
+@pytest.mark.parametrize('initial_cap', [.01, .35])
+def test_budget_increase_resumes_undispatched_selection(tmp_path, monkeypatch, initial_cap):
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    sent = []
+    def provider(request, timeout):
+        if request.get_method() == 'GET':
+            return io.BytesIO(json.dumps(endpoint_metadata('custom/model')).encode())
+        selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
+        sent.append('selection' if selection else 'final')
+        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'})
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    out = tmp_path / 'out'
+    args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='custom/model',
+                reasoning='medium', max_tokens=100, timeout=1, cell_w=128)
+    assert harness.run_batch([ep], out, max_spend=initial_cap, **args) == 0
+    cache = out / '.evidence' / (ep.name + '.json.inspection.json')
+    paused = json.loads(cache.read_text())
+    assert paused['rounds'] == [] and paused['cost_usd'] == 0 and sent == []
+    assert harness.run_batch([ep], out, max_spend=1., **args) == 0
+    result = json.loads((out / (ep.name + '.json')).read_text())
+    assert sent == ['selection', 'final']
+    assert result['evidence_inspection']['status'] == 'complete'
+    assert result['evidence_inspection']['cost_usd'] == .01
+    assert harness.run_batch([ep], out, max_spend=1., **args) == 0
+    assert sent == ['selection', 'final']
+
+
+def test_native_search_fee_without_enforceable_ceiling_refuses_paid_dispatch(tmp_path, monkeypatch):
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    def provider(request, timeout):
+        assert request.get_method() == 'GET', 'native search exceeded its verified quote'
+        return io.BytesIO(json.dumps({'data': {'id': 'perplexity/sonar', 'endpoints': [{
+            'context_length': 127072, 'pricing': {'prompt': '.000001', 'completion': '.000001',
+                                                'web_search': '.005'}}]}}).encode())
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
+    out = tmp_path / 'out'
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
+        model='perplexity/sonar', reasoning='medium', max_tokens=100, timeout=1,
+        cell_w=128, max_spend=.128) == 1
+    receipt = json.loads((out / ('noreply_' + ep.name + '.json')).read_text())
+    assert 'search' in receipt['no_reply'].lower()
+    assert harness.episode_cost(receipt) == 0
+
+
+def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path, monkeypatch):
+    from test_camera_timing import recording
+    ep = recording(tmp_path, np.arange(12) / 30)
+    out = tmp_path / 'out'
+    out.mkdir()
+    args = dict(model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, cell_w=128,
+                example_dir=None)
+    record = {'parse_ok': True, 'labels': {'task_summary': 'The hand reaches.'},
+              'usage': {'est_cost_usd': .01}, 'input_identity': harness.input_identity(ep, **args),
+              'evidence_inspection': {'status': 'incomplete', 'rounds': [], 'cost_usd': 0,
+                  'limitations': ['Inspection selection exceeds the remaining batch spend cap.']}}
+    target = out / (ep.name + '.json')
+    target.write_text(json.dumps(record))
+    original = target.read_bytes()
+    monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda *a, **kw: pytest.fail('paid output replayed'))
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
+                             max_spend=1., timeout=1, **args) == 0
+    assert target.read_bytes() == original
+    warning = json.loads((out / ('stale_' + ep.name + '.json')).read_text())
+    assert warning['refresh'] == '--force' and 'inspection' in warning['reason']

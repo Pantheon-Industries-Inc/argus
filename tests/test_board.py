@@ -105,7 +105,8 @@ def test_convert_a_reply_that_breaks_the_schema():
     assert [(k["t_s"], k["label"]) for k in d["key_events"]] == [(None, "no number"), (2.0, "kept")]
     assert [i["issue"] for i in d["data_issues"]] == ["kept"] and d["tasks"][0]["outcome"] == ""
     assert d["objects"] == [{"name": "plate", "color": None}]
-    assert d["_off_schema"] == {"key_events": 1, "data_issues": 1, "scene.objects": 1}
+    assert d["_off_schema"] == {"key_events": 1, "data_issues": 1, "scene.objects": 1,
+                                "scene.objects.attributes": 1}
     assert "_off_schema" not in to_board.convert(_output("episode_000009"), "demo")
 
 

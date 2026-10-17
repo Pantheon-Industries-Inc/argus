@@ -645,7 +645,7 @@ def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict
     from compare import metrics as mc
     out = board / "compare.new"
     if out.exists():
-        shutil.rmtree(out)
+        remove_tree(out)
     out.mkdir()
     models = [m for m in mc.load_models(manifest, board) if not m["reference"]]
     metrics = mc.compute(manifest, board, board_src)
@@ -709,7 +709,7 @@ def build_hands(board: Path, spec: dict, qa_new: Path, episodes: dict) -> dict:
     out, kout = board / "hands.new", board / "hand_keypoints.new"
     for d in (out, kout):
         if d.exists():
-            shutil.rmtree(d)
+            remove_tree(d)
         d.mkdir()
     here = board.resolve()
     src, clips = (Path(p) if Path(p).is_absolute() else (here / p).resolve() for p in (spec["src"], spec["clips"]))
@@ -736,7 +736,7 @@ def build_sensors(board: Path, episodes: dict) -> dict | None:
         return None
     out = board / "sensors.new"
     if out.exists():
-        shutil.rmtree(out)
+        remove_tree(out)
     out.mkdir()
     res = bs.build(have, out)
     for sk in res["skipped"]:
@@ -830,6 +830,65 @@ def exchange_directories(left: Path, right: Path) -> None:
         raise OSError(code, os.strerror(code))
 
 
+def remove_tree(path: Path) -> None:
+    """Remove derived trees when macOS also removes their AppleDouble entries."""
+    def onerror(function, name, error):
+        if not isinstance(error[1], FileNotFoundError):
+            raise error[1]
+    shutil.rmtree(path, onerror=onerror)
+
+
+def _discard_publication(root: Path) -> None:
+    # Keep the cleanup phase recorded until its backup has been removed.
+    # A killed recursive cleanup must not orphan the remaining backup files.
+    previous = root / 'previous'
+    if previous.exists():
+        remove_tree(previous)
+    remove_tree(root)
+
+
+def recover_publications(board: Path, name: str | None = None) -> None:
+    """Restore interrupted installs; retain unrecognized backups for inspection."""
+    for root in sorted(board.glob(f'.{name or "*"}.rollback-*')):
+        if not root.is_dir():
+            continue
+        marker = root / 'publication.json'
+        try:
+            state = json.loads(marker.read_text())
+            target = state['target']
+            if (state.get('format') != 'argus-publication/1' or not isinstance(target, str) or
+                    Path(target).name != target or target in ('', '.', '..') or
+                    not root.name.startswith(f'.{target}.rollback-') or root.is_symlink()):
+                raise ValueError('Unrecognized publication record')
+            phase = state['phase']
+            if phase not in ('copying', 'ready', 'published', 'restored'):
+                raise ValueError('Unrecognized publication phase')
+        except (OSError, ValueError, KeyError, TypeError):
+            if root.is_dir() and not root.is_symlink() and not any(root.iterdir()):
+                root.rmdir()
+                continue
+            print(f'board: preserved unrecognized publication backup at {root}', file=sys.stderr)
+            continue
+        if phase == 'ready':
+            backup, live = root / 'previous', board / target
+            if live.is_symlink() or not backup.is_dir() or any(p.is_symlink() for p in [backup, *backup.rglob('*')]):
+                raise RuntimeError(f'Publication recovery needs inspection; previous data is preserved at {root}')
+            live.mkdir(exist_ok=True)
+            try:
+                _install_tree(backup, live)
+            except BaseException as error:
+                raise RuntimeError(f'Publication recovery failed; previous data is preserved at {root}') from error
+            write_atomic(marker, {**state, 'phase': 'restored'})
+        _cleanup_publication(root)
+
+
+def _cleanup_publication(root: Path) -> None:
+    try:
+        _discard_publication(root)
+    except OSError as error:
+        print(f'board: publication cleanup deferred at {root}: {error}', file=sys.stderr)
+
+
 def _install_tree(source: Path, destination: Path) -> None:
     """Replace regular files atomically without removing the live directory."""
     incoming = {p.relative_to(source): p for p in source.rglob('*') if p.is_file()}
@@ -846,7 +905,7 @@ def _install_tree(source: Path, destination: Path) -> None:
             temporary.unlink(missing_ok=True)
     for path in destination.rglob('*'):
         if path.is_file() and path.relative_to(destination) not in incoming:
-            path.unlink()
+            path.unlink(missing_ok=True)
     for path in sorted(destination.rglob('*'), key=lambda p: len(p.parts), reverse=True):
         if path.is_dir() and not any(path.iterdir()):
             path.rmdir()
@@ -859,6 +918,7 @@ def publish_directory(old: Path, new: Path) -> None:
     New readers can observe mixed generations during the portable fallback.
     A complete backup restores the previous generation if publication fails.
     """
+    recover_publications(old.parent, old.name)
     try:
         exchange_directories(old, new)
         return
@@ -870,33 +930,43 @@ def publish_directory(old: Path, new: Path) -> None:
         raise OSError(errno.ENOTSUP, 'Portable directory publication requires regular files')
     backup_root = Path(tempfile.mkdtemp(prefix=f'.{old.name}.rollback-', dir=old.parent))
     backup = backup_root / 'previous'
+    marker = backup_root / 'publication.json'
+    state = {'format': 'argus-publication/1', 'target': old.name, 'phase': 'copying'}
     try:
+        write_atomic(marker, state)
         shutil.copytree(old, backup)
+        write_atomic(marker, {**state, 'phase': 'ready'})
     except BaseException:
-        shutil.rmtree(backup_root)
+        _discard_publication(backup_root)
         raise
     try:
         _install_tree(new, old)
+        write_atomic(marker, {**state, 'phase': 'published'})
     except BaseException:
         try:
             _install_tree(backup, old)
         except BaseException as restore_error:
             raise RuntimeError(f'Publication rollback failed; previous data is preserved at {backup}') from restore_error
-        shutil.rmtree(backup_root)
+        write_atomic(marker, {**state, 'phase': 'restored'})
+        _cleanup_publication(backup_root)
         raise
-    shutil.rmtree(backup_root)
+    _cleanup_publication(backup_root)
 
 
 def _swap(board: Path, name: str, keep: bool) -> None:
     """Publish derived files without removing the live directory before replacement."""
     old, new = board / name, board / f'{name}.new'
+    recover_publications(board, name)
     if not keep:
         if old.exists():
-            shutil.rmtree(old)
+            remove_tree(old)
         return
     if old.exists():
         publish_directory(old, new)
-        shutil.rmtree(new)
+        try:
+            remove_tree(new)
+        except OSError as error:
+            print(f'board: publication cleanup deferred at {new}: {error}', file=sys.stderr)
     else:
         new.rename(old)
 
@@ -1012,11 +1082,12 @@ def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: 
 
 
 def build(board: Path) -> dict:
+    recover_publications(board)
     manifest = json.loads((board / "manifest.json").read_text())
     here = board.resolve()
     new = board / "qa.new"
     if new.exists():
-        shutil.rmtree(new)
+        remove_tree(new)
     new.mkdir(parents=True)
     counts, built_entries = {}, []
     board_src = {}      # board file -> the run output its label came from

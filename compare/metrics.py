@@ -60,7 +60,7 @@ RIGS ={"teleop_arms": "teleop", "handheld_gripper": "handheld", "ego_head": "hea
 RIG_NAMES = {"all": "All footage", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
 RESPONDED = ("parsed", "unparsed", "cut_off")
 OUTCOMES = ("success", "success_then_undone", "failure", "partial", "unclear")
-TASK_OUTCOMES = ("success", "partial", "failure")
+TASK_OUTCOMES = ("success", "partial", "failure", "unclear")
 LISTS = ("data_issues", "operator_mistakes")
 PER_EPISODE = ("events_per_min", "key_events", "subgoals", "data_issues", "data_issues_minor", "operator_mistakes",
                "operator_mistakes_minor")
@@ -239,7 +239,10 @@ def schema_violations(L: dict, config: dict | None = None) -> list[str]:
     (FastUMI's one-gripper tasks: the prompt names the camera "gripper" and still lists left, right or both),
     may name that actor: the ambiguity is the prompt's, and counting it would score our wording as the model's
     failure to follow it."""
-    v = []
+    from board.to_board import typed
+    projected, dropped = typed({"labels": L})
+    v = list(projected.get("_schema_violations") or [])
+    v.extend(f"{item['field']}: {item['why']}" for item in dropped)
     arms = {"left", "right", "both"}
     labels = (config or {}).get("cam_labels") or []
     if len((config or {}).get("views") or []) == 1 and labels:
@@ -273,7 +276,7 @@ def schema_violations(L: dict, config: dict | None = None) -> list[str]:
             v.append(f"timeline {i}: times")
         elif s["end_s"] < s["start_s"]:
             v.append(f"timeline {i}: ends before it starts")
-        if s.get("arm") not in arms:
+        if not isinstance(s.get("arm"), str) or s["arm"] not in arms:
             v.append(f"timeline {i}: arm {s.get('arm')!r}")
         if s.get("contribution") not in ("advancing", "wasteful", "idle"):
             v.append(f"timeline {i}: contribution {s.get('contribution')!r}")
@@ -301,11 +304,14 @@ def schema_violations(L: dict, config: dict | None = None) -> list[str]:
 
 def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
     """The counts one parsed response contributes."""
+    from board.to_board import typed
+    violations = schema_violations(L, config)
+    L, _ = typed({"labels": L})
     tl = [s for s in _list(L, "timeline") if isinstance(s, dict) and s.get("start_s") is not None]
     ke = [k for k in _list(L, "key_events") if isinstance(k, dict)]
     m = {"segments": len(tl), "key_events": len(ke),
          "subgoals": sum(1 for k in ke if str(k.get("kind") or "").lower() == "subgoal_complete"),
-         "violations": schema_violations(L, config)}
+         "violations": violations}
     fams = set()
     for key in LISTS:
         items = [i for i in _list(L, key) if isinstance(i, dict) and str(i.get("issue") or "").strip()]
@@ -323,7 +329,7 @@ def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
         oc = str(c.get("task_completed") or "").lower() if isinstance(c, dict) else ""
         # partial is a kind of failure (board/to_board.py), so two runs agree when both say the task was not done
         oc = "failure" if oc == "partial" else oc
-        m["outcome"] = oc if oc in OUTCOMES else (oc or None)
+        m["outcome"] = oc if oc in OUTCOMES else None
     return m
 
 

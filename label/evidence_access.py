@@ -1512,6 +1512,15 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
         if doc.get('input_digest', doc.get('digest')) != digest:
             doc.update(status='incomplete', limitations=['Inspection inputs changed; no automatic paid retry.'])
             return {**access.record(), **doc}, []
+        # A budget refusal claims no dispatch. Recheck the current allowance on resume,
+        # including older receipts identified by their budget limitation.
+        budget_note = 'Inspection selection exceeds the remaining batch spend cap.'
+        if (doc.get('status') == 'incomplete' and doc.get('limitations')
+                and all(note == budget_note for note in doc['limitations'])
+                and not doc.get('cost_is_conservative_estimate')
+                and all(row.get('state') == 'received' for row in doc['rounds'])):
+            doc.update(status='complete', limitations=[])
+            doc.pop('pause_reason', None)
     extra = []
     count = 0
     skipped = {}
@@ -1544,7 +1553,7 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
                 doc['limitations'].append('Inspection selection stopped at the cost or dispatch boundary.')
                 break
             if reserve_dispatch is not None and not reserve_dispatch(reserve):
-                doc['status'] = 'incomplete'
+                doc.update(status='incomplete', pause_reason='spend_cap')
                 doc['limitations'].append('Inspection selection exceeds the remaining batch spend cap.')
                 break
             attempt = f'.retry{len(rejected_attempts)}' if rejected_attempts else ''

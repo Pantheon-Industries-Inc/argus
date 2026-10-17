@@ -339,3 +339,33 @@ const assert=require('assert'),{piece}=require(process.argv[1])();
 })().catch(error=>{console.error(error);process.exit(1);});
 '''
     subprocess.run(['node', '-e', script, str(HERE / 'page_functions.js')], check=True)
+
+
+def test_explicit_finding_survives_playback_beyond_its_automatic_onset_window():
+    script = r'''
+const assert=require('assert');
+const {src}=require(process.argv[1])();
+const begin=src.indexOf('// ================= sensor evidence:');
+const end=src.indexOf('// ================= touch:',begin);
+const {strip,createElement}=cardDocument(),callbacks=new Map();
+const buttons=[0,1].map(i=>({dataset:{gripFinding:String(i),evidenceT:String(i?12:20),evidencePause:'true'},
+ setAttribute(k,v){this[k]=v;}}));
+const doc={createElement,getElementById:id=>id==='grip-finding-overlay'?strip:null,
+ querySelectorAll:q=>['[data-evidence-t]','[data-grip-finding]'].includes(q)?buttons:[]};
+const api=new Function('esc','fmtT','document',src.slice(begin,end)
+ +'return {sensorEvidence,setupSensorEvidence};')(String,String,doc);
+const E=api.sensorEvidence({sensor_evidence:{version:1,findings:[
+ {start_s:10,end_s:30,inspect_s:20,headline:'Continuing hold',confidence:'medium',adds_beyond_video:true},
+ {start_s:12,end_s:26,inspect_s:12,headline:'Later finding',confidence:'medium',adds_beyond_video:true}]}});
+const wire=api.setupSensorEvidence(E,()=>{},(el,event,fn)=>callbacks.set(el,fn),()=>{});
+wire.sync(20);assert.deepEqual(buttons.map(b=>b['aria-pressed']),['false','true']);
+callbacks.get(buttons[0])();
+wire.sync(20.04);assert.deepEqual(buttons.map(b=>b['aria-pressed']),['true','false'],
+ 'an explicit inspection survives its first playback frame while source evidence still applies');
+wire.sync(29.9);assert.deepEqual(buttons.map(b=>b['aria-pressed']),['true','false']);
+wire.sync(30.01);assert.equal(strip.hidden,true,
+ 'manual inspection expires at its actual finding end');
+wire.sync(20);assert.deepEqual(buttons.map(b=>b['aria-pressed']),['false','true'],
+ 'automatic playback still replaces an earlier onset rather than resurrecting it');
+'''
+    subprocess.run(['node', '-e', CARD_DOM + script, str(HERE / 'page_functions.js')], check=True)

@@ -5851,8 +5851,9 @@ def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float |
 
     Proven CFR files retain label.frames' established grid contract. Otherwise compare microsecond-stored
     boundaries to encoded times rounded to that same precision. A shared boundary
-    therefore excludes its frame from the preceding episode and includes it in the following episode. Boundaries
-    with finer recorded precision retain it, and VFR timestamps need not follow a nominal frame grid.
+    therefore excludes its frame from the preceding episode and includes it in the following episode. Decimal
+    precision does not identify a frame clock: rational and accumulated offsets use the same proven CFR grid.
+    Off-grid boundaries retain their recorded precision, and VFR timestamps need not follow the nominal grid.
     """
     if not np.isfinite([base, stop]).all() or stop <= base:
         raise ValueError("invalid packed video episode window")
@@ -5879,7 +5880,7 @@ def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float |
         rounded = round(boundary, 6)
         # Float arithmetic on metadata can add a few binary ULPs, which convey no additional source precision.
         microseconds = abs(boundary - rounded) <= 2 * abs(np.spacing(boundary))
-        if step is not None and microseconds:
+        if step is not None:
             # Keep the existing packed CFR ownership contract (including older rounded publisher offsets), but
             # only after the encoded timestamps prove this grid. Never infer a CFR clock from nominal FPS alone.
             try:
@@ -9138,6 +9139,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 unused.append(f"{t} (depth with no camera of its own)")
                 lone.append(t)
                 depth_of[t] = f'depth_stream{len(lone)}'
+    # A display slot can later be reused by a readable fallback. Keep the original source identity for family pairing.
+    depth_owners = {topic: vmap.get(view) for topic, view in depth_of.items()}
     # the cameras the model is not shown are written too, for the board (unshown_cameras), a depth channel with no
     # camera of its own drawn as a picture of near and far
     unshown_of = {t: f"unshown{i + 1}.mp4" for i, t in enumerate([x for x in unused if x in cam_topics] + lone)}
@@ -9151,6 +9154,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     texts: dict[str, list] = {}               # topic: its messages in time order, (log time ns, text) (add_text)
     n_text: dict[str, int] = {}
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
+    schema_failures = {}
     camera_damage: list = []
     capture_ns: dict[str, list[int]] = {}
     registration, depth_shapes = Registration(), {}
@@ -9185,8 +9189,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     continue
                 try:
                     dec = decs[ch.id](msg.data)
-                except McapSchemaError:
-                    undecodable.add(f"{ch.topic} ({ch.message_encoding})")
+                except McapSchemaError as error:
+                    schema_failures[ch.topic] = str(error)
                     continue
                 capture_stamp, stamp_error = mcap_capture_stamp(dec, schema=schema, message_encoding=ch.message_encoding)
                 stamp = capture_stamp if capture_stamp is not None else int(msg.log_time)
@@ -9281,8 +9285,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             camera_selection += (f" The selected camera had no readable frames; "
                                  f"{next(iter(fallback.values()))} supplies the readable fallback view.")
     if not vmap:
-        if camera_failures:
-            raise ValueError('; '.join(f'{topic}: {reason}' for topic, reason in camera_failures.items()))
+        causes = {topic: f'schema could not be read: {reason}' for topic, reason in schema_failures.items()
+                  if topic in cam_topics}
+        causes.update(camera_failures)
+        if causes:
+            raise ValueError('; '.join(f'{topic}: {reason}' for topic, reason in sorted(causes.items())))
         encodings = sorted({u.rsplit(" (", 1)[-1].rstrip(")") for u in undecodable})
         if encodings:
             raise ValueError(f"its camera channels ({', '.join(missing)}) are in the {' and '.join(encodings)} message "
@@ -9303,8 +9310,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             view = available_depth_view(paired, associated)
             unused = [name for name in unused if name != f'{topic} (depth with no camera of its own)']
         elif not registration.has_geometry(topic):
-            # Old topic-family associations remain camera families, not pixel registration proof.
-            paired = view if view in files else None
+            # A topic family belongs to its source camera, not to a reusable presentation slot.
+            owner = depth_owners.get(topic)
+            paired = next((slot for slot, camera in vmap.items() if camera == owner and camera != topic), None)
         view = available_depth_view(view, associated)
         descriptor.update(paired_camera=paired, calibration={'pixel_registration': proof})
         associated[view] = descriptor

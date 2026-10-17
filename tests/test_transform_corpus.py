@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ FF, FP = shutil.which("ffmpeg"), shutil.which("ffprobe")
 pytestmark = pytest.mark.skipif(not (FF and FP), reason="no ffmpeg")
 
 CODE_RATE = 30            # the time each frame shows, in steps of 1/30 s
+_PROBE_LOCK = threading.Lock()
 
 H264 = ("-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "15")
 
@@ -586,7 +588,10 @@ def check_footage(run, tag, clip_dir, eid, views, et, clip_times, out, serve):
     """The footage download: the main camera at its clip's size, the others beside it, never enlarged; at each of its
     frames every camera shows the frame it shows at that time on the page, to the last frame."""
     cams = serve.footage_cams(clip_dir, eid)
-    probes = [serve._probe(p) for _, p in cams]
+    # Corpus cases run concurrently; direct internal probes must respect the
+    # server's cold-work admission. Encoding and all pixel checks stay parallel.
+    with _PROBE_LOCK:
+        probes = [serve._probe(p) for _, p in cams]
     dst = out / "footage.mp4"
     out.mkdir(parents=True, exist_ok=True)
     cmd = serve.footage_command([(p, pr[:2], pr[3]) for (_, p), pr in zip(cams, probes)], 0.0,

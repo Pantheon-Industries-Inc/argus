@@ -164,10 +164,17 @@ def _durable_metadata(path: str, version: tuple) -> bool:
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         buffer = ctypes.create_string_buffer(4096)
+        if sys.platform == 'darwin':
+            # statfs is the legacy ABI on Intel. statfs64 has the fixed layout
+            # on both supported Mac architectures, including f_fstypename at 72.
+            statfs = libc.statfs64
+            statfs.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
+            statfs.restype = ctypes.c_int
+            if statfs(os.fsencode(path), ctypes.byref(buffer)):
+                return False
+            return buffer.raw[72:88].split(b'\0', 1)[0] in (b'apfs', b'hfs')
         if libc.statfs(os.fsencode(path), ctypes.byref(buffer)):
             return False
-        if sys.platform == 'darwin':
-            return buffer.raw[72:88].split(b'\0', 1)[0] in (b'apfs', b'hfs')
         if sys.platform.startswith('linux'):
             kind = ctypes.c_ulong.from_buffer(buffer).value
             return kind in {0xEF53, 0x58465342, 0x9123683E, 0x2FC12FC1, 0x01021994, 0x794C7630}
@@ -176,8 +183,15 @@ def _durable_metadata(path: str, version: tuple) -> bool:
     return False
 
 
-@lru_cache(maxsize=8192)
 def _source_digest(path: str, version: tuple) -> str:
+    # Check policy before either cache, including repeat calls in this process.
+    if _durable_metadata(path, version):
+        return _cached_source_digest(path, version)
+    return _cached_source_digest.__wrapped__(path, version)
+
+
+@lru_cache(maxsize=8192)
+def _cached_source_digest(path: str, version: tuple) -> str:
     # ctime also changes on in-place edits whose size and restored mtime match.
     # Coarse timestamps and Windows creation-time semantics cannot certify reuse.
     cacheable = _durable_metadata(path, version)
@@ -208,6 +222,9 @@ def _source_digest(path: str, version: tuple) -> str:
         except (OSError, sqlite3.Error):
             pass
     return digest
+
+
+_source_digest.cache_clear = _cached_source_digest.cache_clear
 
 
 def _source_version(path: Path) -> tuple:
@@ -852,7 +869,8 @@ def cmd_site(a):
         # Public payload equality above means only the build receipt needs an
         # update. No directory exchange capability is needed for --force.
         write_atomic(out / 'BUILD.json', public_build_manifest(build))
-        shutil.rmtree(stage)
+        from board.build import remove_tree
+        remove_tree(stage)
     else:
         stage.rename(out)
     write_atomic(receipt, build)

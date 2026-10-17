@@ -53,7 +53,7 @@ DEPTH_INVALID_SHARE = 0.5
 DEPTH_OFFSET_FRAMES = 2.0
 DEPTH_SAMPLES = 24
 CLOCK_OFFSET_FRAMES = 1.0
-VERSION = 1
+VERSION = 2
 
 NAMES = {"no_reading": "Signal has no reading at many frames", "partial_reading": "Signal has partial readings",
          "constant": "Signal never changes",
@@ -165,7 +165,9 @@ def depth_findings(ep: dict) -> list[dict]:
     pick = [ks[int(i)] for i in np.linspace(0, len(ks) - 1, min(DEPTH_SAMPLES, len(ks)))]
     imgs = None
     for v, e in d.items():
-        name = me.cam_name(ep, v)
+        name = me.depth_label(ep, v)
+        # Explicitly unpaired depth cannot be compared to a different camera that shares its display slot.
+        paired = e.get('paired_camera', v if v in ep['sources'] else None)
         got = dp.at_anchor(ep, d, v, pick)
         if not got:
             continue
@@ -175,19 +177,19 @@ def depth_findings(ep: dict) -> list[dict]:
                         "evidence": f"on average {inv:.0%} of the pixels of {name}'s depth pictures hold no reading"})
         same = [(a, b) for a, b in zip(pick, pick[1:]) if a in got and b in got and np.array_equal(got[a], got[b])
                 and int(e["km"][a]) != int(e["km"][b])]
-        if same:
+        if same and paired in ep['sources']:
             if imgs is None:
                 imgs = me.frames(ep, {"ks": pick})
-            moved = [(a, b) for a, b in same if a in imgs[v] and b in imgs[v]
-                     and float(np.abs(np.asarray(imgs[v][a].convert("L"), dtype=np.float32)
-                                     - np.asarray(imgs[v][b].convert("L"), dtype=np.float32)).mean()) > 2.0]
+            moved = [(a, b) for a, b in same if a in imgs[paired] and b in imgs[paired]
+                     and float(np.abs(np.asarray(imgs[paired][a].convert("L"), dtype=np.float32)
+                                     - np.asarray(imgs[paired][b].convert("L"), dtype=np.float32)).mean()) > 2.0]
             if moved:
                 out.append({"check": "depth_frozen", "camera": name, "t_s": round(me.frame_time(ep, moved[0][0]), 2),
                             "evidence": f"{name}'s depth picture is identical between {len(moved)} pairs of sampled "
                                         f"instants while its colour frames change (first at "
                                         f"{me.frame_time(ep, moved[0][0]):.2f} s)"})
         td = e.get("t") if e.get("t") is not None else (ep.get("times") or {}).get(f"depth_{v}")
-        if td is not None:
+        if td is not None and paired in ep['sources']:
             n = int(pl["n"])
             ta = np.array([me.frame_time(ep, k) for k in range(n)])
             step = float(np.median(np.diff(ta))) if n > 1 else 1 / me.ep_fps(ep)
@@ -263,8 +265,13 @@ def run_episode(ep_dir: Path) -> dict | None:
         applies |= set(SIGNAL_CHECKS)
     if len(ep["context"].get("clocks") or []) >= 2:
         applies.add("clock_offset")
-    if ep.get("depth"):
-        applies |= {"depth_invalid", "depth_frozen", "depth_offset"}
+    depth = ep.get('depth') or {}
+    unpaired_depth = [me.depth_label(ep, view) for view, entry in depth.items()
+                      if entry.get('paired_camera', view if view in ep['sources'] else None) not in ep['sources']]
+    if depth:
+        applies.add('depth_invalid')
+        if len(unpaired_depth) < len(depth):
+            applies |= {'depth_frozen', 'depth_offset'}
     fired = {f["check"] for f in found}
     ran_on = {(f["check"], f.get("signal")) for f in found}     # a check with a finding on a signal ran on it
 
@@ -272,6 +279,9 @@ def run_episode(ep_dir: Path) -> dict | None:
         if c in errored:
             return {"check": c, "name": NAMES[c], "status": "errored", "error": errored[c]}
         row = {"check": c, "name": NAMES[c], "status": "fired" if c in fired else "clear" if c in applies else "na"}
+        if c in ('depth_frozen', 'depth_offset') and unpaired_depth:
+            why = ', '.join(unpaired_depth) + ': no available paired colour camera'
+            row['why' if row['status'] == 'na' else 'not_run_on'] = why
         # a signal check names the signals it was not run on; one run on no signal is not assessed, never clear
         left = {nm: why for nm, why in skipped.items() if (c, nm) not in ran_on} if c in SIGNAL_CHECKS else {}
         if left and row["status"] != "na":

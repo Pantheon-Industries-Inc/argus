@@ -38,7 +38,7 @@ Environment:
     BOARD_FOOTAGE_DISK_BYTES   footage disk budget (default 2 GiB)
     BOARD_FOOTAGE_DISK_FILES   maximum cached footage files (default 128)
     BOARD_FOOTAGE_DIR          where the videos made to download are kept (default BOARD/footage)
-    BOARD_FOOTAGE_CONCURRENCY  videos made at once (default 1)
+    BOARD_FOOTAGE_CONCURRENCY  videos made at once and concurrent source probes (default 1)
     BOARD_FOOTAGE_THREADS      threads each is made on (default 2)
     BOARD_FOOTAGE_STALL_TIMEOUT seconds without advancing media or output bytes (default 300)
 
@@ -71,6 +71,7 @@ from board.families import Families
 from board.public_export import project as public_json
 from board.to_board import dumps
 from compare.metrics import model_names, reasoning_effort
+from label.atomic import write_atomic
 
 
 def _find_ffmpeg() -> str | None:
@@ -366,6 +367,10 @@ FOOTAGE_GAP = 8
 FOOTAGE_FPS = 30
 FOOTAGE_TAG = f"footage-v4-h264-crf20-veryfast-{FOOTAGE_FPS}fps-gap{FOOTAGE_GAP}"   # a new recipe makes new files
 _FOOTAGE_SEM = threading.BoundedSemaphore(max(1, int(os.environ.get("BOARD_FOOTAGE_CONCURRENCY", 1))))
+_FOOTAGE_PROBE_SEM = threading.BoundedSemaphore(max(1, int(os.environ.get('BOARD_FOOTAGE_CONCURRENCY', 1))))
+_PROBE_ACTIVE = set()
+_PROBE_ACTIVE_LOCK = threading.Lock()
+_FOOTAGE_READY_LOCK = threading.Lock()
 _FOOTAGE_THREADS = int(os.environ.get("BOARD_FOOTAGE_THREADS", 2))
 _FOOTAGE_STALL_TIMEOUT = max(1.0, float(os.environ.get('BOARD_FOOTAGE_STALL_TIMEOUT', 300)))
 _FOOTAGE_LOCKS: dict = {}
@@ -475,8 +480,38 @@ def _probe(p: Path) -> tuple:
     return _probe_versioned(p, version)
 
 
-@lru_cache(maxsize=2048)
 def _probe_versioned(p: Path, version: tuple) -> tuple:
+    from board.static import _durable_metadata
+    if _durable_metadata(str(p), version):
+        return _cached_probe_versioned(p, version)
+    return _cached_probe_versioned.__wrapped__(p, version)
+
+
+@contextmanager
+def _probe_admission(key):
+    with _PROBE_ACTIVE_LOCK:
+        if key in _PROBE_ACTIVE or not _FOOTAGE_PROBE_SEM.acquire(blocking=False):
+            raise CacheBusy('Media preparation is busy; try again shortly')
+        _PROBE_ACTIVE.add(key)
+    try:
+        yield
+    finally:
+        with _PROBE_ACTIVE_LOCK:
+            _PROBE_ACTIVE.remove(key)
+            _FOOTAGE_PROBE_SEM.release()
+
+
+@lru_cache(maxsize=2048)
+def _cached_probe_versioned(p: Path, version: tuple) -> tuple:
+    # Trusted cache hits bypass admission; cold probes and hashes share its bound.
+    with _probe_admission((p, version)):
+        return _probe_uncached(p)
+
+
+_probe_versioned.cache_clear = _cached_probe_versioned.cache_clear
+
+
+def _probe_uncached(p: Path) -> tuple:
     """(width, height, duration s, frame rate) of a clip. The duration runs to the end of its last frame (its
     time plus its own length), which a variable-rate recording's container duration can stop short of. The rate is
     one over the clip's usual step between frames: a clip timed by capture times (board/clips.py retime) starts with
@@ -533,6 +568,82 @@ def footage_command(inputs: list, t0: float, t1: float, out: Path, threads: int 
                   str(threads), "-filter_complex_threads", "1", "-movflags", "+faststart", str(out)]
 
 
+def _footage_version(path: Path) -> tuple:
+    st = path.stat()
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+def _footage_source_hashes(versions: list) -> list:
+    from board.static import _durable_metadata, _source_digest
+    hashes = []
+    for path, *version in versions:
+        version = tuple(version)
+        if _durable_metadata(path, version):
+            hashes.append(None)
+        else:
+            # Coarse or remote stat identities cannot certify unchanged bytes.
+            # Hashing is source I/O and must share cold-probe admission.
+            with _probe_admission((Path(path), version)):
+                hashes.append(_source_digest(path, version))
+    return hashes if any(hashes) else []
+
+
+def _ready_footage(request: str) -> tuple | None:
+    """A bounded preparation receipt lets ready downloads bypass cold probes."""
+    receipt = FOOTAGE_DIR / '.ready' / f'{request}.json'
+    with _FOOTAGE_READY_LOCK:
+        try:
+            if receipt.is_symlink() or receipt.stat().st_size > 4096:
+                return None
+            record = json.loads(receipt.read_text())
+            if (record.get('format') != 'argus-footage-ready/1' or
+                    not re.fullmatch(r'[a-f0-9]{20}\.mp4', record['file']) or
+                    not isinstance(record['name'], str) or Path(record['name']).name != record['name']):
+                return None
+            out = FOOTAGE_DIR / record['file']
+            version = _footage_version(out)
+            if out.is_symlink() or list(version) != record['version'] or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
+                # Cache names are immutable. A changed output is no longer the
+                # file that completed validation, even if its size was restored.
+                try:
+                    out.unlink(missing_ok=True)
+                except OSError as error:
+                    raise RuntimeError('Prepared footage changed and could not be discarded') from error
+                receipt.unlink(missing_ok=True)
+                return None
+            return out, record['name']
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+
+def _remember_ready_footage(request: str, versions: list, result: tuple) -> None:
+    from board.static import _durable_metadata
+    out, name = result
+    try:
+        output_version = _footage_version(out)
+        # On filesystems without dependable ctime, stat identities cannot
+        # certify that source bytes or a completed output survived unchanged.
+        if (not 0 < output_version[2] <= _FOOTAGE_DISK_BYTES or _FOOTAGE_DISK_FILES < 1 or
+                not _durable_metadata(str(out), output_version) or
+                any(_footage_version(Path(path)) != tuple(version) or not _durable_metadata(path, version)
+                    for path, *version in versions)):
+            return
+        folder = FOOTAGE_DIR / '.ready'
+        with _FOOTAGE_READY_LOCK:
+            receipt = folder / f'{request}.json'
+            try:
+                write_atomic(receipt, {'format': 'argus-footage-ready/1',
+                    'file': out.name, 'name': name, 'version': output_version})
+            finally:
+                receipt.with_name(f'.{receipt.name}.tmp').unlink(missing_ok=True)
+            # One small receipt per request, with the same count bound as media.
+            owned = [p for p in folder.glob('*.json') if re.fullmatch(r'[a-f0-9]{40}\.json', p.name)]
+            for path in sorted(owned, key=lambda p: p.stat().st_mtime_ns)[:-_FOOTAGE_DISK_FILES]:
+                path.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass  # A lost receipt costs a bounded probe, never a download.
+
+
 def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     """(file, download name) of the episode's video from t0 to t1 s (the whole episode by default), made now if it
     was not made before; None when the episode has no clip. Raises RuntimeError when ffmpeg fails."""
@@ -542,6 +653,18 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     cams = footage_cams(MP4_DIR, eid, label)
     if not cams or not FFMPEG:
         return None
+    source_versions = [(str(p), *_footage_version(p)) for _, p in cams]
+    source_hashes = _footage_source_hashes(source_versions)
+    request_parts = [eid, float(t0), None if t1 is None else float(t1), FOOTAGE_TAG,
+        label.get('duration_s'), label.get('camera_views'), source_versions]
+    if source_hashes:
+        request_parts.append(source_hashes)
+    request = hashlib.sha1(json.dumps(request_parts).encode()).hexdigest()
+    ready = _ready_footage(request)
+    if ready is not None:
+        _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
+                         max_files=_FOOTAGE_DISK_FILES, protect=ready[0])
+        return ready
     probes = [_probe(p) for _, p in cams]
     # Presentation order never selects a new recording clock. Old boards without
     # a measured duration keep the prepared input anchor or legacy camera order.
@@ -560,7 +683,10 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     name = f"{eid}.mp4" if whole else f"{eid}_{t0:.1f}-{t1:.1f}s.mp4"
     versions = [(str(p), st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
                 for _, p in cams for st in [p.stat()]]
-    key = hashlib.sha1(json.dumps([eid, t0, t1, FOOTAGE_TAG, versions]).encode()).hexdigest()[:20]
+    key_parts = [eid, t0, t1, FOOTAGE_TAG, versions]
+    if source_hashes:
+        key_parts.append(source_hashes)
+    key = hashlib.sha1(json.dumps(key_parts).encode()).hexdigest()[:20]
     out = FOOTAGE_DIR / f"{key}.mp4"
     if out.is_file():
         if out.stat().st_size > _FOOTAGE_DISK_BYTES:
@@ -568,8 +694,11 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
             raise ValueError('Prepared footage exceeds the disk cache budget')
         _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
                          max_files=_FOOTAGE_DISK_FILES, protect=out)
-        return out, name
-    return _uncached_footage(key, out, name, cams, probes, t0, t1)
+        result = out, name
+    else:
+        result = _uncached_footage(key, out, name, cams, probes, t0, t1)
+    _remember_ready_footage(request, source_versions, result)
+    return result
 
 
 def _run_footage(cmd: list) -> subprocess.CompletedProcess:

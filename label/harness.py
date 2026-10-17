@@ -690,8 +690,6 @@ def normalize_timeline(labels: dict) -> dict:
                 bad = why
             else:
                 _violation(labels, f'timeline row {i}: {why}')
-        if missing_notes and 'contribution' in cols and seg.get('contribution') not in ('advancing', 'wasteful', 'idle'):
-            bad = 'missing trailing notes cannot be distinguished from shifted columns'
         for k in ("start_s", "end_s", "progress"):
             if bad:
                 break
@@ -1002,6 +1000,13 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             doc['previously_billed_usd'] = inspection_billed(fields, doc.get('digest'))
             auxiliary_cost(doc)
             fields['evidence_inspection'] = doc
+            if doc.get('pause_reason') == 'spend_cap':
+                reason = 'Inspection selection exceeds the remaining batch spend cap; final annotation deferred.'
+                write_atomic(Path(out_path).with_name(f'noreply_{Path(out_path).name}'), {
+                    'episode_dir': str(ep_dir), 'model': model, 'reasoning_effort': reasoning, **fields,
+                    'parse_ok': False, 'no_reply': reason, 'no_reply_kind': 'spend_cap',
+                    'final_dispatch_outcome': 'not dispatched', 'final_reserved_usd': 0.0})
+                raise SpendCap(reason)
             addition = [{'type': 'text', 'text': ea.FINAL + '\nINSPECTION COVERAGE\n' +
                         ea.packed(ea.Access.coverage_summary(doc))}] + extra
             # Extra images must fit the existing request cap. Their receipts alone cannot authorize image claims.
@@ -1323,6 +1328,10 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
         if dry:
             return bool(record.get('dry_run'))
         complete = annotation_complete(record)
+        inspection = record.get('evidence_inspection') or {}
+        if complete and (inspection.get('pause_reason') == 'spend_cap' or
+                'Inspection selection exceeds the remaining batch spend cap.' in inspection.get('limitations', [])):
+            unverified[ep.name] = 'saved paid annotation omitted budget-blocked inspection; use --force to refresh explicitly'
         if record.get('parse_ok') is True and not complete:
             try:
                 _billing_fields(p)
