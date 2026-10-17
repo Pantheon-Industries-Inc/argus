@@ -106,6 +106,17 @@ check(tp.every((pt, i) => i === 0 || pt.p >= tp[i - 1].p), `a session that only 
 const tf = progressPoints(two, 12, {tasks: [{start_s: 0, completed_at_s: 6}, {start_s: 6, completed_at_s: null}]});
 check(sample(tf, 0, 12).every(([, p]) => shown(p) < 100), 'a session with an unfinished task never reads 100%');
 
+// A preserved partial reply can contain invalid progress. Keep its action rows, but do not let malformed
+// measurements poison the plotted curve or coerce booleans/arrays into plausible percentages.
+const validSteps = [step(0, 2, .2), step(8, 10, .8)];
+const partialSteps = [...validSteps, ...['late', 50, -.1, true, [], {}, ''].map((value, i) => step(2 + i / 2, 2.2 + i / 2, value))];
+for (const goal of [{}, {completedAt: 12}, {tasks: [{start_s: 0, completed_at_s: 12}]}]) {
+  check(JSON.stringify(progressPoints(partialSteps, 14, goal)) === JSON.stringify(progressPoints(validSteps, 14, goal)),
+    'malformed progress leaves the valid curve and goal timing intact');
+}
+check(JSON.stringify(progressPoints([step(0, 2, '0.2')], 4, {}))
+  === JSON.stringify(progressPoints([step(0, 2, .2)], 4, {})), 'legacy numeric progress text remains readable');
+
 // Independent request predicates do not define whole-recording progress, even when local tasks exist.
 check(progressPoints(two, 12, {tasks: [{start_s: 0, completed_at_s: 6}], progressScope: 'request_parts'}).length === 0,
   'request-part progress has no global chart or zero-percent fallback');

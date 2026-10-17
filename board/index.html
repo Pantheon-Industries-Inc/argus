@@ -5663,8 +5663,11 @@ function progressPoints(eventLabels, duration, goal) {
   const levels = steps => {
     const out = [];
     let cur = 0;
-    const ordered = steps.filter(x => x.t_s != null && x.progress != null)
-      .map((x, i) => ({x, i})).sort((a, b) => stepEnd(a.x) - stepEnd(b.x) || a.i - b.i).map(o => o.x);
+    const ordered = steps.filter(x => {
+      if (typeof x.progress !== 'number' && !(typeof x.progress === 'string' && x.progress.trim())) return false;
+      const p = Number(x.progress);
+      return x.t_s != null && Number.isFinite(p) && p >= 0 && p <= 1;
+    }).map((x, i) => ({x, i})).sort((a, b) => stepEnd(a.x) - stepEnd(b.x) || a.i - b.i).map(o => o.x);
     for (const e of ordered) {
       const p = clamp(e.progress);
       if (e.contribution === 'idle' && p <= cur) continue;
