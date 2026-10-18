@@ -37,7 +37,8 @@ _LOCATIONS = frozenset({
     'archivepath', 'archive', 'url', 'urls', 'uri', 'uris', 'href', 'link', 'links',
     'publicbase', 'publiccitation', 'citation',
 })
-_URL_QUERY_SECRETS = _SECRETS | {'key', 'signature', 'sig', 'keypairid', 'policy', 'googleaccessid'}
+_URL_QUERY_SECRETS = _SECRETS | {'key', 'signature', 'sig', 'session', 'sessionid', 'code',
+                              'keypairid', 'policy', 'googleaccessid'}
 _ACCESS_URI_PREFIXES = ('file:', 's3:', 'gs:', 'az:', 'abfs:', 'ssh:', 'sftp:', 'ftp:')
 _DROP = object()
 
@@ -61,6 +62,48 @@ def _name(key: str) -> str:
     return re.sub('[^a-z0-9]', '', key.lower())
 
 
+def _credential_key(key: str, *, native=False) -> bool:
+    """Access attributes use semantic suffixes, not a growing provider-name list."""
+    name = _name(key)
+    if name in _SECRETS or name in ('auth', 'bearer', 'passphrase'):
+        return True
+    if name.endswith(('password', 'passwd', 'passphrase', 'secret', 'secretkey',
+                      'privatekey', 'apikey', 'apitoken', 'accesstoken', 'refreshtoken',
+                      'authtoken', 'bearertoken', 'sessiontoken', 'accesskey')):
+        return True
+    # Native scientific columns may legitimately be signatures or session IDs.
+    # Their names and values are separate from transport access attributes.
+    if native:
+        return False
+    words = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', key).lower()
+    words = re.findall(r'[a-z0-9]+', words)
+    if name in ('session', 'sessionid', 'signature', 'sig') or name.endswith('token'):
+        return True
+    if len(words) > 1 and words[-1] == 'key':
+        if any(word in ('api', 'auth', 'access', 'secret', 'credential', 'bearer', 'session') for word in words):
+            return True
+        # These keys identify recorded channels, not access mechanisms.
+        return not any(word in ('native', 'field', 'column', 'signal', 'state', 'action',
+                               'observation', 'camera', 'feature', 'dataset', 'source', 'record') for word in words)
+    return False
+
+
+def _private_host(value: str) -> bool:
+    token = value.strip().lower().rstrip('.')
+    if not token or any(char.isspace() for char in token) or '/' in token:
+        return False
+    try:
+        return not ipaddress.ip_address(token.strip('[]')).is_global
+    except ValueError:
+        pass
+    host = token.rsplit(':', 1)[0] if re.search(r':\d+$', token) else token
+    try:
+        return not ipaddress.ip_address(host.strip('[]')).is_global
+    except ValueError:
+        pass
+    return (host == 'localhost' or host.endswith(('.localhost', '.local', '.internal', '.lan', '.ts.net')))
+
+
 def _private_url(value: str) -> bool:
     """Recognize access URLs without trying DNS or fetching any source."""
     try:
@@ -70,16 +113,18 @@ def _private_url(value: str) -> bool:
         host = (parsed.hostname or '').lower().rstrip('.')
         if not host or parsed.username is not None or parsed.password is not None:
             return True
-        if '.' not in host or host.endswith(('.localhost', '.local', '.internal', '.lan', '.ts.net')):
+        if '.' not in host or _private_host(host):
             return True
         try:
             if not ipaddress.ip_address(host).is_global:
                 return True
         except ValueError:
             pass
+        if host == 'hooks.slack.com' and parsed.path.startswith('/services/'):
+            return True
         for key, _ in parse_qsl(parsed.query, keep_blank_values=True) + parse_qsl(parsed.fragment, keep_blank_values=True):
             name = _name(key)
-            if name in _URL_QUERY_SECRETS or name.startswith(('xamz', 'xgoog')):
+            if _credential_key(key) or name in _URL_QUERY_SECRETS or name.startswith(('xamz', 'xgoog')):
                 return True
     except ValueError:
         return True
@@ -388,9 +433,12 @@ def _uploader_item(item: dict) -> dict:
     attributes = [_name(attribute) for i, part in enumerate(parts)
                   if not any(_name(parent) == 'fields' for parent in parts[:i])
                   and (attribute := _reader_attribute(part)) is not None]
-    if any(_name(part) in _SECRETS for part in parts) or any(a in _SECRETS for a in attributes):
-        result['value'] = 'withheld'
-        return result
+    native = False
+    for part in parts:
+        native = native or _name(part) == 'fields'
+        if _credential_key(_reader_attribute(part) or part, native=native):
+            result['value'] = 'withheld'
+            return result
     value = item.get('value')
     terminal = _name(parts[-1]) if parts else ''
     locations = item.get('_uploader_location_values')
@@ -563,7 +611,7 @@ def _credential_binding(binding: dict) -> bool:
     for i, part in enumerate(parts):
         if i and _name(parts[i - 1]) in _NOTE_SOURCE_MAPS:
             continue
-        if _name(_reader_attribute(part) or part) in _SECRETS:
+        if _credential_key(_reader_attribute(part) or part):
             return True
     return False
 
@@ -628,9 +676,8 @@ def _project(value, field: str = '', attribute_owner: str = '', native_fields: b
             name = _name(key)
             attribute = _reader_attribute(key) if not native_fields else None
             owner = _name(attribute) if attribute is not None else attribute_owner
-            if (key in PRIVATE_KEYS or name in _SECRETS or name in _PRIVATE_LOCATIONS
-                    or (attribute is not None and owner in _SECRETS)
-                    or name.endswith(('apikey', 'accesstoken', 'secretaccesskey'))
+            if (key in PRIVATE_KEYS or _credential_key(key, native=native_fields) or name in _PRIVATE_LOCATIONS
+                    or (attribute is not None and _credential_key(attribute))
                     or (field == 'compare' and name in ('runid', 'code'))):
                 continue
             item_native, item_notes = native_fields, note_owner
@@ -662,6 +709,9 @@ def _project(value, field: str = '', attribute_owner: str = '', native_fields: b
         # An entire URL is a typed value even in an extension field. Do not scan
         # or rewrite URL fragments embedded in publisher prose.
         stripped = value.strip()
+        if _private_host(stripped) or re.fullmatch(
+                r'(?:Proxy-)?Authorization\s*:\s*(?:Bearer|Basic)\s+\S+', stripped, re.I):
+            return _DROP
         if _whole_uri(stripped) and _private_location(stripped):
             return _DROP
         # Direct source/path attributes can name HDF members; nested access fields retain protection.

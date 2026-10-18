@@ -47,6 +47,7 @@ board/static.py renders the same page with a static data source, so a CDN can se
 from __future__ import annotations
 
 import argparse
+import errno
 import gzip
 import hashlib
 import html
@@ -164,6 +165,17 @@ class CacheBusy(RuntimeError):
     pass
 
 
+class FootageCapacityError(ValueError):
+    pass
+
+
+class _VerifiedFootage(tuple):
+    def __new__(cls, out, name, record):
+        result = super().__new__(cls, (out, name))
+        result.receipt = dict(record)
+        return result
+
+
 def _bounded_work(semaphore):
     def decorate(fn):
         @wraps(fn)
@@ -189,15 +201,38 @@ def _trim_disk_cache(folder: Path, suffix: str, *, max_bytes: int, max_files: in
     with _DISK_CACHE_LOCK:
         entries = []
         temporary = re.compile(r'(?:[a-f0-9]{40}\.[0-9]+\.[0-9]+\.part|'
-                               r'[a-f0-9]{20}\.[0-9]+\.[0-9]+\.part(?:\.len)?\.mp4)')
+                               r'[a-f0-9]{20}\.[0-9]+\.[0-9]+(?:\.[a-f0-9]{32})?\.part(?:\.len)?\.mp4)')
         for path in folder.glob('*.part*'):
             if not temporary.fullmatch(path.name):
                 continue
             try:
                 if path.stat().st_mtime < time.time() - 600:
-                    path.unlink(missing_ok=True)
+                    if suffix == '.mp4':
+                        guard = _temporary_guard(path)
+                        try:
+                            with _file_lock(guard, blocking=False):
+                                path.unlink(missing_ok=True)
+                            guard.unlink(missing_ok=True)
+                        except CacheBusy:
+                            continue
+                    else:
+                        path.unlink(missing_ok=True)
             except OSError:
                 continue
+        if suffix == '.mp4':
+            for guard in folder.glob('*.part.mp4.lock'):
+                original = guard.with_name(guard.name[:-5])
+                if not temporary.fullmatch(original.name):
+                    continue
+                try:
+                    if guard.stat().st_mtime < time.time() - 600 and not original.exists():
+                        with _file_lock(guard, blocking=False):
+                            pass
+                        guard.unlink(missing_ok=True)
+                except CacheBusy:
+                    pass
+                except OSError as error:
+                    _maintenance_error(error)
         length = {'.jpg': 40, '.mp4': 20}.get(suffix)
         if length is None:
             raise ValueError('Unknown media cache suffix')
@@ -207,7 +242,10 @@ def _trim_disk_cache(folder: Path, suffix: str, *, max_bytes: int, max_files: in
                 continue
             try:
                 st = path.stat()
-                entries.append((st.st_mtime_ns, path, st.st_size))
+                age = st.st_mtime_ns
+                if suffix == '.mp4':
+                    age = _footage_recency(path, age)
+                entries.append((age, path, st.st_size))
             except OSError:
                 continue
         total, count = sum(x[2] for x in entries), len(entries)
@@ -373,6 +411,9 @@ _FOOTAGE_PROBE_SEM = threading.BoundedSemaphore(max(1, int(os.environ.get('BOARD
 _PROBE_ACTIVE = set()
 _PROBE_ACTIVE_LOCK = threading.Lock()
 _FOOTAGE_READY_LOCK = threading.Lock()
+_FOOTAGE_MEMORY_LOCK = threading.Lock()
+_FOOTAGE_RECORDS = OrderedDict()
+_FOOTAGE_ACCESS = OrderedDict()
 _CONTENT_PROBES = OrderedDict()
 _CONTENT_PROBE_LOCK = threading.Lock()
 _FOOTAGE_TICKET_SECONDS = 3600
@@ -762,10 +803,76 @@ def _publication_lock(key):
         yield
 
 
-def _trim_footage_cache(protect):
-    with _file_lock(FOOTAGE_DIR / '.locks' / 'cache'):
-        _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
-                         max_files=_FOOTAGE_DISK_FILES if _FOOTAGE_DISK_FILES > 0 else 2**63, protect=protect)
+def _maintenance_error(error):
+    logging.getLogger(__name__).warning('Footage cache bookkeeping deferred: %s', error)
+
+
+def _footage_recency(out, default):
+    with _FOOTAGE_MEMORY_LOCK:
+        age = _FOOTAGE_ACCESS.get(str(out), default)
+    try:
+        age = max(age, (FOOTAGE_DIR / '.ready' / f'{out.stem}.json').stat().st_mtime_ns)
+    except OSError:
+        pass
+    return max(age, default)
+
+
+def _touch_footage(out):
+    with _FOOTAGE_MEMORY_LOCK:
+        _FOOTAGE_ACCESS[str(out)] = time.time_ns()
+        _FOOTAGE_ACCESS.move_to_end(str(out))
+        while len(_FOOTAGE_ACCESS) > max(128, _FOOTAGE_DISK_FILES):
+            _FOOTAGE_ACCESS.popitem(last=False)
+    try:
+        os.utime(FOOTAGE_DIR / '.ready' / f'{out.stem}.json', None)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        _maintenance_error(error)
+
+
+def _retain_footage_record(out, record):
+    with _FOOTAGE_MEMORY_LOCK:
+        _FOOTAGE_RECORDS[str(out)] = dict(record)
+        _FOOTAGE_RECORDS.move_to_end(str(out))
+        while len(_FOOTAGE_RECORDS) > max(128, _FOOTAGE_DISK_FILES):
+            _FOOTAGE_RECORDS.popitem(last=False)
+
+
+def _trim_footage_cache(protect=None):
+    try:
+        with _file_lock(FOOTAGE_DIR / '.locks' / 'cache'):
+            _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
+                             max_files=_FOOTAGE_DISK_FILES if _FOOTAGE_DISK_FILES > 0 else 2**63, protect=protect)
+    except OSError as error:
+        _maintenance_error(error)
+
+
+def _receipt_guard(path):
+    return FOOTAGE_DIR / '.locks' / f'receipt-{int(path.stem[:2], 16) % 64:02x}'
+
+
+def _write_footage_record(path, record):
+    with _file_lock(_receipt_guard(path)):
+        write_atomic(path, record)
+
+
+def _trim_receipt_temps(folder):
+    for temporary in folder.glob('.*.json.tmp'):
+        match = re.fullmatch(r'\.((?:[a-f0-9]{20}|[a-f0-9]{32}|[a-f0-9]{40})\.json)\.tmp', temporary.name)
+        if match is None:
+            continue
+        try:
+            with _file_lock(_receipt_guard(folder / match[1]), blocking=False):
+                temporary.unlink(missing_ok=True)
+        except CacheBusy:
+            pass
+        except OSError as error:
+            _maintenance_error(error)
+
+
+def _temporary_guard(path):
+    return path.with_name(path.name.replace('.part.len.mp4', '.part.mp4') + '.lock')
 
 
 def _content_probe(path: Path, digest: str) -> tuple:
@@ -790,7 +897,7 @@ def _footage_receipt(result: tuple) -> dict:
     out, name = result
     version = _footage_version(out)
     if out.is_symlink() or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
-        raise ValueError('Prepared footage exceeds the disk cache budget')
+        raise FootageCapacityError('Prepared footage exceeds the disk cache budget')
     record = {'format': 'argus-footage-ready/2', 'file': out.name, 'name': name, 'version': version}
     if not _durable_metadata(str(out), version):
         with _FOOTAGE_DOWNLOAD_SEM:
@@ -816,7 +923,7 @@ def _receipt_footage(record: dict, *, reader=None) -> tuple | None:
         return None
     out = FOOTAGE_DIR / record['file']
     version = _footage_version(out)
-    if out.is_symlink() or list(version) != record['version'] or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
+    if out.is_symlink() or list(version) != list(record['version']) or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
         return None
     if reader is not None:
         stat = os.fstat(reader.fileno())
@@ -835,7 +942,8 @@ def _receipt_footage(record: dict, *, reader=None) -> tuple | None:
             return None
     elif not _durable_metadata(str(out), version):
         return None
-    return out, record['name']
+    _touch_footage(out)
+    return _VerifiedFootage(out, record['name'], record)
 
 
 def _read_footage_receipt(receipt: Path) -> dict | None:
@@ -857,6 +965,15 @@ def _cached_footage_record(key):
             return record, result
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
+    with _FOOTAGE_MEMORY_LOCK:
+        record = _FOOTAGE_RECORDS.get(str(FOOTAGE_DIR / (key + '.mp4')))
+    if record is not None:
+        try:
+            result = _receipt_footage(record)
+            if result is not None:
+                return record, result
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
     # A surviving ticket is also a durable receipt for this exact output,
     # including when a canonical record is malformed or no longer validates.
     for path in (FOOTAGE_DIR / '.tickets').glob('*.json'):
@@ -889,6 +1006,7 @@ def _ready_footage(request: str) -> tuple | None:
 
 
 def _trim_footage_receipts(folder: Path, pattern: str, *, expire=False):
+    _trim_receipt_temps(folder)
     retained = []
     for path in folder.glob('*.json'):
         if not re.fullmatch(pattern, path.name):
@@ -909,6 +1027,8 @@ def _trim_footage_receipts(folder: Path, pattern: str, *, expire=False):
                 retained.append((path.stat().st_mtime_ns, path))
         except FileNotFoundError:
             pass
+        except OSError as error:
+            _maintenance_error(error)
         except (ValueError, TypeError, KeyError):
             path.unlink(missing_ok=True)
     # Canonical records follow movie lifetime. Request aliases and expiring
@@ -922,23 +1042,36 @@ def _trim_footage_receipts(folder: Path, pattern: str, *, expire=False):
 def _remember_ready_footage(request: str, result: tuple, record=None) -> None:
     folder = FOOTAGE_DIR / '.ready'
     if len(request) == 20:
-        write_atomic(folder / f'{request}.json', record or _footage_receipt(result))
+        record = record or _footage_receipt(result)
+        _retain_footage_record(result[0], record)
     else:
-        write_atomic(folder / f'{request}.json', {'format': 'argus-footage-alias/1', 'key': result[0].stem})
-    with _FOOTAGE_READY_LOCK:
-        _trim_footage_receipts(folder, r'(?:[a-f0-9]{20}|[a-f0-9]{40})\.json')
+        record = {'format': 'argus-footage-alias/1', 'key': result[0].stem}
+    # Durable aliases accelerate reuse; their failure must not invalidate media
+    # whose bytes and source identity have already been verified.
+    try:
+        _write_footage_record(folder / f'{request}.json', record)
+        with _FOOTAGE_READY_LOCK:
+            _trim_footage_receipts(folder, r'(?:[a-f0-9]{20}|[a-f0-9]{40})\.json')
+    except (OSError, ValueError) as error:
+        _maintenance_error(error)
 
 
 def prepare_footage_ticket(result: tuple) -> str:
-    record, _ = _cached_footage_record(result[0].stem)
-    if record is None or list(_footage_version(result[0])) != record.get('version'):
+    record = getattr(result, 'receipt', None)
+    if record is None:
+        record, _ = _cached_footage_record(result[0].stem)
+    record = dict(record) if record is not None else None
+    if record is None or list(_footage_version(result[0])) != list(record.get('version') or []):
         raise ValueError('Prepared footage changed before ticket publication')
     record['expires_at'] = time.time() + _FOOTAGE_TICKET_SECONDS
     token = uuid.uuid4().hex
     with _FOOTAGE_READY_LOCK:
         folder = FOOTAGE_DIR / '.tickets'
-        write_atomic(folder / f'{token}.json', record)
-        _trim_footage_receipts(folder, r'[a-f0-9]{32}\.json', expire=True)
+        _write_footage_record(folder / f'{token}.json', record)
+        try:
+            _trim_footage_receipts(folder, r'[a-f0-9]{32}\.json', expire=True)
+        except (OSError, ValueError) as error:
+            _maintenance_error(error)
     return token
 
 
@@ -991,6 +1124,8 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     cams = footage_cams(MP4_DIR, eid, label)
     if not cams or not FFMPEG:
         return None
+    if _FOOTAGE_DISK_BYTES <= 0:
+        raise FootageCapacityError('Prepared footage disk cache has no capacity')
     with _footage_sources(cams) as (working, identities, digests):
         return _footage_from_sources(eid, t0, t1, label, working, identities, digests)
 
@@ -1071,16 +1206,21 @@ def _encode_and_publish(key, out, name, cams, probes, t0, t1):
     # A competing process may publish while this encoder runs. Publication adopts
     # its verified result instead of replacing a file held by a live ticket.
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
+    tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.part.mp4")
     cmd = footage_command([(p, pr[:2], pr[3]) for (_, p), pr in zip(cams, probes)], t0, t1, tmp, _FOOTAGE_THREADS)
     cmd[-1:-1] = ['-fs', str(_FOOTAGE_DISK_BYTES)]
     nice = shutil.which('nice')
+    guard = _temporary_guard(tmp)
+    lease = _file_lock(guard)
+    lease.__enter__()
     try:
         completed = _run_footage(([nice, '-n', '19'] if nice else []) + cmd)
         if completed.returncode != 0 or not tmp.is_file():
+            if 'No space left on device' in (completed.stderr or '') or 'Disk quota exceeded' in (completed.stderr or ''):
+                raise FootageCapacityError('Prepared footage storage is full')
             raise RuntimeError(f"the video could not be made: {(completed.stderr or '').strip()[-300:]}")
         if tmp.stat().st_size >= _FOOTAGE_DISK_BYTES:
-            raise ValueError('Prepared footage exceeds the disk cache budget')
+            raise FootageCapacityError('Prepared footage exceeds the disk cache budget')
         from board.clips import frame_lengths
         frame_lengths(tmp)
         _validate_active_sources()
@@ -1096,16 +1236,16 @@ def _encode_and_publish(key, out, name, cams, probes, t0, t1):
                     _discard_changed_footage(out)
                 os.replace(tmp, out)
                 record.update(file=out.name, version=_footage_version(out))
-                try:
-                    _remember_ready_footage(key, (out, name), record)
-                except BaseException:
-                    _discard_changed_footage(out)
-                    raise
+                _remember_ready_footage(key, (out, name), record)
                 _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
                                  max_files=_FOOTAGE_DISK_FILES if _FOOTAGE_DISK_FILES > 0 else 2**63, protect=out)
-        return out, name
+        return _VerifiedFootage(out, name, record)
     finally:
-        tmp.unlink(missing_ok=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        finally:
+            lease.__exit__(None, None, None)
+            guard.unlink(missing_ok=True)
 
 
 PORT = 8896
@@ -1204,7 +1344,8 @@ def _families(d: dict) -> dict:
     for f in cq.get("flags") or []:
         if isinstance(f, dict) and f.get("check"):
             fams.add(CAPTURE_PREFIX + str(f["check"]))
-    return {"families": sorted(fams), "minor_families": sorted(minor - fams)}
+    return {"families": sorted(fams), "minor_families": sorted(minor - fams),
+            "unrated_families": sorted(c["unrated"])}
 
 
 CAPTURE_PREFIX = "cq:"
@@ -1332,7 +1473,7 @@ def rail_records(here: Path | None = None) -> list:
 
 
 def _rail_record(p: Path, d: dict) -> dict:
-    # the issues that count (Families.counts) are summarised; the minor ones are only tallied
+    # Counted, minor and unrated issues retain separate totals in live and static rails.
     all_issues = [i for i in (d.get("data_issues") or []) if i and i.get("issue")]
     issues = [i for i in all_issues if FAMILIES.counts("data_issues", i)]
     top = max(issues, key=lambda i: SEV_RANK.get(str(i.get("severity") or "").lower(), 0), default=None)
@@ -1341,6 +1482,8 @@ def _rail_record(p: Path, d: dict) -> dict:
     # issues so the rail never counts a fumble as a fault of the data.
     all_mistakes = [i for i in (d.get("operator_mistakes") or []) if i and i.get("issue")]
     mistakes = [i for i in all_mistakes if FAMILIES.counts("operator_mistakes", i)]
+    unrated_issues = sum(not FAMILIES.rated(i) for i in all_issues)
+    unrated_mistakes = sum(not FAMILIES.rated(i) for i in all_mistakes)
     # head-camera sessions have no single completion: the rail shows "N/M tasks" from the per-task outcomes
     tasks = [t for t in (d.get("tasks") or []) if t and (t.get("task") or t.get("start_s") is not None)]
     return {
@@ -1353,9 +1496,11 @@ def _rail_record(p: Path, d: dict) -> dict:
         "n_issues": len(issues),
         "max_severity": max_sev if max_sev in SEV_RANK else None,
         "top_issue": (top.get("issue") or "") if top else "",
-        "n_minor_issues": len(all_issues) - len(issues),
+        "n_minor_issues": len(all_issues) - len(issues) - unrated_issues,
+        "n_unrated_issues": unrated_issues,
         "n_mistakes": len(mistakes),
-        "n_minor_mistakes": len(all_mistakes) - len(mistakes),
+        "n_minor_mistakes": len(all_mistakes) - len(mistakes) - unrated_mistakes,
+        "n_unrated_mistakes": unrated_mistakes,
         "n_tasks": len(tasks),
         "n_task_success": sum(1 for t in tasks if (t.get("outcome") or "").lower() == "success"),
         # the episode's length (board/build.py measures it); files without one fall back on the sampled times
@@ -1825,9 +1970,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 got = footage(eid, t0, t1)
             except CacheBusy as error:
                 return self._send(503, {'error': str(error)})
+            except FootageCapacityError as error:
+                return self._send(507, {'error': str(error)})
             except ValueError as error:
                 return self._send(400, {'error': str(error)})
-            except (RuntimeError, OSError, subprocess.SubprocessError, KeyError) as e:
+            except OSError as error:
+                return self._send(507 if error.errno in (errno.ENOSPC, errno.EDQUOT) else 503,
+                                  {'error': 'Prepared video storage is unavailable.', 'retryable': False})
+            except (RuntimeError, subprocess.SubprocessError, KeyError) as e:
                 logging.getLogger(__name__).error("Footage preparation failed", exc_info=True)
                 self._send(500, {"error": "The requested footage could not be prepared.",
                                  "stage": "footage preparation"})
@@ -1842,7 +1992,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     size = out.stat().st_size
                 except CacheBusy as error:
                     return self._send(503, {'error': str(error)})
-                except (OSError, ValueError):
+                except OSError as error:
+                    return self._send(507 if error.errno in (errno.ENOSPC, errno.EDQUOT) else 503,
+                                      {'error': 'Prepared video storage cannot save a download ticket.', 'retryable': False})
+                except ValueError:
                     return self._send(409, {'error': 'Prepared video changed; prepare it again.'})
                 self._send(200, {"bytes": size, "name": name, "ticket": ticket})
                 return
@@ -1907,7 +2060,9 @@ def main(argv=None) -> int:
     PORT, PAGE_TITLE, BOARD_NAME, HEADER = a.port, a.title, board_name(a.board), read_header(a.header)
     if _FRAME_DIR is not None:
         _trim_disk_cache(_FRAME_DIR, '.jpg', max_bytes=_FRAME_DISK_BYTES, max_files=_FRAME_DISK_FILES)
-    _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES, max_files=_FOOTAGE_DISK_FILES)
+    _trim_footage_cache()
+    for folder in ('.ready', '.tickets'):
+        _trim_receipt_temps(FOOTAGE_DIR / folder)
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     # socketserver's default listen backlog is 5: a burst of visitors (or a proxy opening many connections at once)
     # overflows it and those connections wait on SYN retries for up to a minute

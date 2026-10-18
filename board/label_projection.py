@@ -7,6 +7,21 @@ import math
 import re
 
 OUTCOMES = ('success', 'success_then_undone', 'failure', 'partial', 'unclear')
+TASK_OUTCOMES = OUTCOMES + ('continues_past_cut',)
+EVENT_OUTCOMES = ('success', 'failure', 'unclear')
+
+
+def effective_outcome(value):
+    return 'failure' if value == 'partial' else value
+
+
+def allowed_arms(config=None):
+    arms = {'left', 'right', 'both'}
+    config = config or {}
+    labels = config.get('cam_labels') or []
+    if len(config.get('views') or []) == 1 and labels:
+        arms.add(str(labels[0]))
+    return arms
 TEXT = {
     'timeline': ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes'),
     'key_events': ('label', 'kind', 'outcome', 'note'),
@@ -88,7 +103,7 @@ def diagnostics(labels: dict, dropped: list[dict]) -> dict[str, str]:
     return entries
 
 
-def project(labels: dict) -> tuple[dict, list[dict]]:
+def project(labels: dict, config: dict | None = None) -> tuple[dict, list[dict]]:
     """Keep valid fields, omit unsafe nested values, and report every omission with its source value."""
     labels = copy.deepcopy(labels)
     dropped = []
@@ -133,9 +148,14 @@ def project(labels: dict) -> tuple[dict, list[dict]]:
                 invalid(row, key, scope, index, 'not text')
             elif key == 'issue' and isinstance(value, str) and not value.strip():
                 invalid(row, key, scope, index, 'empty text')
-            elif value is not None and key in ENUMS:
+            elif value is not None and (key in ENUMS or key == 'arm'):
                 normalized = value.strip().lower()
-                if normalized in ENUMS[key]:
+                allowed = (allowed_arms(config) if key == 'arm' else
+                           TASK_OUTCOMES if scope == 'tasks' and key == 'outcome' else
+                           EVENT_OUTCOMES if scope == 'key_events' and key == 'outcome' else ENUMS[key])
+                if key == 'arm' and value.strip() in allowed:
+                    normalized = value.strip()
+                if normalized in allowed:
                     row[key] = normalized
                 else:
                     invalid(row, key, scope, index, 'unknown value')
@@ -185,7 +205,7 @@ def project(labels: dict) -> tuple[dict, list[dict]]:
                 dropped.append({'field': 'part_assessments', 'row': index, 'why': 'not an object',
                                 'value': assessment})
                 continue
-            local, omitted = project(assessment)
+            local, omitted = project(assessment, config)
             kept.append(local)
             dropped.extend({**item, 'field': f'part_assessments[{index}].' + item['field']} for item in omitted)
         labels['part_assessments'] = kept

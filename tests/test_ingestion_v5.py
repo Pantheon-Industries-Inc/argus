@@ -20,7 +20,7 @@ from test_dedicated_camera_recovery import decode
 from test_prepare import joint_names
 
 
-def encoded_video(path, count, fps=30, missing=()):
+def encoded_video(path, count, fps=30, missing=(), timescale=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     if missing:
         writer = formats.FrameWriter(path, '', fine_clock=True)
@@ -30,7 +30,7 @@ def encoded_video(path, count, fps=30, missing=()):
         assert writer.close() == count - len(missing)
         return
     rate = Fraction(fps).limit_denominator(1_000_000)
-    with av.open(str(path), 'w') as output:
+    with av.open(str(path), 'w', options={'video_track_timescale': str(timescale)} if timescale else {}) as output:
         stream = output.add_stream('mpeg4', rate=rate)
         stream.width, stream.height, stream.pix_fmt = 96, 72, 'yuv420p'
         stream.time_base = Fraction(1, 15360) if fps == 50 else 1 / rate / 512
@@ -403,3 +403,275 @@ def test_archive_failure_cleanup_preserves_source_error_and_real_permissions(tmp
     if cleanup == 'vanished_sidecar':
         assert not list((tmp_path / 'upload_unpacked').glob('archive-*'))
     assert source.exists() and not list((tmp_path / 'out').glob('*/context.json'))
+
+
+@pytest.mark.parametrize('coarse', [False, True])
+def test_packed_scalar_depth_resolves_the_same_publisher_queries_as_rgb_and_state(tmp_path, coarse):
+    from label import depth
+    root = tmp_path / 'source'
+    lerobot_source(root)
+    key = 'observation.images.front_depth'
+    info_path = root / 'meta/info.json'
+    info = json.loads(info_path.read_text())
+    info['features'][key] = {'dtype': 'video', 'shape': [72, 96, 1],
+                             'info': {'video.is_depth_map': True, 'depth_scale': .001}}
+    info_path.write_text(json.dumps(info))
+    metadata = root / 'meta/episodes/chunk-000/file-000.parquet'
+    rows = pd.read_parquet(metadata)
+    for field, value in {'chunk_index': 0, 'file_index': 0, 'from_timestamp': .068, 'to_timestamp': .168}.items():
+        rows[f'videos/{key}/{field}'] = value
+    rows.to_parquet(metadata)
+    path = root / 'videos' / key / 'chunk-000/file-000.mp4'
+    path.parent.mkdir(parents=True)
+    denominator = 1000 if coarse else 1_000_000
+    with av.open(str(path), 'w', format='mov', options={'video_track_timescale': str(denominator)}) as output:
+        stream = output.add_stream('png', rate=30)
+        stream.width, stream.height, stream.pix_fmt = 96, 72, 'gray16be'
+        stream.time_base = stream.codec_context.time_base = Fraction(1, denominator)
+        for index in range(8):
+            if index == 6 and not coarse:
+                continue
+            frame = av.VideoFrame.from_ndarray(np.full((72, 96), 1000 + index, np.uint16), format='gray16be')
+            frame.pts = 66617 if index == 2 and not coarse else round(index / 30 * denominator)
+            frame.time_base = Fraction(1, denominator)
+            for packet in stream.encode(frame): output.mux(packet)
+        for packet in stream.encode(): output.mux(packet)
+    _, items = formats.plan(root)
+    context, ep_dir = assert_rows(items[0], tmp_path / 'out', 0, 2, 3)
+    loaded = episode.load(ep_dir)
+    own = next(iter(depth.load(ep_dir)))
+    pixels = depth.at_anchor(loaded, depth.load(ep_dir), own, [0, 1, 2])
+    assert [int(pixels[row][0, 0]) for row in range(3)] == [1002, 1003, 1004]
+    with np.load(ep_dir / 'depth_times.npz') as times:
+        assert times['depth_' + own + '_pts'].tolist() == ([67, 100, 133] if coarse else [66617, 100000, 133333])
+    assert not any(issue['kind'] == 'depth_partial' for issue in context.get('reader_issues', []))
+
+
+def text_recording(path, *, clock='capture', early=-.05, late=4.2, malformed=None, neighbor=False, text_offset=0.):
+    import base64
+    from mcap.writer import Writer
+    png = io.BytesIO(); Image.new('RGB', (32, 24), 'white').save(png, 'PNG')
+    def stamp(value):
+        ns = round(value * 1e9)
+        seconds, nanos = divmod(ns, 1_000_000_000)
+        return {'stamp': {'sec': seconds, 'nanosec': nanos}}
+    wall, capture = 1_790_000_000, 1000
+    with path.open('wb') as target:
+        writer = Writer(target); writer.start()
+        image = writer.register_schema('sensor_msgs/CompressedImage', 'jsonschema', b'{}')
+        text = writer.register_schema('TaskText', 'jsonschema', b'{}')
+        camera = writer.register_channel('/camera/front/compressed', 'json', image)
+        wrist = writer.register_channel('/camera/wrist/compressed', 'json', image) if neighbor else None
+        task = writer.register_channel('/task', 'json', text)
+        step = writer.register_channel('/task/subtask', 'json', text)
+        for index in range(121):
+            message = {'format': 'png', 'data': base64.b64encode(png.getvalue()).decode()}
+            if clock != 'arrival': message['header'] = stamp(capture + index / 30)
+            body = json.dumps(message).encode()
+            data = (b'{broken' if malformed == 'camera' else b'\xff') if malformed in {'camera', 'utf8'} and index == 45 else body
+            writer.add_message(camera, round((wall + index / 30) * 1e9), data, 0)
+            if wrist is not None:
+                writer.add_message(wrist, round((wall + index / 30) * 1e9), body, 0)
+        for channel, at, label in [(task, early, 'prepare'), (task, 1., 'fold the cloth'),
+                                   (step, early, 'pick up'), (step, 2.5, 'fold'), (step, late, 'after recording')]:
+            message = {'data': label}
+            if clock != 'arrival': message['header'] = stamp((wall if clock == 'unrelated' else capture) + at + text_offset)
+            data = b'{broken' if malformed == 'text' and label == 'fold' else json.dumps(message).encode()
+            writer.add_message(channel, round((wall + at) * 1e9), data, 0)
+        writer.finish()
+
+
+@pytest.mark.parametrize('clock', ['arrival', 'capture'])
+def test_mcap_text_span_boundaries_do_not_change_clock_compatibility(tmp_path, clock):
+    source = tmp_path / 'source.mcap'
+    text_recording(source, clock=clock, early=-.02 if clock == 'arrival' else -.05)
+    report = formats.convert(source, 'ego_head', tmp_path / 'out', 'source timeline', 900)
+    assert not report['failed'], report
+    ctx = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert [row['label'] for row in ctx['annotation_subtasks']] == ['pick up', 'fold']
+    assert [row['t0'] for row in ctx['annotation_subtasks']] == [0., 2.5]
+    assert ctx['annotation_subtasks'][-1]['t1'] == pytest.approx(4.033, abs=.001)
+    assert 'prepare' in ctx['instruction'] and 'fold the cloth' in ctx['instruction']
+    assert not any(issue['kind'] == 'text_clock_unverified' for issue in ctx.get('reader_issues', []))
+    assert 'after recording' in json.dumps(ctx)
+    proof = ctx['source']['text_clock_alignment']
+    assert proof['physical_synchronization_verified'] is False
+    assert 'negative capture-clock bias' in proof['limitation']
+
+
+@pytest.mark.parametrize('malformed', ['camera', 'text', 'utf8'])
+def test_generic_mcap_malformed_payload_keeps_later_frames_and_steps(tmp_path, malformed):
+    source = tmp_path / 'source.mcap'
+    text_recording(source, early=.1, late=3.5, malformed=malformed, neighbor=True)
+    report = formats.convert(source, 'ego_head', tmp_path / 'out', 'damaged message', 900)
+    assert not report['failed'], report
+    context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    ep_dir = tmp_path / 'out' / context['episode_id']
+    assert context['n_state_frames'] == (120 if malformed in {'camera', 'utf8'} else 121)
+    neighbor = next(camera for camera in context['unshown_cameras'] if 'wrist' in camera['name'])
+    assert neighbor['n_frames'] == 121 and len(decode(Path(neighbor['packed']))) == 121
+    assert len(decode(ep_dir / 'exo.mp4')) == context['n_state_frames']
+    assert any(step['label'] == 'after recording' for step in context['annotation_subtasks'])
+    assert not any('ends early' in note for note in context.get('notes', []))
+    assert any(issue['kind'] == 'mcap_message_unreadable' for issue in context['reader_issues'])
+
+
+@pytest.mark.parametrize('reader', ['lerobot', 'egocentric'])
+def test_one_file_fractional_rate_has_no_false_grid_warning(tmp_path, reader):
+    from prepare import egocentric100k
+    rate = 30000 / 1001
+    source = tmp_path / 'video.mp4'
+    encoded_video(source, 8, rate)
+    if reader == 'lerobot':
+        root = tmp_path / 'source'
+        (root / 'meta').mkdir(parents=True)
+        (root / 'meta/info.json').write_text(json.dumps({'codebase_version': 'v2.1', 'fps': rate,
+            'features': {'observation.images.front': {'dtype': 'video', 'shape': [72, 96, 3]}}}))
+        destination = root / 'videos/chunk-000/observation.images.front/episode_000000.mp4'
+        destination.parent.mkdir(parents=True); destination.write_bytes(source.read_bytes())
+        report = formats.convert(root, 'ego_head', tmp_path / 'out', 'fractional cadence', 900)
+        assert not report['failed'], report
+        context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+        assert not any(issue['kind'] == 'recorded_rate_mismatch' for issue in context.get('reader_issues', []))
+    else:
+        monkey = pytest.MonkeyPatch()
+        metadata = tmp_path / 'video.json'; metadata.write_text(json.dumps({'fps': rate}))
+        try:
+            monkey.setattr(egocentric100k, 'clip_files', lambda *args: (source, metadata))
+            context = egocentric100k.prepare_clip('shard', 'video.mp4', tmp_path, tmp_path / 'out')
+        finally:
+            monkey.undo()
+        assert 'real_times' not in context
+
+
+@pytest.mark.parametrize('fps', [30000 / 1001, 24, 60, 60000 / 1001])
+def test_count_owned_coarse_container_ticks_keep_every_exact_picture(tmp_path, fps):
+    root = tmp_path / 'source'
+    paths, first = lerobot_source(root, length=10, episodes=2, offset=47 / fps, fps=fps)
+    for path in paths.values():
+        encoded_video(path, 70, fps, timescale=1000)
+        assert formats.probe(path)['time_base'] == Fraction(1, 1000)
+    _, items = formats.plan(root)
+    for index, item in enumerate(items):
+        context, ep_dir = assert_rows(item, tmp_path / 'out', index, first + index * 10, 10)
+        assert any(issue['kind'] == 'packed_clock_quantized' for issue in context['reader_issues'])
+        with np.load(ep_dir / 'times.npz') as times:
+            facts = formats.probe(paths['observation.images.front'])
+            np.testing.assert_array_equal(times['exo_pts'], facts['pts'][first + index * 10:first + (index + 1) * 10])
+
+
+@pytest.mark.parametrize('jitter', [.0002, .004])
+def test_arbitrary_jitter_is_not_relabelled_as_container_quantization(tmp_path, jitter):
+    root = tmp_path / 'source'
+    paths, first = lerobot_source(root, length=10, episodes=1, offset=0)
+    path = paths['observation.images.left_wrist']
+    writer = formats.FrameWriter(path, '', fine_clock=True)
+    for index in range(13):
+        writer.add_image(index / 30 + (jitter if index % 2 else 0),
+                         Image.new('RGB', (96, 72), ((index * 17) % 240,) * 3))
+    assert writer.close() == 13 and len(decode(path)) == 13
+    _, items = formats.plan(root)
+    context = formats.convert_lerobot(items[0], 'teleop_arms', tmp_path / 'out', 'jitter countercase')
+    loaded = episode.load(tmp_path / 'out' / context['episode_id'])
+    np.testing.assert_array_equal(loaded['state'][:, 0], np.arange(first, first + 10))
+    pictures = episode._decode_view(loaded, 'exo', list(range(10)))
+    originals = decode(paths['observation.images.front'])
+    assert len(pictures) == 10
+    for index, picture in pictures.items():
+        np.testing.assert_array_equal(np.asarray(picture), originals[index])
+    assert set(context['cameras']) == {'exo'}
+    assert any(issue['kind'] == 'camera_not_aligned' and 'left_wrist' in issue['camera']
+               for issue in context['reader_issues'])
+    assert not any(issue['kind'] == 'camera_not_decodable' and 'left_wrist' in issue['camera']
+                   for issue in context['reader_issues'])
+
+
+def test_retained_packed_camera_keeps_query_pts_and_exact_clock_offsets(tmp_path):
+    from label.frames import extract_frames
+    root = tmp_path / 'source'
+    paths, _ = lerobot_source(root)
+    key = 'observation.images.rear_mask'
+    info_path = root / 'meta/info.json'
+    info = json.loads(info_path.read_text())
+    info['features'][key] = {'dtype': 'video', 'shape': [72, 96, 3]}
+    info_path.write_text(json.dumps(info))
+    metadata = root / 'meta/episodes/chunk-000/file-000.parquet'
+    table = pd.read_parquet(metadata)
+    for field in ('chunk_index', 'file_index', 'from_timestamp', 'to_timestamp'):
+        table[f'videos/{key}/{field}'] = table[f'videos/observation.images.front/{field}']
+    table.to_parquet(metadata)
+    path = root / 'videos' / key / 'chunk-000/file-000.mp4'
+    path.parent.mkdir(parents=True)
+    writer = formats.FrameWriter(path, '', fine_clock=True)
+    for index in range(8):
+        if index != 6:
+            writer.add_image(index / 30 - (.00005 if index == 2 else 0),
+                             Image.new('RGB', (96, 72), ((index * 17) % 240,) * 3))
+    assert writer.close() == 7
+    _, items = formats.plan(root)
+    context, ep_dir = assert_rows(items[0], tmp_path / 'out', 0, 2, 3)
+    retained = next(camera for camera in context['unshown_cameras'] if camera['name'] == key)
+    with np.load(ep_dir / retained['camera_times']) as times:
+        assert times['pts'].tolist() == [66617, 100000, 133333]
+        np.testing.assert_allclose(times['capture'], np.array([66617, 100000, 133333]) / 1e6 - 2 / 30,
+                                   rtol=0, atol=1e-15)
+        pictures = extract_frames(retained['packed'], retained['base_s'], 3, [0, 1, 2], pts=times['pts'])
+    for row, picture in pictures.items():
+        assert np.asarray(picture).mean() == pytest.approx((row + 2) * 17, abs=3)
+
+
+def test_mixed_embedded_camera_keeps_count_owned_coarse_packed_sibling(tmp_path):
+    root = tmp_path / 'source'
+    paths, first = lerobot_source(root, length=10, offset=47 / 24, fps=24, mixed=True)
+    encoded_video(paths['observation.images.front'], 60, 24, timescale=1000)
+    _, items = formats.plan(root)
+    context, _ = assert_rows(items[0], tmp_path / 'out', 0, first, 10)
+    assert set(context['cameras']) == {'exo', 'left'}
+    assert any(issue['kind'] == 'packed_clock_quantized' for issue in context['reader_issues'])
+
+
+def test_mcap_outside_topic_bounds_do_not_join_unrelated_capture_domains(tmp_path):
+    source = tmp_path / 'source.mcap'
+    text_recording(source, clock='unrelated')
+    report = formats.convert(source, 'ego_head', tmp_path / 'out', 'unrelated clock bounds', 900)
+    assert not report['failed'], report
+    context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert not context.get('annotation_subtasks')
+    assert not context.get('instruction')
+    assert any(issue['kind'] == 'text_clock_unverified' for issue in context['reader_issues'])
+    assert 'after recording' in json.dumps(context['recorded_metadata']['unaligned_text_channels'])
+
+
+def test_generic_mcap_unexpected_decoder_failure_propagates_after_readable_frames(tmp_path, monkeypatch):
+    source = tmp_path / 'source.mcap'
+    text_recording(source)
+    _, items = formats.plan(tmp_path)
+    original, calls = formats._decoder_for, []
+    def faulty_decoder(*args, **kwargs):
+        decoder = original(*args, **kwargs)
+        if decoder is None:
+            return None
+        def decode_message(data):
+            calls.append(data)
+            if len(calls) == 50:
+                raise RuntimeError('decoder implementation regression')
+            return decoder(data)
+        return decode_message
+    monkeypatch.setattr(formats, '_decoder_for', faulty_decoder)
+    with pytest.raises(RuntimeError, match='decoder implementation regression'):
+        formats.convert_mcap_generic(items[0], 'ego_head', tmp_path / 'out', 'programming fault')
+    assert len(calls) == 50
+
+
+def test_mcap_capture_clock_cannot_lead_its_recorded_arrival_origin(tmp_path):
+    source = tmp_path / 'source.mcap'
+    text_recording(source, text_offset=2.)
+    report = formats.convert(source, 'ego_head', tmp_path / 'out', 'future capture clock', 900)
+    assert not report['failed'], report
+    context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
+    assert not context.get('annotation_subtasks')
+    assert not context.get('instruction')
+    assert any(issue['kind'] == 'text_clock_unverified' for issue in context['reader_issues'])
+    records = context['recorded_metadata']['unaligned_text_channels']['/task/subtask']
+    assert records[0]['capture_ns'] == 1001950000000
+    assert 'after recording' in json.dumps(records)

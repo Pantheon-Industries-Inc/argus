@@ -60,10 +60,10 @@ RIGS ={"teleop_arms": "teleop", "handheld_gripper": "handheld", "ego_head": "hea
 RIG_NAMES = {"all": "All footage", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
 RESPONDED = ("parsed", "unparsed", "cut_off")
 OUTCOMES = ("success", "success_then_undone", "failure", "partial", "unclear")
-TASK_OUTCOMES = ("success", "partial", "failure", "unclear")
+from board.label_projection import TASK_OUTCOMES, effective_outcome
 LISTS = ("data_issues", "operator_mistakes")
 PER_EPISODE = ("events_per_min", "key_events", "subgoals", "data_issues", "data_issues_minor", "operator_mistakes",
-               "operator_mistakes_minor")
+               "operator_mistakes_minor", "data_issues_unrated", "operator_mistakes_unrated")
 
 
 # ---------------------------------------------------------------- the runs
@@ -161,13 +161,13 @@ def read_output(p: Path) -> dict:
     if p.name.startswith("failed_"):
         # a failed_<episode>.json: the board's own label of an episode whose reply was cut off (board/to_board.py)
         u = r.get("usage") or {}
-        cost = round(episode_cost(r), 6) if u.get("est_cost_usd") is not None else u.get("cost")
+        cost = episode_cost(r) if u.get("est_cost_usd") is not None else u.get("cost")
         return {"status": "cut_off", "cost": cost, "latency": None, "out_tokens": u.get("completion_tokens"),
                 "finish_reason": r.get("finish_reason"), "tail": r.get("content_tail") or "", "path": p,
                 "model": r.get("model")}
     u = r.get("usage") or {}
     # the episode's billed cost: its model call and, for a routed episode, the routing call made for it
-    cost = round(episode_cost(r), 6) if u.get("est_cost_usd") is not None else None
+    cost = episode_cost(r) if u.get("est_cost_usd") is not None else None
     base = {"cost": cost, "latency": u.get("latency_s"), "out_tokens": u.get("completion_tokens"), "path": p,
             "model": r.get("model")}
     if r.get("parse_ok"):
@@ -240,7 +240,7 @@ def schema_violations(L: dict, config: dict | None = None) -> list[str]:
     may name that actor: the ambiguity is the prompt's, and counting it would score our wording as the model's
     failure to follow it."""
     from board.to_board import typed
-    projected, dropped = typed({"labels": L})
+    projected, dropped = typed({"labels": L, "config": config})
     from board.label_projection import diagnostics, field_identity, source_row_indices
     violations = diagnostics(projected, dropped)
     L = projected
@@ -324,7 +324,7 @@ def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
     """The counts one parsed response contributes."""
     from board.to_board import typed
     violations = schema_violations(L, config)
-    L, _ = typed({"labels": L})
+    L, _ = typed({"labels": L, "config": config})
     tl = [s for s in _list(L, "timeline") if isinstance(s, dict) and s.get("start_s") is not None]
     ke = [k for k in _list(L, "key_events") if isinstance(k, dict)]
     m = {"segments": len(tl), "key_events": len(ke),
@@ -335,19 +335,17 @@ def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
         items = [i for i in _list(L, key) if isinstance(i, dict) and str(i.get("issue") or "").strip()]
         n = sum(1 for i in items if FAMILIES.counts(key, i))
         m[key] = n
-        m[key + "_minor"] = len(items) - n
+        unrated = sum(item.get('severity') not in ('low', 'medium', 'high') for item in items)
+        m[key + "_unrated"] = unrated
+        m[key + "_minor"] = len(items) - n - unrated
         fams |= {FAMILIES.family_of(key, i, dataset) for i in items}
     m["families"] = sorted(fams)
     tasks = [t for t in _list(L, "tasks") if isinstance(t, dict)]
     if tasks:
-        m["outcome"] = None
         m["tasks"] = [len(tasks), sum(1 for t in tasks if str(t.get("outcome") or "").lower() == "success")]
-    else:
-        c = L.get("completion")
-        oc = str(c.get("task_completed") or "").lower() if isinstance(c, dict) else ""
-        # partial is a kind of failure (board/to_board.py), so two runs agree when both say the task was not done
-        oc = "failure" if oc == "partial" else oc
-        m["outcome"] = oc if oc in OUTCOMES else None
+    c = L.get("completion")
+    oc = effective_outcome(c.get("task_completed")) if isinstance(c, dict) else None
+    m["outcome"] = oc if oc in OUTCOMES else None
     return m
 
 
@@ -376,7 +374,9 @@ def metric_values(models: list, eps: list, rows: dict) -> dict:
                   "data_issues": _r(_mean([r["data_issues"] for r in rs]), 3),
                   "data_issues_minor": _r(_mean([r["data_issues_minor"] for r in rs]), 3),
                   "operator_mistakes": _r(_mean([r["operator_mistakes"] for r in rs]), 3),
-                  "operator_mistakes_minor": _r(_mean([r["operator_mistakes_minor"] for r in rs]), 3)}
+                  "operator_mistakes_minor": _r(_mean([r["operator_mistakes_minor"] for r in rs]), 3),
+                  "data_issues_unrated": _r(_mean([r.get("data_issues_unrated", 0) for r in rs]), 3),
+                  "operator_mistakes_unrated": _r(_mean([r.get("operator_mistakes_unrated", 0) for r in rs]), 3)}
     return out
 
 
@@ -420,7 +420,7 @@ def _responses(k: str, eps: list, rows: dict) -> dict:
             "violations": _r(_mean(viol), 3),
             "violations_any": _r(sum(1 for x in viol if x) / len(viol)) if viol else None,
             "violations_n": len(viol),
-            "cost": _r(_mean(costs), 4), "cost_n": len([c for c in costs if c is not None]),
+            "cost": _mean(costs), "cost_n": len([c for c in costs if c is not None]),
             "latency": _r(_mean(lats), 1), "latency_n": len([x for x in lats if x is not None])}
 
 
@@ -443,7 +443,7 @@ def _with_example(m: dict, ref: str | None, eps: list, rows: dict) -> dict | Non
         ag = agreement(k, ref, with_ref, rows) if with_ref else {}
         return {"parse_share": _r(st.count("parsed") / resp) if resp else None,
                 "violations": _r(_mean(viol), 3),
-                "cost": _r(_mean([r.get("cost") for r in rs]), 4),
+                "cost": _mean([r.get("cost") for r in rs]),
                 "latency": _r(_mean([r.get("latency") for r in rs]), 1),
                 **{f: (mv.get(k) or {}).get(f) for f in PER_EPISODE},
                 "agree_outcome": ag.get("outcome"), "agree_issues": ag.get("issues")}

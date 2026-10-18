@@ -796,7 +796,8 @@ def note_broken_cameras(extra: dict, broken: dict, any_left: bool) -> None:
         raise ValueError("no camera of the episode could be opened ("
                          + "; ".join(f"{name}: {why}" for name, why in broken.items()) + ")")
     for name, why in broken.items():
-        add_issue(extra, "camera_not_decodable", f"The camera {name} could not be opened ({why}), so the episode is "
+        kind = "camera_not_aligned" if isinstance(why, PackedOwnershipError) else "camera_not_decodable"
+        add_issue(extra, kind, f"The camera {name} could not be opened ({why}), so the episode is "
                                                  "labelled and shown without it.", camera=name)
         extra.setdefault("source", {}).setdefault("unused_cameras", []).append(f"{name} (could not be opened: {why})")
 
@@ -5723,9 +5724,10 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
             try:
                 pr = packed_video_window(Path(mp4), base, to, fps=fps, query=row.get("_packed_queries", {}).get(key))
             except Exception as error:
-                broken[key] = plain_error(error)
+                broken[key] = error if isinstance(error, PackedOwnershipError) else plain_error(error)
                 continue
             n = len(pr["pts"])
+            packed_quantization_note(extra, key, pr)
             sources[v] = {"packed": str(mp4), "base_s": base, "n_frames": n, "camera_key": key}
             # A grid decode also needs a representable episode origin. Otherwise
             # keep the selected encoded PTS explicitly, even on a CFR source.
@@ -5788,7 +5790,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
     for v, key in vmap.items():
         pr = prs[v]
         n = int(len(pr["pts"]))
-        step = Fraction(1) / Fraction(fps).limit_denominator(1000) / pr["time_base"]
+        step = Fraction(1) / Fraction(fps).limit_denominator(1_000_000) / pr["time_base"]
         grid[v] = bool(n and step.denominator == 1 and pr["pts"][0] == 0 and
                        np.array_equal(pr["pts"], np.arange(n) * int(step)))
         if not grid[v]:
@@ -5881,10 +5883,12 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
                 e = unshown_entry(k, mp4, why, base_s=base, n_frames=len(facts["pts"]), fps=rate)
                 if e and ep is not None:
                     name = f"unshown{len(out) + 1}_times.npz"
-                    clock = np.arange(len(facts["pts"])) / rate
+                    clock = facts.get("episode_times", np.arange(len(facts["pts"])) / rate)
                     ep.mkdir(parents=True, exist_ok=True)
                     np.savez(ep / name, capture=clock, presentation=clock, pts=facts["pts"])
                     e["camera_times"] = name
+                    if facts.get("clock_quantization"):
+                        e["clock_quantization"] = facts["clock_quantization"]
         else:
             e = unshown_entry(k, src, why)
         out.append((k, e))
@@ -5927,17 +5931,22 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
         if not str(pr["pix_fmt"] or "").startswith("gray"):
             leave(key, "stored in colour, so it holds no distances")
             continue
-        t_all = pr["pts"].astype(np.float64) * float(pr["time_base"])
-        lo, hi = packed_window_indices(pr, base, to, fps=fps) if base is not None else (0, len(t_all))
-        sel = slice(lo, hi)
-        if hi <= lo:
+        if base is not None:
+            try:
+                pr = packed_source_window(pr, base, to, fps=fps, query=row.get('_packed_queries', {}).get(key))
+            except ValueError as error:
+                leave(key, str(error))
+                continue
+        if not len(pr['pts']):
             leave(key, "no depth frame falls inside this episode's window of its packed file")
             continue
-        td = t_all[sel] - (base if base is not None else t_all[sel][0])
+        packed_quantization_note(ctx, key, pr)
+        td = pr.get('episode_times', pr['pts'].astype(np.float64) * float(pr['time_base']) -
+                    (base if base is not None else float(pr['pts'][0] * pr['time_base'])))
         info = (r["features"].get(key) or {}).get("info") or {}
         scale = next((float(x) for k, x in info.items() if DEPTH_SCALE_KEY.search(str(k).split(".")[-1])
                       and isinstance(x, (int, float)) and 0 < x < 10), None)
-        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"][sel], scale, source, ctx, (cams or vmap)[camera])
+        e, t = depth_entry(ep, v, Path(path), td, ta, pr["pts"], scale, source, ctx, (cams or vmap)[camera])
         e.update(width=pr["width"], height=pr["height"], pix_fmt=pr["pix_fmt"], source_key=key,
                  paired_camera=camera if v == camera and source == key else None)
         dep[v] = e
@@ -6008,32 +6017,67 @@ def _packed_video_probe(path: str, version: tuple) -> dict:
     return probe(Path(path))
 
 
-def packed_video_window(path: Path, base: float, stop: float, *, fps: float | None = None, query=None) -> dict:
-    """Exact encoded PTS inside a declared half-open LeRobot episode window."""
+class PackedOwnershipError(ValueError):
+    """Readable encoded pictures cannot be assigned to the publisher's episode rows."""
+
+
+def packed_source_window(facts: dict, base: float, stop: float, *, fps=None, query=None) -> dict:
+    """Select one set of exact source PTS for colour, depth and retained camera consumers."""
     if not np.isfinite([base, stop]).all() or stop <= base:
         raise ValueError("invalid packed video episode window")
-    stat = path.stat()
-    facts = _packed_video_probe(str(path.resolve()), (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino))
-    episode_times = None
+    episode_times, quantization = None, None
     if query is not None:
+        from label.frames import base_frame
+        first = base_frame(query['origin_s'], fps)
         clock = facts['pts'].astype(np.float64) * float(facts['time_base'])
         targets = query['origin_s'] + np.arange(query['count'], dtype=np.float64) / fps
         if not len(clock):
-            raise ValueError('Encoded camera has no frames for the publisher queries')
+            raise PackedOwnershipError('Encoded camera has no frames for the publisher queries')
         indices = nearest(clock, targets)
-        # LeRobot's documented nearest-frame tolerance. Never transfer a missing query to the next row.
-        if (len(clock) == 0 or np.any(np.abs(clock[indices] - targets) > 1e-4)
-                or np.any(np.diff(indices) <= 0)):
-            raise ValueError('Encoded camera cannot supply every publisher row within the LeRobot 0.0001 s tolerance')
+        errors = np.abs(clock[indices] - targets)
+        if np.any(errors > 1e-4):
+            # A coarse muxer clock is a different contract from LeRobot's native strict lookup.
+            # Count ownership plus the complete nearest-tick sequence must prove every source ordinal.
+            tick = float(facts['time_base'])
+            ideal = np.arange(len(clock), dtype=np.float64) / fps
+            quantized = (facts['pts'][0] == 0 and np.all(np.diff(facts['pts']) > 0)
+                         and np.all(np.abs(clock - ideal) <= tick / 2 + 4 * np.spacing(np.maximum(ideal, 1))))
+            if not quantized or first < 0 or first + query['count'] > len(clock):
+                raise PackedOwnershipError('Publisher row alignment is unverified: readable encoded frames do not '
+                    'match the LeRobot 0.0001 s tolerance or a complete count-owned nearest-tick clock')
+            indices = first + np.arange(query['count'])
+            quantization = {'time_base_s': tick, 'native_tolerance_s': 1e-4,
+                'max_offset_s': float(np.max(np.abs(clock[indices] - targets))),
+                'basis': 'publisher counts and the complete encoded nearest-tick sequence, not relaxed VFR tolerance'}
+        if np.any(np.diff(indices) <= 0):
+            raise PackedOwnershipError('Publisher queries do not identify distinct encoded pictures')
         pts = facts['pts'][indices]
-        episode_times = clock[indices] - query['origin_s']
+        origin = Fraction(first) / Fraction(fps).limit_denominator(1_000_000)
+        episode_times = np.asarray([float(int(p) * facts['time_base'] - origin) for p in pts])
     else:
         lo, hi = packed_window_indices(facts, base, stop, fps=fps)
-        pts = facts["pts"][lo:hi]
+        pts = facts['pts'][lo:hi]
     if not len(pts):
         raise ValueError("no video packet covers the owned episode window")
-    return {**{key: value for key, value in facts.items() if key != '_packed_windows'}, "pts": pts,
-            **({'episode_times': episode_times, 'publisher_query': True} if episode_times is not None else {})}
+    return {**{key: value for key, value in facts.items() if key != '_packed_windows'}, 'pts': pts,
+            **({'episode_times': episode_times, 'publisher_query': True} if episode_times is not None else {}),
+            **({'clock_quantization': quantization} if quantization else {})}
+
+
+def packed_video_window(path: Path, base: float, stop: float, *, fps: float | None = None, query=None) -> dict:
+    """Exact encoded PTS selected by the publisher query contract or a generic half-open window."""
+    stat = path.stat()
+    facts = _packed_video_probe(str(path.resolve()), (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino))
+    return packed_source_window(facts, base, stop, fps=fps, query=query)
+
+
+def packed_quantization_note(ctx, camera, facts):
+    note = facts.get('clock_quantization')
+    if note and ctx is not None:
+        ctx.setdefault('source', {}).setdefault('packed_clock_quantization', {})[camera] = note
+        add_issue(ctx, 'packed_clock_quantized', f'{camera}: exact source PTS use a coarse container clock. '
+                  'Publisher count ownership and the complete nearest-tick sequence establish frame rows; '
+                  'native LeRobot timestamp tolerance alone does not. Original encoded times are retained.', camera=camera)
 
 
 def packed_grid_step(facts: dict, rate: float | None):
@@ -6192,13 +6236,14 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         if not len(facts["pts"]):
             raise ValueError("no video packet covers the owned episode window")
         paths[key], prs[key], bases[key] = Path(path), facts, float(base)
+        packed_quantization_note(extra, key, facts)
         # LeRobot associates video and table rows by episode frame index. Encoded PTS are retained separately.
         clocks[key] = facts.get("episode_times", np.arange(len(facts["pts"]), dtype=np.float64) / fps)
     for key in video_keys:
         try:
             video_facts(key)
         except Exception as error:
-            broken[key] = plain_error(error)
+            broken[key] = error if isinstance(error, PackedOwnershipError) else plain_error(error)
     note_broken_cameras(extra, broken, bool(paths))
     vmap, unused = pick_cameras(list(paths), rig, list(r["features"]))
     descs = colour_depth_views(r, row, vmap)
@@ -9223,7 +9268,7 @@ def _title_of(x):
     return m.group(1) if m else (x.strip() if isinstance(x, str) else x)
 
 
-def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | None, dict]:
+def mcap_task_texts(texts: dict, counts: dict, t0: int | None, end_s: float | None = None) -> tuple[str | None, dict]:
     """(instruction, uploader notes) from an MCAP's text topics, each a list of its messages in time order as
     (log time ns, text), as add_text keeps them. The instruction is the one message of a topic named for the task
     (/task, /instruction) before any sub-topic (/task/subtask, /task/health); MicroAGI's /task titles the fragment
@@ -9257,7 +9302,12 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None) -> tuple[str | No
         # a task topic whose text changes is given whole, each text with the time it was sent, and no one of them is
         # chosen: MicroAGI sends a placeholder ("The agent is idle") at the start of some fragments, the title after
         # it, and a new title when the work changes
-        return "; ".join(f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in texts[it]), notes
+        sequence = texts[it]
+        if end_s is not None:
+            before = [row for row in sequence if row[0] <= base]
+            sequence = before[-1:] + [row for row in sequence if base < row[0] < base + end_s * 1e9]
+        return ("; ".join(f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in sequence)
+                or None), notes
     instr = texts[it][0][1]
     # a task message in protobuf text form (MicroAGI's /task: title, success, tools, confidence) gives its title as
     # the instruction; the rest of the record stays with the uploader's notes as claims to check
@@ -9276,10 +9326,12 @@ def mcap_step_subtasks(texts: dict, t0: int | None, end_s: float | None) -> tupl
     if t is None:
         return None, []
     base = t0 if t0 is not None else texts[t][0][0]
-    starts = [max(0.0, (ts - base) / 1e9) for ts, _ in texts[t]]
+    starts = [(ts - base) / 1e9 for ts, _ in texts[t]]
     ends = starts[1:] + [max(starts[-1], end_s if end_s is not None else starts[-1])]
+    intervals = [(max(0., a), min(end_s, b) if end_s is not None else b, x)
+                 for a, b, (_, x) in zip(starts, ends, texts[t]) if b > 0 and (end_s is None or a < end_s)]
     return t, [{"t0": round(a, 3), "t1": round(b, 3), "label": _title_of(x)}
-               for a, b, (_, x) in zip(starts, ends, texts[t])]
+               for a, b, x in intervals if b >= a]
 
 
 def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
@@ -9287,6 +9339,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     they are assigned as assign_views does (a head camera gets one). A text or annotation channel becomes the task text or the
     uploader's notes. Channels of arm joints become the recorded state on a teleoperated rig (joint_state)."""
     from mcap.reader import make_reader
+    from mcap.exceptions import McapError
+    from google.protobuf.message import DecodeError
     from prepare.mcap_registration import CAMERA_INFO, Registration
     with open(item["file"], "rb") as fh:
         try:
@@ -9360,7 +9414,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     n_text: dict[str, int] = {}
     text_clock_kinds, text_records = {}, {}
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
-    schema_failures = {}
+    schema_failures, message_failures = {}, {}
+    arrival_start, arrival_stop = None, None
+    camera_log_ns = {}
     camera_damage: list = []
     capture_ns: dict[str, list[int]] = {}
     registration, depth_shapes = Registration(), {}
@@ -9370,6 +9426,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         try:
             msgs = mcap_messages(fh, item["file"], want, camera_damage)
             for schema, ch, msg in msgs:
+                arrival_start = int(msg.log_time) if arrival_start is None else min(arrival_start, int(msg.log_time))
+                arrival_stop = int(msg.log_time) if arrival_stop is None else max(arrival_stop, int(msg.log_time))
                 if ch.topic in texts and len(texts[ch.topic]) > TEXT_MSGS_MAX and not _is_step(ch.topic):
                     n_text[ch.topic] += 1
                     continue
@@ -9398,6 +9456,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 except McapSchemaError as error:
                     schema_failures[ch.topic] = str(error)
                     continue
+                except (json.JSONDecodeError, UnicodeDecodeError, DecodeError) as error:
+                    message_failures[ch.topic] = message_failures.get(ch.topic, 0) + 1
+                    continue
                 capture_stamp, stamp_error = mcap_capture_stamp(dec, schema=schema, message_encoding=ch.message_encoding)
                 stamp = capture_stamp if capture_stamp is not None else int(msg.log_time)
                 if ch.topic in view_of_topic or ch.topic in depth_of:
@@ -9420,6 +9481,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         dw.add((stamp - t0) / 1e9, got[0], got[1])
                         if len(dw.pts) > before:
                             capture_ns.setdefault(ch.topic, []).append(stamp)
+                            camera_log_ns.setdefault(ch.topic, []).append(int(msg.log_time))
                     if ch.topic not in unshown_of and ch.topic not in view_of_topic:
                         continue
                 if ch.topic in view_of_topic or ch.topic in unshown_of:
@@ -9442,6 +9504,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         w.add((stamp - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
                     if len(w.pts) > before and ch.topic not in depth_of:
                         capture_ns.setdefault(ch.topic, []).append(stamp)
+                        camera_log_ns.setdefault(ch.topic, []).append(int(msg.log_time))
                 else:
                     d = _field(dec, "data")
                     value = d if isinstance(d, str) else (dec if isinstance(dec, dict) else str(dec))
@@ -9449,7 +9512,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     text_clock_kinds.setdefault(ch.topic, set()).add("capture" if capture_stamp is not None else "arrival")
                     text_records.setdefault(ch.topic, []).append({"log_ns": int(msg.log_time),
                         "publish_ns": int(msg.publish_time), "capture_ns": capture_stamp, "text": value})
-        except Exception:
+        except (McapError, OSError, EOFError):
             if not writers:
                 raise
             # a damaged tail (recording cut off): keep every frame read before it
@@ -9528,6 +9591,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     depth = associated
     extra = {"task_label": [item["name"]], "source": {"format": "mcap (cameras and text channels)", "file": item["name"],
                                                       "unused_cameras": unused}}
+    for topic, count in sorted(message_failures.items()):
+        add_issue(extra, 'mcap_message_unreadable', f'{count} message payloads on {topic} could not be decoded; '
+                  'later messages and neighboring channels were retained.', signal=topic)
     for topic in sorted(registration.unreadable):
         add_issue(extra, 'camera_calibration_unreadable',
                   'Recorded CameraInfo could not be decoded; image frames were retained and its pixel registration '
@@ -9600,9 +9666,26 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     interval_ns = int(np.median(np.diff(anchor_stamps))) if len(anchor_stamps) > 1 else 0
     end_ns = int(anchor_stamps[-1]) + max(0, interval_ns)
     placed_texts, unplaced_texts = {}, {}
+    anchor_topic = files[me.order_views(files)[0]][0]
+    offsets = [int(capture) - int(log) for capture, log in zip(anchor_stamps, camera_log_ns.get(anchor_topic, []))]
+    recording_span = max(0, (arrival_stop or 0) - (arrival_start or 0))
+    extra.setdefault('recorded_metadata', {})['text_channels'] = text_records
+    extra['source']['text_clock_alignment'] = {
+        'basis': {'arrival': 'common MCAP arrival stamps',
+                  'capture': 'publisher capture stamps consistent with the camera capture-to-arrival envelope '
+                             'and delivery causality'}.get(camera_clock, 'unverified timestamp domain'),
+        'physical_synchronization_verified': False,
+        'limitation': 'Without clock IDs, an independent negative capture-clock bias can be observationally identical '
+                      'to genuine delivery delay. These records do not prove physical synchronization.'}
     for topic, sequence in texts.items():
-        compatible = (camera_clock is not None and text_clock_kinds.get(topic) == {camera_clock}
-                      and all(anchor_origin_ns <= stamp <= end_ns for stamp, _ in sequence))
+        same_kind = camera_clock is not None and text_clock_kinds.get(topic) == {camera_clock}
+        # MCAP arrival stamps share the recording clock even outside camera coverage. Capture stamps require
+        # a compatible capture-to-arrival origin, not membership of the camera's visible interval.
+        # Delivery may lag capture; a text clock ahead of the camera/arrival origin has no causal support.
+        compatible = same_kind and (camera_clock == 'arrival' or bool(offsets) and all(
+            record['capture_ns'] is not None and min(offsets) - recording_span <=
+            int(record['capture_ns']) - record['log_ns'] <= max(offsets)
+            for record in text_records.get(topic, [])))
         if compatible:
             placed_texts[topic] = sorted(sequence, key=lambda row: row[0])
         else:
@@ -9612,7 +9695,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             # A constant task has no timed claim. Keep its instruction without assigning its source clock to footage.
             if len(sequence) == 1:
                 placed_texts[topic] = sequence
-    instr, notes = mcap_task_texts(placed_texts, n_text, anchor_origin_ns)
+    instr, notes = mcap_task_texts(placed_texts, n_text, anchor_origin_ns, (end_ns - anchor_origin_ns) / 1e9)
     if unplaced_texts:
         extra.setdefault('recorded_metadata', {})['unaligned_text_channels'] = unplaced_texts
         for topic, records in unplaced_texts.items():

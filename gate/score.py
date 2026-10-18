@@ -96,18 +96,16 @@ FACTS = {"outcome", "not_outcome", "align", "issue", "sev", "mistake", "named", 
 
 def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
     """(the label meets every fact of the case, why not)."""
-    from board.label_projection import project
+    from board.label_projection import effective_outcome, project
     labels, _ = project(labels)
     unknown = set(case) - FACTS
     if unknown:
         raise ValueError(f"gate case states facts the scorer does not judge: {sorted(unknown)}")
     ok, why = [], []
     comp = labels.get("completion") or {}
-    outcome = comp.get("task_completed")
-    if outcome == 'partial':
-        outcome = 'failure'
+    outcome = effective_outcome(comp.get("task_completed"))
     if labels.get("tasks") and not outcome:
-        outcome = "tasks:" + ",".join(sorted({str(t.get("outcome")) for t in labels["tasks"]}))
+        outcome = "tasks:" + ",".join(sorted({str(effective_outcome(t.get("outcome"))) for t in labels["tasks"]}))
     if "outcome" in case:
         ok.append(outcome in case["outcome"])
         ok[-1] or why.append(f"outcome {outcome}")

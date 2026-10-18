@@ -539,7 +539,7 @@ def _carry_part_billing(result: dict, parts: list) -> None:
     result['final_cost_history'], result['auxiliary_cost_history'] = final, auxiliary
     route = result['config']['resolution_route']
     route.pop('previously_billed', None)
-    route['previously_billed_usd'] = sum(float(item.get('cost_usd') or 0) if item.get('previously_billed')
+    route['previously_billed_usd'] = math.fsum(float(item.get('cost_usd') or 0) if item.get('previously_billed')
         else float(item.get('previously_billed_usd') or 0) for item in routes)
     if any(item.get('cost_is_conservative_estimate') for item in routes):
         route['cost_is_conservative_estimate'] = True
@@ -618,7 +618,8 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
                 u = r.get('usage') or {}
                 for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens',
                             'cache_write_tokens', 'latency_s', 'est_cost_usd'):
-                    result['usage'][key] = round(result['usage'][key] + float(u.get(key) or 0), 4)
+                    total = result['usage'][key] + float(u.get(key) or 0)
+                    result['usage'][key] = total if key == 'est_cost_usd' else round(total, 4)
                 part_record = result['config']['pieces'][int(pc['piece']['index']) - 1]
                 part_record.update(
                     episode_dir=r.get('episode_dir'), example_dir=r.get('example_dir'),
@@ -632,8 +633,8 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
             routes = [((r or {}).get('config') or {}).get('resolution_route') or {}
                       for _, r in sorted(got + failed, key=lambda item: item[0]['piece']['index'])]
             result['config']['resolution_route']['parts'] = routes
-            result['config']['resolution_route']['cost_usd'] = round(
-                sum(float(route.get('cost_usd') or 0) for route in routes), 6)
+            result['config']['resolution_route']['cost_usd'] = math.fsum(
+                float(route.get('cost_usd') or 0) for route in routes)
             result['decode_failed'] += [x for _, r in failed for x in (r or {}).get('decode_failed') or []]
             _carry_part_billing(result, got + failed)
             write_atomic(out / f"{ep}.json", result, indent=None)
@@ -655,7 +656,9 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
     raw = (first.get("labels") or {}).get("_raw") if isinstance(first.get("labels"), dict) else None
     raw = raw if raw is not None else first.get("content_tail") or ""
     whys = "; ".join(f"part {g['part']}: {g['why']}" for g in missing)
-    usage = {key: round(sum(float(((r or {}).get('usage') or {}).get(key) or 0) for _, r in failed), 4)
+    usage = {key: (math.fsum(float(((r or {}).get('usage') or {}).get(key) or 0) for _, r in failed)
+                   if key == 'est_cost_usd' else
+                   round(sum(float(((r or {}).get('usage') or {}).get(key) or 0) for _, r in failed), 4))
              for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cached_tokens',
                          'cache_write_tokens', 'latency_s', 'est_cost_usd')}
     count = len(missing)
@@ -669,7 +672,7 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
     cfg = dict(first.get('config') or {})
     routes = [((r or {}).get('config') or {}).get('resolution_route') or {} for _, r in failed]
     cfg['resolution_route'] = {'parts': routes,
-                               'cost_usd': round(sum(float(route.get('cost_usd') or 0) for route in routes), 6)}
+                               'cost_usd': math.fsum(float(route.get('cost_usd') or 0) for route in routes)}
     cfg['pieces'] = [{**pc.get('piece', {}), 'episode_dir': (r or {}).get('episode_dir'),
                       'example_dir': (r or {}).get('example_dir'),
                       **_part_dispatch(r),
@@ -1163,7 +1166,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         dropped += [{**item, 'part': i} for item in omitted]
         u = r.get("usage") or {}
         for k in usage:
-            usage[k] = round(usage[k] + float(u.get(k) or 0), 4)
+            total = usage[k] + float(u.get(k) or 0)
+            usage[k] = total if k == 'est_cost_usd' else round(total, 4)
         cfg = r.get("config") or {}
         still += _shift(r.get("arm_still_spans") or [], t0)
         part_info.append({"part": i, "t0_s": t0, "t1_s": t1, "episode_dir": r.get("episode_dir"),
@@ -1203,7 +1207,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     # each part routed its own cell width; the recording's route records every part's, and its cost is theirs summed
     routes = [(r.get("config") or {}).get("resolution_route") or {} for _, r in parts]
     cfg["resolution_route"] = {**(routes[0] or {}), "parts": routes,
-                               "cost_usd": round(sum(float(x.get("cost_usd") or 0) for x in routes), 6)}
+                               "cost_usd": math.fsum(float(x.get("cost_usd") or 0) for x in routes)}
     # each part's prompt had its own blocks (a contact or depth only some parts hold); the recording's record names
     # every block, output field and implied check any part had, in the order they first appear
     for k in ("prompt_blocks", "schema_fields", "checks_implied"):

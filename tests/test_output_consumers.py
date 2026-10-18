@@ -39,7 +39,7 @@ def test_partial_replies_project_invalid_nested_values_without_semantics(value):
     before = copy.deepcopy(result)
     d = to_board.convert(result, 'demo')
     assert d['completion']['task_completed'] is None
-    assert d['event_labels'][0]['arm'] == (value if isinstance(value, str) else '')
+    assert d['event_labels'][0]['arm'] == ''
     assert d['event_labels'][0]['object'] == (value if isinstance(value, str) else '')
     assert d['event_labels'][0]['contribution'] == ''
     assert d['event_labels'][0]['progress'] is None

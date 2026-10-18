@@ -351,8 +351,10 @@ def test_metrics_by_hand(tmp_path):
     assert (w["parse_share"], w["cost"], w["events_per_min"], w["agree_outcome"]) == (1.0, 0.05, 9.0, 0.0)
     assert pair["reference"]["events_per_min"] == 12.0 and pair["reference_n"] == 1       # the board's own values
     by = {e["episode_id"]: e["by"] for e in res["episodes"]}
-    assert by["episode_c"] == {"board": {"status": "parsed", "outcome": "success", "segments": 2, "cost": 0.33},
-                               "m2": {"status": "cut_off", "cost": 0.09}, "m2_ex": {"status": "no_response"}}
+    assert by["episode_c"] == {"board": {"status": "parsed", "outcome": "success", "segments": 2,
+                                         "cost": pytest.approx(0.33)},
+                               "m2": {"status": "cut_off", "cost": pytest.approx(0.09)},
+                               "m2_ex": {"status": "no_response"}}
     assert "_rows" not in metrics.public(res) and "_rows" in res
 
 

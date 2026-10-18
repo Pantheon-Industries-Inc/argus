@@ -103,6 +103,11 @@ def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> None
     env.setdefault("MALLOC_ARENA_MAX", "2")
     with open(run / "log.txt", mode) as log:
         rc = subprocess.run(cmd, cwd=run, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+    if rc != 0:
+        # An orphan may own the output lock after this wrapper's child refused it.
+        # Do not replace its running metadata with the refused child's exit status.
+        with execution_lock(run / 'out'):
+            pass
     tail = (run / "log.txt").read_text().strip().splitlines()
     last = next((l for l in reversed(tail) if l.startswith("done=")), "")
     m = dict(re.findall(r"(\w+)=\$?([\d.]+)", last))
@@ -120,7 +125,13 @@ def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> None
 
 
 def resume(a, slice_dir: Path) -> None:
-    with execution_lock(a.resume.resolve()):
+    folder = a.resume.resolve()
+    if not (folder / 'run.json').is_file():
+        raise SystemExit(f'--resume: no run.json in {folder}')
+    with execution_lock(folder):
+        # A killed wrapper can leave its harness alive and spending.
+        with execution_lock(folder / 'out'):
+            pass
         return _resume(a, slice_dir)
 
 

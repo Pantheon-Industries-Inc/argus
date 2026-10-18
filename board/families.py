@@ -19,10 +19,11 @@ What counts (Families.counts, the one statement of the rule):
   - a data issue at medium or high severity;
   - an operator mistake that changes the outcome (its tag's kind in tag_names.json is "outcome") at medium or high;
   - any operator mistake at high.
-Everything else is minor: kept and shown on the episode, left out of the counts and the filter.
+Rated issues below these thresholds are minor. Issues without a valid severity are unrated.
+Both remain visible on the episode and are excluded from severity totals.
 
     fam = Families()
-    c = fam.classify(episode)      # {"counted": {slug: [issues]}, "minor": {...}, "not_counted": {...}}
+    c = fam.classify(episode)      # {"counted": {slug: [issues]}, "minor": {...}, "unrated": {...}, "not_counted": {...}}
 """
 from __future__ import annotations
 
@@ -38,22 +39,21 @@ _NEGATION = re.compile(r"\b(?:not|never|neither|nor|without|no)\b|\b\w+n't\b", r
 
 
 def _supported_text(pattern, text):
-    """Withhold lexical refinement from negatively qualified clauses.
+    """Accept an observed predicate unless its preceding clause negates it.
 
-    This does not infer negation scope. The source category remains available
-    when prose cannot safely establish a more specific family. A phrase such as
-    "no signal" can itself be a positive description of the recorded defect.
+    Later qualifications cannot negate an earlier observation. Negation before
+    a coordinated predicate remains conservative; it is not general language inference.
     """
-    for clause in re.split(r'[.!?;\n]+', text):
+    for clause in re.split(r'[.!?;,\n]+|\b(?:but|however|whereas)\b', text, flags=re.I):
         for match in pattern.finditer(clause):
-            outside = clause[:match.start()] + ' ' + clause[match.end():]
-            if not _NEGATION.search(outside):
+            if not _NEGATION.search(clause[:match.start()]):
                 return True
     return False
 
 
-def _sev(i: dict) -> str:
-    return str(i.get("severity") or "low").lower()
+def _sev(i: dict) -> str | None:
+    value = str(i.get('severity') or '').strip().lower()
+    return value if value in ('low', 'medium', 'high') else None
 
 
 def union_seconds(spans) -> float:
@@ -114,6 +114,10 @@ class Families:
         f = next((f for f in self.defs if f["slug"] == slug), None)
         return f["list"] if f else "mistake" if str(slug).startswith("m:") else "data"
 
+    @staticmethod
+    def rated(i: dict) -> bool:
+        return _sev(i) is not None
+
     def counts(self, key: str, i: dict) -> bool:
         """Whether an issue of this list ("data_issues" or "operator_mistakes") counts (the module docstring)."""
         s = _sev(i)
@@ -125,7 +129,7 @@ class Families:
         lst = LISTS[key]
         cat = i.get("category") or ""
         plain = self.tag_name(key, cat)
-        text = f"{i.get('issue') or ''} {i.get('evidence') or ''}"
+        texts = [str(i.get(key) or '') for key in ('issue', 'evidence')]
         eligible = [f for f in self.defs if f['list'] == lst
                     and (not f.get('datasets') or dataset in f['datasets'])]
         # Structured categories outrank incidental words anywhere in the prose.
@@ -135,7 +139,7 @@ class Families:
         for f in eligible:
             # a text rule claims an issue by its words; with "among", only issues whose tag reads as one of those names
             if (f["slug"] in self._re and (not f.get("among") or plain in f["among"])
-                    and _supported_text(self._re[f["slug"]], text)):
+                    and any(_supported_text(self._re[f["slug"]], text) for text in texts)):
                 return f["slug"]
         return ("d:" if lst == "data" else "m:") + plain
 
@@ -143,13 +147,14 @@ class Families:
         """The episode's families: counted ones with the issues that count under each (empty when a check or the
         outcome raised it), minor ones that nothing counted, and not_counted, the families of reader issues that are
         no fault in the recording (a list outside COUNTED_LISTS), shown on the episode and never counted."""
-        counted, minor = collections.defaultdict(list), collections.defaultdict(list)
+        counted, minor, unrated = (collections.defaultdict(list) for _ in range(3))
         not_counted = {}
         ds = d.get("dataset")
         for key in LISTS:
             for i in d.get(key) or []:
                 if i and i.get("issue"):
-                    (counted if self.counts(key, i) else minor)[self.family_of(key, i, ds)].append(i)
+                    group = counted if self.counts(key, i) else minor if self.rated(i) else unrated
+                    group[self.family_of(key, i, ds)].append(i)
         # the episode's outcome, and each part's of a long recording labelled in parts (label/pieces.py puts those
         # under tasks), so a part reached and then undone counts as a short episode's does
         outcomes = {str((d.get("completion") or {}).get("task_completed") or "").lower()}
@@ -166,6 +171,7 @@ class Families:
                 fam = self.reader_family(str(x["kind"]))
                 (counted if self.list_of(fam) in COUNTED_LISTS else not_counted).setdefault(fam, [])
         return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted},
+                "unrated": dict(unrated),
                 "not_counted": {k: v for k, v in not_counted.items() if k not in counted}}
 
     def hands_hidden_seconds(self, d: dict) -> float | None:

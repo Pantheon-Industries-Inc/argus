@@ -1386,7 +1386,7 @@ h3.section .count {
 .di-row .di-sev { font-family: var(--mono); font-size: 9.5px; font-weight: 700;
   padding: 2px 6px; border-radius: var(--r-pill); text-align: center; }
 .di-row.high .di-sev { color: var(--danger); background: rgba(179,38,60,0.14); border: 1px solid rgba(179,38,60,0.35); }
-.di-row.low .di-sev { color: var(--fg-3); background: rgba(28,28,26,0.050); border: 1px solid var(--border); }
+.di-row.low .di-sev, .di-row.unknown .di-sev { color: var(--fg-3); background: rgba(28,28,26,0.050); border: 1px solid var(--border); }
 .di-issue { font-size: 13px; color: var(--fg); font-weight: 600; line-height: 1.4; }
 .di-ev { font-size: 11.5px; color: var(--fg-3); font-style: italic; line-height: 1.4; margin-top: 3px; }
 .di-tags { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
@@ -2605,9 +2605,18 @@ async function vdDownload(t0, t1) {
     + (t1 != null ? `&t1=${t1}` : '');
   status.textContent = 'Making the video. A long episode takes a few minutes.';
   try {
-    const r = await fetch(q + '&prepare=1', {cache: 'no-store'});
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    let r, j;
+    const deadline = Date.now() + 300000;
+    for (;;) {
+      r = await fetch(q + '&prepare=1', {cache: 'no-store'});
+      j = await r.json().catch(() => ({}));
+      if (r.ok) break;
+      if (r.status !== 503 || j.retryable === false || Date.now() >= deadline)
+        throw new Error(j.error || ('HTTP ' + r.status));
+      const seconds = Number(r.headers.get('Retry-After')) || 1;
+      const delay = Math.min(5000, Math.max(250, seconds * 1000), deadline - Date.now());
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+    }
     if (typeof j.ticket !== 'string' || !/^[a-f0-9]{32}$/.test(j.ticket)) throw new Error('The prepared video is unavailable.');
     status.textContent = `Downloading ${j.name} (${fmtBytes(j.bytes)}).`;
     const a = document.createElement('a');
@@ -3586,6 +3595,8 @@ function renderRail(ds, keepFile, fromSearch) {
     const minorHtml = nMinor ? `<span class="issue-tag minor" title="${ep.n_minor_issues
       || 0} minor data issues and ${ep.n_minor_mistakes || 0} minor operator mistakes: shown on the episode, not `
       + `counted">${nMinor} minor</span>` : '';
+    const nUnrated = (ep.n_unrated_issues || 0) + (ep.n_unrated_mistakes || 0);
+    const unratedHtml = nUnrated ? `<span class="issue-tag minor" title="Severity unavailable. Excluded from severity totals.">${nUnrated} unrated</span>` : '';
     const noteHtml = (n && ep.top_issue)
       ? `<div class="issue-note ${sev || 'low'}" title="${esc(ep.top_issue)}">${esc(ep.top_issue)}</div>` : '';
     card.innerHTML = `
@@ -3596,6 +3607,7 @@ function renderRail(ds, keepFile, fromSearch) {
         ${issueHtml}
         ${mistakeHtml}
         ${minorHtml}
+        ${unratedHtml}
       </div>
       ${noteHtml}`;
     card.addEventListener('click', () => selectEp(ep.file));
@@ -6183,15 +6195,17 @@ function renderEp(d, opts) {
       : 'checked on the frames'}</span>`;
   const issueRows = (list, key) => byCount(list).map(x => {
       const t = (x.t_s != null && !isNaN(parseFloat(x.t_s))) ? x.t_s : null;
-      const minor = !countsIssue(x);
+      const severity = String(x.severity || '').trim().toLowerCase();
+      const rated = ['low', 'medium', 'high'].includes(severity);
+      const minor = rated && !countsIssue(x);
       return `
-      <div class="di-row ${(x.severity || '').toLowerCase() === 'high' ? 'high' : 'low'}${minor ? ' minor'
+      <div class="di-row ${!rated ? 'unknown' : severity === 'high' ? 'high' : 'low'}${minor ? ' minor'
         : ''}"${t != null ? ` data-t="${esc(t)}"` : ''}>
-        <span class="di-sev">${esc((x.severity || 'flag'))}</span>
+        <span class="di-sev">${esc(rated ? severity : 'unknown')}</span>
         <div class="di-body">
           <div class="di-issue">${esc(x.issue)}</div>
-          <div class="di-tags">${minor ? '<span class="di-minor" title="low severity, left out of the totals">minor</span>'
-            : ''}${x.family || x.category ? `<span class="di-cat" title="${esc(x.category || '')}">${esc(x.family
+          <div class="di-tags">${!rated ? '<span class="di-minor" title="Severity unavailable. Excluded from severity totals.">unrated</span>'
+            : minor ? '<span class="di-minor" title="Below the counting threshold">minor</span>' : ''}${x.family || x.category ? `<span class="di-cat" title="${esc(x.category || '')}">${esc(x.family
             ? famName(x.family) : tagName(x.category, key))}</span>` : ''}${t != null
             ? `<span class="di-t">@ ${esc(fmtT(t))}</span>` : ''}${verifiedChip(x)}${x.derived_from
             ? `<span class="di-cat" title="${esc(x.evidence || '')}">from the model's notes</span>` : ''}</div>
@@ -6260,10 +6274,10 @@ function renderEp(d, opts) {
   const opMistakes = (d.operator_mistakes || []).filter(x => x && x.issue);
   // three kinds of problem, each in its own card with its own colour, so where one list ends and the
   // next begins is never in doubt
-  const panel = (kind, title, sub, n, body, minor) => `
+  const panel = (kind, title, sub, n, body, minor, unrated = 0) => `
     <section class="ip ip-${kind}">
       <div class="ip-head"><h3>${title}</h3><span class="ip-counts">${minor ? `<span class="ip-minor">+ ${minor} minor`
-        + `</span>` : ''}<span class="ip-n">${n}</span></span></div>
+        + `</span>` : ''}${unrated ? `<span class="ip-minor">+ ${unrated} unrated</span>` : ''}<span class="ip-n">${n}</span></span></div>
       <p class="ip-sub">${sub}</p>
       <div class="ip-body">${body}</div>
     </section>`;
@@ -6274,13 +6288,15 @@ function renderEp(d, opts) {
     + 'every episode.', nChecks, `${riHtml}${tbHtml}${spHtml}${rjHtml}${gcHtml}${cqHtml}`) : '';
   const nData = dataIssues.filter(countsIssue).length;
   const nOp = opMistakes.filter(countsIssue).length;
+  const unrated = list => list.filter(x => !['low', 'medium', 'high'].includes(String(x.severity || '').trim().toLowerCase())).length;
+  const uData = unrated(dataIssues), uOp = unrated(opMistakes);
   const diHtml = dataIssues.length ? panel('data', 'Data issues', 'Faults in the recording, the scene or the label, '
     + 'reported by the model. Low severity is shown as minor and left out of the totals.', nData,
-    `<div class="info-block di-block">${issueRows(dataIssues, 'data_issues')}</div>`, dataIssues.length - nData) : '';
+    `<div class="info-block di-block">${issueRows(dataIssues, 'data_issues')}</div>`, dataIssues.length - nData - uData, uData) : '';
   const opHtml = opMistakes.length ? panel('mistake', 'Operator mistakes', 'The recording is faithful; the '
     + 'demonstration went wrong in a way a model could copy. Retries and wasted effort below high severity are shown '
     + 'as minor and left out of the totals.', nOp, `<div class="info-block di-block op">${issueRows(opMistakes,
-    'operator_mistakes')}</div>`, opMistakes.length - nOp) : '';
+    'operator_mistakes')}</div>`, opMistakes.length - nOp - uOp, uOp) : '';
   const problemsHtml = (checksPanel || diHtml || opHtml)
     ? `<h3 class="section">Problems in this episode</h3><div class="ip-stack">${checksPanel}${diHtml}${opHtml}</div>`
     : `<h3 class="section">Problems in this episode</h3><div class="ip-none">${cmpInfo ? `${esc(who)} reported no data `

@@ -99,7 +99,7 @@ def typed(result: dict) -> tuple[dict, list[dict]]:
     (label/harness.py typed_labels, which a reply parsed before it was written never went through), and what was left
     out for breaking the format ({"field", "row"?, "why"} per field or row). The run's own output is unchanged."""
     from board.label_projection import project
-    return project(result.get("labels") if isinstance(result.get("labels"), dict) else {})
+    return project(result.get("labels") if isinstance(result.get("labels"), dict) else {}, result.get("config"))
 
 
 # the fields of the output format whose plain words are plural (the key events are, the timeline is), and the fields
@@ -214,6 +214,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         completion["task_completed"], completion["failure_kind"] = "failure", "partial"
     # head-camera clips have no single completion: they carry a `tasks` list of activities, each with its
     # own outcome and goal frame, which the board shows as a Tasks panel
+    from board.label_projection import effective_outcome
     tasks = []
     for t in labels.get("tasks") or []:
         oc = str(t.get("outcome") or "").lower()
@@ -222,7 +223,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "task": t.get("task") or "",
             "objects": t.get("objects") or [],
             # a task partly done is a failure of that task, of the kind partial (as the episode's outcome above)
-            "outcome": "failure" if oc == "partial" else oc,
+            "outcome": effective_outcome(oc),
             **({"failure_kind": "partial"} if oc == "partial" else {}),
             "success_predicate": t.get("success_predicate") or "",
             "completed_at_s": t.get("completed_at_s"),

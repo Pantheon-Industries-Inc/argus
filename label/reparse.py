@@ -75,6 +75,14 @@ def rebind(record: dict) -> None:
 
 
 def reparse(run: Path) -> dict:
+    run = Path(run)
+    if not (run / 'run.json').is_file() or not (run / 'out').is_dir():
+        raise SystemExit(f'{run}: reparse needs an existing run.json and out folder')
+    with harness.execution_lock(run), harness.execution_lock(run / 'out'):
+        return _reparse(run)
+
+
+def _reparse(run: Path) -> dict:
     out, done, still = run / "out", [], []
     code = commit()[0]
     for p in sorted(out.glob("episode_*.json")):

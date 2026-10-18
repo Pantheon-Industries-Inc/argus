@@ -142,7 +142,7 @@ def prepare_clip(shard: str, member: str, raw: Path, out_root: Path) -> dict:
            "cameras": {"exo": {"name": "head", "width": w, "height": h, "desc": CAMERA_DESC}},
            "source": {"shard": shard, "member": member, "clip": clip_meta},
            "collection_note": COLLECTION_NOTE}
-    step = Fraction(1) / Fraction(fps).limit_denominator(1000) / tb
+    step = Fraction(1) / Fraction(fps).limit_denominator(1_000_000) / tb
     grid = step.denominator == 1 and bool(pts) and pts[0] == 0 and all(p == k * int(step) for k, p in enumerate(pts))
     if not grid:
         t = np.asarray([float(p * tb) for p in pts]) - float(pts[0] * tb)

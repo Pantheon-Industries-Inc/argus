@@ -20,12 +20,20 @@ def test_public_credentials_are_withheld_by_live_and_static_exports(public_sourc
     source = public_sources['qa'] / 'ep.json'
     label = json.loads(source.read_text())
     names = ['hf_token', 'auth_token', 'aws_session_token', 'github_token', 'bearer_token',
-             'openrouter_key', 'api_token', 'openai_key', 'anthropic_key']
+             'openrouter_key', 'api_token', 'openai_key', 'anthropic_key', 'session', 'signature',
+             'sig', 'access_key', 'db_password', 'api_secret', 'stripe_secret_key', 'slack_bot_token',
+             'session_id', 'wandb_key', 'replicate_api_token', 'auth', 'passphrase', 'bearer', 'slackbottoken']
     label['publisher_metadata'] = {name: 'fixture-access-' + name for name in names}
     label['publisher_metadata'].update(token_count=17, key='/observations/force',
         citation='https://example.org/paper?version=2',
         access='https://example.org/video?key=fixture-query-access',
-        host='https://camera.example-tailnet.ts.net/video')
+        host='https://camera.example-tailnet.ts.net/video',
+        access_examples=['camera.example-tailnet.ts.net', '100.101.7.9', 'nas.x.local', 'api.x.internal',
+                         'https://oauth.example.org/callback?code=fixture-oauth-access',
+                         'https://hooks.slack.com/services/fixture-webhook-access',
+                         'Authorization: Bearer fixture-bearer-access', '100.101.7.9:8896',
+                         '127.0.0.1:9000', '192.168.1.2:80', 'example.org:443'],
+        fields={'signature': [0.1, 0.2], 'token_ids': [3, 7], 'field_key': '/observations/force'})
     source.write_text(json.dumps(label))
     request = Request('/api/episode?file=ep.json&download=1')
     from email.message import Message
@@ -43,10 +51,14 @@ def test_public_credentials_are_withheld_by_live_and_static_exports(public_sourc
                (args.out / 'credential-boundary/data/ep/ep.json').read_text()]
     for output in outputs:
         assert 'fixture-access-' not in output and 'fixture-query-access' not in output
-        assert '.ts.net' not in output
+        assert '.ts.net' not in output and '100.101.7.9' not in output
+        assert 'fixture-oauth-access' not in output and 'fixture-bearer-access' not in output
+        assert 'fixture-webhook-access' not in output and 'nas.x.local' not in output and 'api.x.internal' not in output
         metadata = json.loads(output)['publisher_metadata']
         assert metadata == {'token_count': 17, 'key': '/observations/force',
-                            'citation': 'https://example.org/paper?version=2'}
+                            'citation': 'https://example.org/paper?version=2', 'access_examples': [None] * 10 + ['example.org:443'],
+                            'fields': {'signature': [0.1, 0.2], 'token_ids': [3, 7],
+                                       'field_key': '/observations/force'}}
     assert json.loads(source.read_text()) == label
 
 
@@ -168,3 +180,104 @@ def test_model_assessments_cannot_forge_parser_row_provenance():
     shown = to_board.convert({'labels': parsed})
     assert 'fabricated' not in json.dumps(shown)
     assert any('timeline[0].contribution' in message for message in shown['_schema_violations'])
+
+
+def test_task_outcomes_survive_projection_and_use_completion_precedence():
+    labels = complete_schema_reply()
+    labels['tasks'] = [{'task': 'reach', 'outcome': outcome} for outcome in (
+        'partial', 'continues_past_cut', 'success_then_undone')]
+    labels['completion'] = {'task_completed': 'success'}
+    shown = to_board.convert({'labels': labels})
+    measured = metrics.measure(labels, None)
+    assert [task['outcome'] for task in shown['tasks']] == ['failure', 'continues_past_cut', 'success_then_undone']
+    assert measured['outcome'] == 'success'
+    assert not any('tasks' in issue for issue in measured['violations'])
+    assert judge({'outcome': ['success']}, labels)[0]
+    labels.pop('completion')
+    assert judge({'outcome': ['tasks:continues_past_cut,failure,success_then_undone']}, labels)[0]
+
+
+def test_scoped_event_outcomes_and_actor_names_agree_with_comparison():
+    labels = complete_schema_reply()
+    labels['timeline'][0]['arm'] = ' LEFT '
+    labels['key_events'] = [{'t_s': 0, 'label': 'reach', 'kind': 'phase', 'outcome': 'Partial'}]
+    shown = to_board.convert({'labels': labels})
+    measured = metrics.measure(labels, None)
+    assert shown['event_labels'][0]['arm'] == 'left'
+    assert shown['key_events'][0]['outcome'] in ('', None)
+    assert any('key_events[0].outcome' in issue for issue in shown['_schema_violations'])
+    assert measured['violations'] == shown['_schema_violations']
+    labels['timeline'][0]['arm'] = ' '
+    shown = to_board.convert({'labels': labels})
+    assert any('timeline[0].arm' in issue for issue in shown['_schema_violations'])
+    labels['timeline'][0]['arm'] = 'front camera'
+    config = {'views': ['exo'], 'cam_labels': ['front camera']}
+    assert not any('timeline[0].arm' in issue for issue in
+                   metrics.measure(labels, None, config)['violations'])
+    assert to_board.convert({'labels': labels, 'config': config})['event_labels'][0]['arm'] == 'front camera'
+
+
+def test_positive_problem_predicates_are_not_cancelled_by_later_negation():
+    families = Families()
+    cases = [
+        ('The camera is frozen and not recovered', '', 'camera-image'),
+        ('Frozen view', 'no motion for 10 s', 'camera-image'),
+        ('Camera frozen, not moved', '', 'camera-image'),
+        ("Removed from the mount and doesn't capture the task", '', 'camera-fault'),
+        ("Glare washes out the view and the cup can't be seen", '', 'low-light'),
+        ('The image is frozen. The camera is not moved or removed.', '', 'camera-image'),
+        ('This is not a privacy blur patch. Bright glare obscures the scene.', '', 'low-light'),
+    ]
+    for text, evidence, expected in cases:
+        issue = {'category': 'camera_fault', 'severity': 'high', 'issue': text, 'evidence': evidence}
+        assert families.family_of('data_issues', issue) == expected
+        assert families.classify({'data_issues': [issue]})['counted'][expected] == [issue]
+
+
+def test_unrated_issue_stays_visible_without_becoming_low_severity():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('no node')
+    raw = {'data_issues': [{'issue': 'The camera image is frozen.', 'severity': None}]}
+    shown = to_board.convert({'labels': raw})
+    item = dict(shown['data_issues'][0], counted=False)
+    assert not Families().counts('data_issues', item)
+    measured = metrics.measure(raw, None)
+    assert measured['data_issues_minor'] == 0 and measured['data_issues_unrated'] == 1
+    assert not judge({'max_issue_sev': 'high'}, raw)[0]
+    program = r"""
+const {src,piece}=require('./tests/page_functions')('./board/index.html');
+const start=src.indexOf('  const byCount =');
+const end=src.indexOf('  const sp =',start);
+const render=new Function(piece('esc')+src.match(/^const countsIssue = [^\n]+/m)[0]
+  +src.slice(start,end)+'return issueRows;')();
+console.log(render(JSON.parse(require('fs').readFileSync(0,'utf8')),'data_issues'));
+"""
+    rendered = subprocess.run([node, '-e', program], input=json.dumps([item]), text=True,
+                              capture_output=True, check=True, cwd=Path(__file__).resolve().parent.parent).stdout
+    assert 'The camera image is frozen.' in rendered
+    assert '>unknown</span>' in rendered and '>unrated</span>' in rendered
+    assert 'low severity' not in rendered and '>minor</span>' not in rendered
+
+
+@pytest.mark.parametrize('key', ['data_issues', 'operator_mistakes'])
+def test_unknown_severity_is_not_minor_in_family_or_live_and_static_rail(tmp_path, key):
+    from board import serve
+    for severity in (None, 'unsupported', ['high']):
+        labels = {key: [{'issue': 'The camera image is frozen.', 'severity': severity},
+                        {'issue': 'A small visible defect.', 'severity': 'low'}]}
+        shown = to_board.convert({'labels': labels})
+        classified = Families().classify(shown)
+        assert sum(map(len, classified['minor'].values())) == 1
+        assert sum(map(len, classified['unrated'].values())) == 1
+        shown['episode_prompt'] = 'Move the cup.'
+        (tmp_path / 'episode_x.json').write_text(json.dumps(shown))
+        row, = serve.rail_records(tmp_path)
+        suffix = 'issues' if key == 'data_issues' else 'mistakes'
+        assert row['n_minor_' + suffix] == 1
+        assert row['n_unrated_' + suffix] == 1
+        assert not row['families']
+        assert row['unrated_families']

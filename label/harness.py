@@ -314,6 +314,43 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                             pricing_quote=pricing_quote)
 
 
+def request_implementation(repository: Path) -> dict[Path, bytes]:
+    """Follow first-party imports from the paid request and binding entry point.
+
+    Include imports inside functions and package initializers, so native evidence,
+    drawing and reader projections keep their transitive guards. Unrelated board
+    publication and server modules do not shape requests and stay outside this proof.
+    """
+    import ast
+    pending, sources = ['label.harness'], {}
+    packages = {'label', 'prepare', 'checks', 'board'}
+    while pending:
+        module = pending.pop()
+        if module.split('.')[0] not in packages:
+            continue
+        path = repository.joinpath(*module.split('.')).with_suffix('.py')
+        if not path.is_file():
+            path = repository.joinpath(*module.split('.'), '__init__.py')
+        if not path.is_file() or path in sources:
+            continue
+        raw = path.read_bytes()
+        sources[path] = raw
+        names = module.split('.')
+        for size in range(1, len(names)):
+            pending.append('.'.join(names[:size]))
+        for node in ast.walk(ast.parse(raw, filename=str(path))):
+            if isinstance(node, ast.Import):
+                pending.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                base = node.module or ''
+                if node.level:
+                    parent = names if path.name == '__init__.py' else names[:-1]
+                    base = '.'.join(parent[:len(parent) - node.level + 1] + ([base] if base else []))
+                pending.append(base)
+                pending.extend(base + '.' + alias.name for alias in node.names if alias.name != '*')
+    return sources
+
+
 def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int, cell_w: int,
                    example_dir: str | None, sample_fps=None, task_mode=None, dataset_note=None) -> dict:
     """Bounded proof for source files and the settings that shape a paid annotation request."""
@@ -350,13 +387,10 @@ def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int,
             examples.append({"name": path.name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
                              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     repository = Path(__file__).parent.parent
-    # Conservatively invalidate direct-harness resume across first-party implementation
-    # changes, including future transitive imports and nested adapter code.
-    request_sources = sorted(path for package in ('label', 'prepare', 'checks', 'board')
-                             for path in (repository / package).rglob('*.py'))
+    request_sources = request_implementation(repository)
     semantics = hashlib.sha256()
-    for path in request_sources:
-        semantics.update(str(path.relative_to(repository)).encode() + b'\0' + path.read_bytes() + b'\0')
+    for path in sorted(request_sources):
+        semantics.update(str(path.relative_to(repository)).encode() + b'\0' + request_sources[path] + b'\0')
     settings = {"model": resolved["model"], "reasoning": resolved["reasoning"], "max_tokens": max_tokens, "cell_w": cell_w,
                 "detail": DETAIL, "grid_cols": GRID_COLS, "examples": examples,
                 "annotation_policy": resolved, "jaw_algorithm_sha256": jaw_algorithm,
@@ -1169,7 +1203,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
     claim_path.unlink(missing_ok=True)
     if finish == "length":
         # the output hit max_tokens, so the JSON is cut off: keep what came back beside the outputs (never as an
-        # episode_*.json, so a resumed run still counts the episode as not done), then fail
+        # episode_*.json), then fail. Paid retry requires --retry-received for this episode.
         raw_usage = resp.get("usage")
         usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
         cost, source = _verified_final_cost(usage, model)
@@ -1321,7 +1355,11 @@ def _release_memory() -> None:
 
 @contextmanager
 def execution_lock(folder: Path):
-    """One process owns execution and its ledger until all dispatched work settles."""
+    """One process owns execution until dispatched work settles, where flock is shared.
+
+    Cross-host writers require a filesystem with working shared locks. Client-local
+    NFS nolock/local_lock mounts do not provide that guarantee.
+    """
     import fcntl
     Path(folder).mkdir(parents=True, exist_ok=True)
     with (Path(folder) / '.execution.lock').open('a') as lock:
@@ -1338,7 +1376,8 @@ def run_batch(episodes: list[Path], out_dir: Path, **kwargs) -> int:
 
 
 def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurrency: int, force: bool,
-              max_spend: float = 0.0, output_path: Path | None = None, **label_kw) -> int:
+              max_spend: float = 0.0, output_path: Path | None = None,
+              retry_received: list[str] | None = None, **label_kw) -> int:
     """Resume verified outputs and reserve each call within this invocation's allowance."""
     if not math.isfinite(max_spend) or max_spend < 0:
         raise ValueError('spend allowance must be finite and nonnegative')
@@ -1347,6 +1386,12 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
     out_dir.mkdir(parents=True, exist_ok=True)
     pool = KeyPool(keys)
     dry = bool(label_kw.get("dry_run"))
+    retry_received = set(retry_received or [])
+    if force and retry_received:
+        raise ValueError('--force and --retry-received cannot be combined')
+    unknown = retry_received - {ep.name for ep in episodes}
+    if unknown:
+        raise ValueError(f'--retry-received names unknown episodes: {sorted(unknown)}')
 
     def out_for(ep: Path) -> Path:
         return Path(output_path) if output_path is not None else out_dir / f"{ep.name}.json"
@@ -1361,10 +1406,17 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                 primary = json.loads(p.read_text())
                 if annotation_complete(primary) or primary.get("dry_run"):
                     candidates = [p]
+                    if ep.name in retry_received:
+                        latest = billing_record(out_dir, p.name)
+                        if latest is not None:
+                            candidates = [latest[0]]
             except (OSError, ValueError, AttributeError):
                 pass
         existing = [q for q in candidates if q.exists() and q.stat().st_size]
         if not existing:
+            if ep.name in retry_received:
+                stale[ep.name] = 'explicit received retry needs an existing received reply'
+                return True
             return False
         records = []
         for q in existing:
@@ -1377,6 +1429,14 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                 stale[ep.name] = f"saved output {q.name} is not a JSON object"
                 return True
             records.append((q, record))
+        try:
+            never_dispatched = all(record.get('final_dispatch_outcome') == 'not dispatched'
+                and not record.get('final_cost_history') and not record.get('auxiliary_cost_history')
+                and not record.get('evidence_inspection')
+                and not ((record.get('config') or {}).get('resolution_route') or {}).get('routed')
+                and episode_cost(record) == 0 for _, record in records)
+        except (ValueError, TypeError, AttributeError):
+            never_dispatched = False
         if len(records) == 1 and records[0][0] == p and records[0][1].get('input_identity') is None:
             if not dry and not annotation_complete(records[0][1]):
                 stale[ep.name] = f'saved output {p.name} has no usable annotation or input proof; use --force to refresh'
@@ -1396,17 +1456,41 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                                      sample_fps=label_kw.get('sample_fps'), task_mode=label_kw.get('task_mode'),
                                      dataset_note=label_kw.get('dataset_note'))
         except (OSError, ValueError, RuntimeError) as error:
+            if never_dispatched:
+                saved_failures.add(ep.name)
+                unverified[ep.name] = f'input cannot be verified; no paid dispatch: {error}'
+                return True
             stale[ep.name] = f"input cannot be verified: {type(error).__name__}: {error}"
             return True
+        if never_dispatched:
+            if ep.name in retry_received:
+                saved_failures.add(ep.name)
+                unverified[ep.name] = 'received retry refused: no received paid reply exists'
+                return True
+            if any(item.get('missing') for item in current['source_proof']):
+                saved_failures.add(ep.name)
+                unverified[ep.name] = 'source input is missing; no paid dispatch'
+                return True
+            if ep.name not in retry_received:
+                return False  # No paid inputs exist to reuse; assemble a fresh request.
         for q, record in records:
             saved = record.get("input_identity")
             if saved is None:
                 unverified[ep.name] = f"saved output {q.name} predates input proof"
                 return True
-            if not same_input_identity(saved, current) or any(item.get("missing") for item in current["source_proof"]):
+            comparison = current
+            if retry_received and isinstance(saved, dict) and isinstance(saved.get('settings'), dict):
+                # A named paid retry can raise its output limit. Existing received
+                # siblings keep the limit of their own request and remain untouched.
+                comparison = {**current, 'settings': {**current['settings'],
+                    'max_tokens': saved['settings'].get('max_tokens')}}
+            if not same_input_identity(saved, comparison) or any(item.get("missing") for item in current["source_proof"]):
                 stale[ep.name] = f"saved output {q.name} has changed or missing input; use --force to refresh"
                 return True
         if any(record.get('final_dispatch_outcome') in ('claimed', 'unverified') for _, record in records):
+            if ep.name in retry_received:
+                saved_failures.add(ep.name)
+                unverified[ep.name] = 'received retry refused: the saved charge is unresolved'
             if not dry and any(record.get('parse_ok') is True and not annotation_complete(record) for _, record in records):
                 stale[ep.name] = 'saved annotation is unusable and its charge is unresolved; use --force to refresh explicitly'
             return True
@@ -1419,8 +1503,12 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                 except (ValueError, TypeError):
                     stale[ep.name] = 'saved reply billing cannot be verified; reconcile it before retrying'
                     return True
+                if ep.name in retry_received:
+                    return False
                 saved_failures.add(ep.name)
-                unverified[ep.name] = 'saved paid reply needs reparse or explicit --force; no automatic paid retry'
+                retryable_received.add(ep.name)
+                unverified[ep.name] = ('saved paid reply needs reparse or explicit '
+                                       f'--retry-received {ep.name}; no automatic paid retry')
                 return True
         if not p.exists():
             return False
@@ -1428,6 +1516,10 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
         if dry:
             return bool(record.get('dry_run'))
         complete = annotation_complete(record)
+        if ep.name in retry_received:
+            saved_failures.add(ep.name)
+            unverified[ep.name] = 'received retry refused: this episode already has a usable annotation'
+            return True
         inspection = record.get('evidence_inspection') or {}
         if complete and (inspection.get('pause_reason') == 'spend_cap' or
                 'Inspection selection exceeds the remaining batch spend cap.' in inspection.get('limitations', [])):
@@ -1440,15 +1532,16 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                 return True
         return complete
 
-    stale, unverified, saved_failures = {}, {}, set()
+    stale, unverified, saved_failures, retryable_received = {}, {}, set(), set()
     todo = [ep for ep in episodes if not is_done(ep)]
     for name, reason in {**unverified, **stale}.items():
         write_atomic(out_dir / f"stale_{name}.json", {"episode": name, "status": "stale" if name in stale else
-                     "unverified", "reason": reason, "refresh": "--force"})
+                     "unverified", "reason": reason,
+                     "refresh": f'--retry-received {name}' if name in retryable_received else '--force'})
     if stale:
         for name, reason in stale.items():
             print(f"STALE {name}: {reason}", file=sys.stderr, flush=True)
-        return 1
+        saved_failures.update(stale)
     skipped = len(episodes) - len(todo)
     print(f"episodes={len(episodes)} skipped(done)={skipped} todo={len(todo)} "
           f"keys={len(keys)} concurrency={concurrency} dry_run={dry}", flush=True)
@@ -1597,7 +1690,7 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                     max_tokens=label_kw.get('max_tokens', 64000), cell_w=label_kw.get('cell_w', 0),
                     example_dir=label_kw.get('example_dir'), sample_fps=label_kw.get('sample_fps'),
                     task_mode=label_kw.get('task_mode'), dataset_note=label_kw.get('dataset_note'))
-            except (OSError, ValueError):
+            except (OSError, ValueError, RuntimeError):
                 pass
         requested_model = (previous.get('model') or
                            (previous.get('input_identity') or {}).get('settings', {}).get('model') or
@@ -1662,6 +1755,8 @@ def main() -> int:
     ap.add_argument("--concurrency", type=int, default=0, help="episodes in flight (default 4 per key)")
     ap.add_argument("--limit", type=int, default=0, help="label at most the first N episodes (0 = all)")
     ap.add_argument("--force", action="store_true", help="relabel episodes that already have a parsed output")
+    ap.add_argument('--retry-received', action='append', default=[], metavar='EPISODE',
+                    help='explicitly retry this received unusable or truncated reply; repeat for each episode')
     ap.add_argument("--cell-w", type=int, default=0,
                     help="grid cell width in px for every episode, with no routing; 0 keeps the per-rig width (teleop "
                          "224 or 448 by its task text, handheld 320, head camera 256), stepped down for an episode "
@@ -1694,12 +1789,13 @@ def main() -> int:
     if args.episode_dir:
         target = args.out or (args.episode_dir / 'labels.json')
         claim = target.with_name(f'noreply_{target.name}')
-        if claim.exists() and not args.force:
+        if claim.exists() and not args.force and args.episode_dir.name not in args.retry_received:
             print(f'{claim}: existing no-reply claim cannot authorize a new call; use --force explicitly',
                   file=sys.stderr)
             return 1
         return run_batch([args.episode_dir], target.parent, keys=keys, concurrency=1,
-                         force=args.force, max_spend=args.max_spend, output_path=target, **label_kw)
+                         force=args.force, max_spend=args.max_spend, output_path=target,
+                         retry_received=args.retry_received, **label_kw)
     if not args.out_dir:
         print("--out-dir is required with --episodes-root", file=sys.stderr)
         return 2
@@ -1710,7 +1806,7 @@ def main() -> int:
     if args.limit > 0:
         episodes = episodes[:args.limit]
     return run_batch(episodes, args.out_dir, keys=keys, concurrency=args.concurrency or 4 * len(keys),
-                     force=args.force, max_spend=args.max_spend, **label_kw)
+                     force=args.force, max_spend=args.max_spend, retry_received=args.retry_received, **label_kw)
 
 
 if __name__ == "__main__":
