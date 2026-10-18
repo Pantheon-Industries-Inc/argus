@@ -58,7 +58,7 @@ cd argus
 uv sync --frozen
 ```
 
-Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py#L1194) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py#L1194) in your shell or secret manager. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py#L21). Keep inputs and outputs under the ignored [`data/`](.gitignore#L1) directory.
+Paid annotation requires [`OPENROUTER_API_KEYS`](label/harness.py) (comma-separated keys) or [`OPENAI_API_KEY`](label/harness.py) in your shell or secret manager. Gated Hugging Face datasets require accepting their terms and setting [`HF_TOKEN`](prepare/hub.py). Keep inputs and outputs under the ignored [`data/`](.gitignore#L1) directory.
 
 Prepare and inspect base requests without model calls.
 
@@ -75,24 +75,24 @@ uv run python -m review --data path/to/dataset --rig teleop_arms \
 uv run python -m board serve --board data/review/mine --clips data/review/mine/clips
 ```
 
-[`--data`](review/__main__.py#L261) accepts a folder, file, archive or HTTP(S) URL. Set [`--rig`](review/__main__.py#L262) to [`teleop_arms`](review/__main__.py#L262), [`handheld_gripper`](review/__main__.py#L262) or [`ego_head`](review/__main__.py#L262) for teleop, UMI or human ego, respectively. Argus detects the format and available evidence; RGB-only data follows the same pipeline without requiring sensor inputs. [Data Review](https://data.pantheon.inc/review) uses the same default policy, though its deployed version and upload limits can differ.
+[`--data`](review/__main__.py) accepts a folder, file, archive or HTTP(S) URL. Set [`--rig`](review/__main__.py) to [`teleop_arms`](review/__main__.py), [`handheld_gripper`](review/__main__.py) or [`ego_head`](review/__main__.py) for teleop, UMI or human ego, respectively. Argus detects the format and available evidence; RGB-only data follows the same pipeline without requiring sensor inputs. [Data Review](https://data.pantheon.inc/review) uses the same default policy, though its deployed version and upload limits can differ.
 
 | Default or optional setting | Behavior |
 |---|---|
-| Astra, the default | [`openai/gpt-6-astra`](label/policy.py#L8), medium reasoning; a regular sample every 1.5s for teleop, 1s for UMI and 0.5s for human ego, plus eligible boundaries and first/last frames. |
-| Sol 6.1 High | [`--model openai/gpt-6.1-sol --reasoning high`](label/policy.py#L78); defaults to 1 FPS on all recording setups and requires at least 1 FPS. |
-| Faster actions | [`--sample-fps 2`](label/policy.py#L80) is recommended for subsecond fumbles and rapid recoveries. More images shorten the available request window and can increase cost. |
-| Task scope | Episode/session scope follows source metadata; [`--task-mode episode`](label/policy.py#L82) or [`session`](label/policy.py#L52) overrides it. A missing instruction does not automatically imply a session. Human ego uses the activities schema. |
+| Astra, the default | [`openai/gpt-6-astra`](label/policy.py), medium reasoning; a regular sample every 1.5s for teleop, 1s for UMI and 0.5s for human ego, plus eligible boundaries and first/last frames. |
+| Sol 6.1 High | [`--model openai/gpt-6.1-sol --reasoning high`](label/policy.py); defaults to 1 FPS on all recording setups and requires at least 1 FPS. |
+| Faster actions | [`--sample-fps 2`](label/policy.py) is recommended for subsecond fumbles and rapid recoveries. More images shorten the available request window and can increase cost. |
+| Task scope | Episode/session scope follows source metadata; [`--task-mode episode`](label/policy.py) or [`session`](label/policy.py) overrides it. A missing instruction does not automatically imply a session. Human ego uses the activities schema. |
 
 Each recording produces one public episode. Long recordings are split to fit API request limits and rejoined on the original timeline; internal chunk boundaries are not treated as recording truncation. Session mode annotates activities within the recording. Preparation limits, missing chunks and processing failures are reported alongside any usable results.
 
-Rerunning a review job with the same [`--out`](review/__main__.py#L263) preserves its settings and reuses outputs whose inputs and selected evidence still match. Changes to paid request semantics require a new job. [`--free`](review/__main__.py#L265) skips paid field interpretation, image-detail routing and evidence selection, so it previews base requests rather than the full paid evidence path. Spending caps account for all applicable calls and outstanding reservations; unresolved charges stay reserved. Inspection blocked by the cap resumes when the allowance increases, before final annotation is dispatched.
+Rerunning a review job with the same [`--out`](review/__main__.py) preserves its settings and reuses outputs whose inputs and selected evidence still match. Source data, prepared inputs, annotation settings and preparation code must still match; otherwise start a new job. [`--free`](review/__main__.py) skips paid field interpretation, image-detail routing and evidence selection, so it previews base requests rather than the full paid evidence path. Spending caps account for all applicable calls and outstanding reservations; unresolved charges stay reserved. Inspection blocked by the cap resumes when the allowance increases, before final annotation is dispatched.
 
 For models without locally verified rates, reservations use the full published context window and can exceed the expected request cost. Capped runs reject native search models whose search fees have no enforceable ceiling.
 
 ## Results and further use
 
-Live and static boards use the same [viewer](board/index.html), with behavioral and sensor annotations overlaid on the footage and supporting measurements alongside it. The same findings are available as episode JSON, filtered JSON Lines and static exports.
+Live and static boards use the same [viewer](board/index.html), with behavioral and sensor annotations overlaid on the footage and supporting measurements alongside it. The same findings are available as episode JSON, filtered JSON Lines and static exports. Issues with missing or invalid severity remain visible as unrated and are excluded from severity totals.
 
 This is an excerpt from a tactile episode's downloadable JSON. Evidence IDs resolve to recorded streams and samples in the full export:
 
@@ -118,7 +118,7 @@ This is an excerpt from a tactile episode's downloadable JSON. Evidence IDs reso
 }
 ```
 
-A review job contains prepared [`episodes/`](review/__main__.py#L308), base requests in [`dry/`](review/__main__.py#L362), model inputs and receipts in [`run/`](review/__main__.py#L371), rejoined labels in [`run_final/`](review/__main__.py#L249), and the board. Action phases distinguish advancing, wasteful and idle behavior. Sensor findings include evidence, confidence and alternative explanations; inconclusive evidence need not produce a finding. Exports omit internal access metadata.
+A review job contains prepared [`episodes/`](review/__main__.py), base requests in [`dry/`](review/__main__.py), model inputs and receipts in [`run/`](review/__main__.py), rejoined labels in [`run_final/`](review/__main__.py), and the board. Action phases distinguish advancing, wasteful and idle behavior. Sensor findings include evidence, confidence and alternative explanations; inconclusive evidence need not produce a finding. Public exports redact credentials and private access locations.
 
 Field definitions supplied by the dataset publisher or user override inferred meanings and layouts without changing recorded measurements. Changes to source data or field interpretations invalidate stale findings. Shared footage retains its source license and access policy.
 
@@ -136,7 +136,7 @@ uv run python -m label --dataset mine --episodes data/episodes/mine/all --kind d
 uv run python -m label --dataset mine --episodes data/episodes/mine/all --kind full --cap 20
 ```
 
-Public adapters are [`molmo`](prepare/molmo.py), [`abc130k`](prepare/abc130k.py), [`galaxea`](prepare/galaxea.py), [`habit`](prepare/habit.py), [`fastumi`](prepare/fastumi.py), [`realomin`](prepare/realomin.py), [`egocentric100k`](prepare/egocentric100k.py), [`genhumanego`](prepare/genhumanego.py) and [`openaoe`](prepare/openaoe.py); [`configs/slices/`](configs/slices/) records published selections. Generic readers preserve source fields instead of applying corpus-release cropping or task selection. Raw video packets with frame reordering are rejected when decode timestamps are unavailable; other readable cameras are retained.
+Public adapters are [`molmo`](prepare/molmo.py), [`abc130k`](prepare/abc130k.py), [`galaxea`](prepare/galaxea.py), [`habit`](prepare/habit.py), [`fastumi`](prepare/fastumi.py), [`realomin`](prepare/realomin.py), [`egocentric100k`](prepare/egocentric100k.py), [`genhumanego`](prepare/genhumanego.py) and [`openaoe`](prepare/openaoe.py); [`configs/slices/`](configs/slices/) records published selections. Generic readers preserve source fields and encoded timestamps, using publisher metadata to align episode frames and sensor samples. Corpus-release cropping and task selection are not applied. Raw video packets with frame reordering are rejected when decode timestamps are unavailable; other readable cameras are retained.
 
 For example, download and prepare the single MolmoAct2 episode listed in the quickstart:
 
@@ -147,7 +147,7 @@ uv run python -m prepare molmo prepare --episodes configs/quickstart/teleop.txt 
 
 The adapter retrieves the source files needed for that episode, including shared video packs, and preserves its camera offsets and state/action trajectories. Preparation makes no model calls.
 
-For a custom board, create [`data/boards/mine/manifest.json`](configs/quickstart/board.json) with the dataset, prepared episodes and run paths. [configs/quickstart/board.json](configs/quickstart/board.json) shows the structure with published-dataset severity rules. Use [`python -m board build`](board/build.py), [`clips`](board/clips.py), [`serve`](board/serve.py#L1363), and [`static media`](board/static.py#L44)/[`static site`](board/static.py#L45); each takes [`--help`](board/__main__.py). Refresh the board after changing field definitions. To edit them in the local viewer, add [`--dictionary-job JOB`](board/serve.py#L1376) to [`board serve`](board/serve.py#L1363).
+For a custom board, create [`data/boards/mine/manifest.json`](configs/quickstart/board.json) with the dataset, prepared episodes and run paths. [configs/quickstart/board.json](configs/quickstart/board.json) shows the structure with published-dataset severity rules. Use [`python -m board build`](board/build.py), [`clips`](board/clips.py), [`serve`](board/serve.py), and [`static media`](board/static.py)/[`static site`](board/static.py); each takes [`--help`](board/__main__.py). Refresh the board after changing field definitions. To edit them in the local viewer, add [`--dictionary-job JOB`](board/serve.py) to [`board serve`](board/serve.py).
 
 Export the same review job as a static viewer by preparing the media first, then building the site:
 
@@ -156,11 +156,15 @@ uv run python -m board static media --board data/review/mine --clips data/review
 uv run python -m board static site --board data/review/mine --clips data/review/mine/clips
 ```
 
-The site is written to [`data/review/mine/static/<build_id>/`](board/static.py#L684), with shared media in [`data/review/mine/static/media/`](board/static.py#L508).
+The site is written to [`data/review/mine/static/<build_id>/`](board/static.py), with shared media in [`data/review/mine/static/media/`](board/static.py).
 
-Paid staged runs require a clean tracked checkout. [`--resume RUN --why "reason"`](label/run.py#L159) retains the run and remaining budget. Repeat [`--dataset`](label/run.py#L151), [`--episodes`](label/run.py#L152) and [`--kind`](label/run.py#L153); pass the original harness options after [`--`](label/run.py#L161). [`python -m label.reparse RUN`](label/reparse.py) reparses stored replies and rebinds their evidence without another call. Capped runs use verified model rates or a saved OpenRouter pricing quote and refuse unknown prices. Provider quotes use conservative full-context reservations, which can require more headroom than the eventual bill. Receipts survive failures. [`board grids`](board/grids.py) reconstructs base request grids only when original input hashes can be verified; detail/sensor images are counted but not reconstructed there.
+Paid staged runs require a clean tracked checkout. [`--resume RUN --why "reason"`](label/run.py) retains the run and remaining budget, using the same commit, dataset, prepared episodes and run kind. Repeat [`--dataset`](label/run.py), [`--episodes`](label/run.py) and [`--kind`](label/run.py); pass the original harness options after [`--`](label/run.py). Cross-host writers require working shared filesystem locks.
 
-[`checks.timebase scan`](checks/timebase.py#L325) proposes clock corrections; inspect them before [`apply`](checks/timebase.py#L331). Capture, source and sensor check failures are distinct from clean results. Optional hand pose uses [`board/hand_pose/modal_app.py`](board/hand_pose/modal_app.py) and [`board/hands.py`](board/hands.py); it is separate from ordinary annotation and has the licenses below.
+[`python -m label.reparse RUN`](label/reparse.py) reparses stored replies and rebinds their evidence without another call. Received but unusable replies, including truncated output, are never retried automatically. For a staged resume, append [`--retry-received EPISODE`](label/harness.py) after [`--`](label/run.py) to authorize another paid attempt for that episode; repeat the flag for additional episodes. Healthy outputs and prior billing receipts are retained. [`--force`](label/harness.py) refreshes every selected episode, including completed ones.
+
+Capped runs use verified model rates or a saved OpenRouter pricing quote and refuse unknown prices. Provider quotes use conservative full-context reservations, which can require more headroom than the eventual bill. Receipts preserve prior responses, charges and outstanding reservations across failures. [`board grids`](board/grids.py) reconstructs base request grids only when original input hashes can be verified; detail/sensor images are counted but not reconstructed there.
+
+[`checks.timebase scan`](checks/timebase.py) proposes clock corrections; inspect them before [`apply`](checks/timebase.py). Capture, source and sensor check failures are distinct from clean results. Optional hand pose uses [`board/hand_pose/modal_app.py`](board/hand_pose/modal_app.py) and [`board/hands.py`](board/hands.py); it is separate from ordinary annotation and has the licenses below.
 
 </details>
 
@@ -176,7 +180,7 @@ uv run python -m gate prepare
 uv run python -m gate label --kind full --cap 20
 ```
 
-Comparison caps apply per model run and gate caps per recording setup. Sampling may differ by model: compare saved requests before claiming identical inputs. [`--with-example`](compare/__main__.py#L211) supplies a reference annotation; [`--routes`](compare/__main__.py#L216) reuses resolution choices. [gate/selection.json](gate/selection.json) and [gate/cases.json](gate/cases.json) define the selected cases; [`gate score`](gate/score.py) evaluates the supplied runs. Its text checks test literal presence, not semantic correctness; ambiguous object claims require review and remain unresolved.
+Comparison caps apply per model run and gate caps per recording setup. Sampling may differ by model: compare saved requests before claiming identical inputs. [`--with-example`](compare/__main__.py) supplies a reference annotation; [`--routes`](compare/__main__.py) reuses resolution choices. [gate/selection.json](gate/selection.json) and [gate/cases.json](gate/cases.json) define the selected cases; [`gate score`](gate/score.py) evaluates the supplied runs. Its text checks test literal presence, not semantic correctness; ambiguous object claims require review and remain unresolved.
 
 [`uv run --frozen --offline pytest -q -ra`](.github/workflows/ci.yml) runs offline tests; viewer tests also require Node.js. CI uses the locked environment, Node, ffmpeg and ffprobe without provider credentials or dataset access. Secret scans cover the committed tree and reachable history; they do not grant permission to publish uploaded data.
 
