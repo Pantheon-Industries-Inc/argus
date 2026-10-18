@@ -1909,7 +1909,7 @@ body.view-fade #cmp-view, body.view-fade main { opacity: 0; }
   margin-bottom: 20px; }
 .cmpv-main .cc-def:empty, .cmpv-main .cc-key:empty, .cmpv-main .cc-foot:empty { margin: 0; }
 /* bar rows: one row per model, the reference model first and ruled off from the comparisons */
-.br { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) 88px; align-items: center;
+.br { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) 96px; align-items: center;
   column-gap: 12px; padding: 5px 0; }
 .br.ref { padding-bottom: 9px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .br-name { font-size: 12.5px; line-height: 1.3; color: var(--fg-2); overflow-wrap: anywhere; }
@@ -1922,10 +1922,12 @@ body.view-fade #cmp-view, body.view-fade main { opacity: 0; }
 .br-bar i + i { border-radius: 0 4px 4px 0; }
 .br-bar i.seg0:not(:last-child) { border-radius: 0; }
 .br-val { font: 600 12.5px/1.2 var(--mono); color: var(--fg); text-align: right; white-space: nowrap; }
-.br-val small { display: block; font: 500 10.5px/1.3 var(--mono); color: var(--fg-3); margin-top: 2px; }
+.br-val small { display: block; font: 500 10.5px/1.3 var(--mono); color: var(--fg-3); margin-top: 2px;
+  white-space: pre-line; }
 .c-ink { background: var(--fg-2); }
 .c-red { background: var(--danger); } .c-red-l { background: rgba(179,38,60,0.30); }
 .c-amb { background: #4d5aa0; } .c-amb-l { background: rgba(77,90,160,0.32); }
+.c-unrated { background: var(--fg-3); }
 .c-grn { background: var(--success); }
 .cc-key { display: flex; gap: 14px; flex-wrap: wrap; margin: -6px 0 12px; font-size: 11.5px; color: var(--fg-3); }
 .cc-key span { display: inline-flex; align-items: center; gap: 6px; }
@@ -2016,7 +2018,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
 }
 @media (max-width: 599px) {
   .cmpv-grid { grid-template-columns: minmax(0, 1fr); }
-  .br { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) 84px; column-gap: 10px; }
+  .br { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) 96px; column-gap: 10px; }
   /* a pair's value ("100% → 100%") is wider than a bar's: its column fits it, and the track gives the room */
   .pr { grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) max-content; column-gap: 10px; }
   .sb-row { flex-wrap: wrap; gap: 8px 12px; padding: 10px 16px; }
@@ -7605,12 +7607,12 @@ const MAIN_CHARTS = [
   {id: 'subgoals', title: 'Subgoals per episode', fmt: fNum, common: true, colors: ['c-grn'],
    def: 'Key events the model marked as a completed subgoal.'},
   {id: 'data_issues', title: 'Data issues per episode', fmt: fNum, common: true, minor: 'data_issues_minor',
-    colors: ['c-red', 'c-red-l'],
-   keys: ['medium or high severity', 'low severity'], short: 'low',
+    unrated: 'data_issues_unrated', colors: ['c-red', 'c-red-l', 'c-unrated'],
+   keys: ['medium or high severity', 'low severity', 'unrated'], short: 'low',
    def: 'Faults in the recording, the scene or the label.'},
   {id: 'operator_mistakes', title: 'Operator mistakes per episode', fmt: fNum, common: true,
-    minor: 'operator_mistakes_minor', colors: ['c-amb', 'c-amb-l'],
-   keys: ['changed the outcome or high severity', 'minor'], short: 'minor'},
+    minor: 'operator_mistakes_minor', unrated: 'operator_mistakes_unrated', colors: ['c-amb', 'c-amb-l', 'c-unrated'],
+   keys: ['changed the outcome or high severity', 'minor', 'unrated'], short: 'minor'},
   {id: 'cost', title: 'Cost per episode', fmt: fUsd,
    val: (s, k) => { const p = s.responses[k]; return p && p.cost != null ? {v: p.cost, sub: `${p.cost_n} calls`} : null;
      },
@@ -7670,8 +7672,8 @@ function buildCompare() {
     + `data-rig="${r}">${esc(r === 'all' ? 'All footage' : M.rig_names[r] || r)}</button>`).join('');
   const card = (c, rowsHtml, wide) => `<div class="cc${wide ? ' cc-wide' : ''}" data-chart="${c.id}">`
     + `<h4>${esc(c.title)}</h4><p class="cc-def">${esc(c.def || '')}</p>`
-    + `<div class="cc-key">${c.minor ? `<span><i class="${c.colors[0]}"></i>${esc(c.keys[0])}</span><span><i `
-      + `class="${c.colors[1]}"></i>${esc(c.keys[1])}</span>` : ''}</div>`
+    + `<div class="cc-key">${c.minor ? c.keys.map((key, i) => `<span><i class="${c.colors[i]}"></i>`
+      + `${esc(key)}</span>`).join('') : ''}</div>`
     + `<div class="cc-rows">${rowsHtml}</div><p class="cc-foot"></p></div>`;
   const barRows = (c) => main.map(m => `<div class="br${m.reference ? ' ref' : ''}" data-k="${esc(m.key)}" `
     + `tabindex="0"><span class="br-name">${cmpNameHtml(m)}</span>`
@@ -7752,17 +7754,22 @@ function updateCompare(first) {
       const mv = (s.metrics || {})[k];
       if (!mv || mv[c.id] == null) { vals[k] = null; continue; }
       const minor = c.minor ? mv[c.minor] || 0 : 0;
-      vals[k] = {v: mv[c.id], minor, sub: c.minor ? `+ ${fNum(minor)} ${c.short}` : '',
-        tip: c.minor ? `${fNum(mv[c.id])} ${c.keys[0]} and ${fNum(minor)} ${c.keys[1]} per episode` : ''};
+      const unrated = c.unrated ? mv[c.unrated] || 0 : 0;
+      vals[k] = {v: mv[c.id], minor, unrated,
+        sub: c.minor ? `+ ${fNum(minor)} ${c.short}` + (unrated ? `\n+ ${fNum(unrated)} unrated` : '') : '',
+        tip: c.minor ? `${fNum(mv[c.id])} ${c.keys[0]}, ${fNum(minor)} ${c.keys[1]}`
+          + (unrated ? ` and ${fNum(unrated)} unrated` : '') + ' per episode' : ''};
     }
-    const max = c.max ? c.max() : Math.max(1e-9, ...Object.values(vals).filter(Boolean).map(x => x.v + (x.minor || 0)));
+    const max = c.max ? c.max() : Math.max(1e-9, ...Object.values(vals).filter(Boolean)
+      .map(x => x.v + (x.minor || 0) + (x.unrated || 0)));
     el.querySelectorAll('.br').forEach(row => {
       const x = vals[row.dataset.k], bar = row.querySelector('.br-bar'), segs = bar.querySelectorAll('i');
-      const tot = x ? x.v + (x.minor || 0) : 0;
+      const tot = x ? x.v + (x.minor || 0) + (x.unrated || 0) : 0;
       bar.style.width = (x ? 100 * tot / max : 0).toFixed(2) + '%';
       bar.style.opacity = x ? '1' : '0';
-      if (segs[0]) segs[0].style.flexGrow = x ? String(x.v || 0.0001) : '1';
+      if (segs[0]) segs[0].style.flexGrow = x ? String(x.v || 0) : '1';
       if (segs[1]) segs[1].style.flexGrow = x ? String(x.minor || 0) : '0';
+      if (segs[2]) segs[2].style.flexGrow = x ? String(x.unrated || 0) : '0';
       tween(row.querySelector('.bv'), x ? x.v : null, c.fmt);
       row.querySelector('small').textContent = x ? x.sub || '' : '';
       row.dataset.tip = x ? `<b>${esc(c.fmt(x.v))}</b>${esc(nm(row.dataset.k))}${x.tip ? '<br>' + esc(x.tip) : ''}`

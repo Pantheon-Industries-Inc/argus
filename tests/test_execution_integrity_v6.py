@@ -265,6 +265,8 @@ def test_refused_child_exit_does_not_replace_an_active_harness_status(tmp_path, 
 
 
 @pytest.mark.parametrize('dependency,changes', [('board/serve.py', False), ('board/build.py', False),
+    ('board/to_board.py', False), ('board/clips.py', False), ('board/hands.py', False),
+    ('label/episode.py', True), ('board/public_export.py', True),
     ('prepare/display.py', True), ('prepare/mcap_fields.py', True), ('prepare/hdf_metadata.py', True),
     ('label/evidence_access.py', True)])
 def test_request_dependency_boundary_ignores_unrelated_board_code(tmp_path, monkeypatch, dependency, changes):

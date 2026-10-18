@@ -99,7 +99,8 @@
    "name": "Camera video does not cover the episode",
    "reader_issues": [
     "clip_frame_count",
-    "camera_short"
+    "camera_short",
+    "packed_partial_coverage"
    ]
   },
   {
@@ -136,6 +137,30 @@
    "reader_issues": [
     "mcap_file_damaged",
     "sensor_file_cut"
+   ]
+  },
+  {
+   "slug": "sensor-message-unreadable",
+   "list": "data",
+   "name": "Sensor message payloads could not be decoded",
+   "reader_issues": [
+    "mcap_message_unreadable"
+   ]
+  },
+  {
+   "slug": "publisher-text-clock",
+   "list": "handling",
+   "name": "Publisher text timing is unverified",
+   "reader_issues": [
+    "text_clock_unverified"
+   ]
+  },
+  {
+   "slug": "publisher-text-span",
+   "list": "handling",
+   "name": "Publisher text extends outside the footage",
+   "reader_issues": [
+    "publisher_text_outside_footage"
    ]
   },
   {

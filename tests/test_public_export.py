@@ -1,10 +1,58 @@
 """Privacy belongs at every JSON boundary, after source/freshness interpretation."""
 import copy
 import json
+import base64
 
 import pytest
 
 from board.public_export import project, public_build_manifest
+
+
+def test_credential_values_and_access_attributes_do_not_escape_under_native_names():
+    def segment(value):
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+    jwt = '.'.join((segment({'alg': 'HS256', 'typ': 'JWT'}), segment({'sub': 'fixture'}), 'signature'))
+    secrets = [jwt, '-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----',
+               'AKIA' + 'A' * 16, 'ghp_' + 'a' * 36, 'sk-ant-' + 'a' * 40,
+               'xoxb-' + '1' * 12 + '-' + '2' * 12 + '-' + 'a' * 24,
+               'Bearer unusable-fixture', 'Authorization: Token unusable-fixture',
+               'Connect with Authorization: Bearer unusable-fixture, then inspect the image.',
+               'https://discord.com/api/webhooks/123456789/' + 'a' * 60,
+               'camera.example-tailnet.ts.net/path', 'operator@100.101.7.9']
+    secrets.append('Basic ' + base64.b64encode(b'fixture:unusable').decode())
+    names = ('jwt', 'csrf', 'sentry_dsn', 'connection_string', 'otp_seed', 'pass', 'pwd',
+             'privateKeyPem', 'secret_key_base', 'api_keys', 'secrets', 'tokens')
+    native = {'session_id': 'session-17', 'session': 4, 'signature': [0.1, 0.2], 'sig': 3,
+              'eos_token': '</s>', 'pad_token': '<pad>', 'stop_token': '<end>',
+              **{key + '_key': '/observations/' + key for key in
+                 ('task', 'image', 'video', 'language', 'episode', 'primary')},
+              'firmware_version': '10.3.0.17', 'token_ids': [1, 7],
+              'key': 'a' * 32,
+              'task_name': 'Basic calibration', 'episode_prompt': 'Basic grasp',
+              'citation': 'https://example.org/paper',
+              'text': 'The gripper does not close. Type api_key on the panel.'}
+    raw = {'native': native, 'unknown': secrets,
+           'credentials': {name: 'unusable-fixture' for name in names},
+           'attributes': {name: 'unusable-fixture' for name in names},
+           'service': {'kaggle': {'key': 'a' * 32}},
+           'metadata': {'fields': {'eos_token': '</s>', 'api_key': 'unusable-fixture'}},
+           'sentence': 'Read https://example.org/paper. Authorization: Token unusable-fixture'}
+    before = copy.deepcopy(raw)
+    public = project(raw)
+    assert public['native'] == native
+    assert public['unknown'] == [None] * len(secrets)
+    assert public['attributes'] == {} and public['service'] == {'kaggle': {}}
+    assert public['metadata'] == {'fields': {'eos_token': '</s>'}}
+    assert 'sentence' not in public
+    assert raw == before and project(public) == public
+    from board.build import uploader_groups
+    note = {'kaggle': {'key': 'a' * 32}}
+    flattened = project({'uploader_notes': uploader_groups(note, None, 10)})
+    assert 'a' * 32 not in json.dumps(flattened)
+    field = {'id': 'service-key', 'bindings': [{'context_path': 'uploader_notes/kaggle/key'}],
+             'summary': {'preview': 'a' * 32}}
+    dictionary = project({'fields': [field], 'entries': {'service-key': {'meaning': 'a' * 32}}})
+    assert 'a' * 32 not in json.dumps(dictionary)
 
 
 @pytest.mark.parametrize('outcome,kind,heading,reason', [
@@ -315,7 +363,7 @@ def test_flattened_source_note_owners_are_private_but_native_fields_and_prose_su
     for group in uri_public['uploader_notes']:
         for item in group['items']:
             if item['name'] == 'publisher_note':
-                assert item['value'] == uri_notes['publisher_note']
+                assert item['value'] == 'withheld'
             else:
                 assert upper_signed not in item['value'] and citation in item['value']
                 if item['name'].endswith(('asset_urls', 'primitive_values', 'protocol_relative')):

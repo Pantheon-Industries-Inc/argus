@@ -15,13 +15,18 @@ def effective_outcome(value):
     return 'failure' if value == 'partial' else value
 
 
-def allowed_arms(config=None):
-    arms = {'left', 'right', 'both'}
+def _arm_names(config=None):
+    arms = {arm: arm for arm in ('left', 'right', 'both')}
     config = config or {}
     labels = config.get('cam_labels') or []
     if len(config.get('views') or []) == 1 and labels:
-        arms.add(str(labels[0]))
+        name = str(labels[0])
+        arms[name.casefold()] = name
     return arms
+
+
+def allowed_arms(config=None):
+    return set(_arm_names(config).values()) | {'left', 'right', 'both'}
 TEXT = {
     'timeline': ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes'),
     'key_events': ('label', 'kind', 'outcome', 'note'),
@@ -153,8 +158,9 @@ def project(labels: dict, config: dict | None = None) -> tuple[dict, list[dict]]
                 allowed = (allowed_arms(config) if key == 'arm' else
                            TASK_OUTCOMES if scope == 'tasks' and key == 'outcome' else
                            EVENT_OUTCOMES if scope == 'key_events' and key == 'outcome' else ENUMS[key])
-                if key == 'arm' and value.strip() in allowed:
-                    normalized = value.strip()
+                if key == 'arm':
+                    canonical = _arm_names(config)
+                    normalized = canonical.get(value.strip().casefold(), normalized)
                 if normalized in allowed:
                     row[key] = normalized
                 else:

@@ -821,15 +821,8 @@ def set_aside_failed(eps: Path, clips_dir: Path) -> list[dict]:
 
 
 def camera_label(view: str, ctx: dict) -> str:
-    """A camera as the board names it: the main (or head) camera, the left or right wrist (or gripper), and any other
-    camera by the dataset's own name for it."""
-    rig = ctx.get("profile")
-    if view == "exo":
-        return "head camera" if rig == "ego_head" else "main camera"
-    if view in ("left", "right"):
-        return f"{view} gripper camera" if rig == "handheld_gripper" else f"{view} wrist camera"
-    cam = (ctx.get("cameras") or {}).get(view) or {}
-    return str(cam.get("name") or cam.get("key") or "other") + " camera"
+    from label.episode import camera_label as request_camera_label
+    return request_camera_label(view, ctx)
 
 
 def _context(ep_dir: Path) -> dict:

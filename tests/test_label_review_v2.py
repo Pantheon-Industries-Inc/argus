@@ -168,7 +168,8 @@ def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize('rejected_stage', ['selection', 'final'])
-def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypatch, rejected_stage):
+@pytest.mark.parametrize('error_length', [20, 1000])
+def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypatch, rejected_stage, error_length):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     sent = []
@@ -178,7 +179,7 @@ def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypat
         key = request.get_header('Authorization')
         sent.append((key, 'selection' if selection else 'final'))
         if fail_final[0] and selection == (rejected_stage == 'selection') and key.endswith('first'):
-            reject(request, 429, {'error': {'code': 'insufficient_quota'}})
+            reject(request, 429, {'error': {'code': 'insufficient_quota', 'message': 'x' * error_length}})
         return answer({'requests': []} if selection else {'task_summary': 'The hand reaches for the cup.'})
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
@@ -242,7 +243,8 @@ def test_ambiguous_final_http_error_retains_reserve_and_never_replays(tmp_path, 
     assert result['final_dispatch_outcome'] == 'unverified' and result['final_reserved_usd'] > 0
     assert harness.episode_cost(result) > .01
     original = receipt.read_bytes()
-    assert harness.run_batch([ep], out, **args) == 0
+    # Resume reports the unresolved charge while retaining the receipt and refusing replay.
+    assert harness.run_batch([ep], out, **args) == 1
     assert receipt.read_bytes() == original and sent == ['selection', 'final']
 
 

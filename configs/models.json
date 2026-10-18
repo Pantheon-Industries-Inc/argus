@@ -1,5 +1,5 @@
 {
- "about": "The pinned model settings. Every model gets the same harness, prompt, images and output limit, and the top-level reasoning effort unless its entry names its own \"reasoning\". No temperature, top_p or seed is sent (see the README's Determinism section).",
+ "about": "Pinned comparison models and output limits. Reasoning effort inherits the top-level setting unless overridden. Sampling and image settings follow label/policy.py; saved requests record the actual evidence supplied to each model. In-context runs include a reference annotation. No temperature, top_p or seed is sent.",
  "reasoning": "medium",
  "max_tokens": 64000,
  "reference": "astra",

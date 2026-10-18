@@ -39,15 +39,31 @@ _NEGATION = re.compile(r"\b(?:not|never|neither|nor|without|no)\b|\b\w+n't\b", r
 
 
 def _supported_text(pattern, text):
-    """Accept an observed predicate unless its preceding clause negates it.
+    """Specialize a broad category only for an affirmative local assertion.
 
-    Later qualifications cannot negate an earlier observation. Negation before
-    a coordinated predicate remains conservative; it is not general language inference.
+    Keep coordinated lists together so one denial applies to every member.
+    Causal clauses have their own predicates. A trailing correction or a denial
+    of the predicate itself cannot establish the specialized family.
     """
-    for clause in re.split(r'[.!?;,\n]+|\b(?:but|however|whereas)\b', text, flags=re.I):
-        for match in pattern.finditer(clause):
-            if not _NEGATION.search(clause[:match.start()]):
-                return True
+    sentences = re.split(r'[.!?;\n]+', text)
+    for sentence in sentences:
+        # A retracted impression is not an observed fault. Prefer the broad
+        # source category to guessing the referent of a correction.
+        if re.search(r'\b(?:but|however)\s+(?:it|this|that)\s+(?:is|was)\s+not\s*$', sentence, re.I):
+            continue
+        clauses = re.split(r'\b(?:but|however|whereas|because|since)\b|'
+                           r',\s*(?=(?:the|this|that|camera|image|view|frame|video|stream)\b)',
+                           sentence, flags=re.I)
+        for clause in clauses:
+            if re.search(r'\b(?:looks?|seems?|appears?)\s+(?:like|to be)\b', clause, re.I):
+                continue
+            for match in pattern.finditer(clause):
+                before = clause[:match.start()]
+                after = re.split(r'[,;]|\b(?:and|or)\b', clause[match.end():], maxsplit=1, flags=re.I)[0]
+                denied = re.match(r'\w*\s+(?:(?:is|are|was|were|has|have)\s+)?'
+                                  r'(?:not\b|never\b|absent\b|(?:is|are|was|were)n\x27t\b)', after, re.I)
+                if not _NEGATION.search(before) and not denied:
+                    return True
     return False
 
 
@@ -145,7 +161,7 @@ class Families:
 
     def classify(self, d: dict) -> dict:
         """The episode's families: counted ones with the issues that count under each (empty when a check or the
-        outcome raised it), minor ones that nothing counted, and not_counted, the families of reader issues that are
+        outcome raised it), minor and unrated ones with no counted issue, and not_counted, the families of reader issues that are
         no fault in the recording (a list outside COUNTED_LISTS), shown on the episode and never counted."""
         counted, minor, unrated = (collections.defaultdict(list) for _ in range(3))
         not_counted = {}
@@ -171,7 +187,7 @@ class Families:
                 fam = self.reader_family(str(x["kind"]))
                 (counted if self.list_of(fam) in COUNTED_LISTS else not_counted).setdefault(fam, [])
         return {"counted": dict(counted), "minor": {k: v for k, v in minor.items() if k not in counted},
-                "unrated": dict(unrated),
+                "unrated": {k: v for k, v in unrated.items() if k not in counted},
                 "not_counted": {k: v for k, v in not_counted.items() if k not in counted}}
 
     def hands_hidden_seconds(self, d: dict) -> float | None:

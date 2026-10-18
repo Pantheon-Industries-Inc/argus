@@ -236,3 +236,32 @@ def test_corrupt_digest_cache_falls_back_to_content_and_unknown_filesystems_reha
     static._source_digest.cache_clear()
     assert static.src_sig(source) == hashlib.sha256(b'actual bytes').hexdigest()
     assert not cache.exists()
+
+
+@pytest.mark.parametrize('command', ['build', 'static media', 'static site'])
+def test_free_job_board_commands_fail_clearly_without_creating_empty_site(tmp_path, command):
+    job = tmp_path / 'free-job'
+    (job / 'dry').mkdir(parents=True)
+    (job / 'clips').mkdir()
+    (job / 'report.json').write_text('{"episodes": []}')
+    arguments = ([str(job)] if command == 'build' else ['--board', str(job), '--clips', str(job / 'clips')])
+    result = subprocess.run([sys.executable, '-m', 'board', *command.split(), *arguments],
+                            text=True, capture_output=True, timeout=10)
+    assert result.returncode != 0
+    assert 'Traceback' not in result.stderr
+    assert 'board' in result.stderr.lower()
+    assert not (job / 'static').exists()
+
+
+def test_custom_static_board_without_manifest_keeps_failure_only_episode(tmp_path):
+    board = tmp_path / 'custom'
+    (board / 'qa').mkdir(parents=True)
+    (board / 'clips').mkdir()
+    (board / 'qa/episode_x.json').write_text(json.dumps({'episode_prompt': '',
+        '_meta': {'episode_id': 'episode_x'}, '_label_failed': {'kind': 'unparsed', 'why': 'Reply needs reparse'}}))
+    result = subprocess.run([sys.executable, '-m', 'board', 'static', 'site', '--board', str(board),
+                             '--clips', str(board / 'clips')], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    latest = (board / 'static/LATEST').read_text().strip()
+    output = json.loads((board / 'static' / latest / 'data/ep/episode_x.json').read_text())
+    assert output['_label_failed'] and not latest.startswith('1969')

@@ -835,7 +835,13 @@ def test_final_timeout_claim_survives_resume_without_second_dispatch(tmp_path, m
     assert receipt['final_dispatch_outcome'] == 'unverified'
     assert receipt['final_reserved_usd'] > 0
     assert harness.episode_cost(receipt) == pytest.approx(receipt['final_reserved_usd'] + .004)
-    assert harness.run_batch([ep], out, **args) == 0
+    receipt_path = out / f'noreply_{ep.name}.json'
+    before_resume = receipt_path.read_bytes()
+    # An unresolved charge is a non-successful resume, while its paid request remains held.
+    assert harness.run_batch([ep], out, **args) == 1
+    assert receipt_path.read_bytes() == before_resume
+    marker = json.loads((out / f'stale_{ep.name}.json').read_text())
+    assert marker['status'] == 'unverified' and 'unresolved charge' in marker['reason']
     assert calls == [('selection', 1), ('final', 1)]
 
 
@@ -900,7 +906,14 @@ def test_run_batch_does_not_replay_successful_reply_with_missing_usage(tmp_path,
     _assert_verified_selection_charge(receipt)
     assert label_spend(tmp_path / 'job') == pytest.approx(receipt['final_reserved_usd'] + .004)
     assert label_spend_complete(tmp_path / 'job') is False
-    assert harness.run_batch([ep], out, **args) == 0
+    receipt_path = out / f'{ep.name}.json'
+    assert harness.annotation_complete(receipt)
+    before_resume = receipt_path.read_bytes()
+    # An unresolved charge is a non-successful resume, while its paid request remains held.
+    assert harness.run_batch([ep], out, **args) == 1
+    assert receipt_path.read_bytes() == before_resume
+    marker = json.loads((out / f'stale_{ep.name}.json').read_text())
+    assert marker['status'] == 'unverified' and 'unresolved charge' in marker['reason']
     assert calls == [('selection', 1), ('final', 1)]
     assert label_spend(tmp_path / 'job') == pytest.approx(receipt['final_reserved_usd'] + .004)
 
@@ -927,7 +940,13 @@ def test_final_claim_survives_worker_crash_and_budget_refusal_has_no_dispatch(tm
     _assert_verified_selection_charge(receipt)
     assert harness.episode_cost(receipt) == pytest.approx(receipt['final_reserved_usd'] + .004)
     assert calls == [('selection', 1), ('final', 1)]
-    assert harness.run_batch([ep], out, max_spend=20, **args) == 0
+    receipt_path = out / f'noreply_{ep.name}.json'
+    before_resume = receipt_path.read_bytes()
+    # An unresolved charge is a non-successful resume, while its paid request remains held.
+    assert harness.run_batch([ep], out, max_spend=20, **args) == 1
+    assert receipt_path.read_bytes() == before_resume
+    marker = json.loads((out / f'stale_{ep.name}.json').read_text())
+    assert marker['status'] == 'unverified' and 'unresolved charge' in marker['reason']
     assert calls == [('selection', 1), ('final', 1)]
 
 

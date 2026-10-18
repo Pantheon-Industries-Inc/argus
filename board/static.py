@@ -924,6 +924,8 @@ def main():
                                                 "page's title bar (python -m board serve --header)")
     a = ap.parse_args()
     a.qa = a.board / "qa"
+    if not a.qa.is_dir():
+        ap.error('No board qa directory exists. A free review stops before board generation; use a built board or a custom qa directory.')
     a.out = a.out or a.board / "static"
     if not FFMPEG or not FFPROBE:
         sys.exit("ffmpeg/ffprobe not found")

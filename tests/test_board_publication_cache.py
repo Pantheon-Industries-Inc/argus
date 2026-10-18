@@ -151,6 +151,20 @@ def test_http_probe_admission_bounds_distinct_and_duplicate_misses_and_keeps_rea
                 assert release.wait(5)
             return stream_digest(reader, *args)
         monkeypatch.setattr(serve, '_stream_digest', slow_hash)
+    queued = threading.Event()
+    if held_stage == 'hash':
+        from contextlib import contextmanager
+        admission = serve._prepare_admission
+        admissions = [0]
+        @contextmanager
+        def observe():
+            with lock:
+                admissions[0] += 1
+                if admissions[0] == 3:
+                    queued.set()
+            with admission():
+                yield
+        monkeypatch.setattr(serve, '_prepare_admission', observe)
     ready, _ = serve.footage('episode_ready', 0, 1)
     with socketserver.ThreadingTCPServer(('127.0.0.1', 0), serve.Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -169,14 +183,20 @@ def test_http_probe_admission_bounds_distinct_and_duplicate_misses_and_keeps_rea
                 duplicate = pool.submit(get, 'cold')
                 other = pool.submit(get, 'other')
                 try:
-                    assert duplicate.result()[0] == 503
-                    assert other.result()[0] == 503
+                    if held_stage == 'probe':
+                        assert duplicate.result()[0] == 503
+                        assert other.result()[0] == 503
+                    else:
+                        assert queued.wait(2)
+                        assert not duplicate.done() and not other.done()
                     assert get('ready') == (200, ready.read_bytes())
                     assert probes == (['episode_ready.mp4', 'episode_cold.mp4'] if held_stage == 'probe'
                                       else ['episode_ready.mp4'])
                 finally:
                     release.set()
                 assert worker.result()[0] == 200
+                if held_stage == 'hash':
+                    assert duplicate.result()[0] == other.result()[0] == 200
         finally:
             release.set()
             server.shutdown()

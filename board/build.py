@@ -1158,6 +1158,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("board", type=Path, help="the board folder, with manifest.json")
     a = ap.parse_args()
+    if not (a.board / 'manifest.json').is_file():
+        ap.error('No board manifest.json exists. A free review stops before board generation; build a labelled board first.')
     print(json.dumps(build(a.board)["counts"], indent=1))
     return 0
 

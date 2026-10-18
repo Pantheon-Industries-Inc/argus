@@ -212,12 +212,15 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
                 raise RuntimeError(f"200 response with no choices: {err}")
             return resp
         except urllib.error.HTTPError as e:
-            text = e.read().decode(errors="replace")[:500]
+            # Read a bounded complete envelope before shortening its display message.
+            raw_error = e.read(65537)
+            text = raw_error.decode(errors="replace")
+            complete_error = len(raw_error) <= 65536
             last = f"HTTP {e.code}: {text[:300]}"
             if is_key_exhausted(e.code, text):
                 quota = None
                 try:
-                    quota = json.loads(text).get('error', {}).get('code')
+                    quota = json.loads(text).get('error', {}).get('code') if complete_error else None
                 except (ValueError, AttributeError):
                     pass
                 if attempt == 0 and (e.code in (401, 402) or (
@@ -431,21 +434,68 @@ def saved_input_problem(record: dict, ep_dir: Path) -> str | None:
     return None
 
 
-def billing_record(out_dir: Path, name: str):
-    """Select the latest durable paid attempt without discarding earlier label files."""
-    selected = None
+def _receipt_snapshot(out_dir: Path, name: str) -> list:
+    """Read and validate each candidate once for a consistent annotation and billing selection."""
+    records = []
     for path in (Path(out_dir) / name, Path(out_dir) / f'failed_{name}', Path(out_dir) / f'noreply_{name}'):
         if not path.exists():
             continue
-        record = json.loads(path.read_text())
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError) as error:
+            raise ValueError(f'{path.name}: saved billing receipt cannot be read: {error}') from error
         if not isinstance(record, dict):
-            raise ValueError('saved billing receipt is not an object')
+            raise ValueError(f'{path.name}: saved billing receipt is not an object')
         index = record.get('final_attempt_index', 0)
         if type(index) is not int or index < 0:
+            raise ValueError(f'{path.name}: saved final attempt index is invalid')
+        records.append((path, record))
+    return records
+
+
+def billing_record(out_dir: Path, name: str):
+    """Select the latest durable paid attempt without discarding earlier label files."""
+    return max(_receipt_snapshot(out_dir, name), key=lambda item: item[1].get('final_attempt_index', 0), default=None)
+
+
+def annotation_record(out_dir: Path, name: str):
+    """Select final reply authority separately from the latest cumulative financial ledger.
+
+    A local refusal cannot supersede a received reply or an unresolved dispatch. Indexed
+    histories retain authority when a later local receipt replaced that dispatch's file.
+    Equal-index files preserve primary, failed, no-reply legacy precedence.
+    """
+    records = _receipt_snapshot(out_dir, name)
+    latest = max(records, key=lambda item: item[1].get('final_attempt_index', 0), default=None)
+    if latest is None:
+        return None
+    selected = None
+    for path, record in records:
+        if record.get('final_dispatch_outcome') == 'not dispatched':
+            continue
+        if selected is None or record.get('final_attempt_index', 0) > selected[1].get('final_attempt_index', 0):
+            selected = path, record
+    for history_index, invoice in enumerate(latest[1].get('final_cost_history', [])):
+        index = invoice.get('final_attempt_index', 0)
+        if type(index) is not int or index < 0:
             raise ValueError('saved final attempt index is invalid')
+        if invoice.get('final_dispatch_outcome') == 'not dispatched':
+            continue
         if selected is None or index > selected[1].get('final_attempt_index', 0):
-            selected = (path, record)
+            prefix = ('failed_' if invoice.get('finish_reason') == 'length' else
+                      'noreply_' if invoice.get('final_dispatch_outcome') in ('claimed', 'unverified') else '')
+            selected = (Path(out_dir) / (prefix + name),
+                        {'episode_dir': latest[1].get('episode_dir'), **copy.deepcopy(invoice),
+                         '_authority_history_index': history_index})
+    selected = selected or latest
+    if selected[1] != latest[1]:
+        selected = selected[0], {**selected[1], '_billing_receipt': latest[1]}
     return selected
+
+
+def billing_view(record: dict) -> dict:
+    """The financial receipt attached to an annotation selected from an older attempt."""
+    return record.get('_billing_receipt', record)
 
 
 def _history_cost(invoice: dict) -> float:
@@ -517,11 +567,9 @@ def _final_cost_history(out_path: Path) -> list:
     if record.get('final_dispatch_outcome') == 'not dispatched' or record.get('dry_run'):
         return history
     _history_cost(record)
-    history.append({key: copy.deepcopy(record[key]) for key in (
-        'model', 'reasoning_effort', 'provider', 'provider_name', 'generation_id', 'model_served',
-        'system_fingerprint', 'usage', 'usage_reported', 'finish_reason', 'final_dispatch_outcome',
-        'final_reserved_usd', 'final_attempt_index', 'response_text', 'response', 'labels',
-        'content_tail', 'reasoning_text') if key in record})
+    # Retain the full attempt for offline repair, without recursively copying its histories.
+    history.append({key: copy.deepcopy(value) for key, value in record.items()
+                    if key not in ('final_cost_history', 'auxiliary_cost_history') and not key.startswith('_')})
     return history
 
 
@@ -557,6 +605,7 @@ def _billing_fields(out_path: Path) -> dict:
 def episode_cost(result: dict) -> float:
     """What labelling one episode was billed: its model call plus, for a routed episode, the routing call made for
     it (label/route.py)."""
+    result = billing_view(result)
     route = (result.get("config") or {}).get("resolution_route") or {}
     inspection = result.get('evidence_inspection') or {}
     final = (result.get("usage") or {}).get("est_cost_usd")
@@ -863,9 +912,15 @@ def substantive_annotation(labels: dict) -> bool:
     return any(text(row, 'object') for field in ('contacts', 'contacts_missing') for row in labels.get(field) or [])
 
 
+def reply_truncated(record: dict) -> bool:
+    """A syntactically parsed fragment still lacks the provider's completed reply."""
+    return record.get('finish_reason') == 'length'
+
+
 def annotation_complete(record: dict) -> bool:
     """Revalidate saved acceptance flags using the current parser before treating a reply as complete."""
-    if record.get('parse_ok') is not True or not isinstance(record.get('labels'), dict):
+    if (reply_truncated(record) or record.get('parse_ok') is not True
+            or not isinstance(record.get('labels'), dict)):
         return False
     return parse_response(json.dumps(record['labels']))[1]
 
@@ -1407,35 +1462,17 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
         p = out_for(ep)
         if force:
             return False
-        candidates = [p, p.with_name(f"failed_{p.name}"), p.with_name(f"noreply_{p.name}")]
-        if p.exists():
-            try:
-                primary = json.loads(p.read_text())
-                if annotation_complete(primary) or primary.get("dry_run"):
-                    candidates = [p]
-                    if ep.name in retry_received:
-                        latest = billing_record(out_dir, p.name)
-                        if latest is not None:
-                            candidates = [latest[0]]
-            except (OSError, ValueError, AttributeError):
-                pass
-        existing = [q for q in candidates if q.exists() and q.stat().st_size]
-        if not existing:
+        try:
+            selected = annotation_record(out_dir, p.name)
+        except (OSError, ValueError, TypeError, AttributeError) as error:
+            stale[ep.name] = f'saved receipts cannot be verified: {error}'
+            return True
+        if selected is None:
             if ep.name in retry_received:
                 stale[ep.name] = 'explicit received retry needs an existing received reply'
                 return True
             return False
-        records = []
-        for q in existing:
-            try:
-                record = json.loads(q.read_text())
-            except (OSError, ValueError):
-                stale[ep.name] = f"saved output {q.name} cannot be verified"
-                return True
-            if not isinstance(record, dict):
-                stale[ep.name] = f"saved output {q.name} is not a JSON object"
-                return True
-            records.append((q, record))
+        records = [selected]
         try:
             never_dispatched = all(record.get('final_dispatch_outcome') == 'not dispatched'
                 and not record.get('final_cost_history') and not record.get('auxiliary_cost_history')
@@ -1486,15 +1523,17 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                 unverified[ep.name] = f"saved output {q.name} predates input proof"
                 return True
             comparison = current
-            if retry_received and isinstance(saved, dict) and isinstance(saved.get('settings'), dict):
-                # A named paid retry can raise its output limit. Existing received
-                # siblings keep the limit of their own request and remain untouched.
+            if isinstance(saved, dict) and isinstance(saved.get('settings'), dict):
+                # Completion limits belong to each saved request. Changing a future
+                # request limit does not invalidate a durably received reply.
                 comparison = {**current, 'settings': {**current['settings'],
                     'max_tokens': saved['settings'].get('max_tokens')}}
             if not same_input_identity(saved, comparison) or any(item.get("missing") for item in current["source_proof"]):
                 stale[ep.name] = f"saved output {q.name} has changed or missing input; use --force to refresh"
                 return True
         if any(record.get('final_dispatch_outcome') in ('claimed', 'unverified') for _, record in records):
+            saved_failures.add(ep.name)
+            unverified[ep.name] = 'saved dispatch has an unresolved charge; no automatic paid retry'
             if ep.name in retry_received:
                 saved_failures.add(ep.name)
                 unverified[ep.name] = 'received retry refused: the saved charge is unresolved'
@@ -1517,9 +1556,7 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                 unverified[ep.name] = ('saved paid reply needs reparse or explicit '
                                        f'--retry-received {ep.name}; no automatic paid retry')
                 return True
-        if not p.exists():
-            return False
-        record = json.loads(p.read_text())
+        record = records[0][1]
         if dry:
             return bool(record.get('dry_run'))
         complete = annotation_complete(record)
@@ -1553,6 +1590,7 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
     print(f"episodes={len(episodes)} skipped(done)={skipped} todo={len(todo)} "
           f"keys={len(keys)} concurrency={concurrency} dry_run={dry}", flush=True)
     if not todo:
+        print(f'done=0 failed={len(saved_failures)} skipped={skipped} total_cost=$0.00 out_dir={out_dir}', flush=True)
         return 1 if saved_failures else 0
     done, failed = 0, len(saved_failures)
     total_cost = 0.0
@@ -1686,7 +1724,8 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
             return
         previous = json.loads(p.read_text()) if p.exists() else {}
         current = billing_record(out_dir, out_for(ep).name)
-        if current is not None and current[0].name.startswith('failed_'):
+        if current is not None and current[1].get('final_dispatch_outcome') != 'not dispatched':
+            # Keep post-receipt processing errors on that attempt, without inventing a final dispatch.
             previous = current[1]
         if not previous:
             previous = {**_billing_fields(out_for(ep)), 'final_dispatch_outcome': 'not dispatched',

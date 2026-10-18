@@ -414,6 +414,8 @@ _FOOTAGE_READY_LOCK = threading.Lock()
 _FOOTAGE_MEMORY_LOCK = threading.Lock()
 _FOOTAGE_RECORDS = OrderedDict()
 _FOOTAGE_ACCESS = OrderedDict()
+_FOOTAGE_HINTS = OrderedDict()
+_PREPARE_WAITERS = threading.BoundedSemaphore(max(4, 2 * int(os.environ.get('BOARD_FOOTAGE_CONCURRENCY', 1))))
 _CONTENT_PROBES = OrderedDict()
 _CONTENT_PROBE_LOCK = threading.Lock()
 _FOOTAGE_TICKET_SECONDS = 3600
@@ -460,8 +462,7 @@ def footage_label(eid: str) -> dict:
                 if not _under(HERE, path):
                     continue
                 try:
-                    st = path.stat()
-                    sig = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+                    sig = _label_identity(path)
                     old = previous.get(path.name)
                     if old is not None and old[0] == sig:
                         _LABEL_INDEX[path.name] = old
@@ -763,7 +764,43 @@ def _validate_active_sources():
 
 
 @contextmanager
-def _footage_sources(cams):
+def _prepare_admission():
+    # Waiting requests are bounded independently of encoder slots. One HTTP
+    # request can wait for a progressing long encode without polling source bytes.
+    if not _PREPARE_WAITERS.acquire(blocking=False):
+        raise CacheBusy('Media preparation queue is busy; try again shortly')
+    acquired = False
+    previous = getattr(_MEDIA_READERS, 'prepare_slot', False)
+    try:
+        _FOOTAGE_SEM.acquire()
+        acquired = True
+        _MEDIA_READERS.prepare_slot = True
+        yield
+    finally:
+        _MEDIA_READERS.prepare_slot = previous
+        if acquired:
+            _FOOTAGE_SEM.release()
+        _PREPARE_WAITERS.release()
+
+
+def _cached_prepare_hint(key):
+    with _FOOTAGE_MEMORY_LOCK:
+        output = _FOOTAGE_HINTS.get(key)
+    return output is not None and output.is_file()
+
+
+def _remember_prepare_hint(key, output):
+    if key is None:
+        return
+    with _FOOTAGE_MEMORY_LOCK:
+        _FOOTAGE_HINTS[key] = output
+        _FOOTAGE_HINTS.move_to_end(key)
+        while len(_FOOTAGE_HINTS) > max(128, _FOOTAGE_DISK_FILES):
+            _FOOTAGE_HINTS.popitem(last=False)
+
+
+@contextmanager
+def _footage_sources(cams, request_options=None):
     """Retain source handles; untrusted files are content-validated on every prepare.
 
     POSIX probe and encode children inherit these same handles. A ready hit reads
@@ -774,16 +811,26 @@ def _footage_sources(cams):
     if len(cams) > 64:
         raise ValueError('Too many footage cameras')
     with ExitStack() as stack:
-        previous = getattr(_MEDIA_READERS, 'active', [])
-        active, working, identities, digests = [], [], [], []
-        _MEDIA_READERS.active = active
+        previous = (getattr(_MEDIA_READERS, 'active', []), getattr(_MEDIA_READERS, 'untrusted', False),
+                    getattr(_MEDIA_READERS, 'prepare_hint', None))
+        active, working, identities, digests, opened = [], [], [], [], []
+        for cam, path in cams:
+            reader = stack.enter_context(path.open('rb'))
+            stat = os.fstat(reader.fileno())
+            version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            opened.append((cam, path, reader, version, not _durable_metadata(str(path), version)))
+        untrusted = any(item[4] for item in opened)
+        hint = (hashlib.sha1(json.dumps([request_options, [(str(path), version)
+                for _, path, _, version, _ in opened]]).encode()).hexdigest() if request_options is not None else None)
+        _MEDIA_READERS.active, _MEDIA_READERS.untrusted, _MEDIA_READERS.prepare_hint = active, untrusted, hint
         try:
-            for index, (cam, path) in enumerate(cams):
-                reader = stack.enter_context(path.open('rb'))
-                stat = os.fstat(reader.fileno())
-                version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            # Hints permit only a potential ready hit to perform its mandatory
+            # content check under contention. They never authorize source bytes.
+            if untrusted and not _cached_prepare_hint(hint):
+                stack.enter_context(_prepare_admission())
+            for cam, path, reader, version, weak in opened:
                 digest = None
-                if not _durable_metadata(str(path), version):
+                if weak:
                     with _probe_admission(('source', str(path), version)):
                         digest = _stream_digest(reader, version[2])
                     reader.seek(0)
@@ -793,7 +840,7 @@ def _footage_sources(cams):
                 digests.append(digest)
             yield working, identities, digests
         finally:
-            _MEDIA_READERS.active = previous
+            _MEDIA_READERS.active, _MEDIA_READERS.untrusted, _MEDIA_READERS.prepare_hint = previous
 
 
 @contextmanager
@@ -1061,7 +1108,11 @@ def prepare_footage_ticket(result: tuple) -> str:
     if record is None:
         record, _ = _cached_footage_record(result[0].stem)
     record = dict(record) if record is not None else None
-    if record is None or list(_footage_version(result[0])) != list(record.get('version') or []):
+    try:
+        version = _footage_version(result[0])
+    except FileNotFoundError as error:
+        raise CacheBusy('Prepared video was evicted; prepare it again.') from error
+    if record is None or list(version) != list(record.get('version') or []):
         raise ValueError('Prepared footage changed before ticket publication')
     record['expires_at'] = time.time() + _FOOTAGE_TICKET_SECONDS
     token = uuid.uuid4().hex
@@ -1126,8 +1177,13 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
         return None
     if _FOOTAGE_DISK_BYTES <= 0:
         raise FootageCapacityError('Prepared footage disk cache has no capacity')
-    with _footage_sources(cams) as (working, identities, digests):
-        return _footage_from_sources(eid, t0, t1, label, working, identities, digests)
+    options = [eid, float(t0), None if t1 is None else float(t1), FOOTAGE_TAG,
+               label.get('duration_s'), label.get('camera_views')]
+    with _footage_sources(cams, options) as (working, identities, digests):
+        result = _footage_from_sources(eid, t0, t1, label, working, identities, digests)
+        if result is not None:
+            _remember_prepare_hint(_MEDIA_READERS.prepare_hint, result[0])
+        return result
 
 
 def _footage_from_sources(eid, t0, t1, label, cams, identities, digests):
@@ -1138,6 +1194,9 @@ def _footage_from_sources(eid, t0, t1, label, cams, identities, digests):
     if ready is not None:
         _trim_footage_cache(ready[0])
         return ready
+    if getattr(_MEDIA_READERS, 'untrusted', False) and not getattr(_MEDIA_READERS, 'prepare_slot', False):
+        with _FOOTAGE_MEMORY_LOCK:
+            _FOOTAGE_HINTS.pop(_MEDIA_READERS.prepare_hint, None)
     probes = [_content_probe(path, digest) if digest else _probe(path)
               for (_, path), digest in zip(cams, digests)]
     clocks = label.get('camera_views') or ['exo', 'left', 'right']
@@ -1155,14 +1214,22 @@ def _footage_from_sources(eid, t0, t1, label, cams, identities, digests):
     name = f'{eid}.mp4' if whole else f'{eid}_{t0:.1f}-{t1:.1f}s.mp4'
     key = hashlib.sha1(json.dumps([eid, t0, t1, FOOTAGE_TAG, identities]).encode()).hexdigest()[:20]
     out = FOOTAGE_DIR / f'{key}.mp4'
-    with _footage_lock(key):
-        ready = _ready_footage(key)
-        if ready is not None:
-            _remember_ready_footage(request, ready)
-            return ready
-        result = _uncached_footage(key, out, name, cams, probes, t0, t1)
-        _remember_ready_footage(request, result)
-        return result
+    with ExitStack() as stack:
+        if getattr(_MEDIA_READERS, 'untrusted', False) and not getattr(_MEDIA_READERS, 'prepare_slot', False):
+            ready = _ready_footage(key)
+            if ready is not None:
+                _remember_ready_footage(request, ready)
+                return ready
+            # Admission always precedes the output lock, including stale hints.
+            stack.enter_context(_prepare_admission())
+        with _footage_lock(key):
+            ready = _ready_footage(key)
+            if ready is not None:
+                _remember_ready_footage(request, ready)
+                return ready
+            result = _uncached_footage(key, out, name, cams, probes, t0, t1)
+            _remember_ready_footage(request, result)
+            return result
 
 
 def _run_footage(cmd: list) -> subprocess.CompletedProcess:
@@ -1196,8 +1263,18 @@ def _run_footage(cmd: list) -> subprocess.CompletedProcess:
             raise
 
 
-@_bounded_work(_FOOTAGE_SEM)
 def _uncached_footage(key, out, name, cams, probes, t0, t1):
+    if getattr(_MEDIA_READERS, 'prepare_slot', False):
+        return _encode_reserved_footage(key, out, name, cams, probes, t0, t1)
+    return _admitted_uncached_footage(key, out, name, cams, probes, t0, t1)
+
+
+@_bounded_work(_FOOTAGE_SEM)
+def _admitted_uncached_footage(*args):
+    return _encode_reserved_footage(*args)
+
+
+def _encode_reserved_footage(key, out, name, cams, probes, t0, t1):
     with _encode_sources(cams) as working:
         return _encode_and_publish(key, out, name, working, probes, t0, t1)
 
@@ -1296,14 +1373,20 @@ def labels_license(board: Path) -> dict | None:
     return lic if isinstance(lic, dict) and lic.get("name") else None
 
 
+def _label_identity(path):
+    from board.static import _durable_metadata, src_sig
+    version = _footage_version(path)
+    return version if _durable_metadata(str(path), version) else (*version, src_sig(path))
+
+
 def list_episodes(here: Path | None = None) -> list:
     """The rail records of the board's own labels, or of one model's labels (compare/<key>). Cached per folder and
-    rebuilt only when its set of json files or their mtimes change, so concurrent page loads don't each re-parse
+    rebuilt only when its set of json files or their identities change, so concurrent page loads don't each re-parse
     every episode file."""
     here = here or HERE
     try:
-        # one stat per file: the list is signed on every page load, and a board has thousands of files
-        sig = tuple(sorted((p.name, int(st.st_mtime), st.st_size) for p in here.glob("*.json") for st in [p.stat()]))
+        # Trusted files use metadata; weak files require content proof on each page load.
+        sig = tuple(sorted((p.name, _label_identity(p)) for p in here.glob("*.json")))
     except OSError:
         sig = None
     with _LIST_LOCK:
@@ -1989,9 +2072,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if (q.get("prepare") or [""])[0] == "1":
                 try:
                     ticket = prepare_footage_ticket(got)
-                    size = out.stat().st_size
+                    try:
+                        size = out.stat().st_size
+                    except FileNotFoundError as error:
+                        raise CacheBusy('Prepared video was evicted; prepare it again.') from error
                 except CacheBusy as error:
-                    return self._send(503, {'error': str(error)})
+                    return self._send(503, {'error': str(error), 'retryable': True})
                 except OSError as error:
                     return self._send(507 if error.errno in (errno.ENOSPC, errno.EDQUOT) else 503,
                                       {'error': 'Prepared video storage cannot save a download ticket.', 'retryable': False})

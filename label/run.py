@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from label.harness import annotation_complete, execution_lock, get_keys, is_openrouter_key
+from label.harness import annotation_complete, annotation_record, execution_lock, get_keys, is_openrouter_key
 from label.dictionary_stage import output_spend
 from label.atomic import write_atomic
 
@@ -62,7 +62,8 @@ def parsed(run: Path, eps: list[str]) -> int:
     n = 0
     for e in eps:
         try:
-            record = json.loads((run / "out" / f"{e}.json").read_text())
+            selected = annotation_record(run / 'out', f'{e}.json')
+            record = selected[1] if selected else {}
             n += isinstance(record, dict) and annotation_complete(record)
         except (OSError, ValueError):
             pass

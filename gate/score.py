@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from checks import label_consistency
-from label.harness import PRICE_IN, episode_cost
+from label.harness import PRICE_IN, episode_cost, annotation_record, reply_truncated
 
 HERE = Path(__file__).resolve().parent
 RIGS = ("teleop", "handheld", "ego")
@@ -137,10 +137,12 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         ok.append(not miss)
         miss and why.append(f"never names {miss}")
     if "max_issue_sev" in case:
-        over = [(i.get("category"), i.get("severity")) for i in labels.get("data_issues") or [] if isinstance(i, dict)
-                and i.get('issue') and (i.get('severity') not in SEV or
-                    SEV[i['severity']] > SEV[case["max_issue_sev"]])]
-        ok.append(not over)
+        issues = [item for item in labels.get('data_issues') or [] if isinstance(item, dict) and item.get('issue')]
+        unrated = [(item.get('category'), item.get('severity')) for item in issues if item.get('severity') not in SEV]
+        over = [(item.get('category'), item.get('severity')) for item in issues
+                if item.get('severity') in SEV and SEV[item['severity']] > SEV[case['max_issue_sev']]]
+        ok.append(not unrated and not over)
+        unrated and why.append(f'unrated issues prevent verifying severity bound: {unrated}')
         over and why.append(f"issues above {case['max_issue_sev']}: {over}")
     if "held" in case:
         texts = texts_handled(labels)
@@ -180,14 +182,17 @@ def score(runs: list[Path]) -> dict:
     for run in runs:
         out = Path(run) / 'out'
         selected = []
-        for file in sorted(out.glob('*.json')):
-            name = file.stem.removeprefix('failed_')
-            if name not in role or (name != file.stem and (out / f'{name}.json').exists()):
+        names = {file.stem.removeprefix('failed_').removeprefix('noreply_')
+                 for file in out.glob('*.json') if not file.stem.startswith('stale_')}
+        for name in sorted(names & role.keys()):
+            chosen = annotation_record(out, name + '.json')
+            if chosen is None:
                 continue
+            file, record = chosen
             if name in owners:
                 raise ValueError(f'Duplicate gate episode {name}: {owners[name]} and {file}; score the runs separately')
             owners[name] = file
-            selected.append((name, file))
+            selected.append((name, file, record))
         selected_runs.append((Path(run), selected))
     for run, selected in selected_runs:
         # a setup whose run wrote no output at all still scores, every episode as "no output"
@@ -196,19 +201,11 @@ def score(runs: list[Path]) -> dict:
         if ds.startswith("gate_") and ds[5:] in sel:
             rig_stats(ds[5:])
         out = Path(run) / "out"
-        for name, f in selected:
+        for name, f, d in selected:
             seen.add(name)
             rig, r = role[name]
             p = rig_stats(rig)
             p["asked"] += 1
-            d = json.loads(f.read_text())
-            if not d.get("parse_ok"):
-                p["failures"].append(f"{name}: did not parse" if "labels" in d else f"{name}: reply cut off")
-                if case_for(name, cases):
-                    p["cases"] += 1
-                continue
-            p["parsed"] += 1
-            labels = d.get("labels") or {}
             sec = duration_s(Path(d["episode_dir"]))
             if r.startswith("cost:"):
                 c = p["cost"].setdefault(r[5:], [0.0, 0.0, 0])
@@ -216,6 +213,13 @@ def score(runs: list[Path]) -> dict:
                 c[1] += sec
                 c[2] += 1
                 p["cache_reads"].append(int((d.get("usage") or {}).get("cached_tokens") or 0))
+            if not d.get("parse_ok") or reply_truncated(d):
+                p["failures"].append(f"{name}: did not parse" if "labels" in d else f"{name}: reply cut off")
+                if case_for(name, cases):
+                    p["cases"] += 1
+                continue
+            p["parsed"] += 1
+            labels = d.get("labels") or {}
             flags = [x["rule"] for x in label_consistency.check(labels, sec)]
             if flags:
                 p["flags"] += 1

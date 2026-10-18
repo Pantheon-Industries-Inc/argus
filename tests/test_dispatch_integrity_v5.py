@@ -198,7 +198,7 @@ def test_model_finding_cannot_supply_presentation_overrides_or_time_offsets():
 
 
 @pytest.mark.parametrize('dependency', ['label/evidence_access.py', 'prepare/display.py',
-    'prepare/mcap_fields.py', 'prepare/hdf_metadata.py', 'checks/vendor/public_dataset_adapter_qc.py'])
+    'prepare/mcap_fields.py', 'prepare/hdf_metadata.py'])
 def test_request_semantics_tracks_inspection_prompt_dependency(tmp_path, monkeypatch, dependency):
     ep = recording(tmp_path, np.arange(12) / 30)
     args = dict(model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, cell_w=128, example_dir=None)
@@ -323,7 +323,8 @@ def test_run_resume_before_primary_output_keeps_claim_and_finishes_untouched_wor
     monkeypatch.setenv('OPENROUTER_API_KEYS', 'sk-or-fixture')
     def finish(run_dir, info, command, slice_dir, mode):
         monkeypatch.setattr(sys, 'argv', command[2:])
-        assert harness.main() == 0
+        # An untouched sibling can finish while the interrupted charge remains unresolved.
+        assert harness.main() == (0 if force else 1)
     monkeypatch.setattr(run, 'finish', finish)
     args = SimpleNamespace(resume=folder, dataset='fixture', kind='full', why='killed child', concurrency=1,
         harness_args=['--cell-w', '128', '--max-tokens', '100'] + (['--force'] if force else []))

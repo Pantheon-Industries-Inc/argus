@@ -50,6 +50,25 @@ def check_packet_order(path, fmt: str) -> None:
                 last = frame.pts
 
 
+def check_message_ownership(path, fmt: str, message_ends: list[int]) -> None:
+    """Every parsed access unit must occupy exactly one original nonempty camera message."""
+    import av
+    count, start = 0, 0
+    with av.open(str(path), format=fmt) as source:
+        for packet in source.demux(source.streams.video[0]):
+            if not packet.size:
+                continue
+            if (count >= len(message_ends) or packet.pos != start
+                    or packet.pos + packet.size != message_ends[count]):
+                raise RemuxSourceError('Annex-B picture/message ownership is unverified: each message must contain '
+                                       'exactly one complete encoded picture, without batching or fragmentation.')
+            start = message_ends[count]
+            count += 1
+    if count != len(message_ends):
+        raise RemuxSourceError(f'Annex-B picture/message ownership is unverified: {len(message_ends)} messages '
+                               f'produced {count} pictures.')
+
+
 def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.ndarray:
     """Copy Annex-B frames packet for packet into an mp4 whose pts are the frames' real capture times
     (rounded to the microsecond time base). No re-encode. Returns the pts in the written file, one per frame."""
@@ -58,8 +77,10 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
     if input_format is None:
         raise RemuxSourceError(f"Unsupported recorded camera codec: {fmt!r}.")
     with tempfile.NamedTemporaryFile(suffix="." + fmt, dir=out.parent, delete=False) as f:
+        ends = []
         for b in frames:
             f.write(b)
+            ends.append(f.tell())
         raw = f.name
     pts = np.round(np.asarray(t_rel_s, dtype=np.float64) * TIME_BASE_DEN).astype(np.int64)
     # a frame stamped at or before the previous one (a recorder glitch, counted in stream_checks) is
@@ -71,6 +92,7 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
         with av.open(raw, format=input_format) as src, av.open(str(out), "w") as dst:
             ist = src.streams.video[0]
             check_packet_order(raw, input_format)
+            check_message_ownership(raw, input_format, ends)
             ost = dst.add_stream_from_template(ist)
             ost.time_base = Fraction(1, TIME_BASE_DEN)
             i = 0

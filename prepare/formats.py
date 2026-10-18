@@ -1097,18 +1097,17 @@ def raw_image(msg):
     """A raw image message (sensor_msgs/Image, foxglove.RawImage) as an RGB PIL image, or None for an encoding that
     is not a colour or grey picture (depth, 16-bit)."""
     from PIL import Image
-    w, h = int(_field(msg, "width") or 0), int(_field(msg, "height") or 0)
+    w, h = mcap_image_uint(msg, 'width'), mcap_image_uint(msg, 'height')
     enc = str(_field(msg, "encoding") or "").lower()
-    data = _field(msg, "data", binary=True)
-    data = bytes(data) if data is not None else b""
-    step = int(_field(msg, "step") or 0)
+    data = mcap_camera_bytes(msg)
+    step = mcap_image_uint(msg, 'step')
     ch = {"rgb8": 3, "bgr8": 3, "8uc3": 3, "rgba8": 4, "bgra8": 4, "8uc4": 4, "mono8": 1, "8uc1": 1}.get(enc)
     if not (w and h):
-        return None
+        raise McapPayloadError('Raw image dimensions must be positive')
     if ch:
         step = step or w * ch
-        if len(data) < step * h:
-            return None
+        if step < w * ch or len(data) < step * h:
+            raise McapPayloadError('Raw image stride or byte count does not cover its dimensions')
         a = np.frombuffer(data, np.uint8, count=step * h).reshape(h, step)[:, :w * ch].reshape(h, w, ch)
         if enc in ("bgr8", "8uc3", "bgra8", "8uc4"):
             a = a[:, :, [2, 1, 0]]
@@ -1119,8 +1118,8 @@ def raw_image(msg):
         import av
         fmt = "uyvy422" if enc in ("yuv422", "uyvy") else "yuyv422"
         step = step or w * 2
-        if len(data) < step * h:
-            return None
+        if w % 2 or step < w * 2 or len(data) < step * h:
+            raise McapPayloadError('YUV422 image dimensions, stride or byte count are invalid')
         a = np.frombuffer(data, np.uint8, count=step * h).reshape(h, step)[:, :w * 2]
         return av.VideoFrame.from_ndarray(np.ascontiguousarray(a).reshape(h, w, 2), format=fmt).to_image()
     return None
@@ -1134,17 +1133,19 @@ def depth_image(msg) -> tuple[np.ndarray, float | None] | None:
     A generic mono16 or PNG image does not establish physical units."""
     import io
     enc = str(_field(msg, "encoding") or _field(msg, "format") or "").lower()
-    data = _field(msg, "data", binary=True)
-    data = bytes(data) if data is not None else b""
-    w, h = int(_field(msg, "width") or 0), int(_field(msg, "height") or 0)
-    if w and h and data:
-        step = int(_field(msg, "step") or 0)
+    data = mcap_camera_bytes(msg)
+    w, h = mcap_image_uint(msg, 'width'), mcap_image_uint(msg, 'height')
+    step = mcap_image_uint(msg, 'step')
+    if w or h or enc in ('16uc1', 'mono16', '32fc1'):
+        if not (w and h):
+            raise McapPayloadError('Raw depth dimensions must be positive')
         if enc in ('16uc1', 'mono16', '32fc1'):
             dtype = np.dtype(('>' if _field(msg, 'is_bigendian') else '<') + ('f4' if enc == '32fc1' else 'u2'))
             step = step or w * dtype.itemsize
-            if step >= w * dtype.itemsize and len(data) >= h * step:
-                a = np.ndarray((h, w), dtype=dtype, buffer=data, strides=(step, dtype.itemsize)).copy()
-                return a, 1.0 if enc == '32fc1' else 0.001 if enc == '16uc1' else None
+            if step < w * dtype.itemsize or len(data) < h * step:
+                raise McapPayloadError('Raw depth stride or byte count does not cover its dimensions')
+            a = np.ndarray((h, w), dtype=dtype, buffer=data, strides=(step, dtype.itemsize)).copy()
+            return a, 1.0 if enc == '32fc1' else 0.001 if enc == '16uc1' else None
         return None
     i = data.find(b"\x89PNG")
     if i < 0:
@@ -1153,7 +1154,7 @@ def depth_image(msg) -> tuple[np.ndarray, float | None] | None:
     try:
         im = Image.open(io.BytesIO(data[i:]))
         a = np.asarray(im)
-    except Exception:
+    except (OSError, ValueError):
         return None
     if a.ndim != 2:
         return None
@@ -5718,7 +5719,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
             row, packed_ownership = canonical_packed_row(r, row, fps)
             if packed_ownership:
                 extra['source']['packed_video_ownership'] = packed_ownership
-        sources, cameras, broken, pts, grid, encoded_times = {}, {}, {}, {}, {}, {}
+        sources, cameras, broken, pts, grid, encoded_times, partial_rows = {}, {}, {}, {}, {}, {}, {}
         for v, key in vmap.items():
             mp4, base, to = row["videos"][key]
             try:
@@ -5741,6 +5742,17 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
                 grid[v] = bool(np.allclose(pr["pts"], expected, rtol=0, atol=1e-4))
             pts[v] = pr["pts"]
             encoded_times[v] = pr.get('episode_times', np.arange(n) / fps)
+            length = row.get('length')
+            if not pr.get('publisher_query') and type(length) is int and n != length:
+                partial_rows[v] = packed_partial_rows(pr, base, to, length, fps)
+                encoded_times[v] = pr['pts'].astype(np.float64) * float(pr['time_base']) - base
+                grid[v] = False
+                add_issue(extra, 'packed_partial_coverage',
+                          f'{key}: {n} encoded pictures remain for {length} publisher rows. ' +
+                          ('Exact PTS identify the retained table rows; original publisher times and full table are kept.'
+                           if partial_rows[v] is not None else
+                           'Their table-row ownership is unverified; physical state is withheld and the full original table is kept.'),
+                          camera=key)
             if not grid[v] and not pr.get('publisher_query'):
                 add_issue(extra, "recorded_rate_mismatch", f"{key} PTS do not follow the declared {fps:g} Hz grid. "
                           "Frames remain mapped by their recorded indices; original encoded PTS are retained separately.",
@@ -5750,14 +5762,41 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
                 cameras[v]["desc"] = descs[key]
                 cameras[v]['role_provenance'] = 'adapter'
                 cameras[v].pop('mounting', None)
+        if any(view not in partial_rows or partial_rows[view] is not None for view in sources):
+            for view in [view for view, rows in partial_rows.items() if rows is None]:
+                key = vmap[view]
+                unshown_keys.append(key)
+                add_issue(extra, 'camera_not_aligned', f'{key}: readable partial footage has no proven publisher '
+                          'row association; it remains an unshown source rather than an aligned physical view.', camera=key)
+                sources.pop(view)
+                cameras.pop(view)
+                partial_rows.pop(view)
+                grid.pop(view)
         note_broken_cameras(extra, broken, bool(sources))
         vmap = {v: k for v, k in vmap.items() if v in sources}
         # the episode is as long as its main camera's window, as in one file per camera below
         anchor = me.order_views(sources)[0]
         n_frames = sources[anchor]["n_frames"]
-        camera_span_issues(extra, {v: np.arange(s["n_frames"]) / fps for v, s in sources.items()}, anchor,
+        camera_span_issues(extra, {view: encoded_times[view] for view in sources}, anchor,
                            dict(vmap), {"profile": rig, "cameras": cameras})
-        state, action, kind, note, fixes = state_on_frames(df, state, action, n_frames, fps, kind, note)
+        aligned_df = df
+        if anchor in partial_rows:
+            owned = partial_rows[anchor]
+            positions = packed_table_positions(df, owned, fps, row['length'])
+            if positions is None:
+                state, action, kind = None, None, 'none'
+                note = StateNote('The readable packed pictures have no proven association with the table rows. '
+                                 'Physical state is withheld; the complete original table remains retained evidence.', 'layout')
+                aligned_df = None
+            else:
+                aligned_df = df.iloc[positions].copy()
+                aligned_df['frame_index'] = np.arange(len(positions))
+                state = state[positions] if state is not None else None
+                action = action[positions] if action is not None else None
+                extra['source']['packed_partial_rows'] = {'camera': vmap[anchor], 'publisher_rows': owned.tolist(),
+                    'basis': 'unique exact encoded PTS against publisher window origin and declared row cadence',
+                    'original_table_rows': len(df)}
+        state, action, kind, note, fixes = state_on_frames(aligned_df, state, action, n_frames, fps, kind, note)
         ctx = {"dataset": dataset, "profile": rig, "state_kind": kind, "episode_id": ep.name, "fps": fps,
                "n_state_frames": int(len(state)) if state is not None and kind != "none" else int(n_frames),
                "cameras": cameras, "stream_checks": {"episode_length_meta": row.get("length"), "frames_on_grid": grid}, **extra}
@@ -5767,14 +5806,25 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
         for i in fixes:
             add_issue(ctx, **i)
         lerobot_annotations(ctx, r, df, row.get("data"))
-        write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx))
+        write_depth(ep, ctx, *lerobot_depth(ep, r, row, vmap, fps, ctx["n_state_frames"], unused, ctx,
+                                          anchor_times=encoded_times[anchor]))
         times = None
         if not all(grid.values()):
             times = {key: value for v in sources for key, value in
                      ((v, encoded_times[v]), (f"{v}_pts", pts[v]))}
-        ctx = finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
-                              signals=lerobot_recorded_signals(ep, ctx, r, df, _used_columns(kind, state, action, state_columns,
-                                                       action_columns) | set(hold_back), ctx["n_state_frames"]))
+        if partial_rows:
+            for view in sources:
+                if view != anchor:
+                    km = nearest(encoded_times[view], encoded_times[anchor])
+                    if not np.array_equal(km, np.arange(len(km))):
+                        sources[view]['kmap'] = f'kmap_{view}.npy'
+                        np.save(ep / sources[view]['kmap'], km)
+        signals = lerobot_recorded_signals(ep, ctx, r, aligned_df, _used_columns(kind, state, action, state_columns,
+                                           action_columns) | set(hold_back), ctx["n_state_frames"],
+                                           anchor_times=encoded_times[anchor])
+        if partial_rows and df is not None:
+            retain_partial_publisher_table(signals, df, r['features'], hold_back)
+        ctx = finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times, signals=signals)
         archive_lerobot_state(ep, ctx, df, row.get("data"))
         return ctx
     # one file per camera per episode (v2). LeRobot's timestamps are frame_index / fps and state rows follow
@@ -5884,6 +5934,9 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
                 if e and ep is not None:
                     name = f"unshown{len(out) + 1}_times.npz"
                     clock = facts.get("episode_times", np.arange(len(facts["pts"])) / rate)
+                    if not facts.get('publisher_query') and row.get('length') != len(facts['pts']):
+                        clock = facts['pts'].astype(np.float64) * float(facts['time_base']) - base
+                        e['camera_clock_note'] = 'Partial publisher row ownership is unverified; exact encoded clock retained.'
                     ep.mkdir(parents=True, exist_ok=True)
                     np.savez(ep / name, capture=clock, presentation=clock, pts=facts["pts"])
                     e["camera_times"] = name
@@ -5896,7 +5949,7 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
 
 
 def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, unused: list,
-                  ctx: dict | None = None) -> tuple[dict, dict]:
+                  ctx: dict | None = None, *, anchor_times=None) -> tuple[dict, dict]:
     """(depth.json entries, depth times) of a LeRobot episode's depth videos (features marked video.is_depth_map or
     named depth), each with its camera as the HDF5 reader pairs them (depth_camera). Additional streams keep their
     own view keys without an asserted RGB pairing. A depth video that is not read
@@ -5910,7 +5963,7 @@ def lerobot_depth(ep: Path, r: dict, row: dict, vmap: dict, fps: float, n: int, 
     from label import episode as me
     cams = {v: k for v, k in vmap.items() if k not in r["depth_cams"]}
     anchor = me.order_views(cams or vmap)[0]
-    ta = np.arange(n) / float(fps or 30.0)
+    ta = np.asarray(anchor_times) if anchor_times is not None else np.arange(n) / float(fps or 30.0)
 
     def leave(key, why):
         unused.append(f"{key} ({why})")
@@ -6064,6 +6117,59 @@ def packed_source_window(facts: dict, base: float, stop: float, *, fps=None, que
             **({'clock_quantization': quantization} if quantization else {})}
 
 
+def retain_partial_publisher_table(signals, df, features, hold_back):
+    """Keep complete original numeric rows as untimed typed evidence beside a partial camera projection."""
+    signals.native_table_fields, signals.native_table_bytes = [], 0
+    signals.native_table_frames = df['frame_index'].to_numpy() if 'frame_index' in df else np.arange(len(df))
+    for column in df.columns:
+        if column in hold_back or (features.get(column) or {}).get('dtype') in ('image', 'video'):
+            continue
+        cells = [_native_table_cell(value) for value in df[column]]
+        if any(value is not None for value in cells):
+            _retain_table_native(signals, str(column), cells, features.get(column) or {},
+                                 bookkeeping=bool(SIGNAL_SKIP.search(str(column))))
+
+
+def packed_table_positions(df, owned, fps, length):
+    """Select exact original table positions only when the row IDs and optional native clock agree."""
+    if owned is None or df is None:
+        return None
+    try:
+        if 'frame_index' in df:
+            declared = np.asarray([recorded_index(value) for value in df['frame_index']])
+        elif 'timestamp' in df:
+            clock = np.asarray(df['timestamp'], dtype=np.float64)
+            declared = np.asarray([recorded_index(value) for value in np.rint(clock * fps)])
+        else:
+            declared = np.arange(len(df)) if len(df) == length else np.array([])
+        clock_ok = 'timestamp' not in df or np.allclose(
+            np.asarray(df['timestamp'], dtype=np.float64), declared / fps, rtol=0, atol=1e-6)
+        lookup = {int(value): index for index, value in enumerate(declared)}
+        if clock_ok and len(lookup) == len(df) and all(int(value) in lookup for value in owned):
+            return np.asarray([lookup[int(value)] for value in owned], dtype=np.int64)
+    except (TypeError, ValueError, OverflowError):
+        pass  # Malformed or conflicting row clocks cannot supply a physical association.
+    return None
+
+
+def packed_partial_rows(facts, base, stop, length, fps):
+    """A partial stream may still identify unique publisher rows from its exact encoded timestamps."""
+    if not fps or length <= 0 or abs((stop - base) - length / fps) > 1e-6:
+        return None
+    targets = base + np.arange(length, dtype=np.float64) / fps
+    clock = facts['pts'].astype(np.float64) * float(facts['time_base'])
+    # A missing prefix removes count ownership. Exactly one publisher row must be a candidate for each
+    # surviving timestamp, accounting for both native query tolerance and the encoded clock's resolution.
+    radius = max(1e-4, float(facts['time_base']) / 2) + 4 * np.spacing(np.maximum(np.abs(clock), 1))
+    first = np.searchsorted(targets, clock - radius, side='left')
+    stop = np.searchsorted(targets, clock + radius, side='right')
+    if np.any(stop - first != 1) or np.any(np.diff(first) <= 0):
+        return None
+    if np.any(np.abs(targets[first] - clock) > 1e-4):
+        return None
+    return first
+
+
 def packed_video_window(path: Path, base: float, stop: float, *, fps: float | None = None, query=None) -> dict:
     """Exact encoded PTS selected by the publisher query contract or a generic half-open window."""
     stat = path.stat()
@@ -6211,6 +6317,7 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     display_t, clock_note = presentation_clock(t, fps)
     encoded_t = display_t if clock_note and clock_note.get("clock_problem") else t
     written, paths, prs, clocks, bases, broken = {}, {}, {}, {}, {}, {}
+    partial_unshown = []
     for index, key in enumerate(image_keys):
         path = ep / (view_of.get(key) or f"image_camera_{index + 1}")
         path = path.with_suffix('.mp4')
@@ -6235,10 +6342,20 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         facts = packed_video_window(Path(path), base, stop, fps=fps, query=row.get("_packed_queries", {}).get(key)) if stop is not None else probe(Path(path))
         if not len(facts["pts"]):
             raise ValueError("no video packet covers the owned episode window")
+        if stop is not None and not facts.get('publisher_query') and len(facts['pts']) != len(df):
+            if any(camera in paths for camera in written):
+                partial_unshown.append(key)
+                raise PackedOwnershipError('Partial packed footage has no complete publisher-row query proof beside '
+                                           'the embedded table camera; source footage remains retained.')
+            extra.setdefault('source', {}).setdefault('packed_rows_unverified', []).append(key)
         paths[key], prs[key], bases[key] = Path(path), facts, float(base)
         packed_quantization_note(extra, key, facts)
         # LeRobot associates video and table rows by episode frame index. Encoded PTS are retained separately.
         clocks[key] = facts.get("episode_times", np.arange(len(facts["pts"]), dtype=np.float64) / fps)
+        if key in extra.get('source', {}).get('packed_rows_unverified', []):
+            clocks[key] = facts['pts'].astype(np.float64) * float(facts['time_base']) - base
+            add_issue(extra, 'packed_partial_coverage', f'{key}: partial encoded footage has unverified table-row '
+                      'ownership. Its exact source clock and complete untimed publisher table are retained.', camera=key)
     for key in video_keys:
         try:
             video_facts(key)
@@ -6253,8 +6370,8 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
         [f"{k} (listed in meta/info.json, not in the data file)" for k in absent] +
         [f"{k} (no video of it for this episode is in the upload)" for k in r["cams"] if k not in video_keys])
     files = {view: (key, paths[key]) for view, key in vmap.items()}
-    un = []
-    for index, key in enumerate(unused):
+    un = lerobot_unshown(row, partial_unshown, rig, list(vmap.values()), fps, ep=ep)
+    for index, key in enumerate(unused, start=len(un)):
         facts = prs[key]
         shown, note_ = presentation_clock(clocks[key], fps)
         entry = unshown_entry(key, paths[key], unshown_why(key, rig, list(vmap.values())),
@@ -6303,12 +6420,34 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
     image_anchor = vmap[anchor] in written
     state_rows = df.drop(columns=["frame_index"], errors="ignore") if image_anchor else df
     count = len(prs[vmap[anchor]]["pts"])
+    aligned_df = df
+    partial_anchor = not image_anchor and vmap[anchor] in extra.get('source', {}).get('packed_rows_unverified', [])
+    if partial_anchor:
+        key = vmap[anchor]
+        owned = packed_partial_rows(prs[key], bases[key], row['videos'][key][2], len(df), fps)
+        positions = packed_table_positions(df, owned, fps, len(df))
+        if positions is None:
+            state, action, kind = None, None, 'none'
+            note = StateNote('Packed footage row ownership is unverified; original table rows remain retained without '
+                             'a physical association.', 'layout')
+            state_rows, aligned_df = None, None
+        else:
+            aligned_df = df.iloc[positions].copy()
+            aligned_df['frame_index'] = np.arange(len(positions))
+            state_rows = aligned_df
+            state = state[positions] if state is not None else None
+            action = action[positions] if action is not None else None
+            extra['source']['packed_partial_rows'] = {'camera': key, 'publisher_rows': owned.tolist(),
+                'basis': 'unique exact encoded PTS against publisher window origin and declared row cadence',
+                'original_table_rows': len(df)}
     state, action, kind, note, fixes = state_on_frames(state_rows, state, action, count, fps, kind, note)
     for issue in fixes:
         add_issue(extra, **issue)
-    signals = recorded_signals(df, _used_columns(kind, state, action, state_columns, action_columns)
+    signals = recorded_signals(aligned_df, _used_columns(kind, state, action, state_columns, action_columns)
                                | set(r["image_cams"]) | set(r.get("image_depths") or []) | set(hold_back),
                                0 if image_anchor else count, r["features"])
+    if partial_anchor:
+        retain_partial_publisher_table(signals, df, r['features'], hold_back)
     ctx = video_views_episode(ep, files, rig, dataset, extra, signals=signals,
                               prs={v: prs[key] for v, key in vmap.items()},
                               real={v: clocks[key] for v, key in vmap.items()}, nominal_fps=fps,
@@ -9104,6 +9243,44 @@ def _field(msg, key, binary: bool = False):
     return getattr(msg, key, None)
 
 
+class McapPayloadError(ValueError):
+    """A decoded camera record has invalid source pixels or their declared layout."""
+
+
+def mcap_image_uint(decoded, field: str) -> int:
+    """Read a source image's uint32 geometry without silently rounding fractional values."""
+    value = _field(decoded, field)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer, str)):
+        raise McapPayloadError(f'Image {field} must be a nonnegative integer')
+    try:
+        integer = int(value)
+    except ValueError as error:
+        raise McapPayloadError(f'Image {field} must be a nonnegative integer') from error
+    if not 0 <= integer <= 0xffffffff:
+        raise McapPayloadError(f'Image {field} is outside the uint32 range')
+    return integer
+
+
+def mcap_camera_bytes(decoded) -> bytes:
+    import base64
+    import binascii
+    value = _field(decoded, 'data')
+    if isinstance(value, str):
+        try:
+            return base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise McapPayloadError('Camera data is not valid base64') from error
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    if isinstance(value, np.ndarray) and value.ndim == 1 and value.dtype == np.uint8:
+        return value.tobytes()
+    if isinstance(value, (list, tuple)) and all(type(item) is int and 0 <= item <= 255 for item in value):
+        return bytes(value)
+    raise McapPayloadError('Camera message has no supported byte data field')
+
+
 def mcap_capture_fields(decoded) -> dict | None:
     """Keep the declared scalar stamp fields even when they cannot establish a capture clock."""
     fields = {str(name): value for name, value, _ in _msg_items(decoded)}
@@ -9334,6 +9511,45 @@ def mcap_step_subtasks(texts: dict, t0: int | None, end_s: float | None) -> tupl
                for a, b, x in intervals if b >= a]
 
 
+def mcap_clock_record(decoded, channel, message, capture):
+    """Retain the exact evidence for a topic's capture clock, without treating arrival latency as a clock ID."""
+    declarations = {}
+    for source, value in [('channel.metadata.capture_clock_id', channel.metadata.get('capture_clock_id')),
+                          ('message.capture_clock_id', _field(decoded, 'capture_clock_id')),
+                          ('message.header.clock_id', _field(_field(decoded, 'header'), 'clock_id'))]:
+        if isinstance(value, str) and value.strip():
+            declarations[source] = value.strip()
+    ids = set(declarations.values())
+    return {'capture_ns': capture, 'publish_ns': int(message.publish_time), 'log_ns': int(message.log_time),
+            'capture_clock_id': next(iter(ids)) if len(ids) == 1 else None, 'clock_declarations': declarations}
+
+
+def mcap_text_clock_proof(camera_kind, text_kind, camera, text):
+    """Require recorded domain evidence and per-channel chronology before timed text placement."""
+    if not camera or not text or text_kind != {camera_kind}:
+        return None
+    def ordered(rows, key):
+        values = [row[key] for row in rows]
+        return all(value is not None for value in values) and all(b >= a for a, b in zip(values, values[1:]))
+    if not all(ordered(rows, 'log_ns') for rows in (camera, text)):
+        return None
+    if camera_kind == 'arrival':
+        return {'basis': 'common MCAP log_time domain with per-channel chronology'}
+    if camera_kind != 'capture' or not all(ordered(rows, 'capture_ns') for rows in (camera, text)):
+        return None
+    rows = camera + text
+    ids = {row['capture_clock_id'] for row in rows}
+    if len(ids) == 1 and None not in ids:
+        return {'basis': 'matching publisher-declared capture clock IDs', 'capture_clock_id': next(iter(ids)),
+                'declaration_sources': sorted({source for row in rows for source in row['clock_declarations']})}
+    if any(row['clock_declarations'] for row in rows):
+        return None  # Conflicting or incomplete explicit domains cannot be repaired by numeric coincidence.
+    if (all(ordered(records, 'publish_ns') for records in (camera, text)) and
+            all(row['capture_ns'] == row['publish_ns'] > 0 and row['publish_ns'] <= row['log_ns'] for row in rows)):
+        return {'basis': 'capture stamps equal recorded MCAP publish_time, with causal publication/log chronology'}
+    return None
+
+
 def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     """Every compressed-image / compressed-video channel that carries a colour camera is a candidate camera;
     they are assigned as assign_views does (a head camera gets one). A text or annotation channel becomes the task text or the
@@ -9415,8 +9631,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     text_clock_kinds, text_records = {}, {}
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
     schema_failures, message_failures = {}, {}
-    arrival_start, arrival_stop = None, None
-    camera_log_ns = {}
+    camera_records = {}
     camera_damage: list = []
     capture_ns: dict[str, list[int]] = {}
     registration, depth_shapes = Registration(), {}
@@ -9426,8 +9641,6 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         try:
             msgs = mcap_messages(fh, item["file"], want, camera_damage)
             for schema, ch, msg in msgs:
-                arrival_start = int(msg.log_time) if arrival_start is None else min(arrival_start, int(msg.log_time))
-                arrival_stop = int(msg.log_time) if arrival_stop is None else max(arrival_stop, int(msg.log_time))
                 if ch.topic in texts and len(texts[ch.topic]) > TEXT_MSGS_MAX and not _is_step(ch.topic):
                     n_text[ch.topic] += 1
                     continue
@@ -9459,8 +9672,17 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 except (json.JSONDecodeError, UnicodeDecodeError, DecodeError) as error:
                     message_failures[ch.topic] = message_failures.get(ch.topic, 0) + 1
                     continue
+                if ch.topic in view_of_topic or ch.topic in unshown_of or ch.topic in depth_of:
+                    try:
+                        camera_payload = mcap_camera_bytes(dec)
+                        decoded_depth = depth_image(dec) if ch.topic in depth_of or ch.topic in pictured else None
+                        decoded_image = raw_image(dec) if ch.topic in raw_topics and ch.topic not in depth_of else None
+                    except McapPayloadError:
+                        message_failures[ch.topic] = message_failures.get(ch.topic, 0) + 1
+                        continue
                 capture_stamp, stamp_error = mcap_capture_stamp(dec, schema=schema, message_encoding=ch.message_encoding)
                 stamp = capture_stamp if capture_stamp is not None else int(msg.log_time)
+                clock_record = mcap_clock_record(dec, ch, msg, capture_stamp)
                 if ch.topic in view_of_topic or ch.topic in depth_of:
                     registration.observe(ch.topic, dec, stamp)
                 if ch.topic in view_of_topic or ch.topic in unshown_of or ch.topic in depth_of:
@@ -9469,7 +9691,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         clock_errors.append((ch.topic, stamp_error))
                 if ch.topic in depth_of:
                     t0 = stamp if t0 is None else t0
-                    got = depth_image(dec)
+                    got = decoded_depth
                     if got is not None:
                         dw = dwriters.get(ch.topic)
                         if dw is None:
@@ -9481,7 +9703,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         dw.add((stamp - t0) / 1e9, got[0], got[1])
                         if len(dw.pts) > before:
                             capture_ns.setdefault(ch.topic, []).append(stamp)
-                            camera_log_ns.setdefault(ch.topic, []).append(int(msg.log_time))
+                            camera_records.setdefault(ch.topic, []).append(clock_record)
                     if ch.topic not in unshown_of and ch.topic not in view_of_topic:
                         continue
                 if ch.topic in view_of_topic or ch.topic in unshown_of:
@@ -9495,35 +9717,34 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                                                             fine_clock=True)
                     before = len(w.pts)
                     if ch.topic in pictured:
-                        w.add_image((stamp - t0) / 1e9, depth_picture(depth_image(dec), ch.topic,
+                        w.add_image((stamp - t0) / 1e9, depth_picture(decoded_depth, ch.topic,
                                                                                     depth_rng))
                     elif ch.topic in raw_topics:
                         # a frame raw_image cannot read is a frame not decoded (FrameWriter bad), never skipped silently
-                        w.add_image((stamp - t0) / 1e9, raw_image(dec))
+                        w.add_image((stamp - t0) / 1e9, decoded_image)
                     else:
-                        w.add((stamp - t0) / 1e9, bytes(_field(dec, "data", binary=True)))
+                        w.add((stamp - t0) / 1e9, camera_payload)
                     if len(w.pts) > before and ch.topic not in depth_of:
                         capture_ns.setdefault(ch.topic, []).append(stamp)
-                        camera_log_ns.setdefault(ch.topic, []).append(int(msg.log_time))
+                        camera_records.setdefault(ch.topic, []).append(clock_record)
                 else:
                     d = _field(dec, "data")
                     value = d if isinstance(d, str) else (dec if isinstance(dec, dict) else str(dec))
                     add_text(texts, n_text, ch.topic, stamp, value)
                     text_clock_kinds.setdefault(ch.topic, set()).add("capture" if capture_stamp is not None else "arrival")
-                    text_records.setdefault(ch.topic, []).append({"log_ns": int(msg.log_time),
-                        "publish_ns": int(msg.publish_time), "capture_ns": capture_stamp, "text": value})
+                    text_records.setdefault(ch.topic, []).append({**clock_record, "text": value})
         except (McapError, OSError, EOFError):
             if not writers:
                 raise
             # a damaged tail (recording cut off): keep every frame read before it
             item.setdefault("notes", []).append("The file ends early; every frame before the cut was used.")
-    from prepare.remux import UnsupportedPacketOrder
+    from prepare.remux import RemuxSourceError
     import av
     counts, camera_failures = {}, {}
     for topic, writer in writers.items():
         try:
             counts[topic] = writer.close()
-        except (UnsupportedPacketOrder, av.error.FFmpegError) as error:
+        except (RemuxSourceError, av.error.FFmpegError) as error:
             # One raw camera's unsupported packet order or corrupt bitstream does not invalidate its neighbors.
             camera_failures[topic] = plain_error(error)
             writer.out.unlink(missing_ok=True)
@@ -9667,25 +9888,17 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     end_ns = int(anchor_stamps[-1]) + max(0, interval_ns)
     placed_texts, unplaced_texts = {}, {}
     anchor_topic = files[me.order_views(files)[0]][0]
-    offsets = [int(capture) - int(log) for capture, log in zip(anchor_stamps, camera_log_ns.get(anchor_topic, []))]
-    recording_span = max(0, (arrival_stop or 0) - (arrival_start or 0))
     extra.setdefault('recorded_metadata', {})['text_channels'] = text_records
     extra['source']['text_clock_alignment'] = {
-        'basis': {'arrival': 'common MCAP arrival stamps',
-                  'capture': 'publisher capture stamps consistent with the camera capture-to-arrival envelope '
-                             'and delivery causality'}.get(camera_clock, 'unverified timestamp domain'),
         'physical_synchronization_verified': False,
-        'limitation': 'Without clock IDs, an independent negative capture-clock bias can be observationally identical '
-                      'to genuine delivery delay. These records do not prove physical synchronization.'}
+        'limitation': 'Publisher clock declarations and recorded publication chronology establish source-domain '
+                      'placement only. They do not independently verify physical synchronization or clock accuracy.',
+        'topics': {}}
     for topic, sequence in texts.items():
-        same_kind = camera_clock is not None and text_clock_kinds.get(topic) == {camera_clock}
-        # MCAP arrival stamps share the recording clock even outside camera coverage. Capture stamps require
-        # a compatible capture-to-arrival origin, not membership of the camera's visible interval.
-        # Delivery may lag capture; a text clock ahead of the camera/arrival origin has no causal support.
-        compatible = same_kind and (camera_clock == 'arrival' or bool(offsets) and all(
-            record['capture_ns'] is not None and min(offsets) - recording_span <=
-            int(record['capture_ns']) - record['log_ns'] <= max(offsets)
-            for record in text_records.get(topic, [])))
+        proof = mcap_text_clock_proof(camera_clock, text_clock_kinds.get(topic),
+                                      camera_records.get(anchor_topic, []), text_records.get(topic, []))
+        compatible = proof is not None
+        extra['source']['text_clock_alignment']['topics'][topic] = proof or {'basis': 'unverified publisher clock'}
         if compatible:
             placed_texts[topic] = sorted(sequence, key=lambda row: row[0])
         else:
@@ -9699,8 +9912,30 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     if unplaced_texts:
         extra.setdefault('recorded_metadata', {})['unaligned_text_channels'] = unplaced_texts
         for topic, records in unplaced_texts.items():
-            if len(texts[topic]) > 1:
-                notes[topic] = {'clock_alignment': 'unverified', 'messages': records}
+            origin = records[0]['capture_ns'] if records and records[0]['capture_ns'] is not None else (
+                records[0]['log_ns'] if records else 0)
+            notes[topic] = {'clock_alignment': 'unverified; publisher chronology is not placed on footage',
+                'publisher_relative_timeline': [{'t_s': ((record['capture_ns'] if record['capture_ns'] is not None else
+                    record['log_ns']) - origin) / 1e9, 'text': record['text']} for record in records],
+                'messages': records}
+    if camera_clock == 'capture':
+        timing = {topic: {**extra['source']['text_clock_alignment']['topics'][topic],
+                    'physical_synchronization_verified': False,
+                    'limitation': 'Publisher clock IDs or publication stamps are domain declarations, not an '
+                                  'independent synchronization measurement. Jointly biased capture/publication '
+                                  'stamps or a false shared clock ID cannot be detected here.'}
+                  for topic in placed_texts if topic not in unplaced_texts}
+        if timing:
+            notes['publisher_text_timing'] = timing
+    outside = {topic: [{'offset_s': (stamp - anchor_origin_ns) / 1e9, 'text': value}
+                       for stamp, value in sequence if stamp < anchor_origin_ns or stamp >= end_ns]
+               for topic, sequence in placed_texts.items() if topic not in unplaced_texts}
+    outside = {topic: records for topic, records in outside.items() if records}
+    if outside:
+        notes['publisher_text_outside_footage'] = outside
+        for topic in outside:
+            add_issue(extra, 'publisher_text_outside_footage', f'{topic}: recorded text timestamps extend outside '
+                      'the footage. Intersecting intervals are clipped; all original text remains publisher context.', signal=topic)
     if instr:
         extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the MCAP.")
     if rig == "ego_head":
@@ -9925,6 +10160,7 @@ class FrameWriter:
     def __init__(self, out: Path, fmt: str, blank: bool = False, fine_clock: bool = False):
         self.out, self.fmt, self.pts, self.kind = out, fmt, [], None
         self.raw = self.enc = self.dst = None
+        self.raw_message_ends = []
         self.held = []                    # encoded packets waiting for the next frame's time (_mux)
         self.blank, self.bad, self.waiting = blank, [], []    # waiting: blank frames before the first decoded one
         self.fine_clock = fine_clock
@@ -9936,22 +10172,23 @@ class FrameWriter:
         return last + 1 if last is not None and p <= last else p   # a repeated or backwards stamp stays in order
 
     def add(self, t_s: float, frame: bytes) -> None:
+        if not frame:
+            self._bad(self._at(t_s))
+            return
         if self.kind is None:
             head = frame[:4]
             annexb = head.startswith(b"\x00\x00\x00\x01") or head[:3] == b"\x00\x00\x01"
             self.kind = codec_of(frame, self.fmt) if (annexb or self.fmt in ("h264", "h265", "hevc")) else "image"
         p = self._at(t_s)
         if self.kind == "image":
-            try:
-                self._image(p, frame)
-            except Exception:
-                self._bad(p)              # one undecodable image never fails the whole camera
+            self._image(p, frame)
             return
         if self.raw is None:
             if not is_keyframe(frame, self.kind):
                 return
             self.raw = open(self.out.with_suffix("." + self.kind), "wb")
         self.raw.write(frame)
+        self.raw_message_ends.append(self.raw.tell())
         self.pts.append(p)
 
     def add_image(self, t_s: float, im) -> None:
@@ -9988,7 +10225,11 @@ class FrameWriter:
     def _image(self, p: int, frame) -> None:
         import io
         from PIL import Image
-        im = frame.convert("RGB") if isinstance(frame, Image.Image) else Image.open(io.BytesIO(frame)).convert("RGB")
+        try:
+            im = frame.convert("RGB") if isinstance(frame, Image.Image) else Image.open(io.BytesIO(frame)).convert("RGB")
+        except (OSError, ValueError):
+            self._bad(p)
+            return
         self._encode(p, im)
 
     def _encode(self, p: int, im) -> None:
@@ -10048,8 +10289,9 @@ class FrameWriter:
             try:
                 with av.open(str(raw), format=self.kind) as src, av.open(str(self.out), "w") as dst:
                     ist = src.streams.video[0]
-                    from prepare.remux import check_packet_order
+                    from prepare.remux import check_packet_order, check_message_ownership
                     check_packet_order(raw, self.kind)
+                    check_message_ownership(raw, self.kind, self.raw_message_ends)
                     ost = dst.add_stream_from_template(ist)
                     ost.time_base = Fraction(1, TIME_BASE_DEN)
                     i = 0

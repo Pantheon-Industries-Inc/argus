@@ -456,45 +456,29 @@ def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
     fields of the wrong type left out, label/harness.py typed_labels), else (what came back, why it gave no labels):
     not parsing, cut off at the output limit (the harness's failed_<part>.json), an output file that does not read, or
     no reply at all, with why when the harness recorded it (noreply_<part>.json)."""
-    from label.harness import typed_labels, billing_record
-    q, f, nr = src / f"{name}.json", src / f"failed_{name}.json", src / f"noreply_{name}.json"
-    # A strictly newer durable attempt supersedes an old label. Equal-index legacy files
-    # keep their established primary, failed, no-reply precedence.
+    from label.harness import typed_labels, annotation_record, reply_truncated
     try:
-        latest = billing_record(src, name + '.json')
-    except (OSError, ValueError, TypeError):
-        present = [path for path in (q, f, nr) if path.exists()]
+        selected = annotation_record(src, name + '.json')
+    except (OSError, ValueError, TypeError, AttributeError):
+        present = [src / (prefix + name + '.json') for prefix in ('', 'failed_', 'noreply_')
+                   if (src / (prefix + name + '.json')).exists()]
         if len(present) == 1:
             _, error = _read(present[0])
             if error:
                 return None, error
         return None, 'saved billing receipts could not be verified'
-    first = next((path for path in (q, f, nr) if path.exists()), None)
-    if latest is not None and first is not None and latest[0] != first:
-        original, _ = _read(first)
-        if original and latest[1].get('final_attempt_index', 0) > original.get('final_attempt_index', 0):
-            record = latest[1]
-            if latest[0] == f:
-                return record, "the model's reply was cut off at the output limit"
-            if latest[0] == nr:
-                return record, f"the model gave no reply ({record['no_reply']})" if record.get('no_reply') else "the model gave no reply"
-    r, bad = _read(q) if q.exists() else (None, None)
-    if bad:
-        return None, bad
-    if r and r.get("parse_ok"):
-        if not isinstance(r.get("labels"), dict):
-            return r, "its labels are not a JSON object"
-        return {**r, "labels": typed_labels(copy.deepcopy(r["labels"]))}, None
-    if r:
-        return r, "the model's reply did not parse"
-    if f.exists():
-        r, bad = _read(f)
-        return r, bad or "the model's reply was cut off at the output limit"
-    if nr.exists():
-        r, _ = _read(nr)
-        if r and r.get("no_reply"):
-            return r, f"the model gave no reply ({r['no_reply']})"
-    return None, "the model gave no reply"
+    if selected is None:
+        return None, 'the model gave no reply'
+    _, record = selected
+    if reply_truncated(record):
+        return record, "the model's reply was cut off at the output limit"
+    if record.get('parse_ok'):
+        if not isinstance(record.get('labels'), dict):
+            return record, 'its labels are not a JSON object'
+        return {**record, 'labels': typed_labels(copy.deepcopy(record['labels']))}, None
+    if record.get('no_reply'):
+        return record, f"the model gave no reply ({record['no_reply']})"
+    return record, "the model's reply did not parse"
 
 
 def _raw_head(r: dict | None) -> str:
@@ -524,6 +508,38 @@ def _part_dispatch(record: dict | None) -> dict:
 
 def _carry_part_billing(result: dict, parts: list) -> None:
     """Carry cumulative invoices separately from each part's current usage."""
+    from label.harness import billing_view, _history_cost, auxiliary_cost
+    if any(record and '_billing_receipt' in record for _, record in parts):
+        # Annotation authority may predate a local refusal. Preserve the complete
+        # financial ledgers as invoices instead of counting the old reply twice.
+        final, auxiliary = [], []
+        for context, annotation in parts:
+            if not annotation:
+                continue
+            record = billing_view(annotation)
+            part = (context.get('piece') or {}).get('index')
+            final.extend({**copy.deepcopy(invoice), 'part': part} for invoice in record.get('final_cost_history', []))
+            if record.get('final_dispatch_outcome') != 'not dispatched' and not record.get('dry_run'):
+                _history_cost(record)
+                final.append({**{key: copy.deepcopy(record[key]) for key in (
+                    'usage', 'final_dispatch_outcome', 'final_reserved_usd', 'final_attempt_index',
+                    'model', 'response', 'response_text') if key in record}, 'part': part})
+            auxiliary.extend({**copy.deepcopy(invoice), 'part': part}
+                             for invoice in record.get('auxiliary_cost_history', []))
+            for kind, value in (('route', (record.get('config') or {}).get('resolution_route') or {}),
+                                ('inspection', record.get('evidence_inspection') or {})):
+                cost = auxiliary_cost(value, routing=kind == 'route')
+                if cost:
+                    auxiliary.append({**copy.deepcopy(value), 'kind': kind, 'part': part,
+                                      'cost_usd': cost, 'previously_billed_usd': 0.0})
+                    auxiliary[-1].pop('previously_billed', None)
+        result['final_cost_history'], result['auxiliary_cost_history'] = final, auxiliary
+        result['usage']['est_cost_usd'] = 0.0
+        for value in ((result.get('config') or {}).get('resolution_route') or {},
+                      result.get('evidence_inspection') or {}):
+            value.pop('previously_billed', None)
+            value['previously_billed_usd'] = value.get('cost_usd', 0.0)
+        return
     final, auxiliary, routes = [], [], []
     for context, record in parts:
         if not record:

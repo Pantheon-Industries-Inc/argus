@@ -779,11 +779,22 @@ def placeholder_instants(ep: dict, ks) -> dict:
     return out
 
 
+def camera_label(view: str, ctx: dict) -> str:
+    """A camera as the board names it: the main (or head) camera, the left or right wrist (or gripper), and any other
+    camera by the dataset's own name for it."""
+    rig = ctx.get("profile")
+    if view == "exo":
+        return "head camera" if rig == "ego_head" else "main camera"
+    if view in ("left", "right"):
+        return f"{view} gripper camera" if rig == "handheld_gripper" else f"{view} wrist camera"
+    cam = (ctx.get("cameras") or {}).get(view) or {}
+    return str(cam.get("name") or cam.get("key") or "other") + " camera"
+
+
 def decode_failures(ep: dict) -> list[dict]:
     """The stretches each camera's file could not be decoded at (frames), for the run's record and the board
     (board/build.py reader_issues): [{"camera", "t0_s", "t1_s", "what"}], on the recording's clock (a part of a long
     recording adds where it starts, label/pieces.py). Labelling never writes into the episode folder."""
-    from board.clips import camera_label
     off = float((ep["context"].get("piece") or {}).get("t0_s") or 0.0)
     out = []
     for v, ks in (ep.get("decode_failed") or {}).items():

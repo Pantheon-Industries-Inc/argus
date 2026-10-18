@@ -20,11 +20,14 @@ def test_public_credentials_are_withheld_by_live_and_static_exports(public_sourc
     source = public_sources['qa'] / 'ep.json'
     label = json.loads(source.read_text())
     names = ['hf_token', 'auth_token', 'aws_session_token', 'github_token', 'bearer_token',
-             'openrouter_key', 'api_token', 'openai_key', 'anthropic_key', 'session', 'signature',
-             'sig', 'access_key', 'db_password', 'api_secret', 'stripe_secret_key', 'slack_bot_token',
-             'session_id', 'wandb_key', 'replicate_api_token', 'auth', 'passphrase', 'bearer', 'slackbottoken']
+             'openrouter_key', 'api_token', 'openai_key', 'anthropic_key',
+             'access_key', 'db_password', 'api_secret', 'stripe_secret_key', 'slack_bot_token',
+             'replicate_api_token', 'auth', 'passphrase', 'bearer', 'slackbottoken']
     label['publisher_metadata'] = {name: 'fixture-access-' + name for name in names}
     label['publisher_metadata'].update(token_count=17, key='/observations/force',
+        session_id='episode-session', session=4, signature=[0.1, 0.2], sig=3,
+        eos_token='</s>', task_key='/tasks/0', firmware_version='10.3.0.17',
+        nested_access=['ghp_' + 'a' * 36, 'Bearer fixture-access-value'],
         citation='https://example.org/paper?version=2',
         access='https://example.org/video?key=fixture-query-access',
         host='https://camera.example-tailnet.ts.net/video',
@@ -56,6 +59,9 @@ def test_public_credentials_are_withheld_by_live_and_static_exports(public_sourc
         assert 'fixture-webhook-access' not in output and 'nas.x.local' not in output and 'api.x.internal' not in output
         metadata = json.loads(output)['publisher_metadata']
         assert metadata == {'token_count': 17, 'key': '/observations/force',
+                            'session_id': 'episode-session', 'session': 4, 'signature': [0.1, 0.2], 'sig': 3,
+                            'eos_token': '</s>', 'task_key': '/tasks/0', 'firmware_version': '10.3.0.17',
+                            'nested_access': [None, None],
                             'citation': 'https://example.org/paper?version=2', 'access_examples': [None] * 10 + ['example.org:443'],
                             'fields': {'signature': [0.1, 0.2], 'token_ids': [3, 7],
                                        'field_key': '/observations/force'}}
@@ -227,11 +233,83 @@ def test_positive_problem_predicates_are_not_cancelled_by_later_negation():
         ("Glare washes out the view and the cup can't be seen", '', 'low-light'),
         ('The image is frozen. The camera is not moved or removed.', '', 'camera-image'),
         ('This is not a privacy blur patch. Bright glare obscures the scene.', '', 'low-light'),
+        ('The grasp is not visible because the exo view is frozen.', '', 'camera-image'),
+        ('The image is frozen; no glare, clipping, or overexposure is visible.', '', 'camera-image'),
+        ('No glare, clipping or overexposure. The frame is frozen.', '', 'camera-image'),
+        ('Glare is not present in any frame. The image is frozen.', '', 'camera-image'),
+        ('Initially looks like occlusion but it is not. The image is frozen.', '', 'camera-image'),
+        ('No privacy blur patch is present. The view is frozen.', '', 'camera-image'),
+        ('The image is frozen but it is not dark.', '', 'camera-image'),
+        ('Glare obscures the cup but it is not an occlusion.', '', 'low-light'),
+        ('The view is occluded but it is not a privacy blur patch.', '', 'camera-fault'),
     ]
     for text, evidence, expected in cases:
         issue = {'category': 'camera_fault', 'severity': 'high', 'issue': text, 'evidence': evidence}
         assert families.family_of('data_issues', issue) == expected
         assert families.classify({'data_issues': [issue]})['counted'][expected] == [issue]
+
+
+@pytest.mark.parametrize('name', ['Gripper', 'Left'])
+def test_single_camera_actor_case_preserves_the_publishers_label(name):
+    config = {'views': ['exo'], 'cam_labels': [name]}
+    for actor in (name, name.lower(), name.upper(), ' ' + name.swapcase() + ' '):
+        labels = complete_schema_reply()
+        labels['timeline'][0]['arm'] = actor
+        projected, dropped = project(labels, config)
+        assert projected['timeline'][0]['arm'] == name
+        assert not any(row['field'] == 'timeline.arm' for row in dropped)
+        assert to_board.convert({'labels': labels, 'config': config})['event_labels'][0]['arm'] == name
+        assert not any('timeline[0].arm' in text for text in metrics.measure(labels, None, config)['violations'])
+
+
+def test_episode_family_status_is_exclusive_without_losing_unrated_issue_counts():
+    issue = {'issue': 'The image is frozen.', 'category': 'camera_fault'}
+    labels = {'data_issues': [dict(issue, severity='high'), dict(issue, severity=None)]}
+    families = Families().classify(labels)
+    assert 'camera-image' in families['counted'] and 'camera-image' not in families['unrated']
+    assert metrics.measure(labels, None)['data_issues_unrated'] == 1
+
+
+def test_comparison_bars_include_unrated_issues_without_inventing_rated_ones():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('no node')
+    measured = metrics.measure({'data_issues': [{'issue': 'Unknown severity', 'severity': None}],
+                                'operator_mistakes': [{'issue': 'Unknown severity', 'severity': None}]}, None)
+    program = r"""
+const {src,piece}=require('./tests/page_functions')('./board/index.html');
+const fNum=String, fPct=String, fUsd=String, fSec=String, fMin=String;
+const rows = {};
+const cmpView = {querySelector(selector) {
+  if (!selector.startsWith('[data-chart=')) return {querySelectorAll:()=>[],querySelector:()=>({})};
+  const id = selector.match(/"([^"]+)"/)[1];
+  const segs = [{style:{}},{style:{}},{style:{}}];
+  const bar = {style:{},querySelectorAll:()=>segs};
+  const small = {}, bv = {};
+  const row = {dataset:{k:'model'},querySelector:s=>s==='.br-bar'?bar:s==='small'?small:bv};
+  rows[id] = {segs,bar,small,bv,row};
+  return {querySelectorAll:()=>[row],querySelector:()=>({})};
+}};
+const CMP_RIG='all', PAIR_CHARTS=[];
+const CMP_METRICS={main:['model'],models:[{key:'model',name:'Model'}],
+  summary:{all:{responses:{},metrics:{model:JSON.parse(require('fs').readFileSync(0,'utf8'))}}}};
+const document={getElementById:()=>({})};
+const cmpOrder=()=>[], shownName=x=>x, renderEpisodeTable=()=>{};
+const tween=(target,value)=>{target.value=value};
+eval(piece('esc') + src.slice(src.indexOf('const MAIN_CHARTS ='),src.indexOf('const ptsDelta ='))
+  + piece('updateCompare') + ';updateCompare(true);');
+console.log(JSON.stringify(rows));
+"""
+    output = subprocess.run([node, '-e', program], input=json.dumps(measured), text=True,
+                            capture_output=True, check=True, cwd=Path(__file__).resolve().parent.parent)
+    for key in ('data_issues', 'operator_mistakes'):
+        bar = json.loads(output.stdout)[key]
+        assert bar['bar']['style']['width'] == '100.00%'
+        assert [segment['style']['flexGrow'] for segment in bar['segs']] == ['0', '0', '1']
+        assert '1 unrated' in bar['small']['textContent'] and 'unrated' in bar['row']['dataset']['tip']
 
 
 def test_unrated_issue_stays_visible_without_becoming_low_severity():
@@ -247,7 +325,8 @@ def test_unrated_issue_stays_visible_without_becoming_low_severity():
     assert not Families().counts('data_issues', item)
     measured = metrics.measure(raw, None)
     assert measured['data_issues_minor'] == 0 and measured['data_issues_unrated'] == 1
-    assert not judge({'max_issue_sev': 'high'}, raw)[0]
+    met, reasons = judge({'max_issue_sev': 'high'}, raw)
+    assert not met and reasons == ['unrated issues prevent verifying severity bound: [(None, None)]']
     program = r"""
 const {src,piece}=require('./tests/page_functions')('./board/index.html');
 const start=src.indexOf('  const byCount =');

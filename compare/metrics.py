@@ -52,7 +52,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from board.families import Families
-from label.harness import episode_cost
+from label.harness import episode_cost, annotation_record, billing_view, reply_truncated
 
 FAMILIES = Families()
 MODELS_PATH = Path(__file__).resolve().parent.parent / "configs" / "models.json"
@@ -148,26 +148,26 @@ def slice_episodes(eps: Path) -> list[str]:
     return sorted(p.name for p in eps.iterdir() if (p / "context.json").exists())
 
 
-def read_output(p: Path) -> dict:
+def read_output(p: Path, record: dict | None = None) -> dict:
     """A run output file's response: status, raw labels when parsed, usage, and the model that gave it. A file that
     does not read is a response that did not parse."""
     try:
-        r = json.loads(p.read_text())
+        r = record if record is not None else json.loads(p.read_text())
     except (OSError, ValueError) as e:
         return {"status": "unparsed", "error": f"the output file does not read: {e}"[:300], "raw": "", "cost": None,
                 "latency": None, "out_tokens": None, "path": p, "model": None}
     if r.get("dry_run"):
         return {"status": "pending"}
-    if p.name.startswith("failed_"):
+    if reply_truncated(r) or p.name.startswith("failed_"):
         # a failed_<episode>.json: the board's own label of an episode whose reply was cut off (board/to_board.py)
         u = r.get("usage") or {}
-        cost = episode_cost(r) if u.get("est_cost_usd") is not None else u.get("cost")
+        cost = episode_cost(r) if (billing_view(r).get("usage") or {}).get("est_cost_usd") is not None or "_billing_receipt" in r else u.get("cost")
         return {"status": "cut_off", "cost": cost, "latency": None, "out_tokens": u.get("completion_tokens"),
                 "finish_reason": r.get("finish_reason"), "tail": r.get("content_tail") or "", "path": p,
                 "model": r.get("model")}
     u = r.get("usage") or {}
     # the episode's billed cost: its model call and, for a routed episode, the routing call made for it
-    cost = episode_cost(r) if u.get("est_cost_usd") is not None else None
+    cost = episode_cost(r) if (billing_view(r).get("usage") or {}).get("est_cost_usd") is not None or "_billing_receipt" in r else None
     base = {"cost": cost, "latency": u.get("latency_s"), "out_tokens": u.get("completion_tokens"), "path": p,
             "model": r.get("model")}
     if r.get("parse_ok"):
@@ -179,12 +179,12 @@ def read_output(p: Path) -> dict:
 def response(model: dict, name: str) -> dict:
     """One episode's response: status, raw labels when parsed, usage."""
     out = model["run"] / "out"
-    p, f = out / f"{name}.json", out / f"failed_{name}.json"
-    if p.exists():
-        return read_output(p)
-    if f.exists():
-        # the harness records a cut-off reply's billed cost and its routing call like any other episode's
-        return read_output(f)
+    try:
+        selected = annotation_record(out, f'{name}.json')
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {'status': 'unparsed', 'error': 'saved receipts could not be verified', 'cost': None}
+    if selected is not None:
+        return read_output(selected[0], selected[1])
     # only a run that finished (label/run.py writes "done", or "exit N" when some calls failed) has episodes it
     # will never answer; a running or interrupted run (killed from outside, then resumed) has episodes to come
     st = str(model.get("status") or "")
@@ -487,9 +487,18 @@ def compute(manifest: dict, base: Path | None = None, sources: dict | None = Non
     seen = set()
     for row in rows.values():
         src = sources.get(row["file"])
-        if src is None or not Path(src).exists():
+        if src is None:
             continue
-        r = read_output(Path(src))
+        path = Path(src)
+        canonical = path.name.removeprefix('failed_').removeprefix('noreply_')
+        try:
+            selected = annotation_record(path.parent, canonical)
+        except (OSError, ValueError, TypeError, AttributeError):
+            r = {'status': 'unparsed', 'error': 'saved receipts could not be verified', 'cost': None}
+        else:
+            if selected is None:
+                continue
+            r = read_output(selected[0], selected[1])
         seen.add(r.get("model"))
         rec = {"status": r["status"], **{f: r[f] for f in ("cost", "latency", "out_tokens") if r.get(f) is not None}}
         if r["status"] == "parsed":

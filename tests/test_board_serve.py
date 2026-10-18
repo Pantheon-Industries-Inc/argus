@@ -699,3 +699,36 @@ def test_a_board_file_with_a_number_that_is_not_finite_is_served_as_json_a_brows
     code, _, body = _get(server + "/api/export", {"Content-Type": "application/json"},
                          json.dumps({"files": ["episode_000001.json"]}).encode())
     assert code == 200 and strict(body.decode().splitlines()[0])["duration_s"] is None
+
+
+@pytest.mark.parametrize('weak', [False, True])
+def test_atomic_equal_size_label_update_refreshes_real_http_rail(tmp_path, monkeypatch, weak):
+    import os
+    from board import static
+    from test_prepared_footage import serving, get
+    from label.atomic import write_atomic
+    monkeypatch.setattr(serve, 'HERE', tmp_path)
+    monkeypatch.setattr(serve, 'DICTIONARY_JOB', None)
+    source = tmp_path / 'episode_x.json'
+    label = {'episode_prompt': 'Move cup', 'completion': {'task_completed': 'success'}}
+    write_atomic(source, label)
+    before = source.stat()
+    if weak:
+        real_stat = Path.stat
+        class Coarse:
+            def __init__(self, stat): self.stat = stat
+            def __getattr__(self, name):
+                if name in ('st_ino', 'st_mtime_ns', 'st_ctime_ns'):
+                    return getattr(before, name)
+                return getattr(self.stat, name)
+        monkeypatch.setattr(Path, 'stat', lambda path, *a, **k: Coarse(real_stat(path, *a, **k)) if path == source else real_stat(path, *a, **k))
+        monkeypatch.setattr(static, '_durable_metadata', lambda *args: False)
+    with serving() as base:
+        first = json.loads(get(base + 'api/episodes'))
+        label['completion']['task_completed'] = 'failure'
+        write_atomic(source, label)
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        assert source.stat().st_size == before.st_size
+        assert json.loads(get(base + 'api/episode?file=episode_x.json'))['completion']['task_completed'] == 'failure'
+        assert first[0]['task_completed'] == 'success'
+        assert json.loads(get(base + 'api/episodes'))[0]['task_completed'] == 'failure'

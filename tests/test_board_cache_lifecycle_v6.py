@@ -270,3 +270,137 @@ def test_sweep_removes_an_orphaned_work_guard_without_touching_operator_files(tm
     serve._trim_footage_cache()
     assert not guard.exists()
     assert unrelated.read_text() == 'lock'
+
+
+def test_new_untrusted_span_waits_for_encode_admission_before_hashing(tmp_path, monkeypatch):
+    source = media(tmp_path, monkeypatch)
+    serve.footage('episode_x', 0, .1)
+    entered, release, waiting = threading.Event(), threading.Event(), threading.Event()
+    digest, encode = serve._stream_digest, serve._run_footage
+    reads = []
+    actual = threading.BoundedSemaphore(1)
+    class Observed:
+        def acquire(self, blocking=True):
+            if not actual.acquire(blocking=False):
+                waiting.set()
+                return actual.acquire(blocking=blocking)
+            return True
+        def release(self): actual.release()
+    monkeypatch.setattr(serve, '_FOOTAGE_SEM', Observed())
+    def count(reader, *args):
+        if Path(reader.name) == source:
+            reads.append(True)
+        return digest(reader, *args)
+    def hold(command):
+        result = encode(command)
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return result
+    monkeypatch.setattr(serve, '_stream_digest', count)
+    monkeypatch.setattr(serve, '_run_footage', hold)
+    with serving() as base, concurrent.futures.ThreadPoolExecutor(2) as pool:
+        first = pool.submit(get, base + 'api/footage?id=episode_x&t0=.05&t1=.2&prepare=1')
+        try:
+            assert entered.wait(3)
+            before = len(reads)
+            second = pool.submit(get, base + 'api/footage?id=episode_x&t0=.1&t1=.3&prepare=1')
+            assert waiting.wait(3)
+            assert len(reads) == before
+        finally:
+            release.set()
+        for request in (first, second):
+            result = json.loads(request.result())
+            assert get(base + 'api/footage?ticket=' + result['ticket'])
+    assert len(reads) == 4
+
+
+def test_prepare_ticket_eviction_is_retryable_media_loss(tmp_path, monkeypatch):
+    media(tmp_path, monkeypatch)
+    prepare = serve.prepare_footage_ticket
+    def evict(result):
+        result[0].unlink()
+        return prepare(result)
+    monkeypatch.setattr(serve, 'prepare_footage_ticket', evict)
+    with serving() as base:
+        with pytest.raises(urllib.error.HTTPError) as error:
+            get(base + 'api/footage?id=episode_x&prepare=1')
+        assert error.value.code == 503
+        message = json.loads(error.value.read())
+        assert message.get('retryable') is True
+        assert 'storage cannot' not in message['error'].lower()
+    monkeypatch.setattr(serve, 'prepare_footage_ticket', prepare)
+    with serving() as base:
+        result = json.loads(get(base + 'api/footage?id=episode_x&prepare=1'))
+        assert get(base + 'api/footage?ticket=' + result['ticket'])
+
+
+def test_configured_untrusted_prepares_encode_different_episodes_in_parallel(tmp_path, monkeypatch):
+    source = media(tmp_path, monkeypatch)
+    (source.parent / 'episode_y.mp4').write_bytes(source.read_bytes())
+    serve.footage('episode_x', 0, .1)
+    monkeypatch.setattr(serve, '_FOOTAGE_SEM', threading.BoundedSemaphore(2))
+    monkeypatch.setattr(serve, '_FOOTAGE_PROBE_SEM', threading.BoundedSemaphore(2))
+    original = serve._run_footage
+    completed, release = threading.Event(), threading.Event()
+    lock, active = threading.Lock(), [0]
+    def hold(command):
+        result = original(command)
+        with lock:
+            active[0] += 1
+            if active[0] == 2:
+                completed.set()
+        assert release.wait(5)
+        return result
+    monkeypatch.setattr(serve, '_run_footage', hold)
+    with serving() as base, concurrent.futures.ThreadPoolExecutor(2) as pool:
+        requests = [pool.submit(get, base + f'api/footage?id=episode_{name}&t0=.1&t1=.3&prepare=1') for name in ('x', 'y')]
+        try:
+            assert completed.wait(3)
+        finally:
+            release.set()
+        for request in requests:
+            prepared = json.loads(request.result())
+            assert get(base + 'api/footage?ticket=' + prepared['ticket'])
+
+
+@pytest.mark.parametrize('probe_busy', [False, True])
+def test_stale_prepare_hint_acquires_encoder_before_output_lock(tmp_path, monkeypatch, probe_busy):
+    from contextlib import contextmanager
+    media(tmp_path, monkeypatch)
+    monkeypatch.setattr(serve, '_FOOTAGE_HINTS', serve.OrderedDict())
+    serve.footage('episode_x', 0, .1)
+    for receipt in (serve.FOOTAGE_DIR / '.ready').glob('*.json'):
+        receipt.unlink()
+    serve._FOOTAGE_RECORDS.clear()
+    original_lock, admission = serve._footage_lock, serve._prepare_admission
+    held, observations = threading.local(), []
+    @contextmanager
+    def output_lock(key):
+        with original_lock(key):
+            held.output = True
+            try:
+                yield
+            finally:
+                held.output = False
+    @contextmanager
+    def observe():
+        observations.append(getattr(held, 'output', False))
+        with admission():
+            yield
+    monkeypatch.setattr(serve, '_footage_lock', output_lock)
+    monkeypatch.setattr(serve, '_prepare_admission', observe)
+    with serving() as base:
+        if probe_busy:
+            probe = serve._content_probe
+            def busy(*args):
+                raise serve.CacheBusy('probe busy')
+            monkeypatch.setattr(serve, '_content_probe', busy)
+            with pytest.raises(urllib.error.HTTPError) as error:
+                get(base + 'api/footage?id=episode_x&t0=0&t1=.1&prepare=1')
+            assert error.value.code == 503
+            assert not serve._FOOTAGE_HINTS
+            monkeypatch.setattr(serve, '_content_probe', probe)
+        prepared = json.loads(get(base + 'api/footage?id=episode_x&t0=0&t1=.1&prepare=1'))
+        assert get(base + 'api/footage?ticket=' + prepared['ticket'])
+    assert observations == [False]

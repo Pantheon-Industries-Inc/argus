@@ -268,6 +268,9 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=2, help="decode processes per step (default 2)")
     ap.add_argument("--timeout", type=int, default=None,
                     help="seconds per labeling request (default: the harness's 600 seconds)")
+    ap.add_argument('--retry-received', action='append', default=[], metavar='EPISODE',
+                    help='retry only this unit with a received unusable reply; repeat for additional units')
+    ap.add_argument('--max-tokens', type=int, default=None, help='completion limit for new label requests')
     ap.add_argument("--max-minutes", type=float, default=0, help="read at most this much footage (default: all)")
     ap.add_argument("--grouping", type=json.loads, default={},
                     help='JSON {folder: "takes" | "cameras"} for folders whose files cannot tell takes from cameras')
@@ -279,6 +282,8 @@ def main() -> int:
         ap.error("--max-minutes must be finite and nonnegative")
     if a.timeout is not None and a.timeout <= 0:
         ap.error("--timeout must be positive")
+    if a.max_tokens is not None and a.max_tokens <= 0:
+        ap.error('--max-tokens must be positive')
     overrides = {key: getattr(a, key) for key in ("model", "reasoning", "sample_fps", "task_mode", "dataset_note")}
     policy.resolve({"profile": a.rig}, **overrides)
 
@@ -358,6 +363,9 @@ def main() -> int:
 
     long_eps = pieces.write_units(job, eps)
     timeout_args = ["--timeout", str(a.timeout)] if a.timeout is not None else []
+    if a.max_tokens is not None:
+        timeout_args += ['--max-tokens', str(a.max_tokens)]
+    retry_args = [value for name in a.retry_received for value in ('--retry-received', name)]
     env = repo_env(RDA_DECODE_CONCURRENCY=os.environ.get("RDA_DECODE_CONCURRENCY") or str(2 * int(jobs)))
     run_step(job, "dry_run", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                               str(job / "dry"), "--concurrency", jobs, "--dry-run", *timeout_args], env)
@@ -371,9 +379,12 @@ def main() -> int:
     run_dir = job / "run"
     run_dir.mkdir(exist_ok=True)
     prior_run = json.loads((run_dir / 'run.json').read_text()) if (run_dir / 'run.json').exists() else {}
-    info = {"run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
+    info = {**prior_run, "run_id": job.name, "kind": "review", "dataset": dataset, "slice": str(eps),
             "code": f"argus@{commit()}", "started_at": prior_run.get('started_at') or now(), "cap_usd": a.cap, "status": "running",
             "annotation_policy": selected}
+    if a.retry_received:
+        info.setdefault('received_retries', []).append({'at': now(), 'episodes': a.retry_received,
+                                                       'max_tokens': a.max_tokens, 'cap_usd': a.cap})
     write_atomic(run_dir / "run.json", info, indent=1)
     label_rc = 0
     try:
@@ -381,7 +392,7 @@ def main() -> int:
         if remaining > 0:
             label_rc = run_step(job, "label", [PY, "-m", "label.harness", "--episodes-root", str(job / "units"), "--out-dir",
                                     str(run_dir / "out"), "--concurrency", str(a.concurrency),
-                                    "--max-spend", str(remaining), *timeout_args], env, ok_codes=(0, 1))
+                                    "--max-spend", str(remaining), *timeout_args, *retry_args], env, ok_codes=(0, 1))
         else:
             print('label budget exhausted by prior spending or outstanding reservations', flush=True)
             from label.harness import record_budget_refusal
@@ -392,8 +403,8 @@ def main() -> int:
         complete = spend['complete'] and dictionary_stage.label_spend_complete(job)
         total = label_cost + (spend['cost_usd'] or 0.0)
         info.update(dictionary=spend,
-                    cost_usd=round(total, 6) if complete else None,
-                    reserved_cost_usd=round(label_cost + spend['reserved_usd'], 6),
+                    cost_usd=total if complete else None,
+                    reserved_cost_usd=label_cost + spend['reserved_usd'],
                     cost_complete=complete)
         write_atomic(run_dir / "run.json", info, indent=1)
         st = build_review_board(job, eps, long_eps, info, dataset, a.rig, rep.get('packaging'))
