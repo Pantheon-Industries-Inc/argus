@@ -1252,7 +1252,7 @@ def test_run_folder_name_and_record(tmp_path, monkeypatch, capsys):
     assert (info["status"], info["cost_usd"], info["episodes_done"], info["episodes_failed"]) == ("done", 0.5, 1, 0)
     assert info["footage_hours"] == round(120 / 3600, 3) and info["usd_per_hour"] == 15.0      # $0.50 over 2 minutes
     cmd = calls[0]["cmd"]
-    assert cmd[1:3] == ["-m", "label.harness"] and cmd[cmd.index("--max-spend") + 1] == "2.00"
+    assert cmd[1:3] == ["-m", "label.harness"] and float(cmd[cmd.index("--max-spend") + 1]) == 2.0
     assert cmd[-2:] == ["--model", "m/x"] and "--" not in cmd and "--dry-run" not in cmd
     assert calls[0]["env"]["OPENROUTER_API_KEYS"] == "sk-or-a"                   # only OpenRouter keys are passed
     assert "done=1" in (run / "log.txt").read_text() and '"status": "done"' in capsys.readouterr().out

@@ -6,7 +6,8 @@ from gate import score
 
 
 def test_issue_requires_severity_only_when_case_states_threshold():
-    labels = {'data_issues': [{'category': 'camera_fault'}]}
+    labels = {'data_issues': [{'category': 'camera_fault', 'issue': 'The camera image is frozen.'}]}
+    assert not score.judge({'issue': ['camera_fault']}, {'data_issues': [{'category': 'camera_fault'}]})[0]
     assert score.judge({'issue': ['camera_fault']}, labels)[0]
     assert not score.judge({'issue': ['camera_fault'], 'sev': 'low'}, labels)[0]
 
