@@ -276,3 +276,39 @@ def test_request_dependency_boundary_ignores_unrelated_board_code(tmp_path, monk
     monkeypatch.setattr(Path, 'read_bytes', lambda path: original(path) + (b'\n# changed\n' if path == target else b''))
     after = harness.input_identity(ep, **settings)
     assert harness.same_input_identity(before, after) is not changes
+
+
+def test_import_walk_reuses_parsed_edges_but_reads_changed_imports(tmp_path, monkeypatch):
+    import ast
+    import os
+    harness._request_imports.cache_clear()
+    files = {'label/__init__.py': '', 'label/harness.py': 'from prepare import evidence\n',
+             'prepare/__init__.py': '', 'prepare/evidence.py': 'from . import base\n',
+             'prepare/base.py': 'VALUE = 1\n', 'prepare/next.py': 'VALUE = 2\n'}
+    for name, text in files.items():
+        path = tmp_path / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(text)
+    parsed = []
+    parse = ast.parse
+    def count_parse(*args, **kwargs):
+        parsed.append(args[0])
+        return parse(*args, **kwargs)
+    monkeypatch.setattr(ast, 'parse', count_parse)
+    original = harness.request_implementation(tmp_path)
+    first_count = len(parsed)
+    assert first_count > 0
+    assert harness.request_implementation(tmp_path) == original
+    assert len(parsed) == first_count
+    source = tmp_path / 'prepare/evidence.py'; before = source.stat()
+    source.write_text('from . import next\n')
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert source.stat().st_size == before.st_size and source.stat().st_mtime_ns == before.st_mtime_ns
+    current = harness.request_implementation(tmp_path)
+    assert tmp_path / 'prepare/next.py' in current and tmp_path / 'prepare/base.py' not in current
+    assert current[source] == b'from . import next\n'
+    assert len(parsed) == first_count + 2
+    source.unlink()
+    package = source.with_suffix(''); package.mkdir()
+    (package / '__init__.py').write_bytes(b'from . import next\n')
+    (package / 'next.py').write_bytes(b'VALUE = 2\n')
+    packaged = harness.request_implementation(tmp_path)
+    assert package / 'next.py' in packaged and tmp_path / 'prepare/next.py' not in packaged

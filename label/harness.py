@@ -49,6 +49,7 @@ import urllib.error
 import urllib.request
 import uuid
 from contextlib import contextmanager
+from functools import lru_cache
 
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -314,6 +315,25 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
                             pricing_quote=pricing_quote)
 
 
+@lru_cache(maxsize=128)
+def _request_imports(module: str, is_package: bool, source: bytes) -> tuple[str, ...]:
+    """Cache only parsed import edges, keyed by module semantics and exact current bytes."""
+    import ast
+    names = module.split('.')
+    imports = ['.'.join(names[:size]) for size in range(1, len(names))]
+    for node in ast.walk(ast.parse(source, filename=module)):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ''
+            if node.level:
+                parent = names if is_package else names[:-1]
+                base = '.'.join(parent[:len(parent) - node.level + 1] + ([base] if base else []))
+            imports.append(base)
+            imports.extend(base + '.' + alias.name for alias in node.names if alias.name != '*')
+    return tuple(imports)
+
+
 def request_implementation(repository: Path) -> dict[Path, bytes]:
     """Follow first-party imports from the paid request and binding entry point.
 
@@ -321,7 +341,6 @@ def request_implementation(repository: Path) -> dict[Path, bytes]:
     drawing and reader projections keep their transitive guards. Unrelated board
     publication and server modules do not shape requests and stay outside this proof.
     """
-    import ast
     pending, sources = ['label.harness'], {}
     packages = {'label', 'prepare', 'checks', 'board'}
     while pending:
@@ -335,19 +354,7 @@ def request_implementation(repository: Path) -> dict[Path, bytes]:
             continue
         raw = path.read_bytes()
         sources[path] = raw
-        names = module.split('.')
-        for size in range(1, len(names)):
-            pending.append('.'.join(names[:size]))
-        for node in ast.walk(ast.parse(raw, filename=str(path))):
-            if isinstance(node, ast.Import):
-                pending.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                base = node.module or ''
-                if node.level:
-                    parent = names if path.name == '__init__.py' else names[:-1]
-                    base = '.'.join(parent[:len(parent) - node.level + 1] + ([base] if base else []))
-                pending.append(base)
-                pending.extend(base + '.' + alias.name for alias in node.names if alias.name != '*')
+        pending.extend(_request_imports(module, path.name == '__init__.py', raw))
     return sources
 
 
