@@ -387,7 +387,8 @@ def finding_fields(finding):
     """Only annotation fields may enter bound evidence; presentation and offsets are computed locally."""
     return {key: copy.deepcopy(finding[key]) for key in (
         'start_s', 'end_s', 'inspect_s', 'headline', 'detail', 'overlay_detail', 'observation',
-        'claim', 'alternative', 'confidence', 'adds_beyond_video', 'claim_type', 'evidence') if key in finding}
+        'claim', 'alternative', 'confidence', 'adds_beyond_video', 'claim_type', 'evidence',
+        'review_status') if key in finding}
 
 
 def bind(doc, findings):

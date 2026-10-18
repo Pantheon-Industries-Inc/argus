@@ -188,8 +188,10 @@ def test_piece_evidence_keeps_clock_offsets_and_independent_sensor_ids():
                'claim_type': 'contact_change', 'evidence': [{'sensor_id': doc['sensors'][0]['id'],
                    'series_id': doc['series'][0]['id'], 'time_s': [.2, .3]}]}
     bound = se.bind(doc, [finding])
+    bound['findings'][0]['review_status'] = 'rejected'
     merged = se.merge([({'piece': {'index': 1, 't0_s': 10}}, {'sensor_evidence': bound}),
                        ({'piece': {'index': 3, 't0_s': 20}}, {'sensor_evidence': bound})], ep['context'])
+    assert all(finding['review_status'] == 'rejected' for finding in merged['findings'])
     assert merged['findings'][1]['inspect_s'] == 20.2
     assert merged['findings'][1]['evidence'][0]['time_s'] == [20.2, 20.3]
     assert merged['findings'][0]['evidence'][0]['series_id'] == merged['series'][0]['id']
