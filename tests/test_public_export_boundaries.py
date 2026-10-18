@@ -1,6 +1,7 @@
 """Exercise real public serializers using synthetic private access descriptors."""
 import io
 import json
+from email.message import Message
 import shutil
 import subprocess
 from pathlib import Path
@@ -19,10 +20,13 @@ CITATION = 'https://example.org/public-dataset'
 class Request(serve.Handler):
     def __init__(self, path, body=None, headers=None):
         self.path = path
-        encoded = json.dumps(body or {}).encode()
-        self.headers = {'Content-Length': str(len(encoded)), **(headers or {})}
+        encoded = b'' if body is None else json.dumps(body).encode()
+        self.headers = Message()
+        for key, value in {'Content-Length': str(len(encoded)), **(headers or {})}.items():
+            self.headers[key] = value
         self.rfile, self.wfile = io.BytesIO(encoded), io.BytesIO()
         self.status = None
+        self.close_connection = False
 
     def send_response(self, status):
         self.status = status

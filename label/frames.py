@@ -39,7 +39,7 @@ class DamagedFrame(FrameError):
 
 
 def frame_pts_step(time_base: Fraction, fps: float = FPS) -> int:
-    step = Fraction(1) / Fraction(fps).limit_denominator(1000) / time_base
+    step = Fraction(1) / Fraction(fps).limit_denominator(1_000_000) / time_base
     if step.denominator != 1:
         raise FrameError(f"time base {time_base} does not put {fps} fps frames on integer pts")
     return int(step)

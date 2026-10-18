@@ -34,6 +34,22 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 LISTS = {"data_issues": "data", "operator_mistakes": "mistake"}
 COUNTED_LISTS = set(LISTS.values())
+_NEGATION = re.compile(r"\b(?:not|never|neither|nor|without|no)\b|\b\w+n't\b", re.I)
+
+
+def _supported_text(pattern, text):
+    """Withhold lexical refinement from negatively qualified clauses.
+
+    This does not infer negation scope. The source category remains available
+    when prose cannot safely establish a more specific family. A phrase such as
+    "no signal" can itself be a positive description of the recorded defect.
+    """
+    for clause in re.split(r'[.!?;\n]+', text):
+        for match in pattern.finditer(clause):
+            outside = clause[:match.start()] + ' ' + clause[match.end():]
+            if not _NEGATION.search(outside):
+                return True
+    return False
 
 
 def _sev(i: dict) -> str:
@@ -110,13 +126,16 @@ class Families:
         cat = i.get("category") or ""
         plain = self.tag_name(key, cat)
         text = f"{i.get('issue') or ''} {i.get('evidence') or ''}"
-        for f in self.defs:
-            if f["list"] != lst or (f.get("datasets") and dataset not in f["datasets"]):
-                continue
+        eligible = [f for f in self.defs if f['list'] == lst
+                    and (not f.get('datasets') or dataset in f['datasets'])]
+        # Structured categories outrank incidental words anywhere in the prose.
+        for f in eligible:
             if cat in (f.get("tags") or []) or plain in (f.get("names") or []):
                 return f["slug"]
+        for f in eligible:
             # a text rule claims an issue by its words; with "among", only issues whose tag reads as one of those names
-            if f["slug"] in self._re and (not f.get("among") or plain in f["among"]) and self._re[f["slug"]].search(text):
+            if (f["slug"] in self._re and (not f.get("among") or plain in f["among"])
+                    and _supported_text(self._re[f["slug"]], text)):
                 return f["slug"]
         return ("d:" if lst == "data" else "m:") + plain
 

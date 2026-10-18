@@ -43,9 +43,9 @@ def test_every_fact_a_case_states_is_one_the_scorer_judges():
 def test_each_kind_of_fact_is_judged():
     case = {"outcome": ["failure"], "issue": ["instruction_mismatch"], "sev": "high"}
     good = {"completion": {"task_completed": "failure"},
-            "data_issues": [{"category": "instruction_mismatch", "severity": "high"}]}
+            "data_issues": [{"category": "instruction_mismatch", "severity": "high", "issue": "Task text differs"}]}
     assert score.judge(case, good) == (True, [])
-    low = dict(good, data_issues=[{"category": "instruction_mismatch", "severity": "medium"}])
+    low = dict(good, data_issues=[{"category": "instruction_mismatch", "severity": "medium", "issue": "Task text differs"}])
     assert score.judge(case, low) == (False, ["issue at ['medium']"])
     held = {"held": {"named": "fork", "not_named": "chopstick"}}
     fork = {"timeline": [{"action": "pick up", "object": "fork"}], "task_summary": "Set the table."}
@@ -56,9 +56,9 @@ def test_each_kind_of_fact_is_judged():
     assert not wrong[0] and wrong[1][0].startswith("claims chopstick") and "never names a fork" in wrong[1]
     ego = {"named": ["sew"], "max_issue_sev": "low"}
     labels = {"tasks": [{"task": "sew the fabric panels", "outcome": "success"}],
-              "data_issues": [{"category": "camera_fault", "severity": "medium"}]}
+              "data_issues": [{"category": "camera_fault", "severity": "medium", "issue": "Frozen image"}]}
     assert score.judge(ego, labels) == (False, ["issues above low: [('camera_fault', 'medium')]"])
-    assert score.judge({"mistake": ["*slip*"]}, {"operator_mistakes": [{"category": "grasp_slip"}]})[0]
+    assert score.judge({"mistake": ["*slip*"]}, {"operator_mistakes": [{"category": "grasp_slip", "issue": "Object slips"}]})[0]
     assert score.judge({"align": ["aligned"]}, {"goal_alignment": {"relation": "broader"}}) == \
         (False, ["alignment broader"])
 

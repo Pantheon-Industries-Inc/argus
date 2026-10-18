@@ -139,6 +139,7 @@ import os
 import re
 import unicodedata
 import sys
+import threading
 from fractions import Fraction
 from pathlib import Path
 
@@ -367,6 +368,48 @@ def _archive_members(path: Path):
 
 
 def open_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
+    """Direct archives get an owned immutable input and a fresh extraction tree per conversion."""
+    root, dest = Path(root), Path(dest)
+    if not root.is_file() or not ARCHIVE_RE.search(root.name):
+        return _unpack_archives(root, dest)
+    import hashlib
+    import shutil
+    import tempfile
+    dest.mkdir(parents=True, exist_ok=True)
+    workspace = Path(tempfile.mkdtemp(prefix='archive-', dir=dest))
+    try:
+        incoming = workspace / 'input' / root.name
+        incoming.parent.mkdir()
+        digest = hashlib.sha256()
+        before = root.stat()
+        with root.open('rb') as source, incoming.open('xb') as target:
+            remaining = before.st_size
+            while remaining:
+                block = source.read(min(1 << 20, remaining))
+                if not block:
+                    raise ValueError('Archive changed while its input snapshot was being read')
+                digest.update(block)
+                target.write(block)
+                remaining -= len(block)
+            if source.read(1):
+                raise ValueError('Archive grew while its input snapshot was being read')
+        after = root.stat()
+        identity = lambda stat: (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        if identity(before) != identity(after):
+            raise ValueError('Archive changed while its input snapshot was being read')
+        expanded, notes = _unpack_archives(incoming, workspace / 'files')
+        write_atomic(workspace / '.archive-source.json', {'name': root.name, 'sha256': digest.hexdigest()})
+        return expanded, notes
+    except BaseException:
+        def cleanup_error(function, name, error):
+            # macOS can remove a payload's AppleDouble companion before rmtree reaches its directory entry.
+            if not isinstance(error[1], FileNotFoundError):
+                raise error[1]
+        shutil.rmtree(workspace, onerror=cleanup_error)
+        raise
+
+
+def _unpack_archives(root: Path, dest: Path) -> tuple[Path, list[str]]:
     """Unpack the upload's archives the way Data Review's upload page opens them (its read.js openArchives): an
     archive whose files sit in one folder unpacks to that folder, one of loose files to a folder named after it.
     An upload that is itself an archive unpacks into dest, which becomes the upload; archives inside a folder
@@ -5445,26 +5488,48 @@ def lerobot_recorded_signals(ep, ctx, root, df, used, n, *, anchor_times=None):
     return lerobot_image_depth(ep, ctx, root, df, signals, anchor_times=anchor_times)
 
 
-def canonical_packed_row(root: dict, row: dict, fps: float | None) -> tuple[dict, dict]:
-    """Recover accumulated timestamp rounding from contiguous, count-owned CFR episodes.
+_PACKED_OWNERSHIP_LOCK = threading.RLock()
 
-    LeRobot resolves a timestamp to its closest encoded frame. A contiguous run
-    then advances by declared episode lengths, so rounding errors cannot accumulate
-    into a different frame. Generic time-window cuts retain their own contract.
+
+def packed_cfr_clock(facts: dict, fps: float) -> bool:
+    """Prove a complete CFR clock allowing only the container's integral tick quantization."""
+    memo = facts.setdefault('_packed_windows', {})
+    key = ('cfr', fps)
+    if key not in memo:
+        pts = np.asarray(facts['pts'])
+        tick = float(facts['time_base'])
+        expected = np.arange(len(pts), dtype=np.float64) / fps
+        actual = pts.astype(np.float64) * tick
+        memo[key] = bool(len(pts) and pts[0] == 0 and np.all(np.diff(pts) > 0) and
+                         np.all(np.abs(actual - expected) <= tick + 4 * np.spacing(np.maximum(expected, 1))))
+    return memo[key]
+
+
+def canonical_packed_row(root: dict, row: dict, fps: float | None) -> tuple[dict, dict]:
+    """Reconcile publisher count ownership once, then query each camera's exact encoded clock.
+
+    A complete encoded cadence or a shared zero origin establishes contiguous episode queries from counts.
+    Sibling cameras resolve those same queries independently, including gaps outside the owned episode.
     """
     if not fps or not np.isfinite(fps) or fps <= 0:
         return row, {}
+    # Workers share root. Publish only complete group and ownership maps, including empty negative results.
+    with _PACKED_OWNERSHIP_LOCK:
+        return _canonical_packed_row(root, row, fps)
+
+
+def _canonical_packed_row(root, row, fps):
     import av
-    from label.frames import FrameError, base_frame
     from collections import Counter
     cache = root.setdefault('_packed_ownership', {})
     if '_packed_groups' not in root:
-        groups = root['_packed_groups'] = {}
+        groups = {}
         for episode in root['episodes']:
             for camera, source in episode.get('videos', {}).items():
                 if isinstance(source, tuple):
                     groups.setdefault((Path(source[0]), camera), []).append((episode, source))
-    videos, corrected = dict(row['videos']), {}
+        root['_packed_groups'] = groups
+    proven = {}
     for camera, source in row['videos'].items():
         if not isinstance(source, tuple):
             continue
@@ -5476,64 +5541,69 @@ def canonical_packed_row(root: dict, row: dict, fps: float | None) -> tuple[dict
             key = (str(path.resolve()), version, camera, fps)
             if key not in cache:
                 facts = _packed_video_probe(str(path.resolve()), version)
-                step = packed_grid_step(facts, fps)
-                owned = cache[key] = {}
-                if (step is None or not len(facts['pts']) or facts['pts'][0] != 0
-                        or not np.all(np.diff(facts['pts']) == step)):
-                    continue
-                entries = root['_packed_groups'].get((path, camera), [])
-                counts = Counter(episode['eidx'] for episode, _ in entries)
-                duplicate = {index for index, count in counts.items() if count > 1}
-                cursor, previous_stop = None, None
-                for episode, (_, start, end) in sorted(entries, key=lambda entry: entry[1][1]):
-                    length = episode.get('length')
-                    if (episode['eidx'] in duplicate or type(length) is not int or not 0 < length <= len(facts['pts'])
-                            or not np.isfinite([start, end]).all() or end <= start):
-                        cursor, previous_stop = None, None
-                        continue
-                    # One microsecond bounds each stored duration's quantization,
-                    # independent of how many earlier rounded durations were added.
-                    error = 1e-6 + 4 * max(abs(np.spacing(start)), abs(np.spacing(end)))
-                    if abs((end - start) - length / fps) > error:
-                        cursor, previous_stop = None, None
-                        continue
-                    contiguous = (previous_stop is not None and abs(start - previous_stop)
-                                  <= 4 * max(abs(np.spacing(start)), abs(np.spacing(previous_stop))))
-                    if not contiguous:
-                        position = start * fps
-                        if not np.isfinite(position):
+                owned = {}
+                entries = sorted(root['_packed_groups'].get((path, camera), []), key=lambda entry: entry[1][1])
+                dense = packed_cfr_clock(facts, fps)
+                shared_zero = (bool(entries) and bool(len(facts['pts'])) and facts['pts'][0] == 0
+                               and entries[0][1][1] == 0)
+                if dense or shared_zero:
+                    capacity = len(facts['pts']) if dense else int(np.ceil(
+                        float(facts['pts'][-1] * facts['time_base']) * fps)) + 1
+                    counts = Counter(episode['eidx'] for episode, _ in entries)
+                    cursor, previous_stop = None, None
+                    for episode, (_, start, end) in entries:
+                        length = episode.get('length')
+                        if (counts[episode['eidx']] != 1 or type(length) is not int or not 0 < length <= capacity
+                                or not np.isfinite([start, end]).all() or end <= start):
                             cursor, previous_stop = None, None
                             continue
-                        cursor = round(position)
-                        # Native LeRobot readers select the nearest frame. A tie
-                        # is backend-dependent and supplies no unique ownership.
-                        if abs(abs(position - cursor) - .5) <= 4 * abs(np.spacing(position)):
+                        error = 1e-6 + 4 * max(abs(np.spacing(start)), abs(np.spacing(end)))
+                        if abs((end - start) - length / fps) > error:
                             cursor, previous_stop = None, None
                             continue
-                    first, last = cursor, cursor + length
-                    lo, hi = np.searchsorted(facts['pts'], [first * step, last * step])
-                    if first < 0 or hi - lo != length or not np.array_equal(facts['pts'][lo:hi], np.arange(first, last) * step):
-                        cursor, previous_stop = None, None
-                        continue
-                    owned[episode['eidx']] = (first, last)
-                    cursor, previous_stop = last, end
+                        contiguous = previous_stop is not None and abs(start - previous_stop) <= 4 * max(
+                            abs(np.spacing(start)), abs(np.spacing(previous_stop)))
+                        if not contiguous:
+                            # Choose a unique nearest CFR picture, rather than flooring a rounded timestamp.
+                            position = start * fps
+                            candidates = (int(np.floor(position)), int(np.ceil(position)))
+                            distances = [abs(position - candidate) for candidate in candidates]
+                            if candidates[0] != candidates[1] and abs(distances[0] - distances[1]) <= 8 * abs(np.spacing(position)):
+                                cursor, previous_stop = None, None
+                                continue
+                            cursor = candidates[int(distances[1] < distances[0])]
+                        first, last = cursor, cursor + length
+                        if first < 0 or last > capacity:
+                            cursor, previous_stop = None, None
+                            continue
+                        owned[episode['eidx']] = (first, last)
+                        cursor, previous_stop = last, end
+                cache[key] = owned
             bounds = cache[key].get(row['eidx'])
         except (OSError, ValueError, av.error.FFmpegError):
-            # Camera opening still reports its own source-specific failure below.
+            continue  # The conversion boundary reports a camera's own opening failure.
+        if bounds is not None:
+            proven[camera] = bounds
+    videos, corrected, queries = dict(row['videos']), {}, {}
+    for camera, source in row['videos'].items():
+        if not isinstance(source, tuple):
             continue
+        path, base, stop = source
+        bounds = proven.get(camera)
         if bounds is None:
-            continue
-        try:
-            declared = (base_frame(base, fps), base_frame(stop, fps))
-        except FrameError:
-            declared = None
-        if declared != bounds:
-            first, last = bounds
-            videos[camera] = (path, first / fps, last / fps)
+            matches = [value for other, value in proven.items()
+                       if np.allclose([base, stop], row['videos'][other][1:], rtol=0, atol=1e-6)]
+            if not matches or any(value != matches[0] for value in matches):
+                continue
+            bounds = matches[0]
+        first, last = bounds
+        videos[camera] = (path, first / fps, last / fps)
+        queries[camera] = {'origin_s': first / fps, 'count': last - first}
+        if (base, stop) != (first / fps, last / fps):
             corrected[camera] = {'from_timestamp': base, 'to_timestamp': stop,
-                                 'first_frame': first, 'frame_count': last - first,
-                                 'basis': 'LeRobot nearest-frame lookup, episode lengths and encoded CFR grid'}
-    return ({**row, 'videos': videos} if corrected else row), corrected
+                'first_frame': first, 'frame_count': last - first,
+                'basis': 'publisher episode counts anchored to the encoded clock; nearest encoded PTS per camera'}
+    return ({**row, 'videos': videos, '_packed_queries': queries} if queries else row), corrected
 
 
 def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(), *, native_adapter=None) -> dict:
@@ -5601,7 +5671,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
 
     video_cams = [k for k in r["cams"] if k in row["videos"]]
     if r["image_cams"] and df is not None:
-        return _convert_image_episode(item, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes,
+        return _convert_image_episode({**item, "row": row}, rig, ep, dataset, df, fps or 30.0, state, action, extra, notes,
                                       state_columns=state_columns, action_columns=action_columns,
                                       state_names=state_names, split_note=split_note, hold_back=hold_back, native_adapter=native_adapter)
     vmap, unused = pick_cameras(video_cams, rig, list(feats) or video_cams)
@@ -5647,11 +5717,11 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
             row, packed_ownership = canonical_packed_row(r, row, fps)
             if packed_ownership:
                 extra['source']['packed_video_ownership'] = packed_ownership
-        sources, cameras, broken, pts, grid = {}, {}, {}, {}, {}
+        sources, cameras, broken, pts, grid, encoded_times = {}, {}, {}, {}, {}, {}
         for v, key in vmap.items():
             mp4, base, to = row["videos"][key]
             try:
-                pr = packed_video_window(Path(mp4), base, to, fps=fps)
+                pr = packed_video_window(Path(mp4), base, to, fps=fps, query=row.get("_packed_queries", {}).get(key))
             except Exception as error:
                 broken[key] = plain_error(error)
                 continue
@@ -5668,7 +5738,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
                 expected = ((first + np.arange(n)) / fps) / float(pr["time_base"])
                 grid[v] = bool(np.allclose(pr["pts"], expected, rtol=0, atol=1e-4))
             pts[v] = pr["pts"]
-            if not grid[v]:
+            encoded_times[v] = pr.get('episode_times', np.arange(n) / fps)
+            if not grid[v] and not pr.get('publisher_query'):
                 add_issue(extra, "recorded_rate_mismatch", f"{key} PTS do not follow the declared {fps:g} Hz grid. "
                           "Frames remain mapped by their recorded indices; original encoded PTS are retained separately.",
                           camera=key)
@@ -5698,7 +5769,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
         times = None
         if not all(grid.values()):
             times = {key: value for v in sources for key, value in
-                     ((v, np.arange(len(pts[v])) / fps), (f"{v}_pts", pts[v]))}
+                     ((v, encoded_times[v]), (f"{v}_pts", pts[v]))}
         ctx = finish_episode(ep, ctx, sources, state if kind != "none" else None, action, times=times,
                               signals=lerobot_recorded_signals(ep, ctx, r, df, _used_columns(kind, state, action, state_columns,
                                                        action_columns) | set(hold_back), ctx["n_state_frames"]))
@@ -5802,7 +5873,7 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
         if isinstance(src, tuple):
             mp4, base, to = src
             try:
-                facts = packed_video_window(Path(mp4), base, to, fps=fps)
+                facts = packed_video_window(Path(mp4), base, to, fps=fps, query=row.get("_packed_queries", {}).get(k))
             except Exception:
                 e = None
             else:
@@ -5937,17 +6008,32 @@ def _packed_video_probe(path: str, version: tuple) -> dict:
     return probe(Path(path))
 
 
-def packed_video_window(path: Path, base: float, stop: float, *, fps: float | None = None) -> dict:
+def packed_video_window(path: Path, base: float, stop: float, *, fps: float | None = None, query=None) -> dict:
     """Exact encoded PTS inside a declared half-open LeRobot episode window."""
     if not np.isfinite([base, stop]).all() or stop <= base:
         raise ValueError("invalid packed video episode window")
     stat = path.stat()
     facts = _packed_video_probe(str(path.resolve()), (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino))
-    lo, hi = packed_window_indices(facts, base, stop, fps=fps)
-    pts = facts["pts"][lo:hi]
+    episode_times = None
+    if query is not None:
+        clock = facts['pts'].astype(np.float64) * float(facts['time_base'])
+        targets = query['origin_s'] + np.arange(query['count'], dtype=np.float64) / fps
+        if not len(clock):
+            raise ValueError('Encoded camera has no frames for the publisher queries')
+        indices = nearest(clock, targets)
+        # LeRobot's documented nearest-frame tolerance. Never transfer a missing query to the next row.
+        if (len(clock) == 0 or np.any(np.abs(clock[indices] - targets) > 1e-4)
+                or np.any(np.diff(indices) <= 0)):
+            raise ValueError('Encoded camera cannot supply every publisher row within the LeRobot 0.0001 s tolerance')
+        pts = facts['pts'][indices]
+        episode_times = clock[indices] - query['origin_s']
+    else:
+        lo, hi = packed_window_indices(facts, base, stop, fps=fps)
+        pts = facts["pts"][lo:hi]
     if not len(pts):
         raise ValueError("no video packet covers the owned episode window")
-    return {**{key: value for key, value in facts.items() if key != '_packed_windows'}, "pts": pts}
+    return {**{key: value for key, value in facts.items() if key != '_packed_windows'}, "pts": pts,
+            **({'episode_times': episode_times, 'publisher_query': True} if episode_times is not None else {})}
 
 
 def packed_grid_step(facts: dict, rate: float | None):
@@ -5991,6 +6077,14 @@ def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float |
         rounded = round(boundary, 6)
         # Float arithmetic on metadata can add a few binary ULPs, which convey no additional source precision.
         microseconds = abs(boundary - rounded) <= 2 * abs(np.spacing(boundary))
+        if rate and packed_cfr_clock(facts, rate):
+            try:
+                frame = base_frame(boundary, rate)
+            except FrameError:
+                pass
+            else:
+                indices.append(min(max(frame, 0), len(facts['pts'])))
+                continue
         if step is not None:
             # Keep the existing packed CFR ownership contract (including older rounded publisher offsets), but
             # only after the encoded timestamps prove this grid. Never infer a CFR clock from nominal FPS alone.
@@ -6094,12 +6188,12 @@ def _convert_image_episode(item, rig, ep, dataset, df, fps, state, action, extra
             return
         source = row["videos"][key]
         path, base, stop = source if isinstance(source, tuple) else (source, 0.0, None)
-        facts = packed_video_window(Path(path), base, stop, fps=fps) if stop is not None else probe(Path(path))
+        facts = packed_video_window(Path(path), base, stop, fps=fps, query=row.get("_packed_queries", {}).get(key)) if stop is not None else probe(Path(path))
         if not len(facts["pts"]):
             raise ValueError("no video packet covers the owned episode window")
         paths[key], prs[key], bases[key] = Path(path), facts, float(base)
         # LeRobot associates video and table rows by episode frame index. Encoded PTS are retained separately.
-        clocks[key] = np.arange(len(facts["pts"]), dtype=np.float64) / fps
+        clocks[key] = facts.get("episode_times", np.arange(len(facts["pts"]), dtype=np.float64) / fps)
     for key in video_keys:
         try:
             video_facts(key)
@@ -9264,6 +9358,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     writers: dict[str, FrameWriter] = {}
     texts: dict[str, list] = {}               # topic: its messages in time order, (log time ns, text) (add_text)
     n_text: dict[str, int] = {}
+    text_clock_kinds, text_records = {}, {}
     facs, decs, undecodable, t0 = _decoders(), {}, set(), None
     schema_failures = {}
     camera_damage: list = []
@@ -9349,8 +9444,11 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                         capture_ns.setdefault(ch.topic, []).append(stamp)
                 else:
                     d = _field(dec, "data")
-                    add_text(texts, n_text, ch.topic, int(msg.log_time),
-                             d if isinstance(d, str) else (dec if isinstance(dec, dict) else str(dec)))
+                    value = d if isinstance(d, str) else (dec if isinstance(dec, dict) else str(dec))
+                    add_text(texts, n_text, ch.topic, stamp, value)
+                    text_clock_kinds.setdefault(ch.topic, set()).add("capture" if capture_stamp is not None else "arrival")
+                    text_records.setdefault(ch.topic, []).append({"log_ns": int(msg.log_time),
+                        "publish_ns": int(msg.publish_time), "capture_ns": capture_stamp, "text": value})
         except Exception:
             if not writers:
                 raise
@@ -9498,7 +9596,28 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         if w.pts:
             bad_frames_issues(extra, t, w, zero)
     anchor_origin_ns = capture_ns[files[me.order_views(files)[0]][0]][0]
-    instr, notes = mcap_task_texts(texts, n_text, anchor_origin_ns)
+    anchor_stamps = capture_ns[files[me.order_views(files)[0]][0]]
+    interval_ns = int(np.median(np.diff(anchor_stamps))) if len(anchor_stamps) > 1 else 0
+    end_ns = int(anchor_stamps[-1]) + max(0, interval_ns)
+    placed_texts, unplaced_texts = {}, {}
+    for topic, sequence in texts.items():
+        compatible = (camera_clock is not None and text_clock_kinds.get(topic) == {camera_clock}
+                      and all(anchor_origin_ns <= stamp <= end_ns for stamp, _ in sequence))
+        if compatible:
+            placed_texts[topic] = sorted(sequence, key=lambda row: row[0])
+        else:
+            unplaced_texts[topic] = text_records.get(topic, [])
+            add_issue(extra, "text_clock_unverified", f"{topic}: text and camera timestamp sources or origins do not "
+                      "establish a shared episode clock; original text and clocks remain recording metadata.", signal=topic)
+            # A constant task has no timed claim. Keep its instruction without assigning its source clock to footage.
+            if len(sequence) == 1:
+                placed_texts[topic] = sequence
+    instr, notes = mcap_task_texts(placed_texts, n_text, anchor_origin_ns)
+    if unplaced_texts:
+        extra.setdefault('recorded_metadata', {})['unaligned_text_channels'] = unplaced_texts
+        for topic, records in unplaced_texts.items():
+            if len(texts[topic]) > 1:
+                notes[topic] = {'clock_alignment': 'unverified', 'messages': records}
     if instr:
         extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the MCAP.")
     if rig == "ego_head":
@@ -9507,7 +9626,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         anchor_pts = writers[files[me.order_views(files)[0]][0]].pts
         end_s = (anchor_pts[-1] + (anchor_pts[-1] - anchor_pts[-2] if len(anchor_pts) > 1 else 0)) / TIME_BASE_DEN
         end_s -= (anchor_origin_ns - t0) / 1e9
-        st, subs = mcap_step_subtasks(texts, anchor_origin_ns, end_s)
+        st, subs = mcap_step_subtasks({topic: sequence for topic, sequence in placed_texts.items()
+                                        if topic not in unplaced_texts}, anchor_origin_ns, end_s)
         if subs:
             notes.pop(st, None)
             extra["annotation_subtasks"] = subs

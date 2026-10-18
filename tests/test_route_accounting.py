@@ -462,7 +462,8 @@ def test_parallel_final_waits_for_live_reservation_but_preserves_unknown_charge(
         def wait(self, timeout=None):
             waiting.set()
             return super().wait(timeout)
-    monkeypatch.setattr(harness, 'threading', SimpleNamespace(Condition=ObservedCondition, Lock=threading.Lock))
+    monkeypatch.setattr(harness, 'threading', SimpleNamespace(Condition=ObservedCondition, Lock=threading.Lock,
+                                                           Event=threading.Event))
     eps = []
     for name in ('a', 'b'):
         root = tmp_path / name
@@ -649,6 +650,10 @@ def test_final_retry_reuses_paid_route_receipt(tmp_path, monkeypatch, final_repl
     else:
         assert harness.label_episode(ep, out / f'{ep.name}.json', api_key='sk-or-fixture', **args())['parse_ok'] is False
     monkeypatch.setattr(route, '_CACHE', {})
+    if final_reply != 'key_exhausted':
+        assert harness.run_batch([ep], out, **batch) == 1
+        assert len(finals) == 1
+        batch['force'] = True
     assert harness.run_batch([ep], out, **batch) == 0
     assert len(finals) == 2
     assert [model for model, _ in calls].count(route.ROUTE_MODEL) == 1

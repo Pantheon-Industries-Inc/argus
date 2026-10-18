@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from label.harness import annotation_complete, get_keys, is_openrouter_key
+from label.harness import annotation_complete, execution_lock, get_keys, is_openrouter_key
 from label.dictionary_stage import output_spend
 from label.atomic import write_atomic
 
@@ -89,7 +89,7 @@ def footage_hours(slice_dir: Path, names: list[str]) -> float:
 def harness_cmd(slice_dir: Path, run: Path, kind: str, cap: float, concurrency: int, extra: list[str]) -> list[str]:
     cmd = [str(PY), "-m", "label.harness", "--episodes-root", str(slice_dir.resolve()), "--out-dir",
            str((run / "out").resolve()), "--concurrency", str(concurrency)]
-    cmd += ["--dry-run"] if kind == "dry" else ["--max-spend", f"{cap:.2f}"]
+    cmd += ["--dry-run"] if kind == "dry" else ["--max-spend", repr(cap)]
     return cmd + [x for x in extra if x != "--"]
 
 
@@ -108,7 +108,7 @@ def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> None
     m = dict(re.findall(r"(\w+)=\$?([\d.]+)", last))
     done_eps = sorted(p.stem for p in (run / "out").glob("episode_*.json")) if (run / "out").exists() else []
     hours = footage_hours(slice_dir, done_eps) if done_eps else 0.0
-    cost = round(billed_cost(run), 2)
+    cost = billed_cost(run)
     info.update({"status": "done" if rc == 0 else f"exit {rc}",
                  "finished_at": dt.datetime.now().isoformat(timespec="seconds"),
                  "cost_usd": cost, "episodes_done": len(done_eps), "episodes_parsed": parsed(run, done_eps),
@@ -120,6 +120,11 @@ def finish(run: Path, info: dict, cmd: list, slice_dir: Path, mode: str) -> None
 
 
 def resume(a, slice_dir: Path) -> None:
+    with execution_lock(a.resume.resolve()):
+        return _resume(a, slice_dir)
+
+
+def _resume(a, slice_dir: Path) -> None:
     run = a.resume.resolve()
     info = json.loads((run / "run.json").read_text())
     sha, dirty = commit()
@@ -136,11 +141,11 @@ def resume(a, slice_dir: Path) -> None:
     left = float(info["cap_usd"]) - spent
     if info["kind"] != "dry" and left <= 0:
         raise SystemExit(f"--resume: the run's cap ${info['cap_usd']} is already spent (${spent:.2f})")
-    if not any((run / "out").glob("episode_*.json")):
+    if not any((run / 'out').glob('*episode_*.json')) and not any((run / 'out' / '.evidence').glob('*.inspection.json')):
         raise SystemExit(f"--resume: no outputs in {run / 'out'}; refusing (wrong folder?)")
     cmd = harness_cmd(slice_dir, run, info["kind"], left, a.concurrency, a.harness_args)
     info.setdefault("resumes", []).append({"at": dt.datetime.now().isoformat(timespec="seconds"), "why": a.why,
-                                           "spent_before": round(spent, 2), "command": cmd})
+                                           "spent_before": spent, "command": cmd})
     info["status"] = "running"
     write_atomic(run / "run.json", info, indent=1)
     finish(run, info, cmd, slice_dir, "a")
@@ -166,7 +171,7 @@ def main() -> None:
         return resume(a, a.episodes)
     sha, dirty = commit()
     if a.kind != "dry":
-        if a.cap <= 0:
+        if not math.isfinite(a.cap) or a.cap <= 0:
             raise SystemExit("a paid run needs --cap")
         if dirty:
             raise SystemExit("refused: the checkout has uncommitted changes, so run.json could not name the code "
@@ -179,8 +184,9 @@ def main() -> None:
     info = {"run_id": run_id, "kind": a.kind, "dataset": a.dataset, "slice": str(a.episodes.resolve()),
             "code": sha, "code_dirty": dirty, "started_at": now.isoformat(timespec="seconds"), "cap_usd": a.cap,
             "status": "running", "command": cmd, "note": a.note}
-    write_atomic(run / "run.json", info, indent=1)
-    finish(run, info, cmd, a.episodes, "w")
+    with execution_lock(run):
+        write_atomic(run / "run.json", info, indent=1)
+        finish(run, info, cmd, a.episodes, "w")
 
 
 if __name__ == "__main__":

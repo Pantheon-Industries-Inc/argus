@@ -321,7 +321,9 @@ def test_resume_revalidates_saved_placeholder_and_retains_previous_charge(tmp_pa
         output.write_text(json.dumps(record))
         return record
     monkeypatch.setattr(harness, 'label_episode', label_episode)
-    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, **settings) == 0
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, **settings) == 1
+    assert calls == []
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=True, **settings) == 0
     assert calls == [1]
     result = json.loads(target.read_text())
     assert harness.episode_cost(result) == pytest.approx(.03)

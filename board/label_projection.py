@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import re
 
@@ -36,29 +37,40 @@ def field_identity(field: str, row: int | None = None) -> str:
     return f'{scope}[{row}].{key}' if dot else f'{field}[{row}]'
 
 
+def source_row_indices(labels: dict, scope: str, dropped: list | None = None) -> list[int]:
+    """Derive provenance from actual omitted rows, never a reply-supplied index map."""
+    rows = labels
+    for key in scope.split('.'):
+        rows = rows.get(key) if isinstance(rows, dict) else None
+    size = len(rows) if isinstance(rows, list) else 0
+    omitted = dropped if dropped is not None else labels.get('_dropped')
+    omitted = {item['row'] for item in (omitted if isinstance(omitted, list) else [])
+               if isinstance(item, dict) and item.get('field') == scope
+               and type(item.get('row')) is int and item['row'] >= 0}
+    total = size + len(omitted)
+    if any(index >= total for index in omitted):
+        return list(range(size))
+    return [index for index in range(total) if index not in omitted]
+
+
 def source_row_index(labels: dict, scope: str, index: int, dropped: list | None = None) -> int:
-    mapping = labels.get('_schema_row_indices')
-    mapping = mapping.get(scope) if isinstance(mapping, dict) else None
-    if (isinstance(mapping, list) and len(mapping) > index and
-            all(type(value) is int and value >= 0 for value in mapping) and mapping == sorted(set(mapping))):
-        return mapping[index]
-    omitted = {item['row'] for item in (dropped if dropped is not None else labels.get('_dropped') or [])
-               if isinstance(item, dict) and item.get('field') == scope and type(item.get('row')) is int}
-    source = index
-    for omitted_index in sorted(omitted):
-        if omitted_index <= source:
-            source += 1
-    return source
+    mapping = source_row_indices(labels, scope, dropped)
+    return mapping[index] if 0 <= index < len(mapping) else index
 
 
 def diagnostics(labels: dict, dropped: list[dict]) -> dict[str, str]:
     """One diagnostic per source field, independent of the layer reporting it."""
     entries = {}
+    mappings = {}
     for message in labels.get('_schema_violations') or []:
         row = re.match(r'^(\w+) row (\d+): (?:its )?(\w+)', message)
         field = re.match(r'^([\w.\[\]]+):', message)
         if row:
-            source_index = source_row_index(labels, row[1], int(row[2]))
+            if row[1] not in mappings:
+                mappings[row[1]] = source_row_indices(labels, row[1], dropped)
+            mapping = mappings[row[1]]
+            index = int(row[2])
+            source_index = mapping[index] if index < len(mapping) else index
             identity = field_identity(row[1] + '.' + row[3], source_index)
             if source_index != int(row[2]):
                 message = identity + ':' + message.split(':', 1)[1]
@@ -98,11 +110,14 @@ def project(labels: dict) -> tuple[dict, list[dict]]:
     from label.harness import typed_labels
     labels = typed_labels(labels)
     dropped.extend(labels.pop('_dropped', []))
-    mappings = labels.get('_schema_row_indices')
-    mappings = dict(mappings) if isinstance(mappings, dict) else {}
+    supplied_mapping = labels.pop('_schema_row_indices', None)
+    mappings = {}
     for scope, rows in labels.items():
         if isinstance(rows, list) and any(item.get('field') == scope and 'row' in item for item in dropped):
-            mappings[scope] = [source_row_index(labels, scope, index, dropped) for index in range(len(rows))]
+            mappings[scope] = source_row_indices(labels, scope, dropped)
+    if supplied_mapping is not None and supplied_mapping != mappings:
+        dropped.append({'field': '_schema_row_indices', 'why': 'row map does not match omitted source rows',
+                        'value': supplied_mapping})
     if mappings:
         labels['_schema_row_indices'] = mappings
 
@@ -116,6 +131,8 @@ def project(labels: dict) -> tuple[dict, list[dict]]:
             value = row.get(key)
             if value is not None and not isinstance(value, str):
                 invalid(row, key, scope, index, 'not text')
+            elif key == 'issue' and isinstance(value, str) and not value.strip():
+                invalid(row, key, scope, index, 'empty text')
             elif value is not None and key in ENUMS:
                 normalized = value.strip().lower()
                 if normalized in ENUMS[key]:
@@ -152,9 +169,10 @@ def project(labels: dict) -> tuple[dict, list[dict]]:
         if isinstance(rows, dict):
             row_fields(rows, scope)
         elif isinstance(rows, list):
+            indices = source_row_indices(labels, scope, dropped)
             for index, row in enumerate(rows):
                 if isinstance(row, dict):
-                    row_fields(row, scope, source_row_index(labels, scope, index, dropped))
+                    row_fields(row, scope, indices[index])
     # Local assessments use the same annotation schema and retain their own attribution.
     assessments = labels.get('part_assessments')
     if assessments is not None and not isinstance(assessments, list):
@@ -171,7 +189,15 @@ def project(labels: dict) -> tuple[dict, list[dict]]:
             kept.append(local)
             dropped.extend({**item, 'field': f'part_assessments[{index}].' + item['field']} for item in omitted)
         labels['part_assessments'] = kept
+    # Nested assessments return their inherited omissions too. Preserve each
+    # source omission once when their projection is revisited by another consumer.
+    unique = {}
+    for item in dropped:
+        unique.setdefault(json.dumps(item, sort_keys=True, ensure_ascii=True), item)
+    dropped = list(unique.values())
     issues = diagnostics(labels, dropped)
     if issues:
         labels['_schema_violations'] = list(issues.values())
+    if dropped:
+        labels['_dropped'] = dropped
     return labels, dropped

@@ -80,9 +80,9 @@ def test_ego_trailing_notes_recovery_checks_hand_columns():
     assert labels['_dropped'][0]['row'] == 1
 
 
-def test_completion_case_variation_preserves_the_result_with_a_violation():
+def test_completion_case_variation_preserves_the_result_without_a_false_violation():
     labels, ok = harness.parse_response('{"completion":{"task_completed":"Success"}}')
-    assert ok and labels['completion']['task_completed'] == 'success' and labels['_schema_violations']
+    assert ok and labels['completion']['task_completed'] == 'success' and not labels.get('_schema_violations')
 
 
 @pytest.mark.parametrize('profile,bad_field,bad_value', [
@@ -103,7 +103,9 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
     labels, accepted = harness.parse_response(json.dumps(reply))
     assert accepted and labels['timeline'][0][bad_field] == bad_value
     assert labels['timeline'][0]['action'] == 'reach' and labels['_schema_violations']
-    assert harness.parse_response(json.dumps({'timeline_columns': columns, 'timeline': [row[:-1]]}))[1] is False
+    short, accepted = harness.parse_response(json.dumps({'timeline_columns': columns, 'timeline': [row[:-1]]}))
+    if accepted:
+        assert short['_dropped'] and all('progress' not in step for step in short['timeline'])
 
     ep = recording(tmp_path, np.arange(12) / 30)
     context_path = ep / 'context.json'
@@ -152,7 +154,7 @@ def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch,
     target = out / (ep.name + '.json')
     result = json.loads(target.read_text())
     assert result['parse_ok'] and result['labels']['timeline'][0]['action'] == 'reach'
-    if row['progress'] == 50 or completion['task_completed'] == 'Success':
+    if row['progress'] == 50:
         assert result['labels']['_schema_violations']
     assert harness.episode_cost(result) == pytest.approx(.02)
     original = target.read_bytes()
@@ -453,7 +455,7 @@ def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path,
     result = json.loads((out / (ep.name + '.json')).read_text())
     assert result['parse_ok'] and result['labels']['timeline'][0]['action'] == 'reach'
     assert result['labels']['timeline'][0]['contribution'] == contribution
-    assert result['labels']['_schema_violations']
+    assert bool(result['labels'].get('_schema_violations')) is (contribution is None)
     assert harness.run_batch([ep], out, **args) == 0
     assert sent == ['selection', 'final']
 
@@ -534,18 +536,19 @@ def test_short_row_recovery_requires_positional_evidence(contribution, progress,
     row = [0, 1, 'left', 'reach', 'cup', None, None, contribution, progress]
     labels, ok = harness.parse_response(json.dumps({'task_summary': 'reach', 'timeline': [row]}))
     assert ok
-    assert bool(labels.get('timeline')) is kept
+    assert labels.get('timeline')
     if kept:
         assert labels['timeline'][0]['contribution'] == contribution
         assert labels['timeline'][0]['progress'] == progress
     else:
         assert labels['_dropped'][0]['row'] == 0
+        assert 'contribution' not in labels['timeline'][0] and 'progress' not in labels['timeline'][0]
 
 
 def test_short_row_with_a_missing_middle_column_is_not_reinterpreted():
     shifted = [0, 1, 'left', 'reach', 'cup', None, 'advancing', None, None]
     labels, ok = harness.parse_response(json.dumps({'task_summary': 'reach', 'timeline': [shifted]}))
-    assert ok and labels['timeline'] == []
+    assert ok and labels['timeline'] == [{'start_s': 0, 'end_s': 1}]
     assert labels['_dropped'][0]['row'] == 0
 
 
@@ -554,5 +557,6 @@ def test_ego_short_row_does_not_guess_whether_text_is_handwear_or_notes():
     ambiguous = [0, 1, 'left', 'reach', 'cup', None, None, 'advancing', .2, True, 'bare']
     labels, ok = harness.parse_response(json.dumps({'task_summary': 'reach', 'timeline_columns': columns,
                                                    'timeline': [ambiguous]}))
-    assert ok and labels['timeline'] == []
+    assert ok and labels['timeline'][0]['action'] == 'reach'
+    assert 'hands_wearing' not in labels['timeline'][0] and 'notes' not in labels['timeline'][0]
     assert labels['_dropped'][0]['value'] == ambiguous

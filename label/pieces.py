@@ -522,6 +522,29 @@ def _part_dispatch(record: dict | None) -> dict:
                and record.get('parse_ok') is False and record.get('final_reserved_usd') == 0 else {})}
 
 
+def _carry_part_billing(result: dict, parts: list) -> None:
+    """Carry cumulative invoices separately from each part's current usage."""
+    final, auxiliary, routes = [], [], []
+    for context, record in parts:
+        if not record:
+            continue
+        part = (context.get('piece') or {}).get('index')
+        final.extend({**copy.deepcopy(invoice), 'part': part} for invoice in record.get('final_cost_history', []))
+        auxiliary.extend({**copy.deepcopy(invoice), 'part': part} for invoice in record.get('auxiliary_cost_history', []))
+        if record.get('final_dispatch_outcome') in ('claimed', 'unverified'):
+            final.append({key: copy.deepcopy(record[key]) for key in (
+                'model', 'generation_id', 'usage', 'final_dispatch_outcome', 'final_reserved_usd',
+                'response_text', 'response') if key in record} | {'part': part})
+        routes.append((record.get('config') or {}).get('resolution_route') or {})
+    result['final_cost_history'], result['auxiliary_cost_history'] = final, auxiliary
+    route = result['config']['resolution_route']
+    route.pop('previously_billed', None)
+    route['previously_billed_usd'] = sum(float(item.get('cost_usd') or 0) if item.get('previously_billed')
+        else float(item.get('previously_billed_usd') or 0) for item in routes)
+    if any(item.get('cost_is_conservative_estimate') for item in routes):
+        route['cost_is_conservative_estimate'] = True
+
+
 def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
     """out/: the short episodes' replies from job/run/out as they came, and one stitched result per long recording.
 
@@ -612,6 +635,7 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
             result['config']['resolution_route']['cost_usd'] = round(
                 sum(float(route.get('cost_usd') or 0) for route in routes), 6)
             result['decode_failed'] += [x for _, r in failed for x in (r or {}).get('decode_failed') or []]
+            _carry_part_billing(result, got + failed)
             write_atomic(out / f"{ep}.json", result, indent=None)
             res["stitched"] += 1
             if missing:
@@ -656,7 +680,7 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
                       'config': copy.deepcopy((r or {}).get('config') or {})}
                      for pc, r in failed]
     _combine_request_config(cfg)
-    return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
+    result = {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
             'annotation_policy': selected, 'prompt_mode': 'session' if selected['task_mode'] == 'session' else 'inferred',
             **({'jaw_evidence': jaw_evidence} if jaw_evidence else {}),
             **({'evidence_inspection': inspection} if inspection['parts'] else {}),
@@ -665,6 +689,8 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
             "labels": {"_raw": raw, "_parse_error": f"no part of the recording returned labels that parse ({whys})"},
             "stitched": {"parts": count, "cuts_s": [g["t0_s"] for g in missing[1:]], "missing": missing},
             "decode_failed": [x for _, r in failed for x in (r or {}).get("decode_failed") or []]}
+    _carry_part_billing(result, failed)
+    return result
 
 
 # ---------------------------------------------------------------- stitching
@@ -834,7 +860,7 @@ def is_cut_artifact(iss: dict, part: int, count: int, t0: float, t1: float, cuts
 def _object_tokens(objects) -> list[frozenset]:
     """Full object-name token sets permit omitted modifiers; shared final nouns alone do not match two modifiers."""
     out = []
-    for obj in objects or []:
+    for obj in objects if isinstance(objects, list) else []:
         words = re.findall(r"[a-z0-9]+", str(obj.get("name") if isinstance(obj, dict) else obj).lower())
         words = [word[:-1] if word.endswith("s") and not word.endswith("ss") and len(word) > 3 else word
                  for word in words if word not in ("a", "an", "the")]
@@ -1060,7 +1086,9 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     for n, (pc, r) in enumerate(parts, start=1):
         i = int(pc["piece"].get("index") or n)      # the part's own number, with a gap where a part gave no labels
         t0, t1 = float(pc["piece"]["t0_s"]), float(pc["piece"]["t1_s"])
-        lab = _shift(r.get("labels") or {}, t0)
+        from board.label_projection import project
+        projected, omitted = project(r.get('labels') or {})
+        lab = _shift(projected, t0)
         owner = {"index": i, "t0_s": t0, "t1_s": t1}
         for field in ("tasks", "key_events", "timeline"):
             lab[field] = [{**item, "source_piece": dict(owner)} for item in lab.get(field) or []]
@@ -1117,7 +1145,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         # the first answer that saw a contact is kept, with its first and last touch frame from the parts whose strips
         # they count in
         for c in lab.get("contacts") or []:
-            if not isinstance(c, dict):
+            if not isinstance(c, dict) or not isinstance(c.get('id'), str):
                 continue
             m = contacts_model.setdefault(c.get("id"), {k: v for k, v in c.items() if k not in STRIP_FIELDS.values()})
             for k, field in STRIP_FIELDS.items():
@@ -1132,7 +1160,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         if lab.get("tasks"):
             L["tasks"] += lab["tasks"]
         # what each part's reply broke of the output format, left out of its labels (label/harness.py typed_labels)
-        dropped += [{**x, "part": i} for x in (r.get("labels") or {}).get("_dropped") or [] if isinstance(x, dict)]
+        dropped += [{**item, 'part': i} for item in omitted]
         u = r.get("usage") or {}
         for k in usage:
             usage[k] = round(usage[k] + float(u.get(k) or 0), 4)
@@ -1206,7 +1234,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     jaw_evidence = merge_jaws(ep_dir, parts, missing)
     camera_observations = merge_camera_observations(ep_dir, parts, missing, ep)
     selected = policy.effective(ctx)
-    return {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
+    result = {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
             'annotation_policy': selected,
             **({'camera_observations': camera_observations} if camera_observations is not None else {}),
             **({'jaw_evidence': jaw_evidence} if jaw_evidence else {}),
@@ -1225,6 +1253,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             "decode_failed": [x for _, r in parts for x in r.get("decode_failed") or []],
             **({"contacts": [c for c in recorded if c.get("id") in asked], "contact_views": views}
                if views["shown"] else {})}
+    _carry_part_billing(result, parts)
+    return result
 
 
 if __name__ == "__main__":

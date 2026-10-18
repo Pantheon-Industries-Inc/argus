@@ -23,7 +23,8 @@ _SECRETS = frozenset({
     'secret', 'secretkey', 'clientsecret', 'secretaccesskey', 'accesskeyid', 'sessiontoken',
     'authorization', 'proxyauthorization', 'cookie', 'setcookie', 'credentials',
     'credential', 'privatekey', 'signedurl', 'presignedurl', 'accessurl',
-    'requestheaders', 'authheaders',
+    'requestheaders', 'authheaders', 'hftoken', 'huggingfacetoken', 'authtoken', 'apitoken',
+    'awssessiontoken', 'githubtoken', 'bearertoken', 'openrouterkey', 'openaikey', 'anthropickey',
 })
 # Source locations resolve private preparation trees before this projection runs.
 _PRIVATE_LOCATIONS = frozenset({
@@ -36,7 +37,7 @@ _LOCATIONS = frozenset({
     'archivepath', 'archive', 'url', 'urls', 'uri', 'uris', 'href', 'link', 'links',
     'publicbase', 'publiccitation', 'citation',
 })
-_URL_QUERY_SECRETS = _SECRETS | {'signature', 'sig', 'keypairid', 'policy', 'googleaccessid'}
+_URL_QUERY_SECRETS = _SECRETS | {'key', 'signature', 'sig', 'keypairid', 'policy', 'googleaccessid'}
 _ACCESS_URI_PREFIXES = ('file:', 's3:', 'gs:', 'az:', 'abfs:', 'ssh:', 'sftp:', 'ftp:')
 _DROP = object()
 
@@ -69,7 +70,7 @@ def _private_url(value: str) -> bool:
         host = (parsed.hostname or '').lower().rstrip('.')
         if not host or parsed.username is not None or parsed.password is not None:
             return True
-        if '.' not in host or host.endswith(('.localhost', '.local', '.internal', '.lan')):
+        if '.' not in host or host.endswith(('.localhost', '.local', '.internal', '.lan', '.ts.net')):
             return True
         try:
             if not ipaddress.ip_address(host).is_global:

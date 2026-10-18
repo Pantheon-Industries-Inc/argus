@@ -62,7 +62,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from functools import lru_cache, wraps
 import urllib.parse
 import uuid
@@ -71,7 +71,7 @@ from pathlib import Path
 
 from board.families import Families
 from board.public_export import project as public_json
-from board.to_board import dumps
+from board.to_board import dumps, finite
 from compare.metrics import model_names, reasoning_effort
 from label.atomic import write_atomic
 
@@ -376,8 +376,13 @@ _FOOTAGE_READY_LOCK = threading.Lock()
 _CONTENT_PROBES = OrderedDict()
 _CONTENT_PROBE_LOCK = threading.Lock()
 _FOOTAGE_TICKET_SECONDS = 3600
+_MEDIA_READERS = threading.local()
+_FOOTAGE_DOWNLOAD_SEM = threading.BoundedSemaphore(4)
 _FOOTAGE_THREADS = int(os.environ.get("BOARD_FOOTAGE_THREADS", 2))
 _FOOTAGE_STALL_TIMEOUT = max(1.0, float(os.environ.get('BOARD_FOOTAGE_STALL_TIMEOUT', 300)))
+_EXPORT_SEM = threading.BoundedSemaphore(2)
+_EXPORT_MAX_BYTES = 256 * 1024**2
+_EXPORT_LABEL_BYTES = 16 * 1024**2
 _FOOTAGE_LOCKS: dict = {}
 _FOOTAGE_LOCKS_LOCK = threading.Lock()
 
@@ -480,9 +485,9 @@ def footage_layout(sizes: list, gap: int = FOOTAGE_GAP) -> tuple:
 
 
 def _probe(p: Path) -> tuple:
-    st = p.stat()
-    version = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-    return _probe_versioned(p, version)
+    version = next((version for reader, version, _ in getattr(_MEDIA_READERS, 'active', [])
+                    if Path(reader.name) == p), None)
+    return _probe_versioned(p, version or _footage_version(p))
 
 
 def _probe_versioned(p: Path, version: tuple) -> tuple:
@@ -522,10 +527,12 @@ def _probe_uncached(p: Path) -> tuple:
     one over the clip's usual step between frames: a clip timed by capture times (board/clips.py retime) starts with
     a frame half a step long, which puts its average rate above the camera's own and the footage canvas
     (footage_command) at a rate that samples on the frames' boundaries."""
+    p = _source_path(p)
     probe = Path(FFMPEG).with_name("ffprobe") if FFMPEG else None
     r = subprocess.run([str(probe) if probe and probe.exists() else "ffprobe", "-v", "error", "-select_streams", "v:0",
                         "-show_entries", "stream=width,height,avg_frame_rate:format=duration",
-                        "-of", "json", str(p)], capture_output=True, text=True, timeout=30, check=True)
+                        "-of", "json", str(p)], capture_output=True, text=True, timeout=30, check=True,
+                       **_source_process_options())
     j = json.loads(r.stdout)
     s = j["streams"][0]
     import av
@@ -604,12 +611,9 @@ def _copy_source_snapshot(source: Path, target: Path, version: tuple) -> str:
 
 
 @contextmanager
-def _snapshot_workspace():
-    """One bounded snapshot workspace across processes; a crash releases its lock."""
-    from board.build import remove_tree
-    folder = FOOTAGE_DIR / '.sources'
-    folder.mkdir(parents=True, exist_ok=True)
-    with (folder / '.lock').open('a+b') as lock:
+def _file_lock(path, *, blocking=True):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as lock:
         try:
             if os.name == 'nt':
                 import msvcrt
@@ -618,22 +622,18 @@ def _snapshot_workspace():
                     lock.write(b'0')
                     lock.flush()
                 lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError as error:
+            raise CacheBusy('Media preparation is busy; try again shortly') from error
         except OSError as error:
-            raise CacheBusy('Media snapshot preparation is busy; try again shortly') from error
+            if os.name == 'nt' and error.errno in (13, 36):
+                raise CacheBusy('Media preparation is busy; try again shortly') from error
+            raise
         try:
-            # The lock proves no other preparation owns these temporary copies.
-            for old in folder.glob('snapshot-*'):
-                if old.is_dir() and not old.is_symlink():
-                    remove_tree(old)
-            temporary = Path(tempfile.mkdtemp(prefix='snapshot-', dir=folder))
-            try:
-                yield temporary
-            finally:
-                remove_tree(temporary)
+            yield
         finally:
             if os.name == 'nt':
                 lock.seek(0)
@@ -643,36 +643,133 @@ def _snapshot_workspace():
 
 
 @contextmanager
-def _footage_sources(cams):
-    """Untrusted metadata requires immutable copies whose hashes match probe and encode inputs."""
-    from board.static import _durable_metadata
-    versions = [(str(path), *_footage_version(path)) for _, path in cams]
-    untrusted = [not _durable_metadata(path, tuple(version)) for path, *version in versions]
-    if not any(untrusted):
-        yield cams, versions, [None] * len(cams)
+def _snapshot_workspace():
+    """Portable fallback uses independent, crash-recoverable copy slots."""
+    from board.build import remove_tree
+    folder = FOOTAGE_DIR / '.sources'
+    folder.mkdir(parents=True, exist_ok=True)
+    with ExitStack() as stack:
+        for slot in range(max(1, int(os.environ.get('BOARD_FOOTAGE_CONCURRENCY', 1)))):
+            try:
+                stack.enter_context(_file_lock(folder / f'.slot-{slot}.lock', blocking=False))
+                break
+            except CacheBusy:
+                continue
+        else:
+            raise CacheBusy('Media snapshot preparation is busy; try again shortly')
+        prefix = f'snapshot-{slot}-'
+        for old in folder.glob(prefix + '*'):
+            if old.is_dir() and not old.is_symlink():
+                remove_tree(old)
+        temporary = Path(tempfile.mkdtemp(prefix=prefix, dir=folder))
+        try:
+            yield temporary
+        finally:
+            remove_tree(temporary)
+
+
+def _source_path(path):
+    if os.name == 'posix':
+        for reader, _, _ in getattr(_MEDIA_READERS, 'active', []):
+            if Path(reader.name) == path:
+                return Path('/dev/fd') / str(reader.fileno())
+    return path
+
+
+@contextmanager
+def _encode_sources(cams):
+    if os.name == 'posix':
+        yield [(cam, _source_path(path)) for cam, path in cams]
         return
-    total = sum(version[3] for version, copy in zip(versions, untrusted) if copy)
-    if total <= 0 or total > _FOOTAGE_DISK_BYTES or len(cams) > 64:
-        raise ValueError('Source snapshots exceed the footage disk budget')
+    readers = {Path(reader.name): (version, digest) for reader, version, digest
+               in getattr(_MEDIA_READERS, 'active', [])}
+    if not any(digest is not None for _, digest in readers.values()):
+        yield cams
+        return
     with _snapshot_workspace() as temporary:
-        working, identities, digests = [], [], []
-        for index, ((cam, path), version, copy) in enumerate(zip(cams, versions, untrusted)):
-            if copy:
-                with _probe_admission((path, tuple(version[1:]))):
-                    snapshot = temporary / f'{index}.mp4'
-                    digest = _copy_source_snapshot(path, snapshot, tuple(version[1:]))
-                working.append((cam, snapshot))
-                identities.append([str(path), 'sha256', digest])
-                digests.append(digest)
-            else:
+        working = []
+        for index, (cam, path) in enumerate(cams):
+            version, digest = readers[path]
+            if digest is not None:
+                target = temporary / f'{index}.mp4'
+                with _FOOTAGE_PROBE_SEM:
+                    if _copy_source_snapshot(path, target, version) != digest:
+                        raise ValueError('Media changed during footage preparation')
+                path = target
+            working.append((cam, path))
+        yield working
+
+
+def _source_process_options():
+    readers = getattr(_MEDIA_READERS, 'active', [])
+    return {'pass_fds': tuple(reader.fileno() for reader, _, _ in readers)} if os.name == 'posix' and readers else {}
+
+
+def _validate_active_sources():
+    # An open descriptor binds pathname replacements. Input bytes must remain
+    # stable throughout preparation; before/after hashes detect persistent edits,
+    # not a transient in-place edit restored while an encoder is reading.
+    for reader, version, digest in getattr(_MEDIA_READERS, 'active', []):
+        stat = os.fstat(reader.fileno())
+        current = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        if digest is not None:
+            with _FOOTAGE_PROBE_SEM:
+                reader.seek(0)
+                if _stream_digest(reader, version[2]) != digest:
+                    raise ValueError('Media changed during footage preparation')
+        elif current != version:
+            raise ValueError('Media changed during footage preparation')
+
+
+@contextmanager
+def _footage_sources(cams):
+    """Retain source handles; untrusted files are content-validated on every prepare.
+
+    POSIX probe and encode children inherit these same handles. A ready hit reads
+    each untrusted source once, without copying it. Misses verify its content again
+    before publication. Source media must not be edited during preparation.
+    """
+    from board.static import _durable_metadata
+    if len(cams) > 64:
+        raise ValueError('Too many footage cameras')
+    with ExitStack() as stack:
+        previous = getattr(_MEDIA_READERS, 'active', [])
+        active, working, identities, digests = [], [], [], []
+        _MEDIA_READERS.active = active
+        try:
+            for index, (cam, path) in enumerate(cams):
+                reader = stack.enter_context(path.open('rb'))
+                stat = os.fstat(reader.fileno())
+                version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                digest = None
+                if not _durable_metadata(str(path), version):
+                    with _probe_admission(('source', str(path), version)):
+                        digest = _stream_digest(reader, version[2])
+                    reader.seek(0)
+                active.append((reader, version, digest))
                 working.append((cam, path))
-                identities.append(version)
-                digests.append(None)
-        yield working, identities, digests
+                identities.append([str(path), 'sha256', digest] if digest else [str(path), *version])
+                digests.append(digest)
+            yield working, identities, digests
+        finally:
+            _MEDIA_READERS.active = previous
+
+
+@contextmanager
+def _publication_lock(key):
+    """A fixed set of cross-process locks protects short output transactions."""
+    with _file_lock(FOOTAGE_DIR / '.locks' / f'{int(key[:2], 16) % 64:02x}'):
+        yield
+
+
+def _trim_footage_cache(protect):
+    with _file_lock(FOOTAGE_DIR / '.locks' / 'cache'):
+        _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
+                         max_files=_FOOTAGE_DISK_FILES if _FOOTAGE_DISK_FILES > 0 else 2**63, protect=protect)
 
 
 def _content_probe(path: Path, digest: str) -> tuple:
-    # The digest belongs to the immutable snapshot, not its disposable pathname.
+    # The digest identifies validated source content, independent of its FD pathname.
     with _CONTENT_PROBE_LOCK:
         hit = _CONTENT_PROBES.get(digest)
         if hit is not None:
@@ -696,7 +793,7 @@ def _footage_receipt(result: tuple) -> dict:
         raise ValueError('Prepared footage exceeds the disk cache budget')
     record = {'format': 'argus-footage-ready/2', 'file': out.name, 'name': name, 'version': version}
     if not _durable_metadata(str(out), version):
-        with _probe_admission(('output', str(out))):
+        with _FOOTAGE_DOWNLOAD_SEM:
             with out.open('rb') as source:
                 record['sha256'] = _stream_digest(source, version[2])
         if _footage_version(out) != version:
@@ -711,7 +808,7 @@ def _discard_changed_footage(out: Path) -> None:
         raise RuntimeError('Prepared footage changed and could not be discarded') from error
 
 
-def _receipt_footage(record: dict, *, discard_changed=False) -> tuple | None:
+def _receipt_footage(record: dict, *, reader=None) -> tuple | None:
     from board.static import _durable_metadata
     if (record.get('format') != 'argus-footage-ready/2' or
             not re.fullmatch(r'[a-f0-9]{20}\.mp4', record['file']) or
@@ -720,16 +817,21 @@ def _receipt_footage(record: dict, *, discard_changed=False) -> tuple | None:
     out = FOOTAGE_DIR / record['file']
     version = _footage_version(out)
     if out.is_symlink() or list(version) != record['version'] or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
-        if discard_changed:
-            _discard_changed_footage(out)
         return None
+    if reader is not None:
+        stat = os.fstat(reader.fileno())
+        opened_version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        if opened_version != version:
+            return None
     if 'sha256' in record:
-        with _probe_admission(('output', str(out))):
-            with out.open('rb') as source:
-                digest = _stream_digest(source, version[2])
+        with _FOOTAGE_DOWNLOAD_SEM:
+            if reader is None:
+                with out.open('rb') as source:
+                    digest = _stream_digest(source, version[2])
+            else:
+                digest = _stream_digest(reader, version[2])
+                reader.seek(0)
         if digest != record['sha256'] or _footage_version(out) != version:
-            if discard_changed:
-                _discard_changed_footage(out)
             return None
     elif not _durable_metadata(str(out), version):
         return None
@@ -747,40 +849,90 @@ def _read_footage_receipt(receipt: Path) -> dict | None:
     return record if isinstance(record, dict) else None
 
 
+def _cached_footage_record(key):
+    try:
+        record = _read_footage_receipt(FOOTAGE_DIR / '.ready' / f'{key}.json')
+        result = _receipt_footage(record) if record and record.get('file') == key + '.mp4' else None
+        if result is not None:
+            return record, result
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    # A surviving ticket is also a durable receipt for this exact output,
+    # including when a canonical record is malformed or no longer validates.
+    for path in (FOOTAGE_DIR / '.tickets').glob('*.json'):
+        if not re.fullmatch(r'[a-f0-9]{32}\.json', path.name):
+            continue
+        try:
+            record = _ticket_record(path.stem)
+            if record and record.get('file') == key + '.mp4':
+                result = _receipt_footage(record)
+                if result is not None:
+                    return record, result
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return None, None
+
+
 def _ready_footage(request: str) -> tuple | None:
     try:
+        if len(request) == 20:
+            return _cached_footage_record(request)[1]
         record = _read_footage_receipt(FOOTAGE_DIR / '.ready' / f'{request}.json')
-        return _receipt_footage(record, discard_changed=True) if record is not None else None
+        if record is not None and record.get('format') == 'argus-footage-alias/1':
+            key = record.get('key', '')
+            if not re.fullmatch(r'[a-f0-9]{20}', key):
+                return None
+            return _cached_footage_record(key)[1]
+        return _receipt_footage(record) if record is not None else None
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
 def _trim_footage_receipts(folder: Path, pattern: str, *, expire=False):
-    owned = [path for path in folder.glob('*.json') if re.fullmatch(pattern, path.name)]
-    for path in sorted(owned, key=lambda p: p.stat().st_mtime_ns, reverse=True)[max(0, _FOOTAGE_DISK_FILES):]:
+    retained = []
+    for path in folder.glob('*.json'):
+        if not re.fullmatch(pattern, path.name):
+            continue
+        try:
+            record = _read_footage_receipt(path)
+            filename = record.get('file') if record else None
+            if record and record.get('format') == 'argus-footage-alias/1':
+                filename = str(record.get('key')) + '.mp4'
+            expiry = record.get('expires_at') if expire and record else None
+            valid = (isinstance(filename, str) and re.fullmatch(r'[a-f0-9]{20}\.mp4', filename)
+                     and (FOOTAGE_DIR / filename).is_file())
+            if expire:
+                valid = valid and type(expiry) in (int, float) and math.isfinite(expiry) and expiry >= time.time()
+            if not valid:
+                path.unlink(missing_ok=True)
+            elif expire or len(path.stem) == 40:
+                retained.append((path.stat().st_mtime_ns, path))
+        except FileNotFoundError:
+            pass
+        except (ValueError, TypeError, KeyError):
+            path.unlink(missing_ok=True)
+    # Canonical records follow movie lifetime. Request aliases and expiring
+    # tickets have independent finite bounds, including when media count is zero.
+    limit = ((_FOOTAGE_DISK_FILES if _FOOTAGE_DISK_FILES > 0 else 128) if expire
+             else max(128, 2 * _FOOTAGE_DISK_FILES))
+    for _, path in sorted(retained, reverse=True)[limit:]:
         path.unlink(missing_ok=True)
-    if expire:
-        for path in owned:
-            try:
-                if path.stat().st_mtime < time.time() - _FOOTAGE_TICKET_SECONDS:
-                    path.unlink(missing_ok=True)
-            except FileNotFoundError:
-                pass
 
 
-def _remember_ready_footage(request: str, result: tuple) -> None:
-    try:
-        record = _footage_receipt(result)
-        with _FOOTAGE_READY_LOCK:
-            folder = FOOTAGE_DIR / '.ready'
-            write_atomic(folder / f'{request}.json', record)
-            _trim_footage_receipts(folder, r'(?:[a-f0-9]{20}|[a-f0-9]{40})\.json')
-    except (OSError, ValueError):
-        pass  # A lost receipt costs preparation, never permits an unverified hit.
+def _remember_ready_footage(request: str, result: tuple, record=None) -> None:
+    folder = FOOTAGE_DIR / '.ready'
+    if len(request) == 20:
+        write_atomic(folder / f'{request}.json', record or _footage_receipt(result))
+    else:
+        write_atomic(folder / f'{request}.json', {'format': 'argus-footage-alias/1', 'key': result[0].stem})
+    with _FOOTAGE_READY_LOCK:
+        _trim_footage_receipts(folder, r'(?:[a-f0-9]{20}|[a-f0-9]{40})\.json')
 
 
 def prepare_footage_ticket(result: tuple) -> str:
-    record = _footage_receipt(result)
+    record, _ = _cached_footage_record(result[0].stem)
+    if record is None or list(_footage_version(result[0])) != record.get('version'):
+        raise ValueError('Prepared footage changed before ticket publication')
     record['expires_at'] = time.time() + _FOOTAGE_TICKET_SECONDS
     token = uuid.uuid4().hex
     with _FOOTAGE_READY_LOCK:
@@ -790,21 +942,45 @@ def prepare_footage_ticket(result: tuple) -> str:
     return token
 
 
-def ticket_footage(token: str) -> tuple | None:
+def _ticket_record(token: str) -> dict | None:
     if not re.fullmatch(r'[a-f0-9]{32}', token):
         return None
     receipt = FOOTAGE_DIR / '.tickets' / f'{token}.json'
+    record = _read_footage_receipt(receipt)
+    if record is None:
+        return None
+    expiry = record.get('expires_at')
+    if type(expiry) not in (int, float) or not math.isfinite(expiry) or expiry < time.time():
+        receipt.unlink(missing_ok=True)
+        return None
+    return record
+
+
+def ticket_footage(token: str) -> tuple | None:
     try:
-        record = _read_footage_receipt(receipt)
-        if record is None:
-            return None
-        expiry = record.get('expires_at')
-        if type(expiry) not in (int, float) or not math.isfinite(expiry) or expiry < time.time():
-            receipt.unlink(missing_ok=True)
-            return None
-        return _receipt_footage(record)
+        record = _ticket_record(token)
+        return _receipt_footage(record) if record is not None else None
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+@contextmanager
+def _ticket_reader(token):
+    # Validate and send the same open file so a path replacement cannot switch
+    # bytes between identity checking and Range delivery.
+    reader, result = None, None
+    try:
+        record = _ticket_record(token)
+        if record and re.fullmatch(r'[a-f0-9]{20}\.mp4', record.get('file', '')):
+            reader = (FOOTAGE_DIR / record['file']).open('rb')
+            result = _receipt_footage(record, reader=reader)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    try:
+        yield (result, reader) if result is not None else (None, None)
+    finally:
+        if reader is not None:
+            reader.close()
 
 
 def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
@@ -825,8 +1001,7 @@ def _footage_from_sources(eid, t0, t1, label, cams, identities, digests):
     request = hashlib.sha1(json.dumps(request_parts).encode()).hexdigest()
     ready = _ready_footage(request)
     if ready is not None:
-        _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
-                         max_files=_FOOTAGE_DISK_FILES, protect=ready[0])
+        _trim_footage_cache(ready[0])
         return ready
     probes = [_content_probe(path, digest) if digest else _probe(path)
               for (_, path), digest in zip(cams, digests)]
@@ -845,24 +1020,22 @@ def _footage_from_sources(eid, t0, t1, label, cams, identities, digests):
     name = f'{eid}.mp4' if whole else f'{eid}_{t0:.1f}-{t1:.1f}s.mp4'
     key = hashlib.sha1(json.dumps([eid, t0, t1, FOOTAGE_TAG, identities]).encode()).hexdigest()[:20]
     out = FOOTAGE_DIR / f'{key}.mp4'
-    ready = _ready_footage(key)
-    if ready is not None:
-        _remember_ready_footage(request, ready)
-        return ready
-    if out.is_file():
-        # A file without a matching validated receipt is not a completed cache entry.
-        _discard_changed_footage(out)
-    result = _uncached_footage(key, out, name, cams, probes, t0, t1)
-    _remember_ready_footage(key, result)
-    _remember_ready_footage(request, result)
-    return result
+    with _footage_lock(key):
+        ready = _ready_footage(key)
+        if ready is not None:
+            _remember_ready_footage(request, ready)
+            return ready
+        result = _uncached_footage(key, out, name, cams, probes, t0, t1)
+        _remember_ready_footage(request, result)
+        return result
 
 
 def _run_footage(cmd: list) -> subprocess.CompletedProcess:
     """Bound stalled work while allowing a progressing encode of any duration."""
     progress_cmd = [*cmd[:-1], '-progress', 'pipe:1', '-stats_period', '5', cmd[-1]]
     last_progress, last_values = time.monotonic(), (0, 0)
-    with subprocess.Popen(progress_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+    with subprocess.Popen(progress_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          **_source_process_options()) as process:
         try:
             while True:
                 try:
@@ -890,37 +1063,49 @@ def _run_footage(cmd: list) -> subprocess.CompletedProcess:
 
 @_bounded_work(_FOOTAGE_SEM)
 def _uncached_footage(key, out, name, cams, probes, t0, t1):
-    with _footage_lock(key):
-        if out.is_file():
-            return out, name
-        out.parent.mkdir(parents=True, exist_ok=True)
-        tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
-        cmd = footage_command([(p, pr[:2], pr[3]) for (_, p), pr in zip(cams, probes)], t0, t1, tmp, _FOOTAGE_THREADS)
-        # ffmpeg exits successfully at -fs, so reject a capped file before publishing it.
-        cmd[-1:-1] = ['-fs', str(_FOOTAGE_DISK_BYTES)]
-        nice = shutil.which("nice")
-        try:
-            r = _run_footage(([nice, "-n", "19"] if nice else []) + cmd)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-        if r.returncode != 0 or not tmp.is_file():
-            tmp.unlink(missing_ok=True)
-            raise RuntimeError(f"the video could not be made: {(r.stderr or '').strip()[-300:]}")
-        try:
-            if tmp.stat().st_size >= _FOOTAGE_DISK_BYTES:
-                raise ValueError('Prepared footage exceeds the disk cache budget')
-            from board.clips import frame_lengths
-            frame_lengths(tmp)
-            os.replace(tmp, out)
-            if out.stat().st_size > _FOOTAGE_DISK_BYTES:
-                out.unlink(missing_ok=True)
-                raise ValueError('Prepared footage exceeds the disk cache budget')
-            _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
-                             max_files=_FOOTAGE_DISK_FILES, protect=out)
-        finally:
-            tmp.unlink(missing_ok=True)
-    return out, name
+    with _encode_sources(cams) as working:
+        return _encode_and_publish(key, out, name, working, probes, t0, t1)
+
+
+def _encode_and_publish(key, out, name, cams, probes, t0, t1):
+    # A competing process may publish while this encoder runs. Publication adopts
+    # its verified result instead of replacing a file held by a live ticket.
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
+    cmd = footage_command([(p, pr[:2], pr[3]) for (_, p), pr in zip(cams, probes)], t0, t1, tmp, _FOOTAGE_THREADS)
+    cmd[-1:-1] = ['-fs', str(_FOOTAGE_DISK_BYTES)]
+    nice = shutil.which('nice')
+    try:
+        completed = _run_footage(([nice, '-n', '19'] if nice else []) + cmd)
+        if completed.returncode != 0 or not tmp.is_file():
+            raise RuntimeError(f"the video could not be made: {(completed.stderr or '').strip()[-300:]}")
+        if tmp.stat().st_size >= _FOOTAGE_DISK_BYTES:
+            raise ValueError('Prepared footage exceeds the disk cache budget')
+        from board.clips import frame_lengths
+        frame_lengths(tmp)
+        _validate_active_sources()
+        record = _footage_receipt((tmp, name))
+        with _publication_lock(key):
+            ready = _ready_footage(key)
+            if ready is not None:
+                return ready
+            # Only the short rename/receipt/prune transaction shares a cache lock.
+            # Source work, encoding and full output hashing run independently.
+            with _file_lock(FOOTAGE_DIR / '.locks' / 'cache'):
+                if out.exists():
+                    _discard_changed_footage(out)
+                os.replace(tmp, out)
+                record.update(file=out.name, version=_footage_version(out))
+                try:
+                    _remember_ready_footage(key, (out, name), record)
+                except BaseException:
+                    _discard_changed_footage(out)
+                    raise
+                _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
+                                 max_files=_FOOTAGE_DISK_FILES if _FOOTAGE_DISK_FILES > 0 else 2**63, protect=out)
+        return out, name
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 PORT = 8896
@@ -1250,6 +1435,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = gzipped if gzipped is not None else gzip.compress(body, compresslevel=5)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if self.close_connection:
+            self.send_header("Connection", "close")
         if code == 503:
             self.send_header("Retry-After", "1")
         if gz:
@@ -1260,11 +1447,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, p: Path, ctype: str, download: str | None = None):
+    def _send_file(self, p: Path, ctype: str, download: str | None = None, *, source=None):
         """Serve a file with proper HTTP Range support so the browser
         can stream/seek without downloading the whole thing first; download names the saved file."""
         try:
-            st = p.stat()
+            st = os.fstat(source.fileno()) if source is not None else p.stat()
         except OSError:
             self._send(404, {"error": "not found"})
             return
@@ -1298,7 +1485,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         length = end - start + 1
         try:
-            f = open(p, "rb")
+            f = source if source is not None else open(p, "rb")
         except OSError:
             self._send(404, {"error": "not found"})
             return
@@ -1330,7 +1517,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     break
                 remaining -= len(buf)
         finally:
-            f.close()
+            if source is None:
+                f.close()
 
     def _dictionary(self, body=None):
         from label.dictionary_editor import public_dictionary, save_override, RevisionConflict
@@ -1369,61 +1557,96 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, OSError):
             return self._send(200, {'fields': [], 'limitations': ['The saved data dictionary is unreadable.'], 'editable': False})
 
+    def _body_size(self, limit):
+        lengths = self.headers.get_all('Content-Length') if hasattr(self.headers, 'get_all') else [self.headers.get('Content-Length')]
+        if (self.headers.get('Transfer-Encoding') is not None or len(lengths or []) != 1
+                or len(lengths[0] or '') > len(str(limit))
+                or not re.fullmatch(r'[0-9]+', lengths[0] or '')
+                or not 0 < int(lengths[0]) <= limit):
+            self.close_connection = True
+            raise ValueError('Unsupported request body framing')
+        return int(lengths[0])
+
     def do_POST(self):
-        """POST /api/export {"files": [...]} -> the listed episode files as JSON Lines, one per line,
-        with current interpretation and private access fields withheld."""
+        """Export unique episodes through a bounded spool before sending headers."""
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == '/api/dictionary':
-            try:
-                n = int(self.headers.get('Content-Length') or 0)
-                if not 0 < n <= 32768:
-                    return self._send(400, {'error': 'The edit is too large.'})
-                return self._dictionary(json.loads(self.rfile.read(n)))
-            except (ValueError, json.JSONDecodeError):
-                return self._send(400, {'error': 'The dictionary edit is not valid.'})
-        if parsed.path != "/api/export":
-            self._send(404, {"error": "not found"})
-            return
+        if parsed.path not in ('/api/export', '/api/dictionary'):
+            self.close_connection = True
+            return self._send(404, {'error': 'not found'})
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            if not 0 < n <= 1024 * 1024:
-                raise ValueError('invalid export request size')
-            payload = json.loads(self.rfile.read(n))
-            if not isinstance(payload, dict) or not isinstance(payload.get('files'), list):
-                raise ValueError('files must be an array')
-            files = payload['files']
-            if len(files) > 10000 or any(not isinstance(f, str) for f in files):
-                raise ValueError('invalid file list')
+            n = self._body_size(32768 if parsed.path == '/api/dictionary' else 1024 * 1024)
+            raw = self.rfile.read(n)
+            if len(raw) != n:
+                self.close_connection = True
+                raise ValueError('Incomplete request body')
+            payload = json.loads(raw)
         except (ValueError, json.JSONDecodeError):
-            self._send(400, {"error": "bad request"})
-            return
-        lines = []
-        for fname in files:
-            p = HERE / str(fname)
-            if not _under(HERE, p) or not p.is_file() or p.suffix != ".json":
-                self._send(404, {"error": f"no such file: {fname}"})
-                return
-            try:
-                label = json.loads(p.read_text())
-                if not isinstance(label, dict):
-                    raise ValueError('Invalid label')
-                lines.append(dumps(public_label(current_label(label, DICTIONARY_JOB, p.name)), separators=(',', ':')))
-            except (OSError, ValueError, TypeError, AttributeError):
-                return self._send(500, {'error': 'An episode could not be read for export.'})
-        body = ("\n".join(lines) + "\n").encode()
-        gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
-        if gz:
-            body = gzip.compress(body, compresslevel=5)
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson")
-        self.send_header("Content-Disposition", 'attachment; filename="episodes.jsonl"')
-        if gz:
-            self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+            return self._send(400, {'error': 'bad request'})
+        if parsed.path == '/api/dictionary':
+            return self._dictionary(payload)
+        if (not isinstance(payload, dict) or not isinstance(payload.get('files'), list)
+                or len(payload['files']) > 10000 or any(not isinstance(f, str) for f in payload['files'])):
+            return self._send(400, {'error': 'bad request'})
+        files = list(dict.fromkeys(payload['files']))
+        if not _EXPORT_SEM.acquire(blocking=False):
+            return self._send(503, {'error': 'Export is busy; try again shortly.'})
+        try:
+            with tempfile.TemporaryFile() as spool:
+                compressed = 'gzip' in (self.headers.get('Accept-Encoding') or '')
+                writer = gzip.GzipFile(fileobj=spool, mode='wb', compresslevel=5) if compressed else spool
+                total = 0
+                seen = set()
+                try:
+                    for fname in files:
+                        path = HERE / fname
+                        if not _under(HERE, path) or not path.is_file() or path.suffix != '.json':
+                            return self._send(404, {'error': f'no such file: {fname}'})
+                        identity = str(path.resolve())
+                        if identity in seen:
+                            continue
+                        seen.add(identity)
+                        try:
+                            with path.open('rb') as source:
+                                raw = source.read(_EXPORT_LABEL_BYTES + 1)
+                            if len(raw) > _EXPORT_LABEL_BYTES:
+                                return self._send(413, {'error': 'An episode exceeds the export size limit.'})
+                            label = json.loads(raw)
+                            if not isinstance(label, dict):
+                                raise ValueError('Invalid label')
+                            label = finite(public_label(current_label(label, DICTIONARY_JOB, path.name)))
+                            for text in json.JSONEncoder(ensure_ascii=False, separators=(',', ':'), allow_nan=False).iterencode(label):
+                                chunk = text.encode()
+                                total += len(chunk)
+                                if total > _EXPORT_MAX_BYTES:
+                                    return self._send(413, {'error': 'The export exceeds the size limit.'})
+                                writer.write(chunk)
+                            total += 1
+                            if total > _EXPORT_MAX_BYTES:
+                                return self._send(413, {'error': 'The export exceeds the size limit.'})
+                            writer.write(b'\n')
+                        except (OSError, ValueError, TypeError, AttributeError):
+                            return self._send(500, {'error': 'An episode could not be read for export.'})
+                finally:
+                    if compressed:
+                        writer.close()
+                size = spool.tell()
+                spool.seek(0)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-ndjson')
+                self.send_header('Content-Disposition', 'attachment; filename="episodes.jsonl"')
+                if compressed:
+                    self.send_header('Content-Encoding', 'gzip')
+                self.send_header('Content-Length', str(size))
+                self.end_headers()
+                shutil.copyfileobj(spool, self.wfile, 64 * 1024)
+        finally:
+            _EXPORT_SEM.release()
 
     def do_GET(self):
+        lengths = self.headers.get_all('Content-Length') or []
+        if self.headers.get('Transfer-Encoding') is not None or (lengths and lengths != ['0']):
+            self.close_connection = True
+            return self._send(400, {'error': 'GET requests cannot carry a body.'})
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
             # the page asks for other models' labels, hand pose files and keypoint downloads only when this board has
@@ -1584,13 +1807,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # with its size, so the page can say it is being made before the download starts
             q = urllib.parse.parse_qs(parsed.query)
             if 'ticket' in q:
-                try:
-                    got = ticket_footage(q['ticket'][0])
-                except CacheBusy as error:
-                    return self._send(503, {'error': str(error)})
-                if got is None:
-                    return self._send(404, {'error': 'Prepared video expired or changed; prepare it again.'})
-                return self._send_file(got[0], 'video/mp4', got[1])
+                with _ticket_reader(q['ticket'][0]) as (got, reader):
+                    if got is None:
+                        return self._send(404, {'error': 'Prepared video expired or changed; prepare it again.'})
+                    return self._send_file(got[0], 'video/mp4', got[1], source=reader)
             eid = (q.get("id") or [""])[0]
             try:
                 t0 = float((q.get("t0") or ["0"])[0] or 0)
@@ -1619,11 +1839,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if (q.get("prepare") or [""])[0] == "1":
                 try:
                     ticket = prepare_footage_ticket(got)
+                    size = out.stat().st_size
                 except CacheBusy as error:
                     return self._send(503, {'error': str(error)})
                 except (OSError, ValueError):
                     return self._send(409, {'error': 'Prepared video changed; prepare it again.'})
-                self._send(200, {"bytes": out.stat().st_size, "name": name, "ticket": ticket})
+                self._send(200, {"bytes": size, "name": name, "ticket": ticket})
                 return
             self._send_file(out, "video/mp4", name)
             return

@@ -48,6 +48,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import contextmanager
 
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -257,6 +258,8 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
     identity = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
                               cell_w=cell_w, example_dir=example_dir, sample_fps=sample_fps,
                               task_mode=task_mode, dataset_note=dataset_note)
+    if any(item.get('missing') for item in identity['source_proof']):
+        raise RuntimeError('Request source inputs are missing; no paid request was dispatched.')
     billing = _billing_fields(out_path)
     # an explicit cell width skips the routing; otherwise a routed rig's widest cell comes from its task text
     route_w, route = (None, {"routed": False}) if cell_w else route_width(
@@ -346,21 +349,20 @@ def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int,
             stat = path.stat()
             examples.append({"name": path.name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
                              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-    routing_code = (Path(me.__file__).with_name('route.py').read_bytes()
-                    if not cell_w and resolved['rig'] in me.ROUTE_WIDTHS else b'')
+    repository = Path(__file__).parent.parent
+    # Conservatively invalidate direct-harness resume across first-party implementation
+    # changes, including future transitive imports and nested adapter code.
+    request_sources = sorted(path for package in ('label', 'prepare', 'checks', 'board')
+                             for path in (repository / package).rglob('*.py'))
+    semantics = hashlib.sha256()
+    for path in request_sources:
+        semantics.update(str(path.relative_to(repository)).encode() + b'\0' + path.read_bytes() + b'\0')
     settings = {"model": resolved["model"], "reasoning": resolved["reasoning"], "max_tokens": max_tokens, "cell_w": cell_w,
                 "detail": DETAIL, "grid_cols": GRID_COLS, "examples": examples,
                 "annotation_policy": resolved, "jaw_algorithm_sha256": jaw_algorithm,
                 "interpretation_sha256": hashlib.sha256(json.dumps(meanings, sort_keys=True,
                     separators=(',', ':'), ensure_ascii=True).encode()).hexdigest(),
-                "request_semantics_sha256": hashlib.sha256(b''.join(path.read_bytes() for path in (
-                    Path(__file__), Path(me.__file__), Path(policy.__file__),
-                    Path(me.__file__).with_name('prompts.py'), Path(me.__file__).with_name('sensor_evidence.py'),
-                    Path(me.__file__).with_name('optical_motion.py'),
-                    Path(me.__file__).with_name('errors.py'),
-                    Path(me.__file__).with_name('lens.py'),
-                    Path(me.__file__).parent.parent / 'prepare' / 'formats.py',
-                    Path(me.__file__).with_name('dictionary_context.py'))) + routing_code).hexdigest()}
+                "request_semantics_sha256": semantics.hexdigest()}
     return {"version": 2, "source_proof": source_proof(ctx, ep_dir), "settings": settings}
 
 
@@ -477,7 +479,8 @@ def _final_cost_history(out_path: Path) -> list:
     history.append({key: copy.deepcopy(record[key]) for key in (
         'model', 'reasoning_effort', 'provider', 'provider_name', 'generation_id', 'model_served',
         'system_fingerprint', 'usage', 'usage_reported', 'finish_reason', 'final_dispatch_outcome',
-        'final_reserved_usd', 'final_attempt_index') if key in record})
+        'final_reserved_usd', 'final_attempt_index', 'response_text', 'response', 'labels',
+        'content_tail', 'reasoning_text') if key in record})
     return history
 
 
@@ -546,7 +549,7 @@ def final_cost_bound(content: list, max_tokens: int, *, model=DEFAULT_MODEL, req
             raw = base64.b64decode(part['image_url']['url'].split(',', 1)[1])
             with Image.open(io.BytesIO(raw)) as image:
                 images += estimate_image_tokens(*image.size)
-    return round((text_bytes + 4 * images + 1024) * price_in + max_tokens * price_out, 6)
+    return math.ceil(((text_bytes + 4 * images + 1024) * price_in + max_tokens * price_out) * 1_000_000) / 1_000_000
 
 
 def persist_final_claim(path: Path, claim: dict) -> None:
@@ -587,6 +590,19 @@ TIMELINE_COLUMNS = ["start_s", "end_s", "arm", "action", "object", "destination"
                     "contribution", "progress", "notes"]
 
 
+def _model_diagnostics(labels: dict) -> None:
+    """Only the parser may author diagnostic provenance, including local assessments."""
+    supplied = [key for key in ('_dropped', '_schema_violations', '_schema_row_indices') if key in labels]
+    for key in supplied:
+        labels.pop(key)
+    for key in supplied:
+        _drop(labels, key, None, 'reserved parser metadata supplied in the reply')
+    assessments = labels.get('part_assessments')
+    for assessment in assessments if isinstance(assessments, list) else []:
+        if isinstance(assessment, dict):
+            _model_diagnostics(assessment)
+
+
 def parse_response(text: str) -> tuple[dict, bool]:
     """A model's reply as labels, or the raw text and the reason it could not be read. The one parser for every
     model and for re-reading stored replies (label/reparse.py). A reply that is a JSON object but breaks the output
@@ -597,16 +613,18 @@ def parse_response(text: str) -> tuple[dict, bool]:
         labels = json.loads(fenced.group(1) if fenced else text)
         if not isinstance(labels, dict):
             raise ValueError(f"the reply is {json_kind(labels)}, not an object")
+        _model_diagnostics(labels)
         had_rows = bool(labels.get('timeline'))
         labels = typed_labels(normalize_timeline(labels))
         completion = labels.get('completion')
         if isinstance(completion, dict) and completion.get('task_completed') is not None and completion['task_completed'] not in (
                 'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
-            _violation(labels, 'completion.task_completed has an unknown outcome')
             outcome = completion['task_completed']
             if isinstance(outcome, str) and outcome.strip().lower() in (
                     'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
                 completion['task_completed'] = outcome.strip().lower()
+            else:
+                _violation(labels, 'completion.task_completed has an unknown outcome')
         for index, row in enumerate(labels.get('timeline') or []):
             progress = row.get('progress')
             if isinstance(progress, str) and me.number(progress) is not None:
@@ -645,9 +663,9 @@ def _violation(labels: dict, why: str) -> None:
 def normalize_timeline(labels: dict) -> dict:
     """The output format sends each timeline segment as one array in the column order of timeline_columns.
     Convert it back to one object per segment, validating every row, so everything downstream sees the usual
-    format. A time or a progress written as a number in text ("2.0") is read as that number. Rows with ambiguous
-    column mappings or unparseable times are left out and recorded in _dropped. A shortened row may omit only
-    trailing notes and must match the expected column types. Full-width rows retain malformed noncritical fields
+    format. A time or progress written as numeric text ("2.0") is read as that number. Shortened rows retain
+    only field assignments shared by every compatible column mapping; ambiguous values are preserved in
+    _dropped. Rows with unparseable times are omitted. Full-width rows retain malformed noncritical fields
     with schema violations. A value that is missing or outside a
     field's allowed set (a progress or a contribution of null) is kept as the model wrote it and listed in
     _schema_violations, so one bad field is counted, not a reason to discard a valid answer."""
@@ -709,16 +727,19 @@ def normalize_timeline(labels: dict) -> dict:
                 return True
             supplied = {key: value for key, value in seg.items() if value is not None}
             alternatives = [dict(zip(cols[:gap] + cols[gap + 1:], row)) for gap in range(len(cols) - 1)]
-            if any(compatible(candidate) and
-                   {key: value for key, value in candidate.items() if value is not None} != supplied
-                   for candidate in alternatives):
-                _drop(labels, 'timeline', i, 'missing trailing notes cannot be distinguished from shifted columns')
+            candidates = [seg] + [candidate for candidate in alternatives if compatible(candidate)]
+            if any({key: value for key, value in candidate.items() if value is not None} != supplied
+                   for candidate in candidates):
+                # Keep only fields proved by every compatible column mapping.
+                # Free text cannot establish whether it is handwear or a note.
+                seg = {key: value for key, value in seg.items()
+                       if all(key in candidate and candidate[key] == value for candidate in candidates)}
+                _drop(labels, 'timeline.columns', i, 'ambiguous shortened row; only unambiguous fields are shown')
                 labels['_dropped'][-1]['value'] = row[:]
-                continue
         for k in ("start_s", "end_s", "progress"):
             if bad:
                 break
-            if k == "progress" and seg.get(k) is None:
+            if k == "progress" and k in seg and seg[k] is None:
                 labels.setdefault("_schema_violations", []).append(f"timeline row {i}: progress null")
             elif k in seg and (isinstance(seg[k], bool) or not isinstance(seg[k], (int, float))):
                 v = me.number(seg[k])
@@ -732,7 +753,7 @@ def normalize_timeline(labels: dict) -> dict:
         if bad:
             _drop(labels, "timeline", i, bad)
             continue
-        if seg.get("contribution") not in ("advancing", "wasteful", "idle"):
+        if 'contribution' in seg and str(seg.get("contribution") or '').strip().lower() not in ("advancing", "wasteful", "idle"):
             labels.setdefault("_schema_violations", []).append(
                 f"timeline row {i}: contribution {seg.get('contribution')!r}")
         if seg.get("notes") in (None, ""):
@@ -1134,6 +1155,18 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
     finish = choice.get("finish_reason") or choice.get("native_finish_reason")
     msg = choice.get("message") or {}
     text = msg.get("content") or ""
+    raw_usage = resp.get('usage')
+    received_usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
+    received_cost, received_source = _verified_final_cost(received_usage, model)
+    received_usage.update(est_cost_usd=received_cost, cost_source=received_source)
+    received = {**claim, 'parse_ok': False, 'response': copy.deepcopy(resp), 'response_text': text,
+                'labels': {'_raw': text, '_parse_error': 'Received response awaiting parsing and evidence binding'},
+                'finish_reason': finish, **_served(resp), 'usage': received_usage,
+                'final_dispatch_outcome': 'received' if received_cost is not None else 'unverified'}
+    received.pop('no_reply', None)
+    received_path = Path(out_path).with_name(f'failed_{Path(out_path).name}') if finish == 'length' else Path(out_path)
+    persist_final_claim(received_path, received)
+    claim_path.unlink(missing_ok=True)
     if finish == "length":
         # the output hit max_tokens, so the JSON is cut off: keep what came back beside the outputs (never as an
         # episode_*.json, so a resumed run still counts the episode as not done), then fail
@@ -1146,7 +1179,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         # the cut-off reply (board/to_board.py label_failed)
         failed = {"episode_dir": str(ep_dir), "model": model, "reasoning_effort": reasoning, **fields,
                   "finish_reason": finish, **_served(resp), "usage": usage, "content_tail": text[-4000:],
-                  "reasoning_tail": (msg.get("reasoning") or "")[-8000:]}
+                  "reasoning_tail": (msg.get("reasoning") or "")[-8000:],
+                  'response': copy.deepcopy(resp), 'response_text': text}
         if cost is None:
             failed.update(final_dispatch_outcome="unverified", final_reserved_usd=bound,
                           usage_reported=raw_usage)
@@ -1175,6 +1209,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         "finish_reason": finish,
         "parse_ok": parse_ok,
         "labels": labels,
+        'response': copy.deepcopy(resp), 'response_text': text,
         "usage": {"prompt_tokens": n_in, "completion_tokens": n_out,
                   "reasoning_tokens": n_reason, "est_cost_usd": cost,
                   "cost_source": cost_source,
@@ -1284,7 +1319,25 @@ def _release_memory() -> None:
         pass
 
 
-def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurrency: int, force: bool,
+@contextmanager
+def execution_lock(folder: Path):
+    """One process owns execution and its ledger until all dispatched work settles."""
+    import fcntl
+    Path(folder).mkdir(parents=True, exist_ok=True)
+    with (Path(folder) / '.execution.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError(f'Another label execution is running in {folder}') from error
+        yield
+
+
+def run_batch(episodes: list[Path], out_dir: Path, **kwargs) -> int:
+    with execution_lock(out_dir):
+        return _run_batch(episodes, out_dir, **kwargs)
+
+
+def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurrency: int, force: bool,
               max_spend: float = 0.0, output_path: Path | None = None, **label_kw) -> int:
     """Resume verified outputs and reserve each call within this invocation's allowance."""
     if not math.isfinite(max_spend) or max_spend < 0:
@@ -1357,6 +1410,18 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
             if not dry and any(record.get('parse_ok') is True and not annotation_complete(record) for _, record in records):
                 stale[ep.name] = 'saved annotation is unusable and its charge is unresolved; use --force to refresh explicitly'
             return True
+        for path, record in records:
+            received = (path == p or record.get('response') is not None or
+                        record.get('finish_reason') == 'length')
+            if not dry and received and not record.get('dry_run') and not annotation_complete(record):
+                try:
+                    _history_cost(record)
+                except (ValueError, TypeError):
+                    stale[ep.name] = 'saved reply billing cannot be verified; reconcile it before retrying'
+                    return True
+                saved_failures.add(ep.name)
+                unverified[ep.name] = 'saved paid reply needs reparse or explicit --force; no automatic paid retry'
+                return True
         if not p.exists():
             return False
         record = json.loads(p.read_text())
@@ -1375,7 +1440,7 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 return True
         return complete
 
-    stale, unverified = {}, {}
+    stale, unverified, saved_failures = {}, {}, set()
     todo = [ep for ep in episodes if not is_done(ep)]
     for name, reason in {**unverified, **stale}.items():
         write_atomic(out_dir / f"stale_{name}.json", {"episode": name, "status": "stale" if name in stale else
@@ -1388,21 +1453,26 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
     print(f"episodes={len(episodes)} skipped(done)={skipped} todo={len(todo)} "
           f"keys={len(keys)} concurrency={concurrency} dry_run={dry}", flush=True)
     if not todo:
-        return 0
-    done = failed = 0
+        return 1 if saved_failures else 0
+    done, failed = 0, len(saved_failures)
     total_cost = 0.0
     fails = []
     spent = {"usd": 0.0}
     spend_lock = threading.Condition()
     pending = {}
+    stopping = threading.Event()
 
     def allowance(ep, amount):
         # Only live dispatches can release a temporary reservation. Settled costs and
         # unknown charges from finished workers remain committed to the cap.
+        if stopping.is_set():
+            raise InterruptedError('Label execution interrupted before dispatch')
         if max_spend > 0 and amount > max_spend:
             return False, False
         waited = False
         while max_spend > 0 and spent['usd'] + amount > max_spend:
+            if stopping.is_set():
+                raise InterruptedError('Label execution interrupted before dispatch')
             if not any(value > 0 for owner, value in pending.items() if owner != ep):
                 return False, waited
             spend_lock.wait()
@@ -1495,6 +1565,8 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
 
     def work(ep):
         try:
+            if stopping.is_set():
+                return ('cancelled', ep, 'Label execution interrupted before work started')
             return work_claimed(ep)
         finally:
             with spend_lock:
@@ -1534,8 +1606,10 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                          **({'no_reply_kind': kind} if kind else {}),
                          "parse_ok": False, "no_reply": why})
 
-    with ThreadPoolExecutor(max_workers=concurrency) as ex:
-        for f in as_completed([ex.submit(work, ep) for ep in todo]):
+    ex = ThreadPoolExecutor(max_workers=concurrency)
+    futures = [ex.submit(work, ep) for ep in todo]
+    try:
+        for f in as_completed(futures):
             status, ep, info = f.result()
             no_reply(ep, None if status in ("ok", "invalid") else str(info), kind='spend_cap' if status == 'skip' else None)
             if status == "ok":
@@ -1557,6 +1631,17 @@ def run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurren
                 failed += 1
                 fails.append(f"FAIL {ep.name}: {info}")
                 print(f"FAIL {ep.name}: {info}", file=sys.stderr, flush=True)
+    except KeyboardInterrupt:
+        stopping.set()
+        with spend_lock:
+            spend_lock.notify_all()
+        for future in futures:
+            future.cancel()
+        ex.shutdown(wait=True, cancel_futures=True)
+        print('Interrupted: queued episodes cancelled; dispatched replies and reservations retained.', file=sys.stderr)
+        return 130
+    finally:
+        ex.shutdown(wait=True, cancel_futures=True)
     print(f"\ndone={done} failed={failed} skipped={skipped} "
           f"total_cost=${total_cost:.2f} out_dir={out_dir} retired_keys={len(pool.dead)}", flush=True)
     if fails:

@@ -32,6 +32,7 @@ def get(url):
 
 
 def media(tmp_path, monkeypatch):
+    monkeypatch.setattr(serve, '_CONTENT_PROBES', serve.OrderedDict())
     ffmpeg = serve.FFMPEG
     if not ffmpeg:
         pytest.skip('ffmpeg is required')
@@ -53,45 +54,47 @@ def media(tmp_path, monkeypatch):
     return source
 
 
-def test_http_prepare_ticket_keeps_snapshot_and_skips_repeat_source_work(tmp_path, monkeypatch):
+def test_http_prepare_ticket_keeps_output_and_skips_repeat_probe_and_encode(tmp_path, monkeypatch):
     source = media(tmp_path, monkeypatch)
     counts = {'copy': 0, 'probe': 0, 'encode': 0}
     for name, key in (('_copy_source_snapshot', 'copy'), ('_probe_uncached', 'probe'), ('_run_footage', 'encode')):
         original = getattr(serve, name, None)
         def track(*args, _original=original, _key=key, **kwargs):
             counts[_key] += 1
-            if _key == 'probe' and counts['probe'] == 2:
-                # Replace the live source after copying. Probe and encode must
-                # still consume the blue snapshot whose digest selected the key.
-                source.write_bytes((tmp_path / 'red.mp4').read_bytes().ljust(4096, b'\0'))
             return _original(*args, **kwargs)
         monkeypatch.setattr(serve, name, track, raising=False)
     with serving() as base:
         prepare = base + 'api/footage?id=episode_x&prepare=1'
         first = json.loads(get(prepare))
-        assert 'ticket' in first and counts == {'copy': 1, 'probe': 1, 'encode': 1}
+        assert 'ticket' in first and counts == {'copy': 0, 'probe': 1, 'encode': 1}
         original = get(base + 'api/footage?ticket=' + first['ticket'])
-        assert counts == {'copy': 1, 'probe': 1, 'encode': 1}
+        assert counts == {'copy': 0, 'probe': 1, 'encode': 1}
         before = source.stat()
         source.write_bytes((tmp_path / 'blue.mp4').read_bytes().ljust(4096, b'\0'))
         os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
         # A prepared ticket names that exact output even if the recording changes.
         assert get(base + 'api/footage?ticket=' + first['ticket']) == original
-        assert counts == {'copy': 1, 'probe': 1, 'encode': 1}
+        assert counts == {'copy': 0, 'probe': 1, 'encode': 1}
         second = json.loads(get(prepare))
         assert get(base + 'api/footage?ticket=' + second['ticket']) != original
-        assert counts == {'copy': 2, 'probe': 2, 'encode': 2}
-        assert get(base + 'api/footage?id=episode_x') == original
-        assert counts == {'copy': 3, 'probe': 2, 'encode': 2}
+        assert counts == {'copy': 0, 'probe': 2, 'encode': 2}
+        assert get(base + 'api/footage?id=episode_x') == get(base + 'api/footage?ticket=' + second['ticket'])
+        assert counts == {'copy': 0, 'probe': 2, 'encode': 2}
     assert not list((serve.FOOTAGE_DIR / '.sources').glob('snapshot-*'))
 
 
-def test_source_snapshot_rejects_oversized_input_before_copy(tmp_path, monkeypatch):
+def test_source_persistent_edit_during_probe_rejects_publication(tmp_path, monkeypatch):
     source = media(tmp_path, monkeypatch)
-    monkeypatch.setattr(serve, '_FOOTAGE_DISK_BYTES', source.stat().st_size - 1)
-    with pytest.raises(ValueError, match='budget'):
+    monkeypatch.setattr(serve, '_CONTENT_PROBES', serve.OrderedDict())
+    probe = serve._probe_uncached
+    def edit(path):
+        result = probe(path)
+        source.write_bytes((tmp_path / 'blue.mp4').read_bytes().ljust(4096, b'\0'))
+        return result
+    monkeypatch.setattr(serve, '_probe_uncached', edit)
+    with pytest.raises(ValueError, match='changed'):
         serve.footage('episode_x')
-    assert not list((serve.FOOTAGE_DIR / '.sources').glob('snapshot-*'))
+    assert not list(serve.FOOTAGE_DIR.glob('*.mp4'))
 
 
 def test_ticket_survives_process_restart_and_receipts_have_a_count_bound(tmp_path, monkeypatch):
@@ -145,8 +148,8 @@ def test_source_snapshot_lock_and_orphan_cleanup_work_across_processes(tmp_path,
     import sys
     monkeypatch.setattr(serve, 'FOOTAGE_DIR', tmp_path / 'footage')
     folder = serve.FOOTAGE_DIR / '.sources'
-    (folder / 'snapshot-orphan').mkdir(parents=True)
-    (folder / 'snapshot-orphan' / 'partial.mp4').write_bytes(b'partial')
+    (folder / 'snapshot-0-orphan').mkdir(parents=True)
+    (folder / 'snapshot-0-orphan' / 'partial.mp4').write_bytes(b'partial')
     script = '''
 import sys
 from pathlib import Path
@@ -159,7 +162,7 @@ except serve.CacheBusy:
     print('busy')
 '''
     with serve._snapshot_workspace() as workspace:
-        assert not (folder / 'snapshot-orphan').exists()
+        assert not (folder / 'snapshot-0-orphan').exists()
         completed = subprocess.run([sys.executable, '-c', script, str(serve.FOOTAGE_DIR)],
                                    capture_output=True, text=True, check=True, timeout=5)
         assert completed.stdout.strip() == 'busy' and workspace.is_dir()

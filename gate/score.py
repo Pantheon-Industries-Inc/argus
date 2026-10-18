@@ -96,12 +96,16 @@ FACTS = {"outcome", "not_outcome", "align", "issue", "sev", "mistake", "named", 
 
 def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
     """(the label meets every fact of the case, why not)."""
+    from board.label_projection import project
+    labels, _ = project(labels)
     unknown = set(case) - FACTS
     if unknown:
         raise ValueError(f"gate case states facts the scorer does not judge: {sorted(unknown)}")
     ok, why = [], []
     comp = labels.get("completion") or {}
     outcome = comp.get("task_completed")
+    if outcome == 'partial':
+        outcome = 'failure'
     if labels.get("tasks") and not outcome:
         outcome = "tasks:" + ",".join(sorted({str(t.get("outcome")) for t in labels["tasks"]}))
     if "outcome" in case:
@@ -115,7 +119,7 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         ok.append(rel in case["align"])
         ok[-1] or why.append(f"alignment {rel}")
     if "issue" in case:
-        matches = _matches(labels.get('data_issues'), case['issue'])
+        matches = _matches([item for item in labels.get('data_issues') or [] if item.get('issue')], case['issue'])
         sevs = [i.get('severity') for i in matches]
         meets = bool(matches)
         if 'sev' in case:
@@ -123,7 +127,7 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         ok.append(meets)
         meets or why.append('issue missing' if not matches else f'issue at {sevs}')
     if "mistake" in case:
-        ok.append(bool(_matches(labels.get("operator_mistakes"), case["mistake"])))
+        ok.append(bool(_matches([item for item in labels.get('operator_mistakes') or [] if item.get('issue')], case["mistake"])))
         ok[-1] or why.append("mistake missing")
     if "named" in case:
         text = " ".join(texts_handled(labels)).lower()
@@ -136,7 +140,8 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         miss and why.append(f"never names {miss}")
     if "max_issue_sev" in case:
         over = [(i.get("category"), i.get("severity")) for i in labels.get("data_issues") or [] if isinstance(i, dict)
-                and SEV.get(i.get("severity"), 0) > SEV[case["max_issue_sev"]]]
+                and i.get('issue') and (i.get('severity') not in SEV or
+                    SEV[i['severity']] > SEV[case["max_issue_sev"]])]
         ok.append(not over)
         over and why.append(f"issues above {case['max_issue_sev']}: {over}")
     if "held" in case:

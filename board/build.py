@@ -329,7 +329,7 @@ def steps_outside(d: dict, result: dict | None = None) -> list[dict]:
     is a known number (not estimated)."""
     from label.episode import STEP_SLACK_S
     dur = d.get("duration_s")
-    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
     one = lambda xs, a, b: a if len(xs) == 1 else b
     said, edge, parts = [], False, []
     if num(dur) and math.isfinite(dur) and dur > 0 and not d.get("duration_estimated"):
@@ -347,6 +347,27 @@ def steps_outside(d: dict, result: dict | None = None) -> list[dict]:
                 f"{len(stray)} of its {len(keys)} key events {one(stray, 'lies', 'lie')} outside the episode"
                 if stray else ""]
         edge = bool(past or early or stray)
+        for field, name, time_keys, start_key, end_key in (
+                ('data_issues', 'data issue', ('t_s', 'end_s'), 't_s', 'end_s'),
+                ('operator_mistakes', 'operator mistake', ('t_s', 'end_s'), 't_s', 'end_s'),
+                ('tasks', 'task', ('start_s', 'end_s', 'completed_at_s', 'goal_reached_at_s', 'undone_at_s'),
+                 'start_s', 'end_s'),
+                ('completion', 'completion', ('completed_at_s', 'goal_reached_at_s', 'undone_at_s'), None, None),
+                ('state_changes', 'state change', ('t_s',), None, None),
+                ('recovery', 'recovery', ('failure_t_s', 'recovered_at_s'), 'failure_t_s', 'recovered_at_s')):
+            value = d.get(field)
+            rows = [value] if isinstance(value, dict) else [row for row in value or [] if isinstance(row, dict)]
+            outside = [row for row in rows if any(num(row.get(key)) and not lo <= row[key] <= hi
+                                                 for key in time_keys)]
+            reversed_rows = [row for row in rows if start_key and num(row.get(start_key)) and num(row.get(end_key))
+                             and row[end_key] < row[start_key]]
+            if outside:
+                said.append(f"{len(outside)} {name}{'' if len(outside) == 1 else 's'} "
+                            f"{one(outside, 'lies', 'lie')} outside the episode")
+            if reversed_rows:
+                said.append(f"{len(reversed_rows)} {name}{'' if len(reversed_rows) == 1 else 's'} "
+                            f"{one(reversed_rows, 'ends', 'end')} before it starts")
+            edge = edge or bool(outside)
     st = (result or {}).get("stitched") if isinstance((result or {}).get("stitched"), dict) else {}
     for p in st.get("outside_part") or []:
         if not isinstance(p, dict) or not (num(p.get("t0_s")) and num(p.get("t1_s"))):

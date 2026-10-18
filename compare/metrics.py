@@ -241,11 +241,17 @@ def schema_violations(L: dict, config: dict | None = None) -> list[str]:
     failure to follow it."""
     from board.to_board import typed
     projected, dropped = typed({"labels": L})
-    from board.label_projection import diagnostics, field_identity, source_row_index
+    from board.label_projection import diagnostics, field_identity, source_row_indices
     violations = diagnostics(projected, dropped)
+    L = projected
+    mappings = {}
     def add(field, message, row=None):
         if row is not None:
-            row = source_row_index(L, field.split('.')[0], row)
+            scope = field.split('.')[0]
+            if scope not in mappings:
+                mappings[scope] = source_row_indices(L, scope, dropped)
+            if row < len(mappings[scope]):
+                row = mappings[scope][row]
         violations.setdefault(field_identity(field, row), message)
     arms = {"left", "right", "both"}
     labels = (config or {}).get("cam_labels") or []

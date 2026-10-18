@@ -104,6 +104,10 @@ def read_mcap(path: Path) -> dict:
                 v["t"].append(_ts(dec))
                 v["data"].append(bytes(dec.data))
             elif t in ARM or t in ARM_ACT:
+                expected = 1 if "-ee-" in t else 6
+                if len(dec.position) != expected:
+                    failures[t] = f"Recorded position has {len(dec.position)} values; expected {expected}."
+                    continue
                 d = robot.setdefault(t, {"t": [], "pos": []})
                 d["t"].append(_ts(dec))
                 d["pos"].append(list(dec.position))

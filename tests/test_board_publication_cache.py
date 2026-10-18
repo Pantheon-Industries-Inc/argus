@@ -120,9 +120,11 @@ def test_http_probe_admission_bounds_distinct_and_duplicate_misses_and_keeps_rea
     lock, probes = threading.Lock(), []
     def run(cmd, **kwargs):
         if '-show_entries' in cmd:
+            path = next((Path(reader.name) for reader, _, _ in getattr(serve._MEDIA_READERS, 'active', [])
+                         if Path(cmd[-1]).name == str(reader.fileno())), Path(cmd[-1]))
             with lock:
-                probes.append(Path(cmd[-1]).name)
-            if held_stage == 'probe' and cmd[-1].endswith('episode_cold.mp4'):
+                probes.append(path.name)
+            if held_stage == 'probe' and path.name == 'episode_cold.mp4':
                 entered.set()
                 assert release.wait(5)
             return subprocess.CompletedProcess(cmd, 0,
@@ -140,15 +142,15 @@ def test_http_probe_admission_bounds_distinct_and_duplicate_misses_and_keeps_rea
     monkeypatch.setattr(serve.subprocess, 'run', run)
     monkeypatch.setattr(serve, '_run_footage', run)
     if held_stage == 'hash':
-        durable, copy_source = static._durable_metadata, serve._copy_source_snapshot
+        durable, stream_digest = static._durable_metadata, serve._stream_digest
         monkeypatch.setattr(static, '_durable_metadata', lambda path, version:
             False if Path(path).name in ('episode_cold.mp4', 'episode_other.mp4') else durable(path, version))
-        def slow_copy(path, target, version):
-            if Path(path).name == 'episode_cold.mp4':
+        def slow_hash(reader, *args):
+            if Path(reader.name).name == 'episode_cold.mp4':
                 entered.set()
                 assert release.wait(5)
-            return copy_source(path, target, version)
-        monkeypatch.setattr(serve, '_copy_source_snapshot', slow_copy)
+            return stream_digest(reader, *args)
+        monkeypatch.setattr(serve, '_stream_digest', slow_hash)
     ready, _ = serve.footage('episode_ready', 0, 1)
     with socketserver.ThreadingTCPServer(('127.0.0.1', 0), serve.Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -239,8 +241,15 @@ def test_real_http_footage_probes_have_finite_processes_and_no_duplicate_work(tm
     wrapper.write_text('#!' + sys.executable + '\n' +
         'import os, pathlib, sys, time\n'
         f'calls=pathlib.Path({str(calls)!r}); entered=pathlib.Path({str(entered)!r}); release=pathlib.Path({str(release)!r})\n'
-        'with calls.open("a") as out: out.write(pathlib.Path(sys.argv[-1]).name + "\\n")\n'
-        'if sys.argv[-1].endswith("episode_cold.mp4"):\n'
+        'path=sys.argv[-1]\n'
+        'if path.startswith("/dev/fd/"):\n'
+        '    fd=int(path.rsplit("/",1)[1])\n'
+        '    if sys.platform == "darwin":\n'
+        '        import fcntl\n'
+        '        path=fcntl.fcntl(fd,50,b"\\0"*1024).split(b"\\0")[0].decode()\n'
+        '    else: path=os.readlink(path)\n'
+        'with calls.open("a") as out: out.write(pathlib.Path(path).name + "\\n")\n'
+        'if path.endswith("episode_cold.mp4"):\n'
         '    entered.touch()\n'
         '    deadline=time.monotonic()+8\n'
         '    while not release.exists() and time.monotonic()<deadline: time.sleep(.01)\n'
@@ -459,10 +468,11 @@ print(json.dumps([result[0].name,result[1]]))
     finally:
         serve._FOOTAGE_PROBE_SEM.release()
     if mutation == 'output':
-        assert not out.exists()
+        # Validation rejects this output without deleting outside a publication transaction.
+        assert out.exists()
 
 
-def test_ready_receipts_share_the_media_count_limit_and_unknown_metadata_is_not_trusted(tmp_path, monkeypatch):
+def test_canonical_receipts_follow_media_lifetime_and_unknown_metadata_is_not_trusted(tmp_path, monkeypatch):
     source = tmp_path / 'clips/episode_x.mp4'
     source.parent.mkdir()
     source.write_bytes(b'source')
@@ -480,12 +490,12 @@ def test_ready_receipts_share_the_media_count_limit_and_unknown_metadata_is_not_
     for start in range(5):
         serve.footage('episode_x', start, start + 1)
     assert len(list(serve.FOOTAGE_DIR.glob('*.mp4'))) == 2
-    assert len(list((serve.FOOTAGE_DIR / '.ready').glob('*.json'))) == 2
+    assert len([p for p in (serve.FOOTAGE_DIR / '.ready').glob('*.json') if len(p.stem) == 20]) == 2
     from board import static
     monkeypatch.setattr(static, '_durable_metadata', lambda *args: False)
     monkeypatch.setattr(serve, '_probe_uncached', lambda p: (16, 16, 10, 30))
     serve.footage('episode_x', 5, 6)
-    assert len(list((serve.FOOTAGE_DIR / '.ready').glob('*.json'))) == 2
+    assert len([p for p in (serve.FOOTAGE_DIR / '.ready').glob('*.json') if len(p.stem) == 20]) == 2
 
 
 def test_changed_ready_output_is_never_served_when_cache_cleanup_is_denied(tmp_path, monkeypatch):

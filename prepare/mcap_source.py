@@ -1,6 +1,8 @@
 """Per-channel protobuf decoding for the published dataset adapters."""
 from __future__ import annotations
 
+import json
+
 from prepare import formats
 
 
@@ -48,7 +50,7 @@ def decoded_messages(reader, fields: dict[str, dict[str, str]], failures: dict[s
                 decoders[channel.id] = decoder
             decoded = decoders[channel.id](message.data)
             _check_fields(decoded, fields[channel.topic])
-        except (formats.McapSchemaError, McapSourceError, DecodeError) as error:
+        except (formats.McapSchemaError, McapSourceError, DecodeError, json.JSONDecodeError, UnicodeDecodeError) as error:
             failures[channel.topic] = formats.plain_error(error)
             continue
         yield schema, channel, message, decoded

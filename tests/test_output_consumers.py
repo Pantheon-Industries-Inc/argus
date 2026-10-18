@@ -126,11 +126,14 @@ def test_model_supplied_diagnostic_shapes_remain_diagnostic_not_executable_metad
         '_dropped': [{'field': 'timeline', 'row': 0, 'why': 'retained source omission'}]}))
     assert ok
     d = to_board.convert({'labels': labels})
-    assert 'retained source violation' in d['_schema_violations']
-    assert d['_off_schema']['timeline'] == 1
+    assert 'retained source violation' not in d['_schema_violations']
+    assert 'timeline' not in d['_off_schema']
     measured = metrics.measure(labels, 'demo')
-    assert 'retained source violation' in measured['violations']
-    assert any('retained source omission' in message for message in measured['violations'])
+    assert 'retained source violation' not in measured['violations']
+    # Already persisted parser diagnostics still survive consumer projection.
+    host = {'task_summary': 'The hand reaches.', '_schema_violations': ['retained source violation'],
+            '_dropped': [{'field': 'timeline', 'row': 0, 'why': 'retained source omission'}]}
+    assert 'retained source violation' in to_board.convert({'labels': host})['_schema_violations']
 
 
 def test_nested_assessments_use_the_same_structural_contract_as_episode_labels():
@@ -228,7 +231,7 @@ def test_case_only_enum_variation_preserves_board_and_compare_meanings(transform
 
 
 @pytest.mark.parametrize('scope,key,value,want', [
-    ('timeline', 'contribution', 'Advancing', 1),
+    ('timeline', 'contribution', 'Advancing', 0),
     ('timeline', 'contribution', 'mostly', 1),
     ('timeline', 'arm', ['left'], 1),
     ('timeline', 'progress', True, 1),
@@ -319,7 +322,7 @@ def test_case_normalized_reply_publishes_real_board_comparison(tmp_path):
         assert episode['goal_alignment']['relation'] == 'aligned'
         assert episode['goal_alignment']['matches_given'] is None
     comparison = json.loads((board / 'compare/metrics.json').read_text())['summary']['all']
-    assert comparison['responses']['board']['violations'] == 3
-    assert comparison['responses']['other']['violations'] == 3
+    assert comparison['responses']['board']['violations'] == 1
+    assert comparison['responses']['other']['violations'] == 1
     assert comparison['metrics']['board']['data_issues'] == 1
     assert comparison['metrics']['other']['data_issues'] == 1

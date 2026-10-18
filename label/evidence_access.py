@@ -1310,7 +1310,7 @@ class Access:
             elif finding.get('start_s') is None and finding.get('end_s') is None and isinstance(refs, list) and refs:
                 valid = finding.get('adds_beyond_video') is True
                 for ref in refs:
-                    r = known.get(ref.get('evidence_id')) if isinstance(ref, dict) else None
+                    r = known.get(ref['evidence_id']) if isinstance(ref, dict) and isinstance(ref.get('evidence_id'), str) else None
                     rows = ref.get('rows') if isinstance(ref, dict) else None
                     if r and r.get('withheld_from_final'):
                         valid = False
@@ -1335,7 +1335,7 @@ class Access:
                                 for row in rows for col in columns):
                             valid = False
                 if valid:
-                    doc['untimed_findings'].append(clean(finding))
+                    doc['untimed_findings'].append(clean(se.finding_fields(finding)))
                     continue
                 reason = 'untimed finding lacks inspected source-row or metadata citations'
             elif any(type(finding.get(k)) not in (int, float) or not math.isfinite(finding[k]) for k in ('start_s', 'end_s')):
@@ -1346,7 +1346,7 @@ class Access:
                 reason = 'missing evidence references'
             converted, windows = [], []
             for ref in refs if isinstance(refs, list) else []:
-                r = known.get(ref.get('evidence_id')) if isinstance(ref, dict) else None
+                r = known.get(ref['evidence_id']) if isinstance(ref, dict) and isinstance(ref.get('evidence_id'), str) else None
                 ts = ref.get('time_s') if isinstance(ref, dict) else None
                 supplied = (r or {}).get('times_s') or []
                 if (r or {}).get('withheld_from_final') or not supplied or not isinstance(ts, list) or not ts or any(type(t) not in (int, float)
@@ -1355,7 +1355,7 @@ class Access:
                 windows.append((min(supplied), max(supplied)))
                 cols = ref.get('columns', r.get('columns') or [])
                 if 'values' in r:
-                    if not isinstance(cols, list) or not cols or any(c not in r['columns'] for c in cols):
+                    if not isinstance(cols, list) or not cols or any(type(c) is not int or c not in r['columns'] for c in cols):
                         reason = 'citation names an uninspected component'; break
                     for col in cols:
                         position = r['columns'].index(col)
@@ -1387,7 +1387,7 @@ class Access:
             if reason:
                 doc['unbound_findings'].append({'finding': clean(finding), 'reason': reason})
             else:
-                doc['findings'].append({**clean(finding), 'evidence': converted, 'claim_type': 'recorded_evidence',
+                doc['findings'].append({**clean(se.finding_fields(finding)), 'evidence': converted, 'claim_type': 'recorded_evidence',
                                         'detail': finding.get('detail') or finding.get('claim') or finding.get('observation')})
         return doc
 
@@ -1425,6 +1425,9 @@ def merge(parts, ep_dir=None):
             pass
     return {'version': 1, **({'source_proof': parent_proof} if parent_proof is not None else {}),
             'cost_usd': sum(float(r['record'].get('cost_usd') or 0) for r in rows),
+            'previously_billed_usd': sum(float(r['record'].get('previously_billed_usd') or 0) for r in rows),
+            **({'cost_is_conservative_estimate': True} if any(
+                r['record'].get('cost_is_conservative_estimate') for r in rows) else {}),
             'parts': rows, 'timing': 'Inspection times are local to each part; add time_origin_s for the parent episode.'}
 
 
@@ -1523,6 +1526,11 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
             doc.update(status='complete', limitations=[note for note in doc['limitations'] if note != budget_note])
             doc.pop('pause_reason', None)
     extra = []
+    # Field reads are replayed locally from saved selections. Their old failures
+    # are diagnostic output, never durable dispatch or billing state.
+    doc['limitations'] = [note for note in doc['limitations'] if not note.startswith('Inspection request failed: ')]
+    if doc.get('status') == 'partial':
+        doc['status'] = 'complete'
     count = 0
     skipped = {}
     inventory = access.inventory()
@@ -1647,5 +1655,6 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
         if row['status'] == 'not inspected' and row['field_id'] in skipped:
             row.update(status='not selected', reason=skipped[row['field_id']])
     doc.update(record)
+    doc['limitations'] = list(dict.fromkeys(doc['limitations']))
     write_atomic(path, doc)
     return doc, extra

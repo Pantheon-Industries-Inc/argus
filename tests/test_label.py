@@ -921,8 +921,7 @@ def test_final_claim_survives_worker_crash_and_budget_refusal_has_no_dispatch(tm
     assert harness.run_batch([ep], refused, max_spend=.001, **args) == 0
     assert calls == []
     out = tmp_path / 'crashed'
-    with pytest.raises(KeyboardInterrupt):
-        harness.run_batch([ep], out, max_spend=20, **args)
+    assert harness.run_batch([ep], out, max_spend=20, **args) == 130
     receipt = json.loads((out / f'noreply_{ep.name}.json').read_text())
     assert receipt['final_dispatch_outcome'] == 'claimed'
     _assert_verified_selection_charge(receipt)
@@ -1324,7 +1323,7 @@ def test_resume_finishes_the_run_within_what_is_left_of_its_cap(tmp_path, monkey
     _argv(monkeypatch, "--dataset", "d", "--episodes", sl, "--kind", "smoke", "--resume", run, "--why", "rebooted")
     lrun.main()
     cmd = calls[0]["cmd"]
-    assert cmd[cmd.index("--max-spend") + 1] == "0.60" and Path(calls[0]["cwd"]) == run.resolve()
+    assert float(cmd[cmd.index("--max-spend") + 1]) == .6 and Path(calls[0]["cwd"]) == run.resolve()
     info = json.loads((run / "run.json").read_text())
     assert info["resumes"][0]["why"] == "rebooted" and info["resumes"][0]["spent_before"] == 0.4
     assert info["status"] == "done" and info["run_id"] == run.name

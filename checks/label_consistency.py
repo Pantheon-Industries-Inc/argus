@@ -35,14 +35,19 @@ the output schema, not from any one episode:
 """
 from __future__ import annotations
 
+import math
+
 REACHED = ("success", "success_then_undone")
 NOT_REACHED = ("failure", "partial", "unclear")
 OTHER_TASK = ("different", "unrelated")
 
 
 def _num(x):
+    if isinstance(x, bool):
+        return None
     try:
-        return float(x)
+        value = float(x)
+        return value if math.isfinite(value) else None
     except (TypeError, ValueError):
         return None
 
@@ -57,7 +62,9 @@ def _levels(steps: list[dict]) -> list[tuple[float, float]]:
                   key=lambda r: (r[0], r[1]))
     out, cur = [], 0.0
     for t, _, s in rows:
-        p = max(0.0, min(1.0, _num(s.get("progress"))))
+        p = _num(s.get("progress"))
+        if not 0 <= p <= 1:
+            continue
         if str(s.get("contribution") or "").lower() == "idle" and p <= cur:
             continue
         out.append((t, p))
@@ -66,6 +73,12 @@ def _levels(steps: list[dict]) -> list[tuple[float, float]]:
 
 
 def check(label: dict, duration_s: float | None = None) -> list[dict]:
+    from board.label_projection import project
+    # Board episodes store the same rows under event_labels. Validate that view
+    # through the same schema rather than interpreting rejected progress values.
+    if 'timeline' not in label and isinstance(label.get('event_labels'), list):
+        label = {**label, 'timeline': label['event_labels']}
+    label, _ = project(label)
     c = label.get("completion") or {}
     outcome = str(c.get("task_completed") or "").lower()
     rel = str((label.get("goal_alignment") or {}).get("relation") or "").lower()
@@ -94,7 +107,7 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
                         "note": "The outcome is success then undone, but the label records no state change after "
                                 "the goal was reached."})
     # the harness returns timeline rows; the board stores them as event_labels
-    steps = [s for key in ("timeline", "event_labels") for s in (label.get(key) or []) if isinstance(s, dict)]
+    steps = label.get('timeline') or []
     peak = max((p for p in (_num(s.get("progress")) for s in steps) if p is not None), default=None)
     if outcome in NOT_REACHED and peak is not None and peak >= 0.99:
         out.append({"rule": "progress_vs_outcome",
@@ -128,4 +141,7 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
             if t is not None and t > duration_s + 1.0:
                 out.append({"rule": "time_past_end",
                             "note": f"{key} is {t:.1f} s, after the episode ends at {duration_s:.1f} s."})
+            elif t is not None and t < 0:
+                out.append({'rule': 'time_before_start',
+                            'note': f'{key} is {t:.1f} s, before the episode starts.'})
     return out
