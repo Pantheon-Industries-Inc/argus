@@ -5445,6 +5445,97 @@ def lerobot_recorded_signals(ep, ctx, root, df, used, n, *, anchor_times=None):
     return lerobot_image_depth(ep, ctx, root, df, signals, anchor_times=anchor_times)
 
 
+def canonical_packed_row(root: dict, row: dict, fps: float | None) -> tuple[dict, dict]:
+    """Recover accumulated timestamp rounding from contiguous, count-owned CFR episodes.
+
+    LeRobot resolves a timestamp to its closest encoded frame. A contiguous run
+    then advances by declared episode lengths, so rounding errors cannot accumulate
+    into a different frame. Generic time-window cuts retain their own contract.
+    """
+    if not fps or not np.isfinite(fps) or fps <= 0:
+        return row, {}
+    import av
+    from label.frames import FrameError, base_frame
+    from collections import Counter
+    cache = root.setdefault('_packed_ownership', {})
+    if '_packed_groups' not in root:
+        groups = root['_packed_groups'] = {}
+        for episode in root['episodes']:
+            for camera, source in episode.get('videos', {}).items():
+                if isinstance(source, tuple):
+                    groups.setdefault((Path(source[0]), camera), []).append((episode, source))
+    videos, corrected = dict(row['videos']), {}
+    for camera, source in row['videos'].items():
+        if not isinstance(source, tuple):
+            continue
+        path, base, stop = source
+        path = Path(path)
+        try:
+            stat = path.stat()
+            version = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+            key = (str(path.resolve()), version, camera, fps)
+            if key not in cache:
+                facts = _packed_video_probe(str(path.resolve()), version)
+                step = packed_grid_step(facts, fps)
+                owned = cache[key] = {}
+                if (step is None or not len(facts['pts']) or facts['pts'][0] != 0
+                        or not np.all(np.diff(facts['pts']) == step)):
+                    continue
+                entries = root['_packed_groups'].get((path, camera), [])
+                counts = Counter(episode['eidx'] for episode, _ in entries)
+                duplicate = {index for index, count in counts.items() if count > 1}
+                cursor, previous_stop = None, None
+                for episode, (_, start, end) in sorted(entries, key=lambda entry: entry[1][1]):
+                    length = episode.get('length')
+                    if (episode['eidx'] in duplicate or type(length) is not int or not 0 < length <= len(facts['pts'])
+                            or not np.isfinite([start, end]).all() or end <= start):
+                        cursor, previous_stop = None, None
+                        continue
+                    # One microsecond bounds each stored duration's quantization,
+                    # independent of how many earlier rounded durations were added.
+                    error = 1e-6 + 4 * max(abs(np.spacing(start)), abs(np.spacing(end)))
+                    if abs((end - start) - length / fps) > error:
+                        cursor, previous_stop = None, None
+                        continue
+                    contiguous = (previous_stop is not None and abs(start - previous_stop)
+                                  <= 4 * max(abs(np.spacing(start)), abs(np.spacing(previous_stop))))
+                    if not contiguous:
+                        position = start * fps
+                        if not np.isfinite(position):
+                            cursor, previous_stop = None, None
+                            continue
+                        cursor = round(position)
+                        # Native LeRobot readers select the nearest frame. A tie
+                        # is backend-dependent and supplies no unique ownership.
+                        if abs(abs(position - cursor) - .5) <= 4 * abs(np.spacing(position)):
+                            cursor, previous_stop = None, None
+                            continue
+                    first, last = cursor, cursor + length
+                    lo, hi = np.searchsorted(facts['pts'], [first * step, last * step])
+                    if first < 0 or hi - lo != length or not np.array_equal(facts['pts'][lo:hi], np.arange(first, last) * step):
+                        cursor, previous_stop = None, None
+                        continue
+                    owned[episode['eidx']] = (first, last)
+                    cursor, previous_stop = last, end
+            bounds = cache[key].get(row['eidx'])
+        except (OSError, ValueError, av.error.FFmpegError):
+            # Camera opening still reports its own source-specific failure below.
+            continue
+        if bounds is None:
+            continue
+        try:
+            declared = (base_frame(base, fps), base_frame(stop, fps))
+        except FrameError:
+            declared = None
+        if declared != bounds:
+            first, last = bounds
+            videos[camera] = (path, first / fps, last / fps)
+            corrected[camera] = {'from_timestamp': base, 'to_timestamp': stop,
+                                 'first_frame': first, 'frame_count': last - first,
+                                 'basis': 'LeRobot nearest-frame lookup, episode lengths and encoded CFR grid'}
+    return ({**row, 'videos': videos} if corrected else row), corrected
+
+
 def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(), *, native_adapter=None) -> dict:
     """hold_back: columns an adapter keeps out of the prompt (a publisher's own labels, kept to score against)."""
     r, row = item["root"], item["row"]
@@ -5467,6 +5558,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
     hold_back = set(hold_back) | publisher_columns(df.columns if df is not None else [])
     if fps is None and df is not None and "timestamp" in df.columns and len(df) > 2:
         fps = measured_fps(np.sort(df["timestamp"].to_numpy(dtype=np.float64)))
+    row, packed_ownership = canonical_packed_row(r, row, fps)
     # every row as it is, NaN where a cell cannot be read; a frame with no reading is filled or the state is left a
     # signal (state_on_frames), never dropped for one NaN frame
     state = _cells(df["observation.state"]) if df is not None and "observation.state" in df.columns else None
@@ -5490,6 +5582,8 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
     annotated = r["annotated"].get(eidx)
     extra = {"task_label": tasks or [item["name"]], "episode_index": eidx, "robot_type": r["robot_type"],
              "source": {"format": f"lerobot {r['version']}", "episode_index": eidx, "dataset_folder": r["rel"] or None}}
+    if packed_ownership:
+        extra['source']['packed_video_ownership'] = packed_ownership
     if any(value_roles):
         extra.update(state_value_roles=value_roles, state_value_role_sources=role_sources)
     if state_groups:
@@ -5550,6 +5644,9 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
             k0 = next(iter(vmap.values()))
             pr0 = probe(row["videos"][k0][0])
             fps = measured_fps(seconds(pr0)) or pr0["fps"] or 30.0
+            row, packed_ownership = canonical_packed_row(r, row, fps)
+            if packed_ownership:
+                extra['source']['packed_video_ownership'] = packed_ownership
         sources, cameras, broken, pts, grid = {}, {}, {}, {}, {}
         for v, key in vmap.items():
             mp4, base, to = row["videos"][key]
@@ -5560,9 +5657,16 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
                 continue
             n = len(pr["pts"])
             sources[v] = {"packed": str(mp4), "base_s": base, "n_frames": n, "camera_key": key}
-            # Rounded v3 offsets still denote the same publisher frame on a CFR grid.
-            expected = ((round(base * fps) + np.arange(n)) / fps) / float(pr["time_base"])
-            grid[v] = bool(np.allclose(pr["pts"], expected, rtol=0, atol=1e-4))
+            # A grid decode also needs a representable episode origin. Otherwise
+            # keep the selected encoded PTS explicitly, even on a CFR source.
+            from label.frames import FrameError, base_frame
+            try:
+                first = base_frame(base, fps)
+            except FrameError:
+                grid[v] = False
+            else:
+                expected = ((first + np.arange(n)) / fps) / float(pr["time_base"])
+                grid[v] = bool(np.allclose(pr["pts"], expected, rtol=0, atol=1e-4))
             pts[v] = pr["pts"]
             if not grid[v]:
                 add_issue(extra, "recorded_rate_mismatch", f"{key} PTS do not follow the declared {fps:g} Hz grid. "
@@ -5846,21 +5950,9 @@ def packed_video_window(path: Path, base: float, stop: float, *, fps: float | No
     return {**{key: value for key, value in facts.items() if key != '_packed_windows'}, "pts": pts}
 
 
-def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float | None = None) -> tuple[int, int]:
-    """Half-open ownership at the precision of LeRobot v3's microsecond metadata.
-
-    Proven CFR files retain label.frames' established grid contract. Otherwise compare microsecond-stored
-    boundaries to encoded times rounded to that same precision. A shared boundary
-    therefore excludes its frame from the preceding episode and includes it in the following episode. Decimal
-    precision does not identify a frame clock: rational and accumulated offsets use the same proven CFR grid.
-    Off-grid boundaries retain their recorded precision, and VFR timestamps need not follow the nominal grid.
-    """
-    if not np.isfinite([base, stop]).all() or stop <= base:
-        raise ValueError("invalid packed video episode window")
-    from label.frames import FrameError, base_frame, frame_pts_step
-    rate = fps or facts.get('fps')
-    # The source-version probe is shared by every episode in a packed file. Cache its derived clocks and grid
-    # proof too, so selecting each episode does not scan the entire shared recording again.
+def packed_grid_step(facts: dict, rate: float | None):
+    """An integer PTS step proved by the encoded source, never by nominal FPS alone."""
+    from label.frames import FrameError, frame_pts_step
     memo = facts.setdefault('_packed_windows', {})
     key = ('step', rate)
     if key not in memo:
@@ -5874,7 +5966,26 @@ def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float |
                 if np.all(np.asarray(facts['pts']) % candidate == 0):
                     found_step = candidate
         memo[key] = found_step
-    step = memo[key]
+    return memo[key]
+
+
+def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float | None = None) -> tuple[int, int]:
+    """Half-open ownership at the precision of LeRobot v3's microsecond metadata.
+
+    Proven CFR files retain label.frames' established grid contract. Otherwise compare microsecond-stored
+    boundaries to encoded times rounded to that same precision. A shared boundary
+    therefore excludes its frame from the preceding episode and includes it in the following episode. Decimal
+    precision does not identify a frame clock: rational and accumulated offsets use the same proven CFR grid.
+    Off-grid boundaries retain their recorded precision, and VFR timestamps need not follow the nominal grid.
+    """
+    if not np.isfinite([base, stop]).all() or stop <= base:
+        raise ValueError("invalid packed video episode window")
+    from label.frames import FrameError, base_frame
+    rate = fps or facts.get('fps')
+    # The source-version probe is shared by every episode in a packed file. Cache its derived clocks and grid
+    # proof too, so selecting each episode does not scan the entire shared recording again.
+    memo = facts.setdefault('_packed_windows', {})
+    step = packed_grid_step(facts, rate)
     indices = []
     for boundary in (base, stop):
         rounded = round(boundary, 6)
@@ -7505,7 +7616,7 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: fl
 
 # modules of prepare/ that are the reader and its tools, not dataset adapters
 NOT_ADAPTERS = {"__main__", "cli", "display", "folder", "formats", "hub", "lerobot", "lerobot_labels", "mcap_claims",
-                "mcap_fields", "mcap_pose", "mcap_registration", "hdf_metadata", "remux",
+                "mcap_fields", "mcap_pose", "mcap_registration", "mcap_source", "hdf_metadata", "remux",
                 "signal_alignment", "state_notes", "state_contract", "videos", "camera_clock", "jaws"}
 
 

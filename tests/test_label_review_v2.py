@@ -73,7 +73,7 @@ def test_only_missing_trailing_notes_are_recovered_without_column_shift():
 
 def test_ego_trailing_notes_recovery_checks_hand_columns():
     columns = harness.TIMELINE_COLUMNS[:-1] + ['hands_visible', 'hands_wearing', 'notes']
-    good = [0, 1, 'left', 'reach', 'cup', None, None, 'advancing', .2, True, 'bare']
+    good = [0, 1, 'left', 'reach', 'cup', None, None, 'advancing', .2, True, None]
     shifted = [0, 1, 'left', 'reach', 'cup', None, None, 'advancing', .2, 'bare', None]
     labels, ok = harness.parse_response(json.dumps({'timeline_columns': columns, 'timeline': [good, shifted]}))
     assert ok and len(labels['timeline']) == 1 and labels['timeline'][0]['hands_visible'] is True
@@ -524,3 +524,35 @@ def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path
     assert target.read_bytes() == original
     warning = json.loads((out / ('stale_' + ep.name + '.json')).read_text())
     assert warning['refresh'] == '--force' and 'inspection' in warning['reason']
+
+
+@pytest.mark.parametrize('contribution,progress,kept', [
+    (None, .2, True), ('Advancing', .2, True), ('mostly', .2, True),
+    ('advancing', None, True), (None, None, False),
+])
+def test_short_row_recovery_requires_positional_evidence(contribution, progress, kept):
+    row = [0, 1, 'left', 'reach', 'cup', None, None, contribution, progress]
+    labels, ok = harness.parse_response(json.dumps({'task_summary': 'reach', 'timeline': [row]}))
+    assert ok
+    assert bool(labels.get('timeline')) is kept
+    if kept:
+        assert labels['timeline'][0]['contribution'] == contribution
+        assert labels['timeline'][0]['progress'] == progress
+    else:
+        assert labels['_dropped'][0]['row'] == 0
+
+
+def test_short_row_with_a_missing_middle_column_is_not_reinterpreted():
+    shifted = [0, 1, 'left', 'reach', 'cup', None, 'advancing', None, None]
+    labels, ok = harness.parse_response(json.dumps({'task_summary': 'reach', 'timeline': [shifted]}))
+    assert ok and labels['timeline'] == []
+    assert labels['_dropped'][0]['row'] == 0
+
+
+def test_ego_short_row_does_not_guess_whether_text_is_handwear_or_notes():
+    columns = harness.TIMELINE_COLUMNS[:-1] + ['hands_visible', 'hands_wearing', 'notes']
+    ambiguous = [0, 1, 'left', 'reach', 'cup', None, None, 'advancing', .2, True, 'bare']
+    labels, ok = harness.parse_response(json.dumps({'task_summary': 'reach', 'timeline_columns': columns,
+                                                   'timeline': [ambiguous]}))
+    assert ok and labels['timeline'] == []
+    assert labels['_dropped'][0]['value'] == ambiguous

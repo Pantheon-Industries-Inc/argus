@@ -2608,9 +2608,10 @@ async function vdDownload(t0, t1) {
     const r = await fetch(q + '&prepare=1', {cache: 'no-store'});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    if (typeof j.ticket !== 'string' || !/^[a-f0-9]{32}$/.test(j.ticket)) throw new Error('The prepared video is unavailable.');
     status.textContent = `Downloading ${j.name} (${fmtBytes(j.bytes)}).`;
     const a = document.createElement('a');
-    a.href = q; a.download = j.name;
+    a.href = 'api/footage?ticket=' + encodeURIComponent(j.ticket); a.download = j.name;
     document.body.appendChild(a); a.click(); a.remove();
   } catch (err) { status.textContent = 'The video could not be made: ' + err.message; }
 }

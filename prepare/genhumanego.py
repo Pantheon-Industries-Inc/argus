@@ -30,7 +30,8 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import formats
 from prepare import hub
-from prepare.remux import UnsupportedPacketOrder, remux  # each frame's recorded time as its pts (shared with ABC-130k, RealOmni)
+from prepare.mcap_source import decoded_messages
+from prepare.remux import RemuxSourceError, remux  # each frame's recorded time as its pts (shared with ABC-130k, RealOmni)
 
 REPO = "genrobot2025/Gen-HumanEgo"
 CAMERA_TOPIC = "/robot0/sensor/camera2/compressed"
@@ -58,58 +59,72 @@ def _annotation(a) -> dict | None:
 def extract(mcap: Path, raw: Path, rel: str) -> None:
     """Extract the forward camera, or a readable headset camera with its own identity and calibration."""
     from mcap.reader import make_reader
-    from mcap_protobuf.decoder import DecoderFactory
     raw.mkdir(parents=True, exist_ok=True)
-    ts, frames, ann, trv, fv_invalid, calibrations = [], [], None, None, 0, {}
-    source_claims = []
+    ann, trv, fv_invalid, calibrations = None, None, 0, {}
+    source_claims, source_failures = [], {}
     with open(mcap, "rb") as fh:
-        r = make_reader(fh, decoder_factories=[DecoderFactory()])
+        r = make_reader(fh)
         summ = r.get_summary()
         camera_topics = sorted({ch.topic for ch in summ.channels.values()
                                 if re.fullmatch(r"/robot0/sensor/camera[0-9]+/compressed", ch.topic)})
         calib_topics = [topic.rsplit("/", 1)[0] + "/camera_info" for topic in camera_topics]
-        started = False
-        for _, ch, msg, d in r.iter_decoded_messages(topics=[CAMERA_TOPIC, *calib_topics, ANNOTATION_TOPIC,
-                                                             "/robot0/time_range_validity", "/robot0/frame_validity"]):
-            if ch.topic in (ANNOTATION_TOPIC, "/robot0/time_range_validity", "/robot0/frame_validity"):
+        fields = {topic: {"width": "integer", "height": "integer", "distortion_model": "text",
+                          "D": "number[]", "T_b_c": "number[]", "frame_id": "text"} for topic in calib_topics}
+        fields[ANNOTATION_TOPIC] = {"video_id": "text", "bold_mark": "text", "sst": "text",
+            "environment_description": "text", "segments_info": "message[]",
+            "segments_info.segment_id": "integer", "segments_info.start_time_s": "number",
+            "segments_info.end_time_s": "number", "segments_info.fine_label": "text",
+            "segments_info.sub_segments_info": "message[]", "segments_info.sub_segments_info.segment_id": "integer",
+            "segments_info.sub_segments_info.start_time_s": "number", "segments_info.sub_segments_info.end_time_s": "number",
+            "segments_info.sub_segments_info.fine_label": "text", "segments_info.sub_segments_info.fine_label_detail": "text",
+            "segments_info.sub_segments_info.is_success": "bool"}
+        fields["/robot0/time_range_validity"] = {"invalid_ranges": "message[]",
+            "invalid_ranges.start_time_s": "number", "invalid_ranges.end_time_s": "number",
+            "invalid_ranges.invalid_code": "integer", "invalid_ranges.invalid_message": "text"}
+        fields["/robot0/frame_validity"] = {"is_valid": "bool"}
+        for _, ch, msg, d in decoded_messages(r, fields, source_failures):
+            if ch.topic in calib_topics:
+                calibrations[ch.topic.rsplit("/", 1)[0] + "/compressed"] = dict(
+                    w=d.width, h=d.height, model=d.distortion_model, D=list(d.D), T=list(d.T_b_c), frame=d.frame_id)
+            else:
                 from prepare.mcap_claims import snapshot
                 source_claims.append({"topic": ch.topic, "log_ns": int(msg.log_time),
                                       "publish_ns": int(msg.publish_time), "fields": snapshot(d)})
-            if ch.topic == CAMERA_TOPIC:
-                if not started:
-                    b = d.data
-                    o = 4 if b.startswith(b"\x00\x00\x00\x01") else 3 if b.startswith(b"\x00\x00\x01") else 0
-                    if len(b) <= o or (b[o] & 0x1F) != 7:
-                        continue            # before the first SPS: dropped, so mp4 frame i is ts[i]
-                    started = True
-                frames.append(bytes(d.data))
-                ts.append(msg.log_time)
-            elif ch.topic in calib_topics:
-                # Each camera keeps its own calibration; fallback footage never inherits camera2 geometry.
-                calibrations[ch.topic.rsplit("/", 1)[0] + "/compressed"] = dict(w=d.width, h=d.height, model=d.distortion_model, D=list(d.D), T=list(d.T_b_c),
-                             frame=d.frame_id)
-            elif ch.topic == ANNOTATION_TOPIC:
-                ann = d
-            elif ch.topic == "/robot0/time_range_validity":
-                trv = d
-            else:
-                fv_invalid += 0 if d.is_valid else 1
+                if ch.topic == ANNOTATION_TOPIC:
+                    ann = d
+                elif ch.topic == "/robot0/time_range_validity":
+                    trv = d
+                else:
+                    fv_invalid += 0 if d.is_valid else 1
+    # An unreadable record invalidates its whole channel, including records seen before the failure.
+    source_claims = [record for record in source_claims if record["topic"] not in source_failures]
+    for topic in source_failures:
+        if topic in calib_topics:
+            calibrations.pop(topic.rsplit("/", 1)[0] + "/compressed", None)
+    if ANNOTATION_TOPIC in source_failures:
+        ann = None
+    if "/robot0/time_range_validity" in source_failures:
+        trv = None
+    if "/robot0/frame_validity" in source_failures:
+        fv_invalid = None
     import av
     failures, selected = {}, None
     for topic in [CAMERA_TOPIC, *(topic for topic in camera_topics if topic != CAMERA_TOPIC)]:
-        if topic != CAMERA_TOPIC:
-            ts, frames = [], []
-            started = False
-            with mcap.open("rb") as stream:
-                for _, _, msg, decoded in make_reader(stream, decoder_factories=[DecoderFactory()]).iter_decoded_messages(topics=[topic]):
-                    packet = bytes(decoded.data)
-                    if not started:
-                        offset = 4 if packet.startswith(b"\x00\x00\x00\x01") else 3 if packet.startswith(b"\x00\x00\x01") else 0
-                        if len(packet) <= offset or (packet[offset] & 0x1F) != 7:
-                            continue
-                        started = True
-                    ts.append(msg.log_time)
-                    frames.append(packet)
+        ts, frames = [], []
+        with mcap.open("rb") as stream:
+            for _, _, msg, decoded in decoded_messages(make_reader(stream), {topic: {"data": "bytes"}}, source_failures):
+                ts.append(msg.log_time)
+                frames.append(bytes(decoded.data))
+        if topic in source_failures:
+            failures[topic] = source_failures[topic]
+            continue
+        first = None
+        for index, packet in enumerate(frames):
+            offset = 4 if packet.startswith(b"\x00\x00\x00\x01") else 3 if packet.startswith(b"\x00\x00\x01") else 0
+            if len(packet) > offset and (packet[offset] & 0x1F) == 7:
+                first = index
+                break
+        ts, frames = (ts[first:], frames[first:]) if first is not None else ([], [])
         if not frames:
             failures[topic] = "No frame from its first SPS on."
             continue
@@ -118,7 +133,7 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
         t = (np.asarray(ts, dtype=np.int64) - ts[0]) / 1e9
         try:
             remux(frames, t, "h264", raw / camera_file)
-        except (UnsupportedPacketOrder, av.error.FFmpegError) as error:
+        except (RemuxSourceError, av.error.FFmpegError) as error:
             failures[topic] = formats.plain_error(error)
             (raw / camera_file).unlink(missing_ok=True)
             continue
@@ -132,7 +147,8 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
             "ann": _annotation(ann), "fv_invalid": fv_invalid,
             "calib2": calibrations.get(CAMERA_TOPIC) if selected["is_forward_camera"] else None,
             "selected_camera": selected, "camera_calibrations": calibrations, "camera_failures": failures,
-            "source_claims": source_claims}
+            "source_claims": source_claims,
+            "source_failures": {topic: error for topic, error in source_failures.items() if topic not in camera_topics}}
     if len(ts) > 1:
         dt = np.diff(np.asarray(ts, dtype=np.int64)) / 1e6
         # drift_s: how far the last frame's recorded time is from where a 30 fps grid would put it
@@ -209,6 +225,8 @@ def write_sidecar(raw: Path, dst: Path) -> dict:
         ctx["source"]["claims_scope"] = {"source": "publisher recording", "camera": "unverified",
                                          "clock_origin": "unverified"}
         ctx["recorded_metadata"] = {"mcap_records": meta.get("source_claims") or []}
+    for topic, error in meta.get("source_failures", {}).items():
+        formats.add_issue(ctx, "mcap_channel_unreadable", f"Channel {topic} was left out: {error}", signal=topic)
     for topic, error in meta.get("camera_failures", {}).items():
         formats.add_issue(ctx, "camera_not_decodable", f"Camera {topic} was left out: {error}", camera=topic)
     dst.mkdir(parents=True, exist_ok=True)

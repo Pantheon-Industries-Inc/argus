@@ -157,8 +157,8 @@ def convert(result: dict, dataset: str | None = None) -> dict:
     off = {}
     for x in dropped:
         off[str(x.get("field"))] = off.get(str(x.get("field")), 0) + 1
-    violations = list(labels.get("_schema_violations") or [])
-    violations.extend(f"{x['field']}: {x['why']} ({x['value']!r})" for x in dropped if "value" in x)
+    from board.label_projection import diagnostics
+    violations = list(diagnostics(labels, dropped).values())
     scene = labels.get("scene") if isinstance(labels.get("scene"), dict) else {}
     timeline = labels.get("timeline") or []
     eid = Path(result.get("episode_dir", "")).name

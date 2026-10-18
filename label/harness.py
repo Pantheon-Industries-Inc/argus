@@ -665,10 +665,12 @@ def normalize_timeline(labels: dict) -> dict:
                 _drop(labels, 'timeline', i, 'timeline columns must be unique nonempty names')
         labels['timeline'] = [r for r in tl if isinstance(r, dict)]
         return labels
-    out = []
+    out, source_rows = [], []
+    first_diagnostic = len(labels.get('_schema_violations') or [])
     for i, row in enumerate(tl):
         if isinstance(row, dict):
             out.append(row)
+            source_rows.append(i)
             continue
         missing_notes = isinstance(row, list) and cols[-1] == 'notes' and len(row) == len(cols) - 1
         if not isinstance(row, list) or (len(row) != len(cols) and not missing_notes):
@@ -690,6 +692,29 @@ def normalize_timeline(labels: dict) -> dict:
                 bad = why
             else:
                 _violation(labels, f'timeline row {i}: {why}')
+        if missing_notes and not bad:
+            def compatible(candidate):
+                for key, value in candidate.items():
+                    if value is None and key not in ('start_s', 'end_s'):
+                        continue
+                    if key in ('start_s', 'end_s', 'progress'):
+                        if isinstance(value, bool) or me.number(value) is None:
+                            return False
+                    elif key == 'hands_visible':
+                        if type(value) is not bool:
+                            return False
+                    elif key in ('arm', 'action', 'object', 'destination', 'spatial_relation',
+                                 'contribution', 'hands_wearing', 'notes') and not isinstance(value, str):
+                        return False
+                return True
+            supplied = {key: value for key, value in seg.items() if value is not None}
+            alternatives = [dict(zip(cols[:gap] + cols[gap + 1:], row)) for gap in range(len(cols) - 1)]
+            if any(compatible(candidate) and
+                   {key: value for key, value in candidate.items() if value is not None} != supplied
+                   for candidate in alternatives):
+                _drop(labels, 'timeline', i, 'missing trailing notes cannot be distinguished from shifted columns')
+                labels['_dropped'][-1]['value'] = row[:]
+                continue
         for k in ("start_s", "end_s", "progress"):
             if bad:
                 break
@@ -713,6 +738,16 @@ def normalize_timeline(labels: dict) -> dict:
         if seg.get("notes") in (None, ""):
             seg.pop("notes", None)
         out.append(seg)
+        source_rows.append(i)
+    if len(out) != len(tl):
+        mappings = labels.get('_schema_row_indices')
+        labels['_schema_row_indices'] = {**(mappings if isinstance(mappings, dict) else {}),
+                                         'timeline': source_rows}
+        diagnostics = labels.get('_schema_violations') or []
+        for index in range(first_diagnostic, len(diagnostics)):
+            match = re.match(r'^timeline row (\d+): (?:its )?(\w+)(.*)', diagnostics[index])
+            if match:
+                diagnostics[index] = f'timeline[{match[1]}].{match[2]}:{match[3]}'
     labels["timeline"] = out
     return labels
 

@@ -39,7 +39,8 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
-from prepare.remux import UnsupportedPacketOrder, remux  # each frame's real capture time as its pts (shared with RealOmni, Gen-HumanEgo)
+from prepare.mcap_source import decoded_messages
+from prepare.remux import RemuxSourceError, remux  # each frame's real capture time as its pts (shared with RealOmni, Gen-HumanEgo)
 
 REPO = "XDOF/ABC-130k"
 TIME_BASE_DEN = 1_000_000   # microseconds: some ABC frames are stamped only 1 us apart
@@ -81,13 +82,22 @@ def cmd_sample(args) -> int:
 
 def read_mcap(path: Path) -> dict:
     from mcap.reader import make_reader
-    from mcap_protobuf.decoder import DecoderFactory
     video, robot, meta, instr = {}, {}, {}, None
+    failures = {}
     with open(path, "rb") as fh:
-        r = make_reader(fh, decoder_factories=[DecoderFactory()])
+        r = make_reader(fh)
         for m in r.iter_metadata():
             meta.update(dict(m.metadata))
-        for _, ch, _, dec in r.iter_decoded_messages():
+        summary = r.get_summary()
+        topics = [channel.topic for channel in summary.channels.values()] if summary is not None else [
+            *TOP_TOPICS, *VIEW_TOPIC.values(), *ARM, *ARM_ACT, "/instruction"]
+        fields = {topic: {"timestamp": "message", "timestamp.seconds": "integer", "timestamp.nanos": "integer",
+                          "format": "text", "data": "bytes"}
+                  for topic in topics if topic.endswith("camera")}
+        fields.update({topic: {"timestamp": "message", "timestamp.seconds": "integer",
+                               "timestamp.nanos": "integer", "position": "number[]"} for topic in ARM + ARM_ACT})
+        fields["/instruction"] = {"data": "text"}
+        for _, ch, _, dec in decoded_messages(r, fields, failures):
             t = ch.topic
             if t.endswith("camera"):
                 v = video.setdefault(t, {"t": [], "data": [], "format": dec.format})
@@ -99,7 +109,12 @@ def read_mcap(path: Path) -> dict:
                 d["pos"].append(list(dec.position))
             elif t == "/instruction":
                 instr = str(dec.data)
-    return {"video": video, "robot": robot, "meta": meta, "instruction": instr}
+    for topic in failures:
+        video.pop(topic, None)
+        robot.pop(topic, None)
+    if "/instruction" in failures:
+        instr = None
+    return {"video": video, "robot": robot, "meta": meta, "instruction": instr, "failures": failures, "topics": topics}
 
 
 def measured_fps(t_ns: np.ndarray) -> float:
@@ -161,24 +176,29 @@ def convert_upload(item: dict, ep: Path) -> dict:
 def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None = None) -> dict:
     """One ABC-layout MCAP on disk into an episode sidecar dir; returns its context."""
     d = read_mcap(mcap)
-    top = next((t for t in TOP_TOPICS if t in d["video"]), None)
-    if top is None or any(VIEW_TOPIC[v] not in d["video"] for v in VIEW_TOPIC):
-        raise RuntimeError(f"{ep_name}: missing camera topics, has {sorted(d['video'])}")
+    top = next((t for t in TOP_TOPICS if t in d["video"]),
+               next((t for t in TOP_TOPICS if t in d["topics"]), None))
     ep_dir.mkdir(parents=True, exist_ok=True)
-    topics = {"exo": top, **VIEW_TOPIC}
+    topics = {"exo": top or TOP_TOPICS[0], **VIEW_TOPIC}
     # time zero is the first frame of any camera, so every camera's times (and pts) are >= 0
-    t0 = int(min(d["video"][t]["t"][0] for t in topics.values()))
+    available = [d["video"][topic] for topic in topics.values() if topic in d["video"]]
+    t0 = int(min(vid["t"][0] for vid in available)) if available else 0
     import av
-    sources, times, checks, failures = {}, {}, {"streams": {}}, {}
+    sources, times, checks = {}, {}, {"streams": {}}
+    failures = {topic: error for topic, error in d["failures"].items() if topic.endswith("camera")}
     kept = {}
     for v, topic in topics.items():
-        vid = d["video"][topic]
         out = ep_dir / f"{v}.mp4"
+        if topic not in d["video"]:
+            failures[topic] = d["failures"].get(topic, "No recorded camera messages.")
+            out.unlink(missing_ok=True)
+            continue
+        vid = d["video"][topic]
         tv = np.asarray(vid["t"], dtype=np.int64)
         times[v] = (tv - t0) / 1e9
         try:
             times[f"{v}_pts"] = remux(vid["data"], times[v], vid["format"], out)
-        except (UnsupportedPacketOrder, av.error.FFmpegError) as error:
+        except (RemuxSourceError, av.error.FFmpegError) as error:
             failures[topic] = formats.plain_error(error)
             times.pop(v)
             out.unlink(missing_ok=True)
@@ -211,17 +231,18 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
             checks["streams"][topic] = gaps(vid["t"])
         sources[v] = src
     q = anchor_t.astype(np.float64)
-    placed = {t: interp(d["robot"][t], q) for t in ARM + ARM_ACT}
+    placed = {t: interp(d["robot"][t], q) if t in d["robot"] else (None, None) for t in ARM + ARM_ACT}
     gap = next(((t, placed[t][1]) for t in ARM if placed[t][1]), None)
     state = action = None
-    if gap is None:
+    if gap is None and all(placed[t][0] is not None for t in ARM):
         L, Lg, R, Rg = (placed[t][0] for t in ARM)
         state = np.concatenate([L[:, :6], Lg[:, :1], R[:, :6], Rg[:, :1]], axis=1).astype(np.float32)
-        if not any(placed[t][1] for t in ARM_ACT):
+        if not any(placed[t][1] for t in ARM_ACT) and all(placed[t][0] is not None for t in ARM_ACT):
             La, Lga, Ra, Rga = (placed[t][0] for t in ARM_ACT)
             action = np.concatenate([La[:, :6], Lga[:, :1], Ra[:, :6], Rga[:, :1]], axis=1).astype(np.float32)
     for t in ARM:
-        checks["streams"][t] = gaps(d["robot"][t]["t"])
+        if t in d["robot"]:
+            checks["streams"][t] = gaps(d["robot"][t]["t"])
     meta = d["meta"]
     cams = {"exo": ("top", top), "left": ("left", VIEW_TOPIC["left"]), "right": ("right", VIEW_TOPIC["right"])}
     station = "ZED-X" if top == "/top-left-camera" else "RealSense"
@@ -253,6 +274,13 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
                     for v, (name, topic) in cams.items() if v in kept},
         "stream_checks": checks,
     }
+    for topic, error in d["failures"].items():
+        if not topic.endswith("camera"):
+            formats.add_issue(context, "mcap_channel_unreadable", f"Channel {topic} was left out: {error}", signal=topic)
+    missing_actions = [topic for topic in ARM_ACT if placed[topic][0] is None]
+    if missing_actions:
+        formats.add_issue(context, "action_not_read", "Recorded commands were left out because required channels "
+                          "are unreadable or absent: " + ", ".join(missing_actions))
     for topic, error in failures.items():
         formats.add_issue(context, "camera_not_decodable", f"Camera {topic} was left out: {error}", camera=topic)
     # every other number the arms record (joint velocities and torques), under the dataset's names (formats.mcap_signals)
@@ -261,6 +289,13 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         formats.no_state(context, formats.StateNote(
             f"Labelled from the cameras, because the recorded arm state {gap[0]} "
             f"{formats.gap_words(gap[1], float(q[0]) / 1e9)}.", "short"))
+    if state is None:
+        (ep_dir / "state.npz").unlink(missing_ok=True)
+        if gap is None:
+            missing = [topic for topic in ARM if placed[topic][0] is None]
+            formats.no_state(context, formats.StateNote(
+                "Labelled from the cameras because required arm state is unreadable or absent: " +
+                ", ".join(missing), "short"))
     if state is not None:
         formats.record_state_groups(context, [(ARM[0], None, 7), (ARM[2], None, 7)])
         np.savez(ep_dir / "state.npz", **({"state": state, "action": action} if action is not None else

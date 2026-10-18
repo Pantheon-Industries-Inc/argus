@@ -61,17 +61,24 @@ def test_packed_vfr_precision_does_not_claim_an_earlier_frame(tmp_path, start, s
     np.testing.assert_array_equal(facts['pts'], expected)
 
 
-@pytest.mark.parametrize('first,clock', [(1, 'microseconds'), (2, 'microseconds'), (586, 'ratio')])
-def test_rounded_v3_windows_keep_exact_pictures_with_their_state_rows(tmp_path, first, clock):
+@pytest.mark.parametrize('first,mode', [(1, 'microseconds'), (2, 'microseconds'), (586, 'ratio'), (7100, 'accumulated')])
+def test_rounded_v3_windows_keep_exact_pictures_with_their_state_rows(tmp_path, first, mode):
     root = tmp_path / 'upload'
     front, rear, depth = [f'observation.images.{key}' for key in ('front', 'rear_mask', 'front_depth')]
     owned = np.arange(first, first + 6)
     total = max(10, first + 9)
-    boundary = lambda frame: round(frame / 30, 6) if clock == 'microseconds' else frame / 30
+    offsets = [0.0]
+    for _ in range(100):
+        offsets.append(offsets[-1] + round(71 / 30, 6))
+    prefix = 100 if mode == 'accumulated' else 0
+    def boundary(frame):
+        if mode == 'accumulated':
+            return offsets[-1] + round((frame - first) / 30, 6)
+        return round(frame / 30, 6) if mode == 'microseconds' else frame / 30
     state = np.zeros((6, 7))
     state[:, 0] = owned
     _lerobot_v3(root, {front: total, rear: total}, {
-        'episode_index': np.repeat([0, 1], 3), 'frame_index': np.tile(np.arange(3), 2),
+        'episode_index': np.repeat([prefix, prefix + 1], 3), 'frame_index': np.tile(np.arange(3), 2),
         'timestamp': np.tile(np.arange(3) / 30, 2), 'observation.state': list(state)})
     info_path = root / 'meta/info.json'
     info = json.loads(info_path.read_text())
@@ -97,8 +104,16 @@ def test_rounded_v3_windows_keep_exact_pictures_with_their_state_rows(tmp_path, 
         for packet in stream.encode():
             container.mux(packet)
     rows = []
+    for index in range(prefix):
+        row = {'episode_index': index, 'length': 71, 'data/chunk_index': 0, 'data/file_index': 0,
+               'dataset_from_index': index * 71, 'dataset_to_index': (index + 1) * 71}
+        for key in (front, rear, depth):
+            row.update({f'videos/{key}/chunk_index': 0, f'videos/{key}/file_index': 0,
+                        f'videos/{key}/from_timestamp': offsets[index],
+                        f'videos/{key}/to_timestamp': offsets[index + 1]})
+        rows.append(row)
     for index in (0, 1):
-        row = {'episode_index': index, 'length': 3, 'data/chunk_index': 0, 'data/file_index': 0,
+        row = {'episode_index': prefix + index, 'length': 3, 'data/chunk_index': 0, 'data/file_index': 0,
                'dataset_from_index': index * 3, 'dataset_to_index': (index + 1) * 3}
         for key in (front, rear, depth):
             row.update({f'videos/{key}/chunk_index': 0, f'videos/{key}/file_index': 0,
@@ -108,7 +123,13 @@ def test_rounded_v3_windows_keep_exact_pictures_with_their_state_rows(tmp_path, 
     metadata = root / 'meta/episodes/chunk-000/file-000.parquet'
     metadata.parent.mkdir(parents=True)
     pd.DataFrame(rows).to_parquet(metadata)
-    report = formats.convert(root, 'teleop_arms', tmp_path / 'out', 'rounded ownership', 900)
+    if prefix:
+        _, items = formats.plan(root)
+        contexts = [formats.convert_lerobot(item, 'teleop_arms', tmp_path / 'out', 'rounded ownership')
+                    for item in items if item['row']['eidx'] >= prefix]
+        report = {'episodes': contexts, 'failed': []}
+    else:
+        report = formats.convert(root, 'teleop_arms', tmp_path / 'out', 'rounded ownership', 900)
     assert not report['failed'], report
     assert len(report['episodes']) == 2
     with av.open(str(root / 'videos' / front / 'chunk-000/file-000.mp4')) as container:
@@ -133,6 +154,14 @@ def test_rounded_v3_windows_keep_exact_pictures_with_their_state_rows(tmp_path, 
         with av.open(str(depth_path)) as container:
             depth_frames = {f.pts: f.to_ndarray() for f in container.decode(video=0)}
         assert [depth_frames[int(pts)][0, 0] for pts in selected] == list(own)
+    if mode == 'accumulated':
+        item = next(item for item in items if item['row']['eidx'] == prefix)
+        video_only = {**item, 'root': {**item['root'], 'fps': None},
+                      'row': {**item['row'], 'data': None}}
+        ctx = formats.convert_lerobot(video_only, 'teleop_arms', tmp_path / 'video_only', 'rounded ownership')
+        loaded = episode.load(tmp_path / 'video_only' / ctx['episode_id'])
+        picture = episode._decode_view(loaded, 'exo', [0])[0]
+        np.testing.assert_array_equal(np.asarray(picture), reference[first].to_ndarray(format='rgb24'))
 
 
 def mixed_mcap(path, *, bad_schema=False, bad_video=None, bad_primary=False):
@@ -300,3 +329,89 @@ def test_unreadable_camera_schema_reports_source_schema_failure(tmp_path):
     reason = report['failed'][0]['why']
     assert 'schema could not be read' in reason and '/camera/front/image' in reason
     assert 'which we do not decode' not in reason
+
+
+def test_cfr_episode_counts_resolve_monotone_drift_and_partial_metadata(tmp_path):
+    source = tmp_path / 'packed.mp4'
+    pts = _mp4(source, 2002)
+    rows, offset = [], 0.0
+    for index in range(1000):
+        stop = offset + round(2 / 30, 6)
+        rows.append({'eidx': index, 'length': 2, 'videos': {'camera': (source, offset, stop)}})
+        offset = stop
+    root = {'episodes': rows}
+    for index, row in enumerate(rows):
+        selected, _ = formats.canonical_packed_row(root, row, 30)
+        path, start, stop = selected['videos']['camera']
+        facts = formats.packed_video_window(path, start, stop, fps=30)
+        np.testing.assert_array_equal(facts['pts'], pts[index * 2:index * 2 + 2])
+    # Native LeRobot lookup selects the closest CFR frame even when only a late
+    # episode's metadata is supplied. Generic time-window cuts retain their own contract.
+    partial = {'episodes': [rows[900]]}
+    selected, proof = formats.canonical_packed_row(partial, rows[900], 30)
+    path, start, stop = selected['videos']['camera']
+    np.testing.assert_array_equal(formats.packed_video_window(path, start, stop, fps=30)['pts'], pts[1800:1802])
+    assert proof['camera']['from_timestamp'] == rows[900]['videos']['camera'][1]
+
+
+
+def test_cfr_episode_counts_override_drift_that_reaches_another_grid_frame(tmp_path, monkeypatch):
+    from label.frames import base_frame
+    source = tmp_path / 'packed.mp4'
+    _mp4(source, 12)
+    stat = source.stat()
+    facts = formats._packed_video_probe(str(source.resolve()),
+        (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino))
+    step = formats.packed_grid_step(facts, 30)
+    # Extend the proved encoded clock in memory to exercise long-run metadata
+    # arithmetic without encoding hours of identical CFR footage.
+    facts = {**facts, 'pts': np.arange(200004, dtype=np.int64) * step, '_packed_windows': {}}
+    monkeypatch.setattr(formats, '_packed_video_probe', lambda *_: facts)
+    rows, offset = [], 0.0
+    for index in range(100001):
+        stop = offset + round(2 / 30, 6)
+        rows.append({'eidx': index, 'length': 2, 'videos': {'camera': (source, offset, stop)}})
+        offset = stop
+    row = rows[-1]
+    assert base_frame(row['videos']['camera'][1], 30) == 200001
+    selected, proof = formats.canonical_packed_row({'episodes': rows}, row, 30)
+    assert selected['videos']['camera'][1:] == (200000 / 30, 200002 / 30)
+    assert proof['camera']['first_frame'] == 200000
+
+
+def test_packed_ownership_refuses_ambiguous_or_contradictory_source_claims(tmp_path):
+    source = tmp_path / 'packed.mp4'
+    _mp4(source, 12)
+    for start, stop, length in ((.25, .35, 3), (.068, .17, 3), (.068, .168, None),
+                                (.068, .168, 10 ** 100)):
+        row = {'eidx': 0, 'length': length, 'videos': {'camera': (source, start, stop)}}
+        selected, proof = formats.canonical_packed_row({'episodes': [row]}, row, 30)
+        assert selected is row and not proof
+    # A locally dense span cannot prove that a file with a missing encoded tick
+    # is CFR. Preserve the VFR clock rather than interpreting frame ordinals.
+    vfr = tmp_path / 'vfr.mp4'
+    writer = formats.FrameWriter(vfr, '', fine_clock=True)
+    for index in [0, 1, 3, 4, 5, 6]:
+        writer.add_image(index / 30, Image.new('RGB', (64, 48), (index * 30,) * 3))
+    assert writer.close() == 6
+    row = {'eidx': 0, 'length': 2, 'videos': {'camera': (vfr, .103, .103 + 2 / 30)}}
+    selected, proof = formats.canonical_packed_row({'episodes': [row]}, row, 30)
+    assert selected is row and not proof
+
+
+def test_half_frame_metadata_keeps_explicit_pts_without_claiming_a_grid_base(tmp_path):
+    root = tmp_path / 'tie'
+    camera = 'observation.images.front'
+    _lerobot_v3(root, {camera: 12}, None)
+    metadata = root / 'meta/episodes/chunk-000/file-000.parquet'
+    metadata.parent.mkdir(parents=True)
+    pd.DataFrame([{'episode_index': 0, 'length': 3,
+        f'videos/{camera}/chunk_index': 0, f'videos/{camera}/file_index': 0,
+        f'videos/{camera}/from_timestamp': .25, f'videos/{camera}/to_timestamp': .35}]).to_parquet(metadata)
+    _, items = formats.plan(root)
+    context = formats.convert_lerobot(items[0], 'ego_head', tmp_path / 'out', 'source time window')
+    prepared = tmp_path / 'out' / context['episode_id']
+    loaded = episode.load(prepared)
+    assert len(episode._decode_view(loaded, 'exo', [0, 1, 2])) == 3
+    assert not context['stream_checks']['frames_on_grid']['exo']
+    assert 'times.npz' == context['real_times']

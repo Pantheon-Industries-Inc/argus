@@ -140,15 +140,15 @@ def test_http_probe_admission_bounds_distinct_and_duplicate_misses_and_keeps_rea
     monkeypatch.setattr(serve.subprocess, 'run', run)
     monkeypatch.setattr(serve, '_run_footage', run)
     if held_stage == 'hash':
-        durable, digest = static._durable_metadata, static._source_digest
+        durable, copy_source = static._durable_metadata, serve._copy_source_snapshot
         monkeypatch.setattr(static, '_durable_metadata', lambda path, version:
             False if Path(path).name in ('episode_cold.mp4', 'episode_other.mp4') else durable(path, version))
-        def slow_digest(path, version):
+        def slow_copy(path, target, version):
             if Path(path).name == 'episode_cold.mp4':
                 entered.set()
                 assert release.wait(5)
-            return digest(path, version)
-        monkeypatch.setattr(static, '_source_digest', slow_digest)
+            return copy_source(path, target, version)
+        monkeypatch.setattr(serve, '_copy_source_snapshot', slow_copy)
     ready, _ = serve.footage('episode_ready', 0, 1)
     with socketserver.ThreadingTCPServer(('127.0.0.1', 0), serve.Handler) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -483,6 +483,7 @@ def test_ready_receipts_share_the_media_count_limit_and_unknown_metadata_is_not_
     assert len(list((serve.FOOTAGE_DIR / '.ready').glob('*.json'))) == 2
     from board import static
     monkeypatch.setattr(static, '_durable_metadata', lambda *args: False)
+    monkeypatch.setattr(serve, '_probe_uncached', lambda p: (16, 16, 10, 30))
     serve.footage('episode_x', 5, 6)
     assert len(list((serve.FOOTAGE_DIR / '.ready').glob('*.json'))) == 2
 
@@ -561,7 +562,7 @@ def test_untrusted_footage_key_tracks_bytes_when_stat_identity_collides(tmp_path
     monkeypatch.setattr(serve, 'MP4_DIR', source.parent)
     monkeypatch.setattr(serve, 'FOOTAGE_DIR', tmp_path / 'footage')
     monkeypatch.setattr(serve, 'FFMPEG', 'ffmpeg-fixture')
-    monkeypatch.setattr(serve, '_probe', lambda p: (16, 16, 4, 30))
+    monkeypatch.setattr(serve, '_probe_uncached', lambda p: (16, 16, 4, 30))
     monkeypatch.setattr(clips, 'frame_lengths', lambda p: None)
     def encode(cmd):
         Path(cmd[-1]).write_bytes(source.read_bytes())
@@ -572,4 +573,4 @@ def test_untrusted_footage_key_tracks_bytes_when_stat_identity_collides(tmp_path
     source.write_bytes(b'bbbb')
     second, _ = serve.footage('episode_x', 0, 1)
     assert second != first and second.read_bytes() == b'bbbb'
-    assert not list((serve.FOOTAGE_DIR / '.ready').glob('*.json'))
+    assert serve.footage('episode_x', 0, 1)[0].read_bytes() == b'bbbb'

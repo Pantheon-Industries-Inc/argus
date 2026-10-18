@@ -1512,14 +1512,15 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
         if doc.get('input_digest', doc.get('digest')) != digest:
             doc.update(status='incomplete', limitations=['Inspection inputs changed; no automatic paid retry.'])
             return {**access.record(), **doc}, []
-        # A budget refusal claims no dispatch. Recheck the current allowance on resume,
-        # including older receipts identified by their budget limitation.
+        # A cap refusal is resumable only when every durable dispatch is settled or
+        # proven unpaid. Field inspection errors do not alter that billing decision.
+        # The note identifies older receipts only; current receipts carry a typed pause.
         budget_note = 'Inspection selection exceeds the remaining batch spend cap.'
-        if (doc.get('status') == 'incomplete' and doc.get('limitations')
-                and all(note == budget_note for note in doc['limitations'])
+        if ((doc.get('pause_reason') == 'spend_cap' or budget_note in doc['limitations'])
                 and not doc.get('cost_is_conservative_estimate')
-                and all(row.get('state') == 'received' for row in doc['rounds'])):
-            doc.update(status='complete', limitations=[])
+                and all(row.get('state') == 'received' or rejected_selection_proof(row)
+                        for row in doc['rounds'])):
+            doc.update(status='complete', limitations=[note for note in doc['limitations'] if note != budget_note])
             doc.pop('pause_reason', None)
     extra = []
     count = 0
@@ -1548,7 +1549,8 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
             reserve = reserve_cost(content) if callable(reserve_cost) else reserve_cost
             if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve <= 0:
                 reserve = MAX_SELECTION_COST
-            if doc.get('status') == 'incomplete' or (not ledger_managed and doc['cost_usd'] + reserve > MAX_SELECTION_COST):
+            if (doc.get('status') == 'incomplete' or doc.get('cost_is_conservative_estimate')
+                    or (not ledger_managed and doc['cost_usd'] + reserve > MAX_SELECTION_COST)):
                 doc.update(status='incomplete')
                 doc['limitations'].append('Inspection selection stopped at the cost or dispatch boundary.')
                 break
@@ -1634,7 +1636,8 @@ def discover(access, base_content, call, cache_path, *, rounds=2, reserve_cost=0
                 if request.get('field_id'):
                     extra.extend(access.images.get(packed([request['field_id'], request]), []))
             except (ValueError, OSError, KeyError, zipfile.BadZipFile) as error:
-                doc['status'] = 'partial'
+                if doc.get('status') != 'incomplete':
+                    doc['status'] = 'partial'
                 extra.append({'type': 'text', 'text': packed({'request': request, 'error': str(error)[:300]})})
                 doc['limitations'].append('Inspection request failed: ' + str(error)[:300])
         if count >= MAX_REQUESTS:

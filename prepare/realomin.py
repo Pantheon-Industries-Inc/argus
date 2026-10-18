@@ -37,7 +37,8 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
-from prepare.remux import UnsupportedPacketOrder, remux  # each frame's capture time as its pts
+from prepare.mcap_source import decoded_messages
+from prepare.remux import RemuxSourceError, remux  # each frame's capture time as its pts
 
 REPO = "genrobot2025/10Kh-RealOmin-OpenData"
 CAMERA_TOPICS = {"/robot0/sensor/camera0/compressed": "left", "/robot1/sensor/camera0/compressed": "right"}
@@ -117,13 +118,18 @@ def convert_upload(item: dict, ep: Path) -> dict:
 
 def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
     from mcap.reader import make_reader
-    from mcap_protobuf.decoder import DecoderFactory
     cam = {v: ([], []) for v in CAMERA_TOPICS.values()}
     pose = {v: ([], []) for v in POSE_TOPICS.values()}
     grip = {v: ([], []) for v in GRIPPER_TOPICS.values()}
+    source_failures = {}
+    fields = {**{topic: {"data": "bytes"} for topic in CAMERA_TOPICS},
+              **{topic: {"pose": "message", "pose.position": "message", "pose.orientation": "message",
+                         **{path: "number" for path in ("pose.position.x", "pose.position.y", "pose.position.z",
+                            "pose.orientation.x", "pose.orientation.y", "pose.orientation.z", "pose.orientation.w")}}
+                 for topic in POSE_TOPICS},
+              **{topic: {"value": "number"} for topic in GRIPPER_TOPICS}}
     with mcap_path.open("rb") as f:
-        for _, ch, msg, d in make_reader(f, decoder_factories=[DecoderFactory()]).iter_decoded_messages(
-                topics=list(CAMERA_TOPICS) + list(POSE_TOPICS) + list(GRIPPER_TOPICS)):
+        for _, ch, msg, d in decoded_messages(make_reader(f), fields, source_failures):
             t = msg.log_time
             if ch.topic in CAMERA_TOPICS:
                 cam[CAMERA_TOPICS[ch.topic]][0].append(t)
@@ -141,34 +147,47 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
     cts, npts, sizes, failures = {}, {}, {}, {}
     for v in ("left", "right"):
         out = ep / f"{v}.mp4"
-        try:
-            cts[v] = np.asarray(mux(cam[v][1], cam[v][0], out), dtype=np.int64)
-        except (MissingCameraKeyframe, UnsupportedPacketOrder, av.error.FFmpegError) as error:
-            failures[v] = formats.plain_error(error)
+        topic = next(topic for topic, view in CAMERA_TOPICS.items() if view == v)
+        if topic in source_failures:
+            failures[v] = source_failures[topic]
             out.unlink(missing_ok=True)
             continue
-        with av.open(str(out)) as c:
-            st = c.streams.video[0]
-            npts[v] = np.asarray(sorted(p.pts for p in c.demux(st) if p.pts is not None and not p.is_discard),
-                                 dtype=np.int64)
-            sizes[v] = (st.codec_context.width, st.codec_context.height)
-        if len(npts[v]) != len(cts[v]):
-            raise RuntimeError(f"{v}.mp4: {len(npts[v])} frames in the file but {len(cts[v])} capture times")
+        try:
+            cts[v] = np.asarray(mux(cam[v][1], cam[v][0], out), dtype=np.int64)
+            with av.open(str(out)) as c:
+                st = c.streams.video[0]
+                npts[v] = np.asarray(sorted(p.pts for p in c.demux(st) if p.pts is not None and not p.is_discard),
+                                     dtype=np.int64)
+                sizes[v] = (st.codec_context.width, st.codec_context.height)
+            if len(npts[v]) != len(cts[v]):
+                raise RemuxSourceError(f"{v}.mp4: {len(npts[v])} frames in the file but {len(cts[v])} capture times")
+        except (MissingCameraKeyframe, RemuxSourceError, av.error.FFmpegError) as error:
+            failures[v] = formats.plain_error(error)
+            cts.pop(v, None)
+            out.unlink(missing_ok=True)
+            continue
     if not cts:
-        raise RuntimeError(f"{rel}: no readable camera remains: {failures}")
+        raise RuntimeError(f"{rel}: no readable camera remains: " +
+                           str({topic: failures[view] for topic, view in CAMERA_TOPICS.items()}))
     anchor = next(iter(cts))
     t0 = int(cts[anchor][0])
     anchor_t = cts[anchor]  # both actors' state rows follow the surviving anchor camera
-    state = []
-    for v in ("left", "right"):
-        pt = np.asarray(pose[v][0], dtype=np.int64)
-        pv = np.asarray(pose[v][1], dtype=np.float64)
-        gt = np.asarray(grip[v][0], dtype=np.int64)
-        gv = np.asarray(grip[v][1], dtype=np.float64)
-        ip, ig = formats.nearest(pt, anchor_t), formats.nearest(gt, anchor_t)
-        state.append(np.concatenate([pv[ip, :3], quat_to_rpy(pv[ip, 3:7]), gv[ig, None]], axis=1))
-    state = np.concatenate(state, axis=1).astype(np.float32)
-    np.savez(ep / "state.npz", state=state)
+    state = None
+    missing_state = [topic for topic, side in {**POSE_TOPICS, **GRIPPER_TOPICS}.items()
+                     if topic in source_failures or not (pose if topic in POSE_TOPICS else grip)[side][0]]
+    if not missing_state:
+        state = []
+        for v in ("left", "right"):
+            pt = np.asarray(pose[v][0], dtype=np.int64)
+            pv = np.asarray(pose[v][1], dtype=np.float64)
+            gt = np.asarray(grip[v][0], dtype=np.int64)
+            gv = np.asarray(grip[v][1], dtype=np.float64)
+            ip, ig = formats.nearest(pt, anchor_t), formats.nearest(gt, anchor_t)
+            state.append(np.concatenate([pv[ip, :3], quat_to_rpy(pv[ip, 3:7]), gv[ig, None]], axis=1))
+        state = np.concatenate(state, axis=1).astype(np.float32)
+        np.savez(ep / "state.npz", state=state)
+    else:
+        (ep / "state.npz").unlink(missing_ok=True)
     times, src = {}, {}
     for v, stamps in cts.items():
         times[v], times[v + "_pts"] = (stamps - t0) / 1e9, npts[v]
@@ -178,7 +197,7 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
             src[v]["kmap"] = f"kmap_{v}.npy"
     np.savez(ep / "times.npz", **times)
     task = task_of(rel)
-    ctx = {"dataset": REPO, "profile": "handheld_gripper", "state_kind": "ee_pose", "episode_id": ep.name,
+    ctx = {"dataset": REPO, "profile": "handheld_gripper", "state_kind": "ee_pose" if state is not None else "none", "episode_id": ep.name,
            "robot_type": "two handheld GenDAS grippers with wrist fisheye cameras",
            "fps": formats.measured_fps((anchor_t - t0) / 1e9) or 30.0,     # the anchor camera's real rate, not assumed
            "n_state_frames": int(len(anchor_t)), "real_times": "times.npz", "instruction": task,
@@ -194,13 +213,22 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
            "source": {"mcap": rel}}
     ctx["state_actor_contract"] = {
         "actors": ["left", "right"], "source": "recording schema maps robot0 to left and robot1 to right"}
-    formats.record_state_groups(ctx, [(topic, None, 7) for topic in POSE_TOPICS])
+    if state is not None:
+        formats.record_state_groups(ctx, [(topic, None, 7) for topic in POSE_TOPICS])
+    else:
+        formats.no_state(ctx, formats.StateNote(
+            "Labelled from the cameras because required actor state is unreadable or absent: " +
+            ", ".join(missing_state), "short"))
+    for topic, error in source_failures.items():
+        if topic not in CAMERA_TOPICS:
+            formats.add_issue(ctx, "mcap_channel_unreadable", f"Channel {topic} was left out: {error}", signal=topic)
     for v, error in failures.items():
         topic = next(topic for topic, view in CAMERA_TOPICS.items() if view == v)
         formats.add_issue(ctx, "camera_not_decodable", f"Camera {topic} was left out: {error}", camera=topic)
     # every other number the grippers record (each one's IMU), under the dataset's names (formats.mcap_signals); the
     # pose and the opening are the state, and /robotN/sim/robot_info repeats the pose
-    used = {**{t: {"pose.position", "pose.orientation"} for t in POSE_TOPICS}, **{t: {""} for t in GRIPPER_TOPICS},
+    used = {**({t: {"pose.position", "pose.orientation"} for t in POSE_TOPICS} if state is not None else {}),
+            **({t: {""} for t in GRIPPER_TOPICS} if state is not None else {}),
             **{t.replace("/vio/eef_pose", "/sim/robot_info"): None for t in POSE_TOPICS}}
     formats.write_signals(ep, ctx, formats.mcap_signals([mcap_path], anchor_t / 1e9, used))
     (ep / "sources.json").write_text(json.dumps(src, indent=1))

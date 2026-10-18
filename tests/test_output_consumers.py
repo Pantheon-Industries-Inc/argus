@@ -194,4 +194,132 @@ def test_legitimate_unclear_ego_task_retains_neighbor_and_is_not_a_schema_violat
     assert measured['tasks'] == [2, 1]
     assert not any('task 0: outcome' in item for item in measured['violations'])
     parsed['tasks'][0]['outcome'] = 'mostly'
-    assert any('task 0: outcome' in item for item in metrics.measure(parsed, 'demo')['violations'])
+    assert len(metrics.measure(parsed, 'demo')['violations']) == len(measured['violations']) + 1
+
+
+def complete_schema_reply():
+    from test_compare import _labels
+    labels = _labels('success', 1)
+    labels['timeline'][0]['action'] = 'reach'
+    return labels
+
+
+@pytest.mark.parametrize('transform', [str.lower, str.upper, str.title])
+def test_case_only_enum_variation_preserves_board_and_compare_meanings(transform):
+    labels = complete_schema_reply()
+    labels.update(completion={'task_completed': transform('partial')},
+        tasks=[{'task': 'fold cloth', 'outcome': transform('success')}],
+        goal_alignment={'relation': transform('aligned'), 'matches_given': 'false'},
+        data_issues=[{'issue': 'visible issue', 'category': 'camera_fault', 'severity': transform('high')}])
+    labels['timeline'][0]['contribution'] = transform('advancing')
+    parsed, ok = parse_response(json.dumps(labels))
+    assert ok
+    before = copy.deepcopy(parsed)
+    d = to_board.convert({'labels': parsed})
+    assert d['completion']['task_completed'] == 'failure' and d['completion']['failure_kind'] == 'partial'
+    assert d['tasks'][0]['outcome'] == 'success'
+    assert d['goal_alignment']['relation'] == 'aligned' and d['goal_alignment']['matches_given'] is None
+    assert d['data_issues'][0]['severity'] == 'high'
+    assert d['event_labels'][0]['contribution'] == 'advancing'
+    measured = metrics.measure(parsed, 'demo')
+    assert measured['tasks'] == [1, 1]
+    assert measured['data_issues'] == 1 and measured['data_issues_minor'] == 0
+    assert parsed == before
+
+
+@pytest.mark.parametrize('scope,key,value,want', [
+    ('timeline', 'contribution', 'Advancing', 1),
+    ('timeline', 'contribution', 'mostly', 1),
+    ('timeline', 'arm', ['left'], 1),
+    ('timeline', 'progress', True, 1),
+    ('data_issues', 'severity', 'Critical', 1),
+    ('data_issues', 'severity', 'High', 0),
+    ('tasks', 'outcome', 'Success', 0),
+    ('completion', 'task_completed', True, 1),
+])
+def test_schema_defects_are_counted_once_per_field_across_layers(scope, key, value, want):
+    labels = complete_schema_reply()
+    if scope in ('data_issues', 'tasks'):
+        labels[scope] = [{'issue': 'visible issue', 'category': 'camera_fault', 'severity': 'high'}
+                        if scope == 'data_issues' else {'task': 'fold cloth', 'outcome': 'success'}]
+    row = labels[scope][0] if isinstance(labels[scope], list) else labels[scope]
+    row[key] = value
+    # Array rows exercise producer diagnostics as well as consumer projection.
+    if scope == 'timeline':
+        from label.harness import TIMELINE_COLUMNS
+        labels['timeline'] = [[labels['timeline'][0].get(column) for column in TIMELINE_COLUMNS]]
+    parsed, ok = parse_response(json.dumps(labels))
+    assert ok
+    violations = metrics.schema_violations(parsed)
+    assert len(violations) == want, violations
+    projected, _ = to_board.typed({'labels': parsed})
+    assert len(metrics.schema_violations(projected)) == want
+
+
+def test_each_bad_row_and_field_keeps_its_own_schema_identity():
+    labels = complete_schema_reply()
+    labels['timeline'] = [dict(labels['timeline'][0], contribution='mostly'),
+                          dict(labels['timeline'][0], contribution='mostly')]
+    labels['data_issues'] = [{'issue': 'visible issue', 'severity': 'Critical'}]
+    parsed, ok = parse_response(json.dumps(labels))
+    assert ok
+    assert len(metrics.schema_violations(parsed)) == 3
+
+
+def test_schema_identity_retains_source_row_indices_after_compaction():
+    from label.harness import TIMELINE_COLUMNS
+    labels = complete_schema_reply()
+    row = [labels['timeline'][0].get(column) for column in TIMELINE_COLUMNS]
+    labels['timeline'] = [list(row), list(row), list(row)]
+    labels['timeline'][0][0] = 'invalid-time'
+    labels['timeline'][1][7] = 'mostly'
+    labels['timeline'][2][8] = True
+    parsed, ok = parse_response(json.dumps(labels))
+    assert ok
+    assert len(metrics.schema_violations(parsed)) == 3
+    d = to_board.convert({'labels': parsed})
+    assert len(d['_schema_violations']) == 3
+    assert any('timeline[1].contribution' in text for text in d['_schema_violations'])
+    assert any('timeline[2].progress' in text for text in d['_schema_violations'])
+
+
+def test_case_normalized_reply_publishes_real_board_comparison(tmp_path):
+    from label.harness import TIMELINE_COLUMNS
+    episodes = _episodes(tmp_path / 'episodes', profile='ego_head')
+    reference = _run(tmp_path / 'runs', 'reference', 'success', 'aligned')
+    other = _run(tmp_path / 'runs', 'other', 'success', 'aligned')
+    labels = complete_schema_reply()
+    labels.update(completion={'task_completed': 'Partial'},
+        tasks=[{'task': 'fold cloth', 'outcome': 'Success'}],
+        goal_alignment={'relation': 'Aligned', 'matches_given': 'false'},
+        data_issues=[{'issue': 'visible issue', 'category': 'camera_fault', 'severity': 'High'}])
+    labels['timeline'][0]['contribution'] = 'Advancing'
+    labels['timeline'] = [[labels['timeline'][0].get(column) for column in TIMELINE_COLUMNS]]
+    parsed, ok = parse_response(json.dumps(labels))
+    assert ok
+    for run in (reference, other):
+        info = json.loads((run / 'run.json').read_text())
+        (run / 'run.json').write_text(json.dumps({**info, 'slice': str(episodes)}))
+        for path in (run / 'out').glob('episode_*.json'):
+            result = json.loads(path.read_text())
+            result['labels'] = parsed
+            path.write_text(json.dumps(result))
+    board = tmp_path / 'board'
+    board.mkdir()
+    (board / 'manifest.json').write_text(json.dumps({'board': 'case contract', 'datasets': [
+        {'dataset': 'demo', 'run': str(reference), 'episodes': str(episodes)}], 'comparisons': [
+        {'key': 'other', 'name': 'Other', 'run': str(other)}]}))
+    build.build(board)
+    for folder in ('qa', 'compare/other'):
+        episode = json.loads((board / folder / 'episode_000000.json').read_text())
+        assert episode['completion']['task_completed'] == 'failure'
+        assert episode['completion']['failure_kind'] == 'partial'
+        assert episode['tasks'][0]['outcome'] == 'success'
+        assert episode['data_issues'][0]['severity'] == 'high'
+        assert episode['goal_alignment']['relation'] == 'aligned'
+        assert episode['goal_alignment']['matches_given'] is None
+    comparison = json.loads((board / 'compare/metrics.json').read_text())['summary']['all']
+    assert comparison['responses']['board']['violations'] == 3
+    assert comparison['responses']['other']['violations'] == 3
+    assert comparison['metrics']['board']['data_issues'] == 1
+    assert comparison['metrics']['other']['data_issues'] == 1

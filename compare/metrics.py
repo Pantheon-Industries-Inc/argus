@@ -241,8 +241,12 @@ def schema_violations(L: dict, config: dict | None = None) -> list[str]:
     failure to follow it."""
     from board.to_board import typed
     projected, dropped = typed({"labels": L})
-    v = list(projected.get("_schema_violations") or [])
-    v.extend(f"{item['field']}: {item['why']}" for item in dropped)
+    from board.label_projection import diagnostics, field_identity, source_row_index
+    violations = diagnostics(projected, dropped)
+    def add(field, message, row=None):
+        if row is not None:
+            row = source_row_index(L, field.split('.')[0], row)
+        violations.setdefault(field_identity(field, row), message)
     arms = {"left", "right", "both"}
     labels = (config or {}).get("cam_labels") or []
     if len((config or {}).get("views") or []) == 1 and labels:
@@ -252,54 +256,62 @@ def schema_violations(L: dict, config: dict | None = None) -> list[str]:
            "data_issues": list}
     for k, t in req.items():
         if k not in L:
-            v.append(f"{k} missing")
+            add(k, f"{k} missing")
         elif not isinstance(L[k], t):
-            v.append(f"{k} is not a {t.__name__}")
+            add(k, f"{k} is not a {t.__name__}")
     if "tasks" in L:
         if not isinstance(L["tasks"], list):
-            v.append("tasks is not a list")
+            add('tasks', "tasks is not a list")
         else:
-            for i, t in enumerate(L["tasks"]):
-                if not isinstance(t, dict) or str(t.get("outcome") or "").lower() not in TASK_OUTCOMES:
-                    v.append(f"task {i}: outcome")
+            for i, task in enumerate(L["tasks"]):
+                if not isinstance(task, dict):
+                    add('tasks', f"task {i}: outcome", i)
+                elif str(task.get("outcome") or "").lower() not in TASK_OUTCOMES:
+                    add('tasks.outcome', f"task {i}: outcome", i)
     else:
         c = L.get("completion")
         if not isinstance(c, dict):
-            v.append("completion missing")
+            add('completion', "completion missing")
         elif str(c.get("task_completed") or "").lower() not in OUTCOMES:
-            v.append(f"completion: task_completed {c.get('task_completed')!r}")
-    for i, s in enumerate(_list(L, "timeline")):
-        if not isinstance(s, dict):
-            v.append(f"timeline {i}: not a segment")
+            add('completion.task_completed', f"completion: task_completed {c.get('task_completed')!r}")
+    for i, segment in enumerate(_list(L, "timeline")):
+        if not isinstance(segment, dict):
+            add('timeline', f"timeline {i}: not a segment", i)
             continue
-        if not (_num(s.get("start_s")) and _num(s.get("end_s"))):
-            v.append(f"timeline {i}: times")
-        elif s["end_s"] < s["start_s"]:
-            v.append(f"timeline {i}: ends before it starts")
-        if not isinstance(s.get("arm"), str) or s["arm"] not in arms:
-            v.append(f"timeline {i}: arm {s.get('arm')!r}")
-        if s.get("contribution") not in ("advancing", "wasteful", "idle"):
-            v.append(f"timeline {i}: contribution {s.get('contribution')!r}")
-        if s.get("progress") is not None and not (_num(s["progress"]) and 0 <= s["progress"] <= 1):
-            v.append(f"timeline {i}: progress {s.get('progress')!r}")
-    for i, k in enumerate(_list(L, "key_events")):
-        if not isinstance(k, dict) or not _num(k.get("t_s")):
-            v.append(f"key event {i}: time")
-        elif str(k.get("outcome") or "").lower() not in ("success", "failure", "unclear"):
-            v.append(f"key event {i}: outcome {k.get('outcome')!r}")
+        for key in ('start_s', 'end_s'):
+            if not _num(segment.get(key)):
+                add('timeline.' + key, f"timeline {i}: {key} is not a time", i)
+        if (_num(segment.get('start_s')) and _num(segment.get('end_s'))
+                and segment['end_s'] < segment['start_s']):
+            add('timeline.end_s.order', f"timeline {i}: ends before it starts", i)
+        if not isinstance(segment.get("arm"), str) or segment["arm"] not in arms:
+            add('timeline.arm', f"timeline {i}: arm {segment.get('arm')!r}", i)
+        if segment.get("contribution") not in ("advancing", "wasteful", "idle"):
+            add('timeline.contribution', f"timeline {i}: contribution {segment.get('contribution')!r}", i)
+        if segment.get("progress") is not None and not (_num(segment['progress']) and 0 <= segment['progress'] <= 1):
+            add('timeline.progress', f"timeline {i}: progress {segment.get('progress')!r}", i)
+    for i, event in enumerate(_list(L, "key_events")):
+        if not isinstance(event, dict):
+            add('key_events', f"key event {i}: time", i)
+        elif not _num(event.get("t_s")):
+            add('key_events.t_s', f"key event {i}: time", i)
+        elif str(event.get("outcome") or "").lower() not in ("success", "failure", "unclear"):
+            add('key_events.outcome', f"key event {i}: outcome {event.get('outcome')!r}", i)
     for key in LISTS:
-        lst = L.get(key)
-        if lst is None:
+        items = L.get(key)
+        if items is None:
             continue
-        if not isinstance(lst, list):
-            v.append(f"{key} is not a list")
+        if not isinstance(items, list):
+            add(key, f"{key} is not a list")
             continue
-        for i, x in enumerate(lst):
-            if not isinstance(x, dict) or not str(x.get("issue") or "").strip():
-                v.append(f"{key} {i}: no description")
-            elif str(x.get("severity") or "").lower() not in ("low", "medium", "high"):
-                v.append(f"{key} {i}: severity {x.get('severity')!r}")
-    return v
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                add(key, f"{key} {i}: no description", i)
+            elif not str(item.get("issue") or "").strip():
+                add(key + '.issue', f"{key} {i}: no description", i)
+            elif str(item.get("severity") or "").lower() not in ("low", "medium", "high"):
+                add(key + '.severity', f"{key} {i}: severity {item.get('severity')!r}", i)
+    return list(violations.values())
 
 
 def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
@@ -315,7 +327,7 @@ def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
     fams = set()
     for key in LISTS:
         items = [i for i in _list(L, key) if isinstance(i, dict) and str(i.get("issue") or "").strip()]
-        n = sum(1 for i in items if FAMILIES.counts(key, {**i, "severity": str(i.get("severity") or "low").lower()}))
+        n = sum(1 for i in items if FAMILIES.counts(key, i))
         m[key] = n
         m[key + "_minor"] = len(items) - n
         fams |= {FAMILIES.family_of(key, i, dataset) for i in items}

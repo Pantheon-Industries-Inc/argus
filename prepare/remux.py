@@ -21,7 +21,11 @@ TIME_BASE_DEN = 1_000_000   # microseconds: some ABC frames are stamped only 1 u
 NOMINAL_FPS = 30            # only a one-frame tolerance for the muxer's own shift
 
 
-class UnsupportedPacketOrder(ValueError):
+class RemuxSourceError(ValueError):
+    """Recorded camera packets cannot preserve their frame and timestamp association."""
+
+
+class UnsupportedPacketOrder(RemuxSourceError):
     """Source packets lack enough clock information to associate reordered pictures."""
 
 
@@ -50,6 +54,9 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
     """Copy Annex-B frames packet for packet into an mp4 whose pts are the frames' real capture times
     (rounded to the microsecond time base). No re-encode. Returns the pts in the written file, one per frame."""
     import av
+    input_format = {"h264": "h264", "h265": "hevc"}.get(fmt)
+    if input_format is None:
+        raise RemuxSourceError(f"Unsupported recorded camera codec: {fmt!r}.")
     with tempfile.NamedTemporaryFile(suffix="." + fmt, dir=out.parent, delete=False) as f:
         for b in frames:
             f.write(b)
@@ -61,9 +68,9 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
         if pts[i] <= pts[i - 1]:
             pts[i] = pts[i - 1] + 1
     try:
-        with av.open(raw, format={"h264": "h264", "h265": "hevc"}[fmt]) as src, av.open(str(out), "w") as dst:
+        with av.open(raw, format=input_format) as src, av.open(str(out), "w") as dst:
             ist = src.streams.video[0]
-            check_packet_order(raw, {"h264": "h264", "h265": "hevc"}[fmt])
+            check_packet_order(raw, input_format)
             ost = dst.add_stream_from_template(ist)
             ost.time_base = Fraction(1, TIME_BASE_DEN)
             i = 0
@@ -71,7 +78,7 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
                 if not pkt.size:
                     continue
                 if i >= len(pts):
-                    raise RuntimeError(f"{out.name}: more packets than frame messages")
+                    raise RemuxSourceError(f"{out.name}: more packets than frame messages")
                 pkt.stream = ost
                 pkt.time_base = ost.time_base
                 pkt.pts = pkt.dts = int(pts[i])
@@ -83,7 +90,7 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
                 dst.mux(pkt)
                 i += 1
         if i != len(pts):
-            raise RuntimeError(f"{out.name}: {len(pts)} frame messages but {i} packets")
+            raise RemuxSourceError(f"{out.name}: {len(pts)} frame messages but {i} packets")
     finally:
         os.unlink(raw)
     with av.open(str(out)) as c:
@@ -93,5 +100,5 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
     # decoder sees. The real capture times stay in times.npz.
     shift = np.unique(got - pts) if len(got) == len(pts) else np.array([10**9])
     if len(shift) != 1 or abs(int(shift[0])) >= TIME_BASE_DEN // NOMINAL_FPS:
-        raise RuntimeError(f"{out.name}: pts in the written mp4 differ from the capture times ({shift[:5]})")
+        raise RemuxSourceError(f"{out.name}: pts in the written mp4 differ from the capture times ({shift[:5]})")
     return got

@@ -59,11 +59,13 @@ import re
 import shutil
 import socketserver
 import subprocess
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
 from functools import lru_cache, wraps
 import urllib.parse
+import uuid
 from collections import OrderedDict
 from pathlib import Path
 
@@ -371,6 +373,9 @@ _FOOTAGE_PROBE_SEM = threading.BoundedSemaphore(max(1, int(os.environ.get('BOARD
 _PROBE_ACTIVE = set()
 _PROBE_ACTIVE_LOCK = threading.Lock()
 _FOOTAGE_READY_LOCK = threading.Lock()
+_CONTENT_PROBES = OrderedDict()
+_CONTENT_PROBE_LOCK = threading.Lock()
+_FOOTAGE_TICKET_SECONDS = 3600
 _FOOTAGE_THREADS = int(os.environ.get("BOARD_FOOTAGE_THREADS", 2))
 _FOOTAGE_STALL_TIMEOUT = max(1.0, float(os.environ.get('BOARD_FOOTAGE_STALL_TIMEOUT', 300)))
 _FOOTAGE_LOCKS: dict = {}
@@ -573,101 +578,258 @@ def _footage_version(path: Path) -> tuple:
     return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
 
 
-def _footage_source_hashes(versions: list) -> list:
-    from board.static import _durable_metadata, _source_digest
-    hashes = []
-    for path, *version in versions:
-        version = tuple(version)
-        if _durable_metadata(path, version):
-            hashes.append(None)
-        else:
-            # Coarse or remote stat identities cannot certify unchanged bytes.
-            # Hashing is source I/O and must share cold-probe admission.
-            with _probe_admission((Path(path), version)):
-                hashes.append(_source_digest(path, version))
-    return hashes if any(hashes) else []
+def _stream_digest(source, size, destination=None):
+    """Hash exactly the admitted byte count, never follow a growing source."""
+    digest = hashlib.sha256()
+    remaining = size
+    while remaining:
+        chunk = source.read(min(1024 * 1024, remaining))
+        if not chunk:
+            raise ValueError('Media changed while its snapshot was being read')
+        digest.update(chunk)
+        if destination is not None:
+            destination.write(chunk)
+        remaining -= len(chunk)
+    if source.read(1):
+        raise ValueError('Media grew while its snapshot was being read')
+    return digest.hexdigest()
+
+
+def _copy_source_snapshot(source: Path, target: Path, version: tuple) -> str:
+    with source.open('rb') as incoming, target.open('xb') as outgoing:
+        digest = _stream_digest(incoming, version[2], outgoing)
+    if _footage_version(source) != version:
+        raise ValueError('Media changed while its snapshot was being read')
+    return digest
+
+
+@contextmanager
+def _snapshot_workspace():
+    """One bounded snapshot workspace across processes; a crash releases its lock."""
+    from board.build import remove_tree
+    folder = FOOTAGE_DIR / '.sources'
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / '.lock').open('a+b') as lock:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                lock.seek(0)
+                if not lock.read(1):
+                    lock.write(b'0')
+                    lock.flush()
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise CacheBusy('Media snapshot preparation is busy; try again shortly') from error
+        try:
+            # The lock proves no other preparation owns these temporary copies.
+            for old in folder.glob('snapshot-*'):
+                if old.is_dir() and not old.is_symlink():
+                    remove_tree(old)
+            temporary = Path(tempfile.mkdtemp(prefix='snapshot-', dir=folder))
+            try:
+                yield temporary
+            finally:
+                remove_tree(temporary)
+        finally:
+            if os.name == 'nt':
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _footage_sources(cams):
+    """Untrusted metadata requires immutable copies whose hashes match probe and encode inputs."""
+    from board.static import _durable_metadata
+    versions = [(str(path), *_footage_version(path)) for _, path in cams]
+    untrusted = [not _durable_metadata(path, tuple(version)) for path, *version in versions]
+    if not any(untrusted):
+        yield cams, versions, [None] * len(cams)
+        return
+    total = sum(version[3] for version, copy in zip(versions, untrusted) if copy)
+    if total <= 0 or total > _FOOTAGE_DISK_BYTES or len(cams) > 64:
+        raise ValueError('Source snapshots exceed the footage disk budget')
+    with _snapshot_workspace() as temporary:
+        working, identities, digests = [], [], []
+        for index, ((cam, path), version, copy) in enumerate(zip(cams, versions, untrusted)):
+            if copy:
+                with _probe_admission((path, tuple(version[1:]))):
+                    snapshot = temporary / f'{index}.mp4'
+                    digest = _copy_source_snapshot(path, snapshot, tuple(version[1:]))
+                working.append((cam, snapshot))
+                identities.append([str(path), 'sha256', digest])
+                digests.append(digest)
+            else:
+                working.append((cam, path))
+                identities.append(version)
+                digests.append(None)
+        yield working, identities, digests
+
+
+def _content_probe(path: Path, digest: str) -> tuple:
+    # The digest belongs to the immutable snapshot, not its disposable pathname.
+    with _CONTENT_PROBE_LOCK:
+        hit = _CONTENT_PROBES.get(digest)
+        if hit is not None:
+            _CONTENT_PROBES.move_to_end(digest)
+            return hit
+    with _probe_admission(('content', digest)):
+        result = _probe_uncached(path)
+    with _CONTENT_PROBE_LOCK:
+        _CONTENT_PROBES[digest] = result
+        _CONTENT_PROBES.move_to_end(digest)
+        while len(_CONTENT_PROBES) > 2048:
+            _CONTENT_PROBES.popitem(last=False)
+    return result
+
+
+def _footage_receipt(result: tuple) -> dict:
+    from board.static import _durable_metadata
+    out, name = result
+    version = _footage_version(out)
+    if out.is_symlink() or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
+        raise ValueError('Prepared footage exceeds the disk cache budget')
+    record = {'format': 'argus-footage-ready/2', 'file': out.name, 'name': name, 'version': version}
+    if not _durable_metadata(str(out), version):
+        with _probe_admission(('output', str(out))):
+            with out.open('rb') as source:
+                record['sha256'] = _stream_digest(source, version[2])
+        if _footage_version(out) != version:
+            raise ValueError('Prepared footage changed while its identity was being read')
+    return record
+
+
+def _discard_changed_footage(out: Path) -> None:
+    try:
+        out.unlink(missing_ok=True)
+    except OSError as error:
+        raise RuntimeError('Prepared footage changed and could not be discarded') from error
+
+
+def _receipt_footage(record: dict, *, discard_changed=False) -> tuple | None:
+    from board.static import _durable_metadata
+    if (record.get('format') != 'argus-footage-ready/2' or
+            not re.fullmatch(r'[a-f0-9]{20}\.mp4', record['file']) or
+            not isinstance(record['name'], str) or Path(record['name']).name != record['name']):
+        return None
+    out = FOOTAGE_DIR / record['file']
+    version = _footage_version(out)
+    if out.is_symlink() or list(version) != record['version'] or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
+        if discard_changed:
+            _discard_changed_footage(out)
+        return None
+    if 'sha256' in record:
+        with _probe_admission(('output', str(out))):
+            with out.open('rb') as source:
+                digest = _stream_digest(source, version[2])
+        if digest != record['sha256'] or _footage_version(out) != version:
+            if discard_changed:
+                _discard_changed_footage(out)
+            return None
+    elif not _durable_metadata(str(out), version):
+        return None
+    return out, record['name']
+
+
+def _read_footage_receipt(receipt: Path) -> dict | None:
+    if receipt.is_symlink():
+        return None
+    with receipt.open('rb') as source:
+        raw = source.read(4097)
+    if len(raw) > 4096:
+        return None
+    record = json.loads(raw)
+    return record if isinstance(record, dict) else None
 
 
 def _ready_footage(request: str) -> tuple | None:
-    """A bounded preparation receipt lets ready downloads bypass cold probes."""
-    receipt = FOOTAGE_DIR / '.ready' / f'{request}.json'
-    with _FOOTAGE_READY_LOCK:
-        try:
-            if receipt.is_symlink() or receipt.stat().st_size > 4096:
-                return None
-            record = json.loads(receipt.read_text())
-            if (record.get('format') != 'argus-footage-ready/1' or
-                    not re.fullmatch(r'[a-f0-9]{20}\.mp4', record['file']) or
-                    not isinstance(record['name'], str) or Path(record['name']).name != record['name']):
-                return None
-            out = FOOTAGE_DIR / record['file']
-            version = _footage_version(out)
-            if out.is_symlink() or list(version) != record['version'] or not 0 < version[2] <= _FOOTAGE_DISK_BYTES:
-                # Cache names are immutable. A changed output is no longer the
-                # file that completed validation, even if its size was restored.
-                try:
-                    out.unlink(missing_ok=True)
-                except OSError as error:
-                    raise RuntimeError('Prepared footage changed and could not be discarded') from error
-                receipt.unlink(missing_ok=True)
-                return None
-            return out, record['name']
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            return None
-
-
-def _remember_ready_footage(request: str, versions: list, result: tuple) -> None:
-    from board.static import _durable_metadata
-    out, name = result
     try:
-        output_version = _footage_version(out)
-        # On filesystems without dependable ctime, stat identities cannot
-        # certify that source bytes or a completed output survived unchanged.
-        if (not 0 < output_version[2] <= _FOOTAGE_DISK_BYTES or _FOOTAGE_DISK_FILES < 1 or
-                not _durable_metadata(str(out), output_version) or
-                any(_footage_version(Path(path)) != tuple(version) or not _durable_metadata(path, version)
-                    for path, *version in versions)):
-            return
-        folder = FOOTAGE_DIR / '.ready'
-        with _FOOTAGE_READY_LOCK:
-            receipt = folder / f'{request}.json'
+        record = _read_footage_receipt(FOOTAGE_DIR / '.ready' / f'{request}.json')
+        return _receipt_footage(record, discard_changed=True) if record is not None else None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _trim_footage_receipts(folder: Path, pattern: str, *, expire=False):
+    owned = [path for path in folder.glob('*.json') if re.fullmatch(pattern, path.name)]
+    for path in sorted(owned, key=lambda p: p.stat().st_mtime_ns, reverse=True)[max(0, _FOOTAGE_DISK_FILES):]:
+        path.unlink(missing_ok=True)
+    if expire:
+        for path in owned:
             try:
-                write_atomic(receipt, {'format': 'argus-footage-ready/1',
-                    'file': out.name, 'name': name, 'version': output_version})
-            finally:
-                receipt.with_name(f'.{receipt.name}.tmp').unlink(missing_ok=True)
-            # One small receipt per request, with the same count bound as media.
-            owned = [p for p in folder.glob('*.json') if re.fullmatch(r'[a-f0-9]{40}\.json', p.name)]
-            for path in sorted(owned, key=lambda p: p.stat().st_mtime_ns)[:-_FOOTAGE_DISK_FILES]:
-                path.unlink(missing_ok=True)
+                if path.stat().st_mtime < time.time() - _FOOTAGE_TICKET_SECONDS:
+                    path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
+
+
+def _remember_ready_footage(request: str, result: tuple) -> None:
+    try:
+        record = _footage_receipt(result)
+        with _FOOTAGE_READY_LOCK:
+            folder = FOOTAGE_DIR / '.ready'
+            write_atomic(folder / f'{request}.json', record)
+            _trim_footage_receipts(folder, r'(?:[a-f0-9]{20}|[a-f0-9]{40})\.json')
     except (OSError, ValueError):
-        pass  # A lost receipt costs a bounded probe, never a download.
+        pass  # A lost receipt costs preparation, never permits an unverified hit.
+
+
+def prepare_footage_ticket(result: tuple) -> str:
+    record = _footage_receipt(result)
+    record['expires_at'] = time.time() + _FOOTAGE_TICKET_SECONDS
+    token = uuid.uuid4().hex
+    with _FOOTAGE_READY_LOCK:
+        folder = FOOTAGE_DIR / '.tickets'
+        write_atomic(folder / f'{token}.json', record)
+        _trim_footage_receipts(folder, r'[a-f0-9]{32}\.json', expire=True)
+    return token
+
+
+def ticket_footage(token: str) -> tuple | None:
+    if not re.fullmatch(r'[a-f0-9]{32}', token):
+        return None
+    receipt = FOOTAGE_DIR / '.tickets' / f'{token}.json'
+    try:
+        record = _read_footage_receipt(receipt)
+        if record is None:
+            return None
+        expiry = record.get('expires_at')
+        if type(expiry) not in (int, float) or not math.isfinite(expiry) or expiry < time.time():
+            receipt.unlink(missing_ok=True)
+            return None
+        return _receipt_footage(record)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
-    """(file, download name) of the episode's video from t0 to t1 s (the whole episode by default), made now if it
-    was not made before; None when the episode has no clip. Raises RuntimeError when ffmpeg fails."""
+    """Prepare the current sources; tickets separately serve the exact prepared output."""
     if not math.isfinite(t0) or (t1 is not None and not math.isfinite(t1)):
         raise ValueError('Footage times must be finite')
     label = footage_label(eid)
     cams = footage_cams(MP4_DIR, eid, label)
     if not cams or not FFMPEG:
         return None
-    source_versions = [(str(p), *_footage_version(p)) for _, p in cams]
-    source_hashes = _footage_source_hashes(source_versions)
+    with _footage_sources(cams) as (working, identities, digests):
+        return _footage_from_sources(eid, t0, t1, label, working, identities, digests)
+
+
+def _footage_from_sources(eid, t0, t1, label, cams, identities, digests):
     request_parts = [eid, float(t0), None if t1 is None else float(t1), FOOTAGE_TAG,
-        label.get('duration_s'), label.get('camera_views'), source_versions]
-    if source_hashes:
-        request_parts.append(source_hashes)
+                     label.get('duration_s'), label.get('camera_views'), identities]
     request = hashlib.sha1(json.dumps(request_parts).encode()).hexdigest()
     ready = _ready_footage(request)
     if ready is not None:
         _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
                          max_files=_FOOTAGE_DISK_FILES, protect=ready[0])
         return ready
-    probes = [_probe(p) for _, p in cams]
-    # Presentation order never selects a new recording clock. Old boards without
-    # a measured duration keep the prepared input anchor or legacy camera order.
+    probes = [_content_probe(path, digest) if digest else _probe(path)
+              for (_, path), digest in zip(cams, digests)]
     clocks = label.get('camera_views') or ['exo', 'left', 'right']
     anchor = next((cam for cam in clocks if any(c == cam for c, _ in cams)), cams[0][0])
     dur = label.get('duration_s')
@@ -680,24 +842,19 @@ def footage(eid: str, t0: float = 0.0, t1: float | None = None) -> tuple | None:
     if any(pr[0] * pr[1] > 16_777_216 or pr[3] > 120 for pr in probes):
         raise ValueError('Camera dimensions or frame rate exceed the footage limit')
     whole = t0 == 0 and t1 >= round(dur, 3)
-    name = f"{eid}.mp4" if whole else f"{eid}_{t0:.1f}-{t1:.1f}s.mp4"
-    versions = [(str(p), st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
-                for _, p in cams for st in [p.stat()]]
-    key_parts = [eid, t0, t1, FOOTAGE_TAG, versions]
-    if source_hashes:
-        key_parts.append(source_hashes)
-    key = hashlib.sha1(json.dumps(key_parts).encode()).hexdigest()[:20]
-    out = FOOTAGE_DIR / f"{key}.mp4"
+    name = f'{eid}.mp4' if whole else f'{eid}_{t0:.1f}-{t1:.1f}s.mp4'
+    key = hashlib.sha1(json.dumps([eid, t0, t1, FOOTAGE_TAG, identities]).encode()).hexdigest()[:20]
+    out = FOOTAGE_DIR / f'{key}.mp4'
+    ready = _ready_footage(key)
+    if ready is not None:
+        _remember_ready_footage(request, ready)
+        return ready
     if out.is_file():
-        if out.stat().st_size > _FOOTAGE_DISK_BYTES:
-            out.unlink(missing_ok=True)
-            raise ValueError('Prepared footage exceeds the disk cache budget')
-        _trim_disk_cache(FOOTAGE_DIR, '.mp4', max_bytes=_FOOTAGE_DISK_BYTES,
-                         max_files=_FOOTAGE_DISK_FILES, protect=out)
-        result = out, name
-    else:
-        result = _uncached_footage(key, out, name, cams, probes, t0, t1)
-    _remember_ready_footage(request, source_versions, result)
+        # A file without a matching validated receipt is not a completed cache entry.
+        _discard_changed_footage(out)
+    result = _uncached_footage(key, out, name, cams, probes, t0, t1)
+    _remember_ready_footage(key, result)
+    _remember_ready_footage(request, result)
     return result
 
 
@@ -1426,6 +1583,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # the episode's cameras in one video (footage), whole or from t0 to t1 s; prepare=1 makes it and answers
             # with its size, so the page can say it is being made before the download starts
             q = urllib.parse.parse_qs(parsed.query)
+            if 'ticket' in q:
+                try:
+                    got = ticket_footage(q['ticket'][0])
+                except CacheBusy as error:
+                    return self._send(503, {'error': str(error)})
+                if got is None:
+                    return self._send(404, {'error': 'Prepared video expired or changed; prepare it again.'})
+                return self._send_file(got[0], 'video/mp4', got[1])
             eid = (q.get("id") or [""])[0]
             try:
                 t0 = float((q.get("t0") or ["0"])[0] or 0)
@@ -1452,7 +1617,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             out, name = got
             if (q.get("prepare") or [""])[0] == "1":
-                self._send(200, {"bytes": out.stat().st_size, "name": name})
+                try:
+                    ticket = prepare_footage_ticket(got)
+                except CacheBusy as error:
+                    return self._send(503, {'error': str(error)})
+                except (OSError, ValueError):
+                    return self._send(409, {'error': 'Prepared video changed; prepare it again.'})
+                self._send(200, {"bytes": out.stat().st_size, "name": name, "ticket": ticket})
                 return
             self._send_file(out, "video/mp4", name)
             return
