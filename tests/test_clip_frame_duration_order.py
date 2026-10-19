@@ -43,16 +43,13 @@ def test_capture_timing_keeps_the_last_native_encoded_frame_without_a_duration(t
         c.streams.video[0].codec_context.thread_count = 1
         original_pixels = [f.to_ndarray(format='rgb24') for f in c.decode(video=0)]
     assert len(original_pixels) == 20
-    real_run = subprocess.run
-
     def frozen_encoder(cmd, *args, **kwargs):
         # Only the external encoder is bound to its retained native output. Counts and timing use actual packets.
-        if cmd[0] == 'fixture-encoder':
-            shutil.copyfile(source, cmd[-1])
-            return subprocess.CompletedProcess(cmd, 0, b'', b'')
-        return real_run(cmd, *args, **kwargs)
+        assert cmd[0] == 'fixture-encoder'
+        shutil.copyfile(source, cmd[-1])
+        return subprocess.CompletedProcess(cmd, 0, b'', b'')
 
-    monkeypatch.setattr(clips.subprocess, 'run', frozen_encoder)
+    monkeypatch.setattr(clips, 'run_while_progressing', frozen_encoder)
     output = tmp_path/'clip.mp4'
     assert clips.extract_one(str(source), 0, 20, output, 'fixture-encoder', 1,
                              fps=20, offset_s=start, times=start+np.arange(20)/20) is None

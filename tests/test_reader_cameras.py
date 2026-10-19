@@ -1066,15 +1066,12 @@ def test_a_failed_cut_leaves_no_temporary_file(tmp_path, monkeypatch):
     import pytest
     from board import clips
 
-    real = subprocess.run
-
     def run(cmd, **kw):
-        if not str(cmd[-1]).endswith(".tmp.mp4"):
-            return real(cmd, **kw)                 # the size probe runs as usual; the cut fails part way
+        assert str(cmd[-1]).endswith(".tmp.mp4")    # the size probe runs as usual; the cut fails part way
         Path(cmd[-1]).write_bytes(b"part of a clip")
         raise subprocess.CalledProcessError(1, cmd)
     src = _mp4(tmp_path / "src.mp4", 30)
-    monkeypatch.setattr(clips.subprocess, "run", run)
+    monkeypatch.setattr(clips, "run_while_progressing", run)
     out = tmp_path / "clips" / "episode_1.mp4"
     with pytest.raises(subprocess.CalledProcessError):
         clips.extract_one(str(src), 0.0, 30, out, clips.find_ffmpeg(), 1)

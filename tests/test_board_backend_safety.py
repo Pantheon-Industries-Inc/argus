@@ -147,15 +147,16 @@ def test_footage_labels_do_not_read_every_json_again(tmp_path, monkeypatch):
     assert reads == [tmp_path / 'prefix_15.json']
 
 
-def test_clip_timeout_cleans_temporary_output(tmp_path, monkeypatch):
+def test_clip_stopped_for_no_progress_cleans_temporary_output(tmp_path, monkeypatch):
     import subprocess
     from board import clips
     monkeypatch.setattr(clips, 'source_size', lambda *args: (16, 16, False))
     def fail(cmd, **kwargs):
-        assert kwargs['timeout'] == 600
+        # the cut is bound by its own clip file growing, never by a fixed time, so a long recording is never cut short
+        assert kwargs['watch'] == [Path(cmd[-1])] and 'timeout' not in kwargs
         Path(cmd[-1]).write_bytes(b'partial')
-        raise subprocess.TimeoutExpired(cmd, kwargs['timeout'])
-    monkeypatch.setattr(clips.subprocess, 'run', fail)
+        raise subprocess.TimeoutExpired(cmd, 300)
+    monkeypatch.setattr(clips, 'run_while_progressing', fail)
     with pytest.raises(subprocess.TimeoutExpired):
         clips.extract_one('source', 0, 30, tmp_path / 'out.mp4', 'ffmpeg', 1)
     assert not list(tmp_path.glob('*.mp4'))

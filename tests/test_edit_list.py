@@ -92,15 +92,12 @@ def test_a_clip_whose_frames_have_no_length_plays_to_its_last_frame(tmp_path, na
 
 def test_the_clip_step_gives_an_encoders_frames_their_length(tmp_path, monkeypatch):
     """extract_one on an ffmpeg that writes such a clip: the episode's 20 frames, not 19 and a failed job."""
-    real = subprocess.run
-
     def ffmpeg_702(cmd, *a, **k):
-        if cmd[0] == "ffmpeg-7.0.2":
-            shutil.copy(FIXTURES / "clip_without_frame_lengths.mp4", cmd[-1])
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-        return real(cmd, *a, **k)
+        assert cmd[0] == "ffmpeg-7.0.2"
+        shutil.copy(FIXTURES / "clip_without_frame_lengths.mp4", cmd[-1])
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
     monkeypatch.setattr(clips, "source_size", lambda ffmpeg, path: (64, 48, False))
-    monkeypatch.setattr(clips.subprocess, "run", ffmpeg_702)
+    monkeypatch.setattr(clips, "run_while_progressing", ffmpeg_702)
     out = tmp_path / "clips" / "episode_000000.mp4"
     clips.extract_one("src.mp4", 0.0, 20, out, "ffmpeg-7.0.2", 1, fps=20.0)
     assert clips.clip_frames(out) == 20

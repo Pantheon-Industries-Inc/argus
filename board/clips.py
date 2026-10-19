@@ -60,6 +60,7 @@ from pathlib import Path
 
 from label.atomic import temporary_path, write_atomic
 from label.presented import presented, presented_pts
+from prepare.isolation import run_while_progressing
 
 CAMS = ("exo", "left", "right")
 
@@ -106,6 +107,7 @@ SIDE_BOX = (1280, 1080)      # a side camera: at most this
 CRF = 20                     # with veryfast, the quality of CRF 22 at medium (VMAF at the shown size) in
 PRESET = "veryfast"          # 40% of the time, which the whole board and every Data Review upload pay
 KEY_S = 2                    # a keyframe every 2 s, so a seek decodes at most 2 s of video
+MIN_DECODE_FPS = 1.0         # the slowest any reader decodes a frame, for the time a cut may take to begin
 DEPTH_CRF = 26               # a depth clip: its colour shading carries sensor noise that CRF 20 keeps at about
                              # five times the colour clip's size; 26 halves that and the shapes stay as clear
 # names the recipe; board/static.py folds it into its media names, so a new recipe gets new names
@@ -142,6 +144,22 @@ def video_args(w: int, h: int, main: bool, threads: int, resample: bool = False,
     return [*vf, "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF), "-pix_fmt", "yuv420p",
             "-profile:v", "high", "-force_key_frames", f"expr:gte(t,n_forced*{KEY_S})", "-enc_time_base", "demux",
             "-movflags", "+faststart", "-threads", str(threads)]
+
+
+def decode_lead_s(packed: str, seek_s: float) -> float:
+    """How much of the video before seek_s an accurate seek decodes before its first frame: back to the keyframe at or
+    before it, which the container's index names. All of it when the index cannot be read."""
+    if seek_s <= 0:
+        return 0.0
+    try:
+        import av
+        with av.open(str(packed)) as source:
+            stream = source.streams.video[0]
+            source.seek(int(seek_s / stream.time_base), stream=stream, backward=True, any_frame=False)
+            packet = next(p for p in source.demux(stream) if p.pts is not None)
+            return max(0.0, seek_s - float(packet.pts * stream.time_base))
+    except Exception:
+        return seek_s
 
 
 def source_size(ffmpeg: str, path: str) -> tuple:
@@ -270,7 +288,15 @@ def extract_one(packed: str, base_s: float, n_frames: int, out_mp4: Path,
            *(["-movie_timescale", str(DISPLAY_TICKS_PER_S)] if dense else []),
            *(["-output_ts_offset", f"{offset_s:.6f}"] if offset_s >= 0.5 / fps else []), str(tmp)]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=600)
+        # stopped only when the encode makes no progress (the clip file stops growing), never for its length: a long
+        # recording takes as long as it takes. Until the first frame is written it may still be decoding the frames
+        # before the cut (from the keyframe before the seek, and those select skips), at no less than one a second
+        if dense:
+            lead = first + int(skip)
+        else:
+            seek_s = float(seek[seek.index("-ss") + 1])
+            lead = decode_lead_s(packed, seek_s) * fps + int(skip)
+        run_while_progressing(cmd, watch=[tmp], lead_s=lead / MIN_DECODE_FPS, check=True)
         # A zero final packet duration hides a readable frame from the count used to slice its capture times.
         frame_lengths(tmp)
         got = clip_frames(tmp)
