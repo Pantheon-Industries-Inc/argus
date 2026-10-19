@@ -357,15 +357,24 @@ def test_reading_a_note_takes_time_in_proportion_to_its_length():
     """Review of 2514ce5: a pass that compared every clause with every later one took 19 s on a 54 KB evidence field and
     stalled the episode list. Reading a note is one pass over its clauses, so ten times the text takes about ten times
     as long, never the hundredfold a comparison of every pair would."""
+    import gc
     import time
     from board.polarity import denied_spans
     unit = 'The operator appears to hold the cup above the table. '
     timings = {}
-    for n in (100, 1000):
-        text = 'The exo camera appears frozen. ' + unit * n
-        start = time.perf_counter()
-        denied_spans(text)
-        timings[n] = time.perf_counter() - start
+    # the fastest of several runs, with collection paused, so a stall of a shared machine never decides the ratio
+    gc.disable()
+    try:
+        for n in (100, 1000):
+            text = 'The exo camera appears frozen. ' + unit * n
+            runs = []
+            for _ in range(5):
+                start = time.perf_counter()
+                denied_spans(text)
+                runs.append(time.perf_counter() - start)
+            timings[n] = min(runs)
+    finally:
+        gc.enable()
     assert timings[1000] < 1.0, timings
     assert timings[1000] < 30 * max(timings[100], 1e-3), timings
 
