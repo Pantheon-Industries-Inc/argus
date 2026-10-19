@@ -162,6 +162,15 @@ def decode_lead_s(packed: str, seek_s: float) -> float:
         return seek_s
 
 
+def clip_threads(clips: int, jobs: int, threads: int) -> int:
+    """Threads per clip when `clips` clips are cut `jobs` at a time with `threads` each. jobs x threads is the step's
+    budget, so fewer clips than jobs share it: one long recording (a single head camera) is encoded with every thread
+    the step was given, not one, and a step with many clips keeps its threads per clip."""
+    if clips <= 0 or clips >= jobs:
+        return threads
+    return max(threads, (jobs * threads) // clips)
+
+
 def source_size(ffmpeg: str, path: str) -> tuple:
     """(width, height, resample) of a video's first stream as it is shown (prepare/display.py, the reader's rule):
     pixels that are not square made square (resample says they must be), and a rotation of 90 or 270 degrees
@@ -1412,8 +1421,9 @@ def main() -> int:
     jobs = []
     for d in ep_dirs:
         jobs += episode_jobs(d, args.out, args.force, args.name_prefix)
+    threads = clip_threads(len(jobs), args.jobs, args.clip_threads)
     print(f"clips: {len(ep_dirs)} episodes, {len(jobs)} cam-clips to extract "
-          f"(jobs={args.jobs}, threads={args.clip_threads}) -> {args.out}")
+          f"(jobs={args.jobs}, threads={threads}) -> {args.out}")
     ok = fail = 0
     broken: dict[str, dict[str, str]] = {}      # episode folder -> {camera: why its video did not decode}
     short: dict[str, dict[str, dict]] = {}      # episode folder -> {camera: its clip's and the episode's frames}
@@ -1421,7 +1431,7 @@ def main() -> int:
     unshown_cut: dict[str, set] = {}            # the same for the cameras the model is not shown (unshown_views)
     unshown_broken: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km, pts, end):
+        futs = {ex.submit(extract_one, pk, b, du, o, ffmpeg, threads, fps, is_main, off, skip, t, q, km, pts, end):
                 (o, ep, cam) for (pk, b, du, o, fps, is_main, off, skip, t, q, km, pts, end, ep, cam) in jobs}
         for f in as_completed(futs):
             o, ep, cam = futs[f]
@@ -1473,7 +1483,9 @@ def main() -> int:
             for (pk, b, du, o, fps, is_main, off, skip, t, q, km, pts, end, ep, cam) in episode_jobs(d, args.out, True,
                                                                                     args.name_prefix):
                 try:
-                    counts = extract_one(pk, b, du, o, ffmpeg, args.clip_threads, fps, is_main, off, skip, t, q, km, pts, end)
+                    # cut one at a time, so each has the step's whole budget
+                    counts = extract_one(pk, b, du, o, ffmpeg, clip_threads(1, args.jobs, args.clip_threads), fps,
+                                         is_main, off, skip, t, q, km, pts, end)
                     if cam.startswith(UNSHOWN):
                         u_cut.add(cam)
                         continue
@@ -1494,7 +1506,8 @@ def main() -> int:
         print(f"clips: {len(djobs)} depth clips to cut")
         dok = 0
         with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-            futs = {ex.submit(extract_depth, d, cam, colour, out, args.clip_threads, fps): (out, d, cam)
+            dthreads = clip_threads(len(djobs), args.jobs, args.clip_threads)
+            futs = {ex.submit(extract_depth, d, cam, colour, out, dthreads, fps): (out, d, cam)
                     for (d, cam, colour, out, fps) in djobs}
             for f in as_completed(futs):
                 out, d, cam = futs[f]
