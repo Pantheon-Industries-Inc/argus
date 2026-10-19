@@ -184,7 +184,7 @@ Comparison caps apply per model run and gate caps per recording setup. Sampling 
 
 Comparisons distinguish missing responses from replies that failed to parse. Cost reports separate verified charges from unresolved reservations; gate cost rates exclude calls without a response or a verified invoice. Cold-cost estimates require the default model and a single paid attempt per unit.
 
-[`uv run --frozen --offline pytest -q -ra`](.github/workflows/ci.yml) runs offline tests; viewer tests also require Node.js. CI uses the locked environment, Node, ffmpeg and ffprobe without provider credentials or dataset access. Secret scans cover the committed tree and reachable history; they do not grant permission to publish uploaded data.
+[`uv run --frozen --offline pytest -q -ra`](.github/workflows/ci.yml) runs offline tests; viewer tests also require Node.js. CI runs the same command as four shards side by side, each a set of whole test files balanced by the times in [`tests/shard_times.json`](tests/shard_times.json); set [`ARGUS_TEST_SHARD=1/4`](tests/sharding.py) to run one shard locally. CI uses the locked environment, Node, ffmpeg and ffprobe without provider credentials or dataset access. Secret scans cover the committed tree and reachable history; they do not grant permission to publish uploaded data.
 
 </details>
 
