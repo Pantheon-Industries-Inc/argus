@@ -464,14 +464,19 @@ class OfflineModel:
         observation (offline <list> <n>) so it can be found again after binding; a citation in the list that does
         not own it must be routed or set aside with its reason, never dropped."""
         whole = '\n'.join(texts)
-        cameras, end = [], 0.0
+        cameras, begin, end = [], None, 0.0
         for start, stop, caption in re.findall(r'=== grid t=([0-9.]+)-([0-9.]+)s \| rows ([^|]*) \|', whole):
             cameras += [c.strip() for c in caption.split(',') if c.strip() and c.strip() not in cameras]
+            begin = float(start) if begin is None else min(begin, float(start))
             end = max(end, float(stop))
         observed = re.search(r'The supplied view IDs and image-row labels are: (.*?)\. Include', whole)
         views = [pair.split(':', 1)[0].strip() for pair in observed.group(1).split(';')] if observed else []
         cited = self.sensor_findings(texts) + self.evidence_findings(texts)
-        reply = {'task_summary': 'Move the object.', 'timeline_columns': [], 'timeline': [],
+        # the work every request asks for (label/completeness.py): a timeline over the footage it sent, and the
+        # outcome in each field its instructions name (the tasks below, the one task's completion)
+        reply = {'task_summary': 'Move the object.',
+                 'timeline': [{'start_s': begin or 0.0, 'end_s': end, 'arm': 'right', 'action': 'reach',
+                               'contribution': 'advancing', 'progress': 1.0}] if end else [],
                  'data_issues': [{'issue': f'{self.tag("data_issues")}: camera {c} is dim', 'category': 'camera_fault',
                                   'severity': 'low', 't_s': None, 'end_s': None, 'evidence': f'camera {c}'}
                                  for c in cameras]}
@@ -492,6 +497,8 @@ class OfflineModel:
                                'objects': ['object'], 'outcome': outcome, 'success_predicate': 'the object is moved',
                                'completed_at_s': b if outcome == 'success' else None, 'note': None}
                               for a, b, outcome in ((0.0, half, 'success'), (half, end, 'partial'))]
+        if '"task_completed"' in whole:
+            reply['completion'] = {'task_completed': 'success'}
         if '"goal_alignment"' in whole:
             reply['goal_alignment'] = {'matches_given': True, 'relation': 'aligned',
                                        'note': f'{self.tag("goal_alignment")}: the work matches the instruction'}
