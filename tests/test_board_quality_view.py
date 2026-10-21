@@ -174,14 +174,14 @@ const render = chip(chipKes, qs.subgoals, qs, x => String(x), 44, [], {getElemen
 render(4.5);   // the caption is on the contact, so no score beside it
 assert.strictEqual(chipEl.on, false);
 render(5.2);   // the subgoal came after the contact, so it replaced it at once: the caption is on Subgoal 1
-assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v">9</span>', chipEl.innerHTML);
+assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v of10"><span class="sc-num">9</span><span class="sc-den">10</span></span>', chipEl.innerHTML);
 render(6.4);   // still within the subgoal's 1.5s
-assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v">9</span>', chipEl.innerHTML);
+assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v of10"><span class="sc-num">9</span><span class="sc-den">10</span></span>', chipEl.innerHTML);
 render(20);
 assert.strictEqual(chipEl.on, false);
 render(44.5);  // the goal from goal_reached_at_s
-assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Execution</span><span class="sc-v">8</span>'
-  + '<span class="sc-k">Outcome</span><span class="sc-v">10</span>', chipEl.innerHTML);
+assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Execution</span><span class="sc-v of10"><span class="sc-num">8</span><span class="sc-den">10</span></span>'
+  + '<span class="sc-k">Outcome</span><span class="sc-v of10"><span class="sc-num">10</span><span class="sc-den">10</span></span>', chipEl.innerHTML);
 
 // a closed fold names the row the video is on; an open one does not
 const foldLabel = new Function(cut("function foldLabel(btn)", 'function foldToggle') + 'return foldLabel;')();
