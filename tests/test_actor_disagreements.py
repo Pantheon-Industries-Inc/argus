@@ -1,4 +1,5 @@
 import json
+import re
 
 import h5py
 import numpy as np
@@ -165,7 +166,7 @@ def test_only_a_matching_state_and_camera_constrain_the_output_arm(tmp_path, sta
     assert me.actor_views(ep) == ([state_side] if want_rule else [None])
     prompt = me.build_request(ep_dir)["prompt"]
     assert ('"arm" field always' in prompt) == want_rule
-    assert f"mounted on the {camera_side.upper()} arm" in prompt
+    assert re.search(rf"its recorded name \S*wrist_{camera_side} places on the {camera_side.upper()} arm", prompt)
     rows = [line for line in prompt.splitlines() if line.startswith("  ") and "s | " in line]
     assert rows and all("| " + state_side + " " in row for row in rows)
 

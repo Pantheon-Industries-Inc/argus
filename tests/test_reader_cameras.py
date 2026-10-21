@@ -541,7 +541,7 @@ def test_recorded_mount_names_and_verified_adapter_descriptions_keep_viewpoint_g
     report = f.convert(root, 'teleop_arms', tmp_path / 'episodes', 'named wrist', 900)
     ep = me.load(tmp_path / 'episodes' / report['episodes'][0]['episode_id'])
     prompt = me.camera_desc(ep)
-    assert 'camera mounted on the' in prompt
+    assert 'camera its recorded name /left_wrist/image_raw/compressed places on the' in prompt
     assert 'recorded or verified camera-role claims' in prompt
     assert 'record it as a data issue' in prompt
     # Specialized adapters supply descriptions checked on native frames, beyond a generic slot.

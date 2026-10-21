@@ -523,7 +523,7 @@ def test_a_video_only_mounted_view_does_not_prove_only_its_arm_acts():
     ep, pl = CASES["teleop_video_only"]()
     _, prompt = me.build_prompt(ep, pl, cell_w=448, cell_h=252)
     assert '"arm" field always' not in prompt
-    assert "mounted on the LEFT arm" in prompt
+    assert "the camera its recorded name left_wrist_camera places on the LEFT arm" in prompt
 
 
 def test_camera_content_observation_block_is_gated_by_exact_authoritative_roles():

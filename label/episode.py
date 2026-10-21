@@ -1197,7 +1197,11 @@ def _camera_facts(ep: dict, v: str) -> str:
         return (f"- {cam_name(ep, v)}: explicitly described as head-mounted; read its wearer or platform "
                 "and direction from the pixels.")
     side = "" if len(views(ep)) == 1 or v not in ("left", "right") else f"{v.upper()} "
-    return (f"- {cam_name(ep, v)}: the camera mounted on the {side}{n['gripper_of']}. When its own gripper's fingers "
+    # a mount read from the camera's recorded name (prepare/formats.py describe, role_provenance "recorded_name") is
+    # said as the name's, so it is checked against the pixels like any other claim
+    said = (f"the camera its recorded name {cam['key']} places on the"
+            if provenance == 'recorded_name' and cam.get('key') else "the camera mounted on the")
+    return (f"- {cam_name(ep, v)}: {said} {side}{n['gripper_of']}. When its own gripper's fingers "
             "are in view, they sit in the same place in every frame, usually along the bottom edge, and change only by "
             "opening and closing; "
             "the rest of the image moves whenever the gripper moves.")
