@@ -603,7 +603,7 @@ aside.left .grip-strip .video-overlay.active { position: static; order: 2; trans
   max-width: 96%;
   padding: 11px 18px; font-size: 15px; text-align: center; box-sizing: border-box; min-height: 76px; }
 /* a strip too narrow for the score chip beside the caption: the chip takes its own line just above the caption */
-aside.left .grip-strip .score-chip.above { position: static; order: 1; transform: none; height: auto !important; }
+aside.left .grip-strip .score-chip.above { position: static; order: 1; transform: none; min-height: 0 !important; }
 aside.left .grip-strip .state-toast,
 aside.left .grip-strip .state-toast.active { position: static; order: 3; transform: none; max-width: 92%;
   min-width: 40%;
@@ -789,7 +789,7 @@ aside.left .cam-cell.cap-below > .video-overlay, aside.left .cam-cell.cap-below 
 /* a score chip that does not fit over the footage either follows the caption below it, on its own line just above
    the caption, at its own size */
 aside.left .cam-cell > .score-chip.under { position: static; order: 1; flex: 0 0 auto; transform: none;
-  margin: 6px 0 0; height: auto !important; }
+  margin: 6px 0 0; min-height: 0 !important; }
 section.right { overflow-y: auto; padding: 22px 28px; }
 
 /* ---------- prompt banner ---------- */
@@ -1857,7 +1857,8 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 
 /* the score chip (board/scores.py): bottom left of the video, beside the caption, only while the caption shows a
    subgoal or the goal reached (the caption's own key-event window), just the scores. It stands on the caption's
-   bottom line and as tall as the caption (scoreChipHeight), so the two read as one row */
+   bottom line and at least as tall as the caption, so the two read as one row; it is never shorter than its own
+   scores (min-height, never height: a forced height let two stacked fractions spill out of the box) */
 .score-chip {
   position: absolute; left: calc(var(--fx-left, 0px) + 12px); bottom: calc(var(--fx-bottom, 0px) + var(--clear-controls)); z-index: 4;
   box-sizing: border-box; display: grid; grid-template-columns: auto auto; column-gap: 14px; row-gap: 2px;
@@ -1865,7 +1866,7 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
   padding: 9px 14px; border-radius: var(--r-md); background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.14);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   opacity: 0; transform: translateY(6px); pointer-events: none;
-  transition: opacity 150ms ease, transform 150ms ease, height 130ms ease;
+  transition: opacity 150ms ease, transform 150ms ease, min-height 130ms ease;
 }
 .score-chip.active { opacity: 1; transform: translateY(0); }
 /* a caption under the video (narrow screens): the chip keeps its own size in the corner, clear of the controls */
@@ -1877,7 +1878,7 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 .score-chip.corner .sc-v { font-size: 15px; }
 .score-chip.corner .sc-v.of10 .sc-den { margin-top: 2px; padding-top: 2px; font-size: 9px; }
 /* a video too narrow for the chip beside the caption: the chip stands above the caption at its own size */
-.score-chip.above { bottom: calc(var(--fx-bottom, 0px) + var(--clear-controls) + 6px + var(--cap-h, 0px)); height: auto !important; }
+.score-chip.above { bottom: calc(var(--fx-bottom, 0px) + var(--clear-controls) + 6px + var(--cap-h, 0px)); min-height: 0 !important; }
 .score-chip .sc-k { font-size: 12.5px; color: rgba(255,255,255,0.72); }
 .score-chip .sc-v { font-family: var(--mono); font-size: 20px; font-weight: 700; color: #f3f2ec; text-align: right; }
 /* out of ten as a stacked fraction: the score over a rule over 10, in the height the chip already has, so the chip is
@@ -2446,23 +2447,31 @@ function fmtT(t) { return Number.isFinite(t) ? t.toFixed(1) + 's' : '-'; }
 // overlay, for at most FLAG_HOLD_S, so the next one replaces it and an earlier flag never outlasts or hides a later
 // one. Moments at the same instant show together.
 const FLAG_LEAD_S = 0.3, FLAG_HOLD_S = 1.5;
+// A recorded time in seconds, or null when there is none. Number(null), Number('') and Number(false) are 0 in
+// JavaScript, and a moment with no time (a goal never reached, an event with no time) must never be drawn at the start
+// of the video: every reader of a moment's time goes through this.
+function timeOf(v) {
+  if (v == null || typeof v === 'boolean' || (typeof v === 'string' && !v.trim())) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 function flagWindows(items) {
-  const sorted = items.filter(x => x && Number.isFinite(Number(x.t_s))).slice()
-    .sort((a, b) => a.t_s - b.t_s);
-  return sorted.map((x, i) => {
-    const next = sorted.slice(i + 1).find(y => y.t_s > x.t_s);
-    return {t0: x.t_s - FLAG_LEAD_S, x, t1: Math.min(x.t_s + FLAG_HOLD_S, next ? next.t_s - FLAG_LEAD_S : Infinity)};
+  const sorted = items.filter(x => x && timeOf(x.t_s) != null).map(x => ({x, t: timeOf(x.t_s)}))
+    .sort((a, b) => a.t - b.t);
+  return sorted.map(({x, t}, i) => {
+    const next = sorted.slice(i + 1).find(y => y.t > t);
+    return {t0: t - FLAG_LEAD_S, x, t1: Math.min(t + FLAG_HOLD_S, next ? next.t - FLAG_LEAD_S : Infinity)};
   });
 }
 function flagsAt(windows, t) { return windows.filter(w => t >= w.t0 && t < w.t1).map(w => w.x); }
 // The caption's moments: the key events, the episode's goal and each task's completion. A task done at the episode's
 // goal is that goal, flagged once.
 function captionFlags(keyEvents, episodeGoalT, taskGoalTimes) {
-  const goal = Number.isFinite(Number(episodeGoalT)) ? Number(episodeGoalT) : null;
+  const goal = timeOf(episodeGoalT);
   return flagWindows([
     ...(keyEvents || []),
     ...(goal != null ? [{t_s: goal, goal: 'episode'}] : []),
-    ...(taskGoalTimes || []).filter(t => t !== goal).map(t => ({t_s: t, goal: 'task'})),
+    ...(taskGoalTimes || []).map(timeOf).filter(t => t != null && t !== goal).map(t => ({t_s: t, goal: 'task'})),
   ]);
 }
 // a key event's kind as the model tagged it, in plain words ("subgoal_complete" reads "subgoal complete")
@@ -6135,7 +6144,7 @@ function depthRoiFrames(label, view, sourceRows = false) {
     .flatMap(({receipt: r, origin}) => (Array.isArray(r.frames) ? r.frames : [])
       .filter(f => f && Array.isArray(f.source_shape) && f.source_shape.length === 2
       && (sourceRows ? (r.source_frames || []).some(source => source.row === f.row
-        && Number.isInteger(source.source_frame) && source.source_frame >= 0) : Number.isFinite(+f.time_s))
+        && Number.isInteger(source.source_frame) && source.source_frame >= 0) : timeOf(f.time_s) != null)
       && Array.isArray(f.regions) && f.regions.length)
       .map(f => sourceRows ? {...f, source_sequence: true, receipt: r.id,
         source_frame: r.source_frames.find(source => source.row === f.row).source_frame}
@@ -7813,7 +7822,7 @@ function renderEp(d, opts) {
       chip.classList.toggle('above', on && !beside);
       chip.style.left = beside ? '12px' : '';
       chip.style.bottom = beside ? 'auto' : '';
-      chip.style.height = beside ? capEl.offsetHeight + 'px' : '';
+      chip.style.minHeight = beside ? capEl.offsetHeight + 'px' : '';
       chip.style.top = beside ? capEl.offsetTop + 'px' : '';
       return;
     }
@@ -7822,7 +7831,7 @@ function renderEp(d, opts) {
       if (chip) {
         chip.classList.remove('corner', 'under');
         if (capEl.offsetHeight) {
-          chip.style.height = capEl.offsetHeight + 'px';
+          chip.style.minHeight = capEl.offsetHeight + 'px';
           chip.style.setProperty('--cap-h', capEl.offsetHeight + 'px');
         }
         const width = capEl.offsetParent ? capEl.offsetParent.clientWidth : 0;
@@ -7838,7 +7847,7 @@ function renderEp(d, opts) {
     }
     // the caption sits under the video, not over it: the chip keeps its own size in the corner over the footage
     if (!chip) return;
-    chip.style.height = ''; capEl.style.maxWidth = ''; chip.classList.remove('above');
+    chip.style.minHeight = ''; capEl.style.maxWidth = ''; chip.classList.remove('above');
     if (chip.classList.contains('under')) return;
     chip.classList.add('corner');
     // over the footage, never over the caption below it: the chip stands on the video's own bottom edge (the drawn
@@ -7884,13 +7893,15 @@ function renderEp(d, opts) {
     _scSig = sig;
     if (!sig) { scoreChip.classList.remove('active'); fitCaptionBesideChip(); return; }
     // the chip names what it scores: the episode at its goal, else the numbered subgoal the caption is on, each out of
-    // ten as the score boxes write it (a score that is missing stays a dash)
-    const of10 = v => v == null ? `<span class="sc-v">${qNum(v)}</span>`
-      : `<span class="sc-v of10"><span class="sc-num">${qNum(v)}</span><span class="sc-den">10</span></span>`;
-    scoreChip.innerHTML = atGoal
-      ? `<span class="sc-k">Execution</span>${of10(Q.execution)}<span class="sc-k">Outcome</span>${of10(Q.outcome)}`
-      : `<span class="sc-k">Subgoal${subNo.get(Math.round(st.end_s * 100)) ? ' ' + subNo.get(Math.round(st.end_s * 100)) : ''}</span>`
-        + of10(st.execution);
+    // ten as the score boxes write it. A score that is missing is no row, and a chip with no score does not show
+    const row = (name, v) => v == null || !Number.isFinite(Number(v)) ? ''
+      : `<span class="sc-k">${name}</span><span class="sc-v of10"><span class="sc-num">${qNum(v)}</span>`
+        + `<span class="sc-den">10</span></span>`;
+    const sub = subNo.get(Math.round((st || {}).end_s * 100));
+    const rows = atGoal ? row('Execution', Q.execution) + row('Outcome', Q.outcome)
+      : row('Subgoal' + (sub ? ' ' + sub : ''), st.execution);
+    if (!rows) { scoreChip.classList.remove('active'); fitCaptionBesideChip(); return; }
+    scoreChip.innerHTML = rows;
     scoreChip.classList.add('active');
     fitCaptionBesideChip();
   }
@@ -8329,12 +8340,19 @@ function renderEp(d, opts) {
   });
   // the busiest flagged moment, for the layout check (?check=layout): the goal, else the last key event, where the
   // caption, the goal badge, the score chip and a state change can all show at once
-  window._layoutMoment = () => {
-    const times = keyEvents.map(k => Number(k.t_s)).filter(Number.isFinite);
-    const t = episodeGoalT ?? (times.length ? Math.max(...times) : null);
-    if (t == null) return;
+  window._layoutAt = t => {
     renderProgress(t); renderState(t); renderOverlay(t); renderScoreChip(t); renderRecovery(t); placeSensors();
   };
+  window._layoutMoment = () => {
+    const times = keyEvents.map(k => timeOf(k.t_s)).filter(t => t != null);
+    const t = timeOf(episodeGoalT) ?? (times.length ? Math.max(...times) : null);
+    if (t != null) window._layoutAt(t);
+  };
+  // every moment something is flagged over the video (each key event, the goal, each task done, each state change):
+  // a box fitted to another (the score chip to the caption) can fit at the busiest moment and spill at a quieter one,
+  // so the layout check draws the overlays at each of them
+  window._layoutMoments = () => [...new Set([...keyEvents.map(k => k.t_s), episodeGoalT, ...taskGoalTimes,
+    ...(d.state_changes || []).map(x => x.t_s)].map(timeOf).filter(t => t != null))].sort((a, b) => a - b);
   // once their transitions end, the boxes that fit themselves to others are fitted again at once, as the observers
   // that keep them fitted in playback would on the next frame (a browser on virtual time may draw no frame): placeTop
   // places the notes at the top of the image, then fits the caption and the score chip to them
@@ -9116,7 +9134,7 @@ window.addEventListener('error', event => { void retryFrameImage(event.target); 
 // by how many px. With &open=all every fold is opened first (openEveryFold), so the long lists inside folds are
 // checked too, and a fold still closed when the check runs is itself a defect, so a new kind of fold cannot hide
 // its content from the check.
-function layoutDefects(folds) {
+function layoutDefects(folds, overlaysOnly = false) {
   const vw = document.documentElement.clientWidth;
   const styles = new Map();
   const cs = el => { let s = styles.get(el); if (!s) { s = getComputedStyle(el); styles.set(el, s); } return s; };
@@ -9153,7 +9171,7 @@ function layoutDefects(folds) {
   // not walked: the browser draws them in the video's shadow tree, inside the video's box, not in the page's layout.
   const pieces = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
-  for (let n = walker.currentNode; n; n = walker.nextNode()) {
+  for (let n = overlaysOnly ? null : walker.currentNode; n; n = walker.nextNode()) {
     if (n.nodeType === 3) {
       if (!n.data.trim() || isHidden(n.parentElement)) continue;
       const r = document.createRange();
@@ -9226,7 +9244,7 @@ function layoutDefects(folds) {
         words.trim().slice(0, 80));
     }
   }
-  if (folds) {
+  if (folds && !overlaysOnly) {
     // a fold left closed: a closed <details>, or a box that clips its content to no height, whose box around it shows
     for (const el of document.body.querySelectorAll('*')) {
       if (isHidden(el.parentElement)) continue;
@@ -9249,6 +9267,18 @@ function layoutDefects(folds) {
       const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
       if (w > 1 && h > 1) note(overlays[i], 'covers ' + path(overlays[j]), Math.min(w, h),
         (overlays[i].textContent || '').trim().slice(0, 80));
+    }
+  }
+  // what each one holds stays inside it: a child drawn past its box's edge (two stacked scores in a chip held to the
+  // caption's height) reads as broken
+  for (const el of overlays) {
+    const r = el.getBoundingClientRect();
+    for (const c of el.querySelectorAll('*')) {
+      if (isHidden(c)) continue;
+      const q = c.getBoundingClientRect();
+      if (q.width < 0.5 || q.height < 0.5) continue;
+      const over = Math.max(r.top - q.top, q.bottom - r.bottom, r.left - q.left, q.right - r.right);
+      if (over > 1) { note(el, 'content spills out of ' + path(el), over, (c.textContent || '').trim().slice(0, 80)); break; }
     }
   }
   // nor do they cover the player's own controls: a box drawn over a video (placed in the cell that holds it) ends at
@@ -9304,7 +9334,6 @@ if (new URLSearchParams(location.search).get('check') === 'layout') {
       // the footage's own size places what is drawn over it: wait (at most 3s) until every video knows it
       const sized = () => [...document.querySelectorAll('video')].every(v => v.readyState >= 1 || v.error);
       for (const until = Date.now() + 3000; !sized() && Date.now() < until;) await new Promise(r => setTimeout(r, 100));
-      if (window._layoutMoment) window._layoutMoment();
       // the layout is checked where every transition ends (a fold opening, a bar growing, a caption taking its
       // height), not part way through one; a browser that runs on virtual time (headless Chrome under the test) may
       // otherwise never finish them. The boxes that fit themselves to another (the score chip to the caption) are then
@@ -9315,10 +9344,24 @@ if (new URLSearchParams(location.search).get('check') === 'layout') {
           try { if (a.effect && a.effect.getComputedTiming().iterations !== Infinity) a.finish(); } catch (_) {}
         }
       };
-      finishAll();
-      if (window._layoutSettle) { window._layoutSettle(); finishAll(); }
+      const settle = () => { finishAll(); if (window._layoutSettle) { window._layoutSettle(); finishAll(); } };
+      // the overlays at every flagged moment, each defect named with the first moment it shows
+      const atMoments = new Map();
+      for (const t of window._layoutMoments ? window._layoutMoments() : []) {
+        window._layoutAt(t);
+        settle();
+        for (const x of layoutDefects(false, true)) {
+          const key = x.el + '|' + x.kind;
+          if (!atMoments.has(key)) atMoments.set(key, {...x, kind: `${x.kind} at ${t.toFixed(2)}s`});
+        }
+      }
+      if (window._layoutMoment) window._layoutMoment();
+      settle();
+      const whole = layoutDefects(openAll);
+      const seen = new Set(whole.map(x => x.el + '|' + x.kind));
+      const defects = [...whole, ...[...atMoments.entries()].filter(([k]) => !seen.has(k)).map(([, x]) => x)];
       out.textContent = JSON.stringify({episode: _activeFile, width: document.documentElement.clientWidth,
-                                        open: openAll, defects: layoutDefects(openAll)});
+                                        open: openAll, defects});
       out.dataset.state = 'done';
     }, Math.max(0, Math.min(1500, first + 5000 - Date.now())));
   };

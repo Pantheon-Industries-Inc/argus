@@ -189,6 +189,13 @@ assert.strictEqual(chipEl.on, false);
 render(44.5);  // the goal from goal_reached_at_s
 assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Execution</span><span class="sc-v of10"><span class="sc-num">8</span><span class="sc-den">10</span></span>'
   + '<span class="sc-k">Outcome</span><span class="sc-v of10"><span class="sc-num">10</span><span class="sc-den">10</span></span>', chipEl.innerHTML);
+// a score that is missing is no row (never a dash beside a fraction), and a goal with no time is no goal at all
+const renderNoOutcome = chip(chipKes, qs.subgoals, {...qs, outcome: null}, x => String(x), 44, [], {getElementById: () => chipEl});
+renderNoOutcome(44.5);
+assert(chipEl.on && !chipEl.innerHTML.includes('Outcome') && chipEl.innerHTML.includes('Execution'), chipEl.innerHTML);
+const renderNoGoal = chip(chipKes, qs.subgoals, qs, x => String(x), null, [], {getElementById: () => chipEl});
+renderNoGoal(0.1);
+assert.strictEqual(chipEl.on, false);
 
 // a closed fold names the row the video is on; an open one does not
 const foldLabel = new Function(cut("function foldLabel(btn)", 'function foldToggle') + 'return foldLabel;')();
