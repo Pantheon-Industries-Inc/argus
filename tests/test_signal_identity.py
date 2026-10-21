@@ -131,3 +131,38 @@ def test_a_note_written_before_a_rename_follows_the_signal_it_is_about(tmp_path)
             assert len(notes) == 1 and notes[0]["what"].startswith(name), notes
             assert notes[0]["signal_source"] == f"{file}.hdf5" and notes[0]["signal_field"] == glove
     assert not [i for i in ctx["reader_issues"] if i.get("signal") in GLOVES], "a note still names a renamed signal"
+
+
+def test_an_arms_joint_stream_follows_the_same_rule_across_mcap_files(tmp_path):
+    t0 = 1_790_000_000.0
+    q = t0 + np.arange(120) / 30
+
+    def arm(path, start, stop, scale):
+        _json_mcap(path, {"/yam_left/joint_state": [
+            (s, {"name": [f"joint{i}" for i in range(6)], "position": [scale * s + i for i in range(6)]})
+            for s in np.arange(start, stop, 1 / 60)]}, t0)
+    arm(tmp_path / "left.mcap", 0.0, 4.0, 1.0)
+    arm(tmp_path / "right.mcap", 0.0, 4.0, -3.0)
+    apart = f.mcap_joint_streams([tmp_path / "left.mcap", tmp_path / "right.mcap"], q)
+    assert sorted(apart) == ["left /yam_left/joint_state", "right /yam_left/joint_state"], list(apart)
+    notes = []
+    apart = f.mcap_joint_streams([tmp_path / "left.mcap", tmp_path / "right.mcap"], q, notes=notes)
+    assert {s["source"] for s in apart.values()} == {"left.mcap", "right.mcap"}
+    assert apart["right /yam_left/joint_state"]["pos"][60, 0] < 0 < apart["left /yam_left/joint_state"]["pos"][60, 0]
+    assert len(notes) == 1 and "overlap" in notes[0]["what"] and notes[0]["kind"] == "signal_name_collision"
+
+    arm(tmp_path / "part_a.mcap", 0.0, 2.0, 1.0)
+    arm(tmp_path / "part_b.mcap", 2.05, 4.0, 1.0)
+    notes = []
+    joined = f.mcap_joint_streams([tmp_path / "part_a.mcap", tmp_path / "part_b.mcap"], q, notes=notes)
+    assert list(joined) == ["/yam_left/joint_state"] and not notes
+    stream = joined["/yam_left/joint_state"]
+    assert stream["joined_from"] == ["part_a.mcap", "part_b.mcap"]
+    assert stream["t"][0] == t0 and stream["t"][-1] > t0 + 3.9 and (np.diff(stream["t"]) > 0).all()
+
+    # a state is never read from one of two overlapping recordings of the arm
+    said, extra = [], {}
+    f.mcap_joint_streams([tmp_path / "left.mcap", tmp_path / "right.mcap"], q, notes=said)
+    blocked = f.collided_arms(extra, said)
+    assert blocked is not None and blocked.why == "layout" and "left.mcap" in blocked
+    assert [i["kind"] for i in extra["reader_issues"]] == ["signal_name_collision"]

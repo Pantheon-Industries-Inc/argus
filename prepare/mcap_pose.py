@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import numpy as np
 
@@ -64,11 +65,26 @@ def pose_contract(path):
     return position, orientation
 
 
+def join_pose_pieces(held, more):
+    """Two time pieces of one pose or gripper stream as one, in time order."""
+    if np.shape(held['values'])[1:] != np.shape(more['values'])[1:]:
+        return None
+    t = np.concatenate([held['t'], more['t']])
+    order = np.argsort(t, kind='stable')
+    return {**held, 't': t[order], 'values': np.concatenate([held['values'], more['values']])[order],
+            'frames': set(held['frames']) | set(more['frames'])}
+
+
 def pose_state(paths, q, clock):
-    """Return state, consumed fields, identity metadata and a qualified limitation."""
+    """Return state, consumed fields, identity metadata and a qualified limitation. Each file is read on its own and
+    the files are gathered by formats.merge_streams, the rule the signals and joint streams follow (formats.relate):
+    pieces of one recording are joined, and one actor's stream recorded by two files at overlapping times is two
+    recordings, so no pose state is read and the limitation says why."""
     from prepare import formats as f
-    poses, grips, failures = {}, {}, []
+    per_file, failures = [], []
     for path in paths:
+        poses, grips = {}, {}
+        per_file.append((Path(path).name, poses, grips))
         channels = f.mcap_channels(path)
         wanted = [topic for topic, _ in channels if re.search(
             r'/(?:eef_pose|ee_pose|tcp_pose|magnetic_encoder|gripper_opening)$', topic)]
@@ -129,6 +145,15 @@ def pose_state(paths, q, clock):
                 for frame in [f._field(decoded, 'frame_id'), f._field(f._field(decoded, 'header'), 'frame_id')]:
                     if frame:
                         group['frames'].add(str(frame))
+    def gathered(index):
+        files = [(file, {key: {**group, 't': np.asarray(group['t']), 'values': np.asarray(group['values'])}
+                         for key, group in streams[index].items()}) for file, *streams in per_file]
+        return f.merge_streams(files, values='values', combine=join_pose_pieces,
+                               rename=lambda key, name: (key[0], name))
+    poses, pose_notes = gathered(0)
+    grips, grip_notes = gathered(1)
+    if pose_notes or grip_notes:
+        return None, {}, {}, '; '.join(n['what'] for n in pose_notes + grip_notes) + ', so which one is the pose is unknown'
     if not poses:
         return None, {}, {}, '; '.join(dict.fromkeys(failures)) if failures else None
     actors = sorted({actor for actor, _ in poses} | {actor for actor, _ in grips})

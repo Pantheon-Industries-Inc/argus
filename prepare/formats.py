@@ -2774,19 +2774,19 @@ class Signals(dict):
         """a kept under name with its meta m, as its summary per frame (summarise_rows, a data issue) when it would take
         the running total past SIGNAL_EPISODE_BYTES; origin is the file it was read from, when known, and field the
         name it was read under (its identity, with origin, whatever name it is later kept under). Returns the name it
-        is kept under. A name already held is decided by its evidence (same_recording): the same values are kept once,
+        is kept under. A name already held is decided by its evidence (relate): the same values are kept once,
         pieces of one recording are joined, and anything else is a second source, kept beside the first
         (distinct_name). One never replaces the other."""
         a = np.asarray(a)
         field = field or name
         if name in self:
-            how = same_recording(self[name], self.meta.get(name) or {}, a, m)
+            how = relate((self.meta.get(name) or {}).get("span_s"), m.get("span_s"), same_values(self[name], a))
             if how == "same":
                 return name
-            if how == "pieces":
+            if how == "pieces" and np.shape(self[name]) == np.shape(a):
                 self._join(name, a, m, origin)
                 return name
-            name = self.distinct_name(name, origin)
+            name = self.distinct_name(name, origin, "overlap" if how == "pieces" else how)
         if origin:
             self.origins[name] = origin
         self.fields[name] = field
@@ -2825,28 +2825,14 @@ class Signals(dict):
         if files:
             meta["joined_from"] = files
 
-    def distinct_name(self, name: str, origin: str | None) -> str:
-        """The name a second signal called name is kept under, beside the one already held. When both files are known
-        and differ, each takes its file's name first ("left_log glove/pressure", "right_log glove/pressure"), so the
-        order the files were read in names neither; otherwise the held one keeps name and the new one takes its file's
-        name first, or a number. Either way a data issue (signal_name_collision) says which source each name holds."""
+    def distinct_name(self, name: str, origin: str | None, relation: str = "unknown") -> str:
+        """The name a second signal called name is kept under, beside the one already held (apart_names), with a data
+        issue (collision_note) saying which source each name holds and why they were kept apart (relation, relate)."""
         held = self.origins.get(name)
-        if held and origin and held != origin and f"{Path(held).stem} {name}" not in self:
-            self.rename(name, f"{Path(held).stem} {name}")
-            first = f"{Path(held).stem} {name}"
-        else:
-            first = name
-        new = f"{Path(origin).stem} {name}" if origin and Path(origin).stem != Path(held or "").stem else None
-        number = 2
-        while new is None or new in self:
-            new, number = f"{name} ({number})", number + 1
-        why = ("their readings overlap in time and differ" if self.meta.get(first, {}).get("span_s") is not None
-               else "nothing recorded shows whether they are one recording")
-        self.issues.append({"kind": "signal_name_collision", "signal": new,
-                            **({"signal_source": origin} if origin else {}), "signal_field": name,
-                            "what": f"{name} is recorded by two sources ({held or 'the first read'} and "
-                                    f"{origin or 'a second'}) and {why}; both are kept, as {first} and {new}, and "
-                                    "neither replaces the other"})
+        first, new = apart_names(name, held, origin, self)
+        if first != name:
+            self.rename(name, first)
+        self.issues.append(collision_note(name, held, origin, first, new, relation))
         return new
 
     def note(self, kind: str, what: str, name: str, **more) -> dict:
@@ -2906,22 +2892,87 @@ class Signals(dict):
         return self.keep(name, a, m, origin)
 
 
-def same_recording(held, held_meta: dict, a, meta: dict) -> str | None:
-    """How a signal arriving under a name already held relates to the held one, decided from what was recorded:
-    "same" when it holds the same values; "pieces" when both say the span of their readings (meta "span_s", seconds
-    of the episode on the clock they were placed by) and the spans do not overlap, as the files of one recording split
-    in time do; None, two sources, when the spans overlap with other values or nothing recorded tells the two apart,
-    so the data is kept apart (Signals.distinct_name)."""
-    if same_values(held, a):
+def relate(span_a, span_b, same: bool) -> str:
+    """How two sources recorded under one name relate, decided from what they recorded. The one rule for every reader
+    that gathers a name from several sources: the signals (Signals.keep) and an arm's joint and pose streams
+    (merge_streams). "same" when they hold the same values (kept once); "pieces" when both give the span of their
+    readings, on one clock, and the spans do not overlap, as the files of one recording split in time do (joined);
+    "overlap" when the spans overlap with other values, two recordings (kept apart and named); "unknown" when a span
+    is not recorded, so nothing tells the two cases apart (kept apart, and the note says so)."""
+    if same:
         return "same"
-    spans = [m.get("span_s") for m in (held_meta, meta)]
-    if not all(isinstance(x, (list, tuple)) and len(x) == 2 and all(isinstance(v, (int, float)) and bool(np.isfinite(v))
-                                                                  for v in x) for x in spans):
-        return None
+    spans = [span_a, span_b]
+    if not all(isinstance(x, (list, tuple)) and len(x) == 2 and all(isinstance(v, (int, float, np.floating))
+                                                                  and bool(np.isfinite(v)) for v in x) for x in spans):
+        return "unknown"
     (a0, a1), (b0, b1) = spans
-    if np.shape(held) != np.shape(a) or not (a1 < b0 or b1 < a0):
-        return None
-    return "pieces"
+    return "pieces" if a1 < b0 or b1 < a0 else "overlap"
+
+
+def apart_names(name: str, held: str | None, origin: str | None, taken) -> tuple[str, str]:
+    """(the held one's name, the new one's name) for two sources of name kept apart, neither taken. When both files
+    are known and differ, each takes its file's name first ("left_log glove/pressure", "right_log glove/pressure"), so
+    the order the files were read in names neither; otherwise the held one keeps name and the new one takes its file's
+    name first, or a number."""
+    first = name
+    if held and origin and held != origin and f"{Path(held).stem} {name}" not in taken:
+        first = f"{Path(held).stem} {name}"
+    new = f"{Path(origin).stem} {name}" if origin and Path(origin).stem != Path(held or "").stem else None
+    number = 2
+    while new is None or new in taken or new == first:
+        new, number = f"{name} ({number})", number + 1
+    return first, new
+
+
+def collision_note(name: str, held: str | None, origin: str | None, first: str, new: str, relation: str) -> dict:
+    """The data issue (signal_name_collision) for two sources of name kept apart as first and new, carrying the new
+    one's identity, with why they were kept apart (relation, relate)."""
+    why = ("their readings overlap in time and differ" if relation == "overlap"
+           else "nothing recorded shows whether they are one recording")
+    return {"kind": "signal_name_collision", "signal": new, **({"signal_source": origin} if origin else {}),
+            "signal_field": name,
+            "what": f"{name} is recorded by two sources ({held or 'the first read'} and {origin or 'a second'}) and "
+                    f"{why}; both are kept, as {first} and {new}, and neither replaces the other"}
+
+
+def merge_streams(per_file: list, *, values: str, combine, rename=lambda key, name: name) -> tuple[dict, list]:
+    """Raw message streams read file by file ([(file name, {key: stream with "t", seconds on the recording's clock,
+    and values rows})]) gathered into one {key: stream}, by the same rule as the signals (relate): a key one file
+    records is kept; the same stream twice is kept once; pieces of one recording are joined (combine(held, new));
+    streams that overlap with other values, or that cannot be told apart (also pieces combine refuses, returning None),
+    are kept apart under names that say their file (apart_names, rename(key, name) builds a key from a name), each
+    stream saying its file ("source"), with a note (collision_note) per pair. Returns (streams, notes)."""
+    out, notes = {}, []
+    for file, streams in per_file:
+        for key, stream in streams.items():
+            stream = {**stream, "source": file}
+            held = out.get(key)
+            if held is None:
+                out[key] = stream
+                continue
+            def span(x):
+                t = np.asarray(x["t"], dtype=np.float64)
+                return [float(t.min()), float(t.max())] if len(t) else None
+            same = (np.array_equal(np.asarray(held["t"]), np.asarray(stream["t"]))
+                    and np.array_equal(np.asarray(held[values]), np.asarray(stream[values])))
+            how = relate(span(held), span(stream), same)
+            if how == "same":
+                continue
+            joined = combine(held, stream) if how == "pieces" else None
+            if joined is not None:
+                out[key] = {**joined, "source": held["source"],
+                            "joined_from": list(dict.fromkeys(held.get("joined_from", [held["source"]]) + [file]))}
+                continue
+            if how == "pieces":
+                how = "unknown"          # pieces in time whose layouts differ: nothing says they are one recording
+            label = key if isinstance(key, str) else key[-1]
+            first, new = apart_names(label, held["source"], file,
+                                     {k if isinstance(k, str) else k[-1] for k in out})
+            del out[key]
+            out[rename(key, first)] = held
+            out[rename(key, new)] = stream
+            notes.append(collision_note(label, held["source"], file, first, new, how))
+    return out, notes
 
 
 def about(issue: dict, name: str, source: str | None, field: str) -> bool:
@@ -5131,12 +5182,12 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         # an arm state only when every arm the sensor files may hold was read on the footage's clock (state_blockers): a
         # file that could not be read, or was damaged where the footage needs it, and an arm placed from both starts
         # beside files on the footage's clock leave the episode with no arm state, every channel a signal
-        lost: list = []
-        streams = mcap_joint_streams(mcap_files, real[anchor], lost) if arm_rig and mcap_files else {}
+        lost, collided = [], []
+        streams = mcap_joint_streams(mcap_files, real[anchor], lost, notes=collided) if arm_rig and mcap_files else {}
         bad = unreadable_sensors(unplaced) + damaged_files(lost) if rig != "ego_head" else []
         others = "the other sensor files" if len(by_clock) + len(assumed) + len(unplaced) > len(bad) else None
         blocked = state_blockers(bad, assumed_arms(assumed, streams) if arm_rig and by_clock else [], others,
-                                 unplaced_arms(unplaced, streams) if arm_rig else [])
+                                 unplaced_arms(unplaced, streams) if arm_rig else []) or collided_arms(extra, collided)
         if by_clock:
             if not arm_rig or not mcap_files:
                 # a glove's pressure and hand pose beside a head camera, a handheld gripper's IMU: every number the MCAP
@@ -9722,8 +9773,27 @@ def _join_gripper(groups: list[dict], q: np.ndarray | None = None) -> list[dict]
                       + (grip.get("units") or [None])[:1]}]
 
 
+def join_joint_pieces(held: dict, more: dict) -> dict | None:
+    """Two time pieces of one arm's joint stream as one, in time order; None when their layouts differ."""
+    if held.get("names") != more.get("names") or np.shape(held["pos"])[1:] != np.shape(more["pos"])[1:]:
+        return None
+    t = np.concatenate([held["t"], more["t"]])
+    order = np.argsort(t, kind="stable")
+    joined = {**held, "t": t[order], "pos": np.concatenate([held["pos"], more["pos"]])[order],
+              "clocks": set(held.get("clocks") or ()) | set(more.get("clocks") or ()),
+              "clock_errors": list(held.get("clock_errors") or []) + list(more.get("clock_errors") or [])}
+    if held.get("units") != more.get("units"):
+        joined["units"] = ["conflicting units"] * np.shape(held["pos"])[1]
+    if "fields" in held or "fields" in more:
+        joined["fields"] = set(held.get("fields") or ()) | set(more.get("fields") or ())
+    if held.get("dropped") or more.get("dropped"):
+        joined["dropped"] = (held.get("dropped") or 0) + (more.get("dropped") or 0)
+        joined["dropped_widths"] = sorted(set(held.get("dropped_widths") or ()) | set(more.get("dropped_widths") or ()))
+    return joined
+
+
 def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: list | None = None,
-                       *, capture_clock: bool = False) -> dict:
+                       *, capture_clock: bool = False, notes: list | None = None) -> dict:
     """{key: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or None,
     "topic": its channel}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and
     text are not read. A channel's rows are grouped by the names their messages give (name_group), each in its group's
@@ -9735,7 +9805,15 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
     inside is read up to the damage, and when unread is given, each such file that declares channels none of whose
     messages could be read, where the footage q needs them (damaged_unread), is appended to it as (its path, those
     channels, whether any of its messages was read): what they hold is unknown, so no arm state is read beside them
-    (state_blockers)."""
+    (state_blockers). Each file is read on its own and the files are gathered by merge_streams, the rule the signals
+    follow (relate): pieces of one recording are joined, and two files recording one arm's channel at overlapping
+    times are kept apart under names that say their file, with a note in notes when given."""
+    if len(paths) > 1:
+        per_file = [(Path(p).name, mcap_joint_streams([p], q, unread, capture_clock=capture_clock)) for p in paths]
+        streams, said = merge_streams(per_file, values="pos", combine=join_joint_pieces)
+        if notes is not None:
+            notes.extend(said)
+        return streams
     found, facs = {}, _decoders()
     for p in paths:
         chans = [(t, s) for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not names_text(t)]
@@ -11563,12 +11641,14 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
         if rig == "teleop_arms":
             # an arm state only when every arm the recording and its sensor files may hold was read on its clock
             # (state_blockers), as beside videos
-            lost: list = []
-            streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q, lost, capture_clock=camera_clock == 'capture')
+            lost, collided = [], []
+            streams = mcap_joint_streams([item["file"]] + sensor_mcaps, q, lost, capture_clock=camera_clock == 'capture',
+                                         notes=collided)
             streams = compose_mcap_arms(streams, q, camera_clock) if camera_clock else streams
             bad = unreadable_sensors(unplaced) + damaged_files(lost)
             others = "the recording's other files" if 1 + len(by_clock) + len(assumed) + len(unplaced) > len(bad) else None
-            blocked = state_blockers(bad, assumed_arms(assumed, streams), others, unplaced_arms(unplaced, streams))
+            blocked = (state_blockers(bad, assumed_arms(assumed, streams), others, unplaced_arms(unplaced, streams))
+                       or collided_arms(extra, collided))
             if not blocked and (clock_errors and camera_clock != 'arrival' or camera_clock is None):
                 blocked = StateNote("Labelled from the cameras because their declared capture clocks are invalid or mixed "
                                     "with arrival stamps. Precise arm alignment was not inferred.", "assumed_clock")
@@ -12890,6 +12970,18 @@ def assumed_arms_note(arms: list[tuple[str, list[str]]], others: str | None, lea
         note += (f" A state of {others} alone would lack {'those arms' if many else 'that arm'}, so every arm channel "
                  "is given as a signal.")
     return StateNote(("Labelled from the cameras, because " if lead else "Also, ") + note, "assumed_clock")
+
+
+def collided_arms(extra: dict, notes: list) -> StateNote | None:
+    """The notes of arm channels that several files record at overlapping times, or with nothing to tell them apart
+    (merge_streams), into the episode's reader_issues, and why no arm state is read: which recording is the arm is
+    unknown, so every arm channel is given as a signal. None when there are none."""
+    for note in notes:
+        add_issue(extra, **note)
+    if not notes:
+        return None
+    return StateNote("Labelled from the cameras, because " + "; ".join(n["what"] for n in notes)
+                     + ". Which recording is the arm is unknown, so every arm channel is given as a signal.", "layout")
 
 
 def state_blockers(bad: list[tuple[str, str]], arms: list[tuple[str, list[str]]],

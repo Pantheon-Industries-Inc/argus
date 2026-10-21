@@ -27,7 +27,7 @@ def test_signals_from_overlapping_files_keep_values_on_their_capture_times(tmp_p
     q = np.arange(6) / 10
     out = formats.mcap_signals([late, early], q)
     # The two files' readings overlap in time, so nothing recorded says they are one recording: each is kept apart,
-    # every value on its own capture time, and a note says why (Signals.keep, same_recording).
+    # every value on its own capture time, and a note says why (Signals.keep, relate).
     np.testing.assert_array_equal(out['early /sensor'][[0, 2, 4], 0], [2, 9, 3])
     np.testing.assert_array_equal(out['late /sensor'][[1, 3, 5], 0], [7, 1, 8])
     assert any(i['kind'] == 'signal_name_collision' and 'overlap' in i['what'] for i in out.issues)
