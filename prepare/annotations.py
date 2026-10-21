@@ -10,30 +10,24 @@ SCOPE_FILES = ('info.json', 'metadata.json', 'dataset.json', 'meta/info.json')
 DESCRIPTION_FIELDS = ('dataset_note', 'dataset_description', 'description', 'collection_note')
 
 
-class ScopeConflict(ValueError):
-    """The upload's own scope declarations contradict each other or name no scope. Labelling the episode under
-    either reading would be a guess at how it was recorded, so this refuses the episode; it is not damage."""
-
-
 def declared_context(declarations, rig: str | None) -> dict:
-    """Resolve explicit declarations without inferring scope from descriptive text."""
+    """Resolve explicit declarations without inferring scope from descriptive text. A declared task mode (task_mode,
+    or sessions true) is kept as provenance when the declarations agree on one; it never changes how a recording is
+    labelled, since every recording is labelled as a list of tasks (label/prompts.py), so declarations that disagree,
+    or a mode that is neither episode nor session, keep none and refuse nothing."""
     context = {'profile': rig} if rig is not None else {}
     modes, notes = set(), []
     for data in declarations:
         mode = data.get('task_mode')
-        if mode is not None and mode not in ('episode', 'session'):
-            raise ScopeConflict('Dataset task_mode must be episode or session.')
         if mode is not None:
-            modes.add(mode)
+            modes.add(mode if isinstance(mode, str) else json.dumps(mode, sort_keys=True, default=str))
         elif data.get('sessions') is True:
             modes.add('session')
         for key in DESCRIPTION_FIELDS:
             note = data.get(key)
             if isinstance(note, str) and note.strip() and note not in notes:
                 notes.append(note)
-    if len(modes) > 1:
-        raise ScopeConflict('Dataset metadata declares conflicting episode and session task scopes.')
-    if modes:
+    if len(modes) == 1 and next(iter(modes)) in ('episode', 'session'):
         context['task_mode'] = modes.pop()
     if notes:
         context['collection_note'] = '\n'.join(notes)
@@ -89,8 +83,9 @@ def hdf_source_context(f, group: str, rig: str, coverage: dict) -> dict:
     context = declared_context(declarations, rig)
     for (name, _), fields in zip(owners, declarations):
         for key, field in fields.items():
-            consumed = key == 'task_mode' and field == context.get('task_mode')
-            consumed |= key == 'sessions' and field is True and fields.get('task_mode') is None and context.get('task_mode') == 'session'
+            # a declared task mode is read as provenance, never offered as metadata, whether or not they agree
+            consumed = key == 'task_mode' and field in ('episode', 'session')
+            consumed |= key == 'sessions' and field is True and fields.get('task_mode') is None
             consumed |= key in DESCRIPTION_FIELDS and isinstance(field, str) and bool(field.strip())
             if consumed:
                 mark_hdf(coverage, str(Path(f.filename).resolve()), name, key)
@@ -98,12 +93,13 @@ def hdf_source_context(f, group: str, rig: str, coverage: dict) -> dict:
 
 
 def scope_pointers(fields, context):
-    """Only native leaves already supplied as task scope or recording description."""
+    """Only native leaves already read as task scope (provenance, declared_context) or supplied as recording
+    description."""
     pointers = []
     mode = fields.get('task_mode')
-    if mode in ('episode', 'session') and mode == context.get('task_mode'):
+    if mode in ('episode', 'session'):
         pointers.append('/task_mode')
-    if mode is None and fields.get('sessions') is True and context.get('task_mode') == 'session':
+    if mode is None and fields.get('sessions') is True:
         pointers.append('/sessions')
     for key in DESCRIPTION_FIELDS:
         value = fields.get(key)

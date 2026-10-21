@@ -193,8 +193,7 @@ class part:
     stream, a sensor file. An episode is shown and labelled beside its cameras, so nothing that goes wrong reading
     any other part may cost the cameras: whatever it raises is recorded as damage to that part (on issues, a list
     of add_issue fields) and the episode goes on without it. This is the one boundary for the class, so a new kind
-    of damage needs no new exception type here. Only cameras, and scope declarations that contradict each other
-    (ScopeConflict, a refusal rather than damage), can fail an episode.
+    of damage needs no new exception type here. Only cameras can fail an episode.
 
         with part(issues, "the recorded state"):
             skip_when_cameras_only()
@@ -211,9 +210,6 @@ class part:
     def __exit__(self, kind, error, tb):
         if error is None or not isinstance(error, Exception):
             return False                 # nothing went wrong, or an interrupt: never swallowed
-        from prepare.annotations import ScopeConflict
-        if isinstance(error, ScopeConflict):
-            return False                 # the upload's own declarations refuse the episode; that is not damage
         if isinstance(error, CamerasOnly):
             if self.what not in LEFT_UNREAD:
                 LEFT_UNREAD.append(self.what)    # named by the retry's one issue (read_episode)
@@ -13827,7 +13823,9 @@ def _convert_upload(root, rig, out, dataset, max_seconds, grouping, ownership_co
             for damage in archive_damage:
                 add_issue(ctx, 'archive_damaged', damage)
             write_atomic(out / ctx['episode_id'] / 'context.json', ctx, indent=1, default=str)
-        if 'task_mode' in scope:
+        # an HDF5 reader merges the upload's scope with the file's own (convert_hdf5), so its context already holds the
+        # declared task mode the two agree on, and none when they disagree
+        if 'task_mode' in scope and it['kind'] != 'hdf5':
             ctx.setdefault('task_mode', scope['task_mode'])
         if 'collection_note' in scope and it['kind'] != 'hdf5':
             notes = [scope['collection_note']]

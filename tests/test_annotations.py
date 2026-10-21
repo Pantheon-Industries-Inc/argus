@@ -672,17 +672,17 @@ def test_explicit_source_scope_reaches_local_preparation_and_request(tmp_path, n
     assert ctx['state_kind'] == 'none'
 
 
-def test_source_scope_rejects_conflicting_claims_without_text_inference(tmp_path):
+def test_source_scope_is_provenance_without_text_inference_and_a_conflict_refuses_nothing(tmp_path):
+    """A declared task mode never changes how a recording is labelled (every recording is a list of tasks), so it is
+    kept only when the declarations agree, and declarations that disagree or name no mode refuse nothing."""
     (tmp_path / 'info.json').write_text(json.dumps({'description': 'A session with several tasks.'}))
     assert annotations().source_context(tmp_path, 'ego_head').get('task_mode') is None
     (tmp_path / 'metadata.json').write_text(json.dumps({'sessions': True}))
     assert annotations().source_context(tmp_path, 'ego_head')['task_mode'] == 'session'
-    (tmp_path / 'dataset.json').write_text(json.dumps({'task_mode': 'episode'}))
-    with pytest.raises(ValueError, match='conflicting'):
-        annotations().source_context(tmp_path, 'ego_head')
-    (tmp_path / 'dataset.json').write_text(json.dumps({'task_mode': ['session']}))
-    with pytest.raises(ValueError, match='task_mode'):
-        annotations().source_context(tmp_path, 'ego_head')
+    for declared in ({'task_mode': 'episode'}, {'task_mode': ['session']}, {'task_mode': 'cycles'}):
+        (tmp_path / 'dataset.json').write_text(json.dumps(declared))
+        context = annotations().source_context(tmp_path, 'ego_head')
+        assert 'task_mode' not in context and context['collection_note'] == 'A session with several tasks.'
 
 
 def test_consumed_source_scope_does_not_opt_rgb_into_extra_evidence(tmp_path):
@@ -740,13 +740,13 @@ def test_hdf_scope_uses_only_explicit_recording_owners(tmp_path, declaration, ri
     out = tmp_path / 'prepared'
     report = f.convert(upload, rig, out, 'scope', 900)
     assert raw.read_bytes() == original_bytes
-    if declaration in ('root_conflict', 'json_conflict', 'invalid'):
-        assert not report['episodes']
-        assert 'task_mode' in report['failed'][0]['why'] or 'conflicting' in report['failed'][0]['why']
-        return
     assert not report['failed'], report
     directory = out / report['episodes'][0]['episode_id']
     ctx = json.loads((directory / 'context.json').read_text())
+    if declaration in ('root_conflict', 'json_conflict', 'invalid'):
+        # declarations that disagree or name no mode are kept out of the context and refuse nothing
+        assert 'task_mode' not in ctx and 'task_mode' not in policy.resolve(ctx)
+        return
     selected = policy.resolve(ctx)
     assert 'task_mode' not in selected      # a declaration is provenance only
     expected_note = 'Upload collection\n' + note if declaration == 'json_agree' else note

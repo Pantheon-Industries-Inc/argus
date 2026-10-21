@@ -294,10 +294,11 @@ def test_an_archive_the_filesystem_cannot_hold_costs_only_itself(tmp_path):
     assert 'could not be' in said, said
 
 
-def test_metadata_that_contradicts_itself_in_an_archive_kept_apart_costs_that_archive_alone(tmp_path):
+def test_metadata_that_contradicts_itself_in_an_archive_kept_apart_refuses_nothing(tmp_path):
     """Review of 2ab6857: a recovered archive whose own metadata declared both a session and an episode task scope
-    raised out of the conversion and cost the healthy recording beside it. Whatever stops a member kept apart from being
-    planned costs that member alone and is named."""
+    raised out of the conversion and cost the healthy recording beside it. A declared task scope is provenance only
+    (every recording is labelled as a list of tasks), so the contradiction now costs nothing: both recordings are
+    prepared, the member kept apart is still named as read as an upload of its own, and neither keeps a task mode."""
     inner = zipped({'take/front.mp4': movie(30, frames=45), 'take/info.json': json.dumps({'task_mode': 'session'}),
                     'take/dataset.json': json.dumps({'task_mode': 'episode'})})
     raw = rename_first_local(zipped({'takeA/first.zip': inner, 'healthy/front.mp4': movie(200, frames=45)}),
@@ -305,8 +306,11 @@ def test_metadata_that_contradicts_itself_in_an_archive_kept_apart_costs_that_ar
     path = tmp_path / 'outer.zip'
     path.write_bytes(raw)
     report = formats.convert(path, 'ego_head', tmp_path / 'out', 'scope conflict', 900)
-    assert [e['episode_id'] for e in report['episodes']] == ['episode_healthy_front'], report
-    assert any('read on its own' in str(note) for note in report['missing']), report['missing']
+    ids = sorted(e['episode_id'] for e in report['episodes'])
+    assert len(ids) == 2 and 'episode_healthy_front' in ids and not report['failed'], report
+    assert any('read as an upload of its own' in str(note) for note in report['missing']), report['missing']
+    for name in ids:
+        assert 'task_mode' not in json.loads((tmp_path / 'out' / name / 'context.json').read_text())
 
 
 def test_a_member_kept_apart_that_cannot_be_written_never_takes_another_ones_folder(tmp_path):

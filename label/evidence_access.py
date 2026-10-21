@@ -68,6 +68,8 @@ state_unaligned fps duration_s n_state_frames real_times clocks clock_start_s cl
 cameras depth signals source instruction instruction_note task_label capture_qc sensor_checks stream_checks
 stream_pairing check_versions reader_issues contacts unshown_cameras recorded_jumps gripper_channels gripper_value piece
 packaging collection_note data_dictionary retained_evidence_root recorded_camera_ns recorded_mcap_fields recorded_hdf5_metadata'''.split())
+# task_mode is a source's declared scope, kept as provenance (prepare/annotations.py declared_context): it no longer
+# shapes the request, and it is never offered for inspection either, since it says nothing about the footage.
 PREPARED_CONTEXT = PREPARED_CONTEXT | {'represented_source_members', 'annotation_policy', 'task_mode', 'state_contract', 'trimmed',
                                      'recorded_table_fields', 'table_field_inventory'}
 
