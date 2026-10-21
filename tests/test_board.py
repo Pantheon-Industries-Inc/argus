@@ -324,8 +324,9 @@ def test_board_builds_from_the_latest_run(tmp_path):
     assert d["dataset_checks"]["stream_pairing"] == {"crossed": True} and "gripper_channels" not in d["dataset_checks"]
     assert d["_withheld_checks"]["gripper_channels"]["reason"] == "one-armed tasks"
     # a dataset label with no end time is a moment
-    assert d["dataset_labels"] == [{"t0": 0.0, "t1": 4.5, "label": "reach for the cup"},
-                                   {"t0": 5.0, "t1": 5.0, "label": "open"}]
+    # each timed label carries its number in the whole recording, the number a task judged against it names
+    assert d["dataset_labels"] == [{"t0": 0.0, "t1": 4.5, "label": "reach for the cup", "step": 1},
+                                   {"t0": 5.0, "t1": 5.0, "label": "open", "step": 2}]
     # the rules: an instruction was given, so a missing-instruction issue stays; nothing capped without a mismatch
     assert [i["category"] for i in d["data_issues"]] == ["human_intervention", "missing_instruction"]
     assert d["operator_mistakes"][0]["severity"] == "high"
@@ -1046,9 +1047,9 @@ def test_a_dataset_label_with_no_time_is_kept_untimed_and_never_breaks_the_build
         {"t0": 2, "label": "open"}, {"t0": 1, "t1": 2, "label": ""}]}
     d = {}
     board_build.add_context(d, ctx, tmp_path)
-    assert d["dataset_labels"] == [{"t0": None, "t1": None, "label": "wipe the table"},
-                                   {"t0": None, "t1": 3.0, "label": "odd start"},
-                                   {"t0": 2.0, "t1": 2.0, "label": "open"}]
+    assert d["dataset_labels"] == [{"t0": None, "t1": None, "label": "wipe the table", "step": 1},
+                                   {"t0": None, "t1": 3.0, "label": "odd start", "step": 2},
+                                   {"t0": 2.0, "t1": 2.0, "label": "open", "step": 3}]
 
 
 def test_an_untimed_step_never_breaks_the_hands_out_of_view_total():

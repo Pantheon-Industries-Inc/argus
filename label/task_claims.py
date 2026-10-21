@@ -69,7 +69,11 @@ def _merged(rows: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
         if not words or ('row_start' not in row and t0 is not None and t1 is not None and t1 - t0 < INSTANT_S
                          and k < len(rows) - 1):
             continue
-        if out and _same(text(out[-1][1]), words):
+        # recorded rows join only where they meet; a row between them with no text (an unresolved code) breaks the
+        # claim, so the text is not held over that stretch
+        meets = not (isinstance(row.get('row_start'), int) and out and isinstance(out[-1][1].get('row_end'), int)
+                     and row['row_start'] != out[-1][1]['row_end'] + 1)
+        if out and meets and _same(text(out[-1][1]), words):
             last = out[-1][1]
             if 't1' in row or 't1' in last:
                 last['t1'] = row.get('t1')
@@ -97,8 +101,8 @@ def _reaches_end(row: dict, end_s: float | None, n_rows) -> bool:
 
 def _starts(row: dict, end_s: float | None) -> bool:
     """Whether a claim starts with the recording: at its first row, or within a second (or 5% of its length)."""
-    if row.get('row_start') == 0:
-        return True
+    if isinstance(row.get('row_start'), int):
+        return row['row_start'] == 0
     t0 = _number(row.get('t0'))
     return t0 is not None and t0 <= max(1.0, 0.05 * (end_s or 0.0))
 
@@ -142,7 +146,8 @@ def claims(ctx: dict, duration_s: float | None = None) -> dict:
         # it holds over the whole recording when it reaches the end and starts with it, or starts after nothing but
         # rows of its source that claim nothing (a placeholder, an empty text)
         led = merged[0][0] != group[0][0]
-        one_text = all(has_text(row) for _, row in merged) and len({text(row).casefold() for _, row in merged}) == 1
+        # one unbroken claim of one text
+        one_text = len(merged) == 1 and has_text(first)
         if one_text and _reaches_end(last, end_s, n_rows) and (
                 _starts(first, end_s) or led and _number(first.get('t0')) is not None):
             whole.append({'text': text(first), 'column': column, 'source': source})

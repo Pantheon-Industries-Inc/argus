@@ -96,7 +96,8 @@ def test_malformed_metadata_keeps_valid_rows_and_reaches_the_board(tmp_path):
     assert findings and all(issue["family"] == "metadata-unreadable" for issue in findings)
     assert any("tasks.jsonl" in issue["what"] for issue in findings)
     assert "metadata-unreadable" in Families().classify(doc)["counted"]
-    assert any(span["label"] == "coarse recorded task" for span in ctx["annotation_subtasks"])
+    # the task code holds one text over every row: the episode's claim about the whole recording, never a step
+    assert any(span["label"] == "coarse recorded task" for span in ctx["annotation_task_claims"])
     assert source_hashes(tmp_path) == before
 
 

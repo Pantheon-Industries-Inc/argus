@@ -468,9 +468,9 @@ def test_constant_row_language_preserves_declared_instruction_priority(tmp_path,
     assert not report['failed'], report
     ctx = json.loads((output / report['episodes'][0]['episode_id'] / 'context.json').read_text())
     assert ctx['instruction'] == (declared or 'recorded language')
-    # constant language over every row that is the episode's task is no step of it; with a declared goal it is
-    language = [s for s in ctx['annotation_task_claims' if not declared else 'annotation_subtasks']
-                if s['column'] == 'language_instruction']
+    # constant language over every row is a claim about the whole episode, never a step of it: the instruction when
+    # none is declared, else a claim beside the declared goal (label/task_claims.py)
+    language = [s for s in ctx['annotation_task_claims'] if s['column'] == 'language_instruction']
     assert language[0]['value'] == 'recorded language' and language[0]['source'] == str(path)
     assert not [s for s in ctx.get('annotation_subtasks', []) if s.get('label') == ctx['instruction']]
     assert path.read_bytes() == raw
@@ -529,11 +529,16 @@ def test_empty_malformed_and_competing_frame_text_remains_source_attributed(tmp_
     report = f.convert(root, 'teleop_arms', output, 'test', 900)
     assert not report['failed'], report
     ctx = json.loads((output / report['episodes'][0]['episode_id'] / 'context.json').read_text())
-    assert 'instruction' not in ctx
+    # the language that changes is timed claims; the column that holds one text over every row is the episode's claim
+    # about the whole recording, its instruction, never a step (label/task_claims.py)
+    assert [(s['column'], s['label']) for s in ctx['annotation_subtasks'] if s['column'] == 'language_instruction'] == [
+        ('language_instruction', 'pick'), ('language_instruction', 'place')]
+    assert [(s['column'], s['label']) for s in ctx['annotation_task_claims']] == [('instruction', 'other goal')]
+    assert ctx['instruction'] == 'other goal'
     missing = [x for x in ctx['annotation_unresolved'] if x['column'] == 'language_instruction']
     assert [x['value'] for x in missing] == ['', None]
     assert all(x['source'] == str(path) and x['why'] for x in missing)
-    assert 'other goal' in ctx['uploader_annotation'] and 'language_instruction' in ctx['uploader_annotation']
+    assert 'language_instruction' in ctx['uploader_annotation']
 
 
 def test_unassigned_episode_claims_never_attach_valid_neighbors(tmp_path):

@@ -544,7 +544,9 @@ def test_reader_metadata_limit_paths_use_typed_source_identity_without_rewriting
     assert [claim['value'] for claim in context['annotation_unresolved']] == [91, 91, 92]
     assert [claim['raw_time'] for claim in context['annotation_unresolved']] == [0., 1., 2.]
     assert all(claim['data_source'] == str(data) for claim in context['annotation_unresolved'])
-    assert any(step['label'] == 'one' for step in context['annotation_subtasks'])
+    # native_step holds "one" over every row: the episode's whole-recording claim, its instruction (label/task_claims.py)
+    assert context['instruction'] == 'one'
+    assert any(step['label'] == 'one' for step in context['annotation_task_claims'])
     from board.families import Families
     assert not Families().classify({'dataset_checks': {'reader_issues': issues}})['counted']
     assert str(data) not in json.dumps(project({'dataset_checks': {'reader_issues': context['reader_issues']}}))
