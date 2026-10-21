@@ -219,6 +219,59 @@ Comparisons distinguish missing responses from replies that failed to parse. Cos
 
 </details>
 
+<details>
+<summary>Every command's options</summary>
+
+Each command runs as `python -m <command>`; `--help` describes its options.
+
+| Command | Options |
+|---|---|
+| [`review`](review/__main__.py) | `--data`, `--rig`, `--out` and every option in [Settings](#settings) |
+| [`prepare abc130k prepare`](prepare/abc130k.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
+| [`prepare abc130k sample`](prepare/abc130k.py) | `--list`, `--per-task`, `--split`, `--seed`, `--jobs` |
+| [`prepare egocentric100k prepare`](prepare/egocentric100k.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
+| [`prepare egocentric100k sample`](prepare/egocentric100k.py) | `--out`, `--list`, `--raw`, `--hours`, `--jobs`, `--seed` |
+| [`prepare fastumi prepare`](prepare/fastumi.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
+| [`prepare fastumi sample`](prepare/fastumi.py) | `--list`, `--raw`, `--per-task`, `--seed` |
+| [`prepare folder prepare`](prepare/folder.py) | `--root`, `--rig`, `--out`, `--dataset`, `--max-minutes` |
+| [`prepare galaxea prepare`](prepare/galaxea.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
+| [`prepare galaxea sample`](prepare/galaxea.py) | `--out`, `--list`, `--raw`, `--hours`, `--jobs`, `--seed` |
+| [`prepare genhumanego prepare`](prepare/genhumanego.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
+| [`prepare habit prepare`](prepare/habit.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
+| [`prepare lerobot prepare`](prepare/lerobot.py) | `--episodes`, `--out`, `--jobs`, `--force`, `--root`, `--rig`, `--dataset` |
+| [`prepare molmo prepare`](prepare/molmo.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
+| [`prepare molmo sample`](prepare/molmo.py) | `--list`, `--raw`, `--hours`, `--mode`, `--per-task-cap-hours` |
+| [`prepare openaoe prepare`](prepare/openaoe.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force` |
+| [`prepare realomin prepare`](prepare/realomin.py) | `--episodes`, `--out`, `--raw`, `--jobs`, `--force`, `--keep-mcap` |
+| [`prepare realomin sample`](prepare/realomin.py) | `--out`, `--list`, `--raw`, `--hours`, `--jobs`, `--seed`, `--keep-mcap` |
+| [`prepare videos prepare`](prepare/videos.py) | `--episodes`, `--out`, `--jobs`, `--force`, `--root`, `--rig`, `--instructions`, `--dataset` |
+| [`checks`](checks/__main__.py) | `--jobs`, `--force` |
+| [`checks.capture_qc`](checks/capture_qc.py) | `--jobs`, `--force` |
+| [`checks.sensors`](checks/sensors.py) | `--jobs`, `--force` |
+| [`checks.stream_pairing`](checks/stream_pairing.py) | `--jobs`, `--force`, `--jumps`, `--grippers` |
+| [`checks.timebase apply`](checks/timebase.py) | `--timebase`, `--labels` |
+| [`checks.timebase scan`](checks/timebase.py) | `--raw`, `--out`, `--jobs` |
+| [`label`](label/run.py) | `--dataset`, `--episodes`, `--kind`, `--cap`, `--runs`, `--concurrency`, `--note`, `--label`, `--resume`, `--why` |
+| [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--task-mode`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--route-seeds`, `--max-spend`, `--dry-run` |
+| [`board build`](board/build.py) | `--no-cache` |
+| [`board clips`](board/clips.py) | `--episodes`, `--out`, `--only`, `--jobs`, `--clip-threads`, `--force`, `--name-prefix`, `--labels` |
+| [`board grids`](board/grids.py) | `--jobs`, `--dataset`, `--file` |
+| [`board hands`](board/hands.py) | `--src`, `--qa`, `--clips`, `--episodes`, `--out`, `--jobs` |
+| [`board sensors`](board/sensors.py) | `--qa`, `--episodes`, `--out` |
+| [`board serve`](board/serve.py) | `--board`, `--clips`, `--host`, `--port`, `--title`, `--header`, `--allow-host`, `--publish-uploader-values`, `--dictionary-job` |
+| [`board static`](board/static.py) | `--board`, `--clips`, `--compare`, `--hands`, `--keypoints`, `--sensors`, `--out`, `--jobs`, `--threads`, `--limit-per-dataset`, `--dataset`, `--samples`, `--first`, `--public-base`, `--publish-uploader-values`, `--dictionary-job`, `--build-id`, `--force`, `--title`, `--header` |
+| [`board to_board`](board/to_board.py) | `--in-dir`, `--out-dir`, `--dataset` |
+| [`board.hand_pose.specs`](board/hand_pose/specs.py) | `--out` |
+| [`compare board`](compare/__main__.py) | `--entries`, `--out` |
+| [`compare label`](compare/__main__.py) | `--selection`, `--episodes`, `--models`, `--with-example`, `--kind`, `--cap`, `--runs`, `--concurrency`, `--routes` |
+| [`compare prepare`](compare/__main__.py) | `--selection`, `--episodes` |
+| [`compare.metrics`](compare/metrics.py) | `--json` |
+| [`gate label`](gate/__main__.py) | `--episodes`, `--rigs`, `--kind`, `--cap`, `--runs`, `--concurrency` |
+| [`gate prepare`](gate/__main__.py) | `--episodes` |
+| [`gate score`](gate/score.py) | `--json` |
+
+</details>
+
 ## Credits
 
 The capture checks in [`checks/vendor/public_dataset_adapter_qc.py`](checks/vendor/public_dataset_adapter_qc.py) are Sambhav Gupta's, from public-dataset-adapter (commit 99d0a9e), with the changes listed in that file's header. The hand pose model is ACE-Ego-Hand (Yufei Liu et al., [arXiv:2608.20308](https://arxiv.org/abs/2608.20308)), built on Wan2.2, VideoX-Fun and MANO (Romero, Tzionas and Black, 2017).
