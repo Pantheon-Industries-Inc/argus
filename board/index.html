@@ -775,6 +775,17 @@ aside.left .cam-row-grippers .top-hud-scene .top-hud-in { flex-direction: column
     max-height: 220px; margin-top: 6px; padding-top: 7px; padding-bottom: 7px; border-top-width: 1px;
     border-bottom-width: 1px; }
 }
+/* at any width, a caption that does not fit over the footage (its box would reach the progress chip or a note at the
+   top of the image, fitCaptionBesideChip measures) moves below the footage as on a phone; the notes at the top stay */
+aside.left .cam-cell.cap-below { flex-wrap: wrap; }
+aside.left .cam-cell.cap-below > video { flex: 1 0 100%; }
+aside.left .cam-cell.cap-below > .video-overlay, aside.left .cam-cell.cap-below > .video-overlay.active {
+  order: 2; flex: 1 0 100%; position: static; transform: none; min-width: 0; max-width: none; margin: 6px 0 0;
+  box-sizing: border-box; min-height: 64px; font-size: 13px; transition: opacity 130ms ease; }
+/* a score chip that does not fit over the footage either follows the caption below it, on its own line just above
+   the caption, at its own size */
+aside.left .cam-cell > .score-chip.under { position: static; order: 1; flex: 0 0 auto; transform: none;
+  margin: 6px 0 0; height: auto !important; }
 section.right { overflow-y: auto; padding: 22px 28px; }
 
 /* ---------- prompt banner ---------- */
@@ -7483,6 +7494,10 @@ function renderEp(d, opts) {
   // this they sit on the black bars. Compute the real displayed-image rect and
   // publish it as CSS vars (--fx-left/top/right/bottom insets) so every overlay
   // hugs the frame, not the padding. Recomputed on metadata/resize/fullscreen.
+  // A caption or score chip that did not fit over the footage stays below it while the frame keeps the size it was
+  // measured on (frameKey, kept in exoCell.dataset.fitFrame), so playback never moves them back and forth; a frame of
+  // another size (a resize, full screen) is measured again from the start.
+  let frameKey = '';
   function layoutFrame() {
     if (!vid || !exoCell || !vid.videoWidth || !vid.videoHeight) return;
     const elW = vid.clientWidth, elH = vid.clientHeight;
@@ -7490,6 +7505,13 @@ function renderEp(d, opts) {
     const ar = vid.videoWidth / vid.videoHeight;
     let dW = elW, dH = elW / ar;
     if (dH > elH) { dH = elH; dW = elH * ar; }
+    frameKey = Math.round(dW) + 'x' + Math.round(dH);
+    if (exoCell.dataset.fitFrame != null && exoCell.dataset.fitFrame !== frameKey) {
+      delete exoCell.dataset.fitFrame;
+      exoCell.classList.remove('cap-below');
+      const chip = document.getElementById('score-chip');
+      if (chip) chip.classList.remove('under');
+    }
     const cellR = exoCell.getBoundingClientRect(), vidR = vid.getBoundingClientRect();
     const elLeft = vidR.left - cellR.left, elTop = vidR.top - cellR.top;
     const fx = elLeft + (elW - dW) / 2, fy = elTop + (elH - dH) / 2;
@@ -7712,16 +7734,21 @@ function renderEp(d, opts) {
     if (capEl.offsetParent) globalThis._scoreChipObserver.observe(capEl.offsetParent);
   }
   // while the chip shows, the centred caption narrows so it clears the chip on the left (and keeps the same margin on
-  // the right); when the video is too narrow for both, the chip stands above the caption instead
+  // the right); when the video is too narrow for both, the chip stands above the caption instead.
+  // A caption that does not fit over the footage (it, or the chip beside or above it, would reach a box at the top of
+  // the image: clearOfTop) moves below the footage at any width (cap-below), as it does on a phone; a chip that does
+  // not fit in the corner over the footage then follows the caption (under). Each stays there while the frame keeps
+  // the size it was measured on (layoutFrame), so playback never moves them back and forth.
   function fitCaptionBesideChip() {
     const chip = document.getElementById('score-chip');
     // layout is the browser's: without one (a page function run on its own) there is nothing to fit
-    if (!chip || !capEl || !chip.style || !capEl.style || typeof getComputedStyle === 'undefined') return;
+    if (!capEl || !capEl.style || (chip && !chip.style) || typeof getComputedStyle === 'undefined') return;
     // the strip under a lone gripper camera holds the caption in the page's flow: the chip stands beside it there too,
     // on the caption's own lines, and the caption narrows to clear it (or the chip stands above it when the strip is
     // too narrow for both)
     const strip = capEl.closest('.grip-strip');
-    if (strip && chip.parentElement === strip) {
+    if (strip) {
+      if (!chip) return;
       chip.classList.remove('corner');
       const on = chip.classList.contains('active');
       const room = strip.clientWidth - 2 * (12 + chip.offsetWidth + 10);
@@ -7734,30 +7761,59 @@ function renderEp(d, opts) {
       chip.style.top = beside ? capEl.offsetTop + 'px' : '';
       return;
     }
-    // on a narrow screen the caption sits under the video, not over it: the chip keeps its own size in the corner
-    if (getComputedStyle(capEl).position !== 'absolute') {
-      chip.style.height = ''; capEl.style.maxWidth = ''; chip.classList.remove('above'); chip.classList.add('corner');
-      // over the footage, never over the caption below it: the chip stands on the video's own bottom edge (the drawn
-      // frame's, --fx-bottom, once the video knows its size), so the caption in the flow under it is never covered
-      const vidEl = chip.parentElement && chip.parentElement.querySelector('video');
-      if (vidEl && chip.offsetParent) {
-        const below = chip.offsetParent.getBoundingClientRect().bottom - vidEl.getBoundingClientRect().bottom;
-        const fx = parseFloat(getComputedStyle(chip).getPropertyValue('--fx-bottom')) || 0;
-        chip.style.bottom = (Math.max(fx, below) + 70) + 'px';
+    const on = !!chip && chip.classList.contains('active');
+    if (getComputedStyle(capEl).position === 'absolute') {
+      if (chip) {
+        chip.classList.remove('corner', 'under');
+        if (capEl.offsetHeight) {
+          chip.style.height = capEl.offsetHeight + 'px';
+          chip.style.setProperty('--cap-h', capEl.offsetHeight + 'px');
+        }
+        const width = capEl.offsetParent ? capEl.offsetParent.clientWidth : 0;
+        const room = width - 2 * (chip.offsetLeft + chip.offsetWidth + 10);
+        const beside = on && room >= 200;
+        capEl.style.maxWidth = beside ? room + 'px' : '';
+        chip.classList.toggle('above', on && !beside);
       }
-      return;
+      const fits = (!capEl.classList.contains('active') || clearOfTop(capEl)) && (!on || clearOfTop(chip));
+      if (fits || !exoCell) return;
+      exoCell.classList.add('cap-below');
+      exoCell.dataset.fitFrame = frameKey;
     }
+    // the caption sits under the video, not over it: the chip keeps its own size in the corner over the footage
+    if (!chip) return;
+    chip.style.height = ''; capEl.style.maxWidth = ''; chip.classList.remove('above');
+    if (chip.classList.contains('under')) return;
+    chip.classList.add('corner');
+    // over the footage, never over the caption below it: the chip stands on the video's own bottom edge (the drawn
+    // frame's, --fx-bottom, once the video knows its size), so the caption in the flow under it is never covered
+    const vidEl = chip.parentElement && chip.parentElement.querySelector('video');
+    if (vidEl && chip.offsetParent) {
+      const below = chip.offsetParent.getBoundingClientRect().bottom - vidEl.getBoundingClientRect().bottom;
+      const fx = parseFloat(getComputedStyle(chip).getPropertyValue('--fx-bottom')) || 0;
+      chip.style.bottom = (Math.max(fx, below) + 70) + 'px';
+    }
+    if (!on || !exoCell || clearOfTop(chip)) return;
     chip.classList.remove('corner');
-    if (capEl.offsetHeight) {
-      chip.style.height = capEl.offsetHeight + 'px';
-      chip.style.setProperty('--cap-h', capEl.offsetHeight + 'px');
-    }
-    const on = chip.classList.contains('active');
-    const width = capEl.offsetParent ? capEl.offsetParent.clientWidth : 0;
-    const room = width - 2 * (chip.offsetLeft + chip.offsetWidth + 10);
-    const beside = on && room >= 200;
-    capEl.style.maxWidth = beside ? room + 'px' : '';
-    chip.classList.toggle('above', on && !beside);
+    chip.classList.add('under');
+    chip.style.bottom = '';
+    exoCell.dataset.fitFrame = frameKey;
+  }
+  // whether a box drawn over the footage (the caption, the score chip) starts 8px or more below every box at the top of
+  // the image that shares its columns: the progress chip, the hands note, a state change and a recovery banner, each
+  // while it shows over the image. Boxes are measured where they are laid out, not where an entry transition has them
+  // now: the box from its offset in the cell, a note placeTop placed from the top it was given.
+  function clearOfTop(el) {
+    if (!exoCell || el.offsetParent !== exoCell) return true;
+    const cr = exoCell.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return [...exoCell.querySelectorAll('.prog-overlay, .es-hand, .state-toast, .recovery-overlay')].every(b => {
+      const s = getComputedStyle(b);
+      if (s.display === 'none' || s.visibility === 'hidden' || (s.position === 'static' && !b.closest('.top-hud'))
+        || !['prog-overlay', 'active', 'show'].some(c => b.classList.contains(c))) return true;
+      const br = b.getBoundingClientRect(), placed = parseFloat(b.style.top);
+      const bottom = Math.max(br.bottom - cr.top, Number.isFinite(placed) ? placed + br.height : -Infinity);
+      return br.width < 0.5 || br.right <= r.left || br.left >= r.right || el.offsetTop >= bottom + 8;
+    });
   }
   function renderScoreChip(t) {
     const scoreChip = document.getElementById('score-chip');
@@ -7880,11 +7936,15 @@ function renderEp(d, opts) {
       top = below(anchor);
       stateToast.style.top = Math.max(top, below(fsBtn || anchor)) + 'px';
     }
-    if (!recOverlay) { placeSensors(); return; }
-    for (const c of [progOverlay, stateToast]) {
-      if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
+    if (recOverlay) {
+      for (const c of [progOverlay, stateToast]) {
+        if (c && (c === progOverlay || c.classList.contains('active'))) top = Math.max(top, below(c));
+      }
+      recOverlay.style.top = top + 'px';
     }
-    recOverlay.style.top = top + 'px';
+    // the caption and the score chip over the footage stay clear of the notes just placed (they move below the footage
+    // when they cannot), and the sensor cards fill the room left between them
+    fitCaptionBesideChip();
     placeSensors();
   }
   function placeSensors() {
@@ -8218,8 +8278,9 @@ function renderEp(d, opts) {
     renderProgress(t); renderState(t); renderOverlay(t); renderScoreChip(t); renderRecovery(t); placeSensors();
   };
   // once their transitions end, the boxes that fit themselves to others are fitted again at once, as the observers
-  // that keep them fitted in playback would on the next frame (a browser on virtual time may draw no frame)
-  window._layoutSettle = () => { fitCaptionBesideChip(); placeTop(); };
+  // that keep them fitted in playback would on the next frame (a browser on virtual time may draw no frame): placeTop
+  // places the notes at the top of the image, then fits the caption and the score chip to them
+  window._layoutSettle = () => placeTop();
   function syncAll(t) {
     if (vid) {
       t = presentation ? presentation.time() : null;
@@ -9175,11 +9236,15 @@ if (new URLSearchParams(location.search).get('check') === 'layout') {
       // the layout is checked where every transition ends (a fold opening, a bar growing, a caption taking its
       // height), not part way through one; a browser that runs on virtual time (headless Chrome under the test) may
       // otherwise never finish them. The boxes that fit themselves to another (the score chip to the caption) are then
-      // fitted again (window._layoutSettle), as a viewer sees them a frame later.
-      for (const a of document.getAnimations ? document.getAnimations() : []) {
-        try { if (a.effect && a.effect.getComputedTiming().iterations !== Infinity) a.finish(); } catch (_) {}
-      }
-      if (window._layoutSettle) window._layoutSettle();
+      // fitted again (window._layoutSettle), as a viewer sees them a frame later, and what that moved (a caption moved
+      // below the footage) is again checked where its transitions end.
+      const finishAll = () => {
+        for (const a of document.getAnimations ? document.getAnimations() : []) {
+          try { if (a.effect && a.effect.getComputedTiming().iterations !== Infinity) a.finish(); } catch (_) {}
+        }
+      };
+      finishAll();
+      if (window._layoutSettle) { window._layoutSettle(); finishAll(); }
       out.textContent = JSON.stringify({episode: _activeFile, width: document.documentElement.clientWidth,
                                         open: openAll, defects: layoutDefects(openAll)});
       out.dataset.state = 'done';

@@ -4,9 +4,11 @@ The page checks itself under ?check=layout (board/index.html layoutDefects): onc
 piece of text (or image, video or control) that runs past a box it sits in, every box that clips text without an
 ellipsis, and the page scrolling sideways. This test serves a board whose content is larger than any board's so far
 (targets of millions of episodes and hours, a long dataset name, long subgoal, key event and timeline labels, many
-problems of one cause, an upload's deep notes, long check lists), opens each episode in headless Chrome at a phone's
-width and three desktop widths, once as it opens and once with every fold opened (&open=all, where a fold left closed
-is a defect too), and asks for no defects. Without Chrome the test is skipped."""
+problems of one cause, an upload's deep notes, long check lists), with short clips of the shapes real cameras have (a
+wide scene or head camera, a square gripper camera) so every box over the footage is placed on a frame of a real size,
+opens each episode in headless Chrome at a phone's width and three desktop widths, once as it opens and once with every
+fold opened (&open=all, where a fold left closed is a defect too), and asks for no defects. Without Chrome or ffmpeg the
+test is skipped."""
 from __future__ import annotations
 
 import html
@@ -23,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from board import serve
+from board import clips, serve
 from test_board_serve import _output, _sensors, _serve
 
 WIDTHS = (390, 1200, 1440, 1920)
@@ -102,17 +104,31 @@ def _capture_checks() -> dict:
             "notes": []}
 
 
-def oversized_board(tmp: Path) -> tuple[Path, list[str]]:
+def _clip(path: Path, size: str) -> None:
+    """A short clip of ffmpeg's test picture at SIZE (w x h), encoded as the board's clips are (H.264)."""
+    subprocess.run([clips.find_ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=size={size}:rate=30",
+                    "-t", "3", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-movflags",
+                    "+faststart", str(path)], check=True)
+
+
+def oversized_board(tmp: Path, clip_dir: Path) -> tuple[Path, list[str]]:
     """A board built by board/build.py with content larger than any so far, and the episode files to open: a teleop
-    dataset with signals and a head-camera dataset of tasks whose name is longer than any tab, each against a target
-    of millions of episodes and hours, each episode many hours long. Much of it lands inside folds: twenty key events,
-    forty problems of one cause, an upload's deep notes, and a capture-check list with nine fired."""
+    dataset with signals, a head-camera dataset of tasks whose name is longer than any tab, and a handheld gripper's
+    dataset of one camera (whose caption sits in the strip under it), each against a target of millions of episodes
+    and hours, each episode many hours long. Much of it lands inside folds: twenty key events, forty problems of one
+    cause, an upload's deep notes, and a capture-check list with nine fired. Each episode's camera has a clip in
+    CLIP_DIR where board/clips.py writes it: a wide one for the scene and head cameras, a square one for the gripper."""
     board = tmp / "boards" / "b"
+    wide, square = tmp / "wide.mp4", tmp / "square.mp4"
+    _clip(wide, "640x360")
+    _clip(square, "480x480")
     entries, files = [], []
     for k, (ds, rig, hub, target) in enumerate((("molmo", "teleop_arms", "allenai/MolmoAct2-BimanualYAM-Dataset",
                                   {"episodes": 9876543, "hours": 987654.3}),
                                  (LONG_DATASET, "ego_head", "you/" + LONG_DATASET,
-                                  {"episodes": 12345678, "hours": 1234567.8}))):
+                                  {"episodes": 12345678, "hours": 1234567.8}),
+                                 ("handheld", "handheld_gripper", "you/a-handheld-gripper-dataset",
+                                  {"episodes": 7654321, "hours": 765432.1}))):
         run = tmp / "runs" / ds / "r1"
         (run / "out").mkdir(parents=True)
         (run / "run.json").write_text(json.dumps({"run_id": "r1", "code": "abc1234", "kind": "full",
@@ -129,6 +145,12 @@ def oversized_board(tmp: Path) -> tuple[Path, list[str]]:
                 _sensors(ep)
             out = _output(ep, "openai/gpt-6-astra", rig == "ego_head")
             out["labels"].update(_labels(18))
+            # a handheld gripper records one camera, mounted on the gripper (the right one, as FastUMI's single one)
+            cam = "right" if rig == "handheld_gripper" else "exo"
+            out["config"].update(views=[cam], cam_labels=["gripper" if cam == "right" else "top"])
+            clip = clips.clip_path(clip_dir, ep.name, cam)
+            clip.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(square if cam == "right" else wide, clip)
             if rig == "ego_head":
                 out["labels"].pop("completion", None)
                 out["labels"]["tasks"] = [{"task": f"task {k}: {LONG_WORD} {_labels(0)['task_summary']}",
@@ -146,7 +168,7 @@ def oversized_board(tmp: Path) -> tuple[Path, list[str]]:
     for p in sorted((board / "qa").glob("episode_*.json")):
         by_ds.setdefault(json.loads(p.read_text()).get("dataset"), p.name)
     files = list(by_ds.values())
-    assert len(files) == 2, by_ds
+    assert len(files) == 3, by_ds
     return board, files
 
 
@@ -207,8 +229,9 @@ def check_all(browser: str, base: str, files: list[str]) -> list[dict]:
 
 
 @pytest.mark.skipif(chrome() is None, reason=f"no Google Chrome or Chromium on this {platform.system()} machine")
+@pytest.mark.skipif(clips.tools.ffmpeg_or_none() is None, reason="no ffmpeg to make the clips")
 def test_no_text_runs_out_of_its_box_at_any_width(tmp_path, monkeypatch):
-    board, files = oversized_board(tmp_path)
+    board, files = oversized_board(tmp_path, tmp_path / "clips")
     monkeypatch.setattr(serve, "Handler", FramedHandler)
     httpd, url = _serve(monkeypatch, board, tmp_path / "clips")
     try:
