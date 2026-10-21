@@ -5658,7 +5658,7 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
     elif info:
         root["missing"].append(f"No meta/episodes.jsonl{where}, so each uploaded episode file is one episode.")
     idx = sorted(set(rows) | set(data_by) | set(vid_by))
-    absent, no_video = 0, []
+    absent, no_video = [], []
     for e in idx:
         row = rows.get(e, {})
         vids_e = {}
@@ -5682,14 +5682,28 @@ def _episodes_v2(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         if not vids_e and not (root["image_cams"] and data):
             if data is not None:
                 no_video.append(data)
-            else:
-                absent += e in rows
+            elif e in rows:
+                absent.append(e)
             continue
         fields = episode_row_fields(root, episode_file, row, e)
         root["episodes"].append({"eidx": e, **fields, "data": data, "videos": vids_e})
-    if absent:
-        root["used"].append(f"The metadata{where} lists {absent} more episodes than were uploaded; the uploaded ones were labelled.")
+    absent_note(root, absent)
     no_video_note(root, rdir, no_video)
+
+
+def absent_note(root: dict, absent: list[int]) -> None:
+    """The episodes the metadata lists with neither a video nor a data file uploaded, named in the report by the names
+    their episodes would have had (plan_lerobot), as no_video_note names those with data and no video. They had been
+    counted among the files used, so which episodes were missing was never said."""
+    if not absent:
+        return
+    where = f" in {root['rel']}" if root["rel"] else ""
+    prefix = f"{root['rel']}/" if root["rel"] else ""
+    names = [f"{prefix}{e:06d}" for e in sorted(absent)]
+    shown = ", ".join(names[:20]) + (f" and {len(names) - 20} more" if len(names) > 20 else "")
+    root["missing"].append(f"{len(names)} episode{'s' if len(names) != 1 else ''}{where} listed in the metadata "
+                           f"{'have' if len(names) != 1 else 'has'} no uploaded video or data file ({shown}), so "
+                           f"{'they were' if len(names) != 1 else 'it was'} not labelled; the uploaded episodes were.")
 
 
 def no_video_note(root: dict, rdir: Path, data_files: list[Path]) -> None:
@@ -5731,7 +5745,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         root["used"].append(f"Episode list{where} from meta/episodes ({len(eps)} listed).")
         rel_tpl = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
         data_tpl = info.get("data_path", "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet")
-        skipped, no_video, unlocated = 0, [], {}
+        skipped, no_video, unlocated = [], [], {}
         for e, p in sorted(eps, key=lambda r: recorded_index(r[0]["episode_index"])):
             eidx = int(scalar(e["episode_index"]))
             vids_e, unplaced = {}, {}
@@ -5759,7 +5773,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
                 if data is not None:
                     no_video.append(data)
                 else:
-                    skipped += 1
+                    skipped.append(eidx)
                 continue
             fields = episode_row_fields(root, p, e, eidx)
             root["episodes"].append({"eidx": eidx, **fields, "data": data, "videos": vids_e,
@@ -5769,9 +5783,7 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
             shown = ", ".join(f"episode {i} ({why})" for i, why in bad[:20]) + (
                 f" and {len(bad) - 20} more" if len(bad) > 20 else "")
             metadata_failure(root, p, f"the data file of {shown} could not be located")
-        if skipped:
-            root["used"].append(f"The metadata{where} lists {skipped} more episodes than there is uploaded video for; the "
-                                "uploaded ones were labelled.")
+        absent_note(root, skipped)
         no_video_note(root, rdir, sorted(set(no_video)))
         return
     # no episode metadata: recover episodes from the data files, accepted only on an exact frame-count match
@@ -10784,6 +10796,25 @@ def mcap_capture_stamp(decoded, *, schema=None, message_encoding=None) -> tuple[
     return total, None
 
 
+def note_mcap_metadata(ctx: dict) -> None:
+    """The metadata records of the episode's MCAP files (retain_mcap_fields), named among the uploader's notes as the
+    file's text channels, an HDF5 file's attributes and a sidecar's fields are, so the prompt, the board and the export
+    name them. They had been kept only in recorded_metadata, which the model could reach by inspection alone and the
+    board and the export never named."""
+    records = {}
+    owners = [(None, ctx)] + [(entry.get("source"), entry) for entry in ctx.get("recorded_sensor_fields") or []
+                              if isinstance(entry, dict)]
+    for owner, entry in owners:
+        for record in (entry.get("recorded_metadata") or {}).get("mcap_metadata") or []:
+            key = f"MCAP metadata {record.get('name')}" + (f" in {Path(owner).name}" if owner else "")
+            records[key] = record.get("metadata")
+    if not records:
+        return
+    previous = ctx.get("uploader_notes", ctx.get("uploader_annotation"))
+    set_uploader_notes(ctx, {**previous, **records} if isinstance(previous, dict) else
+                       {"notes": previous, **records} if previous else records)
+
+
 def retain_mcap_fields(path: Path, ep: Path, ctx: dict, *, archive_name="recorded_mcap_fields.npz", supplied=None) -> None:
     """Retain native fields and distinct integer capture, arrival and publish clocks before placement."""
     from mcap.reader import make_reader
@@ -11807,6 +11838,9 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             for issue in retained.pop("reader_issues", []):
                 add_issue(extra, **issue)
             extra.setdefault("recorded_sensor_fields", []).append({"source": str(path), **retained})
+    with part(parts, "the recording's metadata records"):
+        skip_when_cameras_only()
+        note_mcap_metadata(extra)
     if use_log_clock:
         from prepare.signal_alignment import RECORDER_ARRIVAL
         for metadata in signals.meta.values():
