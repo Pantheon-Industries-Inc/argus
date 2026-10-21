@@ -42,9 +42,6 @@ EGO_SOFTENED = [
   force one global success/failure or one goal frame when there are several activities.
   Segment the clip into the distinct activities in `tasks`. A short clip that is genuinely
   one task yields one task, with its own goal frame.'''),
-    ('''There is deliberately no single
-  episode-level goal frame;''', '''A clip of several tasks has no single
-  episode-level goal frame;'''),
 ]
 
 

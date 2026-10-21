@@ -30,5 +30,13 @@ def labels(summary='The hand reaches.', *, request=None, **fields):
             **fields}
 
 
+def uninstructed(summary='The hand reaches.', **kw) -> dict:
+    """The reply a request with no instruction asks for: the same, with no completion of its own (the harness derives
+    it from the one task)."""
+    out = labels(summary, **kw)
+    out.pop('completion')
+    return out
+
+
 def text(summary='The hand reaches.', **kw) -> str:
     return json.dumps(labels(summary, **kw))

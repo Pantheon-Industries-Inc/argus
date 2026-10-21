@@ -1420,20 +1420,42 @@ def _cup_task(ctx, *, start=False, end=False, **fields):
             'outcome': 'partial' if end else 'success', 'completed_at_s': None if end else span - .05, **fields}
 
 
+def _without_instruction(src: Path) -> None:
+    """The recording as a dataset that ships no instruction gives it."""
+    ctx = json.loads((src / 'context.json').read_text())
+    ctx['instruction'] = ''
+    (src / 'context.json').write_text(json.dumps(ctx))
+
+
 def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_verdict(tmp_path, monkeypatch):
+    """With no instruction a recording of one task takes that task's verdict, also when the task is joined across the
+    cuts; with an instruction no part sees the whole asked work, so the recording stays unclear, as an episode
+    labelled in parts always was, and its joined task keeps its own outcome."""
     _, src, parts = _three_parts(tmp_path, monkeypatch)
     contexts = [json.loads((part / 'context.json').read_text()) for part in parts]
     tasks = [[_cup_task(contexts[0], end=True)], [_cup_task(contexts[1], start=True, end=True)],
              [_cup_task(contexts[2], start=True)]]
     records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, tasks)]
+    given = pieces.stitch(src, list(zip(contexts, records)))
+    (task,) = given['labels']['tasks']
+    assert task['outcome'] == 'success' and task['judged_against'] == 'instruction' and len(task['joined_from']) == 3
+    completion = given['labels']['completion']
+    assert (completion['task_completed'], completion['basis']) == ('unclear', 'instruction')
+    assert 'do not establish a whole-recording outcome' in completion['reason']
+    assert given['label_schema'] == 'tasks' and given['prompt_mode'] == 'given'
+    from board.label_projection import verdict_or_tasks
+    assert verdict_or_tasks(given['labels']) == ('unclear', [])
+    _without_instruction(src)
+    own = [[{**t, 'judged_against': 'own_end_state'} for t in part] for part in tasks]
+    records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, own)]
     stitched = pieces.stitch(src, list(zip(contexts, records)))
     (task,) = stitched['labels']['tasks']
     completion = stitched['labels']['completion']
-    assert task['outcome'] == 'success' and task['judged_against'] == 'instruction' and len(task['joined_from']) == 3
-    assert (completion['task_completed'], completion['from_tasks'], completion['judged_against']) == (
-        'success', 1, 'instruction')
+    assert task['outcome'] == 'success' and task['judged_against'] == 'own_end_state'
+    assert (completion['task_completed'], completion['from_tasks'], completion['judged_against'],
+            completion['basis']) == ('success', 1, 'own_end_state', 'one_task')
     assert completion['completed_at_s'] == task['completed_at_s']
-    assert stitched['label_schema'] == 'tasks' and stitched['prompt_mode'] == 'given'
+    assert stitched['label_schema'] == 'tasks' and stitched['prompt_mode'] == 'inferred'
     # a part with no labels may hold more of the work: no verdict, and the reason names the part
     missing = [{'part': 3, 't0_s': contexts[2]['piece']['t0_s'], 't1_s': contexts[2]['piece']['t1_s'],
                 'why': 'no reply'}]
@@ -1445,8 +1467,10 @@ def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_v
 
 def test_in_the_tasks_format_a_task_open_at_the_last_cut_or_parts_of_two_formats_give_no_verdict(tmp_path, monkeypatch):
     _, src, parts = _three_parts(tmp_path, monkeypatch)
+    _without_instruction(src)
     contexts = [json.loads((part / 'context.json').read_text()) for part in parts]
-    tasks = [[_cup_task(contexts[0], end=True)], [_cup_task(contexts[1], start=True, end=True)], []]
+    tasks = [[_cup_task(contexts[0], end=True, judged_against='own_end_state')],
+             [_cup_task(contexts[1], start=True, end=True, judged_against='own_end_state')], []]
     records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, tasks)]
     stitched = pieces.stitch(src, list(zip(contexts, records)))
     (task,) = stitched['labels']['tasks']
@@ -1458,4 +1482,4 @@ def test_in_the_tasks_format_a_task_open_at_the_last_cut_or_parts_of_two_formats
     mixed = pieces.stitch(src, list(zip(contexts, records[:2] + [older])))
     assert mixed['labels']['completion']['task_completed'] is None
     assert mixed['labels']['completion']['reason'] == 'parts labelled with different output formats'
-    assert 'label_schema' not in mixed and mixed['prompt_mode'] == 'given'
+    assert 'label_schema' not in mixed and mixed['prompt_mode'] == 'inferred'

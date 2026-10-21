@@ -11115,8 +11115,10 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None,
     if len(texts[it]) > 1:
         # a task topic whose text changes names the task of each stretch, so each text is a timed task prompt, none
         # chosen over the others: MicroAGI sends a placeholder ("The agent is idle") at the start of some fragments,
-        # the title after it, and a new title when the work changes
-        return None, notes, [{**step, "column": it} for step in mcap_timed_prompts(texts[it], base, end_s)]
+        # the title after it, and a new title when the work changes; a text replaced the moment it was sent names no
+        # stretch, and stays with the recorded text channels
+        return None, notes, [{**step, "column": it} for step in mcap_timed_prompts(texts[it], base, end_s)
+                             if step["t1"] > step["t0"]]
     instr = texts[it][0][1]
     # a task message in protobuf text form (MicroAGI's /task: title, success, tools, confidence) gives its title as
     # the instruction; the rest of the record stays with the uploader's notes as claims to check

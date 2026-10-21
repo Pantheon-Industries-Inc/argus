@@ -831,7 +831,7 @@ def outside_part(lab: dict, t0: float, t1: float) -> dict:
 JOIN_GUARD_S = 2.0
 KEY_CUT_GUARD_S = 1.0
 OUTCOME_FIELDS = ("outcome", "success_predicate", "completed_at_s", "goal_reached_at_s", "undone_at_s", "undone_by",
-                  "judged_against")
+                  "judged_against", "subtask")
 
 
 def _cut_sides(entry: dict) -> set[str]:

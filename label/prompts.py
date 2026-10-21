@@ -612,7 +612,7 @@ Rules:
   success_predicate is satisfied AND stays satisfied for the rest of that task's span:
   the last action that puts THAT task's objects into their final state (the release,
   seat, placement, closure), NOT when the hands move away to the next task. null if that
-  task's end-state is never reached (partial/failure). A clip of several tasks has no single
+  task's end-state is never reached (partial/failure). There is deliberately no single
   episode-level goal frame; each completed task carries its own.
 - each key_event also gets an outcome, judged on the balance of evidence: did that
   specific subevent succeed (the cup landed, the fold held) or fail (dropped, missed,

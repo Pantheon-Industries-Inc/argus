@@ -119,6 +119,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from board.label_projection import verdict_or_tasks
 from board.to_board import (and_list, convert, dumps, field_words, label_failed, label_outputs, off_schema_text,
                             typed)
 from checks import label_consistency
@@ -183,8 +184,11 @@ def apply_rules(d: dict, ctx: dict, rules: list, ep_dir: Path | None = None) -> 
                 d.setdefault("_withheld_checks", {})[rule["check"]] = {"reason": rule["reason"],
                                                                         "result": dc.pop(rule["check"])}
         elif kind == "cap_when":
-            outcome = str((d.get("completion") or {}).get("task_completed") or "").lower()
-            when = outcome in (rule.get("when_outcome") or []) or any(
+            # the recording's verdict, or with none (several tasks) each task's outcome, by the rule every outcome
+            # reader shares (board/label_projection.py verdict_or_tasks)
+            verdict, tasks = verdict_or_tasks(d)
+            outcomes = {verdict} if verdict else {str(t.get("outcome") or "").lower() for t in tasks}
+            when = bool(outcomes & set(rule.get("when_outcome") or [])) or any(
                 (i or {}).get("category") in (rule.get("when_tags") or []) and i.get("severity") in ("medium", "high")
                 for i in d.get(rule.get("when_list", "data_issues")) or [])
             if when:

@@ -115,8 +115,11 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
         ok.append(outcome in case["outcome"])
         ok[-1] or why.append(f"outcome {outcome}")
     if "not_outcome" in case:
-        ok.append(outcome not in case["not_outcome"])
-        ok[-1] or why.append(f"outcome {outcome}")
+        # no verdict and no one task judged against the instruction: nothing says the asked work was not done, so a
+        # fact about what the outcome must not be is unmet, never passed by default
+        unjudged = isinstance(outcome, str) and outcome.startswith("tasks:")
+        ok.append(not unjudged and outcome not in case["not_outcome"])
+        ok[-1] or why.append(f"outcome {outcome}" + (" (no task judged against the instruction)" if unjudged else ""))
     if "align" in case:
         rel = (labels.get("goal_alignment") or {}).get("relation")
         ok.append(rel in case["align"])

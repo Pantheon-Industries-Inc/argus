@@ -12,7 +12,8 @@ instruction.txt (see prepare/formats.py, whose LeRobot reader this uses). HABIT 
   gripper opening. This selected adapter supplies its established Cartesian contract to the shared reader
   before state and commands are qualified.
 - The instruction is the episode's high-level instruction. The instruction note says that a person shares the
-  workspace in every episode, and gives the person's and the robot's timed parts as the operators marked them.
+  workspace in every episode, and which of the dataset's timed steps (the person's and the robot's parts, as the
+  operators marked them) are whose.
 - The publisher's own labels (task_status, and the frames it marks as error, intervention and high-jerk
   segments) are kept in context["publisher_labels"] to score labels against afterwards. They are never put in
   the prompt.
@@ -61,29 +62,11 @@ def spans(flags: np.ndarray, fps: float) -> list[list[float]]:
     return out
 
 
-def timed_parts(idx: np.ndarray, texts: dict, fps: float) -> list[str]:
-    """Consecutive runs of one subtask index as 't0-t1 s: text' (index < 0 means no active subtask)."""
-    out, start = [], 0
-    for i in range(1, len(idx) + 1):
-        if i == len(idx) or idx[i] != idx[start]:
-            k = int(idx[start])
-            if k >= 0 and k in texts:
-                out.append(f"{start / fps:.1f}-{i / fps:.1f} s: {texts[k]}")
-            start = i
-    return out
-
-
-def _texts(p: Path) -> dict:
-    with open(p) as source:
-        return {json.loads(line)["task_index"]: json.loads(line)["task"] for line in source}
-
-
-def task_note(root: Path, df: pd.DataFrame, fps: float) -> str:
-    """The person's role, and which of the dataset's timed steps are whose. The steps themselves reach the model once,
-    as the dataset's timed steps the LeRobot reader takes from these columns (formats.lerobot_annotations), each named
-    with its column; listing them here too showed every step twice."""
-    return (ROLE_NOTE + "\nThe operators marked both parts by foot pedal: the timed steps from human_role_subtask_index "
-            "are the person's part, and those from low_level_task_index the robot's.")
+# The person's role, and which of the dataset's timed steps are whose. The steps themselves reach the model once, as the
+# dataset's timed steps the LeRobot reader takes from these columns (formats.lerobot_annotations), each named with its
+# column; listing them in the note too showed every step twice.
+TASK_NOTE = (ROLE_NOTE + "\nThe operators marked both parts by foot pedal: the timed steps from human_role_subtask_index "
+             "are the person's part, and those from low_level_task_index the robot's.")
 
 
 def download_meta(raw: Path) -> Path:
@@ -139,7 +122,7 @@ def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dic
     ctx.update(robot_type="two Franka FR3 arms teleoperated with a Meta Quest 3", state_kind="ee_pose",
                gripper_range=[0.0, 1.0],
                instruction=r.get("high_level_instruction") or ctx.get("instruction"),
-               instruction_note=task_note(root, df, fps),
+               instruction_note=TASK_NOTE,
                collection_note=COLLECTION_NOTE,
                publisher_labels={"task_status": r.get("task_status"),
                                  "error_spans_s": spans(df["is_error_segment"].to_numpy(), fps),

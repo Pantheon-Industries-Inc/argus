@@ -320,7 +320,8 @@ def test_mcap_presentation_uses_one_recorded_axis_for_camera_and_text(tmp_path, 
     loaded = episode.load(tmp_path / 'out' / report['episodes'][0]['episode_id'])
     context = loaded['context']
     # Header event stamps place the first step at 1.0; recorder arrivals place it at 1.03 - .1 = .93.
-    assert [step['t0'] for step in context['annotation_subtasks']] == ([1., 2.5, 3.5] if proven else [.93, 2.43, 3.43])
+    assert [step['t0'] for step in context['annotation_subtasks'] if step.get('column') != '/task'] == (
+        [1., 2.5, 3.5] if proven else [.93, 2.43, 3.43])
     assert context['source']['presentation_clock']['basis'] == ('capture' if proven else 'mcap_log_time')
     assert context['source']['presentation_clock']['physical_synchronization_verified'] is False
     if not proven:

@@ -235,12 +235,12 @@ def test_mcap_text_uses_its_verified_camera_clock(tmp_path, text_clock):
     assert not report['failed'], report
     ctx = json.loads((out / report['episodes'][0]['episode_id'] / 'context.json').read_text())
     if text_clock.startswith('capture'):
-        assert [row['t0'] for row in ctx['annotation_subtasks']] == [1., 2.5]
+        assert [row['t0'] for row in steps(ctx)] == [1., 2.5]
         assert ctx['instruction'] == 'fold the cloth'
         flagged = any(i['kind'] == 'capture_clock_offset_possible' for i in ctx.get('reader_issues') or [])
         assert flagged is (text_clock == 'capture_late')
     else:
-        assert [row['t0'] for row in ctx['annotation_subtasks']] == [2., 3.5]
+        assert [row['t0'] for row in steps(ctx)] == [2., 3.5]
         assert ctx['source']['presentation_clock']['basis'] == 'mcap_log_time'
         assert 'arrival' in ctx['collection_note']
         assert 'pick up' in json.dumps(ctx) and 'fold' in json.dumps(ctx)
@@ -494,6 +494,17 @@ def text_recording(path, *, clock='capture', early=-.05, late=4.2, malformed=Non
         writer.finish()
 
 
+def steps(context):
+    """The /task/subtask steps among a recording's timed prompts: a /task whose text changes adds the task of each
+    stretch beside them, named with its topic (prepare/formats.py mcap_task_texts)."""
+    return [row for row in context.get('annotation_subtasks') or [] if row.get('column') != '/task']
+
+
+def task_prompts(context):
+    """{label: t0} of the /task texts given as timed task prompts."""
+    return {row['label']: row['t0'] for row in context.get('annotation_subtasks') or [] if row.get('column') == '/task'}
+
+
 @pytest.mark.parametrize('clock', ['arrival', 'capture'])
 def test_mcap_text_span_boundaries_do_not_change_clock_compatibility(tmp_path, clock):
     source = tmp_path / 'source.mcap'
@@ -502,10 +513,11 @@ def test_mcap_text_span_boundaries_do_not_change_clock_compatibility(tmp_path, c
     report = formats.convert(source, 'ego_head', tmp_path / 'out', 'source timeline', 900)
     assert not report['failed'], report
     ctx = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
-    assert [row['label'] for row in ctx['annotation_subtasks']] == ['pick up', 'fold']
-    assert [row['t0'] for row in ctx['annotation_subtasks']] == [0., 2.5]
-    assert ctx['annotation_subtasks'][-1]['t1'] == pytest.approx(4.033, abs=.001)
-    assert 'prepare' in ctx['instruction'] and 'fold the cloth' in ctx['instruction']
+    assert [row['label'] for row in steps(ctx)] == ['pick up', 'fold']
+    assert [row['t0'] for row in steps(ctx)] == [0., 2.5]
+    assert steps(ctx)[-1]['t1'] == pytest.approx(4.033, abs=.001)
+    # the task text changes, so each text is the task of its stretch and the recording has no instruction
+    assert not ctx.get('instruction') and task_prompts(ctx) == {'prepare': 0., 'fold the cloth': 1.}
     assert not any(issue['kind'] == 'text_clock_unverified' for issue in ctx.get('reader_issues', []))
     assert 'after recording' in json.dumps(ctx)
     proof = ctx['source']['text_clock_alignment']
@@ -650,8 +662,8 @@ def test_mcap_outside_topic_bounds_do_not_join_unrelated_capture_domains(tmp_pat
     report = formats.convert(source, 'ego_head', tmp_path / 'out', 'unrelated clock bounds', 900)
     assert not report['failed'], report
     context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
-    assert [row['t0'] for row in context['annotation_subtasks']] == [0., 2.5]
-    assert 'fold the cloth' in context['instruction']
+    assert [row['t0'] for row in steps(context)] == [0., 2.5]
+    assert 'fold the cloth' in task_prompts(context) and not context.get('instruction')
     assert context['source']['presentation_clock']['basis'] == 'mcap_log_time'
     assert any(issue['kind'] == 'recorder_arrival_timing' for issue in context['reader_issues'])
     assert 'after recording' in json.dumps(context['recorded_metadata']['text_channels'])
@@ -684,8 +696,8 @@ def test_mcap_capture_clock_cannot_lead_its_recorded_arrival_origin(tmp_path):
     report = formats.convert(source, 'ego_head', tmp_path / 'out', 'future capture clock', 900)
     assert not report['failed'], report
     context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
-    assert [row['t0'] for row in context['annotation_subtasks']] == [0., 2.5]
-    assert 'fold the cloth' in context['instruction']
+    assert [row['t0'] for row in steps(context)] == [0., 2.5]
+    assert 'fold the cloth' in task_prompts(context) and not context.get('instruction')
     assert context['source']['presentation_clock']['basis'] == 'mcap_log_time'
     assert any(issue['kind'] == 'recorder_arrival_timing' for issue in context['reader_issues'])
     records = context['recorded_metadata']['text_channels']['/task/subtask']
@@ -887,17 +899,17 @@ def test_mcap_faster_text_retains_exact_timing_only_with_recorded_clock_evidence
     assert not report['failed'], report
     context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
     if proof == 'unproved':
-        assert [step['t0'] for step in context['annotation_subtasks']] == [
+        assert [step['t0'] for step in steps(context)] == [
             round(1.001 - camera_delay, 3), round(2.501 - camera_delay, 3), round(3.501 - camera_delay, 3)]
         assert context['source']['presentation_clock']['basis'] == 'mcap_log_time'
-        assert 'fold the cloth' in context['instruction']
+        assert 'fold the cloth' in task_prompts(context) and not context.get('instruction')
         assert 'unverified' in context['collection_note']
         loaded = episode.load(tmp_path / 'out' / context['episode_id'])
         prompt = episode.build_request(loaded['dir'])['prompt']
         assert 'pick up' in prompt and 'fold the cloth' in prompt and 'arrival' in prompt
     else:
-        assert [step['t0'] for step in context['annotation_subtasks']] == [1., 2.5, 3.5]
-        assert 'fold the cloth' in context['instruction']
+        assert [step['t0'] for step in steps(context)] == [1., 2.5, 3.5]
+        assert 'fold the cloth' in task_prompts(context) and not context.get('instruction')
 
 
 @pytest.mark.parametrize('bias', [-3., 2.])
@@ -907,7 +919,7 @@ def test_mcap_independent_capture_bias_is_visible_context_without_false_footage_
     report = formats.convert(source, 'ego_head', tmp_path / 'out', 'biased text clock', 900)
     assert not report['failed'], report
     context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
-    assert [row['t0'] for row in context['annotation_subtasks']] == [1., 2.5, 3.5]
+    assert [row['t0'] for row in steps(context)] == [1., 2.5, 3.5]
     assert context['source']['presentation_clock']['basis'] == 'mcap_log_time'
     assert 'unverified' in context['collection_note']
     original = context['recorded_metadata']['text_channels']['/task/subtask']
@@ -931,7 +943,7 @@ def test_mcap_conflicting_explicit_clock_ids_override_equal_numeric_publication_
     report = formats.convert(source, 'ego_head', tmp_path / 'out', 'conflicting clock IDs', 900)
     assert not report['failed'], report
     context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
-    assert [row['t0'] for row in context['annotation_subtasks']] == [0., 2.5]
+    assert [row['t0'] for row in steps(context)] == [0., 2.5]
     assert context['source']['presentation_clock']['basis'] == 'mcap_log_time'
     assert context['recorded_metadata']['text_channels']['/task/subtask'][0]['capture_clock_id'] == 'text-device'
     assert 'unverified' in context['collection_note']
@@ -990,7 +1002,7 @@ def test_matching_clock_ids_do_not_override_backwards_channel_chronology(tmp_pat
     report = formats.convert(source, 'ego_head', tmp_path / 'out', 'backwards source stamps', 900)
     assert not report['failed'], report
     context = json.loads((tmp_path / 'out' / report['episodes'][0]['episode_id'] / 'context.json').read_text())
-    assert [row['t0'] for row in context['annotation_subtasks']] == [1., 2.5, 3.5]
+    assert [row['t0'] for row in steps(context)] == [1., 2.5, 3.5]
     assert context['source']['presentation_clock']['basis'] == 'mcap_log_time'
     original = context['recorded_metadata']['text_channels']['/task/subtask']
     assert original[1]['capture_ns'] < original[0]['capture_ns']

@@ -6672,10 +6672,10 @@ function renderEp(d, opts) {
   // model's own reading: the instruction beside its assessment, the dataset's timed steps beside the tasks it found,
   // and with neither, the goal it inferred with its success criterion. An older record keeps its banner.
   const tasksFormat = comp.basis != null;
-  const steps = tasksFormat ? (d.dataset_labels || []).filter(x => x && x.label != null) : [];
-  const stepsOnly = tasksFormat && !!steps.length && !meta.given_prompt;
+  const givenSteps = tasksFormat ? (d.dataset_labels || []).filter(x => x && x.label != null) : [];
+  const stepsOnly = tasksFormat && !!givenSteps.length && !meta.given_prompt;
   const secs = t => (t == null || isNaN(Number(t)) ? '' : `${Number(t).toFixed(1)}s`);
-  const stepLines = steps.map((x, i) => `<div class="gs-step"><span class="gs-n">${i + 1}</span>`
+  const stepLines = givenSteps.map((x, i) => `<div class="gs-step"><span class="gs-n">${i + 1}</span>`
     + `<span class="gs-t">${esc([secs(x.t0), secs(x.t1)].filter(Boolean).join('-'))}</span>`
     + `<span class="gs-l">${esc(x.label)}</span></div>`).join('');
   const readTasks = (d.tasks || []).filter(t => t && t.task);
@@ -6684,10 +6684,15 @@ function renderEp(d, opts) {
     : givenSession ? 'Given task and session summary' : hasTasks ? 'Session summary'
     : givenMode ? `Given goal and ${whoOwn(who, 'independent assessment')}`
     : `Task, as ${esc(nameParts(who)[0])}${nameParts(who)[1] ? ` (${esc(nameParts(who)[1])})` : ''} assessed it`;
+  const stepsHtml = givenSteps.length ? `<div class="goal-given gs"><span class="gg-badge">dataset's timed steps</span>`
+    + `<div class="gs-list">${stepLines}</div></div>` : '';
+  const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">success `
+    + `criterion</span><span class="gr-text">${esc(comp.success_predicate)}</span></div>` : '';
+  // what the chip names: the instruction, or with none the dataset's timed steps
+  const claim = stepsOnly ? "the dataset's steps" : 'given goal';
   // alignment chip: whether the model's independent reading matches what the dataset claims (its instruction, or with
   // none its timed steps)
   const ga = d.goal_alignment || null;
-  const claim = stepsOnly ? "the dataset's steps" : 'given goal';
   let alignHtml = '';
   if ((givenMode || givenSession || stepsOnly) && ga && ga.relation) {
     const rel = String(ga.relation).toLowerCase();
@@ -6703,10 +6708,6 @@ function renderEp(d, opts) {
     alignHtml = `<div class="align-chip ${cls}"><span>${esc(label)}</span>`
       + `${ga.note ? `<span class="ac-note">${esc(ga.note)}</span>` : ''}</div>`;
   }
-  const stepsHtml = steps.length ? `<div class="goal-given gs"><span class="gg-badge">dataset's timed steps</span>`
-    + `<div class="gs-list">${stepLines}</div></div>` : '';
-  const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">success `
-    + `criterion</span><span class="gr-text">${esc(comp.success_predicate)}</span></div>` : '';
   const bannerBody = partProgress && meta.given_prompt
     ? `<div class="text">${esc(meta.given_prompt)}</div>` : stepsOnly
     ? stepsHtml + `<div class="goal-read"><span class="gr-badge">${whoOwn(who, 'tasks')}</span>`
@@ -7139,7 +7140,8 @@ function renderEp(d, opts) {
 
   // a session of tasks: a Tasks panel, each task with its own outcome and goal frame, in place of the single
   // completion
-  const tcount = {success: 0, failure: 0};
+  // a task reached and then undone counts on its own, as the recording's verdict names it, never as unclear
+  const tcount = {success: 0, success_then_undone: 0, failure: 0};
   tasks.forEach(t => { const o = (t.outcome || '').toLowerCase(); if (o in tcount) tcount[o]++; });
   const tPartly = tasks.filter(t => t.failure_kind === 'partial').length;
   const taskRows = [];
@@ -7311,11 +7313,14 @@ function renderEp(d, opts) {
   // built from, then what decided the verdict (the success criterion, what happened, the goal frame). A session of
   // tasks counts its tasks in the verdict and lists each task with its own outcome.
   const tAll = tasks.length, tOk = tcount.success;
-  const tColor = !tAll ? 'var(--fg-2)' : tOk === tAll ? 'var(--success)' : tcount.failure ? 'var(--danger)' : 'var(--fg-2)';
+  const tUndone = tcount.success_then_undone;
+  const tColor = !tAll ? 'var(--fg-2)' : tOk === tAll ? 'var(--success)' : tcount.failure || tUndone ? 'var(--danger)'
+    : 'var(--fg-2)';
   const verdictHtml = hasTasks
     ? `<div class="verdict" style="--v:${tColor}"><span class="verdict-word">${tOk} of ${tAll}</span><span `
-      + `class="verdict-sub">${tAll === 1 ? 'task' : 'tasks'} succeeded${tcount.failure ? `, ${tcount.failure} failed${tPartly
-        ? ` (${tPartly} partly done)` : ''}` : ''}${tAll - tOk - tcount.failure ? `, ${tAll - tOk - tcount.failure} unclear` : ''}`
+      + `class="verdict-sub">${tAll === 1 ? 'task' : 'tasks'} succeeded${tUndone ? `, ${tUndone} undone` : ''}${tcount.failure
+        ? `, ${tcount.failure} failed${tPartly ? ` (${tPartly} partly done)` : ''}` : ''}${tAll - tOk - tUndone - tcount.failure
+        ? `, ${tAll - tOk - tUndone - tcount.failure} unclear` : ''}`
       + `</span>${partsGapHtml(d)}</div>`
     : `<div class="verdict" style="--v:${vColor}"><span class="verdict-word">${esc(comp.task_completed
         ? cap(outcomeWords(verdict, comp.failure_kind)) : 'Not judged')}</span><span class="verdict-sub">${partProgress

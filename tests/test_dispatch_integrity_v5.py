@@ -81,7 +81,7 @@ def test_received_unparsed_reply_is_not_replayed_and_force_keeps_original(tmp_pa
 @pytest.mark.parametrize('evidence_id', [[], {}])
 def test_unhashable_evidence_reference_keeps_paid_reply(tmp_path, monkeypatch, evidence_id):
     ep = recording(tmp_path, np.arange(12) / 30)
-    final = {**complete_reply.labels('A hand reaches.'), 'evidence_findings': [{
+    final = {**complete_reply.uninstructed('A hand reaches.'),'evidence_findings': [{
         'start_s': 0, 'end_s': .2, 'headline': 'Recorded reading', 'adds_beyond_video': True,
         'evidence': [{'evidence_id': evidence_id, 'time_s': [0]}]}]}
     sent = []

@@ -14,7 +14,7 @@ TASK = {'task': 'stack the cups', 'objects': ['cup'], 'judged_against': 'own_end
 
 
 def _reply(tasks, **fields):
-    labels = complete_reply.labels('Stack the cups.')
+    labels = complete_reply.uninstructed('Stack the cups.')
     assert 'completion' not in labels
     lo, hi = labels['timeline'][0]['start_s'], labels['timeline'][0]['end_s']
     labels['tasks'] = [{'start_s': lo, 'end_s': hi, **t} for t in tasks]

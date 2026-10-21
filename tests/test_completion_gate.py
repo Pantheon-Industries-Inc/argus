@@ -39,8 +39,8 @@ def reply(timeline=((0.0, 30.0), (30.0, 60.0)), **fields):
 
 
 SUCCESS = {'completion': {'task_completed': 'success'}}
-# the same outcome as a request in the tasks format asks for it, which every request the harness sends now is
-TASKS = {'tasks': [{'start_s': 0.0, 'end_s': 600.0, 'task': 'put the cup in the bin', 'outcome': 'success'}]}
+# the outcome a robot request with an instruction asks for now: its completion against the instruction, and its tasks
+TASKS = {**SUCCESS, 'tasks': [{'start_s': 0.0, 'end_s': 600.0, 'task': 'put the cup in the bin', 'outcome': 'success'}]}
 
 
 def test_the_audit_minimal_reply_is_not_a_finished_annotation():
@@ -99,25 +99,38 @@ def test_the_outcome_asked_for_follows_the_requests_mode_and_instructions():
             'the request asks each activity in tasks with its outcome, and the reply lists none']
         no_outcome = {'tasks': [{**tasks['tasks'][0], 'outcome': None}]}
         assert harness.annotation_problems(saved(reply(**no_outcome), **kw)) == ['task 0 of 1 has no outcome']
-    # the field named is the one the request's own instructions declare: every request now asks for tasks
+    # the field named is the one the request's own instructions declare: every request asks for its tasks, and a
+    # robot episode with an instruction also for its completion against it, which holds its outcome
     for rig in ('teleop_arms', 'handheld_gripper', 'ego_head'):
         for instructed in (True, False):
             field = prompts.requested_outcome(rig, has_instruction=instructed)
-            assert field == 'tasks' and f'"{field}": [' in prompts.fixed_instructions(rig, has_instruction=instructed)
+            text = prompts.fixed_instructions(rig, has_instruction=instructed)
+            assert field == ('completion.task_completed' if instructed and rig != 'ego_head' else 'tasks')
+            assert '"tasks": [' in text and ('"task_completed"' in text) is (field != 'tasks')
 
 
-def test_a_request_in_the_tasks_format_is_held_to_its_tasks_and_one_without_an_instruction_may_hold_none():
+def test_a_request_in_the_tasks_format_is_held_to_what_it_asks():
     tasks = {'tasks': [{'start_s': 0.0, 'end_s': 60.0, 'task': 'put the cup in the bin', 'outcome': 'success'}]}
-    for rig in ('teleop_arms', 'ego_head'):
-        assert harness.annotation_complete(saved(reply(**tasks), rig=rig, task_mode=None))
-        assert harness.annotation_problems(saved(reply(**SUCCESS), rig=rig, task_mode=None)) == [
-            'the request asks each activity in tasks with its outcome, and the reply lists none']
-        # every recording with an instruction has a task judged against it; one without may have none (idle footage)
-        assert not harness.annotation_complete(saved(reply(tasks=[]), rig=rig, task_mode=None))
-        assert harness.annotation_complete(saved(reply(tasks=[]), rig=rig, task_mode=None, instruction=None))
-        # the record says so itself, whatever its policy names
-        record = saved(reply(**tasks), rig=rig, task_mode='episode')
-        assert harness.annotation_complete({**record, 'label_schema': 'tasks'})
+    # a robot recording with an instruction: its completion, judged against it, and its tasks beside it, which idle
+    # footage may leave empty
+    assert harness.annotation_complete(saved(reply(**SUCCESS, **tasks), task_mode=None))
+    assert harness.annotation_complete(saved(reply(**SUCCESS, tasks=[]), task_mode=None))
+    assert harness.annotation_problems(saved(reply(**tasks), task_mode=None)) == [
+        'the request asks the outcome of its task, and completion.task_completed is missing']
+    assert harness.annotation_problems(saved(reply(**SUCCESS), task_mode=None)) == [
+        "the request asks the recording's tasks beside its completion, and the reply lists none"]
+    # with no instruction only the tasks: a robot recording may hold none (idle footage)
+    assert harness.annotation_complete(saved(reply(**tasks), task_mode=None, instruction=None))
+    assert harness.annotation_complete(saved(reply(tasks=[]), task_mode=None, instruction=None))
+    # a head-camera clip always holds one, with or without an annotated goal, as it always did
+    for instruction in ('Put the cup in the bin.', None):
+        assert harness.annotation_complete(saved(reply(**tasks), rig='ego_head', task_mode=None,
+                                                 instruction=instruction))
+        assert not harness.annotation_complete(saved(reply(tasks=[]), rig='ego_head', task_mode=None,
+                                                     instruction=instruction))
+    # the record says so itself, whatever its policy names: an episode's completion alone no longer suffices
+    record = saved(reply(**SUCCESS), task_mode='episode')
+    assert harness.annotation_complete(record) and not harness.annotation_complete({**record, 'label_schema': 'tasks'})
 
 
 def test_each_part_of_a_recording_labelled_in_parts_is_judged_against_its_own_request(tmp_path, monkeypatch):

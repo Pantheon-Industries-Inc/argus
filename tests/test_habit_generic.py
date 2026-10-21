@@ -139,7 +139,9 @@ def test_repeated_task_codes_bind_robot_and_human_to_their_original_tables(tmp_p
     native(root)
     _, old = published(root, tmp_path / 'old')
     _, new = converted(root, tmp_path / 'generic')
-    assert 'robot reach' in old['instruction_note'] and 'person hold' in old['instruction_note']
+    # the adapter's note says whose steps are whose and lists none; both readers give the steps once, as timed steps
+    assert 'robot reach' not in old['instruction_note'] and 'human_role_subtask_index' in old['instruction_note']
+    assert [s['label'] for s in old['annotation_subtasks']] == [s['label'] for s in new['annotation_subtasks']]
     steps = new['annotation_subtasks']
     for column, labels, filename in [
         ('low_level_task_index', ['robot reach', 'robot fold', 'robot reach', 'robot fold'], 'subtasks.jsonl'),

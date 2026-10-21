@@ -220,7 +220,7 @@ def test_batch_stage_cap_includes_final_floor_and_resume_does_not_rebill(tmp_pat
         kind = request_kind(parts)
         calls.append(kind)
         answer = {'selection': {'requests': []}, 'mechanics': {'sensor_findings': []},
-                  'final': complete_reply.labels('A hand holds the object.')}[kind]
+                  'final': complete_reply.uninstructed('A hand holds the object.')}[kind]
         return encoded(json.dumps(answer), cost={'selection': .01, 'mechanics': .1, 'final': .02}[kind])
     monkeypatch.setattr(harness, 'final_cost_bound', bound)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
@@ -233,7 +233,7 @@ def test_batch_stage_cap_includes_final_floor_and_resume_does_not_rebill(tmp_pat
     assert harness.run_batch([ep], out, **args) == 0
     assert calls == ['selection', 'mechanics', 'final']
     saved = json.loads((out / (ep.name + '.json')).read_text())
-    reply = complete_reply.labels('A hand holds the object.')
+    reply = complete_reply.uninstructed('A hand holds the object.')
     # the recording's completion is derived from its one task (board/label_projection.py recording_completion)
     assert saved['labels'] == {**reply, 'completion': recording_completion(reply['tasks'])}
     assert saved['sensor_analysis']['response_text'] == '{"sensor_findings": []}'
@@ -275,7 +275,7 @@ def test_completed_staged_request_reuses_only_when_both_actual_requests_match(tm
         kind = request_kind(json.loads(request.data)['messages'][0]['content'])
         calls.append(kind)
         answer = {'selection': {'requests': []}, 'mechanics': {'sensor_findings': []},
-                  'final': complete_reply.labels('A hand holds the object.')}[kind]
+                  'final': complete_reply.uninstructed('A hand holds the object.')}[kind]
         return encoded(json.dumps(answer), cost=.01)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'

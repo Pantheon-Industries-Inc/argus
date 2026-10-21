@@ -1046,8 +1046,10 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     def fake_call(content, model, reasoning, api_key, max_tokens, timeout, **options):
         sent["content"] = content
         sent['attempts'] = options.get('attempts')
-        labels = {"tasks": [{"start_s": 0.0, "end_s": 3.967, "task": "place the block", "outcome": "success",
-                             "completed_at_s": 3.0, "goal_reached_at_s": 3.0}],
+        # the episode has an instruction, so the reply judges it against it and lists its tasks beside
+        labels = {"completion": {"task_completed": "success", "completed_at_s": 3.0, "goal_reached_at_s": 3.0},
+                  "tasks": [{"start_s": 0.0, "end_s": 3.967, "task": "place the block", "outcome": "success",
+                             "judged_against": "instruction", "completed_at_s": 3.0, "goal_reached_at_s": 3.0}],
                   "timeline_columns": harness.TIMELINE_COLUMNS,
                   "timeline": [[0.0, 3.0, "left", "reach", "block", None, None, "advancing", 0.5, None],
                                [3.0, 3.967, "left", "release", "block", None, None, "advancing", 1.0, None]],
