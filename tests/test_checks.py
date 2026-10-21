@@ -1193,3 +1193,23 @@ def test_pairing_motion_marks_repeated_or_missing_observations_unknown(tmp_path)
     # A missing native frame makes both neighboring changes unknown, not stationary.
     ep['times']['left_pts'] = np.array([pts[0], (pts[0] + pts[1]) // 2, pts[2]])
     assert np.isnan(stream_pairing.stream_motion(ep, 'left')).all()
+
+
+def test_each_task_of_a_recording_of_several_is_checked_on_its_own():
+    from board.label_projection import recording_completion
+    asked = {"task": "stack the cups", "outcome": "success", "judged_against": "instruction"}
+    other = {"task": "wipe the table", "outcome": "success_then_undone", "judged_against": "own_end_state",
+             "goal_reached_at_s": 9.0, "undone_at_s": 4.0}
+    tasks = [asked, other]
+    label = {"tasks": tasks, "completion": recording_completion(tasks), "goal_alignment": {"relation": "different"}}
+    assert sorted(f["rule"] for f in label_consistency.check(label)) == ["task_outcome_vs_alignment",
+                                                                         "task_undone_timing"]
+    # only a task judged against the instruction claims the asked work
+    label["tasks"] = [{**asked, "judged_against": "own_end_state"}, {**other, "undone_at_s": 12.0}]
+    assert label_consistency.check(label) == []
+    # a record labelled before the tasks format keeps the rules it had: its tasks are not checked one by one
+    old = {"tasks": tasks, "completion": {"task_completed": None}, "goal_alignment": {"relation": "different"}}
+    assert label_consistency.check(old) == []
+    # one task is checked through the completion derived from it, once
+    one = {"tasks": [{**other, "outcome": "success_then_undone"}], "completion": recording_completion([other])}
+    assert [f["rule"] for f in label_consistency.check(one)] == ["undone_timing"]

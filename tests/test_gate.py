@@ -124,3 +124,22 @@ def test_a_setup_whose_run_wrote_nothing_scores_zero(tmp_path, monkeypatch):
     (run / "run.json").write_text(json.dumps({"dataset": "gate_ego", "status": "exit 1"}))
     p = score.score([run])["ego"]
     assert (p["cases"], p["met"], p["asked"]) == (1, 0, 1) and "episode_e: no output" in p["failures"][0]
+
+
+def test_a_recording_of_several_tasks_is_judged_by_the_one_task_judged_against_the_instruction():
+    """A row of blocks and then a tower: the recording has no verdict, and the row, the one task judged against the
+    instruction, stands for the asked work. Two or none judged against it fall back to the set of outcomes, and a
+    recording labelled before the tasks format (no judged_against) is judged as it always was."""
+    from board.label_projection import recording_completion
+    row = {"task": "put the blocks in a row", "outcome": "success_then_undone", "judged_against": "instruction"}
+    tower = {"task": "build a tower", "outcome": "success", "judged_against": "own_end_state"}
+    labels = {"tasks": [row, tower], "completion": recording_completion([row, tower])}
+    assert score.judge({"outcome": ["success_then_undone"]}, labels) == (True, [])
+    assert score.judge({"not_outcome": ["success"]}, labels)[0]
+    both = {**labels, "tasks": [row, {**row, "outcome": "failure"}]}
+    assert score.judge({"outcome": ["success_then_undone"]}, both) == (False, ["outcome tasks:failure,success_then_undone"])
+    session = {"tasks": [{"task": "sort cups", "outcome": "success"}], "completion": {"task_completed": None}}
+    assert score.judge({"outcome": ["tasks:success"]}, session)[0]
+    # one task: the recording's own verdict, as an episode
+    one = {"tasks": [row], "completion": recording_completion([row])}
+    assert score.judge({"outcome": ["success_then_undone"]}, one)[0]

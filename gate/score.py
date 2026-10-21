@@ -106,7 +106,11 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
     comp = labels.get("completion") or {}
     outcome = effective_outcome(comp.get("task_completed"))
     if labels.get("tasks") and not outcome:
-        outcome = "tasks:" + ",".join(sorted({str(effective_outcome(t.get("outcome"))) for t in labels["tasks"]}))
+        # a recording with no verdict of its own (several tasks): the one task judged against the instruction stands
+        # for the asked work when there is exactly one; otherwise the set of the tasks' outcomes
+        asked = [t for t in labels["tasks"] if isinstance(t, dict) and t.get("judged_against") == "instruction"]
+        outcome = (effective_outcome(asked[0].get("outcome")) if len(asked) == 1 else
+                   "tasks:" + ",".join(sorted({str(effective_outcome(t.get("outcome"))) for t in labels["tasks"]})))
     if "outcome" in case:
         ok.append(outcome in case["outcome"])
         ok[-1] or why.append(f"outcome {outcome}")
