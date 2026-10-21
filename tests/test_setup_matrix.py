@@ -1063,11 +1063,25 @@ def review_case(case) -> dict:
         model.fault = setup.fault
         rc = run_review(setup, root / 'job', model, patch, mode)
         return {'rc': rc, 'calls': model.calls, 'losses': losses(setup, root / 'job'),
-                'paths': sorted(paths_reached(root / 'job', model))}
+                'paths': sorted(paths_reached(root / 'job', model)), 'untruths': request_untruths(root / 'job')}
     except BaseException:  # noqa: BLE001 - reported by the case's own test
         return {'error': traceback.format_exc()}
     finally:
         patch.undo()
+
+
+def request_untruths(job: Path) -> list:
+    """What each request of the review states about its recording that the recording does not establish
+    (tests/test_request_hygiene.py untruths), over every prepared episode and every request the dry run built."""
+    from test_request_hygiene import untruths
+    out = []
+    for dry in sorted((job / 'dry').glob('*.json')):
+        record = _read(dry) or {}
+        ep_dir = Path(record.get('episode_dir') or '')
+        ctx = _read(ep_dir / 'context.json') if ep_dir.name else None
+        if ctx is not None:
+            out += [f'{dry.stem}: {x}' for x in untruths(ctx, record.get('prompt_text') or '')]
+    return out
 
 
 def paths_reached(job: Path, model: OfflineModel) -> set:
@@ -1110,6 +1124,16 @@ def test_every_setup_keeps_every_stream_and_citation_through_to_the_export(name,
     assert not stale, f'{name} ({mode}): these expected losses no longer occur, so remove them from EXPECTED: {stale}'
     if found:
         pytest.xfail('; '.join(sorted(set(expected.values()))) + ': ' + ' | '.join(found))
+
+
+@pytest.mark.parametrize('name,mode', CASES, ids=[f'{name}-{mode}' for name, mode in CASES])
+def test_every_setups_request_states_only_what_its_recording_establishes(name, mode, reviewed):
+    """No request gives a value of a signal that shares no clock with the cameras at a frame instant, times a contact
+    by one, counts a signal on a part that never grasps as a hand's, or names a contact's hand or side without saying
+    what establishes it."""
+    result = reviewed[name, mode]
+    assert 'error' not in result, result.get('error')
+    assert result['untruths'] == [], '\n'.join(result['untruths'])
 
 
 def test_the_corpus_reaches_every_path_it_checks(reviewed):
