@@ -11,6 +11,7 @@ fold opened (&open=all, where a fold left closed is a defect too), and asks for 
 test is skipped."""
 from __future__ import annotations
 
+import fcntl
 import html
 import json
 import os
@@ -18,6 +19,7 @@ import platform
 import re
 import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -207,13 +209,20 @@ class FramedHandler(serve.Handler):
 def _devtools(browser: str, args: list[str]):
     """A headless Chrome driven over its DevTools pipe (--remote-debugging-pipe: commands on fd 3, replies on fd 4,
     each a JSON message ended by a NUL), and send(method, params, session) that returns a command's result."""
-    to_chrome_r, to_chrome_w = os.pipe()
-    from_chrome_r, from_chrome_w = os.pipe()
+    def high(fd: int) -> int:
+        # above 64, so putting the ends on fds 3 and 4 can never overwrite the other end
+        moved = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 64)
+        os.close(fd)
+        return moved
+    to_chrome_r, to_chrome_w = map(high, os.pipe())
+    from_chrome_r, from_chrome_w = map(high, os.pipe())
     # the shell puts the pipe ends on the child's fds 3 and 4 and runs Chrome in its place (no preexec_fn: the
-    # checks start several browsers from threads at once)
+    # checks start several browsers from threads at once). Chrome leads its own process group, so closing it ends
+    # every helper it started, even when it never answered.
     proc = subprocess.Popen(["/bin/sh", "-c", f'exec "$0" "$@" 3<&{to_chrome_r} 4>&{from_chrome_w}', browser, *args,
-                             "--remote-debugging-pipe"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            pass_fds=(to_chrome_r, from_chrome_w))
+                             "--remote-debugging-pipe", "--use-mock-keychain", "--password-store=basic"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, pass_fds=(to_chrome_r, from_chrome_w),
+                            start_new_session=True)
     os.close(to_chrome_r)
     os.close(from_chrome_w)
     out, buf, ids = os.fdopen(to_chrome_w, "wb", buffering=0), b"", [0]
@@ -250,8 +259,12 @@ def _devtools(browser: str, args: list[str]):
         try:
             proc.wait(10)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            pass
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
         out.close()
         os.close(from_chrome_r)
         proc.stderr.close()
@@ -271,8 +284,9 @@ def layout_check(browser: str, base: str, page: str, width: int, height: int = H
                                           "--hide-scrollbars", "--disable-extensions", f"--user-data-dir={profile}",
                                           f"--window-size={max(width, 500) + 40},{height + 200}", "about:blank"])
         try:
+            # a browser starting on a busy machine gets its own minute before the check's time starts
+            target = send("Target.createTarget", {"url": frame}, deadline=time.monotonic() + 60)["targetId"]
             deadline = time.monotonic() + timeout
-            target = send("Target.createTarget", {"url": frame}, deadline=deadline)["targetId"]
             session = send("Target.attachToTarget", {"targetId": target, "flatten": True},
                            deadline=deadline)["sessionId"]
             read = ("(() => { const p = document.getElementById('layout-result');"
