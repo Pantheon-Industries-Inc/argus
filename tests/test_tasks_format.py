@@ -137,3 +137,29 @@ def test_the_shared_prefix_is_the_same_for_every_model_and_task_mode(tmp_path, r
             request = me.build_request(ep, cell_w=128)
             prefixes.add(request['content'][0]['text'])
     assert len(prefixes) == 1
+
+
+@pytest.mark.parametrize('claim, instruction, task_prompts', [('instruction', False, 0), ('subtask', True, 0)])
+def test_a_task_is_never_judged_against_a_claim_the_recording_does_not_carry(claim, instruction, task_prompts):
+    # a 550s freeform teleop recording (no instruction, no steps) came back with both tasks "judged against the
+    # instruction": the claim it names does not exist, so the task is judged against its own end state, and said so
+    from board.label_projection import derive_completion
+    labels = {'tasks': [{'task': 'move the cloths', 'outcome': 'success', 'judged_against': claim, 'subtask': 2},
+                        {'task': 'stack the lids', 'outcome': 'success', 'judged_against': 'own_end_state'}]}
+    out = derive_completion(labels, rig='teleop_arms', instruction=instruction, task_prompts=task_prompts)
+    assert [t['judged_against'] for t in out['tasks']] == ['own_end_state', 'own_end_state']
+    assert out['tasks'][0]['subtask'] is None
+    assert any('task 0 said it was judged against' in n for n in out['_schema_violations'])
+    # read again (a saved record checked on resume), nothing changes and nothing is named twice
+    again = derive_completion(out, rig='teleop_arms', instruction=instruction, task_prompts=task_prompts)
+    assert again['tasks'] == out['tasks'] and again['_schema_violations'] == out['_schema_violations']
+
+
+def test_a_task_judged_against_a_claim_the_recording_carries_is_kept():
+    from board.label_projection import derive_completion
+    labels = {'completion': {'task_completed': 'success'},
+              'tasks': [{'task': 'fold', 'outcome': 'success', 'judged_against': 'instruction'},
+                        {'task': 'step', 'outcome': 'success', 'judged_against': 'subtask', 'subtask': 1}]}
+    out = derive_completion(labels, rig='teleop_arms', instruction=True, task_prompts=3)
+    assert [t['judged_against'] for t in out['tasks']] == ['instruction', 'subtask']
+    assert not any('said it was judged against' in n for n in out.get('_schema_violations') or [])

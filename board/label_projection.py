@@ -85,6 +85,24 @@ def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts
     if not isinstance(labels, dict):
         return labels
     out = dict(labels)
+    # a task can be judged only against a claim the request gave: one the reply says it was judged against that the
+    # recording does not carry (an instruction on a recording without one, a timed step on one without steps) is judged
+    # against its own end state, and the correction is named
+    if isinstance(out.get('tasks'), list):
+        given = {'instruction': instruction, 'subtask': bool(task_prompts)}
+        tasks, notes = [], []
+        for i, task in enumerate(out['tasks']):
+            claim = task.get('judged_against') if isinstance(task, dict) else None
+            if claim in given and not given[claim]:
+                task = {**task, 'judged_against': 'own_end_state', 'subtask': None}
+                notes.append(f'tasks: task {i} said it was judged against the '
+                             f'{"timed step" if claim == "subtask" else claim}, which the request did not give; it is '
+                             'judged against its own end state')
+            tasks.append(task)
+        out['tasks'] = tasks
+        notes = [n for n in notes if n not in (out.get('_schema_violations') or [])]
+        if notes:
+            out['_schema_violations'] = [*(out.get('_schema_violations') or []), *notes]
     if rig != 'ego_head' and instruction:
         if isinstance(out.get('completion'), dict):
             out['completion'] = {**out['completion'], 'basis': 'instruction'}
