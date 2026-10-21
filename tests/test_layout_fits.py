@@ -16,9 +16,11 @@ import json
 import os
 import platform
 import re
+import select
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -202,19 +204,88 @@ class FramedHandler(serve.Handler):
         self.wfile.write(body)
 
 
-def layout_check(browser: str, base: str, page: str, width: int, height: int = HEIGHT) -> dict:
+def _devtools(browser: str, args: list[str]):
+    """A headless Chrome driven over its DevTools pipe (--remote-debugging-pipe: commands on fd 3, replies on fd 4,
+    each a JSON message ended by a NUL), and send(method, params, session) that returns a command's result."""
+    to_chrome_r, to_chrome_w = os.pipe()
+    from_chrome_r, from_chrome_w = os.pipe()
+    # the shell puts the pipe ends on the child's fds 3 and 4 and runs Chrome in its place (no preexec_fn: the
+    # checks start several browsers from threads at once)
+    proc = subprocess.Popen(["/bin/sh", "-c", f'exec "$0" "$@" 3<&{to_chrome_r} 4>&{from_chrome_w}', browser, *args,
+                             "--remote-debugging-pipe"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            pass_fds=(to_chrome_r, from_chrome_w))
+    os.close(to_chrome_r)
+    os.close(from_chrome_w)
+    out, buf, ids = os.fdopen(to_chrome_w, "wb", buffering=0), b"", [0]
+
+    def send(method: str, params: dict | None = None, session: str | None = None, deadline: float = 0.0) -> dict:
+        nonlocal buf
+        ids[0] += 1
+        msg = {"id": ids[0], "method": method, "params": params or {}}
+        if session:
+            msg["sessionId"] = session
+        out.write(json.dumps(msg).encode() + b"\0")
+        while True:
+            while b"\0" not in buf:
+                if deadline and time.monotonic() > deadline:
+                    raise TimeoutError(method)
+                ready, _, _ = select.select([from_chrome_r], [], [], 1.0)
+                if ready:
+                    chunk = os.read(from_chrome_r, 1 << 16)
+                    if not chunk:
+                        raise RuntimeError(f"Chrome closed its DevTools pipe: {proc.stderr.read()[-2000:]!r}")
+                    buf += chunk
+            raw, buf = buf.split(b"\0", 1)
+            reply = json.loads(raw)
+            if reply.get("id") == ids[0]:
+                if "error" in reply:
+                    raise RuntimeError(f"{method}: {reply['error']}")
+                return reply.get("result") or {}
+
+    def close():
+        try:
+            send("Browser.close", deadline=time.monotonic() + 5)
+        except Exception:  # noqa: BLE001 - a browser that will not close is killed below
+            pass
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        out.close()
+        os.close(from_chrome_r)
+        proc.stderr.close()
+
+    return send, close
+
+
+def layout_check(browser: str, base: str, page: str, width: int, height: int = HEIGHT, timeout: float = 90.0) -> dict:
     """The page's own layout check (?check=layout) of PAGE (a path with its query) in a frame WIDTH px wide, read from
-    the DOM headless Chrome dumps once the page has settled."""
+    the frame page once the check has finished. Chrome runs on real time and is asked over DevTools until the result
+    is there: a run on virtual time (--virtual-time-budget with --dump-dom) holds its clock while a fetch is pending,
+    and with the clips' videos loading it sometimes never reached its budget, which hung the test."""
     src = page + ("&" if "?" in page else "?") + "check=layout"
     frame = f"{base}/layout-frame?" + urllib.parse.urlencode({"src": src, "w": width, "h": height})
     with tempfile.TemporaryDirectory() as profile:
-        r = subprocess.run([browser, "--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run",
-                            "--hide-scrollbars", "--disable-extensions", f"--user-data-dir={profile}",
-                            f"--window-size={max(width, 500) + 40},{height + 200}", "--virtual-time-budget=20000",
-                            "--dump-dom", frame], capture_output=True, text=True, timeout=120)
-    m = re.search(r'<pre id="layout-result" data-state="done">(.*?)</pre>', r.stdout, re.S)
-    assert m, f"no layout check at {width}px: {r.stderr[-2000:]}"
-    return json.loads(html.unescape(m.group(1)))
+        send, close = _devtools(browser, ["--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run",
+                                          "--hide-scrollbars", "--disable-extensions", f"--user-data-dir={profile}",
+                                          f"--window-size={max(width, 500) + 40},{height + 200}", "about:blank"])
+        try:
+            deadline = time.monotonic() + timeout
+            target = send("Target.createTarget", {"url": frame}, deadline=deadline)["targetId"]
+            session = send("Target.attachToTarget", {"targetId": target, "flatten": True},
+                           deadline=deadline)["sessionId"]
+            read = ("(() => { const p = document.getElementById('layout-result');"
+                    " return p && p.dataset.state === 'done' ? p.textContent : null; })()")
+            while True:
+                value = send("Runtime.evaluate", {"expression": read, "returnByValue": True}, session,
+                             deadline=deadline).get("result", {}).get("value")
+                if value:
+                    return json.loads(value)
+                assert time.monotonic() < deadline, f"no layout check at {width}px of {page} in {timeout:.0f}s"
+                time.sleep(0.2)
+        finally:
+            close()
 
 
 def check_all(browser: str, base: str, files: list[str]) -> list[dict]:
