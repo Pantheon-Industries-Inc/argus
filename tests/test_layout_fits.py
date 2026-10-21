@@ -21,6 +21,7 @@ import select
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -216,10 +217,12 @@ def _devtools(browser: str, args: list[str]):
         return moved
     to_chrome_r, to_chrome_w = map(high, os.pipe())
     from_chrome_r, from_chrome_w = map(high, os.pipe())
-    # the shell puts the pipe ends on the child's fds 3 and 4 and runs Chrome in its place (no preexec_fn: the
-    # checks start several browsers from threads at once). Chrome leads its own process group, so closing it ends
-    # every helper it started, even when it never answered.
-    proc = subprocess.Popen(["/bin/sh", "-c", f'exec "$0" "$@" 3<&{to_chrome_r} 4>&{from_chrome_w}', browser, *args,
+    # a small launcher puts the pipe ends on the child's fds 3 and 4 and runs Chrome in its place (no preexec_fn:
+    # the checks start several browsers from threads at once; and no shell: dash, Ubuntu's sh, takes one-digit fds
+    # only). Chrome leads its own process group, so closing it ends every helper it started, even when it never
+    # answered.
+    place = "import os, sys; os.dup2(int(sys.argv[1]), 3); os.dup2(int(sys.argv[2]), 4); os.execv(sys.argv[3], sys.argv[3:])"
+    proc = subprocess.Popen([sys.executable, "-c", place, str(to_chrome_r), str(from_chrome_w), browser, *args,
                              "--remote-debugging-pipe", "--use-mock-keychain", "--password-store=basic"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, pass_fds=(to_chrome_r, from_chrome_w),
                             start_new_session=True)
