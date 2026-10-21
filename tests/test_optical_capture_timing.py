@@ -28,7 +28,7 @@ def test_marker_pairs_use_distinct_capture_times_across_a_camera_gap():
                    images={'extra1': images})
     sensor = doc['sensors'][0]
     assert sensor['times'] == [0., 3.]
-    assert doc['coverage'][0]['samples'] == 2
+    assert next(row for row in doc['coverage'] if row['id'] == 'camera:extra1')['samples'] == 2
     pairs = sensor['marker_motion']['pairs']
     assert [(pair['from_s'], pair['to_s']) for pair in pairs] == [(0., 3.)]
     invented = {'start_s': 1., 'end_s': 2., 'headline': 'The contact shifts',

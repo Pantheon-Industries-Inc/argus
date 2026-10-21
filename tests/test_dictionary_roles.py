@@ -135,7 +135,10 @@ def test_movement_roles_do_not_give_pose_grids_pressure_wording(role):
     assert sg.localized(values)
     rows = sg.summary_rows("original.grid", values, [0, 40, 59], shape=[3, 4], role=role)
     labels = [row[0] for row in rows]
-    assert labels == ["original.grid largest change of any value since the instant before"]
+    assert labels[0] == "original.grid largest change of any value since the instant before"
+    # the count of changed values beside it, never activity wording (label/signals.py CHANGE_TOP)
+    assert len(labels) == 2 and labels[1].startswith("original.grid values changed by more than")
+    assert not any("activity" in label or "active" in label for label in labels)
     assert rows[0][1] == ["-", "0.3", "0"]
     assert np.array_equal(values[:, 4], RISE[:, 0])
 
@@ -313,7 +316,6 @@ def test_a_machine_role_never_turns_a_camera_the_reader_placed_into_a_touch_sens
     assert not any(is_sensing(n) for n in ('left_gripper_cam', 'digital_cam', 'right_wrist_cam', 'sight_gel'))
     read = lambda c, view, kind: machine if view == 'right' else {}
     monkeypatch.setattr(dictionary_context, 'prepared_interpretation', read)
-    monkeypatch.setattr(tactile_capture, 'prepared_interpretation', read)
     shown = dictionary_projection.camera_presentation(ctx)
     assert all((shown.get(view) or {}).get('role') not in ('tactile', 'sensor') for view in ('exo', 'left', 'right'))
     assert not any(tactile_capture.eligible(ctx, view) for view in ('exo', 'left', 'right'))

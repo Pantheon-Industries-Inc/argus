@@ -12,7 +12,9 @@ from tests.test_tactile_contract import episode
 def image_and_numeric():
     ep = episode({'pressure': np.arange(5).reshape(5, 1)}, [{'name': 'pressure', 'shape': [1]}],
                  cameras={'exo': {'name': 'scene'}, 'extra1': {'name': 'gelsight'}})
-    doc = se.build(ep, {'n': 5}, shown={'extra1': [0, 4]})
+    # optical from the fixed view its frames show (label/camera_class.py), not from the name
+    from tests.test_optical_motion import pad
+    doc = se.build(ep, {'n': 5}, shown={'extra1': [0, 4]}, images={'extra1': {0: pad(), 4: pad()}})
     finding = {'start_s': 0, 'end_s': .4, 'headline': 'Contact shape changes', 'claim_type': 'image_deformation',
                'evidence': [{'sensor_id': 'camera:extra1', 'time_s': [0, .4]}]}
     return doc, finding

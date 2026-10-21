@@ -32,7 +32,9 @@ A signal is read by how its numbers behave, and only whether it measures touch a
   summarise it (summary_rows). One that has a rest and whose activity is local (at a typical frame fewer than half
   its values are active: a pressure map under a grasp, whether or not it ever rests) gets its total activity, how
   many values are active and, for a 2-D array, where its strongest value is; any other (hand landmarks, whose values
-  all move together) gets how much its values changed since the instant before.
+  all move together) gets how much its values changed since the instant before. Both also get how many values changed
+  by more than the array's own change threshold since the instant before, rising and falling (component_change), since
+  a pooled number can stay still while the values under it trade places.
 """
 from __future__ import annotations
 
@@ -177,6 +179,88 @@ def finite_range(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     lo[~np.isfinite(lo)] = np.nan
     hi[~np.isfinite(hi)] = np.nan
     return lo, hi
+
+
+# A pooled summary of many values (a group mean, the largest change of any value) can stay still while the values
+# trade places: on the UMI tactile board, 233 of 384 cells changed by more than a quarter of their range between two
+# rows half a second apart while the board mean moved by 0.0012. So every pooled view of an array also says how its
+# values changed (component_change): how many changed by more than the array's own change threshold, how many of those
+# rose and fell, the spread of the changes, and which values changed most. CHANGE_TOP is how many are named.
+CHANGE_TOP = 5
+
+
+def change_threshold(a: np.ndarray) -> tuple[float, dict]:
+    """(threshold, basis): the smallest change of one value that counts as a change, from the array's own scale. It is
+    REST_FRACTION of the array's typical range (the 99th percentile of its values' own finite ranges, the same share
+    of the swing that makes a value active, module docstring), and never below the array's step noise (the median, over
+    its values, of each value's median absolute step between consecutive readings). A constant array has threshold 0,
+    so nothing in it changes."""
+    a = _float(a)
+    a = a.reshape(len(a), -1)
+    lo, hi = finite_range(a)
+    ranges = (hi - lo)[np.isfinite(hi - lo)]
+    typical = float(np.percentile(ranges, 99)) if len(ranges) else 0.0
+    steps = []
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for i, j in _col_chunks(a):
+            d = np.abs(np.diff(_readings(np.asarray(a[:, i:j], dtype=np.float64)), axis=0))
+            steps.append(np.nanmedian(d, axis=0) if len(d) else np.full(j - i, np.nan))
+    steps = np.concatenate(steps) if steps else np.zeros(0)
+    steps = steps[np.isfinite(steps)]
+    noise = float(np.median(steps)) if len(steps) else 0.0
+    threshold = max(REST_FRACTION * typical, noise)
+    return threshold, {"typical_range": _short(typical), "step_noise": _short(noise),
+                       "rule": f"the larger of {REST_FRACTION} of the typical value range (99th percentile of each "
+                               "value's own range) and the step noise (median of each value's median absolute step "
+                               "between consecutive readings)"}
+
+
+def _short(x: float):
+    """A number as JSON keeps it, to six significant figures (enough to compare, a third of the bytes)."""
+    return float(f"{float(x):.6g}") if np.isfinite(x) else None
+
+
+def component_change(before, after, threshold: float, columns=None, names=None, top: int = CHANGE_TOP) -> dict | None:
+    """How the values of one array changed from one reading (before) to another (after), value by value: changed (more
+    than threshold), rising and falling of those, compared (finite at both), the mean change (what a pooled mean moved
+    by), the median, 90th percentile and largest absolute change, and the top values by absolute change as [source
+    column, change] (columns default to positions; names, when the source declares them, name each column). None when
+    no value reads at both."""
+    before = np.asarray(before, dtype=np.float64).ravel()
+    after = np.asarray(after, dtype=np.float64).ravel()
+    columns = np.arange(len(before)) if columns is None else np.asarray(columns)
+    with np.errstate(invalid="ignore"):
+        d = after - before
+    ok = np.isfinite(d)
+    if not ok.any():
+        return None
+    dv, cols = d[ok], columns[ok]
+    mag = np.abs(dv)
+    order = [i for i in np.argsort(-mag, kind="stable")[:top] if mag[i] > 0]
+    out = {"changed": int((mag > threshold).sum()), "rising": int((dv > threshold).sum()),
+           "falling": int((dv < -threshold).sum()), "compared": int(ok.sum()),
+           "mean_change": _short(dv.mean()), "abs_change_median": _short(np.median(mag)),
+           "abs_change_p90": _short(np.percentile(mag, 90)), "abs_change_max": _short(mag.max()),
+           "largest": [[int(cols[i]), _short(dv[i])] for i in order]}
+    if names is not None and len(names):
+        out["largest_names"] = [str(names[int(cols[i])]) if int(cols[i]) < len(names) else None for i in order]
+    return out
+
+
+def row_steps(a: np.ndarray) -> np.ndarray:
+    """Per row, the summed absolute change of every finite value since the row before (0 for the first row): where an
+    array's values move most, whether or not their pooled mean moves."""
+    a = _float(a)
+    a = a.reshape(len(a), -1)
+    out = np.zeros(len(a))
+    for i, j in _row_chunks(a):
+        lo = max(0, i - 1)
+        c = np.asarray(a[lo:j], dtype=np.float64)
+        d = np.abs(np.diff(c, axis=0))
+        s = np.where(np.isfinite(d), d, 0.0).sum(axis=1)
+        out[lo + 1:j] = s
+    return out
 
 
 def per_value(name: str, d: int, shape=None, names=None, role=None) -> bool:
@@ -1047,6 +1131,14 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
             x = x[np.isfinite(x)]
             ch.append(reading_text(x.max()) if len(x) else "-")
         rows.append((f"{name} largest change of any value since the instant before", ch))
+    # a total, a count or a largest change can stay still while values trade places (CHANGE_TOP): how many values
+    # changed by more than the array's own threshold since the instant before, and how many of those rose and fell
+    threshold, _ = change_threshold(a)
+    moved = ["-"]
+    for a0, b0 in zip(ks, ks[1:]):
+        got = component_change(a[a0], a[b0], threshold)
+        moved.append("-" if got is None else f"{got['changed']} ({got['rising']} up, {got['falling']} down)")
+    rows.append((f"{name} values changed by more than {reading_text(threshold)} since the instant before", moved))
     return rows
 
 

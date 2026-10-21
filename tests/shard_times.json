@@ -187,5 +187,6 @@
  "tests/test_image_channel_planes.py": 2.3,
  "tests/test_role_representation.py": 1.0,
  "tests/test_signal_name_collisions.py": 1.0,
- "tests/test_signal_identity.py": 2.0
+ "tests/test_signal_identity.py": 2.0,
+ "tests/test_evidence_coverage.py": 3.0
 }

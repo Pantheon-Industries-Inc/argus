@@ -2850,7 +2850,7 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     # full size is kept only where a detail view shows it: the first and last instant and the contact instants
     imgs = frames(ep, pl, gate, widths=widths, detail_ks={pl["ks"][0], pl["ks"][-1], *(pl.get("contact") or [])})
     from label import tactile_capture, sensor_copy
-    native_images, capture_selection = tactile_capture.collect(ep, pl, gate)
+    native_images, capture_selection = tactile_capture.collect(ep, pl, gate, images=imgs)
     native_images, native_parts, native_bytes = tactile_capture.bounded_parts(ep, native_images, detail=detail)
     for view, receipt in capture_selection.items():
         supplied = sorted(native_images.get(view) or {})

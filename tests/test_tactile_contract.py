@@ -124,10 +124,18 @@ def test_unknown_grid_keeps_signed_raw_readings_gaps_and_declared_groups():
 def test_optical_evidence_uses_only_frames_actually_sent():
     ep = episode({}, [], cameras={'exo': {'name': 'scene'}, 'extra1': {'name': 'gelsight_left'},
                                   'extra2': {'name': 'digit_right'}, 'extra3': {'name': 'tactile_left_heatmap'}})
-    doc = se.build(ep, {'n': 5, 'ks': [0, 2, 4]}, shown={'exo': [0, 2, 4], 'extra1': [0, 4], 'extra3': [0, 4]})
+    from PIL import Image
+    gel = {k: Image.new('RGB', (64, 48), (120, 160, 140)) for k in (0, 4)}
+    for im in gel.values():
+        im.paste((60, 90, 80), (20, 10, 40, 30))
+    doc = se.build(ep, {'n': 5, 'ks': [0, 2, 4]}, shown={'exo': [0, 2, 4], 'extra1': [0, 4], 'extra3': [0, 4]},
+                   images={'extra1': gel})
     assert [s['view'] for s in doc['sensors']] == ['extra1', 'extra3']
     assert doc['sensors'][0]['times'] == [0, .4]
+    # optical from its frames' fixed view, never from the brand in its name (label/camera_class.py)
     assert 'image_deformation' in doc['sensors'][0]['capabilities']
+    unseen = se.build(ep, {'n': 5, 'ks': [0, 2, 4]}, shown={'extra1': [0, 4]})
+    assert unseen['sensors'][0]['quantity'] == 'tactile_image'
     assert doc['sensors'][1]['capabilities'] == ['image_response_change']
     assert any('digit_right' in x for x in doc['limitations'])
 

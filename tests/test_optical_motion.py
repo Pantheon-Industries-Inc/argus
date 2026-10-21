@@ -47,7 +47,8 @@ def test_coherent_and_local_marker_motion_survive_without_force_claims():
         if not local:
             assert pair['local_p95_px'] < .2
         assert 'force_change' not in sensor['capabilities']
-        assert sensor['quantity'] == 'tactile_image'
+        # a fixed marker-pad view is an optical sensor's own camera (label/camera_class.py)
+        assert sensor['quantity'] == 'optical_tactile'
         assert se.compatible(doc, ep['context'])
 
 

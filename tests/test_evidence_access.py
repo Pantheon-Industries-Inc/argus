@@ -377,10 +377,12 @@ def test_sampling_and_invalid_requests_cannot_exceed_access_budget(tmp_path):
     a.refresh()
     f = next(f for f in a.inventory() if f['name'] == 'wide')
     r = a.inspect({'field_id': f['id']})
-    assert len(r['columns']) <= ea.MAX_COLUMNS
+    # the response budget, not a fixed count, bounds how many components one receipt carries
+    assert 8 < len(r['columns']) < 100000
+    assert len(ea.packed(r).encode()) <= ea.MAX_RESPONSE_BYTES
     assert r['omitted_columns'] == 100000 - len(r['columns'])
     for bad in ({'columns': [-1]}, {'columns': [True]}, {'start_s': float('nan')}, {'mode': 'python'},
-                {'rows': [2]}, {'start_row': 1, 'start_s': 0}):
+                {'rows': [4]}, {'rows': [2], 'start_row': 1}, {'start_row': 1, 'start_s': 0}):
         with pytest.raises(ValueError):
             a.inspect({'field_id': f['id'], **bad})
 

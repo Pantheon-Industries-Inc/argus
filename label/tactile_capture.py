@@ -6,9 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-from label.dictionary_context import camera_content_role, camera_role, prepared_interpretation, TACTILE_CONTENT_ROLES
-from prepare.formats import is_sensing
-
 MAX_SCAN_FRAMES = 36000
 MAX_ADDITIONAL_FRAMES = 24
 MAX_IMAGE_BYTES = 2_000_000
@@ -17,16 +14,11 @@ IMAGE_WIDTH = 384
 CHUNK = 256
 
 
-def eligible(ctx, view):
-    from label import signals as sg
-    meta = (ctx.get('cameras') or {}).get(view) or {}
-    role = camera_role(ctx, view, prepared_interpretation(ctx, view, 'camera'), meta)
-    content = camera_content_role(ctx, view)
-    if content and content['role'] in ('scene', 'other'):
-        return False
-    recorded = bool(content and content['role'] == 'tactile') or meta.get('sensor_type') == 'optical_tactile'
-    return (recorded or role in TACTILE_CONTENT_ROLES or not role and is_sensing(str(meta.get('name') or view))) \
-        and (recorded or role not in sg.NON_TOUCH_ROLES)
+def eligible(ctx, view, images=None):
+    """Whether a camera is a tactile sensor's image, by the one camera decision (label/camera_class.py); images, the
+    view's sampled frames, let its image statistics decide what only they can."""
+    from label.camera_class import camera_class
+    return camera_class(ctx, view, images)['tactile']
 
 
 def sample(ep, view, source_frame):
@@ -146,8 +138,10 @@ def _scan(ep, view, pl, gate, scan_limit, image_limit):
     return images, receipt
 
 
-def collect(ep, pl, gate=None):
-    views = [view for view in ep.get('sources') or {} if eligible(ep['context'], view)]
+def collect(ep, pl, gate=None, images=None):
+    """Native captures of every tactile camera; images, the sampled frames by view (label/episode.py frames), let the
+    camera decision read each view's own pictures."""
+    views = [view for view in ep.get('sources') or {} if eligible(ep['context'], view, (images or {}).get(view))]
     if not views:
         return {}, {}
     quota = max(1, MAX_ADDITIONAL_FRAMES // len(views))

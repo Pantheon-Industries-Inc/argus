@@ -40,7 +40,9 @@ def test_recorded_tactile_role_survives_generic_machine_rgb_interpretation():
     _, doc = camera_evidence({'content_role': 'tactile_image'},
                             {'role': 'rgb_image', 'provenance': 'machine'})
     assert len(doc['sensors']) == 1
-    assert 'image_response_change' in doc['sensors'][0]['capabilities']
+    # still a tactile sensor; its fixed marker view makes it optical (label/camera_class.py)
+    assert doc['sensors'][0]['quantity'] == 'optical_tactile'
+    assert doc['sensors'][0]['class_basis'].startswith('recorded content role tactile')
 
 
 @pytest.mark.parametrize('provenance', ['machine', 'human'])
