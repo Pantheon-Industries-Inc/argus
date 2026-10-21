@@ -27,6 +27,68 @@ def effective_outcome(value):
     return 'failure' if value == 'partial' else value
 
 
+# The output format of a request that asks every recording for a list of tasks, each with its own outcome
+# (label/prompts.py fixed_instructions). label/episode.py writes it into every request record as label_schema, so it
+# names the prompt actually sent; a record without it was asked in the episode or session mode of its saved policy.
+LABEL_SCHEMA = 'tasks'
+JUDGED_AGAINST = ('instruction', 'own_end_state')
+# a task's outcome fields, under the names the recording's completion gives them
+COMPLETION_FROM_TASK = (('task_completed', 'outcome'), ('success_predicate', 'success_predicate'),
+                        ('completed_at_s', 'completed_at_s'), ('goal_reached_at_s', 'goal_reached_at_s'),
+                        ('undone_at_s', 'undone_at_s'), ('undone_by', 'undone_by'), ('reason', 'note'),
+                        ('judged_against', 'judged_against'))
+
+
+def recording_completion(tasks) -> dict:
+    """The recording's completion, derived from its tasks. A recording of exactly one task takes that task's outcome,
+    times and predicate as its own. A recording of several tasks, or of none, has no single verdict: every field is
+    null, and each task keeps its own outcome under tasks. from_tasks says how many tasks it was derived from. A task
+    still open at a cut of the recording (continues_past_cut) is no verdict either."""
+    rows = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+    empty = {name: None for name, _ in COMPLETION_FROM_TASK}
+    if len(rows) == 1 and str(rows[0].get('outcome') or '').strip().lower() == 'continues_past_cut':
+        return {**empty, 'reason': 'its one task continues past a cut of the recording, so its outcome is open',
+                'from_tasks': 1}
+    if len(rows) == 1:
+        return {**{name: copy.deepcopy(rows[0].get(key)) for name, key in COMPLETION_FROM_TASK}, 'from_tasks': 1}
+    reason = 'no task observed' if not rows else f"{len(rows)} tasks; each task's outcome is under tasks"
+    return {**empty, 'reason': reason, 'from_tasks': len(rows)}
+
+
+def derive_completion(labels: dict) -> dict:
+    """labels with the recording's completion derived from its tasks (recording_completion), for a reply asked in the
+    LABEL_SCHEMA format. That format has no completion of its own, so one the reply writes anyway is replaced and
+    noted in _schema_violations. Call it only on a record whose label_schema is LABEL_SCHEMA: an older record keeps the
+    completion its own request asked for."""
+    if not isinstance(labels, dict):
+        return labels
+    out = dict(labels)
+    if 'completion' in out:
+        out['_schema_violations'] = [*(out.get('_schema_violations') or []),
+                                     'completion: the output format has no completion; it is derived from tasks']
+    out['completion'] = recording_completion(out.get('tasks'))
+    return out
+
+
+def recording_verdict(completion) -> str | None:
+    """The recording's own outcome word, or None when it has none (several tasks, no task, a session, the head
+    camera's activities, a long recording whose task is open at a cut)."""
+    word = completion.get('task_completed') if isinstance(completion, dict) else None
+    return word.strip().lower() if isinstance(word, str) and word.strip() else None
+
+
+def verdict_or_tasks(record: dict) -> tuple[str | None, list[dict]]:
+    """(the recording's verdict, the tasks that stand in for it). Every reader of an outcome uses this one rule: the
+    recording's verdict when it has one, and then no tasks; otherwise no verdict and its tasks. A recording of one task
+    is read as one goal, the way an episode always was, and only a recording with no verdict is read task by task."""
+    record = record if isinstance(record, dict) else {}
+    verdict = recording_verdict(record.get('completion'))
+    if verdict is not None:
+        return verdict, []
+    tasks = record.get('tasks')
+    return None, [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+
+
 def severity(item) -> str | None:
     """An issue's severity tier, or None when the issue is unrated (no severity, or one outside SEVERITIES)."""
     value = item.get('severity') if isinstance(item, dict) else None
@@ -64,8 +126,8 @@ TEXT = {
     'timeline': ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes'),
     'key_events': ('label', 'kind', 'outcome', 'note'),
     'state_changes': ('object', 'from', 'to', 'seen_in'),
-    'completion': ('task_completed', 'success_predicate', 'undone_by', 'reason'),
-    'tasks': ('task', 'outcome', 'success_predicate', 'note', 'undone_by'),
+    'completion': ('task_completed', 'success_predicate', 'undone_by', 'reason', 'judged_against'),
+    'tasks': ('task', 'outcome', 'success_predicate', 'note', 'undone_by', 'judged_against'),
     'recovery': ('failure', 'correction', 'how_to_fix'),
     'data_issues': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
     'operator_mistakes': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
@@ -77,7 +139,7 @@ TEXT = {
 ENUMS = {'task_completed': OUTCOMES, 'outcome': OUTCOMES,
          'severity': ('low', 'medium', 'high'), 'contribution': ('advancing', 'wasteful', 'idle'),
          'relation': ('aligned', 'narrower', 'broader', 'different', 'unrelated'),
-         'deliberate': ('yes', 'no', 'unclear')}
+         'deliberate': ('yes', 'no', 'unclear'), 'judged_against': JUDGED_AGAINST}
 BOOLS = {'timeline': ('hands_visible',), 'recovery': ('recovered',),
          'operator_mistakes': ('recovered',), 'goal_alignment': ('matches_given',)}
 TEXT_LISTS = {'tasks': ('objects',), 'scene.objects': ('attributes',), 'scene_graph': ('relations',)}
