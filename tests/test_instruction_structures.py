@@ -296,19 +296,18 @@ console.log(JSON.stringify(JSON.parse(process.argv[2]).map(c => tag(line(c.d, c.
 def test_the_verdict_line_counts_an_undone_task_and_a_stitched_task_verdict_has_its_goal_frame():
     """A task reached and then undone is counted as undone, never as unclear. A recording labelled in parts whose one
     task was joined across the cuts has that task's verdict and goal frame, never "goal frame unassessed". One with an
-    instruction, which no part sees whole, has no verdict and is read by its tasks."""
+    instruction, which no part sees whole, stays unclear with its goal frame unassessed, as on main."""
     task = lambda outcome: {'task': 't', 'outcome': outcome}
     cases = [
         {'d': {}, 'tasks': [task('success'), task('success_then_undone'), task('failure'), task('unclear')],
          'partProgress': False},
         {'d': {'completion': {'task_completed': 'success', 'completed_at_s': 12.5, 'basis': 'one_task'}}, 'tasks': [],
          'partProgress': True},
-        {'d': {'completion': {'task_completed': None, 'basis': 'parts'}},
-         'tasks': [task('success'), task('success'), task('success'), task('failure')], 'partProgress': True},
+        {'d': {'completion': {'task_completed': 'unclear', 'basis': 'parts'}}, 'tasks': [], 'partProgress': True},
     ]
     p = subprocess.run(['node', '-e', VERDICT_SCRIPT, str(PAGE), json.dumps(cases)], text=True, capture_output=True)
     assert p.returncode == 0, p.stderr
     several, joined, parted = json.loads(p.stdout)
     assert several == '1 of 4 tasks succeeded, 1 undone, 1 failed, 1 unclear'
     assert joined == 'success goal frame 12.5s'
-    assert parted == '3 of 4 tasks succeeded, 1 failed'
+    assert parted == 'unclear Whole-recording goal frame unassessed'

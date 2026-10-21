@@ -1429,8 +1429,8 @@ def _without_instruction(src: Path) -> None:
 
 def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_verdict(tmp_path, monkeypatch):
     """With no instruction a recording of one task takes that task's verdict, also when the task is joined across the
-    cuts; with an instruction no part sees the whole asked work, so the recording has no verdict (an unclear that is no
-    judgment) and is read by its joined task, as a session labelled in parts was."""
+    cuts; with an instruction no part sees the whole asked work, so the recording stays unclear, as an episode labelled
+    in parts always was, and its joined task is listed beside that verdict."""
     _, src, parts = _three_parts(tmp_path, monkeypatch)
     contexts = [json.loads((part / 'context.json').read_text()) for part in parts]
     tasks = [[_cup_task(contexts[0], end=True)], [_cup_task(contexts[1], start=True, end=True)],
@@ -1440,11 +1440,11 @@ def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_v
     (task,) = given['labels']['tasks']
     assert task['outcome'] == 'success' and task['judged_against'] == 'instruction' and len(task['joined_from']) == 3
     completion = given['labels']['completion']
-    assert (completion['task_completed'], completion['basis']) == (None, 'parts')
+    assert (completion['task_completed'], completion['basis']) == ('unclear', 'parts')
     assert 'do not establish a whole-recording outcome' in completion['reason']
     assert given['label_schema'] == 'tasks' and given['prompt_mode'] == 'given'
-    from board.label_projection import verdict_or_tasks
-    assert verdict_or_tasks(given['labels']) == (None, [task])
+    from board.label_projection import shown_tasks, verdict_or_tasks
+    assert verdict_or_tasks(given['labels']) == ('unclear', []) and shown_tasks(given['labels']) == [task]
     _without_instruction(src)
     own = [[{**t, 'judged_against': 'own_end_state'} for t in part] for part in tasks]
     records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, own)]

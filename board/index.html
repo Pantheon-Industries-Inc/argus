@@ -6664,8 +6664,8 @@ function renderEp(d, opts) {
   // session, a head camera's activities) are shown task by task (hasTasks), each with its own outcome and goal frame
   const allTasks = (d.tasks || []).filter(t => t && (t.task || t.start_s != null));
   const oneVerdict = comp.basis != null && !!String(comp.task_completed || '').trim();
-  const tasks = oneVerdict && !(allTasks.length >= 2 || allTasks.some(t => t.judged_against === 'subtask')) ? []
-    : allTasks;
+  const tasks = oneVerdict && !(comp.basis === 'parts' || allTasks.length >= 2
+    || allTasks.some(t => t.judged_against === 'subtask')) ? [] : allTasks;
   const hasTasks = tasks.length > 0 && !oneVerdict;
   const taskGoalTimes = tasks.map(t => t.completed_at_s).filter(t => t != null);
 

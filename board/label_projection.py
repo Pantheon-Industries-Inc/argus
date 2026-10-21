@@ -35,8 +35,9 @@ LABEL_SCHEMA = 'tasks'
 # state (label/prompts.py TASK_RULES)
 JUDGED_AGAINST = ('subtask', 'instruction', 'own_end_state')
 # what a completion in that format stands on (its basis): the reply's own completion, judged against the episode's
-# instruction; a recording's one task; or no verdict, for a recording whose dataset times its own steps and gives no
-# instruction (task_prompts) or one of several tasks, or none (tasks)
+# instruction; a recording's one task; no verdict, for a recording whose dataset times its own steps and gives no
+# instruction (task_prompts) or one of several tasks, or none (tasks); or "unclear" for a recording with an instruction
+# labelled in parts, which no part sees whole (parts)
 BASES = ('instruction', 'one_task', 'task_prompts', 'tasks', 'parts')
 # a task's outcome fields, under the names the recording's completion gives them
 COMPLETION_FROM_TASK = (('task_completed', 'outcome'), ('success_predicate', 'success_predicate'),
@@ -90,8 +91,11 @@ def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts
         # the completion is the reply's outcome; the tasks asked beside it, missing or without an outcome, are named
         # as schema issues and never make the reply unfinished (label/completeness.py)
         tasks = out.get('tasks')
+        # with the dataset's timed steps, the tasks hold the judgment against each step the request asks for
         notes = (['tasks: the request asks the recording\'s tasks beside its completion, and the reply lists none']
                  if not isinstance(tasks, list) else
+                 [f'tasks: the request asks each of the dataset\'s {task_prompts} timed steps judged in tasks, and the '
+                  'reply lists none'] if not tasks and task_prompts else
                  [f'tasks: task {i} of {len(tasks)} has no outcome' for i, task in enumerate(tasks)
                   if not isinstance(task, dict) or not str(task.get('outcome') or '').strip()])
         notes = [n for n in notes if n not in (out.get('_schema_violations') or [])]
@@ -178,14 +182,17 @@ def tasks_format(record) -> bool:
 def shown_tasks(record: dict) -> list[dict]:
     """The tasks a reader lists beside the outcome. A record in the tasks format with a verdict of its own lists them
     when there are two or more, or when one is judged against one of the dataset's timed steps (each such judgment
-    was asked for and is shown); one with no verdict lists them all. A record labelled before keeps the rule it was
+    was asked for and is shown), and always when it was labelled in parts (its tasks joined across the cuts, beside
+    its "unclear"); one with no verdict lists them all. A record labelled before keeps the rule it was
     shown by (verdict_or_tasks). Scoring reads verdict_or_tasks, which never lists tasks beside a verdict."""
     record = record if isinstance(record, dict) else {}
     verdict, tasks = verdict_or_tasks(record)
     if not tasks_format(record) or verdict is None:
         return tasks
     every = [t for t in record.get('tasks') or [] if isinstance(t, dict)] if isinstance(record.get('tasks'), list) else []
-    return every if len(every) >= 2 or any(t.get('judged_against') == 'subtask' for t in every) else []
+    # a recording labelled in parts lists every task joined across its cuts beside its "unclear"
+    parted = (record.get('completion') or {}).get('basis') == 'parts'
+    return every if parted or len(every) >= 2 or any(t.get('judged_against') == 'subtask' for t in every) else []
 
 
 def severity(item) -> str | None:

@@ -4,15 +4,29 @@
 A dataset states its task in two ways: an instruction for the whole recording (context["instruction"]) and timed texts
 (context["annotation_subtasks"], each {t0, t1, label} with the column or topic it came from). A timed text is only a
 timed claim when its source's text changes within the recording. One that holds a single text over the whole recording
-is a claim about the whole recording, never a step of it, whatever its source. Within one source, consecutive rows with
-the same text are one claim, and an empty text, or a message replaced the moment it was sent, claims nothing. A claim
-is read as holding over the whole recording only on established times: a row with no time, or a claim that ends in a
-recording whose length is not stated, never is.
+is a claim about the whole recording, never a step of it, whatever its source.
+
+Each source keeps its own semantics.
+- A message source holds each text until the next one replaces it: an MCAP topic (a column named /...) and a recorded
+  text column (rows with row_start and row_end). A message an MCAP topic replaces within 0.1s of sending it claims
+  nothing (MicroAGI sends a placeholder and its title at the same moment); a recorded row is a sample of its frame and
+  always claims its text.
+- An annotation with an explicit start and end is a span, and one with no end, or an end equal to its start, is a
+  moment. Both are always kept as they were given, however short.
+- An empty or missing text claims nothing, and it is not covered by any text either.
+- Identical texts of one source join into one claim only where their spans touch, with no gap between them; moments
+  never join.
+- A claim holds over the whole recording only when it is one unbroken span from within 1s of the recording's start (or
+  its first row) to within 1s of its end (or its last row), on established times: a moment, a row with no time, or a
+  claim in a recording whose length is not stated never is. A message source's leading text replaced within 0.1s does
+  not break that coverage; any other leading text, or an empty one, does.
 
 claims() applies the law when the context is read, so a context prepared before it is read the same way with no new
-preparation; the readers apply it too (prepare/formats.py), so new contexts hold it already. Every reader of the
-dataset's task texts goes through claims(): the request (label/episode.py), the parts of a long recording
-(label/pieces.py), the board and its export (board/build.py).
+preparation; the LeRobot and MCAP readers apply it too (prepare/formats.py), so new contexts hold it already. An
+instruction a reader already flattened from several timed texts (main's MCAP reader, "0.0 s: ...; 66.5 s: ...") stays
+as it is: such a recording reads its timed prompts once it is prepared again. Every reader of the dataset's task texts
+goes through claims(): the request (label/episode.py), the parts of a long recording (label/pieces.py), the board and
+its export (board/build.py).
 
 - A whole-recording claim is the recording's instruction when it has none.
 - One whose text differs from the instruction is kept as the dataset's task for the whole episode, shown in the request
@@ -27,9 +41,12 @@ from __future__ import annotations
 import copy
 import math
 
-# a message replaced within this many seconds of being sent holds no stretch of the recording (MicroAGI sends a
-# placeholder and its title at the same moment)
+# a message source's text replaced within this many seconds of being sent holds no stretch of the recording
 INSTANT_S = 0.1
+# how close to the recording's start and end a claim must reach to hold over the whole recording
+EDGE_S = 1.0
+# two spans of one text touch when the second starts within this of the first's end (times are kept to the ms)
+TOUCH_S = 0.001
 
 
 def _number(x):
@@ -53,27 +70,56 @@ def _same(a: str, b: str) -> bool:
     return ' '.join(a.split()).casefold() == ' '.join(b.split()).casefold()
 
 
-def _merged(rows: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
-    """One source's (position, row) pairs, in the order the context lists them, with every non-claim dropped and
-    consecutive rows of one text joined: the first row's fields and position, the last row's end, and joined_rows
-    when more than one was joined."""
-    out = []
+def message_source(rows: list[dict], column) -> bool:
+    """Whether a source holds each text until the next replaces it: recorded rows (row_start and row_end) or an MCAP
+    topic (a column named /...). Any other source gives spans and moments."""
+    return (isinstance(column, str) and column.startswith('/')) or all(
+        isinstance(row.get('row_start'), int) for row in rows)
+
+
+def _moment(row: dict) -> bool:
+    """A row with a time and no end, or an end equal to its start (a point annotation)."""
+    t0, t1 = _number(row.get('t0')), _number(row.get('t1'))
+    return t0 is not None and (t1 is None or t1 == t0) and not isinstance(row.get('row_end'), int)
+
+
+def _instant(rows: list[dict], k: int) -> bool:
+    """Whether a message source's row k is replaced by the next row within INSTANT_S of being sent. A recorded row is
+    a sample of its frame, held for at least that frame, never a message replaced between frames: at 30 fps a value
+    held for two frames lasts 0.067s and is a real step (a 4-frame episode's "pick" then "place")."""
+    if k + 1 >= len(rows) or isinstance(rows[k].get('row_start'), int):
+        return False
+    t0, nxt = _number(rows[k].get('t0')), _number(rows[k + 1].get('t0'))
+    return t0 is not None and nxt is not None and nxt - t0 < INSTANT_S
+
+
+def _touch(a: dict, b: dict) -> bool:
+    """Whether span b starts where span a ends: the next recorded row, or a start within TOUCH_S of a's end."""
+    if isinstance(a.get('row_end'), int) and isinstance(b.get('row_start'), int):
+        return b['row_start'] == a['row_end'] + 1
+    a1, b0 = _number(a.get('t1')), _number(b.get('t0'))
+    return a1 is not None and b0 is not None and abs(b0 - a1) <= TOUCH_S
+
+
+def _merged(rows: list[tuple[int, dict]], messages: bool) -> tuple[list[tuple[int, dict]], bool]:
+    """(one source's claims, whether everything before its first claim was a message replaced at once). The (position,
+    row) pairs keep the order the context lists them; a non-claim is dropped; consecutive spans of one text join where
+    they touch, keeping the first row's fields and position, the last row's end, and joined_rows."""
+    out, lead_ok = [], True
+    plain = [row for _, row in rows]
     for k, (at, row) in enumerate(rows):
         words = text(row)
-        t0, t1 = _number(row.get('t0')), _number(row.get('t1'))
         if not has_text(row):
             # a recorded annotation with no label or text field is kept as it was recorded, never joined
             out.append((at, copy.deepcopy(row)))
             continue
-        # an empty text; a message replaced at once (a span of recorded rows, row_start, is never an instant)
-        if not words or ('row_start' not in row and t0 is not None and t1 is not None and t1 - t0 < INSTANT_S
-                         and k < len(rows) - 1):
+        if not words or (messages and _instant(plain, k)):
+            # an empty text claims nothing and covers nothing; a message replaced at once claims nothing
+            if not out and not (messages and _instant(plain, k)):
+                lead_ok = False
             continue
-        # recorded rows join only where they meet; a row between them with no text (an unresolved code) breaks the
-        # claim, so the text is not held over that stretch
-        meets = not (isinstance(row.get('row_start'), int) and out and isinstance(out[-1][1].get('row_end'), int)
-                     and row['row_start'] != out[-1][1]['row_end'] + 1)
-        if out and meets and _same(text(out[-1][1]), words):
+        if out and not _moment(row) and not _moment(out[-1][1]) and has_text(out[-1][1]) and _touch(out[-1][1], row) \
+                and _same(text(out[-1][1]), words):
             last = out[-1][1]
             if 't1' in row or 't1' in last:
                 last['t1'] = row.get('t1')
@@ -82,29 +128,19 @@ def _merged(rows: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
             last['joined_rows'] = last.get('joined_rows', 1) + 1
             continue
         out.append((at, copy.deepcopy(row)))
-    return out
+    return out, lead_ok
 
 
-def _reaches_end(row: dict, end_s: float | None, n_rows) -> bool:
-    """Whether a claim holds to the end of the recording, on established times only: its span ends at the last
-    recorded row, or it starts at a time and has no end (it holds until the recording ends), or it ends within a
-    second (or 5% of the length) of the recording's stated end."""
-    if isinstance(row.get('row_end'), int) and isinstance(n_rows, int):
-        return row['row_end'] >= n_rows - 1
-    t0, t1 = _number(row.get('t0')), _number(row.get('t1'))
-    if t0 is None:
+def _covers(row: dict, start_row: dict, end_s: float | None, n_rows) -> bool:
+    """Whether one claim holds from the recording's start (start_row's start: its own row, or a placeholder replaced at
+    once before it) to its end, on established times."""
+    if _moment(row):
         return False
-    if t1 is None:
-        return 't1' not in row or row.get('t1') is None
-    return end_s is not None and t1 >= end_s - max(1.0, 0.05 * end_s)
-
-
-def _starts(row: dict, end_s: float | None) -> bool:
-    """Whether a claim starts with the recording: at its first row, or within a second (or 5% of its length)."""
-    if isinstance(row.get('row_start'), int):
-        return row['row_start'] == 0
-    t0 = _number(row.get('t0'))
-    return t0 is not None and t0 <= max(1.0, 0.05 * (end_s or 0.0))
+    if isinstance(start_row.get('row_start'), int) and isinstance(row.get('row_end'), int) and isinstance(n_rows, int):
+        return start_row['row_start'] == 0 and row['row_end'] >= n_rows - 1
+    t0, t1 = _number(start_row.get('t0')), _number(row.get('t1'))
+    return (end_s is not None and t0 is not None and t1 is not None
+            and t0 <= EDGE_S and t1 >= end_s - EDGE_S)
 
 
 def claims(ctx: dict, duration_s: float | None = None) -> dict:
@@ -139,17 +175,14 @@ def claims(ctx: dict, duration_s: float | None = None) -> dict:
             whole.append({'text': text(row), 'column': row.get('column'), 'source': row.get('source')})
     kept, held = [], []
     for (column, source), group in sources.items():
-        merged = _merged(group)
+        messages = message_source([row for _, row in group], column)
+        merged, lead_ok = _merged(group, messages)
         if not merged:
             continue
-        first, last = merged[0][1], merged[-1][1]
-        # it holds over the whole recording when it reaches the end and starts with it, or starts after nothing but
-        # rows of its source that claim nothing (a placeholder, an empty text)
-        led = merged[0][0] != group[0][0]
-        # one unbroken claim of one text
-        one_text = len(merged) == 1 and has_text(first)
-        if one_text and _reaches_end(last, end_s, n_rows) and (
-                _starts(first, end_s) or led and _number(first.get('t0')) is not None):
+        first = merged[0][1]
+        # one unbroken claim of one text, from the start (or a placeholder replaced at once before it) to the end
+        start_row = group[0][1] if lead_ok else first
+        if len(merged) == 1 and has_text(first) and _covers(first, start_row, end_s, n_rows):
             whole.append({'text': text(first), 'column': column, 'source': source})
             held.append((column, source))
             continue

@@ -1336,10 +1336,10 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
                            "reason": ("a session of several tasks; each task's outcome is under tasks" if session
                                       else parted) + gaps}
     elif rig != "ego_head" and instruction:
-        # no part sees the whole recording, so none can judge it against the instruction: an unclear that is no
-        # judgment, so the recording has no verdict and is read by its tasks joined across the cuts, as a session
-        # labelled in parts was (basis "parts")
-        L["completion"] = {**empty, "reason": parted + gaps, "basis": "parts"}
+        # no part sees the whole recording, so none can judge it against the instruction: unclear, as an episode
+        # labelled in parts always was, and every reader reads that verdict as main does; its tasks joined across the
+        # cuts are listed beside it (basis "parts", board/label_projection.py shown_tasks)
+        L["completion"] = {**empty, "task_completed": "unclear", "reason": parted + gaps, "basis": "parts"}
     for k in ("timeline",):
         L[k].sort(key=lambda s: (s.get("start_s") is None, s.get("start_s") or 0))      # an untimed step last
     L["tasks"] = mark_cut_tasks(join_across_cuts(L["tasks"], cuts_s), cuts_s, L)
