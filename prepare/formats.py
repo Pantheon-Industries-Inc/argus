@@ -3921,7 +3921,9 @@ class DepthWriter:
         if self.dst is None:
             self.storage = storage
             self.scale_m = scale_m
-            self.dst = av.open(str(self.out), "w", format="matroska")
+            # bitexact: Matroska otherwise writes random segment and track UIDs, so the same depth packed to other
+            # bytes every time it was written
+            self.dst = av.open(str(self.out), "w", format="matroska", container_options={"fflags": "+bitexact"})
             self.st = self.dst.add_stream("ffv1", rate=30)
             self.st.width, self.st.height = a.shape[1], a.shape[0]
             self.st.pix_fmt = "gray16le"
@@ -12120,6 +12122,27 @@ def placeholder_frames(own: dict, kmaps: dict) -> dict:
     return out
 
 
+# How FrameWriter encodes pictures, so one source always packs to the same bytes on any machine and in any process (a
+# packed file's bytes are part of the episode's identity, label/evidence_access.py source_proof):
+# - threads 1: with x264's threads the same pictures encoded to different bytes from run to run on a busy machine;
+#   episodes are converted in parallel processes, which is where the speed comes from.
+# - cpu-independent: x264 otherwise runs SIMD code for its macroblock-tree arithmetic on x86 that rounds differently
+#   from the C code, so the same pictures packed to other bytes on x86 than on ARM, and could differ between x86 CPUs.
+#   On ARM it changes nothing.
+X264_OPTIONS = {"crf": "18", "preset": "veryfast", "threads": "1", "x264-params": "cpu-independent=1"}
+
+
+def exact_yuv420p(im):
+    """A PIL RGB picture as the yuv420p frame x264 is given, converted by swscale's bit-exact arithmetic (ACCURATE_RND
+    and BITEXACT, one thread). Its default conversion takes SIMD code on x86 that rounds differently from the C code,
+    and which code runs is process state (FFmpeg's CPU flags), so the same picture gave other pixels on x86 than on
+    ARM. On ARM the bit-exact conversion gives the same pixels as the default one did."""
+    import av
+    from av.video.reformatter import Interpolation
+    exact = Interpolation.BILINEAR | Interpolation.ACCURATE_RND | Interpolation.BITEXACT
+    return av.VideoFrame.from_image(im).reformat(format="yuv420p", interpolation=exact, threads=1)
+
+
 class FrameWriter:
     """One camera's frames streamed to an mp4 at their real times as they are read, so an MCAP is never
     held in memory. Annex-B H.264/H.265 is copied without re-encoding, starting at the first keyframe
@@ -12280,10 +12303,7 @@ class FrameWriter:
             self.enc.width, self.enc.height = im.width - im.width % 2, im.height - im.height % 2
             self.enc.pix_fmt = "yuv420p"
             self.enc.codec_context.time_base = Fraction(1, TIME_BASE_DEN)
-            # one encoder thread: with x264's threads the same pictures encoded to different bytes from run to run on a
-            # busy machine, so one upload converted twice gave two different videos; episodes are converted in
-            # parallel processes, which is where the speed comes from
-            self.enc.options = {"crf": "18", "preset": "veryfast", "threads": "1"}
+            self.enc.options = dict(X264_OPTIONS)
             for q in self.waiting:
                 self._encode(q, None)
             self.waiting = []
@@ -12292,7 +12312,7 @@ class FrameWriter:
             im = Image.new("RGB", size)
         elif im.size != size:
             im = im.resize(size)
-        fr = av.VideoFrame.from_image(im)
+        fr = exact_yuv420p(im)
         fr.pts, fr.time_base = p, Fraction(1, TIME_BASE_DEN)
         self.pts.append(p)
         self._mux(self.enc.encode(fr))
