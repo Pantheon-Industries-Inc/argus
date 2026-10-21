@@ -113,6 +113,7 @@ from board.to_board import (and_list, convert, dumps, field_words, label_failed,
 from checks import label_consistency
 from board import scores
 from label.atomic import write_atomic
+from prepare.frame_rate import episode_fps, frames_seconds
 
 SEVERITIES = ["low", "medium", "high"]
 # the deterministic checks copied from context.json into the episode's dataset_checks
@@ -146,9 +147,8 @@ def episode_seconds(ctx: dict, ep_dir: Path | None = None) -> float | None:
         if cam is not None and len(z[cam]) > 1:
             t = z[cam].astype(float)
             return float(t[-1] - t[0] + np.median(np.diff(t)))
-    fps = ctx.get("fps")
-    n = ctx.get("n_state_frames")
-    return n / fps if fps and n else None
+    seconds = frames_seconds(ctx, ep_dir=ep_dir, default=None)
+    return seconds or None
 
 
 def _cap(issues: list, tags: list, cap: str, reason: str) -> list:
@@ -170,7 +170,7 @@ def _exclude(d: dict, match, kind: str, reason: str) -> None:
     d["data_issues"] = keep
 
 
-def apply_rules(d: dict, ctx: dict, rules: list) -> None:
+def apply_rules(d: dict, ctx: dict, rules: list, ep_dir: Path | None = None) -> None:
     """The manifest entry's rules on one board file, in order (the module docstring describes each kind)."""
     for rule in rules:
         kind = rule.get("kind")
@@ -194,7 +194,7 @@ def apply_rules(d: dict, ctx: dict, rules: list) -> None:
         elif kind == "severity_cap":
             d["data_issues"] = _cap(d.get("data_issues"), rule["tags"], rule["severity"], rule["reason"])
         elif kind == "fixed_window":
-            secs = episode_seconds(ctx)
+            secs = episode_seconds(ctx, ep_dir)
             if secs is None or abs(secs - rule["window_s"]) > rule.get("tolerance_s", 2.5):
                 continue
             d["_packaging"] = {"fixed_window_s": rule["window_s"]}
@@ -496,7 +496,7 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
                for v, e in unshown_views(ctx) if v not in uncut]
     if unshown:
         d["unshown_cameras"] = unshown
-    add_contacts(d, ctx, result)
+    add_contacts(d, ctx, result, ep_dir=ep_dir)
     if ctx.get('signals') and (Path(ep_dir) / 'signals.npz').exists():
         from checks.tactile_quality import for_episode
         try:
@@ -578,7 +578,7 @@ def uploader_groups(notes, start_s, dur_s) -> list[dict]:
     return groups
 
 
-def add_contacts(d: dict, ctx: dict, result: dict | None = None) -> None:
+def add_contacts(d: dict, ctx: dict, result: dict | None = None, ep_dir: Path | None = None) -> None:
     """The recording's contacts (context["contacts"], label/contacts.py), each with the model's answer when it was shown
     ("seen"), and the check of one against the other (checks/contacts.py) in dataset_checks["contact_checks"]. An
     episode prepared before contacts were measured has none in its context; labelling found them on the recording
@@ -618,7 +618,8 @@ def add_contacts(d: dict, ctx: dict, result: dict | None = None) -> None:
     d["contacts"] = [{**c, **({"seen": seen[c["id"]]} if c["id"] in seen else {}), "shown": c["id"] in shown}
                      for c in recorded]
     res = cc.check({"contacts": list(seen.values()), "contacts_missing": d.get("contacts_missing") or []}, recorded,
-                   views.get("strips") or {}, float(ctx.get("fps") or 30), instrumented_hands=set(covered),
+                   views.get("strips") or {}, float(episode_fps(ctx, ep_dir=ep_dir)[0]),
+                   instrumented_hands=set(covered),
                    timing_context=ctx)
     if res is not None:
         d["dataset_checks"] = d.get("dataset_checks") or {}
@@ -1084,7 +1085,7 @@ def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, in
         # a reply that gave no labels is flagged with or without a context, beside a context that did not read
         add_reader_issues(d, {"reader_issues": [context_unreadable(unread)]} if unread else {}, r)
     # after the checks are in; a rule that needs the context (fixed_window) skips where there is none
-    apply_rules(d, ctx, entry.get("rules") or [])
+    apply_rules(d, ctx, entry.get("rules") or [], eps / name)
     d["label_consistency"] = label_consistency.check(d, d.get("duration_s"))
     if "duration_s" not in d and d.get("timesteps_s"):
         # no context: the last sampled time plus one sampling step, marked as an estimate

@@ -35,6 +35,7 @@ from label.atomic import write_atomic, write_bytes_atomic
 from prepare import cli
 from prepare import hub
 from label.presented import presented_pts
+from prepare.frame_rate import declared_fps, frames_seconds
 
 
 REPO = "builddotai/Egocentric-100K"
@@ -131,7 +132,7 @@ def prepare_clip(shard: str, member: str, raw: Path, out_root: Path) -> dict:
         pts = presented_pts(c, st)
         tb, w, h = st.time_base, st.codec_context.width, st.codec_context.height
     n = len(pts)
-    fps = float(clip_meta.get("fps") or 30.0)
+    fps = float(declared_fps(clip_meta) or 30.0)
     ctx = {"dataset": REPO, "profile": "ego_head", "state_kind": "none", "episode_id": ep.name,
            "robot_type": None, "fps": fps, "n_state_frames": n, "instruction": None,
            "task_label": [f"{clip_meta.get('factory_id', '')} {clip_meta.get('worker_id', '')}".strip()],
@@ -200,7 +201,7 @@ def cmd_sample(a) -> int:
             for ctx in ex.map(lambda j: drawn(j[0], j[1], a.raw, a.out), jobs):
                 if ctx:
                     got.append(ctx)
-                    secs += ctx["n_state_frames"] / ctx["fps"]
+                    secs += frames_seconds(ctx)
             print(f"clips {len(got)} hours {secs / 3600:.2f}", flush=True)
     lst = a.list or Path(f"{a.out}.txt")
     lst.write_text("\n".join(sorted(f"{c['source']['shard']} {c['source']['member']}" for c in got)) + "\n")

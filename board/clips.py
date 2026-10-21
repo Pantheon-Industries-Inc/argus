@@ -69,6 +69,7 @@ from label.atomic import temporary_path, write_atomic
 from label.presented import presented, presented_pts
 from prepare import tools
 from prepare.isolation import run_while_progressing
+from prepare.frame_rate import declared_fps, episode_fps, frames_seconds
 
 CAMS = ("exo", "left", "right")
 
@@ -847,7 +848,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     ctx = json.loads(ctx_p.read_text()) if ctx_p.exists() else {}
     # half a frame before the episode's first frame, at the episode's own rate (packed LeRobot v3 files
     # at 50 fps put the previous episode's last frame closer than half a 30 fps frame)
-    fps = float(ctx.get("fps") or 30.0)
+    fps = float(episode_fps(ctx, ep_dir=ep_dir)[0])
     cams = cams_of(sources)           # FastUMI has no fixed camera; single-gripper tasks have one camera
     outs = clip_paths(mp4_dir, eid, cams)
     clock_cam = main_cam(sources) if cams else None
@@ -883,7 +884,7 @@ def episode_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = ""):
     for view, e in unshown_views(ctx):
         o = clip_path(mp4_dir, eid, view)
         if force or not (o.exists() and o.stat().st_size > 0 and clip_frames(o) > 0):
-            f = float(e.get("fps") or fps)
+            f = float(declared_fps(e) or fps)
             from prepare.camera_clock import unshown_times
             unpaired = e.get('clock_alignment') == 'unverified'
             own_clock = unshown_times(ep_dir, e, 0.0 if unpaired else float(ctx.get("clock_zero_s") or 0.0))
@@ -919,7 +920,7 @@ def depth_jobs(ep_dir: Path, mp4_dir: Path, force: bool, prefix: str = "") -> li
     eid = board_name(ep_dir.name, prefix)
     sources = json.loads(src_p.read_text())
     ctx_p = ep_dir / "context.json"
-    fps = float((json.loads(ctx_p.read_text()) if ctx_p.exists() else {}).get("fps") or 30.0)
+    fps = float(episode_fps(json.loads(ctx_p.read_text()) if ctx_p.exists() else {}, ep_dir=ep_dir)[0])
     jobs = []
     for cam, entry in json.loads(dj.read_text()).items():
         unpaired = cam not in sources or entry.get('paired_camera', cam) is None
@@ -1188,7 +1189,7 @@ def respan(ep_dir: Path, ctx: dict, src: dict) -> None:
 
     from prepare.formats import camera_span_issues
     cams = cams_of(src)
-    fps = float(ctx.get("fps") or 30.0)
+    fps = float(episode_fps(ctx, ep_dir=ep_dir)[0])
     tp = ep_dir / (ctx.get("real_times") or "times.npz")
     t = {}
     if tp.exists():
@@ -1229,7 +1230,7 @@ def reanchor(ep_dir: Path, ctx: dict, src: dict, t: dict, old: str, new: str, ol
 
     from prepare.formats import CLOCK_TIME_KEYS, depth_kmap, nearest, placeholder_frames
     t_old, t_new = t[old], t[new]
-    step_old = float(np.median(np.diff(t_old))) if len(t_old) > 1 else 1.0 / float(ctx.get("fps") or 30.0)
+    step_old = float(np.median(np.diff(t_old))) if len(t_old) > 1 else 1.0 / float(episode_fps(ctx, ep_dir=ep_dir)[0])
     idx = nearest(t_old, t_new)
     near = np.abs(t_old[idx] - t_new) <= step_old / 2 + 1e-6
 
@@ -1400,7 +1401,7 @@ def clip_end_s(ep_dir: Path, ctx: dict, src: dict, cam: str, got: int) -> float:
     its first frame left out, from its capture times (times.npz) or its frame index over the rate, after the frames it
     skips from before the clock's start (start_offsets)."""
     import numpy as np
-    fps = float(ctx.get("fps") or 30.0)
+    fps = float(episode_fps(ctx, ep_dir=ep_dir)[0])
     off, skip = start_offsets(ep_dir, src, fps).get(cam, (0.0, 0))
     tp = ep_dir / (ctx.get("real_times") or "times.npz")
     if tp.exists():
@@ -1452,8 +1453,7 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
         ctx = _context(ep_dir)
         src = json.loads((ep_dir / "sources.json").read_text())
     zero = float(ctx.get("clock_zero_s") or 0.0)
-    fps = float(ctx.get("fps") or 30.0)
-    episode_end = float(ctx.get("duration_s") or float(ctx.get("n_state_frames") or 0) / fps)
+    episode_end = float(ctx.get("duration_s") or frames_seconds(ctx, ep_dir=ep_dir))
     for v in sorted(short, key=order):
         n = short[v]
         end = clip_end_s(ep_dir, ctx, src, v, int(n["clip_frames"]))

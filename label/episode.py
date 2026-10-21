@@ -163,15 +163,6 @@ def load(ep_dir: Path) -> dict:
         if ctx.get("presentation_times"):
             original = load_times(ep_dir, ctx, recorded=True)
             ep["recorded_times"] = {k: original[k] if k.endswith("_pts") else original[k] - zero for k in original}
-        # the stated fps turns every window and lag in seconds into frames (ep_fps); one the anchor's own capture times
-        # contradict would make those windows longer or shorter than the recording, so the frames' rate is used and
-        # named in the checks (plan)
-        from prepare.camera_clock import supported_rate
-        own = (ep.get("recorded_times") or ep["times"]).get(anchor(ep))
-        if own is not None:
-            rate, note = supported_rate(ctx.get("fps"), own)
-            if note:
-                ep["frame_rate"], ep["frame_rate_note"] = rate, note
     for v, d in src.items():
         if d.get("kmap"):
             ep["kmap"][v] = np.load(ep_dir / d["kmap"])
@@ -230,10 +221,19 @@ def require_request_window(ep_dir: Path, ctx: dict) -> None:
     policy.require_request_window(ctx, request_duration(ep))
 
 
+def frame_rate(ep: dict) -> tuple:
+    """(the anchor's frames per second, a note or None), from prepare/frame_rate.py episode_fps: the stated fps, or the
+    frames' own rate when the anchor's capture times contradict it, which turns every window and lag in seconds into
+    frames. plan names the note in the checks."""
+    from prepare.frame_rate import episode_fps
+    shown = views(ep) or list(ep.get("sources") or {})    # a lone camera of its own (an image ep) is its own anchor
+    own = (ep.get("recorded_times") or ep.get("times") or {}).get(shown[0]) if shown else None
+    return episode_fps(ep["context"], times=own, default=FPS)
+
+
 def ep_fps(ep: dict) -> float:
-    """The anchor's frames per second: the stated fps, or the frames' own rate when their capture times contradict it
-    (load, frame_rate_note)."""
-    return float(ep.get("frame_rate") or ep["context"].get("fps") or FPS)
+    """The anchor's frames per second (frame_rate)."""
+    return float(frame_rate(ep)[0])
 
 
 # a reply's time may lie this far past the edge of the footage it labels (a reply rounding its last time up) before the
@@ -429,8 +429,8 @@ def plan(ep: dict) -> dict:
     checks = {"state_frames": T, "camera_frames": windows,
               "camera_windows_match_state": not ep["context"].get("state_unaligned")
               and windows[a] == T and not short_maps}
-    if ep.get("frame_rate_note"):
-        checks["frame_rate"] = ep["frame_rate_note"]
+    if frame_rate(ep)[1]:
+        checks["frame_rate"] = frame_rate(ep)[1]
     from prepare.state_contract import action_semantics
     if (ep.get("action") is not None and action_semantics(ep['context'])['role'] == 'command'
             and r == "teleop_arms" and kind == "joints" and ep["state"].shape[1] == 14):

@@ -44,6 +44,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare.formats import scalar
+from prepare.frame_rate import declared_fps
 
 
 REPO = "allenai/MolmoAct2-BimanualYAM-Dataset"
@@ -253,7 +254,7 @@ def prepare_episode(row: dict, raw_root: Path, out_root: Path, instruction: str,
         "gripper_range": [0.0, 1.0],
         "episode_index": eidx,
         "robot_type": (info or {}).get("robot_type"),
-        "fps": (info or {}).get("fps"),
+        "fps": declared_fps(info),
         "task_label": [str(t) for t in row["tasks"]] if hasattr(row["tasks"], "__len__")
                       and not isinstance(row["tasks"], str) else [str(row["tasks"])],
         "instruction": (instruction or "").strip(),

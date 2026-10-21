@@ -78,6 +78,7 @@ import numpy as np
 from board.hands import vlq_append
 from board.to_board import dumps
 from label.atomic import write_atomic
+from prepare.frame_rate import episode_fps
 
 FORMAT = "board-sensors/1"
 RATE_HZ = 15.0           # the page's samples a second, at most
@@ -156,7 +157,7 @@ def strip_times(ep_dir: Path, ctx: dict, n: int) -> np.ndarray:
     clip plays a camera without capture times."""
     from board.clips import clip_times, main_cam
     src_p = ep_dir / "sources.json"
-    fps = float(ctx.get("fps") or 30.0)
+    fps = float(episode_fps(ctx, ep_dir=ep_dir)[0])
     if src_p.exists() and n > 0:
         sources = json.loads(src_p.read_text())
         t = clip_times(ep_dir, sources, fps, ctx).get(main_cam(sources)) if sources else None
@@ -417,10 +418,11 @@ def episode_doc(ep_dir: Path) -> dict | None:
             from board.clips import DISPLAY_TICKS_PER_S, display_ticks, main_cam, start_offsets
             src = json.loads((ep_dir / "sources.json").read_text())
             cam = main_cam(src)
-            _, skip = start_offsets(ep_dir, src, float(ctx.get("fps") or 30)).get(cam, (0, 0))
+            fps = float(episode_fps(ctx, ep_dir=ep_dir)[0])
+            _, skip = start_offsets(ep_dir, src, fps).get(cam, (0, 0))
             captures = t[skip:min(n, int(src.get(cam, {}).get("n_frames") or n))]
             if len(captures):
-                ticks, _ = display_ticks(captures, float(ctx.get("fps") or 30), True, t, np.arange(n) - skip)
+                ticks, _ = display_ticks(captures, fps, True, t, np.arange(n) - skip)
                 doc["playback"] = {"starts": (ticks / DISPLAY_TICKS_PER_S).tolist(), "captures": captures.tolist()}
     if depth_p.exists():
         from label import depth as dp

@@ -148,6 +148,7 @@ from prepare.hdf_metadata import open_hdf5
 from prepare.camera_clock import UNKNOWN_CAMERA_FPS, camera_issue_kind, coarse_rows, presentation_clock
 from prepare.state_notes import STATE_WHY
 from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_ASSUMED, ALIGNED_CAMERA, COARSE_CLOCK
+from prepare.frame_rate import KEY as FPS_KEY, declared_fps, episode_fps, frames_seconds, stored_fps
 
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -1106,8 +1107,8 @@ def seconds(pr: dict) -> np.ndarray:
 
 def measured_fps(t: np.ndarray) -> float | None:
     """A clock's frame rate from its median step (seconds), or its frames' rate over their span when stamps a few
-    microseconds apart make that median no frame interval (camera_clock.supported_rate)."""
-    from prepare.camera_clock import supported_rate
+    microseconds apart make that median no frame interval (frame_rate.supported_rate)."""
+    from prepare.frame_rate import supported_rate
     d = np.diff(np.asarray(t, dtype=np.float64))
     d = d[d > 1e-6]
     return supported_rate(round(1.0 / float(np.median(d)), 3), t)[0] if len(d) else None
@@ -1406,7 +1407,7 @@ def unshown_entry(name: str, path: Path, why: str, base_s: float = 0.0, n_frames
         except Exception:  # noqa: BLE001 - PyAV on upload bytes raises many types; a None entry is named by set_unshown
             return None
         n_frames = len(pr["pts"]) if n_frames is None else n_frames
-        fps = fps or measured_fps(seconds(pr)) or pr["fps"]
+        fps = fps or measured_fps(seconds(pr)) or declared_fps(pr, required=True)
     if not n_frames:
         return None
     return {"name": str(name), "why": why, "packed": str(Path(path).resolve()), "base_s": round(float(base_s), 6),
@@ -3317,7 +3318,7 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         ctx.pop("signals", None)
         return
     t = np.asarray(t, dtype=np.float64)[:n] if t is not None and len(t) >= n else \
-        np.arange(n) / float(ctx.get("fps") or 30.0)
+        np.arange(n) / float(episode_fps(ctx, ep_dir=ep)[0])
     # past SIGNAL_EPISODE_BYTES together, the widest signals are kept as a summary per frame, a data issue each
     meta = {k: dict(m) for k, m in meta.items()}
     size = lambda v: int(np.prod(np.shape(v)[1:])) * n * np.asarray(v).dtype.itemsize
@@ -5253,10 +5254,10 @@ def read_root(rdir: Path, rel: str) -> dict:
                 missing.append(f"meta/info.json{where} lists no video cameras, so the cameras in its videos folder were used.")
             cams = on_disk
     fps = None
-    if info and info.get('fps') is not None:
+    if info and declared_fps(info) is not None:
         try:
-            candidate = float(info['fps'])
-            if isinstance(info['fps'], bool) or not np.isfinite(candidate) or candidate <= 0:
+            candidate = float(declared_fps(info))
+            if isinstance(declared_fps(info), bool) or not np.isfinite(candidate) or candidate <= 0:
                 raise ValueError('fps must be finite and positive')
         except (TypeError, ValueError, OverflowError):
             metadata_failure(reads, rdir / 'meta/info.json',
@@ -5503,9 +5504,9 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
                     metadata_failure(root, dp, f"task_index: {plain_error(error)}; no task was inferred")
             if "timestamp" in g.columns and len(g) > 2:
                 fps_ts.append(measured_fps(np.sort(g["timestamp"].to_numpy(dtype=np.float64))))
-    if root["fps"] is None and fps_ts:
+    if declared_fps(root) is None and fps_ts:
         root["fps"] = float(np.median([x for x in fps_ts if x]))
-    fps = root["fps"]
+    fps = declared_fps(root)
     places = {k: _place_episodes(by_key[k], sorted(lengths.items())) for k in keys} if lengths else {}
     # an episode is kept with the cameras whose packed videos place it frame for frame; a camera that does not place it
     # is listed on the episode with the reason (convert_lerobot), never the reason to drop the episode
@@ -5635,7 +5636,7 @@ def plan_lerobot(det: dict, root: Path) -> tuple[list[dict], list[str], list[str
         missing += r["missing"]
         prefix = (r["rel"] + "/") if r["rel"] else ""
         for e in r["episodes"]:
-            fps = r["fps"]
+            fps = declared_fps(r)
             secs = e["length"] / fps if e.get("length") and fps else None
             if secs is None and e["videos"]:
                 v = next(iter(e["videos"].values()))
@@ -5750,7 +5751,7 @@ def lerobot_metadata(ctx, root):
     represented = ctx.setdefault('represented_source_members', {})
     info_path = str(Path(root['dir']) / 'meta' / 'info.json')
     info = root.get('info') or {}
-    for key in ('codebase_version', 'fps', 'robot_type', 'data_path', 'video_path', 'chunks_size'):
+    for key in ('codebase_version', FPS_KEY, 'robot_type', 'data_path', 'video_path', 'chunks_size'):
         if key in info:
             mark_json(represented, info_path, '/' + key)
     for feature, descriptor in (info.get('features') or {}).items():
@@ -5839,7 +5840,7 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
             add_issue(ctx, "metadata_unreadable", f"{key} could not be fully read: {issue['why']}.", source=str(path))
     times = df["timestamp"].tolist() if "timestamp" in df else None
     frames = df["frame_index"].tolist() if "frame_index" in df else None
-    fps = ctx.get("fps") or root.get("fps")
+    fps = episode_fps(ctx, default=None)[0] or declared_fps(root)
     n = ctx.get("n_state_frames")
     mapped = None
     offset, image_scale = None, 1.0
@@ -6080,12 +6081,12 @@ def lerobot_image_depth(ep, ctx, root, df, signals, *, anchor_times=None, image_
     if df is None or not keys:
         return signals
     ep.mkdir(parents=True, exist_ok=True)
-    fps = float(ctx.get('fps') or root.get('fps') or 30.)
+    fps = float(episode_fps(ctx, default=None)[0] or declared_fps(root) or 30.)
     n = int(ctx['n_state_frames'])
     ta = np.asarray(anchor_times, dtype=float) if anchor_times is not None else np.arange(n) / fps
     native, recorded, clock_metadata, unit_error, _ = lerobot_image_clock(df, root, fps)
     recorded = recorded - clock_zero_s
-    shown, clock_note = presentation_clock(recorded, root.get('fps'))
+    shown, clock_note = presentation_clock(recorded, declared_fps(root))
     if unit_error:
         add_issue(ctx, 'clock_units_unresolved', f'timestamp: {unit_error}; depth rows have no measured event timing.',
                   signal='timestamp')
@@ -6364,7 +6365,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
             notes.append("Labelled from the video: the episode's data file could not be opened"
                          + ("" if isinstance(error, TableSourceError) else f" ({type(error).__name__}: {error})") + ".")
             df = None
-    fps = r["fps"]
+    fps = declared_fps(r)
     from prepare.lerobot_labels import publisher_columns
     hold_back = set(hold_back) | publisher_columns(df.columns if df is not None else [])
     if fps is None and df is not None and "timestamp" in df.columns and len(df) > 2:
@@ -6503,7 +6504,7 @@ def convert_lerobot(item: dict, rig: str, out: Path, dataset: str, hold_back=(),
             # no meta/info.json and no timestamps: the frame rate is the packed video's own
             k0 = next(iter(vmap.values()))
             pr0 = probe(row["videos"][k0][0])
-            fps = measured_fps(seconds(pr0)) or pr0["fps"] or 30.0
+            fps = measured_fps(seconds(pr0)) or declared_fps(pr0, required=True) or 30.0
             row, packed_ownership = canonical_packed_row(r, row, fps)
             readable = {}  # The inferred rate changes publisher query ownership; discard earlier window probes.
             if packed_ownership:
@@ -6794,7 +6795,7 @@ def lerobot_unshown(row: dict, keys: list[str], rig: str, shown: list[str],
             except Exception:  # noqa: BLE001 - PyAV on upload bytes; a None entry is named by set_unshown
                 e = None
             else:
-                rate = fps or measured_fps(seconds(facts)) or facts["fps"] or 30.0
+                rate = fps or measured_fps(seconds(facts)) or declared_fps(facts, required=True) or 30.0
                 e = unshown_entry(k, mp4, why, base_s=base, n_frames=len(facts["pts"]), fps=rate)
                 if e and ep is not None:
                     name = f"unshown{len(out) + 1}_times.npz"
@@ -7096,7 +7097,7 @@ def packed_window_indices(facts: dict, base: float, stop: float, *, fps: float |
     if not np.isfinite([base, stop]).all() or stop <= base:
         raise ValueError("invalid packed video episode window")
     from label.frames import FrameError, base_frame
-    rate = fps or facts.get('fps')
+    rate = fps or declared_fps(facts)
     # The source-version probe is shared by every episode in a packed file. Cache its derived clocks and grid
     # proof too, so selecting each episode does not scan the entire shared recording again.
     memo = facts.setdefault('_packed_windows', {})
@@ -11140,7 +11141,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                     capture_present=np.asarray([row['capture_ns'] is not None for row in records]),
                     pts=np.asarray(w.pts, dtype=np.int64), presentation=shown)
                 entry.update(camera_times=clock_file, start_s=float(shown[0]),
-                             fps=measured_fps(shown) or entry['fps'])
+                             fps=measured_fps(shown) or declared_fps(entry, required=True))
                 if note:
                     entry.update(camera_clock=note,
                                  fps=round(float(1 / np.median(np.diff(shown))), 3), start_s=float(shown[0]),
@@ -11899,7 +11900,7 @@ def trim_episode(ep: Path, max_s: float) -> dict:
         if u.get('clock_alignment') == 'unverified':
             continue
         # a camera the model is not shown keeps its frames up to the same time, at its own rate
-        rate = float(u.get("fps") or ctx.get("fps") or 30.0)
+        rate = float(declared_fps(u) or episode_fps(ctx, ep_dir=ep)[0])
         u["n_frames"] = int(min(u["n_frames"], max(0, np.ceil((ctx["trimmed"]["to_s"] - u["start_s"]) * rate))))
     ctx["n_state_frames"] = keep
     ctx["duration_s"] = ctx["trimmed"]["to_s"]
@@ -13238,7 +13239,7 @@ def _convert_upload(root, rig, out, dataset, max_seconds, grouping, ownership_co
             write_atomic(out / ctx["episode_id"] / "context.json", ctx, indent=1, default=str)
         if source["tables"]:
             ctx = add_table_notes(out / ctx["episode_id"], ctx, table_rows_for(source["tables"], it))
-        secs = float(ctx.get("duration_s") or ctx["n_state_frames"] / float(ctx["fps"]))
+        secs = float(ctx.get("duration_s") or frames_seconds(ctx, ep_dir=out / ctx["episode_id"]))
         if first and secs > max_seconds + 1:
             # one recording longer than the whole limit: its first max_seconds are labelled, never nothing
             ctx = trim_episode(out / ctx["episode_id"], max_seconds)
@@ -13318,7 +13319,7 @@ def episode_row(it: dict, ctx: dict, secs: float) -> dict:
     return {"name": it["name"], "episode_id": ctx["episode_id"], "seconds": round(secs, 2),
             "cameras": {v: c.get("name") for v, c in ctx["cameras"].items()},
             "state_kind": ctx["state_kind"], "state_note": ctx.get("state_note"),
-            "instruction": ctx.get("instruction"), "fps": ctx.get("fps"),
+            "instruction": ctx.get("instruction"), "fps": stored_fps(ctx),
             "unsplit": bool(ctx.get("unsplit")), "packaging": ctx.get("packaging")}
 
 

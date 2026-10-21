@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from prepare.annotations import index_tables, original
+from prepare.frame_rate import declared_fps, episode_fps
 
 
 TABLE_COLUMNS = {'tasks': 'task_index', 'subtasks': 'low_level_task_index',
@@ -112,7 +113,7 @@ def retain_metadata(ctx, root, df, data_path):
         if columns:
             publisher['columns'] = columns
             publisher['row_clock'] = {key: original(df[key].to_numpy()) for key in ['timestamp', 'frame_index'] if key in df}
-            fps = ctx.get('fps') or root.get('fps')
+            fps = episode_fps(ctx, default=None)[0] or declared_fps(root)
             if fps:
                 for column, target in [('is_error_segment', 'error_spans_s'),
                                        ('is_intervention_segment', 'intervention_spans_s'),

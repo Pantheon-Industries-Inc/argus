@@ -122,7 +122,7 @@ def test_repeat_counts_only_inside_motion():
     moving = np.full(T - 1, 6.0, dtype=np.float32)
     moving[1::2] = 0.02                                          # every other frame repeats while moving
     for pair, expect in ((still, False), (moving, True)):
-        cams = {"left": {"n": T, "decoded": T, "error": None, "fps": 30.0,
+        cams = {"left": {"n": T, "decoded": T, "error": None, "rate": 30.0,
                          "means": np.full(T, 100.0, np.float32), "stds": np.full(T, 20.0, np.float32),
                          "pair": pair, "pchange": pair}}
         a = cq.assess({"ep": ep, "T": T, "cams": cams})
@@ -141,7 +141,7 @@ def test_a_frozen_picture_is_reported_whole_across_a_lone_keyframe_step():
     ep = _ep(s, views=("left",))
 
     def run(pair):
-        cams = {"left": {"n": T, "decoded": T, "error": None, "fps": 30.0,
+        cams = {"left": {"n": T, "decoded": T, "error": None, "rate": 30.0,
                          "means": np.full(T, 100.0, np.float32), "stds": np.full(T, 20.0, np.float32),
                          "pair": pair, "pchange": pair}}
         return cq.assess({"ep": ep, "T": T, "cams": cams})["checks"]["video_frozen_run"]
@@ -275,7 +275,7 @@ def _two_cameras(right_crashes: bool, nan_row: bool = False):
         rng = np.random.default_rng(1)
         return {"n": T, "error": None, "decoded": T, "means": np.full(T, 120.0) + rng.normal(0, 1, T),
                 "stds": None if crash else np.full(T, 40.0), "pair": np.full(T - 1, level),
-                "pchange": np.full(T - 1, level), "fps": 30.0}
+                "pchange": np.full(T - 1, level), "rate": 30.0}
     return {"ep": _ep(s, gripper_value=VERIFIED), "T": T,
             "cams": {"left": cam(0.02), "right": cam(30.0, crash=right_crashes)}}
 

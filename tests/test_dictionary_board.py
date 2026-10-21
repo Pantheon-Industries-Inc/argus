@@ -318,7 +318,7 @@ def test_build_projects_after_contacts_are_added(tmp_path, monkeypatch):
     editor().save_override(job, {'revision': 0, 'field_id': 'field_a', 'role': ''}, 'owner')
     ep = job / 'units/episode_a'
 
-    def add_saved_contacts(label, _ctx, _result):
+    def add_saved_contacts(label, _ctx, _result, ep_dir=None):
         label['contacts'] = [{'id': 'touch', 'start_s': 0, 'end_s': 1}]
         label.setdefault('dataset_checks', {})['contact_checks'] = {'checked': 1, 'contacts': 1}
 

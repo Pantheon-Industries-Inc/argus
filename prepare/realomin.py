@@ -40,6 +40,7 @@ from prepare import formats
 from prepare.mcap_source import decoded_messages
 from prepare.remux import RemuxSourceError, remux  # each frame's capture time as its pts
 from label.presented import presented_pts
+from prepare.frame_rate import frames_seconds
 
 REPO = "genrobot2025/10Kh-RealOmin-OpenData"
 CAMERA_TOPICS = {"/robot0/sensor/camera0/compressed": "left", "/robot1/sensor/camera0/compressed": "right"}
@@ -275,7 +276,7 @@ def cmd_sample(a) -> int:
             for ctx in ex.map(lambda r: drawn(r, a.raw, a.out, a.keep_mcap), batch):
                 if ctx:
                     got.append(ctx)
-                    secs += ctx["n_state_frames"] / ctx["fps"]
+                    secs += frames_seconds(ctx)
             print(f"clips {len(got)} hours {secs / 3600:.2f}", flush=True)
     lst = a.list or Path(f"{a.out}.txt")
     lst.write_text("\n".join(sorted(c["source"]["mcap"] for c in got)) + "\n")

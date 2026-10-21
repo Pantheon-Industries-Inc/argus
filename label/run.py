@@ -33,6 +33,7 @@ from pathlib import Path
 from label.harness import annotation_complete, annotation_record, execution_lock, get_keys, is_openrouter_key
 from label.dictionary_stage import output_spend, output_spend_complete
 from label.atomic import write_atomic
+from prepare.frame_rate import frames_seconds
 
 REPO = Path(__file__).resolve().parent.parent
 PY = Path(sys.executable)
@@ -82,7 +83,7 @@ def footage_hours(slice_dir: Path, names: list[str]) -> float:
         c = json.loads((slice_dir / n / "context.json").read_text())
         duration = c.get('duration_s')
         if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
-            duration = (c.get('n_state_frames') or 0) / float(c.get('fps') or 30)
+            duration = frames_seconds(c, ep_dir=slice_dir / n)
         s += duration
     return s / 3600
 

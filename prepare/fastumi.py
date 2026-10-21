@@ -28,6 +28,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from label.presented import presented_pts
+from prepare.frame_rate import declared_fps
 
 
 REPO = "IPEC-COMMUNITY/FastUMI_100k_lerobot"
@@ -106,7 +107,7 @@ def prepare_one(item: str, raw_root: Path, out_root: Path, force: bool) -> str:
         return "skip"
     info_path = _dl(f"{task}/meta/info.json", raw_root)
     info = json.loads(info_path.read_text())
-    fps = int(info["fps"])
+    fps = int(declared_fps(info, required=True))
     chunk = eidx // int(info.get("chunks_size", 1000))
     _dl(f"{task}/meta/episodes.jsonl", raw_root)
     parq = _dl(f"{task}/" + info["data_path"].format(episode_chunk=chunk, episode_index=eidx), raw_root)

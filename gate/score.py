@@ -32,6 +32,7 @@ from board.label_projection import SEVERITY_RANK
 from checks import label_consistency
 from label.harness import PRICE_IN, DEFAULT_MODEL, annotation_record, billing_view
 from label.receipts import billing_summary
+from prepare.frame_rate import frames_seconds
 
 HERE = Path(__file__).resolve().parent
 RIGS = ("teleop", "handheld", "ego")
@@ -68,7 +69,7 @@ def duration_s(ep_dir: Path) -> float:
         z = np.load(Path(ep_dir) / c["real_times"])
         t = z[next(v for v in ("exo", "left", "right") if v in z.files)]
         return float(t[-1] - t[0])
-    return (c.get("n_state_frames") or 0) / float(c.get("fps") or 30)
+    return frames_seconds(c, ep_dir=ep_dir)
 
 
 def texts_handled(labels: dict) -> list[str]:

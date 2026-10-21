@@ -35,6 +35,7 @@ import numpy as np
 
 from label.atomic import write_atomic
 from label import policy
+from prepare.frame_rate import frames_seconds
 
 # Not read here: the part limit is piece_max (policy part_max_s). Kept because Data Review's vendor check
 # (upload/vendor_repo.py NEEDS in the Data repo) requires this name in this file.
@@ -49,8 +50,8 @@ def piece_max(ctx: dict) -> float:
     return policy.effective(ctx)["part_max_s"]
 
 
-def duration(ctx: dict) -> float:
-    return float(ctx.get("duration_s") or ctx["n_state_frames"] / float(ctx["fps"]))
+def duration(ctx: dict, ep_dir: Path | None = None) -> float:
+    return float(ctx.get("duration_s") or frames_seconds(ctx, ep_dir=ep_dir))
 
 
 def needs_pieces(ep_dir: Path) -> bool:
@@ -62,7 +63,7 @@ def needs_pieces(ep_dir: Path) -> bool:
     ctx = clock_context(json.loads((ep_dir / "context.json").read_text()))
     source_path = ep_dir / 'sources.json'
     if not source_path.is_file():
-        return duration(ctx) > piece_max(ctx)
+        return duration(ctx, ep_dir) > piece_max(ctx)
     sources = json.loads(source_path.read_text())
     times = load_times(ep_dir, ctx) if ctx.get('real_times') else None
     if times is not None:

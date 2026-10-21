@@ -55,6 +55,7 @@ import numpy as np
 from checks.results import stored_number
 from label.atomic import write_atomic
 from prepare.signal_alignment import recorder_arrival, RECORDER_ARRIVAL_LIMITATION
+from prepare.frame_rate import episode_fps
 
 JOINTS = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]    # the 12 arm joints of the 14 state values (6 are grippers)
 
@@ -314,7 +315,7 @@ def measure_folder(eps: Path) -> int:
         z = np.load(d / "state.npz")
         if "action" not in z.files or z["state"].shape[1] != 14:
             continue
-        lag = follower_lag_frames(z["state"], z["action"], stored_number(ctx.get("fps")) or 30.0)
+        lag = follower_lag_frames(z["state"], z["action"], float(episode_fps(ctx, ep_dir=d)[0]))
         # the generic LeRobot reader keeps the episode's index at the top of its context, a dataset's own adapter
         # (Galaxea, HABIT) in its source; either is the same number from the dataset's metadata
         src = ctx.get("source") or {}

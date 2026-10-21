@@ -16,6 +16,7 @@ from label.dictionary_context import field_interpretation, prepared_interpretati
 from label import signals as sg
 from label import sensor_copy
 from prepare.formats import TOUCH_WORDS, is_sensing, names_touch, _names_word
+from prepare.frame_rate import KEY as STORED_FPS
 
 MAX_SERIES = 12
 MAX_SAMPLES = 96
@@ -24,7 +25,9 @@ MAX_PROMPT_BYTES = 256000
 MAX_PLOT_SAMPLES = 4096
 META_KEYS = ('name', 'key', 'file', 'shape', 'names', 'unit', 'units', 'rate_hz', 'source',
              'aligned_by', 'camera_aligned_by', 'clock_problem', 'summary_of', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description', 'sensor_semantics')
-TIME_KEYS = ('fps', 'real_times', 'clock_zero_s', 'camera_clock', 'clock_fields', 'presentation_times',
+# the stored fps as written (prepare/frame_rate.py KEY), because these keys fingerprint the stored inputs; a rate to
+# count frames with is always prepare/frame_rate.py episode_fps
+TIME_KEYS = (STORED_FPS, 'real_times', 'clock_zero_s', 'camera_clock', 'clock_fields', 'presentation_times',
              'n_state_frames', 'state_unaligned', 'depth_camera_clock', 'depth')
 SEMANTIC_KEYS = ('shape', 'names', 'unit', 'units', 'summary_of', 'response_direction', 'calibration',
                  'coordinate_frame', 'sensor_type', 'clock_problem', 'aligned_by', 'camera_aligned_by', 'width', 'height', 'sensor_semantics')
@@ -92,7 +95,8 @@ def _descriptor_digest(meta):
 
 def _clock_digest(ctx):
     # Piece-local zero and frame count differ legitimately from their parent.
-    return hashlib.sha256(_json({k: ctx[k] for k in ('fps', 'camera_clock', 'state_unaligned', 'depth_camera_clock')
+    return hashlib.sha256(_json({k: ctx[k] for k in (STORED_FPS, 'camera_clock', 'state_unaligned',
+                                                     'depth_camera_clock')
                                 if k in ctx}).encode()).hexdigest()
 
 

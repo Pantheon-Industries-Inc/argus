@@ -386,7 +386,7 @@ def _features(ep: dict, v: str, d: dict) -> dict:
     means[~got] = np.nan
     stds[~got] = np.nan
     fps = cam_fps(ep, v, n)
-    return {"n": n, "decoded": int(got.sum()), "error": d["error"], "fps": fps,
+    return {"n": n, "decoded": int(got.sum()), "error": d["error"], "rate": fps,
             "means": means.astype(np.float32), "stds": stds.astype(np.float32),
             "pair": pair.astype(np.float32), "pchange": pchange.astype(np.float32)}
 
@@ -595,7 +595,7 @@ def assess(feats: dict) -> dict:
             if "failed" in c:
                 continue        # a camera whose frames could not be read gives no length
             ct = camera_times(ep, v)
-            last.append(float(ct[c["n"] - 1]) if ct is not None and len(ct) >= c["n"] else (c["n"] - 1) / c["fps"])
+            last.append(float(ct[c["n"] - 1]) if ct is not None and len(ct) >= c["n"] else (c["n"] - 1) / c["rate"])
         duration = max(last)
         short = duration < policy.minimum_episode_duration_s
         R["episode_too_short"] = _fired([_ev(f"the episode lasts {duration:.1f} s; the rule is under "
@@ -855,7 +855,7 @@ def assess(feats: dict) -> dict:
             if c["decoded"] != n:
                 missing = np.flatnonzero(~np.isfinite(c["means"]))
                 cnt_ev.append(_ev(f"camera {v}: {c['decoded']} of its {n} frames decode at their recorded times",
-                                  _cam_t(ep, v, int(missing[0]), c["fps"]) if len(missing) else None, v))
+                                  _cam_t(ep, v, int(missing[0]), c["rate"]) if len(missing) else None, v))
             done.add("video_decode_frame_count_mismatch")
             means, stds, pair = c["means"], c["stds"], c["pair"]
             ok = np.isfinite(means)
@@ -880,8 +880,8 @@ def assess(feats: dict) -> dict:
                     exp_ev.append(_ev(f"{frac:.0%} of camera {v}'s frames are nearly black or white (mean grey under "
                                       f"{extra['black_mean']:g} or over {extra['white_mean']:g}); the rule is over "
                                       f"{policy.maximum_extreme_exposure_fraction:.0%}; longest run "
-                                      f"{(longest[1] - longest[0] + 1) / c['fps']:.1f} s",
-                                      _cam_t(ep, v, longest[0], c["fps"]), v))
+                                      f"{(longest[1] - longest[0] + 1) / c['rate']:.1f} s",
+                                      _cam_t(ep, v, longest[0], c["rate"]), v))
                 done.add("video_extreme_exposure")
                 low = ok & (stds < extra["low_contrast_std"])
                 lfrac = float(low[ok].mean())
@@ -891,7 +891,7 @@ def assess(feats: dict) -> dict:
                     low_ev.append(_ev(f"{lfrac:.0%} of camera {v}'s frames are nearly uniform (grey standard deviation "
                                       f"under {extra['low_contrast_std']:g}); the rule is over "
                                       f"{policy.maximum_low_contrast_fraction:.0%}",
-                                      _cam_t(ep, v, longest[0], c["fps"]), v))
+                                      _cam_t(ep, v, longest[0], c["rate"]), v))
             done.update(("video_extreme_exposure", "video_low_contrast"))    # nothing to judge with no frame decoded
             dupm = pok & (pair < extra["duplicate_pair_mad"])
             if extra["duplicate_motion_mad"]:
@@ -912,7 +912,7 @@ def assess(feats: dict) -> dict:
             else:
                 base = pok
                 dupm_count = dupm
-            min_n = max(2, int(2 * c["fps"])) if extra["duplicate_motion_mad"] else 1   # at least 2 s of moving frames
+            min_n = max(2, int(2 * c["rate"])) if extra["duplicate_motion_mad"] else 1   # at least 2 s of moving frames
             dfrac = float(dupm_count[base].mean()) if base.sum() >= min_n else (0.0 if pok.any() else None)
             if dfrac is not None and dfrac > policy.maximum_duplicate_pair_fraction:
                 where = ("of its frame steps while it moves (a short repeat between two steps that each change by at "
@@ -929,7 +929,7 @@ def assess(feats: dict) -> dict:
                 # pairs a..b cover frames a..b+1: real clock span when there is one, else pairs / fps (upstream)
                 if ct is not None and r[1] + 1 < len(ct):
                     return float(ct[r[1] + 1] - ct[r[0]])
-                return (r[1] - r[0] + 1) / c["fps"]
+                return (r[1] - r[0] + 1) / c["rate"]
             longest_run = max(runs, key=span_s) if runs else None
             longest_s = span_s(longest_run) if longest_run else 0.0
             frozen = [r for r in runs if span_s(r) > extra["frozen_run_s"]]
@@ -966,7 +966,7 @@ def assess(feats: dict) -> dict:
                 # where the recording cannot say, while the picture moves right before and right after it
                 kept = []
                 for r in frozen:
-                    why = expected_motion(v, _cam_t(ep, v, r[0], c["fps"]), _cam_t(ep, v, r[1] + 1, c["fps"]))
+                    why = expected_motion(v, _cam_t(ep, v, r[0], c["rate"]), _cam_t(ep, v, r[1] + 1, c["rate"]))
                     basis = None
                     if why is None:
                         w, _ = whole(r)
@@ -981,7 +981,7 @@ def assess(feats: dict) -> dict:
             if kept:
                 r, why, basis = max(kept, key=lambda x: span_s(x[0]))
                 r, steps = whole(r)
-                t0 = _cam_t(ep, v, r[0], c["fps"])
+                t0 = _cam_t(ep, v, r[0], c["rate"])
                 but = (f", apart from {steps} single keyframe step{'s' if steps > 1 else ''} under {m_:g}"
                        if steps else "")
                 ev = _ev(f"camera {v} shows the same picture for {span_s(r):.1f} s from {t0:.1f} s (every "
@@ -994,13 +994,13 @@ def assess(feats: dict) -> dict:
                     r = max(undecided, key=span_s)
                     frozen_undecided.append(
                         f"camera {v} shows the same picture for {span_s(r):.1f} s from "
-                        f"{_cam_t(ep, v, r[0], c['fps']):.1f} s, and neither the recorded motion nor the picture on "
+                        f"{_cam_t(ep, v, r[0], c['rate']):.1f} s, and neither the recorded motion nor the picture on "
                         "either side says whether its view had to change")
                 else:
                     pixel_observed["video_frozen_run"] += int(pok.sum()) > 0
             done.add("video_frozen_run")
             extreme = (means < extra["black_mean"]) | (means > extra["white_mean"])
-            cam_metrics[v] = {"frames": n, "decoded": c["decoded"], "fps": round(c["fps"], 2),
+            cam_metrics[v] = {"frames": n, "decoded": c["decoded"], "fps": round(c["rate"], 2),
                               "extreme_exposure_fraction": round(float(extreme[ok].mean()), 4) if ok.any() else None,
                               "low_contrast_fraction": (round(float((stds < extra["low_contrast_std"])[ok].mean()), 4)
                                                         if ok.any() else None),

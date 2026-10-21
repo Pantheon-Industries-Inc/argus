@@ -2,7 +2,7 @@
 it is read over gave a series of the window's length, and a per-frame mask applied to it stopped the whole episode
 (ABC-130k episode_0070d777: a 1 s window at a stated 976562.5 fps, 3077 frames). Every windowed series has one value
 per frame (label/signals.py window_sum), and a stated rate the frames' own capture times contradict is not used
-(prepare/camera_clock.py supported_rate, label/episode.py ep_fps), and is named in the episode's checks."""
+(prepare/frame_rate.py, the only module that reads a frame rate), and is named in the episode's checks."""
 from __future__ import annotations
 
 import json
@@ -56,7 +56,7 @@ def test_a_pair_read_over_fewer_frames_than_one_window_is_read_and_never_stops()
 
 
 def test_the_stated_rate_is_kept_unless_the_frames_own_times_contradict_it():
-    from prepare.camera_clock import supported_rate
+    from prepare.frame_rate import supported_rate
     n = 3077
     clustered = _clustered_clock(n)
     assert np.median(np.diff(clustered)) < 2e-6
@@ -115,3 +115,67 @@ def test_an_episode_whose_frames_agree_with_its_stated_rate_names_nothing(tmp_pa
     (d / "context.json").write_text(json.dumps({**ctx, "fps": 30.0}))
     ep = me.load(d)
     assert me.ep_fps(ep) == 30.0 and "frame_rate" not in ep and "frame_rate" not in me.plan(ep)["checks"]
+
+
+def test_every_reader_of_an_already_prepared_episode_reads_its_frames_rate(tmp_path):
+    """The episode as prepared, with no duration_s and a stated 976562.5 fps over 1800 frames at 30 fps: every reader
+    that takes its length from its frame count says 60 s, not 1.8 ms, with no re-prepare."""
+    from board import build
+    from gate import score
+    from label import pieces
+    from label.run import footage_hours
+    from prepare.frame_rate import episode_fps, frames_seconds
+    d = _prepared(tmp_path)
+    ctx = json.loads((d / "context.json").read_text())
+    rate, note = episode_fps(ctx, ep_dir=d)
+    assert abs(rate - 30.0) < 0.01 and note["stated_fps"] == STATED
+    for seconds in (frames_seconds(ctx, ep_dir=d), footage_hours(tmp_path, [d.name]) * 3600,
+                    pieces.duration(ctx, d), build.episode_seconds(ctx, d), score.duration_s(d)):
+        assert abs(seconds - 60.0) < 0.1, seconds
+
+
+def _raw_rate_reads(path) -> list[str]:
+    """Each place in a module that reads an "fps" key (a string "fps" that is not a dict literal's key or the target
+    of an assignment), counts frames over a rate (n_state_frames then "/"), or reads an episode context's rate as a
+    source's own (declared_fps on a context)."""
+    import io
+    import tokenize
+    toks = [t for t in tokenize.generate_tokens(io.StringIO(path.read_text()).readline)
+            if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)]
+    out = []
+    for i, t in enumerate(toks):
+        after = [x.string for x in toks[i + 1:i + 6]]
+        if t.type == tokenize.STRING and t.string.strip("rbRB") in ("'fps'", '"fps"'):
+            key_of_literal = after[:1] == [":"]
+            assigned = after[:1] == ["]"] and after[1:2] == ["="]
+            if not key_of_literal and not assigned:
+                out.append(f"{path}:{t.start[0]}")
+        if t.string in ("n_state_frames", "'n_state_frames'", '"n_state_frames"'):
+            rest = [s for s in after if s not in ("]", ")")]
+            if rest[:1] == ["/"] or (rest[:1] == ["or"] and "/" in rest[2:4]):
+                out.append(f"{path}:{t.start[0]}")
+        if t.string == "declared_fps" and after[:1] == ["("] and after[1:2] in (["ctx"], ["context"], ["c"]):
+            out.append(f"{path}:{t.start[0]}")
+    return out
+
+
+def test_only_the_frame_rate_module_reads_a_frame_rate():
+    """A new read of a stored "fps", or a frame count over a rate, anywhere but prepare/frame_rate.py would read an
+    episode at a rate its frames can contradict (episode_0070d777's 976562.5 fps)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    found = [hit for pkg in ("label", "board", "checks", "compare", "gate", "review", "prepare")
+             for p in sorted((root / pkg).rglob("*.py")) if p != root / "prepare" / "frame_rate.py"
+             for hit in _raw_rate_reads(p)]
+    assert not found, found
+
+
+def test_the_guard_sees_each_kind_of_raw_read(tmp_path):
+    p = tmp_path / "m.py"
+    for code in ('x = ctx.get("fps")', "x = ctx['fps']", 'x = ctx["n_state_frames"] / 30',
+                 "x = (c.get('n_state_frames') or 0) / rate", "keys = ('fps', 'n')", 'x = declared_fps(ctx)'):
+        p.write_text(code + "\n")
+        assert _raw_rate_reads(p), code
+    for code in ('d = {"fps": 30}', "ctx['fps'] = 30", '"""a docstring that says fps"""', 'x = declared_fps(info)'):
+        p.write_text(code + "\n")
+        assert not _raw_rate_reads(p), code

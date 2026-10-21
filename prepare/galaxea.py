@@ -36,6 +36,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from label.presented import presented_pts
+from prepare.frame_rate import frames_seconds
 
 GALAXEA_COLUMNS = ("observation.state.left_arm", "observation.state.right_arm", "observation.state.left_gripper",
                    "observation.state.right_gripper", "coarse_task_index", "task_index", "quality_index")
@@ -225,7 +226,7 @@ def cmd_sample(a) -> int:
             for ctx in ex.map(lambda mp: drawn(mp[0], mp[1], a.raw, a.out), batch):
                 if ctx:
                     got.append(ctx)
-                    secs += ctx["n_state_frames"] / FPS
+                    secs += frames_seconds(ctx, default=FPS)
             print(f"episodes {len(got)} hours {secs / 3600:.2f}", flush=True)
     listing = sorted(f"{c['source']['folder']}/{c['source']['episode_index']}" for c in got)
     lst = a.list or Path(f"{a.out}.txt")

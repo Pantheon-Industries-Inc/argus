@@ -31,6 +31,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
+from prepare.frame_rate import declared_fps
 
 
 REPO = "configinc/HABIT"
@@ -126,7 +127,7 @@ def write_episode(it: dict, r: dict, root: Path, out: Path, dataset: str) -> dic
     """One episode read by the LeRobot reader, then HABIT's specifics; returns its context."""
     eidx = int(it["row"]["eidx"])
     info = json.loads((root / "meta" / "info.json").read_text())
-    fps = float(info["fps"])
+    fps = float(declared_fps(info, required=True))
     ctx = formats.convert_lerobot(it, RIG, out, dataset, hold_back=PUBLISHER_COLUMNS, native_adapter="habit")
     ep = out / ctx["episode_id"]
     df = pd.read_parquet(root / info["data_path"].format(episode_chunk=eidx // int(info.get("chunks_size") or 1000),

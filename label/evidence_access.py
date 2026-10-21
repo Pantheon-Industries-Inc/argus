@@ -22,6 +22,7 @@ from label import sensor_evidence as se
 from label import sensor_copy
 from prepare.mcap_fields import SAMPLE_RATE_KEY
 from prepare.signal_alignment import RECORDER_ARRIVAL, RECORDER_ARRIVAL_LIMITATION, recorder_arrival
+from prepare.frame_rate import KEY as FPS_KEY, declared_fps
 
 MAX_COLUMNS = 8
 MAX_ROWS = 64
@@ -812,9 +813,13 @@ class Access:
     def selection_content(self, content):
         """Discovery sees recording context and a few supplied views, without the annotation schema."""
         ctx = self.ep['context']
-        description = {k: ctx[k] for k in ('instruction', 'task_label', 'profile', 'state_kind',
-                       'duration_s', 'n_state_frames', 'fps', 'state_unaligned', 'limitations',
-                       'collection_note', 'camera_clock', 'depth_camera_clock', 'clock_origin_note') if k in ctx}
+        from label.episode import frame_rate
+        # the frame rate is the one the frames are read at (label/episode.py frame_rate), never a stored one they
+        # contradict, in the place the stored one had
+        description = {k: frame_rate(self.ep)[0] if k == FPS_KEY else ctx[k]
+                       for k in ('instruction', 'task_label', 'profile', 'state_kind', 'duration_s', 'n_state_frames',
+                                 FPS_KEY, 'state_unaligned', 'limitations', 'collection_note', 'camera_clock',
+                                 'depth_camera_clock', 'clock_origin_note') if k in ctx}
         from label.episode import recording_window_note
         window = recording_window_note(self.ep)
         if window:
@@ -1241,7 +1246,7 @@ class Access:
                 source_start = int((own_entry.get('frame_span') or [0])[0])
             placeholders = [int(row) - source_start for row in own_entry.get('placeholder_rows') or []
                             if source_start <= int(row) < source_start + len(times)]
-            image_ep = {'dir': self.ep['dir'], 'context': {'fps': own_entry.get('fps') or 30.0,
+            image_ep = {'dir': self.ep['dir'], 'context': {'fps': declared_fps(own_entry, 30.0),
                 'cameras': {view: {'key': own_entry['name']}},
                 'placeholder_frames': {view: me.frame_runs(placeholders)}},
                 'sources': {view: {**own_entry, 'n_frames': len(times)}}, 'kmap': {},

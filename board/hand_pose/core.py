@@ -123,7 +123,7 @@ def probe(path: str) -> dict:
     d = _display()
     g = d.geometry(path)
     w, h = d.shown_size(g) if g["stored"][0] else (int(s["width"]), int(s["height"]))
-    return {"width": w, "height": h, "fps": float(num) / float(den), "n_packets": int(s["nb_read_packets"]),
+    return {"width": w, "height": h, "frame_rate": float(num) / float(den), "n_packets": int(s["nb_read_packets"]),
             "resample": d.needs_resample(g)}
 
 
@@ -346,7 +346,8 @@ def write_outputs(out_dir: Path, ep: dict, meta: dict, pin: dict, src_cam, K_use
     kn = j2d[::4] * scale
     ek = e2d[::4]
     for s in (0, 1):
-        kn[:, s] = one_euro_zero_phase(kn[:, s], ek[:, s] > 0.5, meta["fps"] / 4.0, smooth["min_cut"], smooth["beta"])
+        kn[:, s] = one_euro_zero_phase(kn[:, s], ek[:, s] > 0.5, meta["frame_rate"] / 4.0, smooth["min_cut"],
+                                       smooth["beta"])
     j2d = knots_to_frames(kn / scale, n_px)
     px = to_source_px(j2d, pin, src_cam, meta["width"], meta["height"])     # (n_px, 2, 21, 2)
     # frames past the last 4k+1 frame (at most 3) hold the last prediction
@@ -366,7 +367,7 @@ def write_outputs(out_dir: Path, ep: dict, meta: dict, pin: dict, src_cam, K_use
         "format": "ace_ego_hand_2d/v1",
         "dataset": ep["ds"], "episode": ep["ep"],
         "video": {"path": ep["board_path"], "width": meta["width"], "height": meta["height"],
-                  "fps": meta["fps"], "n_frames": n_src},
+                  "fps": meta["frame_rate"], "n_frames": n_src},
         "coords": "source-video pixels, continuous (x=0 left edge, x=W right edge; pixel j centre = j+0.5)",
         "joints": OP21, "edges": EDGES,
         "handedness": "fixed model slots: left = slot 0, right = slot 1",
