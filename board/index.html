@@ -64,6 +64,10 @@ body {
   font-size: 13px; line-height: 1.45;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+  /* the page's layout rule (layoutDefects, ?check=layout): no text runs out of its box at any width. A word longer
+     than its line (an object id, a file path) breaks where it must instead of running out, and a grid or flex track
+     that holds text has a minimum of 0 (minmax(0, 1fr), min-width: 0) so a long word can never widen it */
+  overflow-wrap: break-word;
 }
 code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
@@ -1324,7 +1328,7 @@ h4.subsection .count { margin-left: 6px; font: 500 11px/1 var(--mono); color: va
 }
 .timeline .tick-label {
   position: absolute; bottom: -16px; font-size: 10px; color: var(--fg-2);
-  font-family: var(--mono); transform: translateX(-50%);
+  font-family: var(--mono); white-space: nowrap;
 }
 
 /* ---------- section headers ---------- */
@@ -1442,7 +1446,7 @@ h3.section .count {
 .tasks-summary .tasks-note { font-size: 11px; color: var(--fg-3); margin-top: 4px; }
 .tasks-panel { display: flex; flex-direction: column; gap: 0; }
 .task-row {
-  display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start;
+  display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start;
   padding: 10px 2px; border-top: 1px solid var(--row-divider); cursor: pointer;
 }
 .task-row:first-child { border-top: none; }
@@ -1456,7 +1460,7 @@ h3.section .count {
 .task-row .task-num.partial { background: #e7b0b8; color: #0b0b0c; }
 .task-row .task-num.failure { background: #b3263c; color: #fff; }
 .task-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.task-head .task-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+.task-head .task-name { font-size: 13px; font-weight: 600; color: var(--fg); min-width: 0; }
 .task-meta { font-family: var(--mono); font-size: 10.5px; color: var(--fg-3); margin-top: 3px; }
 .task-pred { font-size: 12px; color: var(--fg-2); line-height: 1.45; margin-top: 4px; }
 .task-note { font-size: 11.5px; color: var(--fg-3); font-style: italic; line-height: 1.4; margin-top: 3px; }
@@ -1713,22 +1717,19 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 .mo-sev.medium { color: var(--warning); background: rgba(77,90,160,0.12); border-color: rgba(77,90,160,0.35); }
 .mo-none { font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
 .moments .fold-more { margin: 0; padding: 10px 14px; border-top: 1px solid var(--row-divider); width: 100%; text-align: left; }
-/* a table too narrow for its columns (a phone, a narrow column) puts each row's mistakes and then its scores on lines
-   of their own under it, each cell named, on one grid shared by the shown rows and the folded ones */
+/* a table too narrow for its columns (a phone, a narrow column) puts each row's mistakes on a line of their own and its
+   scores on the next, each cell named; the scores share the line, a cell is never narrower than its name, and cells
+   that do not fit side by side go on to another line */
 @container (max-width: 620px) {
-  .moments.scored .mo-row { grid-template-columns: 24px repeat(4, minmax(0, 1fr)); row-gap: 6px;
-    grid-template-areas: "no at what what what" ". mis mis mis mis" ". cl sp st ex"; }
-  /* a row with no scored stretch keeps no empty score cells, so it adds no empty lines */
-  .moments.scored .mo-row > span:empty { display: none; }
+  .moments.scored .mo-row { display: flex; flex-wrap: wrap; align-items: start; gap: 6px 10px; }
   .moments.scored .mo-head { display: none; }
-  .moments.scored .mo-no { grid-area: no; }
-  .moments.scored .mo-at { grid-area: at; }
-  .moments.scored .mo-what { grid-area: what; }
-  .moments.scored .mo-mis { grid-area: mis; }
-  .moments.scored .mo-d.cleanliness { grid-area: cl; }
-  .moments.scored .mo-d.speed { grid-area: sp; }
-  .moments.scored .mo-d.steadiness { grid-area: st; }
-  .moments.scored .mo-exec { grid-area: ex; }
+  .moments.scored .mo-no { flex: 0 0 24px; }
+  .moments.scored .mo-at { flex: 0 0 52px; }
+  .moments.scored .mo-what { flex: 1 1 0; }
+  .moments.scored .mo-row > :nth-child(n+4) { flex: 1 1 0; min-width: max-content; }
+  .moments.scored .mo-row > .mo-mis { flex: 1 0 100%; min-width: 0; }
+  /* a row with no scores (a key event outside every scored stretch) has empty cells, which take no room here */
+  .moments.scored .mo-row > span:empty { display: none; }
   .moments.scored .mo-row [data-k]::before { content: attr(data-k); display: block; grid-column: 1 / -1;
     font: 500 9.5px/1.4 var(--sans); color: var(--fg-3); text-align: left; }
   .moments.scored .mo-row .mo-mis[data-k]::before { flex-basis: 100%; }
@@ -6794,15 +6795,22 @@ function renderEp(d, opts) {
       + `</div></div>`;
   }
   let ticksHtml = '';
-  // at most about eight labels whatever the length, so a long recording's labels never run into each other
-  const labelStep = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800].find(st => duration / st <= 8) || 3600;
-  const tickLabel = t => t >= 60 && labelStep >= 60 ? `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`
-    : `${t}s`;
+  // at most eight labels whatever the length: the step is the first of 1, 2, 5, 10, 20, 30s, 1, 2, 5, 10, 20, 30min,
+  // then 1, 2, 5 times a power of ten hours, that gives eight or fewer. A label at 30% of the timeline has 30% of its
+  // own width before its tick, so the first starts at the timeline's start, the last ends at its end, and none sits
+  // outside the timeline
+  const steps = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800];
+  let labelStep = steps.find(st => duration / st <= 8);
+  for (let h = 1; !labelStep && h <= 1e6; h *= 10) {
+    labelStep = [1, 2, 5].map(k => k * h * 3600).find(st => duration / st <= 8);
+  }
+  labelStep = labelStep || 3600;
+  const tickLabel = t => labelStep >= 3600 ? `${t / 3600}h`
+    : t >= 60 && labelStep >= 60 ? `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}` : `${t}s`;
   for (let t = 0; t <= duration; t += labelStep / 2) {
     const pct = (t / duration) * 100;
     ticksHtml += `<div class="tick" style="left:${pct}%"></div>`;
-    // the first label starts at the timeline's edge instead of centring on it, so it never sits outside the timeline
-    if (t % labelStep === 0) ticksHtml += `<div class="tick-label" style="left:${pct}%${t === 0 ? ';transform:none' : ''}">`
+    if (t % labelStep === 0) ticksHtml += `<div class="tick-label" style="left:${pct}%;transform:translateX(-${pct}%)">`
       + `${tickLabel(t)}</div>`;
   }
 
@@ -8820,6 +8828,151 @@ async function renderEpisodeTable(order, first) {
 window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
 
 window.addEventListener('error', event => { void retryFrameImage(event.target); }, true);
+
+// ---- ?check=layout: the page checks that no text runs out of its box ----
+// The rule, at every width: every piece of content (a run of text, or an image, video, canvas, svg or form control)
+// stays inside every box it sits in, up to the nearest box that scrolls; a box that clips its content shows an
+// ellipsis where it cuts; and the page never scrolls sideways. Once an episode is drawn and the page has been still
+// for a moment, the defects are written as JSON into <pre id="layout-check"> (tests/test_layout_fits.py reads it),
+// and again after every resize. Each defect names the box, a short selector path to it, the text that runs out and
+// by how many px.
+function layoutDefects() {
+  const vw = document.documentElement.clientWidth;
+  const styles = new Map();
+  const cs = el => { let s = styles.get(el); if (!s) { s = getComputedStyle(el); styles.set(el, s); } return s; };
+  const scrolls = s => s.overflowX === 'auto' || s.overflowX === 'scroll';
+  const clips = s => s.overflowX === 'hidden' || s.overflowX === 'clip';
+  const path = el => {
+    const parts = [];
+    for (let e = el; e && e !== document.body && parts.length < 4; e = e.parentElement) {
+      if (e.id) { parts.unshift('#' + e.id); break; }
+      const cls = [...e.classList].slice(0, 2).map(c => '.' + c).join('');
+      parts.unshift(e.tagName.toLowerCase() + cls);
+    }
+    return parts.join(' > ');
+  };
+  // What the rule does not cover, each with why:
+  const hidden = new Map();
+  const isHidden = el => {
+    if (!el || el === document.documentElement) return false;
+    if (hidden.has(el)) return hidden.get(el);
+    const s = cs(el);
+    // a hidden element: not drawn, or drawn invisible (a tooltip or menu waiting for its hover), so nothing shows
+    const h = s.display === 'none' || s.visibility === 'hidden' || s.visibility === 'collapse'
+      || parseFloat(s.opacity) === 0 || el.hidden || (el.tagName === 'DIALOG' && !el.open)
+      // inside a closed fold: a closed <details> shows only its summary until it opens (a fold that clips its content
+      // to no height is left out where the boxes are walked, below)
+      || (el.parentElement && el.parentElement.tagName === 'DETAILS' && !el.parentElement.open && el.tagName !== 'SUMMARY')
+      || isHidden(el.parentElement);
+    hidden.set(el, h);
+    return h;
+  };
+  // The content to check: every run of text and every replaced element, and pseudo-elements of words further down.
+  // A scroll container counts as one piece of content to the boxes around it, and its own content is checked only
+  // against the boxes inside it, because the reader scrolls to what is wider than it. The video's own controls are
+  // not walked: the browser draws them in the video's shadow tree, inside the video's box, not in the page's layout.
+  const pieces = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let n = walker.currentNode; n; n = walker.nextNode()) {
+    if (n.nodeType === 3) {
+      if (!n.data.trim() || isHidden(n.parentElement)) continue;
+      const r = document.createRange();
+      r.selectNodeContents(n);
+      for (const rect of r.getClientRects()) if (rect.width > 0.5) pieces.push({from: n.parentElement, rect,
+        text: n.data.trim().slice(0, 80)});
+    } else if (n !== document.body && !isHidden(n) && (/^(IMG|VIDEO|CANVAS|INPUT|SELECT|TEXTAREA|svg)$/.test(n.tagName)
+        && !(n.parentElement && n.parentElement.closest('svg')) || scrolls(cs(n)))) {
+      const rect = n.getBoundingClientRect();
+      if (rect.width > 0.5 && rect.height > 0.5) pieces.push({from: n.parentElement, rect,
+        text: (n.textContent || '').trim().slice(0, 80) || n.tagName.toLowerCase()});
+    }
+  }
+  const found = new Map();
+  const note = (box, kind, over, text) => {
+    const key = box ? path(box) + '|' + kind : kind;
+    const was = found.get(key);
+    if (!was || over > was.over) found.set(key, {el: box ? path(box) : 'html', kind, text, over: Math.round(over * 10) / 10});
+  };
+  for (const p of pieces) {
+    let l = p.rect.left, r = p.rect.right, t = p.rect.top, b = p.rect.bottom;
+    for (let box = p.from; box && box !== document.documentElement;) {
+      const s = cs(box);
+      // a box that scrolls holds whatever is wider than it; it is itself a piece of content to the boxes around it
+      if (scrolls(s)) break;
+      if (s.display !== 'inline' && s.display !== 'contents') {
+        const br = box.getBoundingClientRect();
+        const bl = br.left + box.clientLeft, bR = bl + box.clientWidth;
+        const over = Math.max(bl - l, r - bR);
+        if (over > 1) {
+          // a box that clips its text with an ellipsis shows where the text was cut; any other overflow is a defect
+          if (!(clips(s) && s.textOverflow === 'ellipsis')) note(box, clips(s) ? 'clipped' : 'runs out', over, p.text);
+          break;
+        }
+        if (clips(s) || s.overflowY === 'hidden' || s.overflowY === 'clip') {
+          // a box that clips: what it cuts off does not show to the boxes around it. Inside a closed fold (a box
+          // that clips its content to no height) nothing shows at all, so nothing is left to check
+          const bt = br.top + box.clientTop, bB = bt + box.clientHeight;
+          if (clips(s)) { l = Math.max(l, bl); r = Math.min(r, bR); }
+          if (s.overflowY === 'hidden' || s.overflowY === 'clip') { t = Math.max(t, bt); b = Math.min(b, bB); }
+          if (r - l <= 0.5 || b - t <= 0.5) break;
+        }
+      }
+      // a box fixed to the window (a menu, a toast) must be held by the window
+      if (s.position === 'fixed') {
+        const off = Math.max(-l, r - vw);
+        if (off > 1) note(box, 'off screen', off, p.text);
+        break;
+      }
+      // a box placed absolutely (a tick label, an overlay on the video) is held by the box it is placed in, not by
+      // the boxes between them
+      box = s.position === 'absolute' ? box.offsetParent : box.parentElement;
+    }
+  }
+  // A pseudo-element whose content is words or numbers (a cell's name drawn by CSS) is text like any other. Its own
+  // box cannot be measured, so the box it belongs to must hold everything inside it. One whose content is a glyph or
+  // nothing (a caret, a rule, a dot) is decoration, not text, and is not checked.
+  for (const el of document.body.querySelectorAll('*')) {
+    if (isHidden(el)) continue;
+    const s = cs(el);
+    if (s.display === 'inline' || s.display === 'contents' || scrolls(s)) continue;
+    for (const which of ['::before', '::after']) {
+      const ps = getComputedStyle(el, which);
+      if (!ps.content || ps.content === 'none' || ps.content === 'normal' || ps.display === 'none'
+          || ps.visibility === 'hidden') continue;
+      const words = ps.content.replace(/attr\(([\w-]+)\)/g, (_, a) => el.getAttribute(a) || '').replace(/"/g, '');
+      if (!/[\p{L}\p{N}]/u.test(words)) continue;
+      const over = el.scrollWidth - el.clientWidth;
+      if (over > 1 && !(clips(s) && s.textOverflow === 'ellipsis')) note(el, clips(s) ? 'clipped' : 'runs out', over,
+        words.trim().slice(0, 80));
+    }
+  }
+  const sw = document.documentElement.scrollWidth;
+  if (sw > vw + 1) note(null, 'page scrolls sideways', sw - vw, '');
+  return [...found.values()].sort((a, b) => b.over - a.over);
+}
+if (new URLSearchParams(location.search).get('check') === 'layout') {
+  const out = document.createElement('pre');
+  out.id = 'layout-check';
+  out.hidden = true;
+  document.body.appendChild(out);
+  // checked once the page has been still for 1.5s, or 5s after the first change it has not checked yet
+  let timer = 0, first = 0;
+  const run = () => {
+    clearTimeout(timer);
+    first = first || Date.now();
+    timer = setTimeout(async () => {
+      first = 0;
+      if (!_activeFile) return;
+      try { await document.fonts.ready; } catch (_) {}
+      out.textContent = JSON.stringify({episode: _activeFile, width: document.documentElement.clientWidth,
+                                        defects: layoutDefects()});
+      out.dataset.state = 'done';
+    }, Math.max(0, Math.min(1500, first + 5000 - Date.now())));
+  };
+  new MutationObserver(records => { if (records.some(m => !out.contains(m.target))) run(); })
+    .observe(document.body, {subtree: true, childList: true, characterData: true});
+  window.addEventListener('resize', run);
+}
 
 loadEpisodes();
 </script>
