@@ -126,9 +126,11 @@ const chip = new Function('keyEvents', 'subs', 'Q', 'qNum', 'episodeGoalT', 'doc
   chipSrc + 'return renderScoreChip;');
 const chipKes = [{t_s: 4.5, kind: 'contact'}, {t_s: 5, kind: 'subgoal_complete'}];
 const render = chip(chipKes, qs.subgoals, qs, x => String(x), 44, {getElementById: () => chipEl});
-render(5.2);   // the caption is on the contact (its window opened first), so no score beside it
+render(4.5);   // the caption is on the contact, so no score beside it
 assert.strictEqual(chipEl.on, false);
-render(7.2);   // the contact's window has closed, the caption is on Subgoal 1
+render(5.2);   // the subgoal came after the contact, so it replaced it at once: the caption is on Subgoal 1
+assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v">9</span>', chipEl.innerHTML);
+render(7.2);   // still within the subgoal's 2.5s
 assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v">9</span>', chipEl.innerHTML);
 render(20);
 assert.strictEqual(chipEl.on, false);

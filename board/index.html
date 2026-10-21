@@ -646,8 +646,8 @@ aside.left .cam-cell.cam-exo .cam-label { top: calc(var(--fx-top, 0px) + 8px); l
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
 }
 .video-overlay.active { opacity: 1; transform: translateX(-50%) translateY(0); }
-.video-wrap.media-pending :is(.sensor-overlay-stack, .sensor-evidence-band, .video-overlay,
-  .state-toast, .recovery-overlay, #prog-overlay, #es-hand, .hp-canvas, .dp-roi) { visibility: hidden !important; }
+/* while a new picture is decoded (a seek, a drag along the scrubber) the overlays stay up for the picture still on
+   screen, and follow it as each new picture is shown; hiding them made every drag blank them until release */
 .video-overlay.adv   { border-left: 3px solid rgba(255,255,255,0.55); box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
 .video-overlay.waste { border-left: 3px solid #a3aee0; box-shadow: 0 4px 18px rgba(0,0,0,0.45),
   inset 3px 0 12px -4px rgba(163,174,224,0.3); }
@@ -7388,11 +7388,24 @@ function renderEp(d, opts) {
     .filter(e => e.t_s != null)
     .map(e => ({t0: e.t_s, t1: (e.end_s != null ? e.end_s : e.t_s + 1.0), ev: e}))
     .sort((a, b) => a.t0 - b.t0);
-  const keyWindows = keyEvents.map(k => ({t0: k.t_s - 0.3, t1: k.t_s + 2.5, k}));
-  function activeKey(t) { for (const w of keyWindows) if (t >= w.t0 && t <= w.t1) return w.k; return null; }
+  const keyWindows = flagWindows(keyEvents);
+  function activeKey(t) { return latestFlag(keyWindows, t); }
+  // A flag (a key event, a state change) shows from 0.3s before its moment until the next flag of its kind, for at
+  // most 2.5s: the next one replaces it, so an earlier flag never hides a later one
+  function flagWindows(items) {
+    const lead = 0.3, hold = 2.5;
+    const sorted = items.slice().sort((a, b) => a.t_s - b.t_s);
+    return sorted.map((x, i) => ({t0: x.t_s - lead, x,
+      t1: Math.min(x.t_s + hold, i + 1 < sorted.length ? sorted[i + 1].t_s - lead : Infinity)}));
+  }
+  function latestFlag(windows, t) {
+    let hit = null;
+    for (const w of windows) if (t >= w.t0 && t < w.t1) hit = w.x;
+    return hit;
+  }
   const stateChanges = (d.state_changes || []).filter(x => x.t_s != null).sort((a, b) => a.t_s - b.t_s);
-  function activeState(t) { for (const x of stateChanges) if (t >= x.t_s - 0.3 && t <= x.t_s + 2.5) return x;
-    return null; }
+  const stateWindows = flagWindows(stateChanges);
+  function activeState(t) { return latestFlag(stateWindows, t); }
 
   const overlay = document.getElementById('video-overlay');
   // Only rebuild the overlay when its content actually changes (segment, goal/key
