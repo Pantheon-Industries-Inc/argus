@@ -22,10 +22,12 @@ def _reply(tasks, **fields):
     return labels
 
 
-def _label(tmp_path, monkeypatch, reply, *, instruction='', saved_mode=None, name='label.json'):
+def _label(tmp_path, monkeypatch, reply, *, instruction='', saved_mode=None, name='label.json', steps=None):
     ep, _ = _packed_episode(tmp_path)
     ctx = json.loads((ep / 'context.json').read_text())
     ctx['instruction'] = instruction
+    if steps:
+        ctx['annotation_subtasks'] = steps
     ctx['task_mode'] = 'session'            # a source declaration: provenance only
     if saved_mode:
         ctx['annotation_policy'] = {**policy.resolve(ctx), 'task_mode': saved_mode}
@@ -44,42 +46,69 @@ def _label(tmp_path, monkeypatch, reply, *, instruction='', saved_mode=None, nam
 
 
 @pytest.mark.parametrize('saved_mode', [None, 'episode', 'session'])
-def test_every_request_asks_for_tasks_and_one_task_is_the_recordings_verdict(tmp_path, monkeypatch, saved_mode):
+def test_with_neither_an_instruction_nor_timed_steps_one_task_is_the_recordings_verdict(tmp_path, monkeypatch,
+                                                                                         saved_mode):
     record, fixed = _label(tmp_path, monkeypatch, _reply([TASK]), saved_mode=saved_mode)
-    assert fixed.endswith(prompts.lean('teleop_arms')) and prompts.TASK_RULES in fixed
-    assert '"completion"' not in fixed and 'ABOUT THE RECORDING\'S INSTRUCTION' not in fixed
+    assert fixed.endswith(prompts.lean('teleop_arms', has_instruction=False))
+    assert '\nTASKS. Segment the recording into its tasks' in fixed and '"completion"' not in fixed
     assert record['label_schema'] == 'tasks' and record['prompt_mode'] == 'inferred' and record['parse_ok']
+    assert record['task_prompts'] == 0
     assert record['labels']['completion'] == {
         'task_completed': 'success', 'success_predicate': 'the cups stacked', 'completed_at_s': 1.0,
         'goal_reached_at_s': 1.0, 'undone_at_s': None, 'undone_by': None, 'reason': None,
-        'judged_against': 'own_end_state', 'from_tasks': 1}
+        'judged_against': 'own_end_state', 'from_tasks': 1, 'basis': 'one_task'}
     # a saved legacy mode is kept for the job's identity; it never shapes the request
     assert record['annotation_policy'].get('task_mode') == saved_mode
     assert '_schema_violations' not in record['labels']
 
 
-def test_several_tasks_give_no_recording_verdict_and_a_reply_completion_is_replaced(tmp_path, monkeypatch):
-    reply = _reply([TASK, {**TASK, 'outcome': 'failure', 'completed_at_s': None, 'goal_reached_at_s': None}],
-                   completion={'task_completed': 'success'},
+def test_with_an_instruction_the_reply_judges_the_recording_itself_and_lists_its_tasks(tmp_path, monkeypatch):
+    """An asked task that fails, then unasked work that succeeds: the recording is a failure, as the episode was."""
+    asked = {**TASK, 'judged_against': 'instruction', 'outcome': 'failure', 'completed_at_s': None,
+             'goal_reached_at_s': None}
+    reply = _reply([asked, {**TASK, 'task': 'build a tower'}],
+                   completion={'task_completed': 'failure', 'reason': 'the cups never stack'},
                    goal_alignment={'relation': 'narrower', 'matches_given': True})
     record, fixed = _label(tmp_path, monkeypatch, reply, instruction='Stack the cups.')
     assert record['prompt_mode'] == 'given' and 'ABOUT THE EPISODE\'S INSTRUCTION' in fixed
-    completion = record['labels']['completion']
-    assert completion['task_completed'] is None and completion['from_tasks'] == 2
-    assert any(v.startswith('completion:') for v in record['labels']['_schema_violations'])
+    assert prompts.INSTRUCTION_RULES in fixed and '"task_completed"' in fixed and '"tasks": [' in fixed
+    assert record['labels']['completion'] == {'task_completed': 'failure', 'reason': 'the cups never stack',
+                                              'basis': 'instruction'}
+    assert '_schema_violations' not in record['labels'] and len(record['labels']['tasks']) == 2
     # a saved record read again on resume is still complete and gains nothing
     assert harness.annotation_problems(record) == []
-
-
-def test_a_recording_with_an_instruction_and_no_task_is_incomplete_and_one_without_is_not(tmp_path, monkeypatch):
-    record, _ = _label(tmp_path, monkeypatch, _reply([]), instruction='Stack the cups.', name='given.json')
-    assert record['parse_ok'] is False and 'lists none' in ' '.join(record['labels']['_incomplete'])
+    # the completion is required beside the tasks, as the episode prompt required it
     (tmp_path / 'b').mkdir()
-    record, _ = _label(tmp_path / 'b', monkeypatch, _reply([]), name='bare.json')
+    bare, _ = _label(tmp_path / 'b', monkeypatch, _reply([asked]), instruction='Stack the cups.', name='bare.json')
+    assert bare['parse_ok'] is False
+    assert bare['labels']['_incomplete'] == ['the request asks the outcome of its task, and completion.task_completed '
+                                             'is missing']
+
+
+def test_with_timed_steps_and_no_instruction_each_task_is_judged_against_its_step_and_there_is_no_verdict(
+        tmp_path, monkeypatch):
+    steps = [{'t0': 0.0, 't1': 1.5, 'label': 'pick up the cup'}, {'t0': 1.5, 't1': 3.9, 'label': 'stack the cup'}]
+    task = {**TASK, 'judged_against': 'subtask', 'subtask': 2}
+    reply = _reply([task], goal_alignment={'relation': 'aligned', 'matches_given': True})
+    record, fixed = _label(tmp_path, monkeypatch, reply, steps=steps)
+    assert record['task_prompts'] == 2 and record['parse_ok']
+    assert "ABOUT THE DATASET'S TIMED STEPS" in fixed
+    assert "comparing the dataset's steps, as one sequence, with the tasks you observed" in ' '.join(fixed.split())
+    completion = record['labels']['completion']
+    assert completion['task_completed'] is None and completion['basis'] == 'task_prompts'
+    assert record['labels']['tasks'][0]['judged_against'] == 'subtask'
+    # with timed steps a recording holds at least one task
+    (tmp_path / 'b').mkdir()
+    empty, _ = _label(tmp_path / 'b', monkeypatch, _reply([]), steps=steps, name='empty.json')
+    assert empty['parse_ok'] is False
+
+
+def test_with_neither_a_robot_recording_may_hold_no_task(tmp_path, monkeypatch):
+    record, _ = _label(tmp_path, monkeypatch, _reply([]), name='bare.json')
     assert record['parse_ok'] is True
     assert record['labels']['completion'] == {**{k: None for k in record['labels']['completion']
-                                                 if k not in ('reason', 'from_tasks')},
-                                              'reason': 'no task observed', 'from_tasks': 0}
+                                                 if k not in ('reason', 'from_tasks', 'basis')},
+                                              'reason': 'no task observed', 'from_tasks': 0, 'basis': 'tasks'}
 
 
 def test_a_record_labelled_before_the_tasks_format_is_read_as_it_was_asked():
@@ -91,7 +120,7 @@ def test_a_record_labelled_before_the_tasks_format_is_read_as_it_was_asked():
         record = {'annotation_policy': {'rig': 'teleop_arms', 'task_mode': mode}, 'given_prompt': 'Stack the cups.',
                   'prompt_mode': 'session' if mode == 'session' else 'given'}
         read, ok = harness.read_reply(raw, record)
-        assert read['completion'] == labels['completion'] and 'from_tasks' not in read['completion']
+        assert read['completion'] == labels['completion'] and 'basis' not in read['completion']
         assert ok is (mode == 'episode'), field
 
 

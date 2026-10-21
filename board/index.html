@@ -6645,11 +6645,11 @@ function renderEp(d, opts) {
     : d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
   const onTl = t => Math.max(0, Math.min(duration, Number(t)));     // a time as drawn: on the episode's timeline
 
-  // the rule every outcome reader shares (board/label_projection.py verdict_or_tasks): a completion derived from the
-  // tasks (from_tasks) with a verdict is one goal, the way an episode is; a recording with none (several tasks) and
-  // a record labelled before the tasks format that lists tasks (a session, a head camera's activities) are shown task
-  // by task (d.tasks), each task with its own outcome and goal frame
-  const tasks = comp.from_tasks != null && String(comp.task_completed || '').trim() ? []
+  // the rule every outcome reader shares (board/label_projection.py verdict_or_tasks): a completion in the tasks format
+  // (it names its basis) with a verdict is one goal, the way an episode is; a recording with none (several tasks, timed
+  // steps) and a record labelled before the tasks format that lists tasks (a session, a head camera's activities) are
+  // shown task by task (d.tasks), each task with its own outcome and goal frame
+  const tasks = comp.basis != null && String(comp.task_completed || '').trim() ? []
     : (d.tasks || []).filter(t => t && (t.task || t.start_s != null));
   const hasTasks = tasks.length > 0;
   const taskGoalTimes = tasks.map(t => t.completed_at_s).filter(t => t != null);
@@ -7292,7 +7292,7 @@ function renderEp(d, opts) {
       + `</span>${partsGapHtml(d)}</div>`
     : `<div class="verdict" style="--v:${vColor}"><span class="verdict-word">${esc(comp.task_completed
         ? cap(outcomeWords(verdict, comp.failure_kind)) : 'Not judged')}</span><span class="verdict-sub">${partProgress
-        ? 'Whole-recording goal frame unassessed' : undone
+        && comp.basis !== 'one_task' ? 'Whole-recording goal frame unassessed' : undone
         ? `goal reached ${comp.goal_reached_at_s != null ? fmtT(comp.goal_reached_at_s)
           : '?'}, undone ${comp.undone_at_s != null ? fmtT(comp.undone_at_s) : '?'}`
         : `goal frame ${comp.completed_at_s != null ? fmtT(comp.completed_at_s) : 'not reached'}`}</span></div>`;

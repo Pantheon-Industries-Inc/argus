@@ -149,7 +149,6 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
     checks["missing_task_indices"] = sorted({int(t) for t in pd.unique(df["task_index"]) if int(t) not in tasks}
                                             | ({int(df["coarse_task_index"].iloc[0])} - set(tasks)))
     quality = sorted({tasks.get(int(q), str(q)) for q in pd.unique(df["quality_index"])})
-    sub_txt = "; ".join(f"{s['t0']:.1f}-{s['t1']:.1f}s \"{s['label']}\"" for s in subs)
     ctx = {
         "dataset": dataset,
         "profile": "teleop_arms",
@@ -162,8 +161,8 @@ def write_episode(meta: dict, ep: dict, get, ep_dir: Path, dataset: str) -> dict
         "fps": FPS,
         "task_label": [coarse],
         "instruction": coarse,
-        "instruction_note": ("This is the dataset's task for the whole episode. The dataset also labels timed "
-                             f"sub-steps for this episode, which are claims to check against the video: {sub_txt}. "
+        # the timed sub-steps go to the model once, as the dataset's timed steps (annotation_subtasks)
+        "instruction_note": ("This is the dataset's task for the whole episode. "
                              f"Its quality tag for the episode: {', '.join(quality)}."),
         "annotation_subtasks": subs,
         "quality_tag": quality,

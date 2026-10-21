@@ -225,9 +225,9 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "undone_at_s": raw_comp.get("undone_at_s"),
         "undone_by": raw_comp.get("undone_by"),
         "reason": raw_comp.get("reason"),
-        # a completion derived from the tasks (board/label_projection.py recording_completion): how many tasks it was
-        # derived from, and what its one task was judged against
-        **{key: raw_comp[key] for key in ("from_tasks", "judged_against") if key in raw_comp},
+        # a completion in the tasks format (board/label_projection.py derive_completion): what it stands on, and when it
+        # is derived from the tasks, how many and what its one task was judged against
+        **{key: raw_comp[key] for key in ("from_tasks", "judged_against", "basis") if key in raw_comp},
     }
     # the outcome is success or failure. "partial" (a real part of the goal left undone) is a kind of failure: the board
     # records it as a failure and keeps the kind, as success_then_undone is kept as a kind of success

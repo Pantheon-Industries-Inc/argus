@@ -32,10 +32,11 @@ the output schema, not from any one episode:
   goal frame, while the goal alignment calls the footage exactly the given goal ("aligned") and no instruction
   mismatch is recorded. The demonstration kept working past the goal, typically handling more of a
   repeated item than the instruction names ("place the coffee filter" with two filters), and nothing says so.
-A recording labelled as tasks (its completion says from_tasks) with one task is checked through that task's
-completion by the rules above. One with several tasks has no verdict, and each task is checked on its own:
-- task_outcome_vs_alignment: a task judged against the instruction reached it (success, or success then undone)
-  while goal_alignment says the footage shows a different or unrelated task.
+A recording labelled as tasks (its completion names its basis) with an instruction or one task is checked through its
+completion by the rules above. One with no verdict (several tasks, or the dataset's own timed steps) has each task
+checked on its own:
+- task_outcome_vs_alignment: a task judged against the instruction or a timed step reached it (success, or success
+  then undone) while goal_alignment says the footage shows a different or unrelated task.
 - task_undone_timing: a task is success then undone without a goal time, without an undo time, or with the undo at
   or before the goal.
 """
@@ -131,18 +132,18 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
                                 f"the goal frame ({done:.1f} s) and reaches 100% only at {first_full:.1f} s, yet nothing "
                                 "says it does more than the instruction. The instruction may name fewer items than "
                                 "were handled."})
-    # a recording labelled as tasks with no verdict of its own (several tasks): the same rules for each task, the
-    # alignment one for the tasks judged against the instruction, which claim the asked work
-    tasks = label.get("tasks") if "from_tasks" in c and not outcome else []
+    # a recording labelled as tasks with no verdict of its own (several tasks, timed steps): the same rules per task, the
+    # alignment one for the tasks judged against the instruction or a timed step, which claim the asked work
+    tasks = label.get("tasks") if "basis" in c and not outcome else []
     for i, task in enumerate(t for t in tasks or [] if isinstance(t, dict)):
         verdict = str(task.get("outcome") or "").lower()
         name = f"task {i + 1} ({task['task']})" if isinstance(task.get("task"), str) else f"task {i + 1}"
         t_goal, t_undone = stored_number(task.get("goal_reached_at_s")), stored_number(task.get("undone_at_s"))
-        if verdict in REACHED and rel in OTHER_TASK and task.get("judged_against") == "instruction":
+        if verdict in REACHED and rel in OTHER_TASK and task.get("judged_against") in ("instruction", "subtask"):
+            claim = "the instruction" if task.get("judged_against") == "instruction" else "the dataset's step"
             out.append({"rule": "task_outcome_vs_alignment",
-                        "note": f"{name} is judged against the instruction and reached it "
-                                f"({verdict.replace('_', ' ')}), but the goal alignment says the footage shows a {rel} "
-                                "task."})
+                        "note": f"{name} is judged against {claim} and reached it ({verdict.replace('_', ' ')}), but "
+                                f"the goal alignment says the footage shows a {rel} task."})
         if verdict == "success_then_undone" and (t_goal is None or t_undone is None or t_undone <= t_goal):
             out.append({"rule": "task_undone_timing",
                         "note": f"{name} is success then undone, but its goal and undo times are missing or the undo "

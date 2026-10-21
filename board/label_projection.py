@@ -28,10 +28,16 @@ def effective_outcome(value):
 
 
 # The output format of a request that asks every recording for a list of tasks, each with its own outcome
-# (label/prompts.py fixed_instructions). label/episode.py writes it into every request record as label_schema, so it
+# (label/prompts.py fixed_instructions). label/harness.py writes it into every request record as label_schema, so it
 # names the prompt actually sent; a record without it was asked in the episode or session mode of its saved policy.
 LABEL_SCHEMA = 'tasks'
-JUDGED_AGAINST = ('instruction', 'own_end_state')
+# what a task is judged against: the dataset's timed step that covers it, the episode's instruction, or its own end
+# state (label/prompts.py TASK_RULES)
+JUDGED_AGAINST = ('subtask', 'instruction', 'own_end_state')
+# what a completion in that format stands on (its basis): the reply's own completion, judged against the episode's
+# instruction; a recording's one task; or no verdict, for a recording whose dataset times its own steps and gives no
+# instruction (task_prompts) or one of several tasks, or none (tasks)
+BASES = ('instruction', 'one_task', 'task_prompts', 'tasks')
 # a task's outcome fields, under the names the recording's completion gives them
 COMPLETION_FROM_TASK = (('task_completed', 'outcome'), ('success_predicate', 'success_predicate'),
                         ('completed_at_s', 'completed_at_s'), ('goal_reached_at_s', 'goal_reached_at_s'),
@@ -39,35 +45,54 @@ COMPLETION_FROM_TASK = (('task_completed', 'outcome'), ('success_predicate', 'su
                         ('judged_against', 'judged_against'))
 
 
-def recording_completion(tasks) -> dict:
-    """The recording's completion, derived from its tasks. A recording of exactly one task takes that task's outcome,
-    times and predicate as its own. A recording of several tasks, or of none, has no single verdict: every field is
-    null, and each task keeps its own outcome under tasks. from_tasks says how many tasks it was derived from. A task
-    still open at a cut of the recording (continues_past_cut) is no verdict either."""
+def recording_completion(tasks, *, task_prompts: int = 0) -> dict:
+    """The completion of a recording with no instruction, derived from its tasks. A recording of exactly one task
+    takes that task's outcome, times and predicate as its own. One whose dataset times its own steps, or one of
+    several tasks or none, has no single verdict: every field is null, and each task keeps its own outcome under
+    tasks. from_tasks says how many tasks it was derived from and basis what it stands on (BASES). A task still open
+    at a cut of the recording (continues_past_cut), or one whose outcome is no outcome word, is no verdict either."""
     rows = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
     empty = {name: None for name, _ in COMPLETION_FROM_TASK}
-    if len(rows) == 1 and str(rows[0].get('outcome') or '').strip().lower() == 'continues_past_cut':
+    n = len(rows)
+    if task_prompts:
+        return {**empty, 'reason': "the dataset times its own steps and gives no instruction for the recording; each "
+                                   "task's outcome, against its step, is under tasks", 'from_tasks': n,
+                'basis': 'task_prompts'}
+    word = str(rows[0].get('outcome') or '').strip().lower() if n == 1 else None
+    if word == 'continues_past_cut':
         return {**empty, 'reason': 'its one task continues past a cut of the recording, so its outcome is open',
-                'from_tasks': 1}
-    if len(rows) == 1:
-        out = {**{name: copy.deepcopy(rows[0].get(key)) for name, key in COMPLETION_FROM_TASK}, 'from_tasks': 1}
-        word = out['task_completed'].strip().lower() if isinstance(out['task_completed'], str) else None
-        if word in OUTCOMES:
-            out['task_completed'] = word      # "Success" is success, as the parser reads a completion's outcome
-        return out
-    reason = 'no task observed' if not rows else f"{len(rows)} tasks; each task's outcome is under tasks"
-    return {**empty, 'reason': reason, 'from_tasks': len(rows)}
+                'from_tasks': 1, 'basis': 'tasks'}
+    if n == 1 and word not in OUTCOMES:
+        return {**empty, 'reason': f"its one task has no known outcome ({rows[0].get('outcome')!r})",
+                'from_tasks': 1, 'basis': 'tasks'}
+    if n == 1:
+        out = {name: copy.deepcopy(rows[0].get(key)) for name, key in COMPLETION_FROM_TASK}
+        # "Success" is success, as the parser reads a completion's outcome
+        return {**out, 'task_completed': word, 'from_tasks': 1, 'basis': 'one_task'}
+    reason = 'no task observed' if not rows else f"{n} tasks; each task's outcome is under tasks"
+    return {**empty, 'reason': reason, 'from_tasks': n, 'basis': 'tasks'}
 
 
-def derive_completion(labels: dict) -> dict:
-    """labels with the recording's completion derived from its tasks (recording_completion), for a reply asked in the
-    LABEL_SCHEMA format. That format has no completion of its own, so one the reply writes anyway is replaced and
-    noted in _schema_violations. Call it only on a record whose label_schema is LABEL_SCHEMA: an older record keeps the
-    completion its own request asked for."""
+def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts: int = 0) -> dict:
+    """labels with the recording's completion as the LABEL_SCHEMA format reads it, by what the request gave. A robot
+    request with an instruction asks for the completion itself, judged against the instruction as the episode prompt
+    always did; it is kept and marked basis "instruction". One without asks only for tasks, and its completion is
+    derived from them (recording_completion); a completion the reply writes anyway is replaced and noted in
+    _schema_violations. The head camera's schema has no completion: a clip of one task with no timed steps takes that
+    task's verdict, and any other clip is read task by task, as it always was. Call it only on a record whose
+    label_schema is LABEL_SCHEMA: an older record keeps the completion its own request asked for."""
     if not isinstance(labels, dict):
         return labels
     out = dict(labels)
-    derived = recording_completion(out.get('tasks'))
+    if rig != 'ego_head' and instruction:
+        if isinstance(out.get('completion'), dict):
+            out['completion'] = {**out['completion'], 'basis': 'instruction'}
+        return out
+    if rig == 'ego_head':
+        tasks = [t for t in out.get('tasks') or [] if isinstance(t, dict)] if isinstance(out.get('tasks'), list) else []
+        if len(tasks) != 1 or task_prompts:
+            return out
+    derived = recording_completion(out.get('tasks'), task_prompts=task_prompts)
     # labels read again (a saved record checked on resume) already hold the derived completion
     if 'completion' in out and out['completion'] != derived:
         out['_schema_violations'] = [*(out.get('_schema_violations') or []),
@@ -85,18 +110,18 @@ def recording_verdict(completion) -> str | None:
 
 def verdict_or_tasks(record: dict) -> tuple[str | None, list[dict]]:
     """(the recording's verdict, the tasks that stand in for it). Every reader of an outcome uses this one rule. A
-    completion derived from the tasks (it says from_tasks, recording_completion) is read first: its verdict when it has
-    one, and then no tasks, so a recording of one task is read as one goal, the way an episode always was; otherwise
-    no verdict and the tasks. A record labelled before the tasks format keeps the rule it was shown and scored by: its
-    tasks whenever it lists any (a session, the head camera's activities, an older long session whose stitched
-    completion says unclear), otherwise its completion's verdict."""
+    completion in the tasks format (it names its basis, derive_completion) is read first: its verdict when it has one,
+    and then no tasks, so a recording with an instruction is read by its completion against it and a recording of one
+    task as one goal, the way an episode always was; otherwise no verdict and the tasks. A record labelled before the
+    tasks format keeps the rule it was shown and scored by: its tasks whenever it lists any (a session, the head
+    camera's activities, an older long session whose stitched completion says unclear), otherwise its completion's
+    verdict."""
     record = record if isinstance(record, dict) else {}
     completion = record.get('completion')
     tasks = record.get('tasks')
     tasks = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
     verdict = recording_verdict(completion)
-    derived = isinstance(completion, dict) and 'from_tasks' in completion
-    if derived:
+    if isinstance(completion, dict) and 'basis' in completion:
         return (verdict, []) if verdict is not None else (None, tasks)
     return (None, tasks) if tasks else (verdict, [])
 
@@ -138,7 +163,7 @@ TEXT = {
     'timeline': ('arm', 'action', 'object', 'destination', 'spatial_relation', 'contribution', 'hands_wearing', 'notes'),
     'key_events': ('label', 'kind', 'outcome', 'note'),
     'state_changes': ('object', 'from', 'to', 'seen_in'),
-    'completion': ('task_completed', 'success_predicate', 'undone_by', 'reason', 'judged_against'),
+    'completion': ('task_completed', 'success_predicate', 'undone_by', 'reason', 'judged_against', 'basis'),
     'tasks': ('task', 'outcome', 'success_predicate', 'note', 'undone_by', 'judged_against'),
     'recovery': ('failure', 'correction', 'how_to_fix'),
     'data_issues': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
@@ -151,7 +176,7 @@ TEXT = {
 ENUMS = {'task_completed': OUTCOMES, 'outcome': OUTCOMES,
          'severity': ('low', 'medium', 'high'), 'contribution': ('advancing', 'wasteful', 'idle'),
          'relation': ('aligned', 'narrower', 'broader', 'different', 'unrelated'),
-         'deliberate': ('yes', 'no', 'unclear'), 'judged_against': JUDGED_AGAINST}
+         'deliberate': ('yes', 'no', 'unclear'), 'judged_against': JUDGED_AGAINST, 'basis': BASES}
 BOOLS = {'timeline': ('hands_visible',), 'recovery': ('recovered',),
          'operator_mistakes': ('recovered',), 'goal_alignment': ('matches_given',)}
 TEXT_LISTS = {'tasks': ('objects',), 'scene.objects': ('attributes',), 'scene_graph': ('relations',)}

@@ -131,16 +131,11 @@ def goal_times(d: dict) -> list:
     """Times the page shows a goal frame for (renderEp's goal-frame panels)."""
     comp = d.get("completion") or {}
     # the recording's verdict first: its tasks carry the goal frames only when it has none
-    # (board/label_projection.py verdict_or_tasks), and a task reached and later undone shows the frame it was reached
+    # (board/label_projection.py verdict_or_tasks), each task the frame it is done at, as the page shows them
     tasks = [t for t in verdict_or_tasks(d)[1] if t.get("task") or t.get("start_s") is not None]
     out = []
     if tasks:
-        for t in tasks:
-            if t.get("completed_at_s") is not None:
-                out.append(t["completed_at_s"])
-            elif (str(t.get("outcome") or "").lower() == "success_then_undone"
-                  and t.get("goal_reached_at_s") is not None):
-                out.append(t["goal_reached_at_s"])
+        out = [t.get("completed_at_s") for t in tasks if t.get("completed_at_s") is not None]
     else:
         if comp.get("completed_at_s") is not None:
             out.append(comp["completed_at_s"])

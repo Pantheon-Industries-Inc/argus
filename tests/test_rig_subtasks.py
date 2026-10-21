@@ -92,7 +92,7 @@ def test_mcap_episode_task_wins_over_language_steps_and_health(reverse):
     ]
     texts = dict(reversed(topics) if reverse else topics)
     counts = {t: len(xs) for t, xs in topics}
-    instruction, notes = f.mcap_task_texts(texts, counts, base)
+    instruction, notes, _ = f.mcap_task_texts(texts, counts, base)
     assert instruction == "Place the cup."
     assert notes["/language_instruction/steps"] == ["0.0 s: Reach", "0.5 s: Reach", "2.0 s: Release"]
     topic, steps = f.mcap_step_subtasks(texts, base, 3.0)

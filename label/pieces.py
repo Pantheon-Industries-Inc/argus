@@ -1304,36 +1304,48 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     uniq = list(dict.fromkeys(summaries))
     L["task_summary"] = uniq[0] if len(uniq) == 1 else " ".join(f"({i}) {s}" for i, s in enumerate(uniq, 1))
     L["performance_review"] = " ".join(reviews)
-    # the output format each part was asked in (label_schema): in the tasks format the recording's completion is
-    # derived from its tasks once they are joined across the cuts below; a part asked before it was asked in the
-    # episode or session mode of its policy, and a mix of the two has no single reading
+    # the output format each part was asked in (label_schema): in the tasks format the recording's completion follows
+    # what the recording gives (board/label_projection.py derive_completion), from its tasks joined across the cuts
+    # below; a part asked before it was asked in the episode or session mode of its policy, and a mix of the two has
+    # no single reading
     formats = {r.get('label_schema') for _, r in parts}
     tasks_format = formats == {LABEL_SCHEMA}
     session = any((r.get('annotation_policy') or {}).get('task_mode') == 'session' for _, r in parts)
     gaps = ("; " + "; ".join(f"part {g['part']} has no labels, as {g['why']}" for g in missing)) if missing else ""
     empty = {"task_completed": None, "success_predicate": None, "completed_at_s": None, "goal_reached_at_s": None,
              "undone_at_s": None, "undone_by": None}
+    parted = (f"Labelled in {count} requests with independently inferred goals. Local outcomes and progress are under "
+              "part_assessments; they do not establish a whole-recording outcome.")
+    rig = me.rig(ep)
+    instruction = bool((ep["context"].get("instruction") or "").strip())
     if len(formats) > 1:
         L["completion"] = {**empty, "reason": "parts labelled with different output formats" + gaps}
     elif not tasks_format:
         # a session has no recording-wide goal in one request or in many: its outcome is its tasks', joined across the
         # cuts below; an episode labelled in parts lacks a whole-recording verdict
         L["completion"] = {**empty, "task_completed": None if session else "unclear",
-                           "reason": ("a session of several tasks; each task's outcome is under tasks" if session else
-                                      f"Labelled in {count} requests with independently inferred goals. "
-                                      "Local outcomes and progress are under part_assessments; "
-                                      "they do not establish a whole-recording outcome.") + gaps}
+                           "reason": ("a session of several tasks; each task's outcome is under tasks" if session
+                                      else parted) + gaps}
+    elif rig != "ego_head" and instruction:
+        # no part sees the whole recording, so none can judge it against the instruction: unclear, as an episode
+        # labelled in parts always was
+        L["completion"] = {**empty, "task_completed": "unclear", "reason": parted + gaps, "basis": "instruction"}
     for k in ("timeline",):
         L[k].sort(key=lambda s: (s.get("start_s") is None, s.get("start_s") or 0))      # an untimed step last
     L["tasks"] = mark_cut_tasks(join_across_cuts(L["tasks"], cuts_s), cuts_s, L)
-    if tasks_format:
-        # one task joined across the cuts is the recording's verdict, as in one request; a part with no labels may
-        # hold more of the work, so then there is none
-        L["completion"] = recording_completion(L["tasks"])
-        if missing:
-            n = len(L["tasks"])
-            L["completion"] = {**empty, "judged_against": None, "from_tasks": n,
+    if tasks_format and not (rig != "ego_head" and instruction):
+        # the tasks joined across the cuts give the completion as one request's would; a part with no labels may hold
+        # more of the work, so then there is no verdict
+        steps = len(me.annotation_lines(ep["context"]))
+        n = len(L["tasks"])
+        if rig == "ego_head" and (n != 1 or steps or missing):
+            L["completion"] = {**empty, "reason": f"a head-camera clip labelled in {count} requests; each task's "
+                                                  "outcome is under tasks" + gaps}
+        elif missing:
+            L["completion"] = {**empty, "judged_against": None, "from_tasks": n, "basis": "tasks",
                                "reason": f"{n} task{'' if n == 1 else 's'} in the parts with labels" + gaps}
+        else:
+            L["completion"] = recording_completion(L["tasks"], task_prompts=steps)
     L["scene"]["objects"] = join_scene_objects(scene_objects, L["tasks"])
     events = []
     for event in L["key_events"]:

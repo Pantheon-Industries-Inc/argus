@@ -1862,6 +1862,20 @@ def video_annotation_paths(item: dict, original_files: set[Path] | None = None) 
                   and set(tokens(p.relative_to(home).parts[0])) & {"annotation", "annotations"})
 
 
+# What OpenAoE's atomic-action annotation (ego_annotation/ego_action_annotation.json: start_ts, end_ts and
+# atomic_action rows) is, and what its clips are, said once for its dataset adapter (prepare/openaoe.py) and for the
+# generic reader, which reads the same files in an upload (recorded_video_notes, video_views_episode)
+ATOMIC_ACTION_NOTE = ("these action segments were generated automatically on a whole-second grid, many as fixed "
+                      "5-second windows, so a boundary a second or two from the visible change is that resolution. A "
+                      "wrong action, object or hand, or segments that stop following what the hands do, is what would "
+                      "mislead someone training on them")
+SEGMENT_CLIP_NOTE = ("crowd contributors record their own activities on a phone worn at the head; each clip is one "
+                     "numbered segment of a longer recording, so a clip can start or end in the middle of an "
+                     "activity, which is how the dataset is packaged")
+# OpenAoE's clip folders, raw_<recording>_seg_<n>: one numbered segment of a longer recording
+SEGMENT_CLIP_NAME = re.compile(r"raw_.+_seg_\d+")
+
+
 def recorded_video_notes(item: dict) -> dict:
     """Read owned atomic action spans and device objects by structure, retaining every source field."""
     files = [Path(p) for p in item.get("files", [])]
@@ -5205,10 +5219,13 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["source"].update(structured["source"])
         if structured["spans"]:
             extra["annotation_subtasks"] = structured["spans"]
-            extra["annotation_note"] = ("These are recorded atomic action claims. start_ts and end_ts are "
-                                        "displayed as seconds from the video start; their unit, clock relation and "
-                                        "accuracy were not separately recorded. Original fields and boundaries "
-                                        "remain in the attributed notes.")
+            extra["annotation_note"] = (ATOMIC_ACTION_NOTE + ". These are recorded atomic action claims. start_ts and "
+                                        "end_ts are displayed as seconds from the video start; their unit, clock "
+                                        "relation and accuracy were not separately recorded. Original fields and "
+                                        "boundaries remain in the attributed notes.")
+            # a clip folder named as one segment of a longer recording is packaged that way, whoever uploads it
+            if SEGMENT_CLIP_NAME.fullmatch(Path(fs[0]).parent.name):
+                extra["collection_note"] = "; ".join(x for x in (SEGMENT_CLIP_NOTE, extra.get("collection_note")) if x)
         if structured["unresolved"]:
             extra["annotation_unresolved"] = structured["unresolved"]
             add_issue(extra, "annotation_unresolved", "Some recorded action claims have invalid boundaries or "
@@ -6305,6 +6322,12 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
             if table["issues"]:
                 add_issue(ctx, "metadata_unreadable", f"{path} has unresolved {column} table claims; "
                           "every recorded field and conflicting row is retained as uploader notes.", source=str(path))
+    # a code that holds one value over every row of the episode and names the episode's own task (task_index read
+    # through tasks.jsonl, a constant language column) is that task, given once as the instruction, never a step of
+    # it; its table claims stay under annotation_tables
+    task = " ".join(str(ctx.get("instruction") or "").split()).casefold()
+    spans = [step for step in spans if not (task and step.get("row_start") == 0 and step.get("row_end") == len(df) - 1
+                                            and " ".join(str(step.get("label") or "").split()).casefold() == task)]
     ctx["annotation_subtasks"] = ctx.get("annotation_subtasks", []) + spans
     ctx["annotation_unresolved"] = unresolved
     ctx["annotation_tables"] = table_notes
@@ -11054,15 +11077,17 @@ def _title_of(x):
     return m.group(1) if m else (x.strip() if isinstance(x, str) else x)
 
 
-def mcap_task_texts(texts: dict, counts: dict, t0: int | None, end_s: float | None = None) -> tuple[str | None, dict]:
-    """(instruction, uploader notes) from an MCAP's text topics, each a list of its messages in time order as
-    (log time ns, text), as add_text keeps them. The instruction is the one message of a topic named for the task
-    (/task, /instruction) before any sub-topic (/task/subtask, /task/health); MicroAGI's /task titles the fragment
-    and its /task/subtask names each step, so the first step is never the task. A task topic whose text changes is
-    the instruction whole, as a timeline, with none of its texts chosen over the others. Any other topic with several
-    messages goes to the notes as a timeline on the episode's clock (the vendor's steps, claims to check). A topic
-    other than a step topic with more than TEXT_MSGS_MAX distinct messages (a heartbeat) keeps only its first, with
-    the count."""
+def mcap_task_texts(texts: dict, counts: dict, t0: int | None,
+                    end_s: float | None = None) -> tuple[str | None, dict, list]:
+    """(instruction, uploader notes, timed task prompts) from an MCAP's text topics, each a list of its messages in
+    time order as (log time ns, text), as add_text keeps them. The instruction is the one message of a topic named for
+    the task (/task, /instruction) before any sub-topic (/task/subtask, /task/health); MicroAGI's /task titles the
+    fragment and its /task/subtask names each step, so the first step is never the task. A task topic whose text
+    changes names the task of each stretch, not one task for the recording: its texts are timed task prompts
+    (mcap_timed_prompts), each from when it was sent until the next, and the recording has no instruction. Any other
+    topic with several messages goes to the notes as a timeline on the episode's clock (the vendor's steps, claims to
+    check). A topic other than a step topic with more than TEXT_MSGS_MAX distinct messages (a heartbeat) keeps only
+    its first, with the count."""
     def named(t):
         return bool(TASK_TOPIC_NAME.fullmatch(t.rstrip("/").rsplit("/", 1)[-1]))
     # a timeline of steps (several messages on a sub-topic) is never read as the task: with no task topic the
@@ -11083,17 +11108,12 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None, end_s: float | No
         else:
             notes[t] = [f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in seq]
     if it is None:
-        return None, notes
+        return None, notes, []
     if len(texts[it]) > 1:
-        # a task topic whose text changes is given whole, each text with the time it was sent, and no one of them is
-        # chosen: MicroAGI sends a placeholder ("The agent is idle") at the start of some fragments, the title after
-        # it, and a new title when the work changes
-        sequence = texts[it]
-        if end_s is not None:
-            before = [row for row in sequence if row[0] <= base]
-            sequence = before[-1:] + [row for row in sequence if base < row[0] < base + end_s * 1e9]
-        return ("; ".join(f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in sequence)
-                or None), notes
+        # a task topic whose text changes names the task of each stretch, so each text is a timed task prompt, none
+        # chosen over the others: MicroAGI sends a placeholder ("The agent is idle") at the start of some fragments,
+        # the title after it, and a new title when the work changes
+        return None, notes, [{**step, "column": it} for step in mcap_timed_prompts(texts[it], base, end_s)]
     instr = texts[it][0][1]
     # a task message in protobuf text form (MicroAGI's /task: title, success, tools, confidence) gives its title as
     # the instruction; the rest of the record stays with the uploader's notes as claims to check
@@ -11101,7 +11121,17 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None, end_s: float | No
     if title:
         notes["task record"] = instr
         instr = title.group(1)
-    return instr.strip(), notes
+    return instr.strip(), notes, []
+
+
+def mcap_timed_prompts(sequence: list, base: int, end_s: float | None) -> list:
+    """[{t0, t1, label}] of one text topic's messages (log time ns, text) on the episode's clock: each lasts until the
+    next one begins and the last until the episode ends; one sent before the footage starts holds from its start."""
+    starts = [(ts - base) / 1e9 for ts, _ in sequence]
+    ends = starts[1:] + [max(starts[-1], end_s if end_s is not None else starts[-1])]
+    intervals = [(max(0., a), min(end_s, b) if end_s is not None else b, x)
+                 for a, b, (_, x) in zip(starts, ends, sequence) if b > 0 and (end_s is None or a < end_s)]
+    return [{"t0": round(a, 3), "t1": round(b, 3), "label": _title_of(x)} for a, b, x in intervals if b >= a]
 
 
 def mcap_step_subtasks(texts: dict, t0: int | None, end_s: float | None) -> tuple[str | None, list]:
@@ -11111,13 +11141,7 @@ def mcap_step_subtasks(texts: dict, t0: int | None, end_s: float | None) -> tupl
     t = next((t for t in texts if _is_step(t) and texts[t] and all(isinstance(x, str) for _, x in texts[t])), None)
     if t is None:
         return None, []
-    base = t0 if t0 is not None else texts[t][0][0]
-    starts = [(ts - base) / 1e9 for ts, _ in texts[t]]
-    ends = starts[1:] + [max(starts[-1], end_s if end_s is not None else starts[-1])]
-    intervals = [(max(0., a), min(end_s, b) if end_s is not None else b, x)
-                 for a, b, (_, x) in zip(starts, ends, texts[t]) if b > 0 and (end_s is None or a < end_s)]
-    return t, [{"t0": round(a, 3), "t1": round(b, 3), "label": _title_of(x)}
-               for a, b, x in intervals if b >= a]
+    return t, mcap_timed_prompts(texts[t], t0 if t0 is not None else texts[t][0][0], end_s)
 
 
 def mcap_clock_record(decoded, channel, message, capture):
@@ -11729,7 +11753,8 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                 # A constant task has no timed claim. Keep its instruction without assigning its source clock to footage.
                 if len(sequence) == 1:
                     placed_texts[topic] = sequence
-        instr, notes = mcap_task_texts(placed_texts, n_text, anchor_origin_ns, (end_ns - anchor_origin_ns) / 1e9)
+        instr, notes, task_prompts = mcap_task_texts(placed_texts, n_text, anchor_origin_ns,
+                                                     (end_ns - anchor_origin_ns) / 1e9)
         if unplaced_texts:
             extra.setdefault('recorded_metadata', {})['unaligned_text_channels'] = unplaced_texts
             for topic, records in unplaced_texts.items():
@@ -11764,15 +11789,19 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
                           'the footage. Intersecting intervals are clipped; all original text remains publisher context.', signal=topic)
         if instr:
             extra.update(instruction=instr, instruction_note="This instruction is the task text stored in the MCAP.")
-        if rig == "ego_head":
-            # a head camera's timed steps are the dataset's subtasks (claims to check, as Gen-HumanEgo's are), shown to
-            # the model once, as its annotation, not again among the notes
-            end_s = (end_ns - anchor_origin_ns) / 1e9
-            st, subs = mcap_step_subtasks({topic: sequence for topic, sequence in placed_texts.items()
-                                            if topic not in unplaced_texts}, anchor_origin_ns, end_s)
-            if subs:
-                notes.pop(st, None)
-                extra["annotation_subtasks"] = subs
+        # the recording's timed steps, on any rig, are the dataset's own per-task prompts (claims to check, as
+        # Gen-HumanEgo's are), shown to the model once, as its timed steps, not again among the notes; a task topic
+        # whose text changes gives the task of each stretch beside them, each prompt named with its topic
+        end_s = (end_ns - anchor_origin_ns) / 1e9
+        st, subs = mcap_step_subtasks({topic: sequence for topic, sequence in placed_texts.items()
+                                        if topic not in unplaced_texts}, anchor_origin_ns, end_s)
+        if subs:
+            notes.pop(st, None)
+            if task_prompts:
+                subs = [{**step, "column": st} for step in subs]
+        prompts = sorted(task_prompts + subs, key=lambda step: (step["t0"], step.get("column") != st))
+        if prompts:
+            extra["annotation_subtasks"] = prompts
         if notes:
             set_uploader_notes(extra, {t: x for t, x in notes.items()})
     if t0 is not None:

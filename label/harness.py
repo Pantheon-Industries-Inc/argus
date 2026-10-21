@@ -475,6 +475,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         # tasks (label_schema), so the recording's completion is derived from them (read_reply)
         "prompt_mode": "given" if req["given_prompt"] else "inferred",
         "label_schema": LABEL_SCHEMA,
+        "task_prompts": req["task_prompts"],
         "task_label": req["task_label"],
         "sampling": req["sampling"],
         "arm_still_spans": req["still_spans"],
@@ -1188,8 +1189,13 @@ def read_reply(text: str, request: dict) -> tuple[dict, bool]:
     the request fields it is built from."""
     labels, ok = parse_response(text)
     if ok and request.get('label_schema') == LABEL_SCHEMA:
-        # a reply asked for a list of tasks: the recording's completion is derived from them, never the reply's own
-        labels = derive_completion(labels)
+        # a reply asked for a list of tasks: the recording's completion is the reply's own, against the instruction,
+        # when the request gave one to a robot rig, and otherwise derived from the tasks
+        selected = request.get('annotation_policy') if isinstance(request.get('annotation_policy'), dict) else {}
+        given = request.get('given_prompt')
+        labels = derive_completion(labels, rig=selected.get('rig') or 'teleop_arms',
+                                   instruction=isinstance(given, str) and bool(given.strip()),
+                                   task_prompts=request.get('task_prompts') or 0)
     if ok:
         from label.completeness import annotation_gaps
         gaps = annotation_gaps(labels, request)

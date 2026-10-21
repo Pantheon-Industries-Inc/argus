@@ -79,12 +79,11 @@ def _texts(p: Path) -> dict:
 
 
 def task_note(root: Path, df: pd.DataFrame, fps: float) -> str:
-    hp = timed_parts(df["human_role_subtask_index"].to_numpy(), _texts(root / "meta" / "human_subtasks.jsonl"), fps)
-    rp = timed_parts(df["low_level_task_index"].to_numpy(), _texts(root / "meta" / "subtasks.jsonl"), fps)
-    return (ROLE_NOTE + "\nThe person's part in this episode, with the times the operators marked by foot pedal:\n  "
-            + ("\n  ".join(hp) or "none recorded")
-            + "\nThe robot's part, marked the same way (claims to check against the video, like the instruction):\n  "
-            + ("\n  ".join(rp) or "none recorded"))
+    """The person's role, and which of the dataset's timed steps are whose. The steps themselves reach the model once,
+    as the dataset's timed steps the LeRobot reader takes from these columns (formats.lerobot_annotations), each named
+    with its column; listing them here too showed every step twice."""
+    return (ROLE_NOTE + "\nThe operators marked both parts by foot pedal: the timed steps from human_role_subtask_index "
+            "are the person's part, and those from low_level_task_index the robot's.")
 
 
 def download_meta(raw: Path) -> Path:

@@ -27,13 +27,10 @@ from prepare import formats
 
 
 REPO = "inclusionAI/OpenAoE-2000h"
-COLLECTION_NOTE = ("crowd contributors record their own activities on a phone worn at the head; each clip is one "
-                   "numbered segment of a longer recording, so a clip can start or end in the middle of an "
-                   "activity, which is how the dataset is packaged")
-ANNOTATION_NOTE = ("these action segments were generated automatically on a whole-second grid, many as fixed "
-                   "5-second windows, so a boundary a second or two from the visible change is that resolution. A "
-                   "wrong action, object or hand, or segments that stop following what the hands do, is what would "
-                   "mislead someone training on them")
+# what its clips and its action segments are, said once with the generic reader that reads the same files in an
+# upload (prepare/formats.py)
+COLLECTION_NOTE = formats.SEGMENT_CLIP_NOTE
+ANNOTATION_NOTE = formats.ATOMIC_ACTION_NOTE
 CLIP_FILES = ("raw_video.mp4", "video_info.json", "ego_annotation/ego_action_annotation.json")
 
 

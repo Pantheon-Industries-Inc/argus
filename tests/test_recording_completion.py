@@ -1,5 +1,6 @@
-"""A recording's completion is derived from its tasks (board/label_projection.py recording_completion), and every
-reader of an outcome reads the recording's verdict first and its tasks only when there is none (verdict_or_tasks)."""
+"""A recording's completion in the tasks format follows what its dataset gives (board/label_projection.py
+derive_completion): the reply's own completion against an instruction, the one task's verdict, or none. Every reader of
+an outcome reads the recording's verdict first and its tasks only when there is none (verdict_or_tasks)."""
 import copy
 from pathlib import Path
 
@@ -18,7 +19,11 @@ def test_one_task_is_the_recordings_verdict():
     assert c == {'task_completed': 'success_then_undone', 'success_predicate': 'three cups stacked',
                  'completed_at_s': None, 'goal_reached_at_s': 7.5, 'undone_at_s': 8.5,
                  'undone_by': 'the stack is taken apart', 'reason': 'reset', 'judged_against': 'instruction',
-                 'from_tasks': 1}
+                 'from_tasks': 1, 'basis': 'one_task'}
+    # an outcome that is no outcome word is no verdict, so the task list is still shown
+    odd = recording_completion([{**TASK, 'outcome': 'done'}])
+    assert odd['task_completed'] is None and odd['basis'] == 'tasks' and "'done'" in odd['reason']
+    assert verdict_or_tasks({'tasks': [TASK], 'completion': odd})[0] is None
 
 
 def test_no_task_and_several_tasks_have_no_verdict():
@@ -26,7 +31,10 @@ def test_no_task_and_several_tasks_have_no_verdict():
     assert none['task_completed'] is None and none['from_tasks'] == 0 and none['reason'] == 'no task observed'
     several = recording_completion([TASK, {**TASK, 'outcome': 'failure'}, {**TASK, 'outcome': 'success'}])
     assert several['from_tasks'] == 3 and several['reason'] == "3 tasks; each task's outcome is under tasks"
-    assert all(several[k] is None for k in several if k not in ('from_tasks', 'reason'))
+    assert all(several[k] is None for k in several if k not in ('from_tasks', 'reason', 'basis'))
+    # the dataset's own timed steps and no instruction: each task against its step, and no recording verdict
+    steps = recording_completion([TASK], task_prompts=2)
+    assert steps['task_completed'] is None and steps['basis'] == 'task_prompts' and steps['from_tasks'] == 1
     # a reply with no tasks list, or rows that are not tasks, counts no task
     assert recording_completion(None)['from_tasks'] == 0
     assert recording_completion(['x', 3])['from_tasks'] == 0
@@ -37,18 +45,41 @@ def test_one_task_open_at_a_cut_is_no_verdict():
     assert c['task_completed'] is None and c['from_tasks'] == 1 and 'cut' in c['reason']
 
 
-def test_a_reply_supplied_completion_is_replaced_and_noted():
+def test_a_reply_supplied_completion_is_replaced_and_noted_where_none_was_asked():
+    robot = dict(rig='teleop_arms', instruction=False)
     labels = {'tasks': [TASK], 'completion': {'task_completed': 'failure'}}
     before = copy.deepcopy(labels)
-    out = derive_completion(labels)
+    out = derive_completion(labels, **robot)
     assert labels == before, 'the reply is not changed in place'
     assert out['completion']['task_completed'] == 'success_then_undone'
     assert any(v.startswith('completion:') for v in out['_schema_violations'])
-    clean = derive_completion({'tasks': [TASK, TASK]})
+    clean = derive_completion({'tasks': [TASK, TASK]}, **robot)
     assert clean['completion']['from_tasks'] == 2 and '_schema_violations' not in clean
     # labels read again keep their derived completion and gain no note
-    assert derive_completion(clean) == clean and derive_completion(out)['_schema_violations'] == out['_schema_violations']
+    assert derive_completion(clean, **robot) == clean
+    assert derive_completion(out, **robot)['_schema_violations'] == out['_schema_violations']
     assert LABEL_SCHEMA == 'tasks'
+
+
+def test_with_an_instruction_the_recording_is_judged_by_its_own_completion_never_by_its_tasks():
+    """A robot recording with an instruction asks for the completion itself, as the episode prompt did: an asked task
+    that fails followed by an unasked task that succeeds is a failure, never "no verdict"."""
+    asked = {**TASK, 'outcome': 'failure', 'judged_against': 'instruction'}
+    extra = {**TASK, 'outcome': 'success', 'judged_against': 'own_end_state'}
+    labels = {'tasks': [asked, extra], 'completion': {'task_completed': 'failure', 'reason': 'the row is never made'}}
+    out = derive_completion(labels, rig='handheld_gripper', instruction=True, task_prompts=3)
+    assert out['completion'] == {**labels['completion'], 'basis': 'instruction'} and '_schema_violations' not in out
+    assert verdict_or_tasks(out) == ('failure', [])
+
+
+def test_the_head_camera_is_read_as_it_always_was_except_one_task():
+    """The head camera's schema has no completion: one task (and no timed steps) is the clip's verdict, and any other
+    clip keeps the reply as it is, with no completion added, so it is read task by task exactly as before."""
+    one = derive_completion({'tasks': [TASK]}, rig='ego_head', instruction=True)
+    assert one['completion']['task_completed'] == 'success_then_undone'
+    for tasks, prompts in (([TASK, TASK], 0), ([], 0), ([TASK], 4)):
+        labels = {'tasks': tasks}
+        assert derive_completion(labels, rig='ego_head', instruction=False, task_prompts=prompts) == labels
 
 
 def test_verdict_first_then_tasks():
@@ -126,12 +157,13 @@ def test_goal_frames_rail_and_compare_read_the_verdict_first():
     rail = serve._rail_record(Path('episode_x.json'), one)
     assert rail['task_completed'] == 'success' and rail['n_tasks'] == 0
     assert metrics.measure(one, 'ds')['outcome'] == 'success' and 'tasks' not in metrics.measure(one, 'ds')
-    # several tasks: each task's goal frame, the frame a task undone later was reached, and the share done
+    # several tasks: the frame each task is done at, the only task goal frame the page shows (none for a task undone
+    # later), and the share done
     tasks = [{**one['tasks'][0], 'end_s': 5, 'completed_at_s': 4.0},
              {**one['tasks'][0], 'start_s': 5, 'outcome': 'success_then_undone', 'completed_at_s': None,
               'goal_reached_at_s': 8.0, 'undone_at_s': 9.0}]
     several = {**one, 'tasks': tasks, 'completion': recording_completion(tasks)}
-    assert static.goal_times(several) == [4.0, 8.0]
+    assert static.goal_times(several) == [4.0]
     rail = serve._rail_record(Path('episode_x.json'), several)
     assert rail['task_completed'] is None and (rail['n_tasks'], rail['n_task_success']) == (2, 1)
     m = metrics.measure(several, 'ds')
