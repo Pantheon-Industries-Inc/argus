@@ -4199,7 +4199,8 @@ def test_lerobot_task_tables_are_read_while_foreign_notes_stay_listed(monkeypatc
                 assert isinstance(caught.value, RuntimeError)
                 assert isinstance(caught.value.__cause__, urllib.error.URLError)
             if table:
-                span = ctx['annotation_subtasks'][0]
+                # the task code over every row names the episode's task: kept as a task claim, never a step
+                span = (ctx.get('annotation_task_claims') or ctx['annotation_subtasks'])[0]
                 assert span['values'] == [0] * 10
                 assert span['raw_times'] == (np.arange(10) / 30).tolist()
             else:

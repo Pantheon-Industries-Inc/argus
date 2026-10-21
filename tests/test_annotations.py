@@ -468,8 +468,11 @@ def test_constant_row_language_preserves_declared_instruction_priority(tmp_path,
     assert not report['failed'], report
     ctx = json.loads((output / report['episodes'][0]['episode_id'] / 'context.json').read_text())
     assert ctx['instruction'] == (declared or 'recorded language')
-    language = [s for s in ctx['annotation_subtasks'] if s['column'] == 'language_instruction']
+    # constant language over every row that is the episode's task is no step of it; with a declared goal it is
+    language = [s for s in ctx['annotation_task_claims' if not declared else 'annotation_subtasks']
+                if s['column'] == 'language_instruction']
     assert language[0]['value'] == 'recorded language' and language[0]['source'] == str(path)
+    assert not [s for s in ctx.get('annotation_subtasks', []) if s.get('label') == ctx['instruction']]
     assert path.read_bytes() == raw
 
 

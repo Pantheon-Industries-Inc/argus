@@ -69,7 +69,10 @@ def test_rich_owned_metadata_and_530_frame_annotations_keep_distinct_sources(tmp
             ('task_index', 'tasks.jsonl', [(0, 529)]),
             ('low_level_task_index', 'subtasks.jsonl', [(0, 172), (173, 280), (281, 529)]),
             ('human_role_subtask_index', 'human_subtasks.jsonl', [(0, 128), (129, 241), (242, 366), (367, 529)])]:
-        spans = [span for span in ctx['annotation_subtasks'] if span['column'] == column]
+        # the task code over every row names the episode's task, given once as its instruction, so its recorded span
+        # is kept as a task claim and never shown as a step (prepare/formats.py lerobot_annotations)
+        spans = [span for span in ctx['annotation_subtasks' if column != 'task_index' else 'annotation_task_claims']
+                 if span['column'] == column]
         assert [(span['row_start'], span['row_end']) for span in spans] == ranges
         assert [span['label'] for span in spans] == [row['task'] for row in recording['tables'][name]]
         assert all(span['source'] == str(root / 'meta' / name) for span in spans)

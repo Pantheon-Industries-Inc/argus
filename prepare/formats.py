@@ -6324,10 +6324,13 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
                           "every recorded field and conflicting row is retained as uploader notes.", source=str(path))
     # a code that holds one value over every row of the episode and names the episode's own task (task_index read
     # through tasks.jsonl, a constant language column) is that task, given once as the instruction, never a step of
-    # it; its table claims stay under annotation_tables
+    # it; the recorded span, with its source and rows, stays under annotation_task_claims
     task = " ".join(str(ctx.get("instruction") or "").split()).casefold()
-    spans = [step for step in spans if not (task and step.get("row_start") == 0 and step.get("row_end") == len(df) - 1
-                                            and " ".join(str(step.get("label") or "").split()).casefold() == task)]
+    whole = [step for step in spans if task and step.get("row_start") == 0 and step.get("row_end") == len(df) - 1
+             and " ".join(str(step.get("label") or "").split()).casefold() == task]
+    if whole:
+        spans = [step for step in spans if step not in whole]
+        ctx["annotation_task_claims"] = ctx.get("annotation_task_claims", []) + whole
     ctx["annotation_subtasks"] = ctx.get("annotation_subtasks", []) + spans
     ctx["annotation_unresolved"] = unresolved
     ctx["annotation_tables"] = table_notes
