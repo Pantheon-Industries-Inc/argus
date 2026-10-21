@@ -6144,7 +6144,8 @@ function depthRoiFrames(label, view, sourceRows = false) {
     .flatMap(({receipt: r, origin}) => (Array.isArray(r.frames) ? r.frames : [])
       .filter(f => f && Array.isArray(f.source_shape) && f.source_shape.length === 2
       && (sourceRows ? (r.source_frames || []).some(source => source.row === f.row
-        && Number.isInteger(source.source_frame) && source.source_frame >= 0) : timeOf(f.time_s) != null)
+        && Number.isInteger(source.source_frame) && source.source_frame >= 0)
+        : f.time_s != null && f.time_s !== '' && typeof f.time_s !== 'boolean' && Number.isFinite(+f.time_s))
       && Array.isArray(f.regions) && f.regions.length)
       .map(f => sourceRows ? {...f, source_sequence: true, receipt: r.id,
         source_frame: r.source_frames.find(source => source.row === f.row).source_frame}
