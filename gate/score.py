@@ -261,11 +261,24 @@ def score(runs: list[Path]) -> dict:
                 p["cases"] += 1
                 p["met"] += met
                 met or p["failures"].append(f"{name}: {'; '.join(why)}")
-    # an episode of a scored rig with no output at all failed before the model answered
+    # what the runs were asked: the episodes in each run's slice (run.json "slice"), when every slice is still there to
+    # read; a run of part of a rig (a floor rerun, a repeat of one case) never asked the rest
+    slices = []
+    for run, _ in selected_runs:
+        rj = Path(run) / "run.json"
+        folder = json.loads(rj.read_text()).get("slice") if rj.exists() else None
+        slices.append(Path(folder) if folder else None)
+    asked = ({p.name for folder in slices for p in folder.iterdir() if p.is_dir()}
+             if slices and all(folder is not None and folder.is_dir() for folder in slices) else None)
+    # an episode of a scored rig that a run was asked and that has no output at all failed before the model answered;
+    # one no scored run was asked is listed as such and counts nowhere
     for rig in list(per):
         for x in sel[rig]:
             if x["name"] not in seen:
                 p = per[rig]
+                if asked is not None and x["name"] not in asked:
+                    p.setdefault("not_asked", []).append(x["name"])
+                    continue
                 p["asked"] += 1
                 p["failures"].append(f"{x['name']}: no output (the harness failed before the model call)")
                 if case_for(x["name"], cases):
@@ -319,6 +332,8 @@ def main() -> int:
         for ds, x in p["cost_by_dataset"].items():
             rate = f"${x['billed_per_hour']}/h billed" if x['billed_per_hour'] is not None else 'cost rate unavailable'
             print(f"    {ds:15s} {x['episodes']:3d} episodes {x['minutes']:6.1f} min  {rate}")
+        if p.get("not_asked"):
+            print(f"    not in these runs: {len(p['not_asked'])} of the rig's episodes, left out of every count")
         for x in p["failures"]:
             print(f"    FAIL {x}")
         for x in p["flagged"]:

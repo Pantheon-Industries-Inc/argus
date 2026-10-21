@@ -120,3 +120,31 @@ def test_scoring_unrelated_run_does_not_report_empty_success(tmp_path, monkeypat
     with pytest.raises(SystemExit) as error:
         score.main()
     assert error.value.code == 2
+
+
+def _asked_run(tmp_path, names, labelled):
+    """A run whose slice holds the episodes NAMES, of which LABELLED have a parsed label."""
+    slice_dir = tmp_path / 'slice'
+    for name in names:
+        (slice_dir / name).mkdir(parents=True)
+        (slice_dir / name / 'context.json').write_text('{"duration_s": 1}')
+    run = tmp_path / 'run'
+    (run / 'out').mkdir(parents=True)
+    (run / 'run.json').write_text(json.dumps({'dataset': 'gate_teleop', 'slice': str(slice_dir)}))
+    for name in labelled:
+        (run / 'out' / f'{name}.json').write_text(json.dumps({
+            'parse_ok': True, 'episode_dir': str(slice_dir / name),
+            'labels': {'tasks': [{'task': 'stack', 'outcome': 'success'}]}}))
+    return run
+
+
+def test_an_episode_no_scored_run_was_asked_is_listed_as_such_never_as_a_harness_failure(tmp_path, monkeypatch):
+    # a floor rerun of part of a rig: its slice held episode_a and episode_b, and the rig also has episode_c
+    monkeypatch.setattr(score, 'load_selection', lambda: {'teleop': [
+        {'name': n, 'role': 'case'} for n in ('episode_a', 'episode_b', 'episode_c')]})
+    monkeypatch.setattr(score, 'load_cases', lambda: {})
+    result = score.score([_asked_run(tmp_path, ['episode_a', 'episode_b'], ['episode_a'])])['teleop']
+    assert result['asked'] == 2
+    assert 'episode_b: no output (the harness failed before the model call)' in result['failures']
+    assert not any(f.startswith('episode_c') for f in result['failures'])
+    assert result['not_asked'] == ['episode_c']
