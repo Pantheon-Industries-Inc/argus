@@ -175,5 +175,7 @@
  "tests/test_upload_sources.py": 1.6,
  "tests/test_video_damage.py": 0.1,
  "tests/test_worker_deaths.py": 2.6,
- "tests/test_zip_recovery.py": 3.0
+ "tests/test_zip_recovery.py": 3.0,
+ "tests/test_given_instruction_banner.py": 0.6,
+ "tests/test_scrub_keeps_overlays.py": 0.2
 }
