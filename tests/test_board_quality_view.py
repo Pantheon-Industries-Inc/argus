@@ -175,7 +175,7 @@ render(4.5);   // the caption is on the contact, so no score beside it
 assert.strictEqual(chipEl.on, false);
 render(5.2);   // the subgoal came after the contact, so it replaced it at once: the caption is on Subgoal 1
 assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v">9</span>', chipEl.innerHTML);
-render(7.2);   // still within the subgoal's 2.5s
+render(6.4);   // still within the subgoal's 1.5s
 assert(chipEl.on && chipEl.innerHTML === '<span class="sc-k">Subgoal 1</span><span class="sc-v">9</span>', chipEl.innerHTML);
 render(20);
 assert.strictEqual(chipEl.on, false);

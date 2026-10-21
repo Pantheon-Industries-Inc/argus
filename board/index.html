@@ -2409,7 +2409,7 @@ function fmtT(t) { return Number.isFinite(t) ? t.toFixed(1) + 's' : '-'; }
 // in its toast keeps one clock: it shows from FLAG_LEAD_S before its moment until the next later moment of the same
 // overlay, for at most FLAG_HOLD_S, so the next one replaces it and an earlier flag never outlasts or hides a later
 // one. Moments at the same instant show together.
-const FLAG_LEAD_S = 0.3, FLAG_HOLD_S = 2.5;
+const FLAG_LEAD_S = 0.3, FLAG_HOLD_S = 1.5;
 function flagWindows(items) {
   const sorted = items.filter(x => x && Number.isFinite(Number(x.t_s))).slice()
     .sort((a, b) => a.t_s - b.t_s);
