@@ -321,7 +321,7 @@ TASK_FIELDS = """  "tasks": [
      "objects": ["<the objects this task acts on>"],
      "judged_against": "subtask" | "instruction" | "own_end_state",
      "subtask": <the number of the dataset's timed step it is judged against, or null>,
-     "success_predicate": "<the COMPLETE terminal state of what it is judged against (the timed step, the instruction, for one repeat of a cyclical instruction that repeat's, or the end state its own actions converge on): ALL sub-conditions that must hold for it to be done, e.g. 'all hardware sorted into compartments AND the lid is closed AND both clasps are latched', not just the salient one, but do not pad it with trivia you cannot judge>",
+     "success_predicate": "<the COMPLETE terminal state of what it is judged against (the timed step, the instruction, for one repeat of a cyclical instruction that repeat's, or the end state of what it evidently set out to do): ALL sub-conditions that must hold for it to be done, e.g. 'all hardware sorted into compartments AND the lid is closed AND both clasps are latched', not just the salient one, but do not pad it with trivia you cannot judge>",
      "outcome": "success" | "success_then_undone" | "failure" | "partial" | "unclear",
      "completed_at_s": <float or null>,
      "goal_reached_at_s": <float or null>,
@@ -1078,8 +1078,10 @@ NO_INSTRUCTION_RULES = """
 ABOUT THE TASKS. This episode comes with no instruction, so each task that no timed step of the dataset covers (with
 no steps, every task) is named and judged on its own end state. Name each as the most specific end state the
 demonstrator evidently worked toward (the blocks in a row, a tower, the cloth folded in half, the cup in the bin),
-read from where their actions converge, never as a description that any motion would satisfy (moving, repositioning
-or rearranging the objects). Its success_predicate states that end state. When that end state was reached and then
+read from what their actions were evidently trying to achieve and not from how far they got, never as a description
+that any motion would satisfy (moving, repositioning or rearranging the objects). Its success_predicate states that
+end state, and whatever the work was evidently meant to cover but did not is a shortfall in the outcome, not something
+outside the task. When that end state was reached and then
 lost before the recording moved on to other work, the outcome is success_then_undone. When the actions fit no single
 end state, name the one that fits best and say in the task's note what leaves it uncertain.
 """
@@ -1094,9 +1096,11 @@ def no_instruction_rules(r: str) -> str:
     return ("""
 ABOUT THE TASKS. This clip comes with no annotated goal, so the end state of each of its tasks is yours to infer. Name
 each as the most specific end state the person evidently worked toward (the blocks in a row, a tower, the cloth folded
-in half, the cup in the bin), read from where their actions converge, never as a description that any motion would
-satisfy (moving, repositioning or rearranging the objects, or the work coming to a stop). Each task's
-success_predicate states that end state. When the actions fit no single end state, name the one that fits best and
+in half, the cup in the bin), read from what their actions were evidently trying to achieve and not from how far they
+got, never as a description that any motion would satisfy (moving, repositioning or rearranging the objects, or the
+work coming to a stop). Each task's success_predicate states that end state, and whatever the work was evidently meant
+to cover but did not is a shortfall in the outcome, not something outside the task. When the actions fit no single end
+state, name the one that fits best and
 say in the task's note what leaves it uncertain.
 """)
 
@@ -1117,8 +1121,8 @@ task.
   subgoals), failed attempts and their retries, recovery from a fumble, regrasps, setup before the work, and
   parking or retreat after it. Stretches with no evident objective (idling, looking around, tidying between tasks)
   belong to no task; tasks need not cover the whole recording.
-- Name each task as the most specific end state its actions converge on, never as a description any motion
-  satisfies (moving, repositioning or rearranging the objects).
+- Name each task as the most specific end state of what it evidently set out to do, never as a description any
+  motion satisfies (moving, repositioning or rearranging the objects).
 - judged_against names the most specific claim the dataset makes about the task's span, and the task's
   success_predicate and outcome are judged against it:
   <<CLAIMS>>
@@ -1136,14 +1140,14 @@ task.
 _CLAIMS = {
     (True, True): ('"subtask" when one of the dataset\'s timed steps covers it (its work falls within the step\'s span\n'
                    '  and is the work the step names; subtask is that step\'s number), else "instruction" when it does the\n'
-                   '  work the instruction asks for or stands in for it, else "own_end_state", the end state its own\n'
-                   '  actions converge on.'),
+                   '  work the instruction asks for or stands in for it, else "own_end_state", the end state of what\n'
+                   '  it evidently set out to do.'),
     (True, False): ('"instruction" for a task that does the work the instruction asks for or stands in for it, and\n'
-                    '  "own_end_state" (the end state its own actions converge on) for every other task; subtask is null.'),
+                    '  "own_end_state" (the end state of what it evidently set out to do) for every other task; subtask is null.'),
     (False, True): ('"subtask" when one of the dataset\'s timed steps covers it (its work falls within the step\'s span\n'
                     '  and is the work the step names; subtask is that step\'s number), else "own_end_state", the end state\n'
-                    '  its own actions converge on.'),
-    (False, False): '"own_end_state" for every task, the end state its own actions converge on; subtask is null.',
+                    '  of what it evidently set out to do.'),
+    (False, False): '"own_end_state" for every task, the end state of what it evidently set out to do; subtask is null.',
 }
 
 
