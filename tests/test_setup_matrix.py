@@ -51,6 +51,7 @@ class Setup:
     items: list = field(default_factory=list)
     part_s: float | None = None     # a request part this long, so a short recording is labelled in parts
     fault: str | None = None        # the offline model fails the second part's annotation: error, cutoff or rejected
+    tasks: int = 2                  # how many tasks the offline model finds in the recording (one, or two)
 
 
 def teleop_lerobot(root: Path) -> Setup:
@@ -276,9 +277,67 @@ def regional_glove(root: Path) -> Setup:
         Item('signal', 'right_hand_landmarks'), Item('signal', 'right_palm_pos'), Item('signal', 'right_wrist_pos')])
 
 
+def text_mcap(path: Path, task: list, steps: list) -> None:
+    """A 4s robot MCAP: a front camera, the task topic's texts and the step topic's, each a list of (seconds, text)
+    on the recorder's clock."""
+    import base64
+    from mcap.writer import Writer
+    from PIL import Image
+    wall = 1_790_000_000
+    with path.open('wb') as target:
+        writer = Writer(target)
+        writer.start()
+        image = writer.register_schema('sensor_msgs/CompressedImage', 'jsonschema', b'{}')
+        text = writer.register_schema('TaskText', 'jsonschema', b'{}')
+        camera = writer.register_channel('/camera/front/compressed', 'json', image)
+        for k in range(121):
+            png = io.BytesIO()
+            Image.new('RGB', (32, 24), ((7 * k) % 256, 80, 130)).save(png, 'PNG')
+            body = json.dumps({'format': 'png', 'data': base64.b64encode(png.getvalue()).decode()}).encode()
+            writer.add_message(camera, round((wall + k / 30) * 1e9), body, 0)
+        for topic, rows in (('/task', task), ('/task/subtask', steps)):
+            channel = writer.register_channel(topic, 'json', text)
+            for at, label in rows:
+                writer.add_message(channel, round((wall + at) * 1e9), json.dumps({'data': label}).encode(), 0)
+        writer.finish()
+
+
+def steps_mcap(root: Path) -> Setup:
+    """Per-task prompts only: a robot MCAP whose task topic changes as the work does, beside its step topic, so the
+    dataset times its own prompts and gives the recording no instruction."""
+    data = root / 'steps_mcap'
+    data.mkdir(parents=True)
+    text_mcap(data / 'steps_take.mcap', [(0.0, 'stack the cups'), (2.0, 'wipe the table')],
+              [(0.0, 'pick up a cup'), (1.0, 'place it on the stack'), (2.0, 'wipe')])
+    return Setup('steps_mcap', 'teleop_arms', data, [Item('recording', 'steps_take'),
+                                                     Item('camera', '/camera/front/compressed')])
+
+
+def both_mcap(root: Path) -> Setup:
+    """An instruction and per-task prompts: one task text for the recording, and its timed steps."""
+    data = root / 'both_mcap'
+    data.mkdir(parents=True)
+    text_mcap(data / 'both_take.mcap', [(0.0, 'stack the cups')], [(0.0, 'pick up a cup'), (2.0, 'place it on the stack')])
+    return Setup('both_mcap', 'teleop_arms', data, [Item('recording', 'both_take'),
+                                                    Item('camera', '/camera/front/compressed')])
+
+
+def one_task_mcap(root: Path) -> Setup:
+    """Neither an instruction nor timed steps, and one task: the task's verdict is the recording's."""
+    setup = mcap_arm(root)
+    return Setup('one_task_mcap', setup.rig, setup.data, setup.items, tasks=1)
+
+
+def long_one_task(root: Path) -> Setup:
+    """Neither, one task over a recording labelled in parts: the task is joined across the cuts and its verdict is the
+    recording's."""
+    setup = long_hdf5(root)
+    return Setup('long_one_task', setup.rig, setup.data, setup.items, part_s=setup.part_s, tasks=1)
+
+
 SETUPS = [teleop_lerobot, mcap_arm, umi_gripper, ego_head, hdf5_gloves, depth_mcap, tactile_lerobot,
            plain_video, zipped_mcap, long_hdf5, regional_glove, tactile_device_mcap, part_error, part_cutoff,
-           part_rejected]
+           part_rejected, steps_mcap, both_mcap, one_task_mcap, long_one_task]
 
 
 # ---- the offline model -------------------------------------------------------------------------------------------------
@@ -327,6 +386,7 @@ class OfflineModel:
         self.selected = {}       # an inventory's field ids -> the ids already requested from it
         self.written = 0         # findings and issues written so far, so every tag is unique across the parts
         self.fault = None        # Setup.fault
+        self.tasks = 2           # Setup.tasks
 
     def tag(self, kind: str) -> str:
         self.written += 1
@@ -521,12 +581,26 @@ class OfflineModel:
             reply['camera_observations'] = [{'view': v, 'content': 'scene', 'evidence': f'offline view {v}'}
                                             for v in views]
         if '"tasks": [' in whole:
-            # two tasks, each with its own outcome, so the recording has no single verdict
+            # the first task is judged against the most specific claim the request offers (a timed step, else the
+            # instruction, else its own end state); a second, unasked one against its own end state, so a recording
+            # with an instruction keeps its completion and one without has no single verdict
+            claim = ('subtask' if "ABOUT THE DATASET'S TIMED STEPS" in whole else
+                     'instruction' if "ABOUT THE EPISODE'S INSTRUCTION" in whole else 'own_end_state')
             half = round(end / 2, 3)
+            rows = [(0.0, half, 'success', claim, None), (half, end, 'partial', 'own_end_state', None)]
+            if self.tasks == 1:
+                # one task over the whole footage; in a part of a longer recording it continues across each cut
+                part = re.search(r'This request is part (\d+) of (\d+)', whole)
+                first, last = (part.group(1) == '1', part.group(1) == part.group(2)) if part else (True, True)
+                note = ' '.join([*([] if first else ['Continues the task from the previous part.']),
+                                 *([] if last else ['The clip ends while the task is still under way.'])]) or None
+                rows = [(begin or 0.0, end, 'success' if last else 'partial', claim, note)]
             reply['tasks'] = [{'start_s': a, 'end_s': b, 'task': f'{self.tag("tasks")}: move the object',
-                               'objects': ['object'], 'outcome': outcome, 'success_predicate': 'the object is moved',
-                               'completed_at_s': b if outcome == 'success' else None, 'note': None}
-                              for a, b, outcome in ((0.0, half, 'success'), (half, end, 'partial'))]
+                               'objects': ['object'], 'judged_against': against,
+                               'subtask': 1 if against == 'subtask' else None, 'outcome': outcome,
+                               'success_predicate': 'the object is moved',
+                               'completed_at_s': b if outcome == 'success' else None, 'note': note}
+                              for a, b, outcome, against, note in rows]
         if '"task_completed"' in whole:
             reply['completion'] = {'task_completed': 'success'}
         if '"goal_alignment"' in whole:
@@ -1058,10 +1132,11 @@ def review_case(case) -> dict:
     try:
         setup = globals()[name](root / 'source')
         model = OfflineModel()
-        model.fault = setup.fault
+        model.fault, model.tasks = setup.fault, setup.tasks
         rc = run_review(setup, root / 'job', model, patch)
         return {'rc': rc, 'calls': model.calls, 'losses': losses(setup, root / 'job'),
-                'paths': sorted(paths_reached(root / 'job', model)), 'untruths': request_untruths(root / 'job')}
+                'paths': sorted(paths_reached(root / 'job', model)), 'untruths': request_untruths(root / 'job'),
+                'structure': structure_facts(root / 'job')}
     except BaseException:  # noqa: BLE001 - reported by the case's own test
         return {'error': traceback.format_exc()}
     finally:
@@ -1079,6 +1154,26 @@ def request_untruths(job: Path) -> list:
         ctx = _read(ep_dir / 'context.json') if ep_dir.name else None
         if ctx is not None:
             out += [f'{dry.stem}: {x}' for x in untruths(ctx, record.get('prompt_text') or '')]
+    return out
+
+
+def structure_facts(job: Path) -> dict:
+    """{episode: what its board record, and its export, say about the recording's verdict and its tasks}."""
+    out = {}
+    for path in sorted((job / 'qa').glob('episode_*.json')):
+        board = _read(path) or {}
+        exported = export_line(board, path.name)
+        meta = board.get('_meta') or {}
+        tasks = board.get('tasks') or []
+        out[path.stem] = {
+            'instruction': bool(meta.get('given_prompt')), 'steps': len(board.get('dataset_labels') or []),
+            'schema': meta.get('label_schema'),
+            'verdict': [(c.get('task_completed'), c.get('basis')) for c in (board.get('completion') or {},
+                                                                             exported.get('completion') or {})],
+            'judged': [[(t.get('judged_against'), t.get('subtask')) for t in rows]
+                       for rows in (tasks, exported.get('tasks') or [])],
+            'joined': [len(t.get('joined_from') or []) for t in tasks],
+            'relation': (board.get('goal_alignment') or {}).get('relation')}
     return out
 
 
@@ -1124,14 +1219,45 @@ def test_every_setup_keeps_every_stream_and_citation_through_to_the_export(name,
         pytest.xfail('; '.join(sorted(set(expected.values()))) + ': ' + ' | '.join(found))
 
 
-@pytest.mark.parametrize('name,mode', CASES, ids=[f'{name}-{mode}' for name, mode in CASES])
-def test_every_setups_request_states_only_what_its_recording_establishes(name, mode, reviewed):
+@pytest.mark.parametrize('name', CASES)
+def test_every_setups_request_states_only_what_its_recording_establishes(name, reviewed):
     """No request gives a value of a signal that shares no clock with the cameras at a frame instant, times a contact
     by one, counts a signal on a part that never grasps as a hand's, or names a contact's hand or side without saying
     what establishes it."""
-    result = reviewed[name, mode]
+    result = reviewed[name]
     assert 'error' not in result, result.get('error')
     assert result['untruths'] == [], '\n'.join(result['untruths'])
+
+
+# What each instruction structure gives, on the board and in the export: (instruction, timed steps, the recording's
+# verdict and its basis, what each task is judged against, how many parts each task joins)
+STRUCTURES = {
+    # global only: the completion is the reply's own, against the instruction; the unasked task never changes it
+    'teleop_lerobot': (True, 0, ('success', 'instruction'), [('instruction', None), ('own_end_state', None)], [0, 0]),
+    # per-task only: no verdict; each task against its step, the steps compared with the tasks
+    'steps_mcap': (False, 5, (None, 'task_prompts'), [('subtask', 1), ('own_end_state', None)], [0, 0]),
+    # both: the completion against the instruction, and a task against its step
+    'both_mcap': (True, 2, ('success', 'instruction'), [('subtask', 1), ('own_end_state', None)], [0, 0]),
+    # neither, two tasks: no verdict
+    'mcap_arm': (False, 0, (None, 'tasks'), [('own_end_state', None), ('own_end_state', None)], [0, 0]),
+    # neither, one task: its verdict is the recording's, in one request and across the cuts of a long one
+    'one_task_mcap': (False, 0, ('success', 'one_task'), [('own_end_state', None)], [0]),
+    'long_one_task': (False, 0, ('success', 'one_task'), [('own_end_state', None)], [2]),
+}
+
+
+@pytest.mark.parametrize('name', sorted(STRUCTURES))
+def test_each_instruction_structure_reaches_the_board_and_the_export_with_its_verdict(name, reviewed):
+    result = reviewed[name]
+    assert 'error' not in result, result.get('error')
+    (facts,) = result['structure'].values()
+    instruction, steps, verdict, judged, joined = STRUCTURES[name]
+    assert (facts['instruction'], facts['steps'], facts['schema']) == (instruction, steps, 'tasks'), facts
+    assert facts['verdict'] == [verdict, verdict], facts
+    assert facts['judged'] == [judged, judged], facts
+    assert facts['joined'] == joined, facts
+    # the instruction, or with none the timed steps, is compared with what was observed
+    assert (facts['relation'] == 'aligned') is (instruction or bool(steps)), facts
 
 
 def test_the_corpus_reaches_every_path_it_checks(reviewed):
