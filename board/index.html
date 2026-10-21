@@ -9,6 +9,8 @@
 <style>
 /* ---------- design tokens ---------- */
 :root {
+  /* the band a video player's own controls take at the footage's bottom edge (.video-overlay) */
+  --clear-controls: 70px;
   /* type: Geist and Geist Mono */
   --sans: "Geist", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -642,9 +644,11 @@ aside.left .cam-cell.cam-exo .cam-label { top: calc(var(--fx-top, 0px) + 8px); l
 
 /* on-video subtitle-style overlay - pinned to the bottom of the EXO cell,
    lifted above the native controls bar; shows the currently-active event
-   with a prominent timestamp readout. */
+   with a prominent timestamp readout. Every box drawn over the footage's bottom edge stands --clear-controls above
+   it: the player's own controls (the time readout, the buttons and the scrubber under them) take that band when the
+   video is paused or hovered, and nothing drawn over the footage may cover them. */
 .video-overlay {
-  position: absolute; left: 50%; bottom: calc(var(--fx-bottom, 0px) + 44px);
+  position: absolute; left: 50%; bottom: calc(var(--fx-bottom, 0px) + var(--clear-controls));
   max-width: 90%; min-width: 240px;
   background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
@@ -1849,7 +1853,7 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
    subgoal or the goal reached (the caption's own key-event window), just the scores. It stands on the caption's
    bottom line and as tall as the caption (scoreChipHeight), so the two read as one row */
 .score-chip {
-  position: absolute; left: calc(var(--fx-left, 0px) + 12px); bottom: calc(var(--fx-bottom, 0px) + 44px); z-index: 4;
+  position: absolute; left: calc(var(--fx-left, 0px) + 12px); bottom: calc(var(--fx-bottom, 0px) + var(--clear-controls)); z-index: 4;
   box-sizing: border-box; display: grid; grid-template-columns: auto auto; column-gap: 14px; row-gap: 2px;
   align-items: center; align-content: center;
   padding: 9px 14px; border-radius: var(--r-md); background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.14);
@@ -1859,7 +1863,7 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 }
 .score-chip.active { opacity: 1; transform: translateY(0); }
 /* a caption under the video (narrow screens): the chip keeps its own size in the corner, clear of the controls */
-.score-chip.corner { bottom: calc(var(--fx-bottom, 0px) + 70px); }
+.score-chip.corner { bottom: calc(var(--fx-bottom, 0px) + var(--clear-controls)); }
 /* in the corner of a phone's short footage the chip is compact, so it clears the progress chip above it and the
    controls below it (the layout check measures that no two overlays cover each other) */
 .score-chip.corner { padding: 6px 10px; column-gap: 10px; }
@@ -1867,7 +1871,7 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 .score-chip.corner .sc-v { font-size: 15px; }
 .score-chip.corner .sc-v.of10 .sc-den { margin-top: 2px; padding-top: 2px; font-size: 9px; }
 /* a video too narrow for the chip beside the caption: the chip stands above the caption at its own size */
-.score-chip.above { bottom: calc(var(--fx-bottom, 0px) + 50px + var(--cap-h, 0px)); height: auto !important; }
+.score-chip.above { bottom: calc(var(--fx-bottom, 0px) + var(--clear-controls) + 6px + var(--cap-h, 0px)); height: auto !important; }
 .score-chip .sc-k { font-size: 12.5px; color: rgba(255,255,255,0.72); }
 .score-chip .sc-v { font-family: var(--mono); font-size: 20px; font-weight: 700; color: #f3f2ec; text-align: right; }
 /* out of ten as a stacked fraction: the score over a rule over 10, in the height the chip already has, so the chip is
@@ -7791,7 +7795,8 @@ function renderEp(d, opts) {
     if (vidEl && chip.offsetParent) {
       const below = chip.offsetParent.getBoundingClientRect().bottom - vidEl.getBoundingClientRect().bottom;
       const fx = parseFloat(getComputedStyle(chip).getPropertyValue('--fx-bottom')) || 0;
-      chip.style.bottom = (Math.max(fx, below) + 70) + 'px';
+      const controls = parseFloat(getComputedStyle(chip).getPropertyValue('--clear-controls')) || 70;
+      chip.style.bottom = (Math.max(fx, below) + controls) + 'px';
     }
     if (!on || !exoCell || clearOfTop(chip)) return;
     chip.classList.remove('corner');
@@ -7993,7 +7998,8 @@ function renderEp(d, opts) {
     const anchor = topHud || progOverlay;
     const start = Math.max(imageTop + 8, anchor ? anchor.getBoundingClientRect().bottom + 8 : imageTop + 8);
     const caption = exoCell.querySelector('#video-overlay');
-    const end = Math.min(imageBottom - 44, visible(caption) ? rect(caption).top - 8 : imageBottom - 44);
+    const controls = parseFloat(style.getPropertyValue('--clear-controls')) || 70;
+    const end = Math.min(imageBottom - controls, visible(caption) ? rect(caption).top - 8 : imageBottom - controls);
     const cards = [...stack.querySelectorAll('.sensor-finding-card, .sensor-overlay.active')];
     if (!cards.length) {
       if (band) { band.hidden = true; band.style.height = ''; }
@@ -9191,6 +9197,19 @@ function layoutDefects(folds) {
       if (w > 1 && h > 1) note(overlays[i], 'covers ' + path(overlays[j]), Math.min(w, h),
         (overlays[i].textContent || '').trim().slice(0, 80));
     }
+  }
+  // nor do they cover the player's own controls: a box drawn over a video (placed in the cell that holds it) ends at
+  // least --clear-controls above the bottom edge of the footage the video draws, the band its time readout, buttons
+  // and scrubber take when it is paused or hovered
+  for (const el of overlays) {
+    const cell = el.offsetParent, vid = cell && cell.querySelector(':scope > video');
+    if (!vid || cs(el).position !== 'absolute') continue;
+    const fx = parseFloat(cs(cell).getPropertyValue('--fx-bottom')) || 0;
+    const controls = parseFloat(cs(cell).getPropertyValue('--clear-controls')) || 0;
+    const frameBottom = Math.min(cell.getBoundingClientRect().bottom - fx, vid.getBoundingClientRect().bottom);
+    const r = el.getBoundingClientRect(), over = r.bottom - (frameBottom - controls);
+    if (over > 1 && r.top < frameBottom) note(el, "covers the video player's controls", over,
+      (el.textContent || '').trim().slice(0, 80));
   }
   const sw = document.documentElement.scrollWidth;
   if (sw > vw + 1) note(null, 'page scrolls sideways', sw - vw, '');
