@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socketserver
 import subprocess
+import time
 import sys
 import threading
 import urllib.error
@@ -154,13 +155,18 @@ print(static.src_sig(source))
 
 
 def test_progressing_encode_outlives_stall_timeout_and_stalled_process_is_reaped(tmp_path, monkeypatch):
-    monkeypatch.setattr(serve, '_FOOTAGE_STALL_TIMEOUT', 0.12)
+    # the limit covers a child interpreter's startup on a loaded runner (the time before its first progress counts as a
+    # stall); the encode then progresses every quarter of the limit and runs for twice the limit in all
+    limit = 1.5
+    monkeypatch.setattr(serve, '_FOOTAGE_STALL_TIMEOUT', limit)
     out = tmp_path / 'progress.mp4'
     code = ('import pathlib, sys, time; p=pathlib.Path(sys.argv[-1]); '
-            '[(p.write_bytes(b"x"*(i+1)), print("out_time_us="+str(i+1), flush=True), time.sleep(.035)) '
-            'for i in range(12)]')
+            f'[(p.write_bytes(b"x"*(i+1)), print("out_time_us="+str(i+1), flush=True), time.sleep({limit / 4})) '
+            'for i in range(8)]')
+    started = time.monotonic()
     assert serve._run_footage([sys.executable, '-c', code, str(out)]).returncode == 0
-    assert out.stat().st_size == 12
+    assert out.stat().st_size == 8
+    assert time.monotonic() - started > limit   # it outlived the stall limit because it kept progressing
     pid_file = tmp_path / 'pid'
     code = 'import os, pathlib, sys, time; pathlib.Path(sys.argv[-1]).write_text(str(os.getpid())); time.sleep(10)'
     with pytest.raises(subprocess.TimeoutExpired):
