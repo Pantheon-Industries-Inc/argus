@@ -279,12 +279,14 @@ def test_recorded_and_video_only_instructions_keep_the_same_output_contract(rig,
         assert "state_video_mismatch" in recorded
 
 
-def test_an_episode_without_instruction_gets_the_task_rule_and_head_cameras_never_do():
+def test_an_episode_without_instruction_gets_the_task_rule_and_head_cameras_without_a_goal_do_too():
     for r in ("teleop_arms", "handheld_gripper"):
         without, given = prompts.fixed_instructions(r, has_instruction=False), prompts.fixed_instructions(r)
         assert "ABOUT THE TASKS. This episode comes with no instruction" in without
         assert "ABOUT THE EPISODE'S INSTRUCTION" not in without and "ABOUT THE TASKS." not in given
-    assert "ABOUT THE TASKS." not in prompts.fixed_instructions("ego_head", has_instruction=False)
+    bare_clip = prompts.fixed_instructions("ego_head", has_instruction=False)
+    assert "ABOUT THE TASKS. This clip comes with no annotated goal" in bare_clip
+    assert "ABOUT THE TASKS." not in prompts.fixed_instructions("ego_head")
 
 
 # ---------------------------------------------------------------- resolution routing and contact views

@@ -101,8 +101,8 @@ def test_the_head_camera_has_one_annotation_rule_whatever_the_source_declares(re
     assert 'its tasks are the steps of that goal' not in s and 'independent activities' not in s
     assert 'is not a missing or invented task' in s
     assert 'demonstrator' not in s and 'object between the jaws' not in s
-    # the head camera's variants differ only where the header names a recorded motion
-    assert tasks_text('ego_head', True, recorded) == tasks_text('ego_head', False, recorded)
+    # with an annotated goal the tasks carrying it are judged against it; the end-state rule is for a clip without one
+    assert 'ABOUT THE TASKS.' not in s
 
 
 @pytest.mark.parametrize('rig', RIGS)
@@ -130,3 +130,35 @@ def test_the_in_context_example_is_in_the_format_it_closes(rig):
     for task in labels['tasks']:
         assert set(fields) <= set(task), set(fields) - set(task)
         assert task['judged_against'] in ('instruction', 'own_end_state')
+
+
+@pytest.mark.parametrize('recorded', [True, False])
+def test_the_head_camera_keeps_its_framing_of_several_activities_and_reads_one_task_as_normal(recorded):
+    """Most head-camera recordings are several activities with no single goal, so that framing stays; only its
+    absolutes are softened, so a short clip of one task is an ordinary case."""
+    s = flat(tasks_text('ego_head', False, recorded))
+    for kept in ('There is NO robot and usually NO single overall goal, especially in a longer clip',
+                 'Segment the clip into the distinct activities in `tasks`.',
+                 'tasks is the list of distinct activities, in time order.',
+                 'NOT the whole recording: 0 when they start a sub-task'):
+        assert kept in s, kept
+    assert 'the person may do a sequence of distinct activities.' in s
+    assert 'Do not force one global success/failure or one goal frame when there are several activities.' in s
+    assert 'A short clip that is genuinely one task yields one task, with its own goal frame.' in s
+    assert 'the person does a SEQUENCE' not in s and '(A short atomic clip' not in s
+    assert 'A clip of several tasks has no single episode-level goal frame' in s
+
+
+@pytest.mark.parametrize('recorded', [True, False])
+def test_a_head_camera_clip_with_no_annotated_goal_names_each_task_by_a_specific_end_state(recorded):
+    """The robot rigs' rule for a recording with no instruction holds for every task a head-camera clip infers: its
+    success_predicate is a concrete end state, never a description any motion satisfies or the work stopping. It
+    changes no segmentation: the clip is still cut into its distinct activities."""
+    s = flat(tasks_text('ego_head', False, recorded))
+    rule = flat(prompts.no_instruction_rules('ego_head'))
+    assert s.count(rule) == 1 and rule not in flat(tasks_text('ego_head', True, recorded))
+    assert ('Name each as the most specific end state the person evidently worked toward' in rule
+            and "Each task's success_predicate states that end state" in rule
+            and 'never as a description that any motion would satisfy' in rule and 'the work coming to a stop' in rule)
+    assert 'demonstrator' not in rule and 'episode' not in rule
+    assert 'Segment the clip into the distinct activities in `tasks`.' in s

@@ -488,11 +488,11 @@ Rules:
   a kind of its own (a grasp, a placement), never subgoal_complete.
 - THIS USES THE HUMAN-HAND ANNOTATION PROFILE: describe the person's work with their own
   hands. Determine viewpoint and camera mounting from the supplied evidence. There is NO robot and usually NO
-  single overall goal, especially in a longer clip; the person does a SEQUENCE of
-  distinct activities. "arm"/left/right means the person's LEFT or RIGHT HAND. Do NOT
-  force one global success/failure or one goal frame. Segment the clip into the
-  distinct activities in `tasks`. (A short atomic clip that is genuinely one task
-  simply yields ONE task, with its own goal frame.)
+  single overall goal, especially in a longer clip; the person may do a sequence of
+  distinct activities. "arm"/left/right means the person's LEFT or RIGHT HAND. Do not
+  force one global success/failure or one goal frame when there are several activities.
+  Segment the clip into the distinct activities in `tasks`. A short clip that is genuinely
+  one task yields one task, with its own goal frame.
 - hands_visible is a per-step ground-truth: set it FALSE whenever NEITHER of the
   person's hands is actually in the supplied frame during that step, and TRUE when
   at least one hand (or a clearly hand-held object in the grip) is in shot. In
@@ -533,8 +533,8 @@ Rules:
   task's end-state is never reached and held. goal_reached_at_s is the FIRST frame that task's
   success_predicate held, whether or not it then lasted: for success it equals completed_at_s; for
   success_then_undone it is when the end-state was reached, with undone_at_s the first frame it no
-  longer holds and undone_by what undid it; null for every other outcome. There is deliberately no single
-  episode-level goal frame; each completed task carries its own.
+  longer holds and undone_by what undid it; null for every other outcome. A clip of several tasks has no
+  single episode-level goal frame; each completed task carries its own.
 - each key_event also gets an outcome, judged on the balance of evidence: did that
   specific subevent succeed (the cup landed, the fold held) or fail (dropped, missed,
   slipped). Use unclear only when the evidence genuinely does not show whether it
@@ -993,6 +993,20 @@ the one that fits best and say in the task's note what leaves it uncertain.
 """
 
 
+def no_instruction_rules(r: str) -> str:
+    """NO_INSTRUCTION_RULES in the rig's words. A head-camera clip with no annotated goal gets the same rule for each
+    task it infers: a concrete end state ("the food in the container gathered onto the fork"), never the work
+    stopping. It changes no segmentation; the head camera's schema still decides where its activities begin."""
+    if r != "ego_head":
+        return NO_INSTRUCTION_RULES
+    s = _replace_once(NO_INSTRUCTION_RULES, "This episode comes with no instruction, so its tasks are yours to infer from "
+                      "the whole episode.", "This clip comes with no annotated goal, so the end state of each of its tasks "
+                      "is yours to infer.")
+    s = _replace_once(s, "(moving, repositioning or rearranging the objects).",
+                      "(moving, repositioning or rearranging the objects, or the work coming to a stop).")
+    return s.replace("demonstrator", "person").replace("episode", "clip")
+
+
 # The timeline at the level of action phases: every distinct action, grasp, release, error and recovery is still
 # its own segment.
 LEAN_NOTE = """
@@ -1027,14 +1041,15 @@ def lean(r: str) -> str:
 def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True) -> str:
     """Everything before the episode's own facts: the schema, the data contract, TASK_RULES, then how to use the
     episode's instruction (INSTRUCTION_RULES, or NO_INSTRUCTION_RULES without one) or, for the head camera, the
-    dataset's annotation, and the note on the timeline's granularity. A robot recording setup has up to four variants
-    (instruction present or not, recorded or video only), the head camera two (recorded or video only). Every
-    episode of the same variant shares the cached prefix. recorded False (no recorded state and no other signal,
-    label/episode.py is_recorded) takes out every word about a recorded motion. A saved task mode never changes the
-    text: every recording is a list of tasks."""
+    dataset's annotation (and, with no annotated goal, how to name each task's end state), and the note on the
+    timeline's granularity. Every setup has up to four variants (instruction or annotated goal present or not,
+    recorded or video only). Every episode of the same variant shares the cached prefix. recorded False (no recorded
+    state and no other signal, label/episode.py is_recorded) takes out every word about a recorded motion. A saved
+    task mode never changes the text: every recording is a list of tasks."""
     head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
     if r == "ego_head":
-        return head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + task_rules(r) + EGO_ANNOTATION_RULES + lean(r)
+        return (head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + task_rules(r) + EGO_ANNOTATION_RULES
+                + ("" if has_instruction else no_instruction_rules(r)) + lean(r))
     rules = INSTRUCTION_RULES if has_instruction else NO_INSTRUCTION_RULES
     return (head + what_this_is(r) + schema(r, recorded) + data_contract(r, recorded) + task_rules(r) + rules
             + lean(r))
