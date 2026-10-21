@@ -172,6 +172,7 @@
  "tests/test_timing_truth.py": 1.9,
  "tests/test_tools.py": 0.0,
  "tests/test_touch_depth.py": 7.3,
+ "tests/test_value_names.py": 1.0,
  "tests/test_transform_corpus.py": 21.0,
  "tests/test_trusted_component_validity.py": 0.1,
  "tests/test_unknown_actor_groups.py": 1.3,

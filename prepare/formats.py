@@ -74,7 +74,9 @@ Recorded state is used when it has 7 values per arm or gripper (6 joints plus gr
 arms; x y z roll pitch yaw plus opening for handheld grippers). When the dataset names the values, the names settle
 it (state_layout): seven named joints and no gripper stay signals. Unsupported homogeneous LeRobot state rows retain
 their native dtype in a raw state.npz archive with state_kind none and an explicit qualification. Every other number is a signal
-(Signals), under its own name, with its shape (a 16 x 16 pressure map stays 16 x 16) and its values' names: counters
+(Signals), under its own name, with its shape (a 16 x 16 pressure map stays 16 x 16) and its values' names, which
+write_signals also takes from any declaration in the recording or a rig description beside it (prepare/value_names.py)
+and otherwise marks unnamed: counters
 and clocks are bookkeeping, a topic that names its sensor per message is split, a sensor faster than the camera is
 summarised per frame (place_on_frames), and a frame with no reading near it is NaN. Anything read but not kept is
 listed with the reason, never dropped without a word. After every episode is read, the upload's depth ranges, each
@@ -2748,7 +2750,9 @@ class Signals(dict):
     """{name: (n, values) array} of the numbers a recording keeps beside its cameras and arm state, under the dataset's
     own names, with what is known about each (meta[name]: "shape", the array's own shape per frame when it is not a flat
     vector, such as a 16 x 16 pressure map; "names", one per value, when the dataset names them; "source", where it was
-    read) and the numbers that were not kept (left_out: [(name, why)]). A plain dict of arrays is read the same way."""
+    read) and the numbers that were not kept (left_out: [(name, why)]). What the recording declares elsewhere about its
+    arrays' value names (an MCAP file's metadata, an HDF5 group's attributes) is kept as claims (prepare/value_names.py),
+    which write_signals attaches. A plain dict of arrays is read the same way."""
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -2757,6 +2761,7 @@ class Signals(dict):
         self.clocks: dict[str, np.ndarray] = {}      # per-frame clocks the recording keeps (write_signals)
         self.clock_metadata: dict[str, dict] = {}
         self.native_table_fields: list[dict] = []
+        self.claims: list[dict] = []                  # declared value names (prepare/value_names.py claims_in)
         self.native_table_frames: np.ndarray | None = None
         self.native_table_bytes = 0
         self.issues: list[dict] = []                 # problems with what was kept, as add_issue's entries
@@ -3022,6 +3027,7 @@ def merge_signals(into: Signals, more: Signals) -> Signals:
         if meta is not None:
             into.clock_metadata[k] = meta
     into.native_table_fields += list(getattr(more, "native_table_fields", []) or [])
+    into.claims += list(getattr(more, "claims", []) or [])
     into.native_table_bytes += getattr(more, "native_table_bytes", 0)
     if getattr(more, "native_table_frames", None) is not None:
         into.native_table_frames = more.native_table_frames
@@ -3537,7 +3543,11 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
     """signals.npz beside the state (keys s0, s1, ...) and ctx["signals"], [{name, key, dims, shape, names, source}],
     trimmed to the episode's n_state_frames; nothing when there are none. What a reader read but did not keep
     (Signals.left_out) is written to ctx["source"]["unused_signals"], so the report names it, and the problems with
-    what it kept (Signals.issues) to ctx["reader_issues"] (add_issue)."""
+    what it kept (Signals.issues) to ctx["reader_issues"] (add_issue).
+    Every reader's arrays pass through here, so this is where value names declared anywhere in the recording or a rig
+    description beside it are attached (prepare/value_names.py resolve, with names_source saying where they were
+    declared), and where an array of two or more values that nothing names is marked unnamed, with the description
+    files that were searched (names_searched)."""
     n = int(ctx.get("n_state_frames") or 0)
     native = getattr(signals, "native_table_fields", []) or []
     if native:
@@ -3602,6 +3612,14 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
         np.arange(n) / float(episode_fps(ctx, ep_dir=ep)[0])
     # past SIGNAL_EPISODE_BYTES together, the widest signals are kept as a summary per frame, a data issue each
     meta = {k: dict(m) for k, m in meta.items()}
+    from prepare import value_names as vn
+    described, searched = vn.description_claims()
+    claims = list(getattr(signals, "claims", []) or []) + described
+    for k in keep:
+        meta.setdefault(k, {})
+    for issue in vn.resolve({k: meta[k] for k in keep}, {k: int(np.prod(np.shape(v)[1:])) for k, v in keep.items()},
+                            claims):
+        add_issue(ctx, **issue)
     size = lambda v: int(np.prod(np.shape(v)[1:])) * n * np.asarray(v).dtype.itemsize
     while sum(size(v) for v in keep.values()) + getattr(signals, 'native_table_bytes', 0) > SIGNAL_EPISODE_BYTES:
         k = max((k for k in keep if np.shape(keep[k])[1] > len(SUMMARY_NAMES)), key=lambda k: np.shape(keep[k])[1],
@@ -3647,6 +3665,10 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
                 units = m.get(unit_key)
                 if isinstance(units, (list, tuple)) and len(units) == v.shape[1]:
                     m[unit_key] = [units[c] for c in selected]
+        if int(a.shape[1]) > 1 and not (m.get("names") and len(m["names"]) == a.shape[1]):
+            m["unnamed"] = True
+            if searched:
+                m["names_searched"] = searched
         readings.append({"name": k, "key": key, "dims": int(a.shape[1]), **m})
         if k not in quiet:
             for issue in signal_gaps(k, a, t):
@@ -8476,6 +8498,8 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
     frame when it has as many rows as the anchor has frames. A value that is not finite is NaN (not_finite)."""
     out = Signals()
     out.issues.extend(streams.get('clock_issues') or [])
+    from prepare.value_names import h5_claims
+    out.claims += h5_claims(f, [s["path"] for s in streams["signal"]])
     from prepare.publisher_schemas import hdf5_candidates, with_candidate
     publisher_candidates = hdf5_candidates(f, streams)
     recorded_q = np.asarray(q_abs, dtype=np.float64)
@@ -8503,12 +8527,8 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
         a = a.reshape(len(a), -1) if a.ndim > 1 else a[:, None]
         if not a.shape[1]:
             continue
-        names = list(SUMMARY_NAMES) if summarised else None
-        from prepare.hdf_metadata import attribute_values
-        for key, stated in attribute_values(ds, ("names", "columns", "labels", "fields") if not summarised else ()):
-            stated = [x.decode() if isinstance(x, bytes) else str(x) for x in np.asarray(stated).ravel()]
-            names = value_names(stated, a.shape[1])
-            break
+        from prepare.value_names import dataset_names
+        names = list(SUMMARY_NAMES) if summarised else dataset_names(ds, a.shape[1])
         same_assumed_rows = (s["clock"] and camera_note is not None and len(a) == len(q)
                           and np.array_equal(streams["clock"][s["clock"]], recorded_q, equal_nan=True))
         if same_assumed_rows:
@@ -9169,17 +9189,21 @@ def with_hdf5_sources(sources, fn, *args, **kwargs):
 
 def convert_item(it: dict, rig: str, out: Path, dataset: str, scope: dict) -> tuple[dict, dict]:
     """One upload item converted in this process, by the reader of its kind: (its context, the item as the reader
-    left it, since a reader may add what it learned, such as an MCAP file's topics or a note that it ends early)."""
-    if it["kind"] == "lerobot":
-        ctx = convert_lerobot_item(it, rig, out, dataset)
-    elif it["kind"] == "recording":
-        ctx = convert_recording(it, rig, out, dataset)
-    elif it["kind"] == "mcap":
-        ctx = convert_mcap(it, rig, out, dataset)
-    elif it["kind"] == "hdf5":
-        ctx = convert_hdf5(it, rig, out, dataset, source_scope=scope)
-    else:
-        ctx = convert_video(it, rig, out, dataset)
+    left it, since a reader may add what it learned, such as an MCAP file's topics or a note that it ends early).
+    The description files beside the recording (it["rig_descriptions"], plan) are offered to write_signals while it
+    is read, so a rig description names its arrays' values whatever reader reads it (prepare/value_names.py)."""
+    from prepare.value_names import describing
+    with describing(it.get("rig_descriptions"), it.get("rig_root")):
+        if it["kind"] == "lerobot":
+            ctx = convert_lerobot_item(it, rig, out, dataset)
+        elif it["kind"] == "recording":
+            ctx = convert_recording(it, rig, out, dataset)
+        elif it["kind"] == "mcap":
+            ctx = convert_mcap(it, rig, out, dataset)
+        elif it["kind"] == "hdf5":
+            ctx = convert_hdf5(it, rig, out, dataset, source_scope=scope)
+        else:
+            ctx = convert_video(it, rig, out, dataset)
     return ctx, it
 
 
@@ -9291,6 +9315,7 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: fl
                 named = (lambda k: f"{p.stem} {k}") if len(paths) > 1 else (lambda k: k)
                 kept = {k: out.keep(named(k), v, got.meta[k], p.name) for k, v in got.items()}
                 out.left_out += [(named(k), why) for k, why in got.left_out]
+                out.claims += got.claims
                 for i in got.issues:
                     k = i.get("signal")
                     out.issues.append({**i, "signal": kept.get(k, named(k)),
@@ -9601,6 +9626,17 @@ def _joint_row(msg) -> list[float] | None:
     return joints + grip[:1] if grip else joints
 
 
+def _joint_row_fields(msg) -> list[tuple[str, int]]:
+    """[(field, how many of its values the row takes)] of the fields _joint_row reads from msg, in row order: the joint
+    vector, then the gripper reading's first value."""
+    out = []
+    for keys, whole in ((JOINT_KEYS, True), (GRIPPER_KEYS, False)):
+        k, v = next(((k, v) for k, v in ((k, _vector(_field(msg, k))) for k in keys) if v), (None, None))
+        if k is not None:
+            out.append((k, len(v) if whole else 1))
+    return out
+
+
 def _name_lists(items) -> list[list[str]]:
     """The lists of names among a message's fields (_msg_items): any sequence of nonempty strings, as _vector reads
     values, so a Protobuf repeated field or a ROS string[] is read like a JSON list. A field _numbers leaves out (the
@@ -9796,8 +9832,11 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
                        *, capture_clock: bool = False, notes: list | None = None) -> dict:
     """{key: {"t": seconds on the recording's clock, "pos": rows, "names": the value names its messages give, or None,
     "topic": its channel}} for every channel of these MCAP files that carries an arm's joints (JOINT_KEYS); cameras and
-    text are not read. A channel's rows are grouped by the names their messages give (name_group), each in its group's
-    order; a channel of one group (or of an arm and its gripper, _join_gripper, judged on the footage's frame times q
+    text are not read. A message that names none of its row's values takes the names its channel's metadata declares
+    for the fields that form the row ({field}_names, prepare/value_names.py declared_row), and the units it declares
+    for them ({field}_unit or {field}_units) are one more claim on each value's unit, which qualify_arm_stream still
+    holds against the readings. A channel's rows are grouped by the names their messages give (name_group), each in
+    its group's order; a channel of one group (or of an arm and its gripper, _join_gripper, judged on the footage's frame times q
     when given) is keyed by its topic, and one of several by its topic and each group's label (group_label), with
     the fields its messages fill ("fields", _joint_fields) so that only the group joint_state reads leaves the
     signals. A file cut short is read up to its cut (mcap_messages), its rows put in time order, so an arm in it is
@@ -9814,8 +9853,10 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
         if notes is not None:
             notes.extend(said)
         return streams
+    from prepare.value_names import declared_row
     found, facs = {}, _decoders()
     for p in paths:
+        declared: dict[tuple, tuple] = {}             # (channel id, the row's fields): what the channel declares
         chans = [(t, s) for t, s in mcap_channels(p) if not CAMERA_SCHEMA.search(s) and not names_text(t)]
         decs, skip, seen, damaged = {}, set(), set(), []
         with open(p, "rb") as fh:
@@ -9840,6 +9881,14 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
                 if error:
                     c["clock_errors"].append(error)
                 names = _joint_names(m, len(row))
+                # what the channel declares for the fields that form the row (prepare/value_names.py, the reader of
+                # every value-name declaration): names where the message gives none, and units per value
+                fields = tuple(_joint_row_fields(m))
+                if (ch.id, fields) not in declared:
+                    declared[(ch.id, fields)] = declared_row(dict(ch.metadata or {}), fields)
+                declared_names, declared_units = declared[(ch.id, fields)]
+                if names is None and declared_names and len(declared_names) == len(row):
+                    names = declared_names
                 i, row = name_group(c["groups"], names, row)
                 if i is None:
                     continue                      # a channel of more name sets than an arm has: not read here
@@ -9853,7 +9902,9 @@ def mcap_joint_streams(paths: list[Path], q: np.ndarray | None = None, unread: l
                         message_units[unit_key] = list(value) if not isinstance(value, str) and hasattr(
                             value, "__len__") else value
                 claims = [state_units(metadata, names, len(row))
-                          for metadata in (dict(ch.metadata or {}), message_units)]
+                          for metadata in (dict(ch.metadata or {}), message_units,
+                                           {"units": declared_units} if declared_units and len(declared_units) == len(row)
+                                           else {})]
                 units = []
                 for index in range(len(row)):
                     values = {claim[index] for claim in claims if claim[index] is not None}
@@ -10161,7 +10212,10 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
     clock_sources: dict[str, set] = {}
     clock_errors: dict[str, set] = {}
     damaged: list = []                    # files whose index is whole but whose messages stop at damage (mcap_messages)
+    from prepare.value_names import mcap_claims
+    claims = []
     for p in paths:
+        claims += mcap_claims(p)
         everything = mcap_channels(p)
         books.update({t: bookkeeping_why(t, s) for t, s in everything if bookkeeping_why(t, s)})
         kinds.update(everything)
@@ -10215,6 +10269,7 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
                     r["v"].append(vals)
                     r["set"] |= was_set
     out = Signals()
+    out.claims += claims
     out.issues += [{"kind": "mcap_schema_unreadable", "signal": topic,
                     "what": f"{path.name}: {topic} schema could not be read: {reason}. Other channels were retained."}
                    for (path, topic), reason in sorted(schema_errors.items())]
@@ -12314,6 +12369,7 @@ def plan(root: Path, grouping: dict | None = None, ownership_context: dict | Non
                               + (f" and {len(tables) - 12} more" if len(tables) > 12 else "") + ".")
     from prepare.annotations import mark_source_context_read
     mark_source_context_read(root, items)
+    assign_rig_descriptions(root, items)
     unread = unread_files(root, det, items)
     if unread:
         det["missing"].append(f"{len(unread)} file{'s' if len(unread) != 1 else ''} that no reader opens: "
@@ -12717,6 +12773,7 @@ def unread_files(root: Path, det: dict, items: list[dict]) -> list[str]:
     notes = {p.resolve() for p in opened_notes(items) | absent_take_notes(items)}
     notes |= {p for it in items for p in (it.get("root") or {}).get("metadata_read", ())}
     notes |= {(root / name).resolve() for name, _ in det.get("annotation_tables", [])}
+    notes |= {Path(p).resolve() for it in items for p in it.get("rig_descriptions_naming") or ()}
     out = []
     for p in files_under(root):
         x = p.suffix.lower()
@@ -12767,6 +12824,42 @@ def _plan_part(det: dict, root: Path, grouping: dict | None, *, packaging: bool 
 def item_folder(it: dict) -> Path:
     """The folder an episode's files sit in: a video episode's first video's, an MCAP's or an HDF5 file's own."""
     return Path(it["files"][0]).parent if it.get("files") else Path(it["file"]).parent
+
+
+def assign_rig_descriptions(root: Path, items: list[dict]) -> None:
+    """Each episode's description files (prepare/value_names.py description_files): the YAML and JSON files of its
+    folder and of every folder above it up to the upload's root, and a LeRobot dataset's meta/info.json, in
+    it["rig_descriptions"], with the upload's root in it["rig_root"]. Those that declare any value names are in
+    it["rig_descriptions_naming"], so the report counts them as read (unread_files); a robots_realtime station.yaml is
+    one."""
+    from prepare.value_names import claims_in, description_files, read_description
+    declares: dict[str, bool] = {}
+    listed: dict[tuple, list[str]] = {}         # the episodes of one folder share its listing
+    for it in items:
+        lerobot = (it.get("root") or {}).get("dir") if it.get("kind") in ("lerobot", "recording") else None
+        files = it.get("files")
+        if lerobot:
+            folder, extra = Path(lerobot), [Path(lerobot) / "meta" / "info.json"]
+        elif isinstance(files, (list, tuple)) and files:
+            folder, extra = Path(files[0]).parent, []
+        elif isinstance(files, dict) and files:
+            # a packed recording's files by camera, each a path or (path, start, end)
+            first = next(iter(files.values()))
+            folder, extra = Path(first[0] if isinstance(first, (list, tuple)) else first).parent, []
+        elif isinstance(it.get("file"), (str, Path)):
+            folder, extra = Path(it["file"]).parent, []
+        else:
+            continue
+        key = (str(folder), tuple(str(p) for p in extra))
+        if key not in listed:
+            listed[key] = description_files(folder, root, extra)
+        files = list(listed[key])
+        it["rig_descriptions"], it["rig_root"] = files, str(root)
+        for f in files:
+            if f not in declares:
+                doc = read_description(Path(f))
+                declares[f] = isinstance(doc, (dict, list)) and bool(claims_in(doc, f))
+        it["rig_descriptions_naming"] = [f for f in files if declares[f]]
 
 
 def episodes_near(items: list[dict], folder: Path, root: Path) -> list[dict]:

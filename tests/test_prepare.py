@@ -405,7 +405,7 @@ def test_every_other_recorded_signal_reaches_the_model_under_its_own_name(tmp_pa
     assert np.allclose(z[ctx["signals"][0]["key"]], base) and z["s2"].shape == (n, 1)
     p = me.build_request(ep)["prompt"]
     table = p.split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
-    assert "observation.state.chassis (3 values): 0 to 0.9, 0, 0 to 0.3" in table
+    assert "observation.state.chassis (3 unnamed values): 0 to 0.9, 0, 0 to 0.3" in table
     # a value the same at every frame is named once, on one line with the others like it
     assert "The same at every frame: observation.state.torso [0.5, 0.25]" in table
     assert "next.done (1 value): 0 to 1" in table
@@ -428,7 +428,7 @@ def test_a_state_wider_than_the_arm_layout_is_shown_instead_of_dropped(tmp_path)
     ctx = json.loads((ep / "context.json").read_text())
     assert ctx["state_kind"] == "none" and [s["name"] for s in ctx["signals"]] == ["observation.state", "action"]
     p = me.build_request(ep)["prompt"]
-    assert "observation.state (16 values)" in p and "the video is all there is" not in p
+    assert "observation.state (16 unnamed values)" in p and "the video is all there is" not in p
 
 
 def test_the_other_signals_are_measured_over_each_still_span():

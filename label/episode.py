@@ -1661,7 +1661,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
                                      fps=ep_fps(ep), aligned_by=m.get("aligned_by"),
                                      camera_aligned_by=m.get("camera_aligned_by"),
                                      clock_problem=m.get("clock_problem"), source_rows=m.get("source_rows"),
-                                     camera_frames=m.get("camera_frames")) + wording)
+                                     camera_frames=m.get("camera_frames"), unnamed=m.get("unnamed"),
+                                     names_source=m.get("names_source")) + wording)
         except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
             lines.append(f"  {name}: could not be read ({type(e).__name__})")
     if still:

@@ -281,7 +281,7 @@ def test_contact_requests_keep_instrumentation_coverage_when_the_glove_stays_qui
     assert '"contacts": [{"id"' in r["prompt"] and "contacts_missing" in r["prompt"]
     assert any(c.get("type") == "text" and c["text"].startswith("=== contact c1") for c in r["content"])
     table = r["prompt"].split("OTHER RECORDED SIGNALS")[1].split("BETWEEN INSTANTS")[0]
-    assert "right_pressure (16 x 16 values)" in table and "right_pressure total" not in table
+    assert "right_pressure (16 x 16 unnamed values)" in table and "right_pressure total" not in table
     strips = r["contact_views"]["strips"]["c1"]
     assert len(strips["begin"]) == 5 and len(strips["end"]) == 3
     assert "contacts" in r["blocks"] and {"contacts", "contacts_missing"} <= set(r["schema_fields"])

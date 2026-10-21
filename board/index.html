@@ -4500,7 +4500,11 @@ function snPlaybackTime(D, t) {
 }
 function snWhat(s) {
   const sh = s.shape && s.shape.length > 1 ? s.shape.join(' x ') : String(s.dims);
-  let w = s.act ? `${sh} values, drawn as their activity` : `${sh} ${s.dims === 1 ? 'value' : 'values'}`;
+  // values nothing in the recording or its rig description names are known by their order alone
+  // (prepare/value_names.py), and declared names say where they were declared
+  const un = s.unnamed && s.dims > 1 ? ' unnamed' : '';
+  let w = s.act ? `${sh}${un} values, drawn as their activity` : `${sh}${un} ${s.dims === 1 ? 'value' : 'values'}`;
+  if (s.names_source) w += `, names from ${s.names_source}`;
   if (s.touch || s.rests_and_rises) {
     if (s.direction === 'down') w += ', falls when active';
     else if (s.direction === 'up') w += ', rises when active';

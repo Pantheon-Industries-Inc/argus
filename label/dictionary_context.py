@@ -91,7 +91,7 @@ def apply_context(context: dict, record: dict, overrides: dict | None = None, *,
             limitations.append(f"dictionary field {field['id']} has no exact prepared binding for {owner}")
             continue
         selected = {key: copy.deepcopy(field[key]) for key in
-                    ("id", "name", "kind", "shape", "dtype", "names", "rate_hz", "source", "summary", "limitations", 'unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description', 'action_semantics', 'recorded_role') if key in field}
+                    ("id", "name", "kind", "shape", "dtype", "names", "names_source", "rate_hz", "source", "summary", "limitations", 'unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description', 'action_semantics', 'recorded_role') if key in field}
         selected.update(episodes=[owner], bindings=copy.deepcopy(matched))
         selected["source"] = _public_source(selected.get("source"))
         fields.append(selected)

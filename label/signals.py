@@ -1052,8 +1052,10 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
 
 def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None, rate_hz=None,
              fps=None, aligned_by=None, camera_aligned_by=None, clock_problem=None,
-             source_rows=None, camera_frames=None) -> str:
-    """One line: the signal's name, its shape or value names, its rate when it is recorded slower than the frames
+             source_rows=None, camera_frames=None, unnamed=False, names_source=None) -> str:
+    """One line: the signal's name, its shape or value names (with where they were declared, names_source, when a
+    description beside the values gave them, prepare/value_names.py), or that its values are unnamed when nothing in
+    the recording or its rig description names them (unnamed), its rate when it is recorded slower than the frames
     (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
     to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it has as many rows as the
     video has frames (ALIGNED_ROWS), or tied readings placed within each recorded stamp interval as an assumption
@@ -1061,8 +1063,9 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
     values (for a wider array, the range of all its values together)."""
     a = _float(a)          # as stored: its smallest and largest readings are exact in any precision
     d = a.shape[1]
-    what = (f"{' x '.join(str(int(x)) for x in shape)} values" if shape and len(shape) > 1 else
-            f"{d} value{'s' if d > 1 else ''}")
+    unnamed = bool(unnamed) and d > 1 and not (names and len(names) == d)
+    what = (f"{' x '.join(str(int(x)) for x in shape)}{' unnamed' if unnamed else ''} values" if shape and len(shape) > 1
+            else f"{d}{' unnamed' if unnamed else ''} value{'s' if d > 1 else ''}")
     named = None
     if names and len(names) == d and d <= PER_VALUE_MAX:
         named = ", ".join(names)
@@ -1071,6 +1074,8 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
         else:
             what = (f"{d} named values in value order, value names retained in episode metadata"
                     + (f", {' x '.join(str(int(x)) for x in shape)} shape" if shape and len(shape) > 1 else ""))
+        if names_source:
+            what += f", names from {names_source}"
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
         rate = reading_text(float(rate_hz))
         what += (f", recorder arrivals at {rate} Hz" if aligned_by == RECORDER_ARRIVAL else
