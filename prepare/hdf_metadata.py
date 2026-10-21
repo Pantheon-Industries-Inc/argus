@@ -234,7 +234,6 @@ def value(x):
 
 def inventory(f, group, recording_paths, shared_paths, episode_groups):
     path = Path(f.filename).resolve()
-    stat = path.stat()
     fields = []
     datasets = {p: 'recording' for p in recording_paths}
     datasets.update({p: 'file' for p in shared_paths})
@@ -259,17 +258,21 @@ def inventory(f, group, recording_paths, shared_paths, episode_groups):
     # h5o.visit can traverse a damaged dataset B-tree even when its useful peers and attributes are readable.
     for name, obj in objects(f):
         attributes(name, obj)
-    return {'source_path': str(path), 'source_size': stat.st_size, 'source_mtime_ns': stat.st_mtime_ns,
-            'source_required_for_inspection': True, 'fields': fields}
+    from label import content_identity
+    recorded = content_identity.identity(path, read_once=True)
+    return {'source_path': str(path), 'source_size': recorded['size'], 'source_sha256': recorded['sha256'],
+            'source_mtime_ns': recorded['mtime_ns'], 'source_required_for_inspection': True, 'fields': fields}
 
 
 def check_source(source):
+    """The original file, while it holds the bytes it was prepared from (by content, label/content_identity.py; a source
+    prepared before content identity is checked by its size and modification time)."""
+    from label import content_identity
     path = Path(source['source_path'])
-    try:
-        stat = path.stat()
-    except OSError as error:
-        raise ValueError('Original HDF5 metadata source is unavailable') from error
-    if stat.st_size != source['source_size'] or stat.st_mtime_ns != source['source_mtime_ns']:
+    if not path.is_file():
+        raise ValueError('Original HDF5 metadata source is unavailable')
+    if not content_identity.same_file(source, path, size='source_size', sha256='source_sha256',
+                                      mtime_ns='source_mtime_ns'):
         raise ValueError('Original HDF5 metadata source changed after preparation')
     return path
 

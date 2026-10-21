@@ -478,6 +478,51 @@ def test_resume_source_identity_skips_same_input_and_stops_changed_input(tmp_pat
     assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] == 'stale'
 
 
+def test_resume_source_identity_follows_content_not_file_times(tmp_path, monkeypatch):
+    import os
+    import shutil
+    from label import evidence_access
+    # every file is identified as a real take's large videos are, whatever size a content hash once stopped at
+    monkeypatch.setattr(evidence_access, 'SOURCE_HASH_LIMIT', 0, raising=False)
+    ep = tmp_path / 'episode_000000'
+    ep.mkdir()
+    (ep / 'context.json').write_text(json.dumps({'profile': 'teleop_arms', 'state_kind': 'none'}))
+    (ep / 'sources.json').write_text('{"camera": {}}')
+    out = tmp_path / 'out'
+    out.mkdir()
+    calls = []
+
+    def fake_label(path, target, *, api_key, **kw):
+        calls.append(path)
+        result = {'parse_ok': True, 'labels': {'task_summary': 'Wait beside the visible workspace.'},
+                  'input_identity': harness.input_identity(path, model='m', reasoning='medium',
+                  max_tokens=100, cell_w=0, example_dir=None)}
+        target.write_text(json.dumps(result))
+        return result
+
+    monkeypatch.setattr(harness, 'label_episode', fake_label)
+    args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='m', reasoning='medium', max_tokens=100,
+                timeout=30)
+    assert harness.run_batch([ep], out, **args) == 0 and len(calls) == 1
+    # the episode copied in again (a restarted container, a sync): the same bytes under new times keep the paid reply
+    for f in sorted(ep.iterdir()):
+        copy = f.with_name(f.name + '.copy')
+        shutil.copyfile(f, copy)
+        os.replace(copy, f)
+        os.utime(f, ns=(f.stat().st_mtime_ns + 10**10,) * 2)
+    assert harness.run_batch([ep], out, **args) == 0
+    assert len(calls) == 1 and not (out / f'stale_{ep.name}.json').exists()
+    # one changed byte under the size and modification time the reply was made from is a changed input
+    sources = ep / 'sources.json'
+    seen = sources.stat()
+    sources.write_text('{"camerb": {}}')
+    os.utime(sources, ns=(seen.st_atime_ns, seen.st_mtime_ns))
+    assert (sources.stat().st_size, sources.stat().st_mtime_ns) == (seen.st_size, seen.st_mtime_ns)
+    assert harness.run_batch([ep], out, **args) == 1
+    assert len(calls) == 1
+    assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] == 'stale'
+
+
 def test_resume_legacy_reply_is_marked_unverified_without_a_paid_call(tmp_path, monkeypatch):
     ep = tmp_path / 'episode_000000'
     ep.mkdir()

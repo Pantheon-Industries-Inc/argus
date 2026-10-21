@@ -80,14 +80,32 @@ def commit() -> str:
         return "unknown"
 
 
-def stamp(out: Path, adapter: str, since: float) -> int:
-    """Record in every episode context under `out` written at or after `since` (a time.time()) which adapter wrote it
-    and at which commit: source.adapter (kept when the adapter already named a more specific one) and
-    source.adapter_commit. Returns how many were stamped."""
+def contexts(out: Path) -> dict:
+    """Every episode context under `out` by the digest of its content, taken before a run so that stamp can tell which
+    ones the run wrote."""
+    from label import content_identity
+    found = {}
+    for c in sorted(Path(out).glob("episode_*/context.json")):
+        try:
+            found[str(c)] = content_identity.digest(c)
+        except (OSError, ValueError):
+            pass
+    return found
+
+
+def stamp(out: Path, adapter: str, before: dict) -> int:
+    """Record in every episode context under `out` that this run wrote (one missing from `before`, contexts(out) taken
+    before the run, or holding other bytes now) which adapter wrote it and at which commit: source.adapter (kept when
+    the adapter already named a more specific one) and source.adapter_commit. A context only copied or touched since
+    keeps its bytes and is not taken for this run's work. Returns how many were stamped."""
+    from label import content_identity
     sha, n = commit(), 0
     for c in sorted(Path(out).glob("episode_*/context.json")):
-        if c.stat().st_mtime < since:
-            continue                     # prepared by an earlier run and skipped by this one
+        try:
+            if before.get(str(c)) == content_identity.digest(c):
+                continue                 # prepared by an earlier run and skipped by this one
+        except (OSError, ValueError):
+            continue                     # gone, or still being written by something other than this run
         ctx = json.loads(c.read_text())
         src = ctx.setdefault("source", {})
         src.setdefault("adapter", adapter)

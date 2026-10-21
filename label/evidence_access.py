@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from label import content_identity
 from label.atomic import write_atomic
 from label.dictionary_context import _public_source, field_interpretation, native_field_name, prepared_interpretation
 from label import sensor_evidence as se
@@ -37,7 +38,6 @@ MAX_SELECTION_COST = 1.0
 # so an empty inspection is never read as one that found nothing to select.
 INSPECTION_OFF = 'Evidence inspection is off in the annotation policy; no recorded fields were selected.'
 MAX_SCAN_BYTES = 256 * 1024 * 1024
-SOURCE_HASH_LIMIT = 16 * 1024 * 1024
 IMPLEMENTATION_SHA256 = hashlib.sha256(b''.join(path.read_bytes() for path in (
     Path(__file__), Path(__file__).with_name('depth.py'),
     Path(__file__).with_name('dictionary_context.py'), Path(__file__).with_name('sensor_evidence.py'),
@@ -169,14 +169,8 @@ def source_proof(ctx, ep_dir):
         path = path.resolve()
         entry = {'name': name, 'location_sha256': hashlib.sha256(str(path).encode()).hexdigest()}
         try:
-            stat = path.stat()
-            entry.update(size=stat.st_size, mtime_ns=stat.st_mtime_ns)
-            if stat.st_size <= SOURCE_HASH_LIMIT:
-                h = hashlib.sha256()
-                with path.open('rb') as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                        h.update(chunk)
-                entry['sha256'] = h.hexdigest()
+            # every file by its content, whatever its size (label/content_identity.py)
+            entry.update(content_identity.identity(path))
         except OSError:
             entry['missing'] = True
         sources[name] = entry
@@ -244,18 +238,25 @@ def table_source_identity(ctx, ep_dir):
     proof = next((item for item in source_proof(ctx, ep_dir) if item['name'] == 'retained:0:table'), None)
     if proof is None:
         return {'missing': True}
-    return {key: value for key, value in proof.items() if key != 'mtime_ns' or 'sha256' not in proof}
+    return content_identity.content(proof)
+
+
+def content_proof(proof):
+    """A proof as its files' contents, for keys built from it: a copy of the same bytes keeps the key."""
+    if isinstance(proof, dict):
+        return content_identity.content(proof)
+    if not isinstance(proof, list):
+        return proof
+    return [content_identity.content(item) if isinstance(item, dict) else item for item in proof]
 
 
 def equivalent_source_proof(left, right):
-    """Small files use their content hash; large files retain size and mtime guards."""
-    if (not isinstance(left, list) or not isinstance(right, list)
+    """The same files with the same contents (content_identity.same_recorded): an entry recorded with a content hash is
+    compared by it, and one recorded before every file had one by its size and modification time, as it was written."""
+    if (not isinstance(left, list) or not isinstance(right, list) or len(left) != len(right)
             or any(not isinstance(item, dict) for item in [*left, *right])):
         return False
-    def normalize(items):
-        return [{k: v for k, v in item.items() if k != 'mtime_ns' or 'sha256' not in item}
-                for item in items]
-    return normalize(left) == normalize(right)
+    return all(content_identity.same_recorded(a, b) for a, b in zip(left, right))
 
 
 def piece_reference(parent_dir, piece_dir, piece):
@@ -341,8 +342,7 @@ def withhold_stale_untimed(record, ctx, ep_dir, *, verified=True):
                 path = (root / source['file']).resolve()
                 if not path.is_relative_to(root):
                     raise ValueError('recorded evidence reference is outside its root')
-                stat = path.stat()
-                if [stat.st_size, stat.st_mtime_ns] != [source['size'], source['mtime_ns']]:
+                if not content_identity.same_file(source, path):
                     valid = False
             for archive in [ctx, *(ctx.get('recorded_sensor_fields') or [])]:
                 if archive.get('recorded_hdf5_metadata'):
@@ -903,18 +903,15 @@ class Access:
         h = hashlib.sha256(packed([self.ep['context'], self.inventory()]).encode())
         h.update(IMPLEMENTATION_SHA256.encode())
         h.update(reader_projection_identity(self.ep['context']).encode())
-        h.update(packed(source_proof(self.ep['context'], self.ep['dir'])).encode())
+        h.update(packed(content_proof(source_proof(self.ep['context'], self.ep['dir']))).encode())
         for field in self.fields.values():
             a = field.get('value')
             if isinstance(a, np.ndarray):
                 for start in range(0, len(a), 256):
                     h.update(np.ascontiguousarray(a[start:start + 256]).tobytes())
-            if field.get('path'):
-                stat = field['path'].stat()
-                h.update(packed([stat.st_size, stat.st_mtime_ns]).encode())
-            if field.get('raw_path'):
-                stat = field['raw_path'].stat()
-                h.update(packed([stat.st_size, stat.st_mtime_ns]).encode())
+            for key in ('path', 'raw_path'):
+                if field.get(key):
+                    h.update(packed(content_identity.content(content_identity.identity(field[key]))).encode())
         return h.hexdigest()
 
     def times(self):
@@ -1416,9 +1413,7 @@ class Access:
                         root, name = 'pieces', ep_dir.name + '/' + name
                 else:
                     root, name = 'retained', path.relative_to(retained).as_posix()
-                stat = path.stat()
-                sources[(root, name)] = {'root': root, 'file': name, 'size': stat.st_size,
-                                         'mtime_ns': stat.st_mtime_ns}
+                sources[(root, name)] = {'root': root, 'file': name, **content_identity.identity(path)}
         return {'version': 1, 'implementation_sha256': IMPLEMENTATION_SHA256,
                 'source_proof': source_proof(self.ep['context'], ep_dir),
                 'untimed_context_fields': metadata_fields,

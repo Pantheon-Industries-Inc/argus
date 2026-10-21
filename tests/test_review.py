@@ -310,13 +310,16 @@ def test_review_native_dictionary_retires_only_verified_unpaid_key(tmp_path, mon
 
 
 @pytest.mark.parametrize('change', [None, 'source_in_job', 'source', 'resource', 'settings', 'preparation_settings',
-                                     'producer', 'prepared', 'report', 'legacy'])
+                                     'producer', 'prepared', 'report', 'legacy', 'copied', 'same_stat_source'])
 def test_review_reuses_real_preparation_and_refuses_unverified_paid_resume(tmp_path, monkeypatch, change):
     import h5py
     import hashlib
+    import os
     from review import __main__ as rv
     from prepare import formats
-    from label import dictionary_stage, harness
+    from label import dictionary_stage, evidence_access, harness
+    # every file is identified as a real take's large videos are, whatever size a content hash once stopped at
+    monkeypatch.setattr(evidence_access, 'SOURCE_HASH_LIMIT', 0, raising=False)
     upload = tmp_path / 'job' / 'upload' if change == 'source_in_job' else tmp_path / 'upload'
     upload.mkdir(parents=True)
     raw = upload / 'recording.h5'
@@ -394,7 +397,22 @@ def test_review_reuses_real_preparation_and_refuses_unverified_paid_resume(tmp_p
         (job / 'report.json').write_text('{"episodes": []}')
     elif change == 'legacy':
         (job / 'preparation_receipt.json').unlink()
-    if change in (None, 'source_in_job', 'producer'):
+    elif change == 'copied':
+        # a restarted container rebuilds the take and restores the job: the same bytes, new files and new times
+        for f in sorted([*(p for p in upload.rglob('*') if not p.is_relative_to(job)), *(job / 'episodes').rglob('*')]):
+            if f.is_file():
+                copy = f.with_name(f.name + '.copy')
+                shutil.copyfile(f, copy)
+                os.replace(copy, f)
+                os.utime(f, ns=(f.stat().st_mtime_ns + 10**10,) * 2)
+    elif change == 'same_stat_source':
+        # one changed byte under the size and modification time the receipt saw
+        seen = raw.stat()
+        with h5py.File(raw, 'r+') as source:
+            source['images/top'][0, 0, 0, 0] = 61
+        os.utime(raw, ns=(seen.st_atime_ns, seen.st_mtime_ns))
+        assert (raw.stat().st_size, raw.stat().st_mtime_ns) == (seen.st_size, seen.st_mtime_ns)
+    if change in (None, 'source_in_job', 'producer', 'copied'):
         with pytest.raises(ReachedLabel):
             rv.main()
         assert dictionaries == [1, 1]
@@ -405,10 +423,15 @@ def test_review_reuses_real_preparation_and_refuses_unverified_paid_resume(tmp_p
     assert conversions == [1]
     assert invoice.read_bytes() == original_invoice
     assert dictionary_stage.label_spend(job) == pytest.approx(.125)
-    if change != 'source':
+    if change not in ('source', 'same_stat_source'):
         assert raw.read_bytes() == raw_before
-    if change != 'prepared':
+    if change not in ('prepared', 'copied'):
         assert (generated.stat().st_mtime_ns, hashlib.sha256(generated.read_bytes()).hexdigest()) == generated_proof
+    if change == 'copied':
+        # the copy passed on its content, and the receipt now holds the new times
+        assert hashlib.sha256(generated.read_bytes()).hexdigest() == generated_proof[1]
+        receipt = json.loads((job / 'preparation_receipt.json').read_text())
+        assert receipt['source'][raw.name]['mtime_ns'] == raw.stat().st_mtime_ns
 
 
 def test_unknown_outcomes_and_severities_are_shown_as_unclear():

@@ -1160,23 +1160,25 @@ def code_identity() -> str:
     return _CODE_ID
 
 
-def _stat_text(path) -> str:
+def _content_text(path) -> str:
+    """The digest of a file's content (label/content_identity.py, whose stat check only spares reading it again), so a
+    file copied or touched with the same bytes keeps its key and one edited under the same size and time changes it."""
+    from label import content_identity
     try:
-        st = Path(path).stat()
-        return f"{st.st_size}:{st.st_mtime_ns}"
-    except OSError:
+        return content_identity.digest(path)
+    except (OSError, ValueError):
         return "-"
 
 
 def folder_identity(ep_dir: Path) -> list:
-    """Every file of a prepared episode folder by name, size and modification time, and the source videos its
-    sources.json names (read by tools the build starts, outside its own file reads)."""
+    """Every file of a prepared episode folder by name and content, and the source videos its sources.json names (read
+    by tools the build starts, outside its own file reads)."""
     out = []
     if not ep_dir.is_dir():
         return out
     for f in sorted(ep_dir.rglob("*")):
         if f.is_file():
-            out.append(f"{f.relative_to(ep_dir).as_posix()}={_stat_text(f)}")
+            out.append(f"{f.relative_to(ep_dir).as_posix()}={_content_text(f)}")
     try:
         sources = json.loads((ep_dir / "sources.json").read_text())
     except (OSError, ValueError):
@@ -1184,7 +1186,7 @@ def folder_identity(ep_dir: Path) -> list:
     for view, src in sorted(sources.items()) if isinstance(sources, dict) else []:
         for k, v in sorted(src.items()) if isinstance(src, dict) else []:
             if isinstance(v, str) and v.startswith("/"):
-                out.append(f"source {view}.{k}={_stat_text(v)}")
+                out.append(f"source {view}.{k}={_content_text(v)}")
     return out
 
 
@@ -1201,7 +1203,7 @@ def episode_key(manifest: dict, entry: dict, fname: str, name: str, src, r, info
     """The key of everything a board file is made from (traced: the episode folder, the run's output and run.json,
     the manifest and the code). Equal keys make equal files, so the last build's file is used as it is."""
     import hashlib
-    label = _stat_text(src) if src is not None else json.dumps(r, sort_keys=True, default=str)
+    label = _content_text(src) if src is not None else json.dumps(r, sort_keys=True, default=str)
     parts = [code_identity(), json.dumps(_without_targets(manifest), sort_keys=True, default=str),
              json.dumps(_without_targets(entry), sort_keys=True, default=str), fname, name, str(src), label,
              json.dumps(info, sort_keys=True, default=str), *folder_identity(ep_dir)]

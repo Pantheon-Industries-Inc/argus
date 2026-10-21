@@ -10,7 +10,6 @@ on 456 px) leaves the size as stored."""
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from fractions import Fraction
 
@@ -24,7 +23,8 @@ def even(x: float) -> int:
 def geometry(path: str, ffprobe: str | None = None) -> dict:
     """{"stored": (w, h), "sar": Fraction, "rotation": degrees as ffprobe reports it, "matrix": [a, b, c, d] or None,
     "mirror": bool} for the first video stream; a file ffprobe cannot read is taken as stored (sar 1, no rotation).
-    Read once per file version (its size and modification time), and kept only for the version it was read from."""
+    Read once per file version (its whole stat, label/content_identity.py: an edit that keeps the size and puts the
+    modification time back still changes the change time), and kept only for the version it was read from."""
     try:
         version = _version(path)
     except OSError:
@@ -33,8 +33,8 @@ def geometry(path: str, ffprobe: str | None = None) -> dict:
 
 
 def _version(path) -> tuple:
-    st = os.stat(path)
-    return st.st_size, st.st_mtime_ns
+    from label.content_identity import stat_version
+    return stat_version(path)
 
 
 @cached_while_unchanged(4096, lambda path, version, ffprobe: version is not None and _version(path) == version)

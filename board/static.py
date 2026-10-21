@@ -61,12 +61,10 @@ import argparse
 import concurrent.futures as cf
 import datetime as dt
 import hashlib
-from functools import lru_cache
 import json
 import math
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -80,6 +78,7 @@ from board import hands as hands_overlay
 from board import serve as sa
 from board.to_board import dumps
 from board.public_export import project as public_json, public_build_manifest, publication_policy
+from label import content_identity
 from label.atomic import temporary_path, write_atomic, write_bytes_atomic
 from prepare import tools
 
@@ -161,80 +160,28 @@ def ms_key(t: float) -> int:
     return math.floor(t * 1000 + 0.5)   # Preserve existing keys; goal_times checks browser agreement.
 
 
-def _durable_metadata(path: str, version: tuple) -> bool:
-    """Only reuse durable hashes on local filesystems with change-time semantics."""
-    if os.name != 'posix' or version[-1] % 1_000_000_000 == 0:
-        return False
-    import ctypes
-    try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        buffer = ctypes.create_string_buffer(4096)
-        if sys.platform == 'darwin':
-            # statfs is the legacy ABI on Intel. statfs64 has the fixed layout
-            # on both supported Mac architectures, including f_fstypename at 72.
-            statfs = libc.statfs64
-            statfs.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
-            statfs.restype = ctypes.c_int
-            if statfs(os.fsencode(path), ctypes.byref(buffer)):
-                return False
-            return buffer.raw[72:88].split(b'\0', 1)[0] in (b'apfs', b'hfs')
-        if libc.statfs(os.fsencode(path), ctypes.byref(buffer)):
-            return False
-        if sys.platform.startswith('linux'):
-            kind = ctypes.c_ulong.from_buffer(buffer).value
-            return kind in {0xEF53, 0x58465342, 0x9123683E, 0x2FC12FC1, 0x01021994, 0x794C7630}
-    except (AttributeError, OSError):
-        pass
-    return False
+# A media file is named by the digest of its content (label/content_identity.py), read again only when its stat changes.
+# The policy and the stat reader are looked up here on each call, so a test can replace them on this module.
+_durable_metadata = content_identity.durable_metadata
+
+
+def _durable_policy(path: str, version: tuple) -> bool:
+    return _durable_metadata(path, version)
+
+
+def _restat(path: str) -> tuple:
+    return _source_version(Path(path))
 
 
 def _source_digest(path: str, version: tuple) -> str:
-    # Check policy before either cache, including repeat calls in this process.
-    if _durable_metadata(path, version):
-        return _cached_source_digest(path, version)
-    return _cached_source_digest.__wrapped__(path, version)
+    return content_identity.digest(path, version, durable=_durable_policy, restat=_restat)
 
 
-@lru_cache(maxsize=8192)
-def _cached_source_digest(path: str, version: tuple) -> str:
-    # ctime also changes on in-place edits whose size and restored mtime match.
-    # Coarse timestamps and Windows creation-time semantics cannot certify reuse.
-    cacheable = _durable_metadata(path, version)
-    cache = Path(os.environ.get('BOARD_SOURCE_DIGEST_CACHE') or
-                 Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'argus/source-digests.sqlite3')
-    key = json.dumps([path, version])
-    if cacheable:
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(cache, timeout=1) as db:
-                db.execute('CREATE TABLE IF NOT EXISTS digests (path TEXT PRIMARY KEY, version TEXT, digest TEXT)')
-                row = db.execute('SELECT digest FROM digests WHERE path=? AND version=?', (path, key)).fetchone()
-            if row and re.fullmatch(r'[0-9a-f]{64}', row[0]) and _source_version(Path(path)) == version:
-                return row[0]
-        except (OSError, sqlite3.Error):
-            pass  # A missing, busy, or damaged cache costs a hash, never an identity.
-    h = hashlib.sha256()
-    with open(path, 'rb') as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b''):
-            h.update(chunk)
-    if _source_version(Path(path)) != version:
-        raise ValueError('Media changed while its identity was being read')
-    digest = h.hexdigest()
-    if cacheable:
-        try:
-            with sqlite3.connect(cache, timeout=1) as db:
-                db.execute('INSERT OR REPLACE INTO digests VALUES (?, ?, ?)', (path, key, digest))
-        except (OSError, sqlite3.Error):
-            pass
-    return digest
-
-
-_source_digest.cache_clear = _cached_source_digest.cache_clear
+_source_digest.cache_clear = content_identity.digest.cache_clear
 
 
 def _source_version(path: Path) -> tuple:
-    st = path.stat()
-    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+    return content_identity.stat_version(path)
 
 
 def src_sig(p: Path) -> str:
@@ -677,17 +624,15 @@ def build_id_for(qa: Path, files: list, compare: Path | None = None, hands: Path
             hp = hands / f
             if hp.exists():
                 h.update(f"hands|{f}|".encode() + hp.read_bytes())
-    newest = 0
     for f in files:
-        st = (qa / f).stat()
         if dictionary_job is not None:
             current = sa.current_label(json.loads((qa / f).read_text()), dictionary_job, f)
             h.update(dumps(current, sort_keys=True).encode())
-        newest = max(newest, st.st_mtime)
         h.update(f.encode() + (qa / f).read_bytes())
     h.update(hashlib.sha1(sa.INDEX_HTML.encode()).digest())
     h.update(ENC_TAG.encode() + FRAME_TAG.encode())
-    return f"{dt.datetime.fromtimestamp(newest):%Y%m%d}-{h.hexdigest()[:8]}"
+    # content only: a board rebuilt to the same bytes (every build rewrites its files) keeps its id
+    return h.hexdigest()[:16]
 
 
 def media_status(eps, media_root: Path):

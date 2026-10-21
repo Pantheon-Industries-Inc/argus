@@ -13,7 +13,6 @@ Adapters:
 """
 import importlib
 import sys
-import time
 from pathlib import Path
 
 from prepare import cli
@@ -40,9 +39,9 @@ name = sys.argv.pop(1)
 sys.argv[0] = f"python -m prepare {name}"
 out = next((a.split("=", 1)[1] if "=" in a else (sys.argv[i + 1] if i + 1 < len(sys.argv) else None)
             for i, a in enumerate(sys.argv) if a == "--out" or a.startswith("--out=")), None)
-since = time.time() - 2                  # some filesystems keep whole-second mtimes
+before = cli.contexts(Path(out)) if out and Path(out).is_dir() else {}     # by content, so a copy is not new work
 rc = importlib.import_module(f"prepare.{name}").main()
 if out and Path(out).is_dir():
     # every episode this run wrote names the adapter and commit that wrote it (prepare/cli.py stamp)
-    cli.stamp(Path(out), name, since)
+    cli.stamp(Path(out), name, before)
 raise SystemExit(rc)

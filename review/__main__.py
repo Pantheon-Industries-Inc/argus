@@ -157,9 +157,10 @@ def preparation_code_identity() -> dict:
 
 
 def file_identity(path: Path, *, context=False) -> dict:
-    from label.evidence_access import SOURCE_HASH_LIMIT
-    stat = path.stat()
-    result = {'location': hashlib.sha256(str(path.resolve()).encode()).hexdigest(), 'size': stat.st_size}
+    """Where a file is and what it holds (label/content_identity.py): a copy with the same bytes and new times is the
+    same file, and an edit that keeps the size and modification time is not."""
+    from label import content_identity
+    result = {'location': hashlib.sha256(str(path.resolve()).encode()).hexdigest()}
     if context:
         from label.dictionary import DERIVED_CONTEXT
         document = json.loads(path.read_text())
@@ -168,11 +169,16 @@ def file_identity(path: Path, *, context=False) -> dict:
         content = json.dumps(document, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
         result['size'] = len(content)
         result['sha256'] = hashlib.sha256(content).hexdigest()
-    elif stat.st_size <= SOURCE_HASH_LIMIT:
-        result['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
     else:
-        result['mtime_ns'] = stat.st_mtime_ns
+        result.update(content_identity.identity(path))
     return result
+
+
+def same_identities(saved, current) -> bool:
+    """The same files by content (content_identity.same_recorded), whatever times each was recorded with."""
+    from label.content_identity import same_recorded
+    return (isinstance(saved, dict) and isinstance(current, dict) and saved.keys() == current.keys()
+            and all(same_recorded(saved[name], current[name]) for name in current))
 
 
 def source_identity(data: Path, job: Path) -> dict:
@@ -247,9 +253,12 @@ def verified_preparation(job: Path, data: Path, args, dataset: str, overrides: d
     if receipt_path.exists():
         try:
             saved = json.loads(receipt_path.read_text())
-            if any(saved.get(key) != value for key, value in current.items() if key != 'producer'):
+            if (any(saved.get(key) != value for key, value in current.items() if key not in ('producer', 'source'))
+                    or not same_identities(saved.get('source'), current['source'])):
                 raise ValueError('source, settings or producer changed')
-            if saved['prepared'] != prepared_identity(job) or saved['report'] != file_identity(job / 'report.json'):
+            prepared, report = prepared_identity(job), file_identity(job / 'report.json')
+            if not same_identities(saved['prepared'], prepared) or not same_identities(
+                    {'report': saved['report']}, {'report': report}):
                 raise ValueError('prepared artifacts or report changed')
             selected = {}
             for name in saved['policies']:
@@ -264,6 +273,11 @@ def verified_preparation(job: Path, data: Path, args, dataset: str, overrides: d
                 raise ValueError('preparation report is invalid')
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             raise SystemExit(refuse) from error
+        # the same bytes under new times (a copy, an untar, a sync) pass, and the receipt keeps their times now
+        refreshed = {**saved, 'source': current['source'], 'prepared': prepared, 'report': report}
+        if refreshed != saved:
+            write_atomic(receipt_path, refreshed)
+            saved = refreshed
         print('== convert (verified preparation reused)', flush=True)
         return rep, saved
     if unverified_preparation_artifacts(job):
@@ -271,7 +285,8 @@ def verified_preparation(job: Path, data: Path, args, dataset: str, overrides: d
     print('== convert', flush=True)
     rep = formats.convert(data, args.rig, job / 'episodes', dataset,
                           args.max_minutes * 60 if args.max_minutes else float('inf'), grouping=args.grouping)
-    if current['source'] != source_identity(data, job) or current['producer'] != preparation_code_identity():
+    if (not same_identities(current['source'], source_identity(data, job))
+            or current['producer'] != preparation_code_identity()):
         raise SystemExit(refuse)
     write_atomic(job / 'report.json', rep, indent=1)
     current['policies'] = policy.persist(job / 'episodes', **overrides)
@@ -443,7 +458,7 @@ def review_job(a, overrides, lock_fd, output_lock_fd) -> int:
         print(f"free run: requests built in {job / 'dry'}, model not called", flush=True)
         return 0
 
-    if preparation['source'] != source_identity(data, job):
+    if not same_identities(preparation['source'], source_identity(data, job)):
         raise SystemExit('Source changed during review; use a fresh job with a new --out. Existing receipts are retained.')
 
     run_dir = job / "run"

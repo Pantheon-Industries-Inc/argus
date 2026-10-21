@@ -830,6 +830,33 @@ def test_a_rebuild_reuses_every_unchanged_episode_and_writes_the_same_bytes(tmp_
     assert made == {"episodes": 1, "sensors": 1} and _files(board) == first
 
 
+def test_the_build_cache_follows_file_content_not_file_times(tmp_path, monkeypatch):
+    ep = _episode(tmp_path / "eps")
+    board = _board(tmp_path, ep)
+    board_build.build(board)
+    first = _files(board)
+    made = _spy(monkeypatch)
+    # every file of the episode copied in again with the same bytes and new times (a sync, an untar): nothing is rebuilt
+    for f in sorted(p for p in ep.rglob("*") if p.is_file()):
+        copy = f.with_name(f.name + ".copy")
+        shutil.copyfile(f, copy)
+        os.replace(copy, f)
+        os.utime(f, ns=(f.stat().st_mtime_ns + 10**10,) * 2)
+    board_build.build(board)
+    assert made == {"episodes": 0, "sensors": 0} and _files(board) == first
+    # other readings under the same size and modification time rebuild both
+    sig = ep / "signals.npz"
+    before = sig.stat()
+    with np.load(sig) as z:
+        force = z["s0"].copy()
+    force[100:110] = 3.0
+    _resave(ep, s0=force)
+    os.utime(sig, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert (sig.stat().st_size, sig.stat().st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+    board_build.build(board)
+    assert made == {"episodes": 1, "sensors": 1} and _files(board) != first
+
+
 def test_a_changed_input_rebuilds_its_episode(tmp_path, monkeypatch):
     ep = _episode(tmp_path / "eps")
     board = _board(tmp_path, ep)
@@ -849,10 +876,8 @@ def test_a_changed_input_rebuilds_its_episode(tmp_path, monkeypatch):
     board_build.build(board)
     assert made == {"episodes": 1, "sensors": 0}
     assert "lift the red cup" in (board / "qa" / f"{ep.name}.json").read_text()
-    # a rewritten episode file rebuilds both
-    sig = ep / "signals.npz"
-    sig.write_bytes(sig.read_bytes())
-    os.utime(sig, ns=(sig.stat().st_mtime_ns + 10**9,) * 2)
+    # an episode file rewritten with other readings rebuilds both
+    _resave(ep, s2=np.zeros((300, 1), np.float32))
     board_build.build(board)
     assert made == {"episodes": 2, "sensors": 1}
     # and a changed rule in the manifest rebuilds the board file

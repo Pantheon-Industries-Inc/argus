@@ -127,6 +127,7 @@ def prepared_interpretation(context: dict, key: str, kind: str) -> dict:
 
 def field_interpretation(context: dict, name: str, kind="signal", *, context_path=None, source_identity=None) -> dict:
     """One exact bound field, or no interpretation when recorded identities are ambiguous."""
+    from label.content_identity import same_recorded
     overlay = context.get("data_dictionary") or {}
     owner = _owner(context)
     if owner != overlay.get("episode_id"):
@@ -136,7 +137,7 @@ def field_interpretation(context: dict, name: str, kind="signal", *, context_pat
     matched = [field for field in overlay.get("fields", []) if field.get("name") == name and field.get("kind") == kind
                and any(binding.get("episode") == owner and _bound(context, field, binding)
                        and (context_path is None or binding.get("context_path") == context_path)
-                       and (kind != 'native' or binding.get('source_identity') == source_identity)
+                       and (kind != 'native' or same_recorded(binding.get('source_identity'), source_identity))
                        for binding in field.get("bindings", []))]
     if len(matched) != 1:
         return {}

@@ -87,11 +87,12 @@ def test_durable_digest_uses_the_native_and_intel_statfs_abi(tmp_path):
     source.write_bytes(b'content')
     # Execute the production function with only stdlib imports, so the system's
     # universal Python can exercise the Intel libc symbol under Rosetta too.
-    tree = ast.parse(Path(static.__file__).read_text())
+    from label import content_identity
+    tree = ast.parse(Path(content_identity.__file__).read_text())
     functions = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and
-                 n.name in ('_durable_metadata', '_DarwinStatFS')]
+                 n.name in ('durable_metadata', '_DarwinStatFS')]
     script = 'import os, sys, ctypes\n' + ast.unparse(ast.Module(body=functions, type_ignores=[])) + '\n'
-    script += "p=sys.argv[1]; s=os.stat(p); print(_durable_metadata(p,(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns)))\n"
+    script += "p=sys.argv[1]; s=os.stat(p); print(durable_metadata(p,(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns)))\n"
     probe = tmp_path / 'probe.py'
     probe.write_text(script)
     for command in ([sys.executable], ['/usr/bin/arch', '-x86_64', '/usr/bin/python3']):

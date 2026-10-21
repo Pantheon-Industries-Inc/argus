@@ -584,10 +584,10 @@ def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int,
         isinstance(camera, dict) and camera.get('jaw_geometry') for camera in (ctx.get('cameras') or {}).values()) else None
     examples = []
     if example_dir:
+        from label import content_identity
         for path in sorted(Path(example_dir).glob("example_*.json")):
-            stat = path.stat()
-            examples.append({"name": path.name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+            # by content: an example copied with new times is the same example
+            examples.append({"name": path.name, **content_identity.content(content_identity.identity(path))})
     repository = Path(__file__).parent.parent
     request_sources = request_implementation(repository)
     semantics = hashlib.sha256()
@@ -605,10 +605,19 @@ def input_identity(ep_dir: Path, *, model: str, reasoning: str, max_tokens: int,
     return {"version": 2, "source_proof": source_proof(ctx, ep_dir), "settings": settings}
 
 
+def _content_settings(settings):
+    """Settings with each example by its content alone (an earlier identity also kept its modification time)."""
+    from label import content_identity
+    if isinstance(settings, dict) and isinstance(settings.get('examples'), list):
+        settings = {**settings, 'examples': [content_identity.content(e) if isinstance(e, dict) else e
+                                             for e in settings['examples']]}
+    return settings
+
+
 def same_input_identity(saved: dict, current: dict) -> bool:
     from label.evidence_access import equivalent_source_proof
     return (isinstance(saved, dict) and saved.get('version') == current.get('version')
-            and saved.get('settings') == current.get('settings')
+            and _content_settings(saved.get('settings')) == _content_settings(current.get('settings'))
             and equivalent_source_proof(saved.get('source_proof'), current.get('source_proof')))
 
 

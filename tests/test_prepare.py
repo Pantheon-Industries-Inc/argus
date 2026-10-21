@@ -81,15 +81,24 @@ def test_read_list_skips_comments_and_blanks_and_keeps_spaces_inside_a_line(tmp_
 
 def test_stamp_names_the_adapter_and_commit_in_the_episodes_this_run_wrote(tmp_path):
     import os
+    import shutil
     import time
-    for name, src in (("old", {}), ("new", {"format": "lerobot v2.1"}), ("upload", {"adapter": "habit"})):
-        (tmp_path / f"episode_{name}").mkdir()
+    def write(name, src):
+        (tmp_path / f"episode_{name}").mkdir(exist_ok=True)
         (tmp_path / f"episode_{name}" / "context.json").write_text(json.dumps({"source": src}))
-    since = time.time()
-    os.utime(tmp_path / "episode_old" / "context.json", (since - 60, since - 60))
-    assert cli.stamp(tmp_path, "lerobot", since - 1) == 2
+    write("old", {})
+    write("copied", {"format": "earlier"})
+    before = cli.contexts(tmp_path)
+    # an earlier run's episode copied in again (a sync, an untar) has new times and the same bytes: not this run's work
+    copied = tmp_path / "episode_copied" / "context.json"
+    shutil.copy(copied, copied.with_suffix(".tmp"))
+    os.replace(copied.with_suffix(".tmp"), copied)
+    os.utime(copied, (time.time() + 60,) * 2)
+    for name, src in (("new", {"format": "lerobot v2.1"}), ("upload", {"adapter": "habit"})):
+        write(name, src)
+    assert cli.stamp(tmp_path, "lerobot", before) == 2
     read = lambda n: json.loads((tmp_path / f"episode_{n}" / "context.json").read_text())["source"]
-    assert read("old") == {}
+    assert read("old") == {} and read("copied") == {"format": "earlier"}
     assert read("new")["adapter"] == "lerobot" and read("new")["format"] == "lerobot v2.1"
     assert read("upload")["adapter"] == "habit"
     assert read("new")["adapter_commit"] == read("upload")["adapter_commit"] == cli.commit() != ""

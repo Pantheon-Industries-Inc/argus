@@ -315,9 +315,10 @@ def analyse(video, *, times_s, camera, declaration, output_dir, source_proof, fr
             protected_roots=(), read_only=False):
     """Return output-cached evidence for an exact native-clock source window.
 
-    source_proof is the caller's existing verified source receipt. Source stat and
-    path identity also invalidate same-path replacement. output_dir must be outside
-    the source video's directory and all caller-supplied prepared roots.
+    source_proof is the caller's existing verified source receipt. The video's content
+    and path identity also invalidate same-path replacement, and a copy of the same
+    bytes keeps the cached evidence (label/content_identity.py). output_dir must be
+    outside the source video's directory and all caller-supplied prepared roots.
     """
     if not eligible(declaration):
         return _abstain('unsupported_geometry')
@@ -331,13 +332,16 @@ def analyse(video, *, times_s, camera, declaration, output_dir, source_proof, fr
     video, output_dir = Path(video).resolve(), Path(output_dir).resolve()
     if any(output_dir.is_relative_to(Path(root).resolve()) for root in (video.parent, *protected_roots)):
         raise ValueError('Jaw output must be outside the source directory.')
+    from label import content_identity
+    from label.evidence_access import content_proof
     try:
-        stat = video.stat()
+        content = content_identity.content(content_identity.identity(video))
     except OSError:
         return _abstain('source_unavailable')
     identity = {'algorithm': ALGORITHM, 'implementation_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                'source_proof': source_proof, 'source_location_sha256': hashlib.sha256(str(video).encode()).hexdigest(),
-                'source_stat': [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino],
+                'source_proof': content_proof(source_proof),
+                'source_location_sha256': hashlib.sha256(str(video).encode()).hexdigest(),
+                'source_content': content,
                 'camera': camera, 'declaration': declaration, 'frame_start': frame_start,
                 'frame_count': len(times), 'times_sha256': hashlib.sha256(times.astype('<f8').tobytes()).hexdigest()}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -351,10 +355,7 @@ def analyse(video, *, times_s, camera, declaration, output_dir, source_proof, fr
             try:
                 cached = json.loads(path.read_text())
                 if isinstance(cached, dict) and cached.get('identity') == identity and cached.get('cache_key') == key:
-                    current = video.stat()
-                    if [current.st_size, current.st_mtime_ns, current.st_ctime_ns, current.st_ino] == identity['source_stat']:
-                        return cached
-                    return _abstain('source_changed_during_analysis')
+                    return cached
             except (OSError, ValueError):
                 pass
         try:
@@ -363,11 +364,7 @@ def analyse(video, *, times_s, camera, declaration, output_dir, source_proof, fr
         except (ValueError, OSError, subprocess.SubprocessError):
             # Exception messages can name private paths; retain a bounded public reason.
             return _abstain('video_decode_failed')
-        try:
-            after = video.stat()
-        except OSError:
-            return _abstain('source_changed_during_analysis')
-        if [after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_ino] != identity['source_stat']:
+        if not content_identity.same_file(content, video):
             return _abstain('source_changed_during_analysis')
         result.update(cache_key=key, identity=identity)
         if not read_only:
