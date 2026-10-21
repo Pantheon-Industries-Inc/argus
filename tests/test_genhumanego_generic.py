@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import av
 import numpy as np
+import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from mcap_protobuf.writer import Writer
 
@@ -12,7 +13,13 @@ from prepare import formats, genhumanego
 from test_prepare import _h264_frames
 
 
-def native_types():
+# The field types Gen-HumanEgo's own recordings declare (read from its published MCAPs on 2026-10-21): segment ids
+# and invalid codes are text. INTEGER_IDS is the integer variant a recorder could write for the same fields.
+TEXT_IDS = {'id': 9, 'code': 9}
+INTEGER_IDS = {'id': 5, 'code': 5}
+
+
+def native_types(ids=TEXT_IDS):
     fd = descriptor_pb2.FileDescriptorProto(name='structured_ego_parity.proto', package='structured_ego', syntax='proto3')
     def message(name, fields):
         msg = fd.message_type.add(name=name)
@@ -23,14 +30,14 @@ def native_types():
     message('CompressedVideo', [('format', 9, False, None), ('data', 12, False, None)])
     message('CameraInfo', [('width', 5, False, None), ('height', 5, False, None),
         ('distortion_model', 9, False, None), ('D', 1, True, None), ('T_b_c', 1, True, None), ('frame_id', 9, False, None)])
-    message('Subsegment', [('segment_id', 5, False, None), ('start_time_s', 1, False, None),
+    message('Subsegment', [('segment_id', ids['id'], False, None), ('start_time_s', 1, False, None),
         ('end_time_s', 1, False, None), ('fine_label', 9, False, None), ('fine_label_detail', 9, False, None), ('is_success', 8, False, None)])
-    message('Segment', [('segment_id', 5, False, None), ('start_time_s', 1, False, None),
+    message('Segment', [('segment_id', ids['id'], False, None), ('start_time_s', 1, False, None),
         ('end_time_s', 1, False, None), ('fine_label', 9, False, None), ('sub_segments_info', 11, True, 'Subsegment')])
     message('Annotation', [('video_id', 9, False, None), ('bold_mark', 9, False, None), ('sst', 9, False, None),
         ('environment_description', 9, False, None), ('segments_info', 11, True, 'Segment')])
     message('InvalidRange', [('start_time_s', 1, False, None), ('end_time_s', 1, False, None),
-        ('invalid_code', 5, False, None), ('invalid_message', 9, False, None)])
+        ('invalid_code', ids['code'], False, None), ('invalid_message', 9, False, None)])
     message('TimeRangeValidity', [('invalid_ranges', 11, True, 'InvalidRange')])
     message('FrameValidity', [('is_valid', 8, False, None)])
     message('TextClaim', [('data', 9, False, None)])
@@ -48,8 +55,10 @@ def six_packets(offset):
         return _h264_frames(6)
 
 
-def recording(path, *, other_camera=False, explicit_primary=False, both_calibrated=False, six_cameras=False, early_other_ns=0, other_topic='/robot0/sensor/camera0/compressed', step_text=False):
-    types = native_types()
+def recording(path, *, other_camera=False, explicit_primary=False, both_calibrated=False, six_cameras=False, early_other_ns=0, other_topic='/robot0/sensor/camera0/compressed', step_text=False, ids=TEXT_IDS):
+    types = native_types(ids)
+    as_id = str if ids['id'] == 9 else int
+    as_code = str if ids['code'] == 9 else int
     base = 1_700_000_000_000_000_000
     offsets = np.asarray([0, 33, 68, 101, 143, 179], dtype=np.int64) * 1_000_000
     stamps = base + offsets
@@ -74,16 +83,16 @@ def recording(path, *, other_camera=False, explicit_primary=False, both_calibrat
             writer.write_message(topic.rsplit('/', 1)[0] + '/camera_info', calibration, log_time=base)
         annotation = types['Annotation'](video_id='source episode', bold_mark='fold the cloth', sst='folding',
                                        environment_description='original workspace')
-        segment = annotation.segments_info.add(segment_id=4, start_time_s=0, end_time_s=.179, fine_label='fold cloth')
-        segment.sub_segments_info.add(segment_id=5, start_time_s=.033, end_time_s=.068,
+        segment = annotation.segments_info.add(segment_id=as_id(4), start_time_s=0, end_time_s=.179, fine_label='fold cloth')
+        segment.sub_segments_info.add(segment_id=as_id(5), start_time_s=.033, end_time_s=.068,
             fine_label='grasp corner', fine_label_detail='original nested detail', is_success=False)
-        segment.sub_segments_info.add(segment_id=6, start_time_s=.101, end_time_s=.179,
+        segment.sub_segments_info.add(segment_id=as_id(6), start_time_s=.101, end_time_s=.179,
             fine_label='fold once', fine_label_detail='original successful detail', is_success=True)
         writer.write_message(genhumanego.ANNOTATION_TOPIC, annotation, log_time=base)
         if step_text:
             writer.write_message('/task/subtask', types['TextClaim'](data='recorded final step'), log_time=base + 33_000_000)
         validity = types['TimeRangeValidity']()
-        validity.invalid_ranges.add(start_time_s=.04, end_time_s=.06, invalid_code=3, invalid_message='source validity claim')
+        validity.invalid_ranges.add(start_time_s=.04, end_time_s=.06, invalid_code=as_code(3), invalid_message='source validity claim')
         writer.write_message('/robot0/time_range_validity', validity, log_time=base)
         for i, stamp in enumerate(stamps):
             writer.write_message('/robot0/frame_validity', types['FrameValidity'](is_valid=i not in (2, 4)), log_time=int(stamp))
@@ -114,13 +123,18 @@ def rgb(path):
         return [hashlib.sha256(frame.to_ndarray(format='rgb24').tobytes()).hexdigest() for frame in container.decode(video=0)]
 
 
-def test_structured_source_goal_nested_steps_and_false_success_match_legacy(tmp_path):
+@pytest.mark.parametrize('ids', [TEXT_IDS, INTEGER_IDS], ids=['text ids, as published', 'integer ids'])
+def test_structured_source_goal_nested_steps_and_false_success_match_legacy(tmp_path, ids):
     root = tmp_path / 'native'
     root.mkdir()
     raw = root / 'episode.mcap'
-    proof = recording(raw)
+    proof = recording(raw, ids=ids)
     old_ep, old = published(root, tmp_path / 'old')
     new_ep, new = converted(root, tmp_path / 'generic')
+    # the annotation and validity channels are read whichever type the recorder gave their ids and codes
+    meta = json.loads((old_ep / 'source/meta.json').read_text())
+    assert not meta['source_failures'], meta['source_failures']
+    assert [r['code'] for r in meta['invalid_ranges']] == [ids is TEXT_IDS and '3' or 3]
     assert new['instruction'] == old['instruction'] == 'fold the cloth'
     assert new['task_label'] == old['task_label'] == ['folding']
     assert new['annotation_subtasks'] == old['annotation_subtasks']

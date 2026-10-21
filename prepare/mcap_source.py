@@ -17,7 +17,13 @@ def _check_fields(decoded, required: dict[str, str]) -> None:
                 Field.TYPE_SFIXED32, Field.TYPE_SFIXED64}
     kinds = {"number": integers | {Field.TYPE_FLOAT, Field.TYPE_DOUBLE}, "integer": integers,
              "bytes": {Field.TYPE_BYTES}, "text": {Field.TYPE_STRING}, "bool": {Field.TYPE_BOOL},
-             "message": {Field.TYPE_MESSAGE}}
+             "message": {Field.TYPE_MESSAGE},
+             # a value the reader only carries (an id, a code), never computes with: any single value a publisher
+             # may record it as. Declaring such a field narrower than its use cost a whole channel when the
+             # publisher's type differed (Gen-HumanEgo records segment_id and invalid_code as text, and every
+             # annotation was left out)
+             "scalar": integers | {Field.TYPE_FLOAT, Field.TYPE_DOUBLE, Field.TYPE_STRING, Field.TYPE_BOOL,
+                                   Field.TYPE_ENUM}}
     for path, kind in required.items():
         descriptor = getattr(decoded, 'DESCRIPTOR', None)
         for name in path.split('.'):

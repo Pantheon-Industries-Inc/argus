@@ -73,15 +73,15 @@ def extract(mcap: Path, raw: Path, rel: str) -> None:
                           "D": "number[]", "T_b_c": "number[]", "frame_id": "text"} for topic in calib_topics}
         fields[ANNOTATION_TOPIC] = {"video_id": "text", "bold_mark": "text", "sst": "text",
             "environment_description": "text", "segments_info": "message[]",
-            "segments_info.segment_id": "integer", "segments_info.start_time_s": "number",
+            "segments_info.segment_id": "scalar", "segments_info.start_time_s": "number",
             "segments_info.end_time_s": "number", "segments_info.fine_label": "text",
-            "segments_info.sub_segments_info": "message[]", "segments_info.sub_segments_info.segment_id": "integer",
+            "segments_info.sub_segments_info": "message[]", "segments_info.sub_segments_info.segment_id": "scalar",
             "segments_info.sub_segments_info.start_time_s": "number", "segments_info.sub_segments_info.end_time_s": "number",
             "segments_info.sub_segments_info.fine_label": "text", "segments_info.sub_segments_info.fine_label_detail": "text",
             "segments_info.sub_segments_info.is_success": "bool"}
         fields["/robot0/time_range_validity"] = {"invalid_ranges": "message[]",
             "invalid_ranges.start_time_s": "number", "invalid_ranges.end_time_s": "number",
-            "invalid_ranges.invalid_code": "integer", "invalid_ranges.invalid_message": "text"}
+            "invalid_ranges.invalid_code": "scalar", "invalid_ranges.invalid_message": "text"}
         fields["/robot0/frame_validity"] = {"is_valid": "bool"}
         for _, ch, msg, d in decoded_messages(r, fields, source_failures):
             if ch.topic in calib_topics:
