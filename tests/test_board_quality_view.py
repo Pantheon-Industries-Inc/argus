@@ -208,5 +208,7 @@ def test_quality_css_uses_only_tokens_the_page_defines():
     used = set(re.findall(r'var\((--[\w-]+)\)', css))   # a var() with a fallback is allowed to be undefined
     local = set(re.findall(r'(--[\w-]+)\s*:', css))       # a property the section sets for its own boxes
     assert used and used <= defined | local, used - defined - local
-    # the narrow layout keeps the header, the shown rows and the folded rows on one grid
-    assert '@container (max-width: 620px)' in css and 'grid-template-areas' in css
+    # the narrow layout puts each row's scores on lines of their own, where a cell no wider than its name goes on to the
+    # next line instead of running into the next cell (tests/test_layout_fits.py checks it at a phone's width)
+    narrow = css[css.index('@container (max-width: 620px)'):]
+    assert 'flex-wrap: wrap' in narrow and 'min-width: max-content' in narrow

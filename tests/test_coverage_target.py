@@ -31,7 +31,7 @@ let currentDataset = 'yam';
 const page = require('fs').readFileSync(require('path').join(process.argv[3], 'board', 'index.html'), 'utf8');
 const line = name => page.slice(page.indexOf(name), page.indexOf('\n', page.indexOf(name)) + 1);
 const code = stub + line('let TARGETS =') + line('const coverageWas =')
-  + ['fmtHours', 'fmtSpan', 'sumDur', 'fmtOf', 'coverageBar', 'renderCoverage'].map(piece).join('')
+  + ['fmtHours', 'fmtSpan', 'sumDur', 'fmtOf', 'fitLine', 'coverageBar', 'renderCoverage'].map(piece).join('')
   + 'renderCoverage("yam", ALL_EPS.filter(e => e.dataset === "yam")); coverageEl.innerHTML';
 console.log(JSON.stringify(eval(code)));
 '''
@@ -47,9 +47,9 @@ def render(targets):
 @pytestmark_node
 def test_a_target_shows_labelled_of_target_with_a_bar():
     html = render({'yam': {'episodes': 2682, 'hours': 101.9}, 'umi': {'episodes': 10, 'hours': 2}})
-    assert '1 of 2,682<span class="u"> eps</span> &middot; 45.1 of 101.9 h' in html
-    assert '0.5 of 2.0 h' in html                       # each dataset in its own target's unit
-    assert 'of 2,692 eps' in html and 'of 103.9 h' in html     # the totals add the targets
+    assert '1 of 2,682<span class="u"> eps</span> &middot; 45.1 of 101.9h' in html
+    assert '0.5 of 2.0h' in html                       # each dataset in its own target's unit
+    assert 'of 2,692 eps' in html and 'of 103.9h' in html     # the totals add the targets
     assert html.count('role="progressbar"') == 3
     assert 'aria-valuenow="44"' in html                 # 45.1 of 101.9 hours
 
@@ -57,7 +57,7 @@ def test_a_target_shows_labelled_of_target_with_a_bar():
 @pytestmark_node
 def test_without_a_target_for_every_dataset_the_totals_are_unchanged():
     html = render({'yam': {'episodes': 2682, 'hours': 101.9}})
-    assert '45.1 of 101.9 h' in html
+    assert '45.1 of 101.9h' in html
     assert 'of 2,682 eps</small>' not in html and html.count('role="progressbar"') == 1
     assert '<small>episodes</small>' in html
 
@@ -66,7 +66,7 @@ def test_without_a_target_for_every_dataset_the_totals_are_unchanged():
 def test_no_targets_leave_the_strip_as_it_was():
     html = render({})
     assert 'progressbar' not in html and ' of ' not in html
-    assert '1<span class="u"> ep</span> &middot; 45.1 h' in html
+    assert '1<span class="u"> ep</span> &middot; 45.1h' in html
 
 
 @pytestmark_node
@@ -74,8 +74,8 @@ def test_a_dataset_with_a_target_and_no_episodes_gets_a_dimmed_tab_and_counts_in
     html = render({'yam': {'episodes': 2682, 'hours': 101.9}, 'umi': {'episodes': 10, 'hours': 2},
                    'molmo': {'episodes': 4472, 'hours': 100.1}})
     assert 'cv-cell none' in html and 'data-ds="molmo"' in html
-    assert '0 of 4,472<span class="u"> eps</span> &middot; 0.0 of 100.1 h' in html
-    assert 'of 7,164 eps' in html and 'of 204.0 h' in html       # 2,682 + 10 + 4,472 episodes, 101.9 + 2 + 100.1 hours
+    assert '0 of 4,472<span class="u"> eps</span> &middot; 0.0 of 100.1h' in html
+    assert 'of 7,164 eps' in html and 'of 204.0h' in html       # 2,682 + 10 + 4,472 episodes, 101.9 + 2 + 100.1 hours
 
 
 def test_targets_read_only_positive_numbers_from_the_manifest(tmp_path):
