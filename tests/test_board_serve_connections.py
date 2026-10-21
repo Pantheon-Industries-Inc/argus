@@ -111,3 +111,21 @@ def test_client_key_groups_ipv6_hosts_and_trusts_forwarding_only_from_loopback()
     assert serve.client_key('127.0.0.1', '1.2.3.4, 10.0.0.5') == '10.0.0.5'
     assert serve.client_key('192.168.1.9', '10.0.0.5') == '192.168.1.9'
     assert serve.client_key('::ffff:10.1.2.3') == '10.1.2.3'
+
+
+def test_a_port_already_taken_is_reported_as_taken_and_leaves_nothing_open():
+    import errno
+    import os
+    import pytest
+    taken = socket.socket()
+    taken.bind(('127.0.0.1', 0))
+    taken.listen()
+    fds = len(os.listdir('/dev/fd')) if os.path.isdir('/dev/fd') else None
+    try:
+        with pytest.raises(OSError) as raised:
+            serve.BoardHTTPServer(taken.getsockname(), serve.Handler)
+        assert raised.value.errno == errno.EADDRINUSE
+        if fds is not None:
+            assert len(os.listdir('/dev/fd')) == fds
+    finally:
+        taken.close()

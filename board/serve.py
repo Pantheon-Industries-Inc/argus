@@ -2584,7 +2584,6 @@ class BoardHTTPServer(socketserver.TCPServer):
     worker_idle_seconds = 0.5
 
     def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True):
-        super().__init__(server_address, RequestHandlerClass, bind_and_activate)
         try:
             import resource
             soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
@@ -2609,6 +2608,9 @@ class BoardHTTPServer(socketserver.TCPServer):
         self._stopped = threading.Event()
         self._stopped.set()
         self._accept_paused_until = 0.0
+        # bound last: a bind that fails (the port taken) closes the server, and server_close needs the state above, so
+        # the caller sees the bind's own error ("Address already in use") and no descriptor is left open
+        super().__init__(server_address, RequestHandlerClass, bind_and_activate)
 
     # selector thread ------------------------------------------------------------------------------------------------
 
