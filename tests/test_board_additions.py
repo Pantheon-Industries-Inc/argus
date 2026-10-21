@@ -21,6 +21,9 @@ def _output(ep: Path, **labels) -> dict:
             "given_prompt": "Zip the bag closed.", "prompt_mode": "session",
             "usage": {"est_cost_usd": 0.2}, "config": {"timesteps_s": [0.0, 1.0], "views": ["exo"]},
             "labels": {"task_summary": "The arm folds a cloth.",
+                       # the work the request asked for (label/completeness.py): a timeline over its instants
+                       "timeline": [{"start_s": 0.0, "end_s": 1.0, "arm": "right", "action": "fold",
+                                     "contribution": "advancing", "progress": 1.0}],
                        "tasks": [{"start_s": 0.0, "end_s": 5.0, "task": "Fold the cloth.", "outcome": "success"}],
                        "data_issues": [{"issue": "a person reaches in", "category": "human_intervention",
                                         "severity": "low", "t_s": 1.0, "end_s": 2.0, "evidence": "exo 1 s"}],
