@@ -1070,7 +1070,8 @@ aside.left .cam-row-grippers.cam-main-scene:has(.sensor-overlay-stack) .cam-cell
    spends away from rest shaded. A 2-D array that is touch (label/signals.py is_touch, a pressure map) is drawn as a
    heatmap at the playhead beside the lanes' start. Lanes past the first few open with "Show all". */
 /* clear the timeline's tick labels, which hang 16px below it, as the first lane does */
-.timeline + #sn-slot > h3.sn-h, .lane + #sn-slot > h3.sn-h { margin-top: 22px; }
+.timeline + #sn-slot > .sn-h, .lane + #sn-slot > .sn-h { margin-top: 22px; }
+h4.subsection .count { margin-left: 6px; font: 500 11px/1 var(--mono); color: var(--fg-3); }
 .sn { margin: 0 0 22px; }
 .sn > .lane:first-child, .sn-maps + .lane { margin-top: 0; }
 .sn .lane { margin-top: 10px; }
@@ -1278,7 +1279,7 @@ aside.left .cam-row-grippers.cam-main-scene:has(.sensor-overlay-stack) .cam-cell
 /* a step with no time the board can read: listed after the timed ones, nothing to seek to */
 .feed .ev.untimed { cursor: default; }
 .feed .ev.untimed .t { font-size: 10.5px; white-space: nowrap; }
-.mo-row .ke-kind { display: inline-block; margin-right: 8px; padding: 1px 7px; border-radius: var(--r-pill);
+.mo-row .ke-kind { display: inline-block; padding: 1px 7px; border-radius: var(--r-pill);
   font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--fg-2); border: 1px solid var(--border);
   vertical-align: 1px; }
 .mo-row .ke-kind.sub { background: var(--fg); color: var(--bg, #fff); border-color: var(--fg); }
@@ -1683,10 +1684,11 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 .mo-row > * { min-width: 0; }
 .mo-no, .mo-at { font-family: var(--mono); font-size: 11.5px; color: var(--fg-3); padding-top: 1px; white-space: nowrap; }
 .mo-head .mo-no, .mo-head .mo-at { font-family: var(--sans); font-size: 11px; color: var(--fg-2); }
-.mo-l1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 0; }
-.mo-row .mo-label { flex: 1 1 140px; margin-right: 8px; color: var(--fg); font-size: 13px; line-height: 1.4;
-  overflow-wrap: anywhere; }
-.mo-task { margin-right: 8px; font: 600 10px/1.6 var(--mono); color: var(--fg-3); }
+/* a row's first line holds its kind and subtask, and its outcome at the right; the label below has the full width */
+.mo-l1 { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.mo-l1 .outcome { margin-left: auto; }
+.mo-row .mo-label { color: var(--fg); font-size: 13px; line-height: 1.4; overflow-wrap: break-word; }
+.mo-task { font: 600 10px/1.6 var(--mono); color: var(--fg-3); }
 .mo-d { font-family: var(--mono); font-size: 12.5px; text-align: right; padding-top: 1px; }
 .mo-head .mo-d { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-family: var(--sans);
   font-size: 11px; }
@@ -1701,11 +1703,13 @@ h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: va
 .mo-sev.medium { color: var(--warning); background: rgba(77,90,160,0.12); border-color: rgba(77,90,160,0.35); }
 .mo-none { font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
 .moments .fold-more { margin: 0; padding: 10px 14px; border-top: 1px solid var(--row-divider); width: 100%; text-align: left; }
-/* a table too narrow for its columns (a phone, a narrow column) puts each row's scores on a second line, each cell
-   named, on one grid shared by the shown rows and the folded ones */
+/* a table too narrow for its columns (a phone, a narrow column) puts each row's mistakes and then its scores on lines
+   of their own under it, each cell named, on one grid shared by the shown rows and the folded ones */
 @container (max-width: 620px) {
-  .moments.scored .mo-row { grid-template-columns: 24px 52px repeat(4, minmax(0, 1fr)) 76px; row-gap: 6px;
-    grid-template-areas: "no at what what what what what" ". mis mis cl sp st ex"; }
+  .moments.scored .mo-row { grid-template-columns: 24px repeat(4, minmax(0, 1fr)); row-gap: 6px;
+    grid-template-areas: "no at what what what" ". mis mis mis mis" ". cl sp st ex"; }
+  /* a row with no scored stretch keeps no empty score cells, so it adds no empty lines */
+  .moments.scored .mo-row > span:empty { display: none; }
   .moments.scored .mo-head { display: none; }
   .moments.scored .mo-no { grid-area: no; }
   .moments.scored .mo-at { grid-area: at; }
@@ -4722,7 +4726,7 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
     const fold = !!hasContacts && (sigs.length > 0 || still > 0);
     const shown = !fold || SN_SHOWN;
     const foldWord = on_ => on_ ? 'Hide the recorded signals' : `Show all recorded signals`;
-    slot.innerHTML = `<h3 class="section sn-h">All recorded signals <span class="count">${counts.join(', ')}</span></h3>
+    slot.innerHTML = `<h4 class="subsection sn-h">All recorded signals <span class="count">${counts.join(', ')}</span></h4>
       <div class="sn${SN_OPEN ? ' open' : ''}${shown ? ' shown' : ''}">
         ${fold ? `<div class="sn-fold"><div class="sn-fold-in">${signalsHtml}</div></div><button class="ck-more `
           + `sn-show" type="button" aria-expanded="${shown}">${foldWord(shown)}</button>` : signalsHtml}
@@ -6846,20 +6850,26 @@ function renderEp(d, opts) {
     return `<div class="mo-row ${esc(oc)}${goalish ? ' goal' : ''}" data-t="${esc(m.t)}">
       <span class="mo-no">${n}</span>
       <span class="mo-at">${fmtT(m.t)}</span>
-      <div class="mo-what"><div class="mo-l1">${st && st.task != null && qIn.tasks_total ? `<span class="mo-task">Subtask `
-        + `${esc(st.task)}</span>` : ''}${name ? `<span class="ke-kind${goalish ? ' sub' : ''}">${esc(name)}</span>` : ''}<span `
-        + `class="mo-label">${esc(label || '')}</span>${oc ? `<span class="outcome ${esc(oc)}">${esc(st && !st.reached
-          && oc !== 'unclear' ? 'not reached' : oc)}</span>` : ''}</div>
+      <div class="mo-what">${momentTop(name ? `<span class="ke-kind${goalish ? ' sub' : ''}">${esc(name)}</span>` : '',
+        st && st.task != null && qIn.tasks_total ? `Subtask ${esc(st.task)}` : '',
+        oc, st && !st.reached && oc !== 'unclear' ? 'not reached' : oc)}<div class="mo-label">${esc(label || '')}</div>
         ${k && k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}
       </div>${scored ? momentScoreCells(st) : ''}
     </div>`;
   };
+  // a row's first line: its kind and subtask on the left and, when it did not succeed, its outcome on the right; the
+  // label then has the column's whole width. Success is the rule, so it is left unsaid
+  function momentTop(kindChip, task, oc, ocWord) {
+    const pill = oc && oc !== 'success' ? `<span class="outcome ${esc(oc)}">${esc(ocWord)}</span>` : '';
+    return kindChip || task || pill ? `<div class="mo-l1">${kindChip}${task ? `<span class="mo-task">${task}</span>`
+      : ''}${pill}</div>` : '';
+  }
   const untimedKeys = (d.key_events || []).filter(k => k && k.t_s == null);
   const momentRows = moments.map((m, i) => momentRow(m, i + 1)).concat(untimedKeys.map((k, i) => {
     const oc = (k.outcome || '').toLowerCase();
     return `<div class="mo-row untimed ${esc(oc)}"><span class="mo-no">${moments.length + i + 1}</span>`
-      + `<span class="mo-at">no time</span><div class="mo-what"><div class="mo-l1"><span class="mo-label">`
-      + `${esc(k.label || '')}</span>${oc ? `<span class="outcome ${esc(oc)}">${esc(oc)}</span>` : ''}</div>`
+      + `<span class="mo-at">no time</span><div class="mo-what">${momentTop('', '', oc, oc)}<div class="mo-label">`
+      + `${esc(k.label || '')}</div>`
       + `${k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}</div>${scored ? momentScoreCells(null) : ''}</div>`;
   }));
   const nSub = subs.filter(st => !st.goal).length;
@@ -7092,7 +7102,8 @@ function renderEp(d, opts) {
   const tColor = !tAll ? 'var(--fg-2)' : tOk === tAll ? 'var(--success)' : tcount.failure ? 'var(--danger)' : 'var(--fg-2)';
   const verdictHtml = hasTasks
     ? `<div class="verdict" style="--v:${tColor}"><span class="verdict-word">${tOk} of ${tAll}</span><span `
-      + `class="verdict-sub">${tAll === 1 ? 'task' : 'tasks'} succeeded${tPartly ? `, ${tPartly} partly done` : ''}`
+      + `class="verdict-sub">${tAll === 1 ? 'task' : 'tasks'} succeeded${tcount.failure ? `, ${tcount.failure} failed${tPartly
+        ? ` (${tPartly} partly done)` : ''}` : ''}${tAll - tOk - tcount.failure ? `, ${tAll - tOk - tcount.failure} unclear` : ''}`
       + `</span>${partsGapHtml(d)}</div>`
     : `<div class="verdict" style="--v:${vColor}"><span class="verdict-word">${esc(comp.task_completed
         ? cap(outcomeWords(verdict, comp.failure_kind)) : 'Not judged')}</span><span class="verdict-sub">${partProgress

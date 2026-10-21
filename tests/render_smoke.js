@@ -44,7 +44,7 @@ const {ctx, doc, created, failedRequests, fail, settle} = P;
       await ctx.setDataset(e.dataset, e.file); await settle();
       // an episode with a sensors file: its panel, once the file is in (the render fills it when it arrives)
       if ((S.sn() || {})[e.file]) { await S.loadSensors(e.file); await settle(); }
-      if (doc.getElementById('sn-slot').innerHTML.includes('class="section sn-h"')) out.sensors_panels++;
+      if (doc.getElementById('sn-slot').innerHTML.includes('class="subsection sn-h"')) out.sensors_panels++;
       // an episode with contacts: its Touch lane, its contact cards and its contact checks
       const left = doc.getElementById('left-col').innerHTML;
       if (left.includes('id="lane-touch"')) out.touch_lanes++;
