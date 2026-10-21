@@ -162,13 +162,15 @@ for (const src of [cut('const keyHtml = k ?', '</span>'), cut('class="tip">${esc
   assert(src.includes('keyKindName(k)') && !src.includes('kindName(k.kind)'), src);
 
 // the score chip: only beside a caption whose key event is a subgoal, or the goal reached
-const chipSrc = cut('  const subNo = new Map();', '  let subN = 0;') + cut('  const keyWindows =', '  const stateChanges =')
+// the caption's moments keep one clock (captionFlags), loaded from the page with the chip
+const chipSrc = cut('const FLAG_LEAD_S', '// a key event') + cut('  const subNo = new Map();', '  let subN = 0;')
+  + cut('  const captionWindows =', '  const stateChanges =')
   + cut('  let _scSig = null', "  document.querySelectorAll('.moments .mo-row");
 const chipEl = {innerHTML: '', on: false, classList: {add() { chipEl.on = true; }, remove() { chipEl.on = false; }}};
-const chip = new Function('keyEvents', 'subs', 'Q', 'qNum', 'episodeGoalT', 'document',
+const chip = new Function('keyEvents', 'subs', 'Q', 'qNum', 'episodeGoalT', 'taskGoalTimes', 'document',
   chipSrc + 'return renderScoreChip;');
 const chipKes = [{t_s: 4.5, kind: 'contact'}, {t_s: 5, kind: 'subgoal_complete'}];
-const render = chip(chipKes, qs.subgoals, qs, x => String(x), 44, {getElementById: () => chipEl});
+const render = chip(chipKes, qs.subgoals, qs, x => String(x), 44, [], {getElementById: () => chipEl});
 render(4.5);   // the caption is on the contact, so no score beside it
 assert.strictEqual(chipEl.on, false);
 render(5.2);   // the subgoal came after the contact, so it replaced it at once: the caption is on Subgoal 1
