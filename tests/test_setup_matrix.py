@@ -50,6 +50,7 @@ class Setup:
     data: Path
     items: list = field(default_factory=list)
     part_s: float | None = None     # a request part this long, so a short recording is labelled in parts
+    fault: str | None = None        # the offline model fails the second part's annotation: error, cutoff or rejected
 
 
 def teleop_lerobot(root: Path) -> Setup:
@@ -221,6 +222,20 @@ def long_hdf5(root: Path) -> Setup:
         Item('signal', 'force'), Item('signal', 'left_pressure')], part_s=12.0)
 
 
+def part_failure(fault: str):
+    """long_hdf5 with its second part's annotation failed by the offline model: a provider error (error), a reply cut
+    off at the output limit (cutoff), or a reply the completion rule rejects for holding no annotation (rejected)."""
+    def build(root: Path) -> Setup:
+        setup = long_hdf5(root)
+        return Setup(f'part_{fault}', setup.rig, setup.data, setup.items, part_s=setup.part_s, fault=fault)
+    build.__name__ = f'part_{fault}'
+    build.__doc__ = part_failure.__doc__
+    return build
+
+
+part_error, part_cutoff, part_rejected = (part_failure(fault) for fault in ('error', 'cutoff', 'rejected'))
+
+
 def regional_glove(root: Path) -> Setup:
     """A pressure glove in the OpenTouch layout, whose bundled publisher contract declares the hand regions, so the
     pad gets its separate regional pass: the publisher-schema builder's file, lengthened to 4s of presses."""
@@ -262,7 +277,8 @@ def regional_glove(root: Path) -> Setup:
 
 
 SETUPS = [teleop_lerobot, mcap_arm, umi_gripper, ego_head, hdf5_gloves, depth_mcap, tactile_lerobot,
-          plain_video, zipped_mcap, long_hdf5, regional_glove, tactile_device_mcap]
+           plain_video, zipped_mcap, long_hdf5, regional_glove, tactile_device_mcap, part_error, part_cutoff,
+           part_rejected]
 
 
 # ---- the offline model -------------------------------------------------------------------------------------------------
@@ -310,6 +326,7 @@ class OfflineModel:
         self.calls = []
         self.selected = {}       # an inventory's field ids -> the ids already requested from it
         self.written = 0         # findings and issues written so far, so every tag is unique across the parts
+        self.fault = None        # Setup.fault
 
     def tag(self, kind: str) -> str:
         self.written += 1
@@ -333,9 +350,21 @@ class OfflineModel:
         else:
             kind, reply = 'final', self.final(texts)
         self.calls.append(kind)
+        content, finish = json.dumps(reply), 'stop'
+        if kind == 'final' and self.fault and 'This request is part 2 of' in whole:
+            self.calls[-1] = f'final {self.fault}'
+            if self.fault == 'error':
+                import email.message
+                import urllib.error
+                raise urllib.error.HTTPError(request.full_url, 400, 'Bad Request', email.message.Message(),
+                                             io.BytesIO(b'{"error":{"message":"offline provider failure"}}'))
+            if self.fault == 'cutoff':
+                content, finish = content[:len(content) // 2], 'length'
+            if self.fault == 'rejected':
+                content = json.dumps({'timeline_columns': [], 'timeline': []})
         payload = {'id': f'gen-offline-{len(self.calls)}', 'model': body.get('model'),
                    'usage': {'cost': 0.001, 'prompt_tokens': 10, 'completion_tokens': 10},
-                   'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(reply)}}]}
+                   'choices': [{'finish_reason': finish, 'message': {'content': content}}]}
         return io.BytesIO(json.dumps(payload).encode())
 
     # -- evidence selection: request every measured field once, three a round
@@ -477,14 +506,15 @@ class OfflineModel:
         reply = {'task_summary': 'Move the object.',
                  'timeline': [{'start_s': begin or 0.0, 'end_s': end, 'arm': 'right', 'action': 'reach',
                                'contribution': 'advancing', 'progress': 1.0}] if end else [],
-                 'data_issues': [{'issue': f'{self.tag("data_issues")}: camera {c} is dim', 'category': 'camera_fault',
-                                  'severity': 'low', 't_s': None, 'end_s': None, 'evidence': f'camera {c}'}
+                 'data_issues': [{'issue': f'Camera {c} is dim.', 'category': 'camera_fault', 'severity': 'low',
+                                  't_s': None, 'end_s': None, 'evidence': f'{self.tag("data_issues")}: camera {c}'}
                                  for c in cameras]}
         if cameras:
-            # an issue at the request's last instant, which a part's cut can set aside with its reason
-            reply['data_issues'].append({'issue': f'{self.tag("data_issues")}: the task is still going at the end',
-                                         'category': 'truncated_episode', 'severity': 'medium', 't_s': end,
-                                         'end_s': end, 'evidence': f'camera {cameras[0]} at {end}s'})
+            # an issue that only says the clip ends mid-task, at the request's last instant: at an internal cut the
+            # stitcher sets it aside with its reason (label/pieces.py is_cut_artifact), elsewhere it stands
+            reply['data_issues'].append({'issue': 'The clip ends mid-task.', 'category': 'truncated_episode',
+                                         'severity': 'medium', 't_s': end, 'end_s': end,
+                                         'evidence': f'{self.tag("data_issues")}: camera {cameras[0]} at {end}s'})
         for name in FINDING_LISTS:
             reply[name] = [{**json.loads(json.dumps(f)), 'observation': self.tag(name)} for f in cited]
         if views:
@@ -758,8 +788,8 @@ def issue_tags(d: dict) -> set:
     rows = [*(d.get('data_issues') or labels.get('data_issues') or []),
             *(row for row in excluded if isinstance(row, dict) and any(isinstance(row.get(k), str) and row[k].strip()
                                                                       for k in ('reason', 'excluded_reason', 'why')))]
-    return {r['issue'].split(':', 1)[0] for r in rows if isinstance(r, dict) and isinstance(r.get('issue'), str)
-            and r['issue'].startswith('offline ')}
+    return {r['evidence'].split(':', 1)[0] for r in rows if isinstance(r, dict) and isinstance(r.get('evidence'), str)
+            and r['evidence'].startswith('offline ')}
 
 
 def observation_views(d: dict) -> tuple:
@@ -767,7 +797,10 @@ def observation_views(d: dict) -> tuple:
     kept = {o.get('view') for o in co.get('observations') or [] if isinstance(o, dict)}
     withheld = [o for o in co.get('withheld_observations') or []
                 if isinstance(o, dict) and isinstance(o.get('why'), str) and o['why'].strip()]
-    aside = {(o.get('observation') or {}).get('view') for o in withheld} | {v for o in withheld for v in o.get('views') or []}
+    # a withheld row names its view, the observation it holds back, or the views it covers (label/harness.py
+    # bind_camera_observations, label/pieces.py merge_camera_observations)
+    aside = ({o.get('view') for o in withheld} | {(o.get('observation') or {}).get('view') for o in withheld}
+             | {v for o in withheld for v in o.get('views') or []})
     return kept, aside
 
 
@@ -880,7 +913,48 @@ def carried_losses(tag: str, units: list, stages: list) -> list:
 
 def unit_names(job: Path, eid: str) -> list:
     """The requests a recording was labelled in: its parts when it was cut (label/pieces.py), else itself."""
-    return sorted(p.stem for p in (job / 'run' / 'out').glob(f'{eid}__p*.json')) or [eid]
+    return sorted(p.name for p in (job / 'units').glob(f'{eid}__p*') if p.is_dir()) or [eid]
+
+
+def unit_record(job: Path, name: str) -> dict | None:
+    """A request's record as the harness left it: its reply, or the reply cut off at the output limit (failed_), or
+    the claim of a request that got none (noreply_)."""
+    for prefix in ('', 'failed_', 'noreply_'):
+        record = _read(job / 'run' / 'out' / f'{prefix}{name}.json')
+        if record is not None:
+            return record
+    return None
+
+
+def gap_losses(tag: str, part: int, record: dict | None, stages: list) -> list:
+    """A part that gave no labels is named at every later stage as a gap with its span and reason, and the recording
+    is never presented as whole: the stitched episode, the board and the export each list the part under the stitched
+    gaps, the board and the export flag it at its span, and the recording's outcome is unclear and says why, or absent
+    (a session's outcome is its tasks'). The stitched gap keeps the cause the harness recorded for the part: the
+    parser's error, or why no reply came."""
+    lost = []
+    labels = (record or {}).get('labels') if isinstance((record or {}).get('labels'), dict) else {}
+    cause = labels.get('_parse_error') or (record or {}).get('no_reply')
+    for stage, doc in stages:
+        stitched = doc.get('stitched') if stage == 'stitched' else doc.get('_stitched')
+        gaps = [g for g in (stitched or {}).get('missing') or [] if isinstance(g, dict) and g.get('part') == part]
+        if not gaps or not all(isinstance(g.get(k), (int, float)) for g in gaps for k in ('t0_s', 't1_s')) \
+                or not all(isinstance(g.get('why'), str) and g['why'].strip() for g in gaps):
+            lost.append(f'{stage}: {tag}part {part} gave no labels and is not named as a gap with its span and reason')
+        elif stage == 'stitched' and isinstance(cause, str) and not any(cause in g['why'] for g in gaps):
+            lost.append(f'{stage}: {tag}part {part}\'s gap says {gaps[0]["why"]!r}, not the recorded cause {cause!r}')
+        if stage != 'stitched':
+            flagged = [i for i in (doc.get('dataset_checks') or {}).get('reader_issues') or [] if isinstance(i, dict)
+                       and i.get('kind') == 'part_not_labelled' and isinstance(i.get('t0_s'), (int, float))]
+            if not any(gaps and abs(i['t0_s'] - gaps[0].get('t0_s', -1)) < 1e-6 for i in flagged):
+                lost.append(f'{stage}: {tag}part {part} gave no labels and is not flagged at its span')
+        completion = ((doc.get('labels') if stage == 'stitched' else doc) or {}).get('completion') or {}
+        verdict = completion.get('task_completed')
+        if verdict not in (None, 'unclear'):
+            lost.append(f'{stage}: {tag}part {part} gave no labels, yet the recording has the outcome {verdict!r}')
+        elif not mentions(str(completion.get('reason') or ''), f'part {part} has no labels') and verdict == 'unclear':
+            lost.append(f'{stage}: {tag}the recording\'s outcome does not say part {part} has no labels')
+    return lost
 
 
 def losses(setup: Setup, job: Path) -> list:
@@ -907,9 +981,14 @@ def losses(setup: Setup, job: Path) -> list:
         stitched = _read(job / 'run_final' / 'out' / f'{eid}.json')
         board = _read(job / 'qa' / f'{eid}.json')
         names = unit_names(job, eid)
-        units = {name: _read(job / 'run' / 'out' / f'{name}.json') for name in names}
+        records = {name: unit_record(job, name) for name in names}
+        from label.harness import annotation_complete
+        # a part that gave no labels is a gap: it is checked for being named as one, never as a part that was labelled
+        gaps = [name for name, record in records.items() if record is None or not annotation_complete(record)]
+        units = {name: record for name, record in records.items() if name not in gaps}
         missing = [stage for stage, doc in (('prepared', ctx), ('stitched', stitched), ('board', board)) if doc is None]
-        missing += [f'bound ({name})' for name, record in units.items() if record is None]
+        if len(names) == 1 and gaps:
+            lost.append(f'bound: {tag}the reply gave no labels: {(records[eid] or {}).get("labels")}')
         if missing:
             if not explained(report_reasons, eid):
                 lost += [f'{stage}: {tag}the episode is missing with no reason' for stage in missing]
@@ -926,7 +1005,9 @@ def losses(setup: Setup, job: Path) -> list:
         reasons['export'] = reasons['board']
         carriers = {'stitched': request_carriers(stitched, ''), 'board': board_carriers(job, eid, board),
                     'export': record_carriers(exported)}
-        for name, record in units.items():
+        for name, record in records.items():
+            if record is None:
+                continue
             evidence, inspection = record.get('sensor_evidence') or {}, record.get('evidence_inspection') or {}
             carriers[name] = request_carriers(record, (_read(job / 'dry' / f'{name}.json') or {}).get('prompt_text') or '')
             reasons[name] = flagged_texts([evidence.get('limitations'), inspection.get('limitations')])
@@ -940,8 +1021,9 @@ def losses(setup: Setup, job: Path) -> list:
                 continue
             # the stitched record joins the parts' labels and evidence; recorded fields stay in the episode's context,
             # which the board reads again, so they are checked in each part's request, the board and the export
-            for stage in [*names, *(['stitched'] if item.kind != 'field' else []), 'board', 'export']:
-                label = f'request ({stage})' if stage in units else stage
+            for stage in [*(n for n in names if records[n] is not None),
+                          *(['stitched'] if item.kind != 'field' else []), 'board', 'export']:
+                label = f'request ({stage})' if stage in records else stage
                 for ident in idents:
                     if not (present(carriers[stage], item.kind, ident) or explained(reasons[stage], ident)
                             or explained(reasons[stage], item.name)):
@@ -949,6 +1031,9 @@ def losses(setup: Setup, job: Path) -> list:
         for name, record in units.items():
             lost += unit_losses(f'{name}: ', record)
         lost += carried_losses(tag, list(units.values()),
+                               [('stitched', stitched), ('board', board), ('export', exported)])
+        for name in gaps if len(names) > 1 else []:
+            lost += gap_losses(tag, names.index(name) + 1, records[name],
                                [('stitched', stitched), ('board', board), ('export', exported)])
     return lost
 
@@ -975,6 +1060,7 @@ def review_case(case) -> dict:
     try:
         setup = globals()[name](root / 'source')
         model = OfflineModel()
+        model.fault = setup.fault
         rc = run_review(setup, root / 'job', model, patch, mode)
         return {'rc': rc, 'calls': model.calls, 'losses': losses(setup, root / 'job'),
                 'paths': sorted(paths_reached(root / 'job', model))}
@@ -992,7 +1078,12 @@ def paths_reached(job: Path, model: OfflineModel) -> set:
         | ({'tasks'} if any(tagged_tasks(r) for r in replies) else set()) \
         | ({'goal alignment'} if any(alignment_tags(r) for r in replies) else set()) \
         | ({'sensor findings'} if any(finding_tags(r.get('sensor_findings')) for r in replies) else set()) \
-        | ({'camera observations'} if any(r.get('camera_observations') for r in replies) else set())
+        | ({'camera observations'} if any(r.get('camera_observations') for r in replies) else set()) \
+        | {f'part without labels ({kind.split()[-1]})' for kind in model.calls if kind.startswith('final ')} \
+        | ({'issue set aside at a cut'} if any(row.get('excluded_by') == 'piece_cut' and issue_tags({'data_issues': [row]})
+                                               for p in (job / 'run_final' / 'out').glob('episode_*.json')
+                                               for row in ((_read(p) or {}).get('labels') or {}).get('_excluded') or []
+                                               if isinstance(row, dict)) else set())
 
 
 @pytest.fixture(scope='module')
@@ -1023,12 +1114,14 @@ def test_every_setup_keeps_every_stream_and_citation_through_to_the_export(name,
 
 def test_the_corpus_reaches_every_path_it_checks(reviewed):
     """A check that never runs proves nothing: in each task mode some setup is cut into parts, gets the regional
-    pass, writes tasks, a goal alignment, sensor findings and camera observations."""
+    pass, writes tasks, a goal alignment, sensor findings and camera observations, has an issue set aside at a cut,
+    and has a part that gave no labels for each kind of failure."""
     for mode in MODES:
         reached = {path for (name, case_mode), result in reviewed.items() if case_mode == mode
                    for path in result.get('paths') or []}
         assert reached >= {'parts', 'regional pass', 'tasks', 'goal alignment', 'sensor findings',
-                           'camera observations'}, (mode, sorted(reached))
+                           'camera observations', 'issue set aside at a cut', 'part without labels (error)',
+                           'part without labels (cutoff)', 'part without labels (rejected)'}, (mode, sorted(reached))
 
 
 # ---- the check itself catches each kind of loss ----------------------------------------------------------------------

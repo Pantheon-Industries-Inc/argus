@@ -506,7 +506,10 @@ def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
         return record, f"the model gave no reply ({record['no_reply']})"
     if record.get('parse_ok') or isinstance(labels, dict) and labels.get('_incomplete'):
         return record, "the model's reply is incomplete: " + '; '.join(problems)
-    return record, "the model's reply did not parse"
+    # the parser's own error says why, such as a JSON reply with no annotation in it, which the gap would otherwise
+    # describe as JSON that did not read
+    error = labels.get('_parse_error') if isinstance(labels, dict) else None
+    return record, "the model's reply did not parse" + (f" ({error})" if isinstance(error, str) and error.strip() else "")
 
 
 def _raw_head(r: dict | None) -> str:

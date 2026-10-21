@@ -154,6 +154,7 @@
  "tests/test_sensor_evidence.py": 0.6,
  "tests/test_sensor_native_plots.py": 1.6,
  "tests/test_setup_matrix.py": 76.0,
+ "tests/test_setup_matrix.py": 75.0,
  "tests/test_sensor_scene.py": 1.3,
  "tests/test_sensor_semantics.py": 0.0,
  "tests/test_sharding.py": 0.0,

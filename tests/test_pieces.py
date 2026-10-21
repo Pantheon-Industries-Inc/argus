@@ -750,7 +750,7 @@ def test_a_long_recording_with_a_part_that_failed_is_stitched_from_the_rest_with
     assert r["stitched"]["parts"] == 3 and r["stitched"]["cuts_s"] == [pcs[1]["t0_s"], pcs[2]["t0_s"]]
     (gap,) = r["stitched"]["missing"]
     # with the start of the part's own reply, which the board shows (it never reached the board before)
-    assert gap == {"part": 2, "t0_s": pcs[1]["t0_s"], "t1_s": pcs[1]["t1_s"], "why": "the model's reply did not parse",
+    assert gap == {"part": 2, "t0_s": pcs[1]["t0_s"], "t1_s": pcs[1]["t1_s"], "why": "the model's reply did not parse (x)",
                    "raw_head": "{oops"}
     assert r['labels']['tasks'] == []
     assert [x['task_summary'] for x in r['labels']['part_assessments']] == ['reach', 'place']
@@ -785,7 +785,7 @@ def test_a_long_recording_none_of_whose_parts_parsed_is_still_on_the_board(tmp_p
     assert r["evidence_inspection"]["parts"][0]["part"] == 3
     assert r["parse_ok"] is False and r["episode_dir"] == str(src)
     assert [g["why"] for g in r["stitched"]["missing"]] == [
-        "the model's reply was cut off at the output limit", "the model's reply did not parse",
+        "the model's reply was cut off at the output limit", "the model's reply did not parse (x)",
         "the model gave no reply (decoder failed after inspection)"]
     # the board says why for each part, never that the model's reply did not parse
     from board import build as board_build
