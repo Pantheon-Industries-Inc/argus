@@ -2462,16 +2462,35 @@ def degree_evidence(readings, columns) -> list[int] | None:
 RADIAN_UNITS = {"rad", "radian", "radians"}
 
 
+def winds_past_one_turn(column: np.ndarray) -> bool:
+    """Whether a value keeps turning one way past one turn, as a wheel or a continuous joint recorded in radians does:
+    its finite readings end more than 2 pi from where they start, every step between them is under half a turn, and
+    at least 90% of the steps that move go the way the whole travel goes. A degree-valued joint that reaches out and
+    back does not wind."""
+    v = np.asarray(column, dtype=float)
+    v = v[np.isfinite(v)]
+    if len(v) < 3:
+        return False
+    steps = np.diff(v)
+    travel = v[-1] - v[0]
+    moving = steps[steps != 0]
+    if abs(travel) <= 2 * np.pi or not len(moving) or bool(np.any(np.abs(steps) >= np.pi)):
+        return False
+    return float(np.mean(np.sign(moving) == np.sign(travel))) >= 0.9
+
+
 def radians_contradicted(name: str, a: np.ndarray, meta: dict) -> str | None:
     """The reader issue sentence when a signal's values declared in radians (its unit or units, whoever declared them)
     read as only degrees explain, by the rule qualified_state holds a state to: at least half of them, and at least
-    one, beyond one turn (2 pi), and none beyond 720. None otherwise. The declared unit is kept and named as
-    contradicted; it never rescales the readings."""
+    one, beyond one turn (2 pi), and none beyond 720. A value that winds (winds_past_one_turn), a wheel or a
+    continuous joint, reads past one turn in radians too, so it counts toward neither side. None otherwise. The
+    declared unit is kept and named as contradicted; it never rescales the readings."""
     from prepare.value_names import recorded_units
     a = np.asarray(a, dtype=float)
     a = a.reshape(len(a), -1) if a.ndim != 2 else a
     units = recorded_units(meta, a.shape[1]) if len(a) else None
-    columns = [i for i, u in enumerate(units or []) if str(u).strip().lower() in RADIAN_UNITS]
+    columns = [i for i, u in enumerate(units or []) if str(u).strip().lower() in RADIAN_UNITS
+               and not winds_past_one_turn(a[:, i])]
     if not columns:
         return None
     values = np.abs(a[:, columns])

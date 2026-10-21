@@ -28,12 +28,12 @@ def test_units_an_mcap_channel_declares_reach_every_signal_they_describe(tmp_pat
     assert ctx["state_kind"] == "joints"
 
 
-def test_a_signal_nothing_gives_a_unit_says_so(tmp_path):
+def test_a_signal_nothing_gives_a_unit_says_so_on_the_board_and_not_in_the_prompt(tmp_path):
     root = tmp_path / "upload"
     _declared_yam_episode(root, declare=False)
     _, signals, prompt, _ = _read(tmp_path, root)
     assert signals["/yam_left/joint_state joint_vel"]["units_undeclared"] is True
-    assert "/yam_left/joint_state joint_vel (6 unnamed values, unit undeclared):" in prompt
+    assert "/yam_left/joint_state joint_vel (6 unnamed values):" in prompt
 
 
 def _write(tmp_path, sig, n):
@@ -111,6 +111,22 @@ def test_radians_the_readings_contradict_are_named_and_never_trusted(tmp_path):
         "wrist angle", a, units=["rad", "rad"], units_contradicted=True)
 
 
+def test_a_value_that_winds_past_one_turn_in_radians_is_not_read_as_degrees(tmp_path):
+    """A wheel or a continuous joint recorded in radians reads past one turn by turning, not by being in degrees: it is
+    never named as contradicted, while a degree-valued arm beside it still is."""
+    n = 300
+    t = np.linspace(0, 1, n)
+    sig = f.Signals()
+    sig.add("wheel angle", (40 * t)[:, None], metadata={"unit": "rad"})
+    sig.add("wrist angle", np.stack([90 * np.sin(3 * t), 120 * np.cos(2 * t)], axis=1), metadata={"unit": "rad"})
+    ctx, got = _write(tmp_path, sig, n)
+    assert "units_contradicted" not in got["wheel angle"] and got["wrist angle"]["units_contradicted"] is True
+    assert not any(i.get("signal") == "wheel angle" for i in ctx["reader_issues"])
+    assert f.winds_past_one_turn(-40 * t) and not f.winds_past_one_turn(90 * np.sin(3 * t))
+    # one reach out in degrees moves in steps of half a turn or more at this rate, so it does not wind
+    assert not f.winds_past_one_turn(np.linspace(0, 90, 20))
+
+
 def test_the_readout_and_the_board_say_each_signals_unit():
     from board.sensors import signal_doc
     from label import signals as sg
@@ -118,7 +134,8 @@ def test_the_readout_and_the_board_say_each_signals_unit():
     assert sg.describe("q", a, units=["rad", "normalized"]).startswith("  q (2 values, in rad, normalized):")
     assert sg.describe("q", a, units=["m/s", "m/s"], units_source="rig.yaml").startswith(
         "  q (2 values, in m/s from rig.yaml):")
-    assert sg.describe("q", a, units_undeclared=True).startswith("  q (2 values, unit undeclared):")
+    # nothing declares a unit: the board and the export say so, the prompt line says nothing of it
+    assert sg.describe("q", a).startswith("  q (2 values):")
     t = np.arange(20) / 30
     doc = signal_doc({"name": "q", "unit": "rad/s", "units_source": "rig.yaml"}, a, t, 1)
     assert doc["unit"] == "rad/s" and doc["units_source"] == "rig.yaml"

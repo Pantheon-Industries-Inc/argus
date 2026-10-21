@@ -98,7 +98,7 @@ def test_a_single_arm_named_six_joints_and_a_gripper_is_still_its_state(landed):
 def test_a_humanoid_and_its_base_are_shown_under_their_own_names(landed):
     ctx, prompt, _ = landed["lerobot_v30_humanoid_base_ft"]
     assert ctx["state_kind"] == "none"
-    assert "observation.state (26 values, unit undeclared, value names retained in episode metadata): ranges by value index" in prompt
+    assert "observation.state (26 values, value names retained in episode metadata): ranges by value index" in prompt
     names = _signals(ctx)["observation.state"]["names"]
     assert len(names) == 26 and names[0] == "left_arm_j1" and names[-1] == "right_hand_pinky"
     assert all(f"    observation.state {name}: " in prompt for name in names)

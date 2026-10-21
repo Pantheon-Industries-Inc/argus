@@ -135,8 +135,8 @@ def test_a_yam_recording_whose_station_names_no_joint_keeps_its_arrays_marked_un
     assert signals["/yam_leader_left/joint_pos joint_pos"]["unnamed"] is True
     assert "unnamed" not in signals["/yam_left/joint_state gripper_pos"]          # one value is named by its field
     assert not any(s.get("names_source") for s in signals.values())
-    assert "/yam_left/joint_state joint_pos (6 unnamed values, unit undeclared):" in prompt
-    assert "/yam_leader_left/joint_pos joint_pos (7 unnamed values, unit undeclared):" in prompt
+    assert "/yam_left/joint_state joint_pos (6 unnamed values):" in prompt
+    assert "/yam_leader_left/joint_pos joint_pos (7 unnamed values):" in prompt
     assert not any("station.yaml" in m for m in report["missing"]), report["missing"]
 
 
@@ -156,7 +156,7 @@ def test_a_rig_description_beside_the_recording_names_exactly_the_arrays_it_name
     assert signals["/yam_right/joint_state joint_pos"]["unnamed"] is True
     assert signals["/yam_left/joint_state joint_vel"]["unnamed"] is True
     assert ("/yam_left/joint_state joint_pos (6 values (waist, shoulder, elbow, wrist_1, wrist_2, wrist_3), names "
-            "from episode_125625_df6f654c/rig.yaml, unit undeclared)") in prompt
+            "from episode_125625_df6f654c/rig.yaml)") in prompt
 
 
 def test_an_mcap_names_its_values_in_channel_metadata_a_metadata_record_or_its_json_schema(tmp_path):

@@ -1666,7 +1666,6 @@ def _signals_table(ep: dict, pl: dict) -> str:
                                      names_source=m.get("names_source"),
                                      units=recorded_units(m, int(np.prod(np.shape(a)[1:]))),
                                      units_source=m.get("units_source"),
-                                     units_undeclared=m.get("units_undeclared"),
                                      units_contradicted=m.get("units_contradicted")) + wording)
         except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
             lines.append(f"  {name}: could not be read ({type(e).__name__})")
