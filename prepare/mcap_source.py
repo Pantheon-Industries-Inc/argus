@@ -38,7 +38,8 @@ def decoded_messages(reader, fields: dict[str, dict[str, str]], failures: dict[s
     from google.protobuf.message import DecodeError
     from mcap_protobuf.decoder import DecoderFactory
     factories, decoders = [DecoderFactory()], {}
-    for schema, channel, message in reader.iter_messages(topics=list(fields)):
+    from prepare.isolation import beating
+    for schema, channel, message in beating(reader.iter_messages(topics=list(fields))):
         if channel.topic in failures:
             continue
         try:

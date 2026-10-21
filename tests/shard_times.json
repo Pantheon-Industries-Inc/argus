@@ -128,6 +128,7 @@
  "tests/test_publisher_schemas.py": 1.1,
  "tests/test_reader_cameras.py": 10.8,
  "tests/test_reader_isolation.py": 13.8,
+ "tests/test_no_false_stall.py": 27.7,
  "tests/test_reader_tables.py": 16.3,
  "tests/test_readme_current.py": 0.9,
  "tests/test_realomin_generic.py": 0.3,

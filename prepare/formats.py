@@ -147,6 +147,7 @@ import numpy as np
 from label.atomic import cached_while_unchanged, private_name, write_atomic
 from label.presented import presented, presented_pts
 from prepare.hdf_metadata import open_hdf5
+from prepare.isolation import allow_quiet, beating, quiet_allowance
 from prepare.camera_clock import UNKNOWN_CAMERA_FPS, camera_issue_kind, coarse_rows, presentation_clock
 from prepare.state_notes import STATE_WHY
 from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_ASSUMED, ALIGNED_CAMERA, COARSE_CLOCK
@@ -214,7 +215,9 @@ class part:
         if isinstance(error, ScopeConflict):
             return False                 # the upload's own declarations refuse the episode; that is not damage
         if isinstance(error, CamerasOnly):
-            return True                  # left unread on purpose; the retry records why, once (read_episode)
+            if self.what not in LEFT_UNREAD:
+                LEFT_UNREAD.append(self.what)    # named by the retry's one issue (read_episode)
+            return True                  # left unread on purpose
         self.failed = error
         detail = str(error).strip().splitlines()[0][:200] if str(error).strip() else ""
         self.issues.append({"kind": self.kind,
@@ -226,6 +229,9 @@ class part:
 
 class CamerasOnly(Exception):
     """Raised at the start of an optional part when the episode is being read with its cameras alone (cameras_only)."""
+
+
+LEFT_UNREAD: list[str] = []      # the parts this process left unread for a read with its cameras alone, in order
 
 
 def skip_when_cameras_only() -> None:
@@ -982,7 +988,7 @@ def has_readable_owned_picture(path: Path, facts: dict) -> bool:
             return False
         stream.codec_context.thread_count = 1
         source.seek(min(owned), stream=stream, backward=True, any_frame=False)
-        for packet in source.demux(stream):
+        for packet in beating(source.demux(stream)):
             try:
                 pictures = packet.decode()
             except av.error.FFmpegError:
@@ -2749,7 +2755,7 @@ def summarise_rows(a) -> np.ndarray:
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            for i in range(0, n, chunk_rows):
+            for i in beating(range(0, n, chunk_rows)):
                 b = np.asarray(a[i:i + chunk_rows], dtype=np.float32)
                 b = b.reshape(len(b), -1)
                 b = np.where(np.isfinite(b), b, np.nan)
@@ -4743,12 +4749,12 @@ def read_number_table(p: Path):
         df.attrs["number_inferences"] = number_inferences({c: number_syntax(raw[c]) for c in raw})
         return df, text, 1, len(df)
     syntax = {}
-    for ch in pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs):
+    for ch in beating(pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs)):
         for c in ch:
             flags = number_syntax(ch[c])
             syntax[c] = tuple(a or b for a, b in zip(syntax.get(c, (False,) * len(flags)), flags))
     parts, totals, stride, rows, kept = [], {}, 1, 0, 0
-    for ch in pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs):
+    for ch in beating(pd.read_csv(p, chunksize=TABLE_CHUNK_ROWS, **kwargs)):
         nums = {}
         for c in ch:
             x = column_numbers(ch[c], decimal, syntax[c][0] and not syntax[c][1])
@@ -5335,10 +5341,10 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     depth = {}
     for v, (_, p) in list(files.items()):
         with part(parts, 'the depth video beside a camera'):
-            skip_when_cameras_only()
             dp = (item.get("depth") or {}).get(str(p))
             if dp is None:
                 continue
+            skip_when_cameras_only()
             try:
                 pr_d = probe_depth(dp)
                 n_d = len(pr_d["pts"])
@@ -5376,7 +5382,8 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
     ep = unique_dir(out, item.get("output_name") or episode_name(item["name"]))
     ep.mkdir(parents=True, exist_ok=True)
     with part(parts, "the unshown cameras' clocks"):
-        skip_when_cameras_only()
+        if unshown:
+            skip_when_cameras_only()
         for index, (name, entry) in enumerate(unshown):
             if entry is None:
                 continue
@@ -5391,9 +5398,11 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
                 unshown[index] = (name, keep_unshown_clock(ep, entry, recorded - (zero if zero is not None else recorded[0]),
                                                            pr["pts"].tolist()))
     set_unshown(extra, unshown)
-    with part(parts, "the videos' recorded clocks"):
-        skip_when_cameras_only()
+    # named by its files (the sidecars of a folder of videos), so a read with the cameras alone says which it left
+    with part(parts, "the videos' recorded clocks" + (f" ({_and_words(sorted({p.name for p, _ in native.values()}))})"
+                                                      if native else "")):
         if native:
+            skip_when_cameras_only()
             home = Path(os.path.commonpath([str(p.parent) for p, _ in native.values()]))
             key = lambda p: p.relative_to(home).as_posix()
             clocks = {key(p): a for p, a in native.values()}
@@ -5789,7 +5798,8 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
     eps = []
     for p in parts:
         try:
-            rows = pd.read_parquet(p).to_dict("records")
+            with allow_quiet(quiet_allowance(p.stat().st_size)):     # one native read of the whole file
+                rows = pd.read_parquet(p).to_dict("records")
             root["metadata_read"].add(p.resolve())
         except Exception as error:  # noqa: BLE001 - pyarrow on upload bytes raises many types; named by metadata_failure
             metadata_failure(root, p, plain_error(error))
@@ -5861,8 +5871,9 @@ def _episodes_v3(root: dict, rdir: Path, data_files: list[Path], vids: list[Path
         try:
             import pyarrow.parquet as pq
             have = pq.ParquetFile(dp).schema_arrow.names
-            df = pd.read_parquet(dp, columns=[c for c in ("episode_index", "frame_index", "timestamp", "task_index")
-                                              if c in have])
+            with allow_quiet(quiet_allowance(Path(dp).stat().st_size)):
+                df = pd.read_parquet(dp, columns=[c for c in ("episode_index", "frame_index", "timestamp",
+                                                              "task_index") if c in have])
         except Exception as error:  # noqa: BLE001 - pyarrow on upload bytes raises many types; named below
             # its episodes cannot be found without it: the data file is named with why, the others are still read
             metadata_failure(root, dp, f"{plain_error(error)}; its episodes could not be found")
@@ -7757,7 +7768,8 @@ def convert_recording(item: dict, rig: str, out: Path, dataset: str) -> dict:
         lead = files[me.order_views(files)[0]][1]
         signals = Signals()
         try:
-            df = pd.read_parquet(item["data"])
+            with allow_quiet(quiet_allowance(Path(item["data"]).stat().st_size)):
+                df = pd.read_parquet(item["data"])
             order = [c for c in ("episode_index", "frame_index") if c in df.columns]
             df = df.sort_values(order, kind="stable") if order else df
             n = _frame_count(lead)
@@ -8336,7 +8348,8 @@ def h5_streams(f, group: str) -> dict:
         if kinds[p] != 'time':
             continue
         try:
-            native[p] = np.asarray(ds[()])
+            with allow_quiet(quiet_allowance(getattr(ds, 'nbytes', 0))):     # one native read of the whole array
+                native[p] = np.asarray(ds[()])
             clocks[p] = np.asarray(native[p], dtype=np.float64).ravel()
         except OSError:
             clocks[p] = np.full(ds.size, np.nan)
@@ -8591,7 +8604,8 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             # past the running total an episode's signals hold: read a block of rows at a time into its summary
             a, summarised, shape = summarise_rows(readable), width, [len(SUMMARY_NAMES)]
         else:
-            a = float_rows(readable[()])
+            with allow_quiet(quiet_allowance(getattr(ds, 'nbytes', 0))):
+                a = float_rows(readable[()])
         metadata = h5_signal_metadata(ds, bool(summarised))
         if not summarised:
             metadata = with_candidate(metadata, publisher_candidates.get(s['path']), shape)
@@ -9295,12 +9309,22 @@ def convert_item(it: dict, rig: str, out: Path, dataset: str, scope: dict) -> tu
     return ctx, it
 
 
+def convert_item_left_unread(it: dict, rig: str, out: Path, dataset: str, scope: dict) -> tuple[dict, dict, list]:
+    """convert_item, and the parts it left unread (LEFT_UNREAD) when the episode is read with its cameras alone."""
+    LEFT_UNREAD.clear()
+    ctx, after = convert_item(it, rig, out, dataset, scope)
+    return ctx, after, list(LEFT_UNREAD)
+
+
 def read_episode(it: dict, rig: str, out: Path, dataset: str, scope: dict) -> dict:
     """convert_item in a child process (prepare.isolation). A native reader (HDF5's C library, a video or
     decompression codec) can loop forever or crash on damaged bytes, and no Python boundary stops either. A read that
     stops responding or dies is tried once more with the episode's cameras alone (every optional part, skipped by
     skip_when_cameras_only, and every HDF5 attribute left unread), so a damaged part never costs the cameras; only
-    when that fails too is the episode lost, with the reason."""
+    when that fails too is the episode lost, with the reason. The retry's part_unreadable issue names every part it
+    left unread, and context["read_cameras_only"] keeps why and that list, which the board shows beside the episode's
+    name (board/build.py reader_notes), since a recorded clock, a decoding check or a sensor left unread changes what
+    the episode's timing and checks rest on."""
     from prepare.isolation import ReaderStopped, run_isolated
     from prepare.hdf_metadata import current_sources
     import shutil
@@ -9315,12 +9339,14 @@ def read_episode(it: dict, rig: str, out: Path, dataset: str, scope: dict) -> di
         for name in {p.name for p in out.iterdir()} - before:
             shutil.rmtree(out / name, ignore_errors=True)
         try:
-            ctx, after = run_isolated(with_hdf5_sources, sources, convert_item, it, rig, out, dataset, scope,
-                                      watch=out, mode='cameras')
+            ctx, after, left = run_isolated(with_hdf5_sources, sources, convert_item_left_unread, it, rig, out,
+                                            dataset, scope, watch=out, mode='cameras')
         except ReaderStopped as again:
             raise ReaderStopped(f"its reader {stopped}, and read again with its cameras alone it {again}") from again
+        ctx['read_cameras_only'] = {'why': f"its reader {stopped}", 'left_unread': left}
         add_issue(ctx, 'part_unreadable', f"The reader of this episode {stopped}, so the episode was read again "
-                  "with its cameras alone; its recorded state, signals, text, metadata and depth were not read.")
+                  "with its cameras alone, " + (f"which left unread {_and_words(left)}." if left else
+                                                "which left nothing else of it unread."))
         write_atomic(out / ctx['episode_id'] / 'context.json', ctx, indent=1, default=str)
     if after is not it:
         it.clear()
@@ -9518,7 +9544,7 @@ def _mcap_stream(path: Path, topics: set | None = None, damaged: list | None = N
 
     with open(path, "rb") as fh:
         try:
-            for r, next_time in file_records(fh):
+            for r, next_time in beating(file_records(fh)):
                 try:
                     for msg in messages(records(r) if isinstance(r, Chunk) else [r]):
                         if ordered:
@@ -9566,8 +9592,8 @@ def mcap_messages(fh, path: Path, topics, damaged: list | None = None):
     seen = Counter()
     key = lambda ch, m: (ch.id, m.log_time, m.publish_time, m.sequence, zlib.crc32(m.data))
     try:
-        for schema, ch, msg in make_reader(fh, validate_crcs=True).iter_messages(
-                topics=sorted(topics), log_time_order=True):
+        for schema, ch, msg in beating(make_reader(fh, validate_crcs=True).iter_messages(
+                topics=sorted(topics), log_time_order=True)):
             seen[key(ch, msg)] += 1
             yield schema, ch, msg
     except Exception:  # noqa: BLE001 - mcap on upload bytes raises many types; recovered below and recorded in damaged
@@ -12028,7 +12054,8 @@ def decoded_damage(path: Path) -> set[int]:
     packets after the one that caused it, so the packet in hand is the wrong picture. A picture is refused when the
     file presents it (label/presented.py: a discarded preroll packet is decoded as a reference but never shown) and
     the decoder never delivers it, and the pictures predicted from damage follow in the file's own decode order, up to
-    the next key packet that decodes clean."""
+    the next key packet that decodes clean. It decodes every picture, minutes for a long recording, and beats once per
+    packet (beating), so a reader's child doing it is never taken for a hang."""
     import av
     from label.presented import presents
     order: list[tuple[int, bool]] = []          # (pts, key packet) of every picture the file presents, in decode order
@@ -12036,7 +12063,7 @@ def decoded_damage(path: Path) -> set[int]:
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
-        for packet in container.demux(stream):
+        for packet in beating(container.demux(stream)):
             # the last packet demux yields carries no data and drains the decoder, whose threads still hold the last
             # pictures; it is decoded like any other, so those pictures are checked too
             if presents(packet):
@@ -12322,7 +12349,7 @@ class FrameWriter:
                     ost.time_base = Fraction(1, TIME_BASE_DEN)
                     i = 0
                     pts = self.pts
-                    for pkt in src.demux(ist):
+                    for pkt in beating(src.demux(ist)):
                         if not pkt.size or i >= len(pts):
                             continue
                         pkt.stream, pkt.time_base = ost, ost.time_base

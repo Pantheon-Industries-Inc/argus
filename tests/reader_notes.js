@@ -1,4 +1,5 @@
-// The board's provenance line (board/serve.py readerNotesHtml): the reader's note on the recorded state as text, then
+// The board's provenance line (board/serve.py readerNotesHtml): an episode read again with its cameras alone, why and
+// what it did not read, then the reader's note on the recorded state as text, then
 // what the model was not shown of the upload in the page's own fold (the .pub-fold toggled by its .pub-show button,
 // which says the counts by kind; the items one per line, each escaped); nothing for an episode the reader read whole.
 //
@@ -69,5 +70,17 @@ check(odd.includes('>The model was not shown 1 signal</button>') && !odd.include
   && !odd.includes('Cameras</div>') && !odd.includes('Arrays</div>') && !odd.includes('Depth streams</div>'),
   'a kind whose value is not a list is passed over: ' + odd);
 check(safe({left_out: {cameras: 'cam_high'}}) === '', 'only kinds that are not lists draw nothing');
+
+// an episode read again with its cameras alone leads, saying why and every part it did not read, escaped
+const why = 'its reader stopped responding (no progress for 300s) and was stopped';
+const alone = T.readerNotesHtml({cameras_only: {why, left_unread: ['the decoding check of the camera exo <x>',
+  "the videos' recorded clocks (exo_timestamp.npy)"]}, state_note: note});
+check(alone.startsWith('<div class="rn-note rn-cameras-only">Read with its cameras alone, as ' + why + ', so it did '
+  + "not read the decoding check of the camera exo &lt;x&gt; and the videos&#39; recorded clocks (exo_timestamp.npy).</div>"
+  + '<div class="rn-note">'), 'a read with the cameras alone first, with why and what it did not read: ' + alone);
+check(T.readerNotesHtml({cameras_only: {why, left_unread: []}}) === '<div class="rn-note rn-cameras-only">Read with '
+  + 'its cameras alone, as ' + why + '.</div>', 'with nothing left unread it says why alone');
+check(safe({cameras_only: {why, left_unread: 'all'}}).startsWith('<div class="rn-note rn-cameras-only">Read with its '
+  + 'cameras alone, as ' + why + '.</div>'), 'a list that is not a list is passed over');
 
 process.exit(bad ? 1 : 0);

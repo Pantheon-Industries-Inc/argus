@@ -27,8 +27,10 @@ def encrypted(packet) -> bool:
 def presented(container, stream):
     """The packets of `stream` that are pictures the file shows, in the file's own decode order. An encrypted picture
     raises EncryptedVideo, so every count, clip and frame read of the file stops at its first packet with the reason,
-    rather than reading the file through and showing noise."""
-    for packet in container.demux(stream):
+    rather than reading the file through and showing noise. Each packet read is progress (prepare/isolation.py
+    beating), so reading a long video's packets in a reader's child is never taken for a hang."""
+    from prepare.isolation import beating
+    for packet in beating(container.demux(stream)):
         if encrypted(packet):
             name = getattr(container, 'name', None) or 'the video'
             raise EncryptedVideo(f"{str(name).rsplit('/', 1)[-1]} is encrypted (MPEG common encryption), so its "

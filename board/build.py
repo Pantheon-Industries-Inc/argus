@@ -222,17 +222,25 @@ READER_LEFT_OUT = (("unused_cameras", "cameras"), ("unused_signals", "signals"),
 
 
 def reader_notes(ctx: dict) -> dict | None:
-    """What the reader says about an episode beyond what it read: its note on the recorded state (state_note) and what
-    of the upload it did not read, each with its reason (context["source"] unused_*). The model never saw these. The
-    prompt states them only where they explain an absence (label/episode.py, the no state block); the board always
-    shows them, so a field the model never saw is never a silent gap. None when there is nothing to say."""
+    """What the reader says about an episode beyond what it read: an episode read again with its cameras alone, why
+    and the parts that left unread (context["read_cameras_only"], prepare/formats.py read_episode), its note on the
+    recorded state (state_note) and what of the upload it did not read, each with its reason (context["source"]
+    unused_*). The model never saw these. The prompt states them only where they explain an absence (label/episode.py,
+    the no state block); the board always shows them, so a field the model never saw is never a silent gap. None when
+    there is nothing to say."""
     src = ctx.get("source") if isinstance(ctx.get("source"), dict) else {}
     left = {kind: [str(x) for x in src[key]] for key, kind in READER_LEFT_OUT
             if isinstance(src.get(key), (list, tuple)) and src[key]}
     note = ctx["state_note"].strip() if isinstance(ctx.get("state_note"), str) else ""
-    if not note and not left:
+    again = ctx.get("read_cameras_only") if isinstance(ctx.get("read_cameras_only"), dict) else None
+    if again is not None:
+        unread = again.get("left_unread")
+        again = {"why": str(again.get("why") or ""),
+                 "left_unread": [str(x) for x in unread] if isinstance(unread, (list, tuple)) else []}
+    if not note and not left and again is None:
         return None
-    return {**({"state_note": note} if note else {}), **({"left_out": left} if left else {})}
+    return {**({"cameras_only": again} if again is not None else {}), **({"state_note": note} if note else {}),
+            **({"left_out": left} if left else {})}
 
 
 _FAMILIES = None

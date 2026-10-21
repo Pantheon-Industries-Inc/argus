@@ -28,6 +28,9 @@ def attribute_values(obj, keys=None, issues=None):
     Iterating attrs.items() read every value before any was chosen, so one bad attribute failed the whole read."""
     from prepare.isolation import cameras_only
     if cameras_only():
+        from prepare.formats import LEFT_UNREAD
+        if "the HDF5 attributes" not in LEFT_UNREAD:
+            LEFT_UNREAD.append("the HDF5 attributes")    # named by the retry's issue (prepare/formats.py read_episode)
         return []           # a second attempt after a read that stopped responding reads no attribute (isolation)
     where = getattr(obj, 'name', '') or '/'
 

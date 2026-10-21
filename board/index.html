@@ -109,6 +109,7 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 /* The list of what the model was not shown is the board's own fold (.pub-fold). Opened, it scrolls inside the header
    so it never pushes the player off screen. */
 #current-ep-reader .rn-note { overflow-wrap: anywhere; }
+#current-ep-reader .rn-cameras-only { color: var(--danger); }
 #current-ep-reader .pub-show { font-size: 11px; padding: 2px 0; text-align: left; }
 #current-ep-reader .rn-body { max-height: 40vh; overflow: auto; padding: 4px 0 2px; overflow-wrap: anywhere; }
 #current-ep-reader .rn-k { font-weight: 600; color: var(--fg-2); padding: 6px 0 2px; }
@@ -3202,6 +3203,13 @@ async function loadDictionary(d, file) {
 
 function readerNotesHtml(rn) {
   if (!rn) return '';
+  // an episode read again with its cameras alone (rn.cameras_only) leads, in the colour of something wrong with the
+  // data: the parts it left unread (a recorded clock, a decoding check, the sensors) change what its timing rests on
+  const again = rn.cameras_only && typeof rn.cameras_only === 'object' ? rn.cameras_only : null;
+  const unread = again && Array.isArray(again.left_unread) ? again.left_unread.map(String) : [];
+  const unreadList = unread.length > 1 ? `${unread.slice(0, -1).join(', ')} and ${unread[unread.length - 1]}` : unread[0];
+  const alone = again ? `<div class="rn-note rn-cameras-only">Read with its cameras alone${again.why ? `, as `
+    + `${esc(again.why)}` : ''}${unreadList ? `, so it did not read ${esc(unreadList)}` : ''}.</div>` : '';
   const left = rn.left_out || {};
   const kinds = [['cameras', 'Cameras', 'camera', 'cameras'], ['signals', 'Signals', 'signal', 'signals'],
                  ['arrays', 'Arrays', 'array', 'arrays'], ['depth', 'Depth streams', 'depth stream', 'depth streams']]
@@ -3210,7 +3218,7 @@ function readerNotesHtml(rn) {
   const counts = kinds.map(([k, , one, many]) => `${left[k].length} ${left[k].length === 1 ? one : many}`);
   const n = counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}` : counts[0];
   const closed = `The model was not shown ${n}`, opened = `Hide the ${n} the model was not shown`;
-  return (rn.state_note ? `<div class="rn-note">${esc(rn.state_note)}</div>` : '')
+  return alone + (rn.state_note ? `<div class="rn-note">${esc(rn.state_note)}</div>` : '')
     + (kinds.length ? `<div class="pub-fold rn-fold"><div class="sn-fold"><div class="sn-fold-in"><div class="rn-body">`
       + kinds.map(([k, head]) => `<div class="rn-k">${head}</div>`
         + left[k].map(x => `<div class="rn-i">${esc(x)}</div>`).join('')).join('')

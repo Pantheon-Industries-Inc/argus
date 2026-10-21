@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from label.presented import presented
+from prepare.isolation import beating
 
 TIME_BASE_DEN = 1_000_000   # microseconds: some ABC frames are stamped only 1 us apart
 NOMINAL_FPS = 30            # only a one-frame tolerance for the muxer's own shift
@@ -40,7 +41,7 @@ def check_packet_order(path, fmt: str) -> None:
             return
         stream.codec_context.thread_count = 1
         index, last = 0, -1
-        for packet in source.demux(stream):
+        for packet in beating(source.demux(stream)):
             if packet.size:
                 # Dummy packet identities survive decoding, exposing picture order without inventing source times.
                 packet.pts = packet.dts = index
@@ -57,7 +58,7 @@ def check_message_ownership(path, fmt: str, message_ends: list[int]) -> None:
     import av
     count, start = 0, 0
     with av.open(str(path), format=fmt) as source:
-        for packet in source.demux(source.streams.video[0]):
+        for packet in beating(source.demux(source.streams.video[0])):
             if not packet.size:
                 continue
             if (count >= len(message_ends) or packet.pos != start
@@ -98,7 +99,7 @@ def remux(frames: list[bytes], t_rel_s: np.ndarray, fmt: str, out: Path) -> np.n
             ost = dst.add_stream_from_template(ist)
             ost.time_base = Fraction(1, TIME_BASE_DEN)
             i = 0
-            for pkt in src.demux(ist):
+            for pkt in beating(src.demux(ist)):
                 if not pkt.size:
                     continue
                 if i >= len(pts):
