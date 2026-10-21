@@ -22,9 +22,11 @@ from __future__ import annotations
 HAND_PARTS = ("hand", "glove", "palm", "thumb", "knuckle")
 END_EFFECTOR_PARTS = ("gripper", "jaw", "claw", "finger", "fingertip", "fingerpad")
 # the rest of a body: parts that never grasp. An arm, a forearm, an elbow and a shoulder are left out, since a gripper
-# or a hand sits at their end and a robot names its arms (left_arm/pressure)
+# or a hand sits at their end and a robot names its arms (left_arm/pressure). So are the words a touch sensor's own
+# parts share with a body's (a sensor head, a gel's contact face, a trunk cable): read as a part of the body they would
+# take a gripper's tactile sensor for one that never grasps, and an unknown part keeps its contacts
 OTHER_PARTS = ("foot", "feet", "toe", "heel", "sole", "insole", "shoe", "ankle", "leg", "knee", "thigh", "shin",
-               "hip", "pelvis", "torso", "chest", "trunk", "spine", "head", "neck", "face")
+               "hip", "pelvis", "torso", "chest", "spine", "neck")
 BASES = ("declared", "name", "interpreted")
 
 

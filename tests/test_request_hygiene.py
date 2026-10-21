@@ -81,6 +81,10 @@ def test_a_touch_signal_on_a_part_that_never_grasps_times_no_contact_and_instrum
                                      "provenance": "machine"}}, True, "fingertip", "interpreted"),
     (GLOVE, {"dictionary": {"role": "contact_state", "meaning": "foot contact", "provenance": "machine"}},
      True, "glove", "name"),
+    # a touch sensor's own parts named like a body's are no part of a body: its contacts stay
+    ("observation.tactile_left_raw", {"description": "DIGIT sensor head, gel contact face"}, True, None, None),
+    ("observation.tactile_left_raw", {"dictionary": {"role": "tactile_image", "meaning": "GelSight sensor head",
+                                                     "provenance": "machine"}}, True, None, None),
 ])
 def test_where_a_touch_signal_sits_comes_from_the_strongest_evidence_and_says_which(name, meta, grasps, part, basis):
     from label import signal_class as sc
