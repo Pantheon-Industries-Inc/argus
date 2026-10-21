@@ -88,6 +88,28 @@ def test_an_addition_never_overwrites_a_field_the_label_has_and_reports_it(tmp_p
     assert sorted(c["field"] for c in built["additions"]["conflicts"]) == ["duration_s", "goal_alignment"]
 
 
+def test_an_added_row_whose_category_the_label_already_reports_is_left_out_and_reported(tmp_path):
+    own = {"issue": "The bag is never zipped.", "category": "instruction_mismatch", "severity": "high",
+           "t_s": None, "end_s": None, "evidence": "tasks 1 and 2"}
+    board = _board(tmp_path)
+    out = tmp_path / "run" / "out" / "episode_000000.json"
+    r = json.loads(out.read_text())
+    r["labels"]["data_issues"].append(own)
+    out.write_text(json.dumps(r))
+    other = {**ISSUE, "issue": "A drop.", "category": "object_dropped"}
+    _add(board, "episode_000000.json", {"provenance": PROV, "fields": {"goal_alignment": ALIGN},
+                                        "append": {"data_issues": [ISSUE, other]}})
+    built = board_build.build(board)
+    d = _qa(board, "episode_000000.json")
+    assert [i["category"] for i in d["data_issues"]] == ["human_intervention", "instruction_mismatch", "object_dropped"]
+    assert d["data_issues"][1]["issue"] == own["issue"] and "provenance" not in d["data_issues"][1]
+    assert d["goal_alignment"] == {**ALIGN, "provenance": PROV}
+    assert {"field": "data_issues", "rows": 1, "provenance": PROV} in d["_additions"]
+    assert [c["field"] for c in d["addition_conflicts"]] == ["data_issues"]
+    assert "instruction_mismatch" in d["addition_conflicts"][0]["why"]
+    assert [c["field"] for c in built["additions"]["conflicts"]] == ["data_issues"]
+
+
 def test_a_changed_addition_rebuilds_its_episode_and_an_unchanged_one_is_reused(tmp_path, capsys):
     board = _board(tmp_path)
     _add(board, "episode_000000.json", {"provenance": PROV, "fields": {"goal_alignment": ALIGN}})

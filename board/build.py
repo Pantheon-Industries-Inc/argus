@@ -77,8 +77,8 @@ paid label. Each file is
   {"provenance": {"source": "...", "model": "...", ...},     required: where the added content came from
    "fields": {"goal_alignment": {...}},                      optional: fields set where the label has none
    "append": {"data_issues": [{...}]}}                       optional: rows added to the label's list fields
-An added field never overwrites one the label (or the build) already has: the label's value stands and the conflict is
-listed in the episode's addition_conflicts and in BUILT.json, as is an addition that does not read or names no episode
+An added field never overwrites one the label (or the build) already has, and an added row is left out when the label's
+list already has a row of its category: the label's value stands and the conflict is listed in the episode's addition_conflicts and in BUILT.json, as is an addition that does not read or names no episode
 of the board. Every added field that is an object and every added row carries the provenance, and _additions lists
 what was added. The addition is part of the episode's build key, so changing it rebuilds that episode.
 
@@ -1125,7 +1125,8 @@ def _empty(v) -> bool:
 
 def apply_addition(d: dict, a: dict) -> dict:
     """Merges an addition (read_additions) into a converted label, in place. Each field of fields is set only where the
-    label has none (absent, null or empty), and each row of append is added to that list field of the label; every
+    label has none (absent, null or empty), and each row of append is added to that list field of the label unless the
+    label's list already has a row of its category; every
     added field that is an object and every added row carries the addition's provenance, unless it brings its own, and
     _additions lists what was added. A field the label already has is never overwritten: it is kept, and the conflict
     is listed in addition_conflicts. Returns {field: value added}, so the caller can check the build left it alone."""
@@ -1146,7 +1147,15 @@ def apply_addition(d: dict, a: dict) -> dict:
             conflicts.append({"field": field, "why": "the label's field is not a list, so the rows are not added"
                               if not field.startswith("_") else "fields starting with _ belong to the build"})
             continue
-        rows = [{**r, "provenance": r.get("provenance") or prov} for r in rows]
+        # a row whose category the label already reports is a second report of the same thing: the label's stands
+        own = {r.get("category") for r in have or [] if isinstance(r, dict) and r.get("category")}
+        for r in rows:
+            if r.get("category") in own:
+                conflicts.append({"field": field, "why": f"the label already has a {r['category']} row, so the "
+                                  "addition's is not added"})
+        rows = [{**r, "provenance": r.get("provenance") or prov} for r in rows if r.get("category") not in own]
+        if not rows:
+            continue
         d[field] = list(have or []) + rows
         done.append({"field": field, "rows": len(rows), "provenance": prov})
     if done:
