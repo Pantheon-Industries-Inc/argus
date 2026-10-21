@@ -7,14 +7,20 @@ class DispatchError(RuntimeError):
     verified_unpaid is True only when the request provably cost nothing: it never left the machine (the connection
     or the upload failed before the provider had the whole request), or the provider answered with an error status
     instead of a completion. Every other failure (a timeout or reset after the request was sent, a gateway timeout,
-    a 200 with no completion) is unknown and keeps its reservation."""
+    a 200 with no completion) is unknown and keeps its reservation.
 
-    def __init__(self, message, *, http_status=None, verified_unpaid=False, rejection_code=None, stage=None):
+    client_timeout is True when our own client gave up: the connection carried no bytes for longer than any live
+    reply can be silent (label/harness.py SILENT_CONNECTION_LIMIT_S), so we closed it as dead. It is never the
+    provider's failure, and the run record names it apart from one."""
+
+    def __init__(self, message, *, http_status=None, verified_unpaid=False, rejection_code=None, stage=None,
+                 client_timeout=False):
         super().__init__(message)
         self.http_status = http_status
         self.rejection_code = rejection_code
         self.verified_unpaid = verified_unpaid is True
         self.stage = stage
+        self.client_timeout = client_timeout is True
 
 
 class KeyExhausted(DispatchError):

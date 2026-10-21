@@ -305,7 +305,8 @@ def main() -> int:
     ap.add_argument("--concurrency", type=int, default=8, help="requests in flight (default 8)")
     ap.add_argument("--jobs", type=int, default=2, help="decode processes per step (default 2)")
     ap.add_argument("--timeout", type=int, default=None,
-                    help="seconds per labeling request (default: the harness's 600 seconds)")
+                    help="seconds a labelling request's connection may carry no bytes before it is closed as dead "
+                         "(default and minimum: the harness's 6060 seconds); a reply still arriving is never cut off")
     ap.add_argument('--retry-received', action='append', default=[], metavar='EPISODE',
                     help='send this unit alone again: one with a received unusable reply, or one whose earlier charge is unknown (that possible charge stays counted against the cap); repeat for additional units')
     ap.add_argument('--force', action='store_true', help='explicitly refresh paid units, retaining prior charges and replies')

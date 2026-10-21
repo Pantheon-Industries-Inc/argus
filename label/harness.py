@@ -224,7 +224,9 @@ def _retry_after(headers, attempt: int) -> float:
 
 
 # A request the provider failed on its side (the reply never came or was cut off, or the provider reported an error
-# inside the reply) is sent again automatically, up to AUTO_RESENDS more times per unit, after AUTO_RESEND_DELAYS_S.
+# inside the reply), or one whose connection our own client closed as dead after SILENT_CONNECTION_LIMIT_S with no
+# bytes (client_timeout, recorded as no_reply_kind client_timeout and never as the provider's failure), is sent again
+# automatically, up to AUTO_RESENDS more times per unit, after AUTO_RESEND_DELAYS_S.
 # Each attempt that may have been billed keeps its charge in the unit's billing history and against the cap, as an
 # explicit --retry-received does; past the bound only --retry-received sends it again. A reply the model wrote that
 # does not parse, a reply cut at the output limit and a complete annotation are never resent automatically.
@@ -232,13 +234,38 @@ AUTO_RESENDS = 2
 AUTO_RESEND_DELAYS_S = (30.0, 120.0)
 
 
+# How a record written before client timeouts were named (no_reply_kind) says our own client gave up: the exception
+# our socket raised, never a provider's HTTP status or error text.
+_CLIENT_TIMEOUT_TEXT = re.compile(r'\b(TimeoutError|ReadTimeout|socket\.timeout)\b')
+
+
+def client_timeout(record: dict) -> str | None:
+    """Why a unit's last attempt ended on our side, or None: our client closed a connection that carried no bytes
+    for longer than SILENT_CONNECTION_LIMIT_S (no_reply_kind client_timeout), or, in a record written before that was
+    named, the socket timeout our client raised. The provider never failed such a request; it may still have
+    finished and billed it."""
+    if not isinstance(record, dict) or record.get('dry_run') or record.get('parse_ok') is True:
+        return None
+    if record.get('response') is not None or record.get('final_dispatch_outcome') not in ('claimed', 'unverified'):
+        return None
+    why = str(record.get('no_reply') or '')
+    if record.get('no_reply_kind') == 'client_timeout' or (
+            record.get('no_reply_kind') is None and _CLIENT_TIMEOUT_TEXT.search(why)
+            and not re.search(r'HTTP \d{3}:', why)):
+        return why[:200] or 'our client closed a silent connection'
+    return None
+
+
 def provider_failure(record: dict) -> str | None:
     """Why a unit's last attempt failed on the provider's side, or None: no verified response (a request cut off or
-    whose machine stopped), or the provider's own error inside a reply it delivered."""
+    whose machine stopped), or the provider's own error inside a reply it delivered. Our own client timeout is never
+    one (client_timeout)."""
     if not isinstance(record, dict) or record.get('dry_run') or record.get('parse_ok') is True:
         return None
     resp = record.get('response')
     if resp is None and record.get('final_dispatch_outcome') in ('claimed', 'unverified'):
+        if client_timeout(record):
+            return None
         return str(record.get('no_reply') or 'the request has no verified response')[:200]
     if isinstance(resp, dict) and record.get('finish_reason') != 'length':
         failure = reply_error(resp)
@@ -261,8 +288,11 @@ def dispatched_attempts(record: dict) -> int:
 
 
 def auto_resend(record: dict) -> str | None:
-    """The provider failure to send this unit again for, while it has been sent at most AUTO_RESENDS times, or None."""
-    why = provider_failure(record)
+    """Why to send this unit again, while it has been sent at most AUTO_RESENDS times, or None: a provider failure,
+    or a connection our client found dead, each named as what it was."""
+    failure = provider_failure(record)
+    ours = None if failure else client_timeout(record)
+    why = f'provider failure: {failure}' if failure else f'our client closed a dead connection: {ours}' if ours else None
     return why if why and dispatched_attempts(record) <= AUTO_RESENDS else None
 
 
@@ -279,6 +309,24 @@ def reply_error(resp: dict) -> str | None:
     return str(error)[:300] if error else 'finish_reason error'
 
 
+# How long the connection may carry no bytes at all before our client calls it dead and closes it. It never ends a reply
+# the provider is still sending, however long the reply takes in total: it is the longest silence a live reply can
+# have, taken from the provider's published worst case. OpenRouter and api.openai.com both answer through Cloudflare
+# (every response carries server: cloudflare and a cf-ray), and Cloudflare ends a request whose origin sends nothing
+# for its Proxy Read Timeout, 125s by default and at most 6000s on any plan
+# (https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/).
+# OpenRouter says it sends keepalive comments on a stream but publishes no spacing, and nothing for a request that is
+# not streamed, so the bound is Cloudflare's maximum, plus a minute so that Cloudflare's own close reaches us first
+# and is recorded as the provider's. --timeout can raise it, never lower it.
+CLOUDFLARE_MAX_PROXY_READ_S = 6000
+SILENT_CONNECTION_LIMIT_S = CLOUDFLARE_MAX_PROXY_READ_S + 60
+
+
+def silent_connection_limit(timeout) -> float:
+    """The socket timeout for a model request: the caller's timeout, never below SILENT_CONNECTION_LIMIT_S."""
+    return max(float(timeout or 0), float(SILENT_CONNECTION_LIMIT_S))
+
+
 def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6) -> dict:
     """POST one request. attempts bounds retries of failures whose billing is unknown, so a paid call passes 1 and
     is never replayed after it may have been billed. A failure that provably cost nothing (the request never fully
@@ -290,14 +338,16 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
     unknown_left, unpaid_left = attempts, max(attempts, UNPAID_ATTEMPTS)
+    silence = silent_connection_limit(timeout)
     clean = True          # no earlier attempt of this call may have been billed
     tries = 0
     while True:
         tries += 1
         try:
             # urllib raises URLError only while connecting and sending the request; every error after the request
-            # was sent (waiting for or reading the response) propagates as itself
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            # was sent (waiting for or reading the response) propagates as itself. The socket timeout bounds each
+            # wait for bytes, never the whole reply, so a reply that keeps arriving is never cut off.
+            with urllib.request.urlopen(req, timeout=silence) as r:
                 resp = json.loads(r.read().decode())
             if not resp.get("choices"):
                 # HTTP 200 carrying an error body and no completion: fail loudly, never record an empty parse
@@ -361,14 +411,18 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
         except DispatchError:
             raise
         except (OSError, http.client.HTTPException, ValueError) as e:
-            # sent, then timed out, reset or answered with an unreadable body: the outcome is unknown
-            last = f"{type(e).__name__}: {e}"
+            # sent, then timed out, reset or answered with an unreadable body: the outcome is unknown. A timeout is
+            # our own client closing a connection silent for longer than any live reply can be, never the provider's
+            ours = isinstance(e, TimeoutError)
+            last = (f"our client closed the connection after {silence:g}s with no bytes from the provider "
+                    f"({type(e).__name__}: {e})" if ours else f"{type(e).__name__}: {e}")
             clean = False
             unknown_left -= 1
             if unknown_left > 0:
                 time.sleep(min(30.0, 2.0 ** (tries - 1)))
                 continue
-            raise DispatchError(f"model call failed after {tries} HTTP attempts: {last}", stage='unknown') from e
+            raise DispatchError(f"model call failed after {tries} HTTP attempts: {last}", stage='unknown',
+                                client_timeout=ours) from e
 
 
 def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, api_key: str, max_tokens: int,
@@ -398,7 +452,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
     billing = _billing_fields(out_path)
     # an explicit cell width skips the routing; otherwise a routed rig's widest cell comes from its task text
     route_w, route = (None, {"routed": False}) if cell_w else route_width(
-        ep_dir, None if dry_run else api_key, call_model_once, timeout=min(timeout, 120),
+        ep_dir, None if dry_run else api_key, call_model_once, timeout=timeout,
         out_path=out_path, input_identity=identity,
         reserve_dispatch=reserve_selection, settle_dispatch=settle_selection, billing_fields=billing,
         force_refresh=force_refresh)
@@ -1278,7 +1332,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         fields['evidence_inspection'] = evidence_access.record()
         if not dry_run:
             def select(parts):
-                response = call_model_once(parts, model, reasoning, api_key, ea.selection_tokens(reasoning), min(timeout, 120),
+                response = call_model_once(parts, model, reasoning, api_key, ea.selection_tokens(reasoning), timeout,
                     **({'pricing_quote': pricing_quote} if pricing_quote is not None else {}))
                 usage = response.get('usage') or {}
                 cost, _ = _verified_final_cost(usage, model)
@@ -1462,7 +1516,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         else:
             fields['config']['request_images']['dispatch_status'] = 'outcome_unknown'
             write_atomic(claim_path, {**claim, 'final_dispatch_outcome': 'unverified',
-                                      'no_reply': f'{type(error).__name__}: {error}'})
+                                      'no_reply': f'{type(error).__name__}: {error}',
+                                      **({'no_reply_kind': 'client_timeout'} if error.client_timeout else {})})
         raise
     except Exception as error:
         fields['config']['request_images']['dispatch_status'] = 'outcome_unknown'
@@ -1859,7 +1914,7 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
             retryable_received.add(ep.name)
             unverified[ep.name] = ('saved dispatch has an unresolved charge (it may have been billed)'
                                    + (f' after {dispatched_attempts(records[0][1])} attempts'
-                                      if provider_failure(records[0][1]) else '')
+                                      if provider_failure(records[0][1]) or client_timeout(records[0][1]) else '')
                                    + f'; --retry-received {ep.name} sends this unit alone again')
             if not dry and any(record.get('parse_ok') is True and not annotation_complete(record) for _, record in records):
                 stale[ep.name] = 'saved annotation is unusable and its charge is unresolved; use --force to refresh explicitly'
@@ -1917,7 +1972,7 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
         return complete
 
     stale, unverified, saved_failures, retryable_received = {}, {}, set(), set()
-    auto_resent = {}       # unit -> (the provider failure it is sent again for, how many times it was sent)
+    auto_resent = {}       # unit -> (the failure it is sent again for, provider's or ours, how many times it was sent)
     todo = [ep for ep in episodes if not is_done(ep)]
     for name, (why, sent) in sorted(auto_resent.items()):
         print(f'RESEND {name}: sent {sent} time{"s" if sent != 1 else ""}, {why}; sending it again '
@@ -2197,7 +2252,10 @@ def main() -> int:
     ap.add_argument("--out-dir", type=Path, help="output folder with --episodes-root, one <episode>.json each")
     policy.add_arguments(ap)
     ap.add_argument("--max-tokens", type=int, default=64000, help="output tokens per episode (default 64000)")
-    ap.add_argument("--timeout", type=int, default=600, help="seconds per request (default 600)")
+    ap.add_argument("--timeout", type=int, default=SILENT_CONNECTION_LIMIT_S,
+                    help="seconds a request's connection may carry no bytes before it is closed as dead; never below "
+                         f"{SILENT_CONNECTION_LIMIT_S} (the provider's longest possible silence), and a reply still "
+                         "arriving is never cut off")
     ap.add_argument("--concurrency", type=int, default=0, help="episodes in flight (default 4 per key)")
     ap.add_argument("--limit", type=int, default=0, help="label at most the first N episodes (0 = all)")
     ap.add_argument("--force", action="store_true", help="relabel episodes that already have a parsed output")

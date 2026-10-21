@@ -8026,7 +8026,9 @@ function partFailureReason(part) {
   if (part.finish_reason === 'length') return 'Response cut off at the output limit.';
   if (part.final_dispatch_outcome === 'not dispatched') return part.no_reply_kind === 'spend_cap'
     ? 'Annotation not sent. The remaining spend cap was too small for this request.' : 'Annotation not sent.';
-  if (['claimed', 'unverified'].includes(part.final_dispatch_outcome)) return 'Response outcome unknown.';
+  if (['claimed', 'unverified'].includes(part.final_dispatch_outcome)) return part.no_reply_kind === 'client_timeout'
+    ? 'Response outcome unknown. Our client closed the connection after it carried no bytes for longer than any live reply is silent.'
+    : 'Response outcome unknown.';
   return null;
 }
 function noLabelsHtml(lf) {
@@ -8076,7 +8078,9 @@ function cmpFailHtml(c, who, usage, own) {
         : 'The final annotation request was not dispatched.'}${rest}</p></div>`;
   if (c.status === 'no_reply' && ['claimed', 'unverified'].includes(c.final_dispatch_outcome))
     return `<div class="cmp-fail"><h4>Response outcome unknown for ${esc(who)}</h4>`
-      + `<p>No verified final response is available.${rest}</p></div>`;
+      + `<p>No verified final response is available.${c.no_reply_kind === 'client_timeout'
+        ? ' Our client closed the connection after it carried no bytes for longer than any live reply is silent; the provider did not report a failure.'
+        : ''}${rest}</p></div>`;
   // Older outputs have no typed dispatch outcome. Their private diagnostic stays redacted in public transport.
   if (c.status === 'no_reply') return `<div class="cmp-fail"><h4>No response from ${esc(who)}</h4>
     <p>This episode got no response, so there are no labels to show.${rest}</p>

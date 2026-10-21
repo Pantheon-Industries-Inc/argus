@@ -511,6 +511,7 @@ def _raw_head(r: dict | None) -> str:
 
 def _part_dispatch(record: dict | None) -> dict:
     """Only dispatch states established by the part's own durable receipt."""
+    from label.harness import client_timeout
     record = record or {}
     outcome = record.get('final_dispatch_outcome')
     reserve = record.get('final_reserved_usd')
@@ -524,7 +525,9 @@ def _part_dispatch(record: dict | None) -> dict:
             **({'finish_reason': 'length'} if record.get('finish_reason') == 'length' else {}),
             **({'no_reply_kind': 'spend_cap'} if outcome == 'not dispatched'
                and record.get('no_reply_kind') == 'spend_cap'
-               and record.get('parse_ok') is False and record.get('final_reserved_usd') == 0 else {})}
+               and record.get('parse_ok') is False and record.get('final_reserved_usd') == 0 else {}),
+            **({'no_reply_kind': 'client_timeout'} if outcome in ('claimed', 'unverified')
+               and client_timeout(record) else {})}
 
 
 def _carry_part_billing(result: dict, parts: list) -> None:

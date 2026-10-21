@@ -93,7 +93,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | [`--dataset`](review/__main__.py) | The name of `--data` | The name shown on the board and told to the model |
 | [`--dataset-note`](label/policy.py) | The source's own collection note, if any | A description of the recordings given to the model as context |
 | [`--max-tokens`](review/__main__.py) | 64,000 | The output limit of each labelling request; a smaller limit reserves less against the cap |
-| [`--timeout`](review/__main__.py) | 600s | How long a labelling request waits for the provider's reply |
+| [`--timeout`](review/__main__.py) | 6060s | How long a labelling request's connection may carry no bytes before it is closed as dead. It is never lower than 6060s, Cloudflare's longest allowed silence (6000s) plus a minute, so a reply the provider is still sending is never cut off |
 | [`--concurrency`](review/__main__.py) | 8 | Labelling requests in flight at once |
 | [`--jobs`](review/__main__.py) | 2 | Decode processes per preparation step |
 | [`--grouping`](review/__main__.py) | Inferred from file names | JSON such as `{"cam_folder": "cameras"}` or `{"take_folder": "takes"}`, for folders whose file names cannot tell separate takes from cameras of one take |

@@ -62,14 +62,15 @@ def label_failed(result: dict) -> dict | None:
     that could not be built; label/harness.py run_batch), or a reply the board could not read although it parsed
     (not_shown, with the error and the start of the reply; board/build.py). None for any other output, a reply that
     parsed or one written without parse_ok (by hand, or by an older harness), which is its labels."""
-    from label.harness import reply_truncated
+    from label.harness import client_timeout, reply_truncated
     if result.get("unreadable"):
         return {"status": "unreadable", "error": str(result["unreadable"])[:RAW_HEAD]}
     if result.get("no_reply"):
         return {"status": "no_reply", "why": str(result["no_reply"])[:RAW_HEAD],
                 **({'final_dispatch_outcome': result['final_dispatch_outcome']}
                    if result.get('final_dispatch_outcome') in ('claimed', 'unverified', 'not dispatched') else {}),
-                **({'no_reply_kind': 'spend_cap'} if result.get('no_reply_kind') == 'spend_cap' else {})}
+                **({'no_reply_kind': 'spend_cap'} if result.get('no_reply_kind') == 'spend_cap' else
+                   {'no_reply_kind': 'client_timeout'} if client_timeout(result) else {})}
     if result.get("board_error"):
         raw = str(result.get("raw") or "")
         return {"status": "not_shown", "error": str(result["board_error"])[:RAW_HEAD], "raw_head": raw[:RAW_HEAD],
@@ -83,7 +84,9 @@ def label_failed(result: dict) -> dict | None:
                if g.get('final_dispatch_outcome') in ('claimed', 'unverified', 'not dispatched') else {}),
             **({'finish_reason': 'length'} if g.get('finish_reason') == 'length' else {}),
             **({'no_reply_kind': 'spend_cap'} if g.get('no_reply_kind') == 'spend_cap'
-               and g.get('final_dispatch_outcome') == 'not dispatched' else {})}
+               and g.get('final_dispatch_outcome') == 'not dispatched' else {}),
+            **({'no_reply_kind': 'client_timeout'} if g.get('no_reply_kind') == 'client_timeout'
+               and g.get('final_dispatch_outcome') in ('claimed', 'unverified') else {})}
             for g in st["missing"] if isinstance(g, dict)]}
     if reply_truncated(result):
         return {"status": "cut_off", "out_tokens": (result.get("usage") or {}).get("completion_tokens"),
