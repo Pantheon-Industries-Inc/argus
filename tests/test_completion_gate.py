@@ -117,8 +117,10 @@ def test_a_request_in_the_tasks_format_is_held_to_what_it_asks():
     assert harness.annotation_complete(saved(reply(**SUCCESS, tasks=[]), task_mode=None))
     assert harness.annotation_problems(saved(reply(**tasks), task_mode=None)) == [
         'the request asks the outcome of its task, and completion.task_completed is missing']
-    assert harness.annotation_problems(saved(reply(**SUCCESS), task_mode=None)) == [
-        "the request asks the recording's tasks beside its completion, and the reply lists none"]
+    # a missing tasks list, or a task with no outcome, beside a valid completion is a schema issue, never a gap
+    assert harness.annotation_problems(saved(reply(**SUCCESS), task_mode=None)) == []
+    no_outcome = {'tasks': [{**tasks['tasks'][0], 'outcome': None}]}
+    assert harness.annotation_problems(saved(reply(**SUCCESS, **no_outcome), task_mode=None)) == []
     # with no instruction only the tasks: a robot recording may hold none (idle footage)
     assert harness.annotation_complete(saved(reply(**tasks), task_mode=None, instruction=None))
     assert harness.annotation_complete(saved(reply(tasks=[]), task_mode=None, instruction=None))
@@ -128,8 +130,8 @@ def test_a_request_in_the_tasks_format_is_held_to_what_it_asks():
                                                  instruction=instruction))
         assert not harness.annotation_complete(saved(reply(tasks=[]), rig='ego_head', task_mode=None,
                                                      instruction=instruction))
-    # the record says so itself, whatever its policy names: an episode's completion alone no longer suffices
-    record = saved(reply(**SUCCESS), task_mode='episode')
+    # the record says so itself, whatever its policy names: with no instruction a completion alone no longer suffices
+    record = saved(reply(**SUCCESS), task_mode='episode', instruction=None)
     assert harness.annotation_complete(record) and not harness.annotation_complete({**record, 'label_schema': 'tasks'})
 
 

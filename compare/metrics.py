@@ -63,7 +63,7 @@ RIGS ={"teleop_arms": "teleop", "handheld_gripper": "handheld", "ego_head": "hea
 RIG_NAMES = {"all": "All footage", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
 RESPONDED = ("parsed", "unparsed", "incomplete", "cut_off")
 OUTCOMES = ("success", "success_then_undone", "failure", "partial", "unclear")
-from board.label_projection import effective_outcome, verdict_or_tasks
+from board.label_projection import effective_outcome, shown_tasks, tasks_format, verdict_or_tasks
 LISTS = ("data_issues", "operator_mistakes")
 PER_EPISODE = ("events_per_min", "key_events", "subgoals", "data_issues", "data_issues_minor", "operator_mistakes",
                "operator_mistakes_minor", "data_issues_unrated", "operator_mistakes_unrated")
@@ -262,10 +262,13 @@ def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
         m[key + "_minor"] = len(items) - n - unrated
         fams |= {FAMILIES.family_of(key, i, dataset) for i in items}
     m["families"] = sorted(fams)
-    # the recording's verdict first; the tasks' share done only for a recording with none (several tasks, a session)
-    _, tasks = verdict_or_tasks(L)
+    # the tasks' share done, for a recording with no verdict (several tasks, a session) and beside the verdict of one
+    # that lists its tasks (board/label_projection.py shown_tasks)
+    tasks = shown_tasks(L)
     if tasks:
         m["tasks"] = [len(tasks), sum(1 for t in tasks if str(t.get("outcome") or "").lower() == "success")]
+    if tasks_format(L) and verdict_or_tasks(L)[0] is not None:
+        m["verdict_first"] = True
     c = L.get("completion")
     oc = effective_outcome(c.get("task_completed")) if isinstance(c, dict) else None
     m["outcome"] = oc if oc in OUTCOMES else None
@@ -459,7 +462,7 @@ def compute(manifest: dict, base: Path | None = None, sources: dict | None = Non
                  for p in [_with_example(m, ref, rig_eps(rig), rows)] if p]
         if pairs:
             paired[rig] = pairs
-    kept = ("status", "outcome", "tasks", "segments", "cost")
+    kept = ("status", "outcome", "tasks", "verdict_first", "segments", "cost")
     episodes = [{"file": r["file"], "episode_id": r["episode_id"], "dataset": r["dataset"], "rig": r["rig"],
                  "seconds": _r(r["seconds"], 2),
                  "by": {m: {x: v for x, v in rec.items() if x in kept} for m, rec in r["by"].items()}}

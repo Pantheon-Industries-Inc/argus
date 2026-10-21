@@ -3131,6 +3131,12 @@ function cardOutcomeHtml(ep) {
     // a model's response that did not parse, was cut off or never came: a result, listed like any other
     return `<span class="outcome-tag fail">${esc(ST_WORDS[ep.cmp_status] || ep.cmp_status)}</span>`;
   }
+  if (ep.n_tasks && ep.verdict_first && ep.task_completed) {
+    // a recording judged as a whole that also lists its tasks: its verdict, and how many of its tasks succeeded
+    const oc = String(ep.task_completed).toLowerCase();
+    return `<span class="outcome-tag ${esc(oc)}">${esc(outcomeWords(oc, ep.failure_kind))}, `
+      + `${ep.n_task_success}/${ep.n_tasks} tasks</span>`;
+  }
   if (ep.n_tasks) {
     const allOk = ep.n_task_success === ep.n_tasks && !ep.parts_missing;
     const gap = ep.parts_missing ? `, ${ep.parts_missing} of ${ep.parts} parts not labelled` : '';
@@ -6651,13 +6657,16 @@ function renderEp(d, opts) {
     : d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
   const onTl = t => Math.max(0, Math.min(duration, Number(t)));     // a time as drawn: on the episode's timeline
 
-  // the rule every outcome reader shares (board/label_projection.py verdict_or_tasks): a completion in the tasks format
-  // (it names its basis) with a verdict is one goal, the way an episode is; a recording with none (several tasks, timed
-  // steps) and a record labelled before the tasks format that lists tasks (a session, a head camera's activities) are
-  // shown task by task (d.tasks), each task with its own outcome and goal frame
-  const tasks = comp.basis != null && String(comp.task_completed || '').trim() ? []
-    : (d.tasks || []).filter(t => t && (t.task || t.start_s != null));
-  const hasTasks = tasks.length > 0;
+  // the rule every outcome reader shares (board/label_projection.py verdict_or_tasks and shown_tasks): a completion in
+  // the tasks format (it names its basis) with a verdict is one goal, the way an episode is, and still lists its tasks
+  // (oneVerdict) when there are two or more or one is judged against a timed step; a recording with none (several
+  // tasks, timed steps, a long recording in parts) and a record labelled before the tasks format that lists tasks (a
+  // session, a head camera's activities) are shown task by task (hasTasks), each with its own outcome and goal frame
+  const allTasks = (d.tasks || []).filter(t => t && (t.task || t.start_s != null));
+  const oneVerdict = comp.basis != null && !!String(comp.task_completed || '').trim();
+  const tasks = oneVerdict && !(allTasks.length >= 2 || allTasks.some(t => t.judged_against === 'subtask')) ? []
+    : allTasks;
+  const hasTasks = tasks.length > 0 && !oneVerdict;
   const taskGoalTimes = tasks.map(t => t.completed_at_s).filter(t => t != null);
 
   // Given or inferred. When the dataset ships an instruction, the episode was graded against it (given mode): that
@@ -6671,11 +6680,11 @@ function renderEp(d, opts) {
   // A record in the tasks format (its completion names its basis) shows every claim the dataset makes, each beside the
   // model's own reading: the instruction beside its assessment, the dataset's timed steps beside the tasks it found,
   // and with neither, the goal it inferred with its success criterion. An older record keeps its banner.
-  const tasksFormat = comp.basis != null;
+  const tasksFormat = comp.basis != null || meta.label_schema === 'tasks';
   const givenSteps = tasksFormat ? (d.dataset_labels || []).filter(x => x && x.label != null) : [];
   const stepsOnly = tasksFormat && !!givenSteps.length && !meta.given_prompt;
   const secs = t => (t == null || isNaN(Number(t)) ? '' : `${Number(t).toFixed(1)}s`);
-  const stepLines = givenSteps.map((x, i) => `<div class="gs-step"><span class="gs-n">${i + 1}</span>`
+  const stepLines = givenSteps.map((x, i) => `<div class="gs-step"><span class="gs-n">${x.step != null ? x.step : i + 1}</span>`
     + `<span class="gs-t">${esc([secs(x.t0), secs(x.t1)].filter(Boolean).join('-'))}</span>`
     + `<span class="gs-l">${esc(x.label)}</span></div>`).join('');
   const readTasks = (d.tasks || []).filter(t => t && t.task);
@@ -6684,8 +6693,11 @@ function renderEp(d, opts) {
     : givenSession ? 'Given task and session summary' : hasTasks ? 'Session summary'
     : givenMode ? `Given goal and ${whoOwn(who, 'independent assessment')}`
     : `Task, as ${esc(nameParts(who)[0])}${nameParts(who)[1] ? ` (${esc(nameParts(who)[1])})` : ''} assessed it`;
-  const stepsHtml = givenSteps.length ? `<div class="goal-given gs"><span class="gg-badge">dataset's timed steps</span>`
-    + `<div class="gs-list">${stepLines}</div></div>` : '';
+  // a text the dataset holds over the whole recording beside the instruction (label/task_claims.py), never a step
+  const wholeHtml = (tasksFormat ? d.dataset_task_claims || [] : []).map(x => `<div class="goal-given">`
+    + `<span class="gg-badge">dataset's task for the whole episode</span><span class="gg-text">${esc(x)}</span></div>`).join('');
+  const stepsHtml = wholeHtml + (givenSteps.length ? `<div class="goal-given gs"><span class="gg-badge">dataset's timed steps</span>`
+    + `<div class="gs-list">${stepLines}</div></div>` : '');
   const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">success `
     + `criterion</span><span class="gr-text">${esc(comp.success_predicate)}</span></div>` : '';
   // what the chip names: the instruction, or with none the dataset's timed steps
@@ -7149,13 +7161,16 @@ function renderEp(d, opts) {
     const oc = (t.outcome || '').toLowerCase();
     const span = (t.start_s != null && t.end_s != null) ? `${fmtT(t.start_s)}-${fmtT(t.end_s)}` : '';
     const done = t.completed_at_s != null ? ` &middot; done ${fmtT(t.completed_at_s)}` : '';
+    // what the task was judged against (label/prompts.py TASK_RULES): one of the dataset's timed steps, the instruction
+    const against = t.judged_against === 'subtask' && t.subtask != null ? ` &middot; against step ${esc(t.subtask)}`
+      : t.judged_against === 'instruction' ? ' &middot; against the instruction' : '';
     const jump = t.completed_at_s != null ? t.completed_at_s : t.start_s;
     taskRows.push(`<div class="task-row ${esc(oc)}"${jump != null ? ` data-t="${esc(jump)}"` : ''}>
       <span class="task-num ${esc(oc)}">${i + 1}</span>
       <div class="task-body">
         <div class="task-head"><span class="task-name">${esc(t.task || '?')}</span>${oc
           ? `<span class="outcome ${esc(oc)}">${esc(outcomeWords(oc, t.failure_kind))}</span>` : ''}</div>
-        <div class="task-meta">${span}${done}</div>
+        <div class="task-meta">${span}${done}${against}</div>
         ${t.success_predicate ? `<div class="task-pred">${esc(t.success_predicate)}</div>` : ''}
         ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
       </div>
@@ -7353,7 +7368,7 @@ function renderEp(d, opts) {
     ${scoresHtml}
     ${outcomeKv}
     ${goalFramesHtml}
-    ${hasTasks ? `<div class="info-block tasks-panel">${tasksHtml}</div>` : ''}
+    ${tasks.length ? `<div class="info-block tasks-panel">${tasksHtml}</div>` : ''}
     ${requestPartAssessmentsHtml(d)}
   `;
 
@@ -9054,7 +9069,9 @@ async function renderEpisodeTable(order, first) {
     const by = !m.reference && cmpHas(m.key, e.file) ? m.key : '';
     let cls, txt;
     if (r.status === 'parsed') {
-      if (r.tasks) { cls = 'tasks'; txt = `${r.tasks[1]} of ${r.tasks[0]} tasks`; }
+      if (r.tasks && r.verdict_first && r.outcome) {
+        cls = r.outcome; txt = `${r.outcome.replace(/_/g, ' ')}, ${r.tasks[1]} of ${r.tasks[0]} tasks`;
+      } else if (r.tasks) { cls = 'tasks'; txt = `${r.tasks[1]} of ${r.tasks[0]} tasks`; }
       else { cls = r.outcome || 'unclear'; txt = (r.outcome || 'no outcome').replace(/_/g, ' '); }
     } else if (r.status === 'pending') return '<td><span class="et-none">not yet</span></td>';
     else { cls = 'fail'; txt = ST_WORDS[r.status] || r.status; }

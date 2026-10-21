@@ -38,7 +38,7 @@ import re
 from re import _constants as _C, _parser
 from pathlib import Path
 
-from board.label_projection import severity as _sev
+from board.label_projection import severity as _sev, tasks_format
 from board.polarity import denied_spans
 
 HERE = Path(__file__).resolve().parent
@@ -293,7 +293,13 @@ class Families:
         # the episode's outcome, and each part's of a long recording labelled in parts (label/pieces.py puts those
         # under tasks), so a part reached and then undone counts as a short episode's does
         outcomes = {str((d.get("completion") or {}).get("task_completed") or "").lower()}
-        outcomes |= {str(t.get("outcome") or "").lower() for t in d.get("tasks") or [] if isinstance(t, dict)}
+        if not tasks_format(d):
+            outcomes |= {str(t.get("outcome") or "").lower() for t in d.get("tasks") or [] if isinstance(t, dict)}
+        elif outcomes == {""}:
+            # in the tasks format: the recording's verdict, else only the tasks judged against the instruction; an
+            # unasked side task never stands for the recording
+            outcomes |= {str(t.get("outcome") or "").lower() for t in d.get("tasks") or []
+                         if isinstance(t, dict) and t.get("judged_against") == "instruction"}
         outcomes.discard("")
         for f in self.defs:
             if f.get("datasets") and ds not in f["datasets"]:

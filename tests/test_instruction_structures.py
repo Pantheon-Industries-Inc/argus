@@ -134,7 +134,8 @@ def test_a_reply_that_judges_no_task_against_the_instruction_is_incomplete_and_n
     assert not ok and labels['_incomplete'] == [
         'the request asks the outcome of its task, and completion.task_completed is missing']
     case = {'not_outcome': ['success', 'success_then_undone']}
-    met, why = judge(case, {**labels, 'tasks': [shirt, {**shirt, 'start_s': 9.0}]})
+    met, why = judge(case, {**labels, 'tasks': [shirt, {**shirt, 'start_s': 9.0}],
+                            'completion': {'task_completed': None, 'basis': 'tasks'}})
     assert not met and 'no task judged against the instruction' in why[0]
     # judged against the instruction, the recording fails it and the case is met
     labels, ok = _read({**reply, 'completion': {'task_completed': 'failure', 'reason': 'a shirt is folded'}},
@@ -178,16 +179,21 @@ def test_each_structure_asks_for_what_it_has_and_numbers_its_steps_once(tmp_path
 
 # ---- the readers --------------------------------------------------------------------------------------------------------
 
-def test_openaoe_clips_read_by_the_generic_reader_keep_the_adapters_notes(tmp_path):
-    """An OpenAoE clip folder uploaded as it is published: the generic reader says what its action segments and its
-    clips are, as the dataset's adapter does, instead of only that they are recorded claims."""
+def test_openaoe_notes_reach_an_upload_only_where_its_own_metadata_names_openaoe(tmp_path):
+    """An OpenAoE clip folder whose upload names OpenAoE (its README) gets what the dataset's adapter says of its
+    action segments and its clips. The same rows (start_ts, end_ts) and folder name (raw_*_seg_N) without it state
+    neither fact: another upload can share both, and a name match establishes nothing."""
     from prepare import formats
     from test_openaoe_generic import clip, convert
-    clip(tmp_path / 'raw_kitchen_0412_seg_3')
-    _, ctx, _ = convert(tmp_path / 'raw_kitchen_0412_seg_3', tmp_path / 'out')
+    clip(tmp_path / 'named' / 'raw_kitchen_0412_seg_3')
+    (tmp_path / 'named' / 'raw_kitchen_0412_seg_3' / 'README.md').write_text('# OpenAoE-2000h clip\n')
+    _, ctx, _ = convert(tmp_path / 'named' / 'raw_kitchen_0412_seg_3', tmp_path / 'out_named')
     assert formats.ATOMIC_ACTION_NOTE in ctx['annotation_note']
     assert formats.SEGMENT_CLIP_NOTE in ctx['collection_note']
-    assert 'whole-second grid' in ctx['annotation_note'] and 'numbered segment' in ctx['collection_note']
+    clip(tmp_path / 'bare' / 'raw_kitchen_0412_seg_3')
+    _, ctx, _ = convert(tmp_path / 'bare' / 'raw_kitchen_0412_seg_3', tmp_path / 'out_bare')
+    assert 'whole-second grid' not in ctx['annotation_note']
+    assert 'numbered segment' not in str(ctx.get('collection_note') or '')
 
 
 def test_a_lerobot_task_index_over_the_whole_episode_is_its_task_never_a_step(tmp_path):
@@ -289,18 +295,20 @@ console.log(JSON.stringify(JSON.parse(process.argv[2]).map(c => tag(line(c.d, c.
 @pytest.mark.skipif(not shutil.which('node'), reason='no node')
 def test_the_verdict_line_counts_an_undone_task_and_a_stitched_task_verdict_has_its_goal_frame():
     """A task reached and then undone is counted as undone, never as unclear. A recording labelled in parts whose one
-    task was joined across the cuts has that task's verdict and goal frame, never "goal frame unassessed"."""
+    task was joined across the cuts has that task's verdict and goal frame, never "goal frame unassessed". One with an
+    instruction, which no part sees whole, has no verdict and is read by its tasks."""
     task = lambda outcome: {'task': 't', 'outcome': outcome}
     cases = [
         {'d': {}, 'tasks': [task('success'), task('success_then_undone'), task('failure'), task('unclear')],
          'partProgress': False},
         {'d': {'completion': {'task_completed': 'success', 'completed_at_s': 12.5, 'basis': 'one_task'}}, 'tasks': [],
          'partProgress': True},
-        {'d': {'completion': {'task_completed': 'unclear', 'basis': 'instruction'}}, 'tasks': [], 'partProgress': True},
+        {'d': {'completion': {'task_completed': None, 'basis': 'parts'}},
+         'tasks': [task('success'), task('success'), task('success'), task('failure')], 'partProgress': True},
     ]
     p = subprocess.run(['node', '-e', VERDICT_SCRIPT, str(PAGE), json.dumps(cases)], text=True, capture_output=True)
     assert p.returncode == 0, p.stderr
     several, joined, parted = json.loads(p.stdout)
     assert several == '1 of 4 tasks succeeded, 1 undone, 1 failed, 1 unclear'
     assert joined == 'success goal frame 12.5s'
-    assert parted == 'unclear Whole-recording goal frame unassessed'
+    assert parted == '3 of 4 tasks succeeded, 1 failed'

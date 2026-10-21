@@ -119,7 +119,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from board.label_projection import verdict_or_tasks
+from board.label_projection import tasks_format, verdict_or_tasks
 from board.to_board import (and_list, convert, dumps, field_words, label_failed, label_outputs, off_schema_text,
                             typed)
 from checks import label_consistency
@@ -186,8 +186,10 @@ def apply_rules(d: dict, ctx: dict, rules: list, ep_dir: Path | None = None) -> 
         elif kind == "cap_when":
             # the recording's verdict, or with none (several tasks) each task's outcome, by the rule every outcome
             # reader shares (board/label_projection.py verdict_or_tasks)
+            # (a record in the tasks format only: an older one is capped by its completion alone, as it always was)
             verdict, tasks = verdict_or_tasks(d)
-            outcomes = {verdict} if verdict else {str(t.get("outcome") or "").lower() for t in tasks}
+            outcomes = ({verdict} if verdict else {str(t.get("outcome") or "").lower() for t in tasks}
+                        if tasks_format(d) else {str((d.get("completion") or {}).get("task_completed") or "").lower()})
             when = bool(outcomes & set(rule.get("when_outcome") or [])) or any(
                 (i or {}).get("category") in (rule.get("when_tags") or []) and i.get("severity") in ("medium", "high")
                 for i in d.get(rule.get("when_list", "data_issues")) or [])
@@ -444,12 +446,15 @@ def add_reader_issues(d: dict, ctx: dict, result: dict | None = None) -> None:
 
 def dataset_label(s: dict) -> dict:
     """One of the dataset's timed labels for the board: its start and end in seconds, a label with no end time a
-    moment (its end its start), and a time that is not a number null, which the page shows untimed."""
+    moment (its end its start), a time that is not a number null, which the page shows untimed, and its number in the
+    whole recording (step), the number a task judged against it names."""
     from label.episode import number
+    from label.task_claims import text
     t0, t1 = number(s.get("t0")), number(s.get("t1"))
     # OpenAoE labels stored before prepare/openaoe.py hand_phrase
     return {"t0": t0, "t1": t1 if t1 is not None or s.get("t1") is not None else t0,
-            "label": str(s["label"]).replace("(both hand)", "(both hands)")}
+            "label": text(s).replace("(both hand)", "(both hands)"),
+            **({"step": s["step"]} if isinstance(s.get("step"), int) else {})}
 
 
 def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) -> None:
@@ -481,11 +486,20 @@ def add_context(d: dict, ctx: dict, ep_dir: Path, result: dict | None = None) ->
     if outside:
         d["dataset_checks"] = d.get("dataset_checks") or {}
         d["dataset_checks"]["reader_issues"] = (d["dataset_checks"].get("reader_issues") or []) + outside
-    subs = [s for s in ctx.get("annotation_subtasks") or [] if isinstance(s, dict) and s.get("label")]
-    if subs:
-        d["dataset_labels"] = [dataset_label(s) for s in subs]
+    # the dataset's task texts as the request read them (label/task_claims.py): its timed steps, and the texts it holds
+    # over the whole recording that differ from the instruction, its tasks for the whole episode
+    from label.task_claims import claims as task_claims
+    read = task_claims(ctx)
+    if read["steps"]:
+        d["dataset_labels"] = [dataset_label(s) for s in read["steps"]]
         if ctx.get("annotation_note"):
             d["dataset_labels_note"] = ctx["annotation_note"]
+    if read["whole"]:
+        d["dataset_task_claims"] = [claim["text"] for claim in read["whole"]]
+    if d.get("_rig") == "ego_head" and (d.get("_meta") or {}).get("label_schema") == "tasks":
+        # the head camera's schema asks no judged_against: each task's is read from the claims (label_projection.py)
+        from board.label_projection import judge_head_camera_tasks
+        judge_head_camera_tasks(d, read["steps"], read["instruction"])
     if isinstance(ctx.get("publisher_labels"), dict):
         d["dataset_episode_labels"] = ctx["publisher_labels"]
     notes = ctx.get("uploader_notes")
@@ -680,6 +694,7 @@ def normalize_enums(x, key: str | None = None):
 # the episode's context a comparison label carries from the board's own label, so the page lays out the same player
 # (length, rig, cameras, the dataset's own labels, where the footage comes from); none of the checks or rules
 CONTEXT_KEYS = ("dataset", "_rig", "duration_s", "duration_estimated", "dataset_labels", "dataset_labels_note",
+                "dataset_task_claims",
                 "dataset_episode_labels", "uploader_notes", "dataset_source", "camera_views", "camera_labels", "camera_mounting",
                 "timesteps_s", "task_label", "reader_notes", "unshown_cameras", "data_dictionary", "camera_presentation")
 

@@ -75,7 +75,7 @@ from pathlib import Path
 
 from board.clips import DEPTH, clip_path    # one rule for where a camera's clip is, for the writer and this server
 from board.families import Families
-from board.label_projection import verdict_or_tasks
+from board.label_projection import shown_tasks, tasks_format, verdict_or_tasks
 from board.public_export import project as public_json
 from board.to_board import dumps, finite
 from prepare import tools
@@ -1752,9 +1752,10 @@ def _rail_record(p: Path, d: dict) -> dict:
     unrated_issues = sum(not FAMILIES.rated(i) for i in all_issues)
     unrated_mistakes = sum(not FAMILIES.rated(i) for i in all_mistakes)
     # a recording with no verdict of its own (several tasks, a session, the head camera's activities): the rail shows
-    # "N/M tasks" from the per-task outcomes; a recording with a verdict (one task) shows that verdict
-    _, tasks = verdict_or_tasks(d)
-    tasks = [t for t in tasks if t.get("task") or t.get("start_s") is not None]
+    # "N/M tasks" from the per-task outcomes; a recording with a verdict shows that verdict, and beside it the count of
+    # the tasks it lists (board/label_projection.py shown_tasks)
+    verdict, _ = verdict_or_tasks(d)
+    tasks = [t for t in shown_tasks(d) if t.get("task") or t.get("start_s") is not None]
     return {
         "episode_id": (d.get("_meta") or {}).get("episode_id") or p.stem,
         "file": p.name,
@@ -1771,6 +1772,7 @@ def _rail_record(p: Path, d: dict) -> dict:
         "n_minor_mistakes": len(all_mistakes) - len(mistakes) - unrated_mistakes,
         "n_unrated_mistakes": unrated_mistakes,
         "n_tasks": len(tasks),
+        **({"verdict_first": True} if tasks_format(d) and verdict is not None else {}),
         "n_task_success": sum(1 for t in tasks if (t.get("outcome") or "").lower() == "success"),
         # the episode's length (board/build.py measures it); files without one fall back on the sampled times
         "duration_s": d.get("duration_s") or _duration_s(d.get("timesteps_s")),

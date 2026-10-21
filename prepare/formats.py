@@ -1876,6 +1876,30 @@ SEGMENT_CLIP_NOTE = ("crowd contributors record their own activities on a phone 
 SEGMENT_CLIP_NAME = re.compile(r"raw_.+_seg_\d+")
 
 
+def declares_openaoe(root, scope: dict) -> bool:
+    """Whether an upload's own metadata names OpenAoE: the dataset description it declares (info.json, metadata.json
+    or dataset.json, prepare/annotations.py) or the README at its root. Row fields (start_ts, end_ts) and folder names
+    are shared by other uploads and establish nothing."""
+    texts = [str(scope.get("collection_note") or "")]
+    for name in ("README.md", "README.txt", "README"):
+        path = Path(root) / name if root is not None and Path(root).is_dir() else None
+        if path is not None and path.is_file() and path.stat().st_size <= NOTE_JSON_MAX_BYTES:
+            texts.append(path.read_text(errors="replace"))
+    return any("openaoe" in text.casefold() for text in texts)
+
+
+def openaoe_notes(ctx: dict, folder: str = "") -> None:
+    """OpenAoE's notes on an episode its upload establishes as OpenAoE (declares_openaoe): what its atomic action
+    segments are, and, for a clip folder named as one numbered segment, how its clips are packaged."""
+    if not (ctx.get("source") or {}).get("atomic_action_spans"):
+        return
+    if ATOMIC_ACTION_NOTE not in str(ctx.get("annotation_note") or ""):
+        ctx["annotation_note"] = ATOMIC_ACTION_NOTE + ". " + str(ctx.get("annotation_note") or "")
+    if SEGMENT_CLIP_NAME.fullmatch(str(folder)) and \
+            SEGMENT_CLIP_NOTE not in str(ctx.get("collection_note") or ""):
+        ctx["collection_note"] = "; ".join(x for x in (SEGMENT_CLIP_NOTE, ctx.get("collection_note")) if x)
+
+
 def recorded_video_notes(item: dict) -> dict:
     """Read owned atomic action spans and device objects by structure, retaining every source field."""
     files = [Path(p) for p in item.get("files", [])]
@@ -5219,13 +5243,12 @@ def convert_video(item: dict, rig: str, out: Path, dataset: str) -> dict:
         extra["source"].update(structured["source"])
         if structured["spans"]:
             extra["annotation_subtasks"] = structured["spans"]
-            extra["annotation_note"] = (ATOMIC_ACTION_NOTE + ". These are recorded atomic action claims. start_ts and "
+            extra["annotation_note"] = ("These are recorded atomic action claims. start_ts and "
                                         "end_ts are displayed as seconds from the video start; their unit, clock "
                                         "relation and accuracy were not separately recorded. Original fields and "
                                         "boundaries remain in the attributed notes.")
-            # a clip folder named as one segment of a longer recording is packaged that way, whoever uploads it
-            if SEGMENT_CLIP_NAME.fullmatch(Path(fs[0]).parent.name):
-                extra["collection_note"] = "; ".join(x for x in (SEGMENT_CLIP_NOTE, extra.get("collection_note")) if x)
+            # what OpenAoE's segments and clips are is added only where the upload names OpenAoE (openaoe_notes)
+            extra["source"]["atomic_action_spans"] = True
         if structured["unresolved"]:
             extra["annotation_unresolved"] = structured["unresolved"]
             add_issue(extra, "annotation_unresolved", "Some recorded action claims have invalid boundaries or "
@@ -6322,15 +6345,19 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
             if table["issues"]:
                 add_issue(ctx, "metadata_unreadable", f"{path} has unresolved {column} table claims; "
                           "every recorded field and conflicting row is retained as uploader notes.", source=str(path))
-    # a code that holds one value over every row of the episode and names the episode's own task (task_index read
-    # through tasks.jsonl, a constant language column) is that task, given once as the instruction, never a step of
-    # it; the recorded span, with its source and rows, stays under annotation_task_claims
-    task = " ".join(str(ctx.get("instruction") or "").split()).casefold()
-    whole = [step for step in spans if task and step.get("row_start") == 0 and step.get("row_end") == len(df) - 1
-             and " ".join(str(step.get("label") or "").split()).casefold() == task]
+    # a column that holds one text over the whole episode (task_index read through tasks.jsonl, a constant language
+    # column) is a claim about the whole episode, never a step of it (label/task_claims.py): the instruction when the
+    # episode has none, else a second claim beside it; its recorded span, with its source and rows, stays under
+    # annotation_task_claims
+    from label.task_claims import claims as task_claims
+    read = task_claims({"instruction": ctx.get("instruction"), "annotation_subtasks": spans, "n_state_frames": len(df)})
+    whole = [step for step in spans
+             if (step.get("column"), step.get("source") if step.get("column") else None) in read["held"]]
     if whole:
         spans = [step for step in spans if step not in whole]
         ctx["annotation_task_claims"] = ctx.get("annotation_task_claims", []) + whole
+        if read["instruction_from"] == "claim":
+            ctx["instruction"] = read["instruction"]
     ctx["annotation_subtasks"] = ctx.get("annotation_subtasks", []) + spans
     ctx["annotation_unresolved"] = unresolved
     ctx["annotation_tables"] = table_notes
@@ -11115,10 +11142,18 @@ def mcap_task_texts(texts: dict, counts: dict, t0: int | None,
     if len(texts[it]) > 1:
         # a task topic whose text changes names the task of each stretch, so each text is a timed task prompt, none
         # chosen over the others: MicroAGI sends a placeholder ("The agent is idle") at the start of some fragments,
-        # the title after it, and a new title when the work changes; a text replaced the moment it was sent names no
-        # stretch, and stays with the recorded text channels
-        return None, notes, [{**step, "column": it} for step in mcap_timed_prompts(texts[it], base, end_s)
-                             if step["t1"] > step["t0"]]
+        # the title after it, and a new title when the work changes. By the one law for task texts
+        # (label/task_claims.py) a text replaced the moment it was sent claims nothing, repeats of one text are one
+        # claim, and a topic left with one text over the whole recording gives its instruction; every text stays with
+        # the recorded text channels and the notes
+        from label.task_claims import claims as task_claims
+        prompts = [{**step, "column": it} for step in mcap_timed_prompts(texts[it], base, end_s)]
+        read = task_claims({"annotation_subtasks": prompts, "duration_s": end_s})
+        if read["held"]:
+            notes[it] = [f"{max(0.0, (ts - base) / 1e9):.1f} s: {_title_of(x)}" for ts, x in texts[it]]
+            return read["instruction"], notes, []
+        return None, notes, [{k: v for k, v in step.items() if k not in ("step", "joined_rows")}
+                             for step in read["steps"]]
     instr = texts[it][0][1]
     # a task message in protobuf text form (MicroAGI's /task: title, success, tools, confidence) gives its title as
     # the instruction; the rest of the record stays with the uploader's notes as claims to check
@@ -13866,6 +13901,9 @@ def _convert_upload(root, rig, out, dataset, max_seconds, grouping, ownership_co
             if ctx.get('collection_note') and ctx['collection_note'] not in notes:
                 notes.append(ctx['collection_note'])
             ctx['collection_note'] = '\n'.join(notes)
+        if (ctx.get('source') or {}).get('atomic_action_spans') and declares_openaoe(root, scope):
+            openaoe_notes(ctx, Path(str((it.get("files") or [""])[0])).parent.name)
+            write_atomic(out / ctx["episode_id"] / "context.json", ctx, indent=1, default=str)
         if len(scope) > 1:
             from prepare.annotations import represented_scope
             it['scope_metadata_read'] = represented_scope(ctx, [source["metadata_root"],

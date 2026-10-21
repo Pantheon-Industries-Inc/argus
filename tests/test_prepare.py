@@ -530,7 +530,10 @@ def test_videos_adapter_prepares_each_file_with_its_instruction(tmp_path):
     assert a["n_state_frames"] == 40 and b["source"] == {"format": "video files", "file": "kitchen/run_1.mp4"}
     req = me.build_request(out / "episode_kitchen_run_1_2")
     assert req["views"] == ["exo"] and 'goal: "dry the mug"' in req["prompt"]
-    assert "0.0-0.5s  pick up the towel" in req["prompt"]
+    # the clip is 0.5s long: its one sub-step holds over the whole clip, so it is the dataset's task for the whole
+    # episode beside the goal, never a timed step (label/task_claims.py)
+    assert 'the dataset\'s task for the whole episode: "pick up the towel"' in req["prompt"]
+    assert "0.0-0.5s  pick up the towel" not in req["prompt"]
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"kitchen/missing.mp4": "x"}))
     assert _main(videos, ["prepare", "--root", root, "--out", out, "--instructions", bad])[0] != 0

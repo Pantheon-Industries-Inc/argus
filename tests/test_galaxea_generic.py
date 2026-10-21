@@ -165,7 +165,10 @@ def test_seven_joint_groups_stay_video_labelled_with_every_split_signal(tmp_path
 
 
 @pytest.mark.parametrize('coarse', [True, 0.5])
-def test_invalid_coarse_code_never_borrows_a_constant_fine_task(tmp_path, coarse):
+def test_an_invalid_coarse_code_leaves_the_fine_task_held_over_the_episode_as_its_only_task_claim(tmp_path, coarse):
+    """An invalid coarse code gives no instruction. The fine task code then holds one text over every row: by the one
+    law for task texts (label/task_claims.py) that is the episode's claim about the whole recording, never a step, so
+    it is the instruction, kept with its rows under annotation_task_claims."""
     root = tmp_path / 'invalid'
     path, _ = native(root)
     df = pd.read_parquet(path)
@@ -173,7 +176,9 @@ def test_invalid_coarse_code_never_borrows_a_constant_fine_task(tmp_path, coarse
     df['task_index'] = 0
     df.to_parquet(path)
     _, ctx = convert(root, tmp_path / 'output')
-    assert not ctx.get('instruction')
+    held = [row for row in ctx['annotation_task_claims'] if row['column'] == 'task_index']
+    assert held and ctx['instruction'] == held[0]['label']
+    assert not [row for row in ctx['annotation_subtasks'] if row['column'] == 'task_index']
 
 
 def test_explicit_episode_goal_keeps_priority_over_coarse_and_quality_codes(tmp_path):

@@ -12,7 +12,8 @@ first and last stretch reach as far out as their one neighbour does. The timelin
 instant's stretch meets a timed step. A step outside the sent span meets no stretch and covers nothing.
 
 The outcome. The field the request's own instructions ask for (label/prompts.py requested_outcome). A robot request
-with an instruction asks for completion.task_completed, judged against it, and the list of tasks beside it. Any other
+with an instruction asks for completion.task_completed, judged against it: that is its outcome, and the list of tasks
+it asks beside it is not (a missing list, or a task with no outcome, is a schema issue the record names). Any other
 request asks for a tasks list with an outcome on every task: at least one task, except on a robot recording with
 neither an instruction nor timed steps, where idle footage holds none. A record asked before the tasks format (no
 label_schema) is held to what its mode asked: completion.task_completed for an episode, a tasks list with an outcome on
@@ -139,13 +140,9 @@ def outcome_gaps(labels: dict, record: dict) -> list[str]:
     completion = labels.get('completion')
     if not isinstance(completion, dict) or not _answered(completion.get('task_completed')):
         return ['the request asks the outcome of its task, and completion.task_completed is missing']
-    if tasks_format(record):
-        # beside the completion the request asks for the recording's tasks; idle footage may hold none
-        if not isinstance(tasks, list):
-            return ['the request asks the recording\'s tasks beside its completion, and the reply lists none']
-        missing = [str(i) for i, task in enumerate(tasks)
-                   if not isinstance(task, dict) or not _answered(task.get('outcome'))]
-        return [f'task {", ".join(missing)} of {len(tasks)} has no outcome'] if missing else []
+    # the tasks a robot request with an instruction asks beside its completion are not its outcome: a list that is
+    # missing, or a task with no outcome, is a schema issue the record names (board/label_projection.py
+    # derive_completion), never a reason to call the reply unfinished
     return []
 
 

@@ -20,6 +20,12 @@ const gap = T.cardOutcomeHtml({n_tasks: 2, n_task_success: 2, parts_missing: 1, 
 check(!gap.includes('success') && gap.includes('2/2 tasks') && gap.includes('1 of 3 parts not labelled'),
   'a long recording with a part not labelled never reads complete');
 check(T.cardOutcomeHtml({task_completed: 'success'}).includes('>success<'), 'an outcome');
+// a recording judged as a whole that lists its tasks (board/label_projection.py shown_tasks): its verdict, then the
+// count; a record with no verdict_first mark keeps the count alone, as a session always did
+const both = T.cardOutcomeHtml({task_completed: 'failure', verdict_first: true, n_tasks: 2, n_task_success: 1});
+check(both.includes('failure">failure, 1/2 tasks<'), 'a verdict beside its tasks');
+check(T.cardOutcomeHtml({task_completed: 'unclear', n_tasks: 4, n_task_success: 3}).includes('>3/4 tasks<'),
+  'an older record lists its tasks as before');
 check(T.cardOutcomeHtml({}).includes('>unrated<'), 'no outcome');
 const malformed = T.cardOutcomeHtml({task_completed: 'success"><img src=x onerror="throw Error(1)">'});
 check(!malformed.includes('<img') && malformed.includes('&lt;img'),

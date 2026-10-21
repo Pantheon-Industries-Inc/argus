@@ -122,3 +122,36 @@ def test_the_banner_shows_every_claim_the_dataset_makes_beside_the_models_readin
     assert 'success criterion' in neither['bannerBody'] and 'three cups stacked' in neither['bannerBody']
     body = both['bannerBody']
     assert body.index('given goal') < body.index('matches given goal') < body.index('timed steps')
+
+
+REVIEW_CASES = [
+    # a verdict against the instruction beside two tasks each judged against its step: the verdict, and both tasks
+    {'d': {'episode_prompt': 'stacks the cups', 'goal_alignment': ALIGNED,
+           'tasks': [{**TASK, 'judged_against': 'subtask', 'subtask': 1},
+                     {**TASK, 'task': 'wipe up', 'judged_against': 'subtask', 'subtask': 2}],
+           'dataset_labels': [{'t0': 0, 't1': 4.5, 'label': 'stack the cups', 'step': 1},
+                              {'t0': 4.5, 't1': 9, 'label': 'wipe up', 'step': 2}],
+           'completion': {'task_completed': 'failure', 'basis': 'instruction'}},
+     'meta': {'prompt_mode': 'given', 'given_prompt': 'stack the cups and wipe up', 'label_schema': 'tasks'}},
+    # a head-camera clip with timed steps and no goal, in the tasks format (no completion): its steps and alignment
+    {'d': {'episode_prompt': 'wipes the table', 'tasks': [TASK, {**TASK, 'task': 'wipe the table'}],
+           'goal_alignment': {'relation': 'aligned', 'matches_given': True},
+           'dataset_labels': [{'t0': 0, 't1': 9, 'label': 'wipe up', 'step': 1}]},
+     'meta': {'prompt_mode': 'inferred', 'label_schema': 'tasks'}},
+    # a second text the dataset holds over the whole recording, beside the instruction
+    {'d': {'episode_prompt': 'spells CORL', 'tasks': [TASK], 'dataset_task_claims': ['spell out CORL'],
+           'completion': {'task_completed': 'success', 'basis': 'instruction'}},
+     'meta': {'prompt_mode': 'given', 'given_prompt': 'arrange the blocks to spell CORL', 'label_schema': 'tasks'}},
+]
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='no node')
+def test_a_verdict_keeps_its_judged_tasks_and_every_claim_reaches_the_banner():
+    p = subprocess.run(['node', '-e', TASKS_SCRIPT, str(PAGE), json.dumps(REVIEW_CASES)], text=True,
+                       capture_output=True)
+    assert p.returncode == 0, p.stderr
+    both, ego, whole = json.loads(p.stdout)
+    assert both['shown'] == 2 and both['bannerLabel'].startswith('Given goal and')
+    assert ego['bannerLabel'].startswith("The dataset's timed steps and") and 'matches the dataset' in ego['bannerBody']
+    assert "dataset's task for the whole episode" in whole['bannerBody'] and 'spell out CORL' in whole['bannerBody']
+    assert whole['shown'] == 0

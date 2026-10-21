@@ -37,7 +37,7 @@ JUDGED_AGAINST = ('subtask', 'instruction', 'own_end_state')
 # what a completion in that format stands on (its basis): the reply's own completion, judged against the episode's
 # instruction; a recording's one task; or no verdict, for a recording whose dataset times its own steps and gives no
 # instruction (task_prompts) or one of several tasks, or none (tasks)
-BASES = ('instruction', 'one_task', 'task_prompts', 'tasks')
+BASES = ('instruction', 'one_task', 'task_prompts', 'tasks', 'parts')
 # a task's outcome fields, under the names the recording's completion gives them
 COMPLETION_FROM_TASK = (('task_completed', 'outcome'), ('success_predicate', 'success_predicate'),
                         ('completed_at_s', 'completed_at_s'), ('goal_reached_at_s', 'goal_reached_at_s'),
@@ -87,11 +87,24 @@ def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts
     if rig != 'ego_head' and instruction:
         if isinstance(out.get('completion'), dict):
             out['completion'] = {**out['completion'], 'basis': 'instruction'}
+        # the completion is the reply's outcome; the tasks asked beside it, missing or without an outcome, are named
+        # as schema issues and never make the reply unfinished (label/completeness.py)
+        tasks = out.get('tasks')
+        notes = (['tasks: the request asks the recording\'s tasks beside its completion, and the reply lists none']
+                 if not isinstance(tasks, list) else
+                 [f'tasks: task {i} of {len(tasks)} has no outcome' for i, task in enumerate(tasks)
+                  if not isinstance(task, dict) or not str(task.get('outcome') or '').strip()])
+        notes = [n for n in notes if n not in (out.get('_schema_violations') or [])]
+        if notes:
+            out['_schema_violations'] = [*(out.get('_schema_violations') or []), *notes]
         return out
     if rig == 'ego_head':
+        # one task gives the clip its verdict when the clip has an annotated goal, or has no timed steps to judge it
+        # against instead; any other clip is read task by task, as on main
         tasks = [t for t in out.get('tasks') or [] if isinstance(t, dict)] if isinstance(out.get('tasks'), list) else []
-        if len(tasks) != 1 or task_prompts:
+        if len(tasks) != 1 or (task_prompts and not instruction):
             return out
+        task_prompts = 0
     derived = recording_completion(out.get('tasks'), task_prompts=task_prompts)
     # labels read again (a saved record checked on resume) already hold the derived completion
     if 'completion' in out and out['completion'] != derived:
@@ -99,6 +112,36 @@ def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts
                                      'completion: the output format has no completion; it is derived from tasks']
     out['completion'] = derived
     return out
+
+
+def judge_head_camera_tasks(record: dict, steps: list[dict], goal: str | None) -> None:
+    """What each task of a head-camera record was judged against, which its schema does not ask (label/prompts.py
+    EGO_SCHEMA): the dataset's timed step covering most of it ("subtask", with the step's number in the whole
+    recording, label/task_claims.py), else the annotated goal ("instruction"), else its own end state. Each is marked
+    judged_against_derived; a completion taken from the one task carries the same."""
+    def number(x):
+        return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+    for task in record.get('tasks') or []:
+        if not isinstance(task, dict) or task.get('judged_against') in JUDGED_AGAINST:
+            continue
+        a, b = number(task.get('start_s')), number(task.get('end_s'))
+        best, cover = None, 0.0
+        for step in steps:
+            s0, s1 = number(step.get('t0')), number(step.get('t1'))
+            if None in (a, b, s0, s1) or b <= a:
+                continue
+            share = max(0.0, min(b, s1) - max(a, s0)) / (b - a)
+            if share > cover:
+                best, cover = step, share
+        if best is not None and cover >= 0.5:
+            task.update(judged_against='subtask', subtask=best.get('step'))
+        else:
+            task.update(judged_against='instruction' if goal else 'own_end_state', subtask=None)
+        task['judged_against_derived'] = True
+    completion = record.get('completion')
+    tasks = [t for t in record.get('tasks') or [] if isinstance(t, dict)]
+    if isinstance(completion, dict) and completion.get('basis') == 'one_task' and len(tasks) == 1:
+        completion['judged_against'] = tasks[0].get('judged_against')
 
 
 def recording_verdict(completion) -> str | None:
@@ -124,6 +167,25 @@ def verdict_or_tasks(record: dict) -> tuple[str | None, list[dict]]:
     if isinstance(completion, dict) and 'basis' in completion:
         return (verdict, []) if verdict is not None else (None, tasks)
     return (None, tasks) if tasks else (verdict, [])
+
+
+def tasks_format(record) -> bool:
+    """Whether a record's completion is in the tasks format (it names its basis, derive_completion)."""
+    completion = record.get('completion') if isinstance(record, dict) else None
+    return isinstance(completion, dict) and 'basis' in completion
+
+
+def shown_tasks(record: dict) -> list[dict]:
+    """The tasks a reader lists beside the outcome. A record in the tasks format with a verdict of its own lists them
+    when there are two or more, or when one is judged against one of the dataset's timed steps (each such judgment
+    was asked for and is shown); one with no verdict lists them all. A record labelled before keeps the rule it was
+    shown by (verdict_or_tasks). Scoring reads verdict_or_tasks, which never lists tasks beside a verdict."""
+    record = record if isinstance(record, dict) else {}
+    verdict, tasks = verdict_or_tasks(record)
+    if not tasks_format(record) or verdict is None:
+        return tasks
+    every = [t for t in record.get('tasks') or [] if isinstance(t, dict)] if isinstance(record.get('tasks'), list) else []
+    return every if len(every) >= 2 or any(t.get('judged_against') == 'subtask' for t in every) else []
 
 
 def severity(item) -> str | None:
