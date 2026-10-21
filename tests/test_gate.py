@@ -72,7 +72,11 @@ def _episode(tmp_path, name, seconds=60.0):
 
 def _out(run, name, ep, labels=None, cost=0.5, cached=0, parse_ok=True, route_cost=0.0):
     (run / "out").mkdir(parents=True, exist_ok=True)
-    rec = {"episode_dir": str(ep), "model": score.DEFAULT_MODEL, "parse_ok": parse_ok, "labels": labels or {},
+    # a reply holds a timeline over the episode and an outcome (label/completeness.py), whatever else a test gives it
+    seconds = json.loads((Path(ep) / "context.json").read_text())["duration_s"]
+    whole = {"timeline": [{"start_s": 0.0, "end_s": seconds, "action": "work"}],
+             "completion": {"task_completed": "success"}}
+    rec = {"episode_dir": str(ep), "model": score.DEFAULT_MODEL, "parse_ok": parse_ok, "labels": {**whole, **(labels or {})},
            "usage": {"est_cost_usd": cost, "cached_tokens": cached},
            "config": {"resolution_route": {"routed": True, "cost_usd": route_cost}}}
     (run / "out" / f"{name}.json").write_text(json.dumps(rec))

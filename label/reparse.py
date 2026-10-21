@@ -2,9 +2,10 @@
 
     python -m label.reparse RUN [RUN ...]
 
-For every out/episode_*.json whose reply did not parse, the stored raw reply goes through
-label.harness.parse_response again. A reply that now parses replaces its labels (parse_ok true, the earlier
-error kept under _reparsed); one that still does not is left as it is. The original file is copied to
+For every out/episode_*.json whose reply did not parse or lacked work its request asked for, the stored raw reply
+goes through label.harness.read_reply again, the parser and the completeness rule of label/completeness.py. A reply
+that is now a complete annotation replaces its labels (parse_ok true, the earlier error kept under _reparsed); one
+that still is not is left as it is. The original file is copied to
 out/reparsed_originals/ first, and run.json lists what was re-read, by which code, and why. Prints one JSON
 line per run with the counts.
 """
@@ -159,7 +160,7 @@ def refresh_received(record: dict) -> dict:
     if not isinstance(raw, str):
         raise ValueError('saved reply has no complete retained response text')
     updated = copy.deepcopy(record)
-    labels, ok = harness.parse_response(raw)
+    labels, ok = harness.read_reply(raw, record)
     if '_reparsed' in (record.get('labels') or {}):
         labels['_reparsed'] = copy.deepcopy(record['labels']['_reparsed'])
     updated.update(labels=labels, parse_ok=ok)
@@ -219,9 +220,9 @@ def _reparse(run: Path) -> dict:
         raw = (r.get("labels") or {}).get("_raw") or r.get('response_text')
         if r.get("parse_ok") or not raw:
             continue
-        labels, ok = harness.parse_response(raw)
+        labels, ok = harness.read_reply(raw, r)
         if not ok:
-            still.append({"episode": p.stem, "error": labels["_parse_error"]})
+            still.append({"episode": p.stem, "error": labels.get("_parse_error") or "; ".join(labels["_incomplete"])})
             continue
         keep = out / "reparsed_originals"
         keep.mkdir(exist_ok=True)
@@ -229,7 +230,8 @@ def _reparse(run: Path) -> dict:
         original = ledger[0] if r.get('_authority_history_index') is not None else p
         shutil.copy2(original, keep / original.name)
         previous_labels = r.get("labels") if isinstance(r.get("labels"), dict) else {}
-        labels["_reparsed"] = {"was": previous_labels.get("_parse_error"), "code": code}
+        labels["_reparsed"] = {"was": previous_labels.get("_parse_error")
+                               or "; ".join(previous_labels.get("_incomplete") or []) or None, "code": code}
         r["labels"], r["parse_ok"] = labels, True
         rebind(r)
         save_annotation(out, name, p, r)

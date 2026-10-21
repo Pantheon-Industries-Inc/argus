@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from label import evidence_access as ea
+import complete_reply
 
 
 def access(tmp_path, **extra):
@@ -603,7 +604,7 @@ def test_harness_uses_requested_evidence_in_final_annotation_and_accounts_for_co
             camera = next(r for r in receipts if r['mode'] == 'images')
             assert len(camera['times_s']) == 4 and not camera['unavailable_rows']
             assert r['values'][0] == [0.] and r['values'][-1] == [11.]
-            text = {'timeline': [], 'evidence_findings': [{'start_s': r['times_s'][0], 'end_s': r['times_s'][-1],
+            text = {**complete_reply.labels(), 'evidence_findings': [{'start_s': r['times_s'][0], 'end_s': r['times_s'][-1],
                     'headline': 'Recorded response increases', 'observation': '0 to 11',
                     'claim': 'An uncalibrated sensor response increases.', 'adds_beyond_video': True,
                     'confidence': 'medium', 'evidence': [{'evidence_id': r['id'], 'time_s': r['times_s'][::5]}]}]}
@@ -825,7 +826,7 @@ def test_rgb_request_and_model_call_are_unchanged(inspect_every_field, tmp_path,
         calls.append(content)
         assert content == baseline['content']
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(harness, 'call_model', provider)
     result = harness.label_episode(ep, tmp_path / 'rgb.json', model='openai/gpt-6-astra', reasoning='medium',
                                    api_key='fixture', max_tokens=2000, timeout=10, cell_w=128)

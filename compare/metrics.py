@@ -23,12 +23,13 @@ Every number comes from the run folders: out/<episode>.json (parse_ok, labels, u
 repaired or re-prompted; a response that did not parse is a result. None of the board's checks or rules enter a
 number: they are applied to the board's labels on the page, not to any model's response.
 
-    status   parsed | unparsed | cut_off | no_response (a finished run has no output for it)
+    status   parsed | unparsed | incomplete | cut_off | no_response (a finished run has no output for it)
              | pending (the run is running or was interrupted, or it was a dry run)
 
 Which episodes each number uses (only episodes the board has a label of: any other episode a comparison run labelled
 has no board label to set it against, so it is left out):
-  - parse share: every episode the model was asked (pending ones aside), parsed / (parsed + unparsed + cut off);
+  - parse share: every episode the model was asked (pending ones aside), parsed / (parsed + unparsed + incomplete +
+    cut off), where a reply that parses but lacks work its request asked for is incomplete;
     a call that returned nothing is reported beside it, not counted as a response. The reference is asked every
     episode the board has a label of, and a board label is always a response that parsed
   - schema violations: every parsed response of that model
@@ -53,14 +54,14 @@ from collections import defaultdict
 from pathlib import Path
 
 from board.families import Families
-from label.harness import annotation_record, reply_truncated
+from label.harness import annotation_problems, annotation_record, reply_truncated
 from label.receipts import billing_summary, has_response
 
 FAMILIES = Families()
 MODELS_PATH = Path(__file__).resolve().parent.parent / "configs" / "models.json"
 RIGS ={"teleop_arms": "teleop", "handheld_gripper": "handheld", "ego_head": "head_camera"}
 RIG_NAMES = {"all": "All footage", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
-RESPONDED = ("parsed", "unparsed", "cut_off")
+RESPONDED = ("parsed", "unparsed", "incomplete", "cut_off")
 OUTCOMES = ("success", "success_then_undone", "failure", "partial", "unclear")
 from board.label_projection import effective_outcome
 LISTS = ("data_issues", "operator_mistakes")
@@ -176,9 +177,14 @@ def read_output(p: Path, record: dict | None = None) -> dict:
     u = r.get("usage") or {}
     # the episode's billed cost: its model call and, for a routed episode, the routing call made for it
     base.update(latency=u.get('latency_s'), out_tokens=u.get('completion_tokens'))
-    if r.get("parse_ok"):
+    # a reply counts as parsed only when it holds the work its request asked for (label/completeness.py)
+    problems = annotation_problems(r)
+    if not problems:
         return {"status": "parsed", "labels": r.get("labels") or {}, "config": r.get("config") or {}, **base}
-    lab = r.get("labels") or {}
+    lab = r.get("labels") if isinstance(r.get("labels"), dict) else {}
+    if r.get("parse_ok") or lab.get("_incomplete"):
+        return {"status": "incomplete", "why": problems, "raw": lab.get("_raw") or r.get("response_text") or "",
+                **base}
     return {"status": "unparsed", "error": lab.get("_parse_error"), "raw": lab.get("_raw") or "", **base}
 
 

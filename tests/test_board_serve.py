@@ -664,10 +664,12 @@ def test_a_part_of_a_long_recording_that_was_undone_counts_like_a_short_episode_
     the same outcome on a part of a long recording raises nothing, and the rail counts that part as not done."""
     from board import to_board
     stitched = {"parse_ok": True, "labels": {"completion": {"task_completed": None},
+                                             "timeline": [{"start_s": 0, "end_s": 500, "action": "stack"}],
                                              "tasks": [{"start_s": 0, "end_s": 250, "task": "stack", "outcome": "success"},
                                                        {"start_s": 250, "end_s": 500, "task": "stack",
                                                         "outcome": "success_then_undone", "completed_at_s": 300}]}}
-    short = {"parse_ok": True, "labels": {"completion": {"task_completed": "success_then_undone",
+    short = {"parse_ok": True, "labels": {"timeline": [{"start_s": 0, "end_s": 70, "action": "stack"}],
+                                          "completion": {"task_completed": "success_then_undone",
                                                          "goal_reached_at_s": 50, "undone_at_s": 60}}}
     recs = {}
     for name, r in (("episode_long", stitched), ("episode_short", short)):

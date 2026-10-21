@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from label import dictionary as dd, harness
+import complete_reply
 
 
 def answer(content, *, cost=.01):
@@ -102,7 +103,8 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
                   hands_visible=True, hands_wearing='bare')
     values[bad_field] = bad_value
     row = [values[column] for column in columns]
-    reply = {'timeline_columns': columns, 'timeline': [row]}
+    reply = {'timeline_columns': columns, 'timeline': [row], 'completion': {'task_completed': 'success'},
+             'tasks': [{'task': 'reach', 'outcome': 'success'}]}
     labels, accepted = harness.parse_response(json.dumps(reply))
     assert accepted and labels['timeline'][0][bad_field] == bad_value
     assert labels['timeline'][0]['action'] == 'reach' and labels['_schema_violations']
@@ -183,7 +185,7 @@ def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypat
         sent.append((key, 'selection' if selection else 'final'))
         if fail_final[0] and selection == (rejected_stage == 'selection') and key.endswith('first'):
             reject(request, 429, {'error': {'code': 'insufficient_quota', 'message': 'x' * error_length}})
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches for the cup.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches for the cup.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(concurrency=1, model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100,
@@ -208,6 +210,8 @@ def test_force_refresh_is_consumed_once_when_key_is_rejected(tmp_path, monkeypat
     {'completion': {'task_completed': 'Success'}},
 ])
 def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, has_identity, labels):
+    """A saved paid reply that lacks a timeline or an outcome is not a finished annotation (label/completeness.py),
+    and it is never sent again on its own: the run fails and names how to resend it."""
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     out = tmp_path / 'out'
@@ -221,8 +225,9 @@ def test_legacy_partial_paid_output_is_not_sent_again(tmp_path, monkeypatch, has
     target.write_text(json.dumps(result))
     original = target.read_bytes()
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda *a, **kw: pytest.fail('paid output replayed'))
-    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, max_spend=1., **args) == 0
+    assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, max_spend=1., **args) == 1
     assert target.read_bytes() == original
+    assert json.loads((out / f'stale_{ep.name}.json').read_text())['status'] in ('stale', 'unverified')
 
 
 @pytest.mark.parametrize('status', [429, 503])
@@ -237,7 +242,7 @@ def test_final_http_error_status_is_unpaid_and_resumes(tmp_path, monkeypatch, st
         sent.append('selection' if selection else 'final')
         if not selection and fail[0]:
             reject(request, status, {'error': {'message': 'busy'}})
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     monkeypatch.setattr(harness.time, 'sleep', lambda seconds: None)
     out = tmp_path / 'out'
@@ -317,7 +322,7 @@ def test_provider_quote_covers_time_and_long_context_price_overrides(tmp_path, m
         body = json.loads(request.data)
         assert body['provider']['max_price'] == {'prompt': .6, 'completion': 2.4, 'image': 0., 'request': 0.}
         selection = 'FIELD INVENTORY' in json.dumps(body['messages'])
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
@@ -370,7 +375,7 @@ def test_public_metadata_lookup_does_not_bind_run_to_the_first_key(tmp_path, mon
         if key.endswith('first'):
             reject(request, 402, {'error': {'message': 'no credits'}})
         selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, keys=['sk-or-first', 'sk-or-second'], concurrency=1, force=False,
@@ -393,7 +398,7 @@ def test_capped_non_openai_run_uses_provider_prices_and_enforces_them(tmp_path, 
         assert body['model'] == model
         assert body['provider']['max_price'] == {'prompt': 4., 'completion': 10., 'image': .002, 'request': .003}
         selection = 'FIELD INVENTORY' in json.dumps(body['messages'])
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches for the cup.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches for the cup.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, model=model, reasoning='medium', max_tokens=100,
@@ -428,7 +433,7 @@ def test_quote_handles_published_opus_fee_shape_without_inventing_surcharges(tmp
         body = json.loads(request.data)
         assert body['provider']['max_price'] == {'prompt': 4., 'completion': 20., 'image': 0., 'request': 0.}
         selection = 'FIELD INVENTORY' in json.dumps(body['messages'])
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
@@ -494,7 +499,7 @@ def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path,
     def provider(request, timeout):
         selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
         sent.append('selection' if selection else 'final')
-        return answer({'requests': []} if selection else {'timeline': [row]})
+        return answer({'requests': []} if selection else {**complete_reply.labels(), 'timeline': [row]})
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, max_spend=1.,
@@ -518,7 +523,7 @@ def test_budget_increase_resumes_undispatched_selection(tmp_path, monkeypatch, i
             return io.BytesIO(json.dumps(endpoint_metadata('custom/model')).encode())
         selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
         sent.append('selection' if selection else 'final')
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='custom/model',
@@ -557,7 +562,7 @@ def test_known_rate_inspection_uses_the_funded_batch_cap(tmp_path, monkeypatch, 
         assert request.get_method() != 'GET', 'Known model rates require no external quote'
         selecting = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
         sent.append('selection' if selecting else 'final')
-        return answer({'requests': []} if selecting else {'task_summary': 'The hand reaches.'})
+        return answer({'requests': []} if selecting else complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'funded'
     rc = harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False,
@@ -595,7 +600,7 @@ def test_uncapped_batch_completes_second_inspection_round_and_reuses_paid_output
             assert 'INSPECTED EVIDENCE' in json.dumps(content)
             return answer({'requests': []})
         assert 'INSPECTED EVIDENCE' in json.dumps(content)
-        return answer({'task_summary': 'The hand reaches.'})
+        return answer(complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'uncapped'
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, max_spend=0.,
@@ -641,7 +646,7 @@ def test_legacy_paid_final_after_budget_pause_requires_explicit_refresh(tmp_path
     out.mkdir()
     args = dict(model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, cell_w=128,
                 example_dir=None)
-    record = {'parse_ok': True, 'labels': {'task_summary': 'The hand reaches.'},
+    record = {'parse_ok': True, 'labels': complete_reply.labels('The hand reaches.'),
               'usage': {'est_cost_usd': .01}, 'input_identity': harness.input_identity(ep, **args),
               'evidence_inspection': {'status': 'incomplete', 'rounds': [], 'cost_usd': 0,
                   'limitations': [limitation]}}
@@ -717,7 +722,7 @@ def test_quote_caps_a_gemini_request_whose_audio_and_search_prices_cannot_apply(
         assert body['provider']['max_price'] == {'prompt': 2., 'completion': 10., 'image': .000002, 'request': 0.}
         assert 'plugins' not in body and ':online' not in body['model']
         selection = 'FIELD INVENTORY' in json.dumps(body['messages'])
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'})
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, keys=['sk-or-test'], concurrency=1, force=False, model=model,

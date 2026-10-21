@@ -4985,7 +4985,7 @@ function genericSensorMethodHtml(G) {
       if (timing.camera_aligned_by) parts.push('Camera alignment ' + timing.camera_aligned_by);
       return parts.length ? `<p>${esc(s.name)}<br>${parts.map(esc).join('<br>')}</p>` : '';
     }).join('')}
-    ${G.unbound_findings && G.unbound_findings.length ? `<p>${G.unbound_findings.length} model findings could not be bound to supplied evidence and are withheld.</p>` : ''}</details>`;
+</details>`;
 }
 function syncGenericSensorVideos(t) {
   document.querySelectorAll('[data-sensor-evidence-video]').forEach(v => {
@@ -5012,6 +5012,27 @@ function recordingFindings(d) {
     }
   }
   return findings;
+}
+// Every finding the model returned that no binder accepted, with the reason it gave (label/sensor_evidence.py
+// route_findings and bind); it plays on no video, and it stays in the list.
+function unboundFindings(d) {
+  const doc = d.sensor_evidence && d.sensor_evidence.version === 1 ? d.sensor_evidence : null;
+  const text = v => typeof v === 'string' && v.trim() ? v.trim() : '';
+  return (doc && Array.isArray(doc.unbound_findings) ? doc.unbound_findings : []).filter(row => row
+    && !(row.finding && row.finding.review_status === 'rejected')).map(row => {
+    const f = row.finding && typeof row.finding === 'object' ? row.finding : {};
+    return {headline: text(f.headline) || text(f.claim) || text(f.observation) || text(row.finding) || 'Finding',
+      detail: text(f.detail), reason: text(row.reason), part: Number.isInteger(row.part) ? row.part : null};
+  });
+}
+function unboundFindingsHtml(rows) {
+  if (!rows.length) return '';
+  return `<section class="recording-findings unbound-findings"><div class="grip-panel-head">
+    <strong>Unbound findings <span class="grip-count">${rows.length}</span></strong></div>
+    ${rows.map(f => `<article class="grip-selected"><div class="grip-selected-head"><strong>${esc(f.headline)}</strong>
+      ${f.part != null ? `<span>Part ${f.part}</span>` : ''}</div>
+      ${f.detail ? `<p class="grip-adds">${esc(f.detail)}</p>` : ''}
+      <p><strong>Not bound</strong> ${esc(f.reason || 'No reason recorded')}</p></article>`).join('')}</section>`;
 }
 function recordingFindingsHtml(findings) {
   if (!findings.length) return '';
@@ -5150,7 +5171,8 @@ function sensorEvidence(d) {
       end: moment ? anomaly.t : anomaly.end,
       t: moment ? anomaly.t : anomaly.start, generic: true, evidence: []});
   }
-  return {contacts, moments, insights, overlayFindings, grip, warnings, recordingFindings: recordingFindings(d)};
+  return {contacts, moments, insights, overlayFindings, grip, warnings, recordingFindings: recordingFindings(d),
+    unboundFindings: unboundFindings(d)};
 }
 function activeSensorEvidence(E, t) {
   const active = [...E.contacts, ...(E.insights || [])].filter(c => t + 1e-6 >= c.start && t <= c.end + 1e-6)
@@ -5460,13 +5482,15 @@ function sensorEvidenceHtml(E, depth) {
   const insights = E.insights || [];
   const warnings = E.warnings || [];
   const recording = E.recordingFindings || [];
+  const unbound = E.unboundFindings || [];
   const depthSensors = new Set(((E.grip || {}).sensors || [])
     .filter(s => s.access_kind === 'depth').map(s => s.id));
   const depthFindingCount = insights.filter(f => (f.evidence || []).some(ref => depthSensors.has(ref.sensor_id))).length
     + recording.filter(f => (f.receipts || []).some(({receipt}) => (receipt.descriptor || {}).kind === 'depth')).length;
-  if (!E.contacts.length && !E.moments.length && !insights.length && !depth.length && !warnings.length && !recording.length) return '';
+  if (!E.contacts.length && !E.moments.length && !insights.length && !depth.length && !warnings.length && !recording.length
+    && !unbound.length) return '';
   return `<div class="sensor-evidence${insights.length ? ' has-grip' : ''}" id="sensor-evidence">
-    ${recordingFindingsHtml(recording)}
+    ${recordingFindingsHtml(recording)}${unboundFindingsHtml(unbound)}
     ${warnings.length ? `<div class="tactile-qc" aria-label="Tactile quality warnings">${warnings.map(w =>
       `<div class="tactile-qc-warning"><div class="tactile-qc-head"><strong>${esc(w.headline)}</strong>
       <button type="button" data-evidence-t="${w.start_s}" data-evidence-pause="true" title="Inspect warning at ${fmtT(w.start_s)}">${fmtT(w.start_s)} to ${fmtT(w.end_s)}</button></div>
@@ -8159,7 +8183,7 @@ function cmpFullName(k) {
   const m = cmpModel(k);
   return !m ? 'The model' : m.example ? `${shownName(cmpWho(k))}, ${icl()}` : shownName(m.name);
 }
-const ST_WORDS = {unparsed: 'did not parse', cut_off: 'cut off', no_response: 'no response', pending: 'not yet run'};
+const ST_WORDS = {unparsed: 'did not parse', incomplete: 'incomplete', cut_off: 'cut off', no_response: 'no response', pending: 'not yet run'};
 // every model in the menu's order: each model, then its in-context run
 function cmpMenuOrder() {
   const ms = (CMP && CMP.models) || [], out = [];
@@ -8200,6 +8224,7 @@ function noLabelsHtml(lf) {
     : lf && lf.status === 'no_part' ? 'replies gave no labels for any part of this long recording'
     : lf && lf.status === 'no_reply' ? 'request got no reply'
     : lf && lf.status === 'not_shown' ? 'reply could not be read by the board'
+    : lf && lf.status === 'incomplete' ? 'reply lacks work its request asked for'
     : 'reply did not parse';
   return `<p class="no-labels">The model's ${why}, so this episode has no labels: no key events, outcome, `
     + `recoveries or scene. Its footage, checks, sensors and the dataset's own labels are shown as recorded.</p>`;
@@ -8215,6 +8240,12 @@ function cmpFailHtml(c, who, usage, own) {
     <p>The response is not valid JSON, so there are no labels to show. ${own ? 'It was not retried or repaired.'
       + rest : 'The comparison counts it as a response that did not parse; it was not retried or repaired.'}${cost}</p>
     ${c.parse_error ? `<div class="cf-k">Parser error</div><pre>${esc(c.parse_error)}</pre>` : ''}
+    <div class="cf-k">Start of the response, ${Number(c.raw_chars || 0).toLocaleString()} characters in all</div>`
+      + `<pre>${esc(c.raw_head || '(empty)')}</pre></div>`;
+  if (c.status === 'incomplete') return `<div class="cmp-fail"><h4>${esc(who)}&rsquo;s response is incomplete</h4>
+    <p>The response parsed but lacks work its request asked for, so it is not counted as labelled. ${own
+      ? 'It was not resent automatically.' + rest : 'The comparison counts it as a response that did not parse.'}${cost}</p>
+    <div class="cf-k">Missing</div><pre>${esc((c.why || []).join('\n'))}</pre>
     <div class="cf-k">Start of the response, ${Number(c.raw_chars || 0).toLocaleString()} characters in all</div>`
       + `<pre>${esc(c.raw_head || '(empty)')}</pre></div>`;
   if (c.status === 'no_part') {
@@ -8539,10 +8570,10 @@ function cmpNameText(m) {
 }
 const MAIN_CHARTS = [
   {id: 'parse', title: 'Responses that parse', fmt: fPct, max: () => 1,
-   def: 'The share of responses that are valid JSON.',
-   val: (s, k) => { const p = s.responses[k]; const n = p ? p.parsed + p.unparsed + p.cut_off : 0;
+   def: 'The share of responses that are valid JSON and hold the work their request asked for.',
+   val: (s, k) => { const p = s.responses[k]; const n = p ? p.parsed + p.unparsed + (p.incomplete || 0) + p.cut_off : 0;
      return p && p.parse_share != null ? {v: p.parse_share, sub: `${p.parsed} of ${n}`,
-       tip: `${p.parsed} parsed, ${p.unparsed} did not parse, ${p.cut_off} cut off at the output limit${p.no_response
+       tip: `${p.parsed} parsed, ${p.unparsed} did not parse, ${p.incomplete ? `${p.incomplete} incomplete, ` : ''}${p.cut_off} cut off at the output limit${p.no_response
          ? `; ${p.no_response} calls returned nothing` : ''}${p.pending ? `; ${p.pending} still to run` : ''}`} : null;
          },
    foot: s => ''},

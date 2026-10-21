@@ -13,6 +13,7 @@ from compare.metrics import response as compared
 from test_camera_timing import recording
 from test_dispatch_integrity_v5 import options, provider_kind, response
 from test_execution_integrity_v6 import episodes
+import complete_reply
 
 
 def transport_fixture(monkeypatch, contents, cost=.003):
@@ -39,8 +40,8 @@ def reference_result(run, ep):
 def test_cap_refusal_does_not_hide_received_refresh(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
     calls = transport_fixture(monkeypatch, iter([
-        ('{"task_summary":"A hand reaches."}', 'stop'), ('{"task_summary":', 'length'),
-        ('{"task_summary":"A hand stops."}', 'stop')]))
+        (complete_reply.text('A hand reaches.'), 'stop'), ('{"task_summary":', 'length'),
+        (complete_reply.text('A hand stops.'), 'stop')]))
     assert harness.run_batch([ep], out, **options()) == 0
     force = options(); force['force'] = True
     assert harness.run_batch([ep], out, **force) == 1
@@ -53,7 +54,7 @@ def test_cap_refusal_does_not_hide_received_refresh(tmp_path, monkeypatch):
 
 def test_binding_repair_agrees_with_board_and_compare(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
-    transport_fixture(monkeypatch, iter([('{"task_summary":"A hand reaches."}', 'stop')]))
+    transport_fixture(monkeypatch, iter([(complete_reply.text('A hand reaches.'), 'stop')]))
     bind = evidence_access.Access.bind
     monkeypatch.setattr(evidence_access.Access, 'bind', lambda *args: (_ for _ in ()).throw(RuntimeError('bind failed')))
     assert harness.run_batch([ep], out, **options()) == 1
@@ -69,7 +70,7 @@ def test_binding_repair_agrees_with_board_and_compare(tmp_path, monkeypatch):
 def test_newest_refresh_controls_readers_and_billing(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
     transport_fixture(monkeypatch, iter([
-        ('{"task_summary":"A hand reaches."}', 'stop'), ('{"task_summary":', 'length')]))
+        (complete_reply.text('A hand reaches.'), 'stop'), ('{"task_summary":', 'length')]))
     assert harness.run_batch([ep], out, **options()) == 0
     force = options(); force['force'] = True
     assert harness.run_batch([ep], out, **force) == 1
@@ -81,8 +82,8 @@ def test_newest_refresh_controls_readers_and_billing(tmp_path, monkeypatch):
 def test_completed_mixed_limits_resume_without_payment(tmp_path, monkeypatch):
     eps = episodes(tmp_path, 2); out = tmp_path / 'out'
     calls = transport_fixture(monkeypatch, iter([
-        ('{"task_summary":"A hand reaches."}', 'stop'), ('invalid', 'stop'),
-        ('{"task_summary":"A hand stops."}', 'stop')]))
+        (complete_reply.text('A hand reaches.'), 'stop'), ('invalid', 'stop'),
+        (complete_reply.text('A hand stops.'), 'stop')]))
     assert harness.run_batch(eps, out, **options()) == 1
     retry = options(); retry['max_tokens'] = 200
     assert harness.run_batch(eps, out, retry_received=[eps[1].name], **retry) == 0
@@ -120,7 +121,7 @@ def test_structured_quota_rejection_is_parsed_before_display_truncation(monkeypa
 def test_gate_counts_paid_unusable_reply_before_grading(tmp_path, monkeypatch, refresh):
     from gate import score
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
-    replies = ([('{"task_summary":"A hand reaches."}', 'stop')] if refresh else []) + [('invalid', 'length' if refresh else 'stop')]
+    replies = ([(complete_reply.text('A hand reaches.'), 'stop')] if refresh else []) + [('invalid', 'length' if refresh else 'stop')]
     transport_fixture(monkeypatch, iter(replies), cost=.25)
     if refresh:
         assert harness.run_batch([ep], out, **options()) == 0
@@ -140,7 +141,7 @@ def test_piece_reader_uses_repaired_reply_under_local_refusal(tmp_path):
     from label.pieces import _part_reply, _carry_part_billing
     out = tmp_path / 'out'; out.mkdir()
     paid = {'final_attempt_index': 1, 'final_dispatch_outcome': 'received', 'parse_ok': True,
-            'labels': {'task_summary': 'A hand reaches.'}, 'usage': {'est_cost_usd': .123},
+            'labels': complete_reply.labels('A hand reaches.'), 'usage': {'est_cost_usd': .123},
             'config': {'resolution_route': {'cost_usd': .004}}}
     (out / 'episode_1.json').write_text(json.dumps(paid))
     refused = {'final_attempt_index': 2, 'final_dispatch_outcome': 'not dispatched',
@@ -164,7 +165,7 @@ def test_review_named_retry_preserves_cap_and_history(tmp_path, monkeypatch):
         source.attrs['fps'] = 10
         source.create_dataset('images/top', data=np.full((12, 36, 64, 3), 60, np.uint8))
     job = tmp_path / 'job'
-    calls = transport_fixture(monkeypatch, iter([('invalid', 'length'), ('{"task_summary":"A hand reaches."}', 'stop')]))
+    calls = transport_fixture(monkeypatch, iter([('invalid', 'length'), (complete_reply.text('A hand reaches.'), 'stop')]))
     monkeypatch.setenv('OPENROUTER_API_KEYS', 'sk-or-fixture')
     monkeypatch.setattr(dictionary_stage, 'prepare', lambda *args, **kwargs: None)
     monkeypatch.setattr(review, 'build_review_board', lambda *args, **kwargs: {'incomplete': [], 'unlabelled': []})
@@ -199,7 +200,7 @@ def test_review_named_retry_preserves_cap_and_history(tmp_path, monkeypatch):
 
 def test_reparse_received_history_retains_newer_financial_receipt(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
-    transport_fixture(monkeypatch, iter([('{"task_summary":"A hand reaches."}', 'stop')]))
+    transport_fixture(monkeypatch, iter([(complete_reply.text('A hand reaches.'), 'stop')]))
     bind = evidence_access.Access.bind
     monkeypatch.setattr(evidence_access.Access, 'bind', lambda *args: (_ for _ in ()).throw(RuntimeError('bind failed')))
     assert harness.run_batch([ep], out, **options()) == 1
@@ -216,7 +217,7 @@ def test_reparse_received_history_retains_newer_financial_receipt(tmp_path, monk
     latest = harness.billing_record(out, ep.name + '.json')[1]
     assert latest['final_attempt_index'] == before['final_attempt_index']
     assert latest['final_dispatch_outcome'] == 'not dispatched'
-    assert latest['final_cost_history'][-1]['response_text'] == '{"task_summary":"A hand reaches."}'
+    assert latest['final_cost_history'][-1]['response_text'] == complete_reply.text('A hand reaches.')
     assert latest['final_cost_history'][-1]['parse_ok'] is True
     assert output_spend(out) == pytest.approx(.006)
     outputs, _ = label_outputs(out)
@@ -236,8 +237,8 @@ def test_actual_stitch_after_cap_refused_refresh_keeps_all_charges(inspect_every
     (job / 'pieces' / f'.{ep.name}.source_proof.json').write_text(json.dumps(proof))
     out = job / 'run' / 'out'
     calls = transport_fixture(monkeypatch, iter([
-        *[('{"task_summary":"A hand reaches."}', 'stop')] * 3,
-        ('{"task_summary":', 'length'), ('{"task_summary":"A hand stops."}', 'stop')]))
+        *[(complete_reply.text('A hand reaches.'), 'stop')] * 3,
+        ('{"task_summary":', 'length'), (complete_reply.text('A hand stops.'), 'stop')]))
     assert harness.run_batch(parts, out, **options()) == 0
     force = options(); force['force'] = True
     assert harness.run_batch(parts[:1], out, **force) == 1
@@ -294,7 +295,7 @@ def test_offline_rebind_preserves_human_rejection_of_same_finding():
 
 def test_compare_uses_financial_ledger_when_old_annotation_has_no_usage(tmp_path):
     out = tmp_path / 'out'; out.mkdir()
-    primary = {'final_attempt_index': 1, 'parse_ok': True, 'labels': {'task_summary': 'A hand reaches.'}}
+    primary = {'final_attempt_index': 1, 'parse_ok': True, 'labels': complete_reply.labels('A hand reaches.')}
     (out / 'episode_a.json').write_text(json.dumps(primary))
     ledger = {'final_attempt_index': 2, 'final_dispatch_outcome': 'not dispatched',
               'final_reserved_usd': 0.0, 'final_cost_history': [
@@ -307,7 +308,7 @@ def test_compare_uses_financial_ledger_when_old_annotation_has_no_usage(tmp_path
 def test_reparse_valid_json_does_not_make_truncation_a_completed_reply(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
     calls = transport_fixture(monkeypatch, iter([
-        ('{"task_summary":"A hand reaches."}', 'length'), ('{"task_summary":"A hand stops."}', 'stop')]))
+        (complete_reply.text('A hand reaches.'), 'length'), (complete_reply.text('A hand stops.'), 'stop')]))
     assert harness.run_batch([ep], out, **options()) == 1
     (tmp_path / 'run.json').write_text('{}')
     assert reparse.reparse(tmp_path)['parsed_now'] == 1
@@ -329,7 +330,7 @@ def test_reparse_valid_json_does_not_make_truncation_a_completed_reply(tmp_path,
 
 def test_reference_cost_matches_spend_after_refused_refresh(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
-    calls = transport_fixture(monkeypatch, iter([('{"task_summary":"A hand reaches."}', 'stop')]))
+    calls = transport_fixture(monkeypatch, iter([(complete_reply.text('A hand reaches.'), 'stop')]))
     assert harness.run_batch([ep], out, **options()) == 0
     original = (out / (ep.name + '.json')).read_bytes()
     refresh = options(); refresh.update(force=True, max_tokens=1_000_000)
@@ -348,8 +349,8 @@ def test_atomic_publication_cannot_pair_new_annotation_with_old_billing(tmp_path
     from pathlib import Path
     from label.atomic import write_atomic
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
-    transport_fixture(monkeypatch, iter([('{"task_summary":"A hand reaches."}', 'stop'),
-                                       ('{"task_summary":"A hand stops."}', 'stop')]))
+    transport_fixture(monkeypatch, iter([(complete_reply.text('A hand reaches.'), 'stop'),
+                                       (complete_reply.text('A hand stops.'), 'stop')]))
     assert harness.run_batch([ep], out, **options()) == 0
     path = out / (ep.name + '.json'); old = path.read_bytes()
     refresh = options(); refresh['force'] = True
@@ -423,7 +424,7 @@ def test_received_reply_without_invoice_remains_a_response(tmp_path, monkeypatch
     ep = recording(tmp_path, np.arange(12) / 30); out = tmp_path / 'out'
     def transport(request, timeout):
         if provider_kind(request) == 'selection': return response('{"requests":[]}')
-        doc = json.loads(response('{"task_summary":"A hand reaches."}').read())
+        doc = json.loads(response(complete_reply.text('A hand reaches.')).read())
         doc.pop('usage', None)
         doc['choices'][0]['finish_reason'] = finish
         return io.BytesIO(json.dumps(doc).encode())

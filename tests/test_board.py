@@ -452,7 +452,8 @@ def test_comparisons_are_kept_apart_and_measured(tmp_path):
                                                 "command": ["--model", "some/model"]}))
     (other / "out" / "episode_000000.json").write_text(json.dumps({
         "episode_dir": str(eps / "episode_000000"), "parse_ok": True,
-        "labels": {"completion": {"task_completed": "failure"}, "timeline": [], "data_issues": []},
+        "labels": {"completion": {"task_completed": "failure"}, "timeline": [{"start_s": 0.0, "end_s": 10.0,
+                                                                              "action": "reach"}], "data_issues": []},
         "usage": {"est_cost_usd": 0.1, "latency_s": 3.0}}))
     (other / "out" / "episode_000001.json").write_text(json.dumps({
         "episode_dir": str(eps / "episode_000001"), "parse_ok": False, "labels": {"_raw": "{", "_parse_error": "x"},
@@ -1232,6 +1233,8 @@ def test_a_number_that_is_not_finite_never_stops_an_episode_loading(tmp_path):
     out = _output("episode_000000", completion={"task_completed": "success", "completed_at_s": float("nan")})
     out["episode_dir"] = str(eps / "episode_000000")
     out["labels"]["timeline"][0]["start_s"] = float("nan")
+    # the untimed step leaves the first sampled instant uncovered, so the request here starts at the next step
+    out["config"]["timesteps_s"] = [1.5, 2.0, 3.0]
     out["labels"]["key_events"][0]["t_s"] = float("inf")
     (run / "out" / "episode_000000.json").write_text(json.dumps(out))
     board = tmp_path / "board"
@@ -1293,8 +1296,9 @@ def test_every_prepared_episode_is_on_the_board_and_says_why_it_has_no_labels(tm
 def test_a_reply_that_breaks_the_output_format_is_flagged_and_never_stops_the_build(tmp_path):
     """A reply missing the schema (only a task summary) read as labelled with no flag; rows written as plain strings
     were counted only in _off_schema, which nothing showed; and one parsed reply with a field of the wrong type (a
-    timeline object, a tasks string) crashed the whole build. Each reply keeps what it gives; one with no timeline is a
-    label failed issue naming what it left out, one with rows or fields left out says which, and an episode the board
+    timeline object, a tasks string) crashed the whole build. A reply with no timeline lacks work its request asked
+    for, so it is not labelled: a label failed issue names what it lacks, beside the start of the reply (label/
+    completeness.py). One with rows or fields left out keeps what it gives and says which, and an episode the board
     still cannot read is kept with its reply and the error. The build goes on for every other episode."""
     run = tmp_path / "runs" / "demo" / "20260101-0000_full_abc1234"
     (run / "out").mkdir(parents=True)
@@ -1324,17 +1328,17 @@ def test_a_reply_that_breaks_the_output_format_is_flagged_and_never_stops_the_bu
     def issues(name):
         d = json.loads((board / "qa" / f"{name}.json").read_text())
         return d, {x["kind"]: x for x in (d.get("dataset_checks") or {}).get("reader_issues") or []}
-    d, iss = issues("episode_000000")
-    assert d["episode_prompt"] == "only a summary" and d["event_labels"] == []
-    assert iss["model_reply_off_schema"]["family"] == "label-format"
-    assert "leaves out the key events, data issues and operator mistakes" in iss["model_reply_off_schema"]["what"]
+    for name in ("episode_000000", "episode_000002"):
+        d, iss = issues(name)
+        assert d["_label_failed"]["status"] == "incomplete" and d["event_labels"] == []
+        assert d["_label_failed"]["why"][0] == "the reply has no timeline"
+        assert iss["model_reply_incomplete"]["family"] == "label-failed"
+        assert "model_reply_off_schema" not in iss
     d, iss = issues("episode_000001")
     assert [k["label"] for k in d["key_events"]] == ["ok"] and d["tasks"] == [] and len(d["event_labels"]) == 3
     assert d["_off_schema"] == {"key_events": 1, "tasks": 1}
     assert iss["model_reply_fields_dropped"]["family"] == "label-format"
     assert "1 row of the key events and the tasks (text, not a list) are" in iss["model_reply_fields_dropped"]["what"]
-    d, iss = issues("episode_000002")
-    assert d["event_labels"] == [] and "model_reply_off_schema" in iss and "model_reply_fields_dropped" not in iss
     d, iss = issues("episode_000003")
     assert not iss and "_off_schema" not in d
     fam = Families()

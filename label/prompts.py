@@ -971,6 +971,19 @@ def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool =
     return head + what_this_is(r) + schema(r, recorded) + data_contract(r, recorded) + rules + lean(r)
 
 
+def requested_outcome(r: str, *, has_instruction: bool, sessions: bool) -> str:
+    """Where the instructions of this request ask the reply to put its outcome, read from the text fixed_instructions
+    sends for it: "tasks" where the text asks for a tasks list (the head camera's schema, a session), since each
+    activity then carries its own outcome and there is no single one, otherwise the one task's
+    completion.task_completed."""
+    text = fixed_instructions(r, has_instruction=has_instruction, sessions=sessions)
+    if '"tasks": [' in text:
+        return 'tasks'
+    if '"task_completed"' not in text:
+        raise RuntimeError('the instructions ask for no outcome field')
+    return 'completion.task_completed'
+
+
 # An episode with no instruction (a bare video, or a dataset that ships none) still needs a task to grade the
 # outcome and progress against, and a description that any motion satisfies ("rearrange the objects") makes every
 # episode a success and hides a goal that was reached and then undone.

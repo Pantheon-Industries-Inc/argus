@@ -8,6 +8,7 @@ import pytest
 from board import clips, sensors
 from label import episode
 from prepare import formats
+import complete_reply
 
 
 def tied_recording(tmp_path, pattern, n=60, topics=None):
@@ -401,7 +402,7 @@ def test_request_camera_labels_bind_native_caption_addresses_for_public_download
             for view, label in labels.items()]
     monkeypatch.setattr(harness, 'call_model_once', lambda *a, **k: {
         'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
-            'timeline': [], 'camera_observations': rows})}}], 'usage': {'cost': 0.0}})
+            **complete_reply.labels(), 'camera_observations': rows})}}], 'usage': {'cost': 0.0}})
     saved = tmp_path / 'reply.json'
     result = harness.label_episode(ep, saved, model='openai/gpt-6.1-sol', reasoning='high',
         api_key='offline', max_tokens=2000, timeout=1, cell_w=128)
@@ -477,7 +478,7 @@ def test_request_camera_aliases_withhold_complete_set_when_ambiguous_or_unverifi
                                                   if p['name'] != 'rgb:right:packed']
     bound = harness.bind_camera_observations(rows, fields)
     result = {**fields, 'episode_dir': str(ep), 'parse_ok': True,
-              'labels': {'timeline': [], 'camera_observations': rows}, 'camera_observations': bound}
+              'labels': {**complete_reply.labels(), 'camera_observations': rows}, 'camera_observations': bound}
     if problem == 'stale_source':
         path = ep / 'context.json'
         changed = json.loads(path.read_text())
@@ -530,7 +531,7 @@ def test_stitched_camera_addresses_keep_owned_child_resolution_proof(tmp_path, m
         rows = [{'view': label, 'content': 'scene' if view == 'exo' else 'sensor',
                  'evidence': 'Visible owned native frames.'} for view, label in req['camera_observation_labels'].items()]
         records.append({**fields, 'episode_dir': str(folder), 'parse_ok': True,
-                        'labels': {'timeline': [], 'camera_observations': rows},
+                        'labels': {**complete_reply.labels(), 'camera_observations': rows},
                         'camera_observations': harness.bind_camera_observations(rows, fields)})
         contexts.append(ctx)
     joined = pieces.stitch(ep, list(zip(contexts, records)))

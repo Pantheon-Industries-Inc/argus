@@ -18,11 +18,12 @@ teleop episode's request is built, a text-only routing call chooses its cell wid
 cost are recorded in config.resolution_route, and episode_cost() counts both calls.
 
 Output per episode (out.json, or OUT/<episode>.json): the model's labels (`labels`, parsed; `_raw` and
-`_parse_error` when the reply did not parse), `parse_ok`, what was sent (`config`: cameras, cell size, the
-exact instants), the deterministic checks that ran on the episode (`dataset_checks`), the still spans the model
-was told about, the instruction it was graded against, and the billed usage and cost. A reply cut off at the
-output limit is kept as failed_<episode>.json, with what was sent, and counts as a failure; the board shows the
-episode with that reply, as it shows one whose reply did not parse. An episode that got no reply at all (the spend
+`_parse_error` when the reply did not parse), `parse_ok` (false as well for a reply that parses but lacks work its
+request asked for, label/completeness.py, with what it lacks under labels._incomplete), what was sent (`config`:
+cameras, cell size, the exact instants), the deterministic checks that ran on the episode (`dataset_checks`), the
+still spans the model was told about, the instruction it was graded against, and the billed usage and cost. A reply
+cut off at the output limit is kept as failed_<episode>.json, with what was sent, and counts as a failure; the board
+shows the episode with that reply, as it shows one whose reply did not parse. An episode that got no reply at all (the spend
 cap reached, every key out of credit, a request that could not be built, a call that failed) has
 noreply_<episode>.json saying why, so the board shows it too.
 
@@ -1176,12 +1177,42 @@ def reply_truncated(record: dict) -> bool:
     return record.get('finish_reason') == 'length'
 
 
+def read_reply(text: str, request: dict) -> tuple[dict, bool]:
+    """A model's reply as labels, judged against the request it answers: parse_response, then whether it holds the
+    work the request asked for (label/completeness.py). A reply that parses but lacks some of that work keeps its
+    labels, with what it lacks under _incomplete, and is not a usable annotation (False). request is the record or
+    the request fields it is built from."""
+    labels, ok = parse_response(text)
+    if ok:
+        from label.completeness import annotation_gaps
+        gaps = annotation_gaps(labels, request)
+        if gaps:
+            labels['_incomplete'] = gaps
+            return labels, False
+    return labels, ok
+
+
+def annotation_problems(record: dict) -> list[str]:
+    """Why a saved record is not a finished annotation, or [] when it is: a reply cut off at the output limit, one
+    that did not parse, or one without the work its request asked for, judged again with the current parser and
+    label/completeness.py, never from the saved parse_ok alone. The one judgement every site that calls a unit done,
+    reusable or skippable reads (annotation_complete)."""
+    if reply_truncated(record):
+        return ["the model's reply was cut off at the output limit"]
+    labels = record.get('labels')
+    if not isinstance(labels, dict):
+        return [f"the model gave no reply ({record['no_reply']})" if record.get('no_reply')
+                else 'its labels are not a JSON object']
+    if record.get('parse_ok') is not True:
+        return list(labels.get('_incomplete') or []) or [str(labels.get('_parse_error') or record.get('no_reply')
+                                                             or "the model's reply did not parse")]
+    checked, ok = read_reply(json.dumps({k: v for k, v in labels.items() if k != '_incomplete'}), record)
+    return [] if ok else list(checked.get('_incomplete') or []) or [str(checked.get('_parse_error'))]
+
+
 def annotation_complete(record: dict) -> bool:
-    """Revalidate saved acceptance flags using the current parser before treating a reply as complete."""
-    if (reply_truncated(record) or record.get('parse_ok') is not True
-            or not isinstance(record.get('labels'), dict)):
-        return False
-    return parse_response(json.dumps(record['labels']))[1]
+    """Whether a saved record is a finished annotation (annotation_problems)."""
+    return not annotation_problems(record)
 
 
 def _times(x: dict, where: str, labels: dict) -> None:
@@ -1603,8 +1634,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         write_atomic(Path(out_path).with_name(f"failed_{Path(out_path).name}"), failed)
         claim_path.unlink(missing_ok=True)
         raise Truncated(f"response truncated (finish_reason=length) at max_tokens={max_tokens}", episode_cost(failed))
-    # an unparseable reply is recorded as it came, never repaired or retried
-    labels, parse_ok = parse_response(text)
+    # an unparseable or incomplete reply is recorded as it came, never repaired or resent automatically
+    labels, parse_ok = read_reply(text, fields)
     failure = reply_error(resp)
     if failure is not None:
         # the provider failed partway (billed or unpriced, or _post would have retried it): its text is a fragment,
@@ -1688,6 +1719,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
     cost_text = f"cost=${cost:.3f}" if cost is not None else f"reserved=${bound:.3f} cost=unverified"
     print(f"[{Path(ep_dir).name}] timesteps={c.get('n_timesteps')} images={n_images} "
           f"in={n_in} out={n_out} {cost_text} {elapsed:.0f}s parse_ok={parse_ok} -> {out_path}", flush=True)
+    if labels.get('_incomplete'):
+        print(f"INCOMPLETE {Path(ep_dir).name}: {'; '.join(labels['_incomplete'])}", file=sys.stderr, flush=True)
     return result
 
 

@@ -13,6 +13,7 @@ import pytest
 from label import evidence_access as ea, harness, run
 from label.dictionary_stage import output_spend
 from test_camera_timing import recording
+import complete_reply
 
 
 def response(content, cost=.003):
@@ -38,7 +39,7 @@ def test_run_fractional_cent_cap_reaches_real_harness_without_rounding(tmp_path,
     monkeypatch.setenv('OPENROUTER_API_KEYS', 'sk-or-fixture')
     def transport(request, timeout):
         sent.append(provider_kind(request))
-        return response(json.dumps({'requests': []} if sent[-1] == 'selection' else {'task_summary': 'A hand reaches.'}))
+        return response(json.dumps({'requests': []} if sent[-1] == 'selection' else complete_reply.labels('A hand reaches.')))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     def finish(folder, info, command, slice_dir, mode):
         commands.append(command)
@@ -68,7 +69,7 @@ def test_received_unparsed_reply_is_not_replayed_and_force_keeps_original(tmp_pa
     assert sent == ['selection', 'final'] and (out / (ep.name + '.json')).read_bytes() == original
     assert output_spend(out) == pytest.approx(.006)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda request, timeout:
-        response('{"requests":[]}' if provider_kind(request) == 'selection' else '{"task_summary":"A hand reaches."}'))
+        response('{"requests":[]}' if provider_kind(request) == 'selection' else complete_reply.text('A hand reaches.')))
     args = options(); args['force'] = True
     assert harness.run_batch([ep], out, **args) == 0
     current = json.loads((out / (ep.name + '.json')).read_text())
@@ -79,7 +80,7 @@ def test_received_unparsed_reply_is_not_replayed_and_force_keeps_original(tmp_pa
 @pytest.mark.parametrize('evidence_id', [[], {}])
 def test_unhashable_evidence_reference_keeps_paid_reply(tmp_path, monkeypatch, evidence_id):
     ep = recording(tmp_path, np.arange(12) / 30)
-    final = {'task_summary': 'A hand reaches.', 'evidence_findings': [{
+    final = {**complete_reply.labels('A hand reaches.'), 'evidence_findings': [{
         'start_s': 0, 'end_s': .2, 'headline': 'Recorded reading', 'adds_beyond_video': True,
         'evidence': [{'evidence_id': evidence_id, 'time_s': [0]}]}]}
     sent = []
@@ -107,7 +108,7 @@ def test_batch_process_lock_prevents_duplicate_paid_dispatch(tmp_path, monkeypat
         if kind == 'selection':
             entered.set()
             assert release.wait(5)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     def work():
         try: results.put(harness.run_batch([ep], tmp_path / 'out', **options()))
@@ -145,7 +146,7 @@ def test_interrupt_cancels_queued_episodes_and_retains_inflight_reply(tmp_path, 
         if kind == 'final':
             entered.set()
             assert release.wait(5)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     def work():
         # a shell starts a background job with SIGINT ignored, and Python then never raises KeyboardInterrupt, so the
@@ -176,13 +177,13 @@ def test_unexpected_binding_failure_retains_reparseable_received_response(tmp_pa
     from label import reparse
     ep = recording(tmp_path, np.arange(12) / 30)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda request, timeout:
-        response('{"requests":[]}' if provider_kind(request) == 'selection' else '{"task_summary":"A hand reaches."}'))
+        response('{"requests":[]}' if provider_kind(request) == 'selection' else complete_reply.text('A hand reaches.')))
     original = ea.Access.bind
     monkeypatch.setattr(ea.Access, 'bind', lambda *args: (_ for _ in ()).throw(RuntimeError('binding failed')))
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **options()) == 1
     record = json.loads((out / (ep.name + '.json')).read_text())
-    assert record['response_text'] == '{"task_summary":"A hand reaches."}'
+    assert record['response_text'] == complete_reply.text('A hand reaches.')
     assert record['usage']['est_cost_usd'] == .003 and record['final_dispatch_outcome'] == 'received'
     assert output_spend(out) == pytest.approx(.006)
     monkeypatch.setattr(ea.Access, 'bind', original)
@@ -246,7 +247,7 @@ def test_stitch_keeps_paid_history_and_unknown_reservations(tmp_path, monkeypatc
         kind = provider_kind(request)
         if kind == 'final' and unknown[0]:
             raise TimeoutError('unknown first final charge')
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     source_out = job / 'run' / 'out'
     assert harness.run_batch(parts, source_out, **options()) == (1 if prior_unknown else 0)
@@ -326,7 +327,7 @@ def test_run_resume_before_primary_output_keeps_claim_and_finishes_untouched_wor
     sent = []
     def transport(request, timeout):
         kind = provider_kind(request); sent.append(kind)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     monkeypatch.setattr(run, 'commit', lambda: ('fixture', False))
     monkeypatch.setenv('OPENROUTER_API_KEYS', 'sk-or-fixture')

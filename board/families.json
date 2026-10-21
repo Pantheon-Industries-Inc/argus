@@ -227,6 +227,7 @@
    "name": "Model reply gave no labels",
    "reader_issues": [
     "model_reply_unparsed",
+    "model_reply_incomplete",
     "model_reply_cut_off",
     "part_not_labelled",
     "label_output_unreadable",

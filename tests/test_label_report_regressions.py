@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from label import evidence_access as ea, harness, pieces, reparse, run, sensor_evidence
+import complete_reply
 
 
 @pytest.mark.parametrize('reply', [{}, {'timeline': [], 'completion': {'task_completed': 'banana'}}])
@@ -163,7 +164,7 @@ def test_reparse_restores_native_inspected_and_camera_bindings(tmp_path, monkeyp
                  'evidence': [{'evidence_id': receipt['id'], 'time_s': [0., .3]}]}
     cameras = [{'view': v, 'content': 'scene', 'evidence': 'The work surface is visible.'}
                for v in ('exo', 'left')]
-    labels = {'timeline': [], 'sensor_findings': [finding([80., 90.])],
+    labels = {**complete_reply.labels(), 'sensor_findings': [finding([80., 90.])],
               'evidence_findings': [inspected], 'camera_observations': cameras}
     identity = harness.input_identity(ep, model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100,
                                       cell_w=128, example_dir=None)
@@ -203,7 +204,7 @@ def test_batch_retries_verified_quota_rejection_on_next_key(tmp_path, monkeypatc
         payload = json.loads(request.data)
         text = json.dumps(payload['messages'])
         response = {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop', 'message': {
-            'content': '{"requests":[]}' if 'FIELD INVENTORY' in text else '{"timeline":[],"task_summary":"Wait beside the visible workspace."}'}}]}
+            'content': '{"requests":[]}' if 'FIELD INVENTORY' in text else complete_reply.text('Wait beside the visible workspace.')}}]}
         return io.BytesIO(json.dumps(response).encode())
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
@@ -224,7 +225,7 @@ def test_force_refresh_retains_all_prior_inspection_and_final_spend(tmp_path, mo
         calls.append(1)
         selection = 'FIELD INVENTORY' in json.dumps(content)
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop', 'message': {
-            'content': '{"requests":[]}' if selection else '{"timeline":[],"task_summary":"Wait beside the visible workspace."}'}}]}
+            'content': '{"requests":[]}' if selection else complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(harness, 'call_model', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, model=harness.DEFAULT_MODEL, reasoning='medium',
@@ -327,7 +328,7 @@ def test_resume_revalidates_saved_placeholder_and_retains_previous_charge(tmp_pa
     calls = []
     def label_episode(path, output, **kwargs):
         calls.append(1)
-        record = {'parse_ok': True, 'labels': {'task_summary': 'The visible hands wait.'},
+        record = {'parse_ok': True, 'labels': complete_reply.labels('The visible hands wait.'),
                   'input_identity': identity, 'usage': {'est_cost_usd': .02}, **harness._billing_fields(output)}
         output.write_text(json.dumps(record))
         return record
@@ -359,10 +360,12 @@ def test_resume_invalid_annotation_with_unknown_charge_fails_without_replaying(t
 
 def test_run_parsed_count_revalidates_saved_flags(tmp_path):
     (tmp_path / 'out').mkdir()
+    # a reply with only a quality finding parses, but lacks the timeline and outcome every request asks for
     for name, labels in [('empty', {'timeline': []}), ('placeholder', {'timeline': [{}]}),
-                         ('quality', {'data_issues': [{'issue': 'The camera is covered.'}]})]:
+                         ('quality', {'data_issues': [{'issue': 'The camera is covered.'}]}),
+                         ('whole', complete_reply.labels())]:
         (tmp_path / 'out' / (name + '.json')).write_text(json.dumps({'parse_ok': True, 'labels': labels}))
-    assert run.parsed(tmp_path, ['empty', 'placeholder', 'quality']) == 1
+    assert run.parsed(tmp_path, ['empty', 'placeholder', 'quality', 'whole']) == 1
 
 
 def test_resume_placeholder_without_billing_proof_fails_closed(tmp_path, monkeypatch):

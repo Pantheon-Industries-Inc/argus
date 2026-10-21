@@ -11,6 +11,7 @@ from label import harness
 from label.dictionary_stage import output_spend
 from test_dispatch_integrity_v5 import options, provider_kind, response
 from test_label import _packed_episode
+import complete_reply
 
 # every request here inspects a recorded signal of the packed fixture, which only inspection all reaches
 pytestmark = pytest.mark.usefixtures('inspect_every_field')
@@ -41,7 +42,7 @@ def paid_episode(tmp_path, monkeypatch, saved_inspection=None, **extra):
             receipts = [json.loads(part['text'].split('\n', 1)[1]) for part in content
                         if part.get('text', '').startswith('INSPECTED EVIDENCE\n')]
             selected = next(row for row in receipts if row.get('times_s'))
-            answer = {'task_summary': 'A hand reaches.', 'evidence_findings': [{
+            answer = {**complete_reply.labels('A hand reaches.'), 'evidence_findings': [{
                 'start_s': selected['times_s'][0], 'end_s': selected['times_s'][-1],
                 'headline': 'Recorded response changes', 'observation': 'Recorded samples across the request.',
                 'claim': 'An uncalibrated recorded response changes.', 'adds_beyond_video': True,
@@ -174,7 +175,7 @@ def test_rgb_only_paid_request_uses_actual_attestation_after_bookkeeping_edit(tm
     ep = observed_packed_episode(tmp_path)
     calls = []
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda request, timeout:
-                        calls.append(provider_kind(request)) or response('{"task_summary":"A hand reaches."}'))
+                        calls.append(provider_kind(request)) or response(complete_reply.text('A hand reaches.')))
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **options()) == 0
     assert 'evidence_inspection' not in json.loads((out / (ep.name + '.json')).read_text())

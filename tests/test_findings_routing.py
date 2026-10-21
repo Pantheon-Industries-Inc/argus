@@ -14,6 +14,7 @@ from label import harness, reparse
 from label import sensor_evidence as se
 from test_dispatch_integrity_v5 import options, provider_kind, response
 from test_label import _packed_episode
+import complete_reply
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +64,7 @@ def test_an_inspection_backed_finding_written_in_sensor_findings_is_bound(tmp_pa
     def final(receipts):
         selected = next(row for row in receipts if row.get('times_s') and row.get('columns'))
         ref = {'evidence_id': selected['id'], 'time_s': selected['times_s'][::5], 'columns': selected['columns'][:2]}
-        return {'task_summary': 'A hand reaches.', 'evidence_findings': [],
+        return {**complete_reply.labels('A hand reaches.'), 'evidence_findings': [],
                 'sensor_findings': [gripper_finding(selected['times_s'][0], selected['times_s'][-1], ref)]}
     install(monkeypatch, final)
     out = tmp_path / 'out'
@@ -88,7 +89,7 @@ def test_findings_with_no_binder_in_the_request_are_kept_with_the_reason(tmp_pat
     inspected = {'evidence_id': 'inspection:0123456789abcdef0123', 'time_s': [1.0], 'columns': [0]}
     supplied = {'sensor_id': 'touch', 'series_id': 'touch:0', 'time_s': [1.0]}
     install(monkeypatch, lambda receipts: {
-        'task_summary': 'A hand reaches.', 'sensor_findings': [gripper_finding(1.0, 1.0, inspected)],
+        **complete_reply.labels('A hand reaches.'), 'sensor_findings': [gripper_finding(1.0, 1.0, inspected)],
         'evidence_findings': [gripper_finding(1.0, 1.0, supplied)]})
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **options()) == 0

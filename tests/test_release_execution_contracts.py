@@ -14,6 +14,7 @@ from review import __main__ as review
 from test_dictionary import episode as dictionary_episode
 from test_dispatch_integrity_v5 import options, provider_kind, response
 from test_camera_timing import recording
+import complete_reply
 
 
 def review_fixture(tmp_path, monkeypatch):
@@ -56,7 +57,7 @@ def funded_provider(monkeypatch, calls):
             calls.append('dictionary')
             return response('{"entries":[]}')
         kind = provider_kind(request); calls.append(kind)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
 
 
@@ -119,7 +120,7 @@ def test_reparse_recovers_received_reply_without_releasing_unknown_charge(tmp_pa
         if provider_kind(request) == 'selection':
             return response('{"requests":[]}')
         return io.BytesIO(json.dumps({'choices': [{'finish_reason': 'stop', 'message': {
-            'content': '{"task_summary":"A hand reaches."}'}}]}).encode())
+            'content': complete_reply.text('A hand reaches.')}}]}).encode())
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     original = harness.parse_response
     monkeypatch.setattr(harness, 'parse_response', lambda text: ({'_raw': text, '_parse_error': 'interrupted'}, False))
@@ -214,7 +215,7 @@ def test_board_export_edit_does_not_repurchase_same_request(tmp_path, monkeypatc
     calls = []
     def provider(request, timeout):
         kind = provider_kind(request); calls.append(kind)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **options()) == 0
@@ -290,7 +291,9 @@ def provider(request, timeout):
         deadline = time.monotonic() + 8
         while not Path(os.environ['RELEASE']).exists() and time.monotonic() < deadline:
             time.sleep(.02)
-    text = '{"requests":[]}' if selection else '{"task_summary":"A hand reaches."}'
+    text = '{"requests":[]}' if selection else json.dumps({'task_summary': 'A hand reaches.',
+        'timeline': [{'start_s': 0.0, 'end_s': 3600.0, 'action': 'reach'}], 'completion': {'task_completed': 'success'},
+        'tasks': [{'task': 'reach', 'outcome': 'success'}]})
     return io.BytesIO(json.dumps({'usage': {'cost': .003}, 'choices': [
         {'finish_reason': 'stop', 'message': {'content': text}}]}).encode())
 urllib.request.urlopen = provider
@@ -436,7 +439,7 @@ def test_output_lease_borrow_requires_same_inode_and_exclusive_description(tmp_p
     calls = []
     def provider(request, timeout):
         kind = provider_kind(request); calls.append(kind)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     wrong = tmp_path / 'unrelated'; wrong.touch()

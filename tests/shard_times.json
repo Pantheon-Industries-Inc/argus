@@ -192,5 +192,6 @@
  "tests/test_signal_name_collisions.py": 1.0,
  "tests/test_signal_identity.py": 2.0,
  "tests/test_evidence_coverage.py": 3.0,
- "tests/test_camera_slots.py": 4.0
+ "tests/test_camera_slots.py": 4.0,
+ "tests/test_completion_gate.py": 4.5
 }

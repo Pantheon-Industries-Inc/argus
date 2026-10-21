@@ -12,6 +12,7 @@ from label import harness, pieces, reparse, run
 from label.dictionary_stage import output_spend, output_spend_complete
 from test_camera_timing import recording
 from test_dispatch_integrity_v5 import options, provider_kind, response
+import complete_reply
 
 
 def episodes(tmp_path, count=3):
@@ -32,7 +33,7 @@ def test_explicit_received_retry_pays_only_for_named_unusable_reply(tmp_path, mo
         kind = provider_kind(request); calls.append(kind)
         if kind == 'selection':
             return response('{"requests":[]}')
-        content = 'not JSON' if calls.count('final') == 2 else '{"task_summary":"A hand reaches."}'
+        content = 'not JSON' if calls.count('final') == 2 else complete_reply.text('A hand reaches.')
         result = response(content)
         if content == 'not JSON':
             data = json.loads(result.read()); data['choices'][0]['finish_reason'] = finish
@@ -58,7 +59,7 @@ def test_explicit_received_retry_pays_only_for_named_unusable_reply(tmp_path, mo
 def test_reparse_excludes_a_harness_writer_before_reading_receipts(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda request, timeout:
-        response('{"requests":[]}' if provider_kind(request) == 'selection' else '{"task_summary":"A hand reaches."}'))
+        response('{"requests":[]}' if provider_kind(request) == 'selection' else complete_reply.text('A hand reaches.')))
     bind = harness.parse_response
     monkeypatch.setattr(harness, 'parse_response', lambda text: ({'_raw': text, '_parse_error': 'interrupted'}, False))
     out = tmp_path / 'out'
@@ -91,7 +92,7 @@ def test_received_retry_uses_newer_truncation_instead_of_older_healthy_primary(t
         if provider_kind(request) == 'selection':
             return response('{"requests":[]}')
         finals.append(1)
-        result = response('{"task_summary":"A hand reaches."}' if len(finals) != 2 else '{"task_summary":')
+        result = response(complete_reply.text('A hand reaches.') if len(finals) != 2 else '{"task_summary":')
         if len(finals) == 2:
             data = json.loads(result.read()); data['choices'][0]['finish_reason'] = 'length'
             return io.BytesIO(json.dumps(data).encode())
@@ -115,7 +116,7 @@ def test_received_retry_cannot_repurchase_healthy_output(tmp_path, monkeypatch):
     ep = recording(tmp_path, np.arange(12) / 30)
     settings = dict(model=harness.DEFAULT_MODEL, reasoning='medium', max_tokens=100, cell_w=128, example_dir=None)
     record = {'input_identity': harness.input_identity(ep, **settings), 'parse_ok': True,
-        'labels': {'task_summary': 'A hand reaches.'},
+        'labels': complete_reply.labels('A hand reaches.'),
         'usage': {'est_cost_usd': .003}, 'final_dispatch_outcome': 'received', 'final_reserved_usd': 1.}
     out = tmp_path / 'out'; out.mkdir(); path = out / (ep.name + '.json')
     path.write_text(json.dumps(record)); original = path.read_bytes()
@@ -143,7 +144,7 @@ def test_unknown_charge_past_its_automatic_resends_is_retried_only_when_named_an
     calls = []
     def transport(request, timeout):
         calls.append(provider_kind(request))
-        return response('{"requests":[]}' if calls[-1] == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if calls[-1] == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     assert harness.run_batch([ep], out, retry_received=[ep.name], **options()) == 0
     assert calls.count('final') == 1
@@ -158,7 +159,7 @@ def test_changed_paid_inputs_are_isolated_without_being_reused(tmp_path, monkeyp
     calls = []
     def transport(request, timeout):
         kind = provider_kind(request); calls.append(kind)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}')
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'))
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     out = tmp_path / 'out'
     assert harness.run_batch(eps[:1], out, **options()) == 0
@@ -185,7 +186,7 @@ def test_missing_never_dispatched_input_does_not_block_untouched_episodes(tmp_pa
     calls = []
     monkeypatch.setattr(harness.urllib.request, 'urlopen', lambda request, timeout:
         (calls.append(provider_kind(request)) or response('{"requests":[]}' if provider_kind(request) == 'selection'
-                                                        else '{"task_summary":"A hand reaches."}')))
+                                                        else complete_reply.text('A hand reaches.'))))
     out = tmp_path / 'out'
     initial = eps[:2] if problem == 'physical-state' else eps[:1]
     assert harness.run_batch(initial, out, **options()) == 1
@@ -208,7 +209,7 @@ def test_stitched_invoices_keep_current_history_and_route_precision(tmp_path, mo
     calls = []
     def transport(request, timeout):
         kind = provider_kind(request); calls.append(kind)
-        return response('{"requests":[]}' if kind == 'selection' else '{"task_summary":"A hand reaches."}', .0000123)
+        return response('{"requests":[]}' if kind == 'selection' else complete_reply.text('A hand reaches.'), .0000123)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     assert harness.run_batch(parts, out, **options()) == 0
     args = options(); args['force'] = True

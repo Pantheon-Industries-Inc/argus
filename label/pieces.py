@@ -474,11 +474,12 @@ def _read(p: Path) -> tuple[dict | None, str | None]:
 
 
 def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
-    """A part's reply from a run's out/ folder: (its result, None) when it parsed and its labels can be read (their
-    fields of the wrong type left out, label/harness.py typed_labels), else (what came back, why it gave no labels):
-    not parsing, cut off at the output limit (the harness's failed_<part>.json), an output file that does not read, or
+    """A part's reply from a run's out/ folder: (its result, None) when it is a complete annotation of the part's own
+    request (label/harness.py annotation_problems) and its labels can be read (their fields of the wrong type left
+    out, typed_labels), else (what came back, why it gave no labels): not parsing, lacking work the part's request
+    asked for, cut off at the output limit (the harness's failed_<part>.json), an output file that does not read, or
     no reply at all, with why when the harness recorded it (noreply_<part>.json)."""
-    from label.harness import typed_labels, annotation_record, reply_truncated
+    from label.harness import typed_labels, annotation_problems, annotation_record, reply_truncated
     try:
         selected = annotation_record(src, name + '.json')
     except (OSError, ValueError, TypeError, AttributeError):
@@ -494,19 +495,25 @@ def _part_reply(src: Path, name: str) -> tuple[dict | None, str | None]:
     _, record = selected
     if reply_truncated(record):
         return record, "the model's reply was cut off at the output limit"
-    if record.get('parse_ok'):
-        if not isinstance(record.get('labels'), dict):
-            return record, 'its labels are not a JSON object'
+    # each part is judged against its own request, as any unit is (label/completeness.py)
+    problems = annotation_problems(record)
+    if not problems:
         return {**record, 'labels': typed_labels(copy.deepcopy(record['labels']))}, None
+    labels = record.get('labels')
+    if record.get('parse_ok') and not isinstance(labels, dict):
+        return record, 'its labels are not a JSON object'
     if record.get('no_reply'):
         return record, f"the model gave no reply ({record['no_reply']})"
+    if record.get('parse_ok') or isinstance(labels, dict) and labels.get('_incomplete'):
+        return record, "the model's reply is incomplete: " + '; '.join(problems)
     return record, "the model's reply did not parse"
 
 
 def _raw_head(r: dict | None) -> str:
     """The start of a part's reply that gave no labels, as the board keeps one (board/to_board.py RAW_HEAD)."""
     lab = (r or {}).get("labels") if isinstance((r or {}).get("labels"), dict) else {}
-    raw = lab.get("_raw") if lab.get("_raw") is not None else (r or {}).get("content_tail") or ""
+    raw = (lab.get("_raw") if lab.get("_raw") is not None else (r or {}).get("content_tail")
+           or (r or {}).get("response_text") or "")
     return str(raw)[:3000]
 
 

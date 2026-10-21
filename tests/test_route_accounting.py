@@ -9,6 +9,7 @@ import pytest
 
 from label import harness, route
 from label.dictionary_stage import label_spend, label_spend_complete
+import complete_reply
 
 
 def episode(root, name='episode_a', instruction='Place the cup.'):
@@ -62,7 +63,7 @@ def test_http_rejected_selection_fails_over_without_replaying_received_rounds(in
             field = next(f for f in page['fields'] if 'samples' in f.get('available_modes', []))
             reply = {'requests': [{'field_id': field['id'], 'mode': 'samples'}]}
         else:
-            reply = {'requests': []} if selection is not None else {'timeline': [], 'task_summary': 'Wait beside the visible workspace.'}
+            reply = {'requests': []} if selection is not None else complete_reply.labels('Wait beside the visible workspace.')
         return Response(json.dumps({'usage': {'cost': .004 if selection is not None else .01},
             'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(reply)}}]}).encode())
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
@@ -110,7 +111,7 @@ def test_module_cli_retires_rejected_key_without_losing_paid_inspection_or_route
             field = next(f for f in page['fields'] if 'samples' in f.get('available_modes', []))
             answer = {'requests': [{'field_id': field['id'], 'mode': 'samples'}]}
         else:
-            answer = {'requests': []} if selection is not None else {'timeline': [], 'task_summary': 'Wait beside the visible workspace.'}
+            answer = {'requests': []} if selection is not None else complete_reply.labels('Wait beside the visible workspace.')
         return io.BytesIO(json.dumps({'usage': {'cost': .004 if routed or selection is not None else .01},
             'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(answer)}}]}).encode())
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
@@ -197,7 +198,7 @@ def test_native_rgb_final_http_rejection_reuses_exact_payload_on_next_key(tmp_pa
         if len(requests) == 1:
             raise urllib.error.HTTPError(req.full_url, 402, 'Payment Required', {}, io.BytesIO(b'{}'))
         return io.BytesIO(json.dumps({'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-            'message': {'content': '{"timeline":[], "task_summary":"Wait beside the visible workspace."}'}}]}).encode())
+            'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}).encode())
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     assert harness.run_batch([ep], out, keys=['sk-or-empty', 'sk-or-funded'], concurrency=1,
         force=False, max_spend=2, **args(cell_w=128)) == 0
@@ -218,7 +219,7 @@ def test_unproven_routing_key_error_preserves_unknown_route_charge(tmp_path, mon
         if model == route.ROUTE_MODEL:
             raise harness.KeyExhausted('legacy callable error, no server rejection proof')
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline":[], "task_summary":"Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(harness, 'call_model', provider)
     monkeypatch.setattr(route, '_CACHE', {})
     assert harness.run_batch([ep], out, keys=['sk-or-empty', 'sk-or-funded'], concurrency=1,
@@ -504,7 +505,7 @@ def test_parallel_final_waits_for_live_reservation_but_preserves_unknown_charge(
                 ctx['instruction'] = 'A changed publisher instruction during the budget wait.'
                 path.write_text(json.dumps(ctx))
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(harness, 'final_cost_bound', bound)
     monkeypatch.setattr(harness, 'call_model', provider)
     cap = max(original_bound(harness.me.build_request(ep, cell_w=128)['content'], 100) for ep in eps) + .02
@@ -617,7 +618,7 @@ def test_successful_final_retains_routing_invoice_and_width(tmp_path, monkeypatc
             return {'usage': route_usage, 'choices': [{'message': {
                 'content': '{"fine_detail": false, "why": "whole objects"}'}}]}
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(route, '_CACHE', {})
     monkeypatch.setattr(harness, 'call_model', provider)
     result = harness.label_episode(ep, out, api_key='sk-or-fixture', **args())
@@ -649,7 +650,7 @@ def test_final_retry_reuses_paid_route_receipt(tmp_path, monkeypatch, final_repl
                 'finish_reason': 'length' if final_reply == 'truncated' else 'stop',
                 'message': {'content': 'unparseable'}}]}
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(route, '_CACHE', {})
     monkeypatch.setattr(harness, 'call_model', provider)
     batch = dict(keys=['sk-or-fixture'], concurrency=1, force=False, max_spend=1, **args())
@@ -689,7 +690,7 @@ def test_forced_refresh_preserves_prior_bills_and_remaining_cap(tmp_path, monkey
         calls.append(model)
         return {'id': f'call-{len(calls)}', 'usage': {'cost': .004 if model == route.ROUTE_MODEL else .01},
                 'choices': [{'finish_reason': 'stop', 'message': {'content':
-                    '{"fine_detail": false}' if model == route.ROUTE_MODEL else '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                    '{"fine_detail": false}' if model == route.ROUTE_MODEL else complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(route, '_CACHE', {})
     monkeypatch.setattr(harness, 'call_model', provider)
     monkeypatch.setattr(harness, 'final_cost_bound', observe_bound)
@@ -742,7 +743,7 @@ def test_forced_legacy_unknown_final_retains_reservation_before_routing(tmp_path
         calls.append(model)
         return {'usage': {'cost': .004 if model == route.ROUTE_MODEL else .01},
                 'choices': [{'finish_reason': 'stop', 'message': {'content':
-                    '{"fine_detail": false}' if model == route.ROUTE_MODEL else '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                    '{"fine_detail": false}' if model == route.ROUTE_MODEL else complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(route, '_CACHE', {})
     monkeypatch.setattr(harness, 'call_model', provider)
     batch = dict(keys=['sk-or-fixture'], concurrency=1, force=True, max_spend=.00001, **args())
@@ -830,7 +831,7 @@ def test_cache_only_inspection_does_not_consume_remaining_cap_again(tmp_path, mo
     def provider(*a, **kw):
         calls.append(1)
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     build_request = harness.me.build_request
     def build_with_access(*a, **kw):
         result = build_request(*a, **kw)
@@ -866,7 +867,7 @@ def test_dry_run_preserves_prior_paid_invoices(resends_used_up, tmp_path, monkey
         if unknown:
             raise TimeoutError('fixture final outcome unknown')
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(route, '_CACHE', {})
     monkeypatch.setattr(harness, 'call_model', provider)
     batch = dict(keys=['sk-or-fixture'], concurrency=1, force=False, max_spend=1, **args())
@@ -923,7 +924,7 @@ def test_request_build_failure_without_routing_remains_resumable(tmp_path, monke
     def provider(*a, **kw):
         calls.append(1)
         return {'usage': {'cost': .01}, 'choices': [{'finish_reason': 'stop',
-                'message': {'content': '{"timeline": [], "task_summary": "Wait beside the visible workspace."}'}}]}
+                'message': {'content': complete_reply.text('Wait beside the visible workspace.')}}]}
     monkeypatch.setattr(harness, 'call_model', provider)
     assert harness.run_batch([ep], out, **batch) == 0
     assert calls == [1] and label_spend(job) == pytest.approx(.01)

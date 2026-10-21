@@ -7,6 +7,7 @@ import pytest
 from label import evidence_access as ea, harness
 from label.dictionary_stage import output_spend, output_spend_complete
 from label.errors import DispatchError, SpendCap
+import complete_reply
 
 
 REQUEST = {'digest': 'request-one', 'content': [{'type': 'text', 'text': 'SENSOR ANALYSIS FIXTURE'}],
@@ -218,7 +219,7 @@ def test_batch_stage_cap_includes_final_floor_and_resume_does_not_rebill(tmp_pat
         kind = request_kind(parts)
         calls.append(kind)
         answer = {'selection': {'requests': []}, 'mechanics': {'sensor_findings': []},
-                  'final': {'task_summary': 'A hand holds the object.'}}[kind]
+                  'final': complete_reply.labels('A hand holds the object.')}[kind]
         return encoded(json.dumps(answer), cost={'selection': .01, 'mechanics': .1, 'final': .02}[kind])
     monkeypatch.setattr(harness, 'final_cost_bound', bound)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
@@ -231,7 +232,7 @@ def test_batch_stage_cap_includes_final_floor_and_resume_does_not_rebill(tmp_pat
     assert harness.run_batch([ep], out, **args) == 0
     assert calls == ['selection', 'mechanics', 'final']
     saved = json.loads((out / (ep.name + '.json')).read_text())
-    assert saved['labels'] == {'task_summary': 'A hand holds the object.'}
+    assert saved['labels'] == complete_reply.labels('A hand holds the object.')
     assert saved['sensor_analysis']['response_text'] == '{"sensor_findings": []}'
     assert output_spend(out) == pytest.approx(.13) and output_spend_complete(out)
     assert harness.run_batch([ep], out, **args) == 0
@@ -271,7 +272,7 @@ def test_completed_staged_request_reuses_only_when_both_actual_requests_match(tm
         kind = request_kind(json.loads(request.data)['messages'][0]['content'])
         calls.append(kind)
         answer = {'selection': {'requests': []}, 'mechanics': {'sensor_findings': []},
-                  'final': {'task_summary': 'A hand holds the object.'}}[kind]
+                  'final': complete_reply.labels('A hand holds the object.')}[kind]
         return encoded(json.dumps(answer), cost=.01)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'

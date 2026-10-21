@@ -68,7 +68,9 @@ def test_unresolved_held_fact_is_counted_separately_and_does_not_pass(tmp_path, 
     (run / 'out').mkdir(parents=True)
     (run / 'out/episode_x.json').write_text(json.dumps({
         'parse_ok': True, 'episode_dir': str(ep),
-        'labels': {'timeline': [{'object': 'fork'}, {'action': 'the fork, not chopsticks'}]}}))
+        'labels': {'timeline': [{'start_s': 0, 'end_s': .5, 'object': 'fork'},
+                                {'start_s': .5, 'end_s': 1, 'action': 'the fork, not chopsticks'}],
+                   'tasks': [{'task': 'set the table', 'outcome': 'success'}]}}))
     monkeypatch.setattr(score, 'load_selection', lambda: {'ego': [{'name': 'episode_x', 'role': 'case'}]})
     monkeypatch.setattr(score, 'load_cases', lambda: {'episode_x': {
         'held': {'named': 'fork', 'not_named': 'chopstick'}}})

@@ -10,6 +10,7 @@ from label.dictionary_stage import output_spend, output_spend_complete
 from test_camera_timing import recording
 from test_evidence_access import access
 from test_label_review_v2 import answer
+import complete_reply
 
 
 @pytest.mark.parametrize('legacy_pause', [False, True])
@@ -24,7 +25,7 @@ def test_partial_inspection_budget_resume_finishes_without_rebilling(tmp_path, m
         sent.append('selection' if selection else 'final')
         return answer({'requests': [{'field_id': 'unknown-field', 'mode': 'metadata'}]}
                       if sent == ['selection'] else {'requests': []} if selection
-                      else {'task_summary': 'The hand reaches.'}, cost=.1)
+                      else complete_reply.labels('The hand reaches.'), cost=.1)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='custom/model',
@@ -106,7 +107,7 @@ def test_inspection_turned_off_sends_only_the_annotation_and_a_touch_sensor_is_s
                 'context_length': 50000, 'pricing': {'prompt': '.000004', 'completion': '.00001'}}]}}).encode())
         selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
         sent.append('selection' if selection else 'final')
-        return answer({'requests': []} if selection else {'task_summary': 'The hand reaches.'}, cost=.1)
+        return answer({'requests': []} if selection else complete_reply.labels('The hand reaches.'), cost=.1)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='custom/model',
                 reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=1.)
@@ -144,7 +145,7 @@ def test_a_provider_error_inside_a_200_reply_is_retried_at_once_when_unbilled_an
             return io.BytesIO(json.dumps({'usage': {'cost': cost}, 'choices': [{
                 'finish_reason': 'error', 'error': {'code': 502, 'message': 'Our servers are currently overloaded'},
                 'message': {'content': '{"timeline": [{"start_s": 0'}}]}).encode())
-        return answer({'task_summary': 'The hand reaches.'}, cost=.1)
+        return answer(complete_reply.labels('The hand reaches.'), cost=.1)
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     monkeypatch.setattr(harness.time, 'sleep', lambda seconds: None)
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model='custom/model',

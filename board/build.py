@@ -284,6 +284,10 @@ def label_failure(result: dict | None) -> list[dict]:
         return [{"kind": "label_output_unreadable",
                  "what": f"The labelling run's output file for this episode does not read ({lf.get('error')}), "
                          f"{rest}."}]
+    if lf["status"] == "incomplete":
+        return [{"kind": "model_reply_incomplete",
+                 "what": f"The model's reply lacks work its request asked for ({'; '.join(lf.get('why') or [])}), "
+                         f"{rest}."}]
     if lf["status"] == "cut_off":
         n = lf.get("out_tokens")
         return [{"kind": "model_reply_cut_off",
@@ -733,6 +737,9 @@ def build_comparisons(board: Path, manifest: dict, qa_new: Path, board_src: dict
                     ('billed_usd', 'reserved_usd', 'cost_complete')})
             if r["status"] == "unparsed":
                 info.update({"parse_error": r.get("error"), "raw_head": (r.get("raw") or "")[:3000],
+                             "raw_chars": len(r.get("raw") or "")})
+            if r["status"] == "incomplete":
+                info.update({"why": r.get("why") or [], "raw_head": (r.get("raw") or "")[:3000],
                              "raw_chars": len(r.get("raw") or "")})
             if r["status"] == "cut_off":
                 info.update({"out_tokens": r.get("out_tokens"), "tail": (r.get("tail") or "")[-1500:]})

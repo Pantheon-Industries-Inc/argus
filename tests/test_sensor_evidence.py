@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import complete_reply
 
 
 def test_observed_camera_content_uses_native_ids_and_current_roles_for_exports(tmp_path, monkeypatch):
@@ -35,7 +36,7 @@ def test_observed_camera_content_uses_native_ids_and_current_roles_for_exports(t
     # Exercise the real annotation writer with an offline reply, without invoking a provider.
     monkeypatch.setattr(harness, 'call_model_once', lambda *a, **k: {
         'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
-            'timeline': [], 'camera_observations': rows})}}], 'usage': {'cost': 0.0}})
+            **complete_reply.labels(), 'camera_observations': rows})}}], 'usage': {'cost': 0.0}})
     recorded = harness.label_episode(folder, tmp_path / 'reply.json', model='openai/gpt-6.1-sol',
         reasoning='high', api_key='offline', max_tokens=2000, timeout=1, cell_w=128)
     assert recorded['labels']['camera_observations'] == rows
@@ -47,7 +48,7 @@ def test_observed_camera_content_uses_native_ids_and_current_roles_for_exports(t
         findings = [{'signal': 'recorded_force', 'observation': 'Recorded values change during the work.'}]
         monkeypatch.setattr(harness, 'call_model_once', lambda *a, **k: {
             'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps({
-                'timeline': [], 'camera_observations': incomplete,
+                **complete_reply.labels(), 'camera_observations': incomplete,
                 'sensor_findings': findings})}}], 'usage': {'cost': 0.0}})
         partial = harness.label_episode(folder, tmp_path / 'partial.json', model='openai/gpt-6.1-sol',
             reasoning='high', api_key='offline', max_tokens=2000, timeout=1, cell_w=128)
@@ -74,7 +75,7 @@ def test_observed_camera_content_uses_native_ids_and_current_roles_for_exports(t
     unclear = harness.bind_camera_observations([{**rows[0], 'content': 'unclear'}, *rows[1:]], fields)
     assert len(unclear['observations']) == 3
     bound = harness.bind_camera_observations(rows, fields)
-    result = {**fields, 'episode_dir': str(folder), 'parse_ok': True, 'labels': {'timeline': []},
+    result = {**fields, 'episode_dir': str(folder), 'parse_ok': True, 'labels': complete_reply.labels(),
               'camera_observations': bound}
     saved = to_board.convert(result, 'native')
     shown = dictionary_projection.apply(copy.deepcopy(saved), ctx, folder)

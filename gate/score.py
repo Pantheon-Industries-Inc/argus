@@ -8,7 +8,7 @@ the run folders and the episodes they name; nothing is repaired. Per rig:
 - cases: each episode with a fact in gate/cases.json is judged against its label (judge()). A reply that did not
   parse, and an episode of the rig's gate folder with no output at all (the harness failed before the model call),
   count as failures.
-- parse: replies that parsed, of episodes asked.
+- parse: replies that parsed and hold the work their request asked for, of episodes asked.
 - flags: episodes whose label contradicts itself (checks/label_consistency.py).
 - cost: over the cost-sample episodes (role cost:<dataset>), per footage hour, billed and cold. The billed cost can
   be lower than a real run's: a request identical to one sent shortly before (the same episode labelled again) is
@@ -231,7 +231,7 @@ def score(runs: list[Path]) -> dict:
                 c['billed_usd'] += billing['billed_usd']
                 c['reserved_usd'] += billing['reserved_usd']
                 c['cost_complete'] &= billing['cost_complete']
-                if billing['cost_complete'] and response['status'] in ('parsed', 'unparsed', 'cut_off'):
+                if billing['cost_complete'] and response['status'] in ('parsed', 'unparsed', 'incomplete', 'cut_off'):
                     c['seconds'] += sec
                     c['episodes'] += 1
                     c['measured_usd'] += billing['billed_usd']
@@ -241,7 +241,7 @@ def score(runs: list[Path]) -> dict:
                     p['cold_valid'] &= (not billing_view(d).get('final_cost_history')
                                         and d.get('model') == DEFAULT_MODEL)
             if response['status'] != 'parsed':
-                reason = {'unparsed': 'did not parse', 'cut_off': 'reply cut off',
+                reason = {'unparsed': 'did not parse', 'incomplete': 'reply incomplete', 'cut_off': 'reply cut off',
                           'no_response': 'no response', 'pending': 'pending'}[response['status']]
                 p["failures"].append(f'{name}: {reason}')
                 if case_for(name, cases):

@@ -14,6 +14,7 @@ from label import sensor_copy
 
 from label import evidence_access as ea, harness, reparse, sensor_evidence as se
 from tests.test_tactile_contract import episode
+import complete_reply
 
 
 def source(tmp_path):
@@ -136,7 +137,7 @@ def test_reparse_uses_saved_version_and_preserves_marked_human_override(tmp_path
 def test_recorded_request_version_controls_binding_not_model_marker(tmp_path, monkeypatch):
     ep = source(tmp_path)
     doc = se.build(ep, {'n': 5})
-    raw = {'sensor_findings': [native_finding(doc)]}
+    raw = {**complete_reply.labels(), 'sensor_findings': [native_finding(doc)]}
     response_text = json.dumps(raw)
     monkeypatch.setattr(harness, 'call_model_once', lambda *a, **k: {
         'choices': [{'finish_reason': 'stop', 'message': {'content': response_text}}],

@@ -297,6 +297,7 @@ def test_case_normalized_reply_publishes_real_board_comparison(tmp_path):
         goal_alignment={'relation': 'Aligned', 'matches_given': 'false'},
         data_issues=[{'issue': 'visible issue', 'category': 'camera_fault', 'severity': 'High'}])
     labels['timeline'][0]['contribution'] = 'Advancing'
+    labels['timeline'][0]['end_s'] = 3.0          # the whole footage the request sent (test_board _output)
     labels['timeline'] = [[labels['timeline'][0].get(column) for column in TIMELINE_COLUMNS]]
     parsed, ok = parse_response(json.dumps(labels))
     assert ok

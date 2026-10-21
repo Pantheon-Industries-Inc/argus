@@ -13,6 +13,7 @@ from label import episode as me
 from label import harness, pieces
 from prepare import formats as f
 from test_formats import recorder_folder
+import complete_reply
 
 
 def test_only_a_recording_longer_than_the_limit_is_cut(tmp_path):
@@ -632,7 +633,7 @@ def test_split_refusals_keep_each_dispatch_receipt_in_native_board_download(tmp_
                 record.update(usage={'est_cost_usd': None}, final_dispatch_outcome='unverified', final_reserved_usd=6.4)
             target = out / ('failed_' + parts[0].name + '.json')
         else:
-            record.update(parse_ok=True, labels={'timeline': [], 'task_summary': 'Reach for the object.'})
+            record.update(parse_ok=True, labels=complete_reply.labels('Reach for the object.'))
             target = out / (parts[0].name + '.json')
         refused.unlink()
         target.write_text(json.dumps(record))
@@ -1391,7 +1392,7 @@ def test_on_random_recordings_a_joined_object_holds_one_record_per_part_in_any_t
 def test_the_board_names_the_parts_a_stitched_object_came_from():
     from board import to_board
     one, two = {'index': 1, 't0_s': 0., 't1_s': 5.}, {'index': 2, 't0_s': 5., 't1_s': 9.}
-    result = {'episode_dir': 'episode_x', 'parse_ok': True, 'labels': {'scene': {'objects': [
+    result = {'episode_dir': 'episode_x', 'parse_ok': True, 'labels': {**complete_reply.labels(), 'scene': {'objects': [
         {'name': 'blanket', 'source_piece': one, 'continues': [{'name': 'floral blanket', 'source_piece': two}]},
         {'name': 'cup', 'attributes': ['red'], 'source_piece': two}, {'name': 'plate'}]}}}
     assert to_board.convert(result, 'demo')['objects'] == [

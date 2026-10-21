@@ -59,7 +59,8 @@ def commit() -> tuple[str, bool]:
 
 
 def parsed(run: Path, eps: list[str]) -> int:
-    """How many of the episodes with an output have a reply that parsed (episodes_done counts every output)."""
+    """How many of the episodes with an output have a finished annotation, a reply that parsed and holds the work its
+    request asked for (label/harness.py annotation_complete; episodes_done counts every output)."""
     n = 0
     for e in eps:
         try:

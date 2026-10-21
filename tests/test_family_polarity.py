@@ -18,7 +18,7 @@ from board.label_projection import max_severity, severity
 from checks import label_consistency
 from compare import metrics
 from gate.score import judge
-from label.harness import parse_response
+from label.harness import annotation_problems, parse_response
 
 _spec = importlib.util.spec_from_file_location('family_wordings',
                                                Path(__file__).parent / 'fixtures' / 'family_wordings.py')
@@ -524,10 +524,12 @@ def test_board_compare_gate_and_checks_agree_on_every_derived_value():
     seen = collections.Counter()
     for _ in range(400):
         labels, ok = parse_response(json.dumps(_reply(rng)))
-        if not ok:
+        record = {'episode_dir': '/x/ep', 'parse_ok': True, 'labels': labels, 'config': {}}
+        # a reply that lacks a timeline or an outcome is not labelled on any of them (label/completeness.py)
+        if not ok or annotation_problems(record):
             continue
         seen['parsed'] += 1
-        d = to_board.convert({'episode_dir': '/x/ep', 'parse_ok': True, 'labels': labels, 'config': {}}, 'probe')
+        d = to_board.convert(record, 'probe')
         m = metrics.measure(labels, 'probe', {})
         board_outcome = (d.get('completion') or {}).get('task_completed') or None
         assert m['outcome'] == board_outcome

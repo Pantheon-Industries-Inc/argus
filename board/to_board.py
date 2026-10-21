@@ -60,9 +60,12 @@ def label_failed(result: dict) -> dict | None:
     the error), or a long recording none of whose parts gave labels (no_part, each part with why and the start of its
     reply), or an episode the model gave no reply for (no_reply, with why: no answer, the spend cap reached, a request
     that could not be built; label/harness.py run_batch), or a reply the board could not read although it parsed
-    (not_shown, with the error and the start of the reply; board/build.py). None for any other output, a reply that
-    parsed or one written without parse_ok (by hand, or by an older harness), which is its labels."""
-    from label.harness import client_timeout, reply_truncated
+    (not_shown, with the error and the start of the reply; board/build.py), or a reply that lacks work its request
+    asked for (incomplete, with what it lacks and the start of the reply; label/harness.py annotation_problems, which
+    judges a saved parse_ok again). None for any other output: a complete reply, a recording stitched from its parts
+    (each part was judged on its own, and a part with no labels is flagged at its span), or one written without
+    parse_ok (by hand, or by an older harness), which is its labels."""
+    from label.harness import annotation_problems, client_timeout, reply_truncated
     if result.get("unreadable"):
         return {"status": "unreadable", "error": str(result["unreadable"])[:RAW_HEAD]}
     if result.get("no_reply"):
@@ -91,9 +94,16 @@ def label_failed(result: dict) -> dict | None:
     if reply_truncated(result):
         return {"status": "cut_off", "out_tokens": (result.get("usage") or {}).get("completion_tokens"),
                 "tail": (result.get("content_tail") or "")[-TAIL:]}
-    if result.get("parse_ok") is not False:
-        return None
     lab = result.get("labels") if isinstance(result.get("labels"), dict) else {}
+    if result.get("parse_ok") is not False and (result.get("parse_ok") is not True
+                                                or isinstance(result.get("stitched"), dict)):
+        return None
+    problems = annotation_problems(result) if result.get("parse_ok") is True or lab.get("_incomplete") else []
+    if result.get("parse_ok") is True and not problems:
+        return None
+    if problems:
+        raw = str(lab.get("_raw") or result.get("response_text") or "")
+        return {"status": "incomplete", "why": problems, "raw_head": raw[:RAW_HEAD], "raw_chars": len(raw)}
     raw = str(lab.get("_raw") or "")
     return {"status": "unparsed", "parse_error": lab.get("_parse_error"), "raw_head": raw[:RAW_HEAD],
             "raw_chars": len(raw)}
