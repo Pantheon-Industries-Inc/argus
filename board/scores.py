@@ -31,7 +31,7 @@ import re
 import statistics
 
 from board.families import Families, union_seconds as _union
-from board.label_projection import severity as _severity
+from board.label_projection import severity as _severity, verdict_or_tasks as _verdict_or_tasks
 from checks.results import stored_number
 
 
@@ -108,6 +108,12 @@ def _str(x) -> str | None:
     return x if isinstance(x, str) else None
 
 
+def _subtasks(d: dict) -> list:
+    """The tasks scored one by one, by the rule every outcome reader shares (board/label_projection.py
+    verdict_or_tasks): none for a recording whose completion, derived from its one task, gives a verdict."""
+    return _verdict_or_tasks(d)[1]
+
+
 def _steps(d: dict) -> list:
     """The timeline steps with usable times, in time order."""
     return sorted((e for e in _list(d.get("event_labels")) if isinstance(e, dict) and _num(e.get("t_s")) is not None
@@ -178,9 +184,11 @@ def facts(d: dict) -> dict:
     mistakes, explaining = _mistakes(d)
     any_mistakes = len(explaining)
     incident = _incidents(d)
-    # progress restarts at each subtask, so a subtask's progress is the furthest its own steps got
+    # a recording with its own verdict is one goal, whatever tasks it lists (a recording of one task takes that task's
+    # verdict, board/label_projection.py recording_completion); only without one is each subtask judged on its own,
+    # and progress restarts at each subtask, so a subtask's progress is the furthest its own steps got
     tasks = []
-    for t in _list(d.get("tasks")):
+    for t in _subtasks(d):
         if not isinstance(t, dict) or _num(t.get("start_s")) is None or _num(t.get("end_s")) is None:
             continue
         own = [min(1.0, max(0.0, p)) for e in steps if t["start_s"] <= e["t_s"] <= t["end_s"]
@@ -428,9 +436,10 @@ def subgoals(d: dict, f: dict) -> list:
     mistakes = sorted((m for m in f["mistakes"] if m["t_s"] is not None), key=lambda m: m["t_s"])
     mistake_t = [m["t_s"] for m in mistakes]
     any_mistake_t = sorted(t for t in _mistakes(d)[1] if t is not None)
-    # an episode of several subtasks (human ego, sessions) has no single goal: each subtask is scored on its own, from
-    # its start through its subgoals to its own end-state, and the time between subtasks belongs to none of them
-    tasks = sorted((t for t in _list(d.get("tasks")) if isinstance(t, dict) and _num(t.get("start_s")) is not None
+    # a recording with no verdict of its own (several tasks, human ego, sessions) has no single goal: each subtask is
+    # scored on its own, from its start through its subgoals to its own end-state, and the time between subtasks
+    # belongs to none of them
+    tasks = sorted((t for t in _subtasks(d) if isinstance(t, dict) and _num(t.get("start_s")) is not None
                     and _num(t.get("end_s")) is not None), key=lambda t: t["start_s"])
     spans = ([(t["start_s"], _num(t.get("completed_at_s")) if _num(t.get("completed_at_s")) is not None else t["end_s"],
                _str(t.get("task")), _verdict(t), t["end_s"], i + 1) for i, t in enumerate(tasks)] if tasks

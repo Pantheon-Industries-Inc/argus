@@ -118,6 +118,13 @@ q = quality({prompt_mode: 'session', scores: scores({inputs: {outcome: null, pen
             {reason: why}, esc, fmtT);
 const sessionBox = outcomeBox(q.scoresHtml);
 assert(sessionBox.includes('none labelled') && sessionBox.includes(esc(why)) && !sessionBox.includes('not reached'), sessionBox);
+// a recording whose reply lists no task (its completion derived from none) says no task was observed, never "not
+// reached" or "unclear"
+q = quality({prompt_mode: 'given', scores: scores({inputs: {outcome: null, penalties: [], progress_reached: null}})},
+            {from_tasks: 0, reason: 'no task observed'}, esc, fmtT);
+const noTaskBox = outcomeBox(q.scoresHtml);
+assert(noTaskBox.includes('none observed') && noTaskBox.includes('no task observed') && !noTaskBox.includes('not reached')
+  && !noTaskBox.includes('>unclear<'), noTaskBox);
 
 // the Subgoals and key events table: every key event in time order, a subgoal's scores on the row of the key event that
 // ends it, the goal on its own row when no key event marks it, a subgoal not reached says so, and a key event with no

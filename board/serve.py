@@ -75,6 +75,7 @@ from pathlib import Path
 
 from board.clips import DEPTH, clip_path    # one rule for where a camera's clip is, for the writer and this server
 from board.families import Families
+from board.label_projection import verdict_or_tasks
 from board.public_export import project as public_json
 from board.to_board import dumps, finite
 from prepare import tools
@@ -1750,8 +1751,10 @@ def _rail_record(p: Path, d: dict) -> dict:
     mistakes = [i for i in all_mistakes if FAMILIES.counts("operator_mistakes", i)]
     unrated_issues = sum(not FAMILIES.rated(i) for i in all_issues)
     unrated_mistakes = sum(not FAMILIES.rated(i) for i in all_mistakes)
-    # head-camera sessions have no single completion: the rail shows "N/M tasks" from the per-task outcomes
-    tasks = [t for t in (d.get("tasks") or []) if t and (t.get("task") or t.get("start_s") is not None)]
+    # a recording with no verdict of its own (several tasks, a session, the head camera's activities): the rail shows
+    # "N/M tasks" from the per-task outcomes; a recording with a verdict (one task) shows that verdict
+    _, tasks = verdict_or_tasks(d)
+    tasks = [t for t in tasks if t.get("task") or t.get("start_s") is not None]
     return {
         "episode_id": (d.get("_meta") or {}).get("episode_id") or p.stem,
         "file": p.name,

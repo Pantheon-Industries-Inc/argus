@@ -225,6 +225,9 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "undone_at_s": raw_comp.get("undone_at_s"),
         "undone_by": raw_comp.get("undone_by"),
         "reason": raw_comp.get("reason"),
+        # a completion derived from the tasks (board/label_projection.py recording_completion): how many tasks it was
+        # derived from, and what its one task was judged against
+        **{key: raw_comp[key] for key in ("from_tasks", "judged_against") if key in raw_comp},
     }
     # the outcome is success or failure. "partial" (a real part of the goal left undone) is a kind of failure: the board
     # records it as a failure and keeps the kind, as success_then_undone is kept as a kind of success
@@ -248,7 +251,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "note": t.get("note") or "",
             **{key: copy.deepcopy(t[key]) for key in ("outcome_in_part", "joined_from", "source_piece",
                 "goal_reached_at_s", "undone_at_s", "undone_by", "completed_at_s_in_part",
-                "cut_continuation") if key in t},
+                "cut_continuation", "judged_against") if key in t},
         })
     key_events = []
     for k in labels.get("key_events") or []:
@@ -328,6 +331,8 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             # was inferred); the board shows it beside the model's own task_summary
             "given_prompt": result.get("given_prompt"),
             "prompt_mode": result.get("prompt_mode"),
+            # the output format the reply was asked in (board/label_projection.py LABEL_SCHEMA), if its request named one
+            **({"label_schema": result["label_schema"]} if result.get("label_schema") else {}),
         },
         "_usage": result.get("usage"),
         **({"_off_schema": off} if off else {}),

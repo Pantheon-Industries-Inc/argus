@@ -45,3 +45,47 @@ def test_a_recorded_instruction_shows_above_the_models_reading_in_either_mode():
     assert episode['bannerBody'].index('stack the cups') < episode['bannerBody'].index('stacks the cups')
     assert 'given' not in bare['bannerBody'] and 'wipes the table' in bare['bannerBody']
     assert bare['bannerLabel'] == 'Session summary'
+
+
+# which tasks the page shows one by one, by the rule every outcome reader shares (board/label_projection.py
+# verdict_or_tasks), then the banner those tasks give
+TASKS_SCRIPT = r'''
+const fs = require('fs');
+const s = fs.readFileSync(process.argv[1], 'utf8');
+const cut = (a, b) => { const i = s.indexOf(a), j = s.indexOf(b, i); if (i < 0 || j < i) throw new Error(a); return s.slice(i, j); };
+const fn = name => cut(`function ${name}(`, '\n}\n') + '\n}\n';
+const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const src = fn('nameParts') + fn('whoOwn') + cut("  // the rule every outcome reader shares", '  // Key events (milestone layer), sorted.');
+const page = new Function('d', 'comp', 'meta', 'who', 'esc', src + 'return {shown: tasks.length, bannerLabel, bannerBody};');
+console.log(JSON.stringify(JSON.parse(process.argv[2]).map(c => page(c.d, c.d.completion || {}, c.meta, 'Astra', esc))));
+'''
+TASK = {'start_s': 0, 'end_s': 9, 'task': 'stack the cups', 'outcome': 'success'}
+ALIGNED = {'relation': 'aligned', 'matches_given': True}
+TASK_CASES = [
+    # one task: its verdict is the recording's, shown as an episode against its instruction, with the alignment chip
+    {'d': {'episode_prompt': 'stacks the cups', 'goal_alignment': ALIGNED, 'tasks': [TASK],
+           'completion': {'task_completed': 'success', 'from_tasks': 1}},
+     'meta': {'prompt_mode': 'given', 'given_prompt': 'stack the cups'}},
+    # several tasks: no verdict, each task shown, the instruction above the summary and the chip beside them
+    {'d': {'episode_prompt': 'stacks the cups twice', 'goal_alignment': ALIGNED, 'tasks': [TASK, TASK],
+           'completion': {'task_completed': None, 'from_tasks': 2}},
+     'meta': {'prompt_mode': 'given', 'given_prompt': '(Cyclical) stack the cups, then reset'}},
+    # a record labelled before the tasks format with a verdict and tasks keeps its tasks
+    {'d': {'episode_prompt': 'stacks the cups', 'tasks': [TASK, TASK], 'completion': {'task_completed': 'unclear'}},
+     'meta': {'prompt_mode': 'session'}},
+    # an old episode: its verdict, no tasks
+    {'d': {'episode_prompt': 'stacks the cups', 'completion': {'task_completed': 'success'}},
+     'meta': {'prompt_mode': 'inferred'}},
+]
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='no node')
+def test_a_recording_of_one_task_reads_as_an_episode_and_one_of_several_task_by_task():
+    p = subprocess.run(['node', '-e', TASKS_SCRIPT, str(PAGE), json.dumps(TASK_CASES)], text=True, capture_output=True)
+    assert p.returncode == 0, p.stderr
+    one, several, legacy, episode = json.loads(p.stdout)
+    assert one['shown'] == 0 and one['bannerLabel'].startswith('Given goal and'), one['bannerLabel']
+    assert 'matches given goal' in one['bannerBody']
+    assert several['shown'] == 2 and several['bannerLabel'] == 'Given task and session summary'
+    assert 'matches given goal' in several['bannerBody']
+    assert legacy['shown'] == 2 and episode['shown'] == 0

@@ -78,15 +78,21 @@ def recording_verdict(completion) -> str | None:
 
 
 def verdict_or_tasks(record: dict) -> tuple[str | None, list[dict]]:
-    """(the recording's verdict, the tasks that stand in for it). Every reader of an outcome uses this one rule: the
-    recording's verdict when it has one, and then no tasks; otherwise no verdict and its tasks. A recording of one task
-    is read as one goal, the way an episode always was, and only a recording with no verdict is read task by task."""
+    """(the recording's verdict, the tasks that stand in for it). Every reader of an outcome uses this one rule. A
+    completion derived from the tasks (it says from_tasks, recording_completion) is read first: its verdict when it has
+    one, and then no tasks, so a recording of one task is read as one goal, the way an episode always was; otherwise
+    no verdict and the tasks. A record labelled before the tasks format keeps the rule it was shown and scored by: its
+    tasks whenever it lists any (a session, the head camera's activities, an older long session whose stitched
+    completion says unclear), otherwise its completion's verdict."""
     record = record if isinstance(record, dict) else {}
-    verdict = recording_verdict(record.get('completion'))
-    if verdict is not None:
-        return verdict, []
+    completion = record.get('completion')
     tasks = record.get('tasks')
-    return None, [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+    tasks = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+    verdict = recording_verdict(completion)
+    derived = isinstance(completion, dict) and 'from_tasks' in completion
+    if derived:
+        return (verdict, []) if verdict is not None else (None, tasks)
+    return (None, tasks) if tasks else (verdict, [])
 
 
 def severity(item) -> str | None:

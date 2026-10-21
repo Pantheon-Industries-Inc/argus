@@ -6645,9 +6645,12 @@ function renderEp(d, opts) {
     : d.duration_s > 0 ? Math.max(duration, d.duration_s) : Math.max(duration + 1, 10);
   const onTl = t => Math.max(0, Math.min(duration, Number(t)));     // a time as drawn: on the episode's timeline
 
-  // a head-camera session is a sequence of self-directed tasks (d.tasks), each with its own goal frame; every other
-  // episode has one completion and one goal
-  const tasks = (d.tasks || []).filter(t => t && (t.task || t.start_s != null));
+  // the rule every outcome reader shares (board/label_projection.py verdict_or_tasks): a completion derived from the
+  // tasks (from_tasks) with a verdict is one goal, the way an episode is; a recording with none (several tasks) and
+  // a record labelled before the tasks format that lists tasks (a session, a head camera's activities) are shown task
+  // by task (d.tasks), each task with its own outcome and goal frame
+  const tasks = comp.from_tasks != null && String(comp.task_completed || '').trim() ? []
+    : (d.tasks || []).filter(t => t && (t.task || t.start_s != null));
   const hasTasks = tasks.length > 0;
   const taskGoalTimes = tasks.map(t => t.completed_at_s).filter(t => t != null);
 
@@ -6799,6 +6802,8 @@ function renderEp(d, opts) {
           'Subtasks the footage does not settle (eg cut off by the end of the clip) or whose progress is not measured; they count for nothing either way')}`
       : d.prompt_mode === 'session' ? cell('Subtasks', null, 'none labelled',
           (comp && comp.reason) || 'The labels name no task in this session', true)
+      : comp && comp.from_tasks === 0 ? cell('Tasks', null, 'none observed',
+          comp.reason || 'no task observed', true)
       : `${cell('Goal', null, goalT != null ? `reached ${fmtT(goalT)}`
           : ['failure', 'partial'].includes(qIn.outcome) ? 'not reached' : 'unclear',
           'When the labelled goal was first met', goalT == null && ['failure', 'partial'].includes(qIn.outcome))}
@@ -8873,9 +8878,8 @@ function buildCompare() {
     <div class="cmpv-grid cmpv-main">${MAIN_CHARTS.map(c => card(c, barRows(c))).join('')}</div>
     <h3 class="section">Agreement between models <span class="count">(all medium reasoning unless otherwise specified)</span></h3>
     <div class="cmpv-grid">${mx('outcome', 'Outcome agreement', 'The share of episodes on which two runs give the task '
-      + 'the same outcome (success, success then undone, failure or unclear; a task partly done is a failure). Human ego '
-      + 'sessions grade each '
-      + 'task separately and have no single outcome, so they are left out.')}
+      + 'the same outcome (success, success then undone, failure or unclear; a task partly done is a failure). A recording '
+      + 'of several tasks grades each task separately and has no single outcome, so it is left out.')}
       ${mx('issues', 'Issue-type agreement', '')}</div>
     ${pairs.length ? `<h3 class="section">${esc(cap(icl()))} <span class="count">(all medium reasoning unless otherwise specified)</span></h3>
     <p class="cmpv-sub" id="pr-sub"></p>
@@ -8963,7 +8967,7 @@ function updateCompare(first) {
         : `${g.issues_shared} of ${g.issues_union} kinds of problem in common over ${n} episodes`}`;
     });
     card.querySelector('.cc-foot').textContent = any ? '' : (id === 'outcome' && CMP_RIG === 'head_camera'
-      ? 'Human ego sessions have no single outcome to compare.' : 'No pair of runs has an episode in common here '
+      ? 'Recordings of several tasks have no single outcome to compare.' : 'No pair of runs has an episode in common here '
         + 'yet.');
   }
   const pairs = (M.paired || {})[CMP_RIG] || [];

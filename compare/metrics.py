@@ -63,7 +63,7 @@ RIGS ={"teleop_arms": "teleop", "handheld_gripper": "handheld", "ego_head": "hea
 RIG_NAMES = {"all": "All footage", "teleop": "Teleop", "handheld": "UMI", "head_camera": "Human ego"}
 RESPONDED = ("parsed", "unparsed", "incomplete", "cut_off")
 OUTCOMES = ("success", "success_then_undone", "failure", "partial", "unclear")
-from board.label_projection import effective_outcome
+from board.label_projection import effective_outcome, verdict_or_tasks
 LISTS = ("data_issues", "operator_mistakes")
 PER_EPISODE = ("events_per_min", "key_events", "subgoals", "data_issues", "data_issues_minor", "operator_mistakes",
                "operator_mistakes_minor", "data_issues_unrated", "operator_mistakes_unrated")
@@ -262,7 +262,8 @@ def measure(L: dict, dataset: str | None, config: dict | None = None) -> dict:
         m[key + "_minor"] = len(items) - n - unrated
         fams |= {FAMILIES.family_of(key, i, dataset) for i in items}
     m["families"] = sorted(fams)
-    tasks = [t for t in _list(L, "tasks") if isinstance(t, dict)]
+    # the recording's verdict first; the tasks' share done only for a recording with none (several tasks, a session)
+    _, tasks = verdict_or_tasks(L)
     if tasks:
         m["tasks"] = [len(tasks), sum(1 for t in tasks if str(t.get("outcome") or "").lower() == "success")]
     c = L.get("completion")
