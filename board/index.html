@@ -2404,6 +2404,31 @@ async function retryFrameImage(image) {
 
 function isNullish(v) { return v == null || (typeof v === 'string' && v.toLowerCase() === 'null'); }
 function fmtT(t) { return Number.isFinite(t) ? t.toFixed(1) + 's' : '-'; }
+
+// Every moment the video flags over its caption (a key event, the goal reached, a task done) and every state change
+// in its toast keeps one clock: it shows from FLAG_LEAD_S before its moment until the next later moment of the same
+// overlay, for at most FLAG_HOLD_S, so the next one replaces it and an earlier flag never outlasts or hides a later
+// one. Moments at the same instant show together.
+const FLAG_LEAD_S = 0.3, FLAG_HOLD_S = 2.5;
+function flagWindows(items) {
+  const sorted = items.filter(x => x && Number.isFinite(Number(x.t_s))).slice()
+    .sort((a, b) => a.t_s - b.t_s);
+  return sorted.map((x, i) => {
+    const next = sorted.slice(i + 1).find(y => y.t_s > x.t_s);
+    return {t0: x.t_s - FLAG_LEAD_S, x, t1: Math.min(x.t_s + FLAG_HOLD_S, next ? next.t_s - FLAG_LEAD_S : Infinity)};
+  });
+}
+function flagsAt(windows, t) { return windows.filter(w => t >= w.t0 && t < w.t1).map(w => w.x); }
+// The caption's moments: the key events, the episode's goal and each task's completion. A task done at the episode's
+// goal is that goal, flagged once.
+function captionFlags(keyEvents, episodeGoalT, taskGoalTimes) {
+  const goal = Number.isFinite(Number(episodeGoalT)) ? Number(episodeGoalT) : null;
+  return flagWindows([
+    ...(keyEvents || []),
+    ...(goal != null ? [{t_s: goal, goal: 'episode'}] : []),
+    ...(taskGoalTimes || []).filter(t => t !== goal).map(t => ({t_s: t, goal: 'task'})),
+  ]);
+}
 // a key event's kind as the model tagged it, in plain words ("subgoal_complete" reads "subgoal complete")
 function kindName(k) { return String(k || '').replace(/_/g, ' ').trim(); }
 
@@ -7563,24 +7588,16 @@ function renderEp(d, opts) {
     .filter(e => e.t_s != null)
     .map(e => ({t0: e.t_s, t1: (e.end_s != null ? e.end_s : e.t_s + 1.0), ev: e}))
     .sort((a, b) => a.t0 - b.t0);
-  const keyWindows = flagWindows(keyEvents);
-  function activeKey(t) { return latestFlag(keyWindows, t); }
-  // A flag (a key event, a state change) shows from 0.3s before its moment until the next flag of its kind, for at
-  // most 2.5s: the next one replaces it, so an earlier flag never hides a later one
-  function flagWindows(items) {
-    const lead = 0.3, hold = 2.5;
-    const sorted = items.slice().sort((a, b) => a.t_s - b.t_s);
-    return sorted.map((x, i) => ({t0: x.t_s - lead, x,
-      t1: Math.min(x.t_s + hold, i + 1 < sorted.length ? sorted[i + 1].t_s - lead : Infinity)}));
-  }
-  function latestFlag(windows, t) {
-    let hit = null;
-    for (const w of windows) if (t >= w.t0 && t < w.t1) hit = w.x;
-    return hit;
+  // the caption's key events, goal and task done keep one clock (captionFlags), as do the state changes
+  const captionWindows = captionFlags(keyEvents, episodeGoalT, taskGoalTimes);
+  function activeKey(t) { return flagsAt(captionWindows, t).filter(x => !x.goal).pop() || null; }
+  function activeGoal(t) {
+    const goals = flagsAt(captionWindows, t).filter(x => x.goal);
+    return goals.some(x => x.goal === 'episode') ? 'episode' : goals.length ? 'task' : null;
   }
   const stateChanges = (d.state_changes || []).filter(x => x.t_s != null).sort((a, b) => a.t_s - b.t_s);
   const stateWindows = flagWindows(stateChanges);
-  function activeState(t) { return latestFlag(stateWindows, t); }
+  function activeState(t) { return flagsAt(stateWindows, t).pop() || null; }
 
   const overlay = document.getElementById('video-overlay');
   // Only rebuild the overlay when its content actually changes (segment, goal/key
@@ -7596,9 +7613,8 @@ function renderEp(d, opts) {
     const ev = w.ev;
     const cc = contribClass(ev.contribution);
     const cl = contribText(ev.contribution) || '-';
-    const goalT = episodeGoalT;
-    const atEpisodeGoal = goalT != null && t >= goalT - 0.3 && t <= goalT + 3.0;
-    const atTaskGoal = taskGoalTimes.some(gt => t >= gt - 0.3 && t <= gt + 3.0);
+    const atGoal = activeGoal(t);
+    const atEpisodeGoal = atGoal === 'episode', atTaskGoal = atGoal === 'task';
     const k = activeKey(t);
     const kOc = k ? (k.outcome || '').toLowerCase() : '';
     const sig = [ev.event_idx != null ? ev.event_idx : ev.t_s, cc, atEpisodeGoal, atTaskGoal, k ? k.label : '',
@@ -7663,8 +7679,7 @@ function renderEp(d, opts) {
     const scoreChip = document.getElementById('score-chip');
     if (!scoreChip) return;
     const subByT = _subByT || (_subByT = new Map(subs.filter(st => !st.goal).map(st => [Math.round(st.end_s * 100), st])));
-    const goalT = episodeGoalT;
-    const atGoal = goalT != null && t >= goalT - 0.3 && t <= goalT + 3.0;
+    const atGoal = activeGoal(t) === 'episode';
     const k = activeKey(t);
     const st = k && k.kind === 'subgoal_complete' ? subByT.get(Math.round(k.t_s * 100)) : null;
     const sig = atGoal ? 'goal' : st ? String(st.end_s) : '';
@@ -7756,7 +7771,7 @@ function renderEp(d, opts) {
   const recWindows = recoveries
     .filter(r => r.failureT != null)
     .map(r => ({t0: r.failureT - 0.3,
-                t1: (r.recoveredAt != null ? r.recoveredAt + 1.0 : r.failureT + 3.5), r}))
+                t1: (r.recoveredAt != null ? r.recoveredAt + 1.0 : r.failureT + FLAG_HOLD_S), r}))
     .sort((a, b) => a.t0 - b.t0);
   const recOverlay = document.getElementById('recovery-overlay');
   const progOverlay = document.getElementById('prog-overlay');
