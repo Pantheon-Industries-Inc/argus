@@ -1216,12 +1216,14 @@ h4.subsection .count { margin-left: 6px; font: 500 11px/1 var(--mono); color: va
   background: color-mix(in srgb, var(--c) 40%, transparent); }
 .tc-k i.st-unshown { border-style: dashed; background: color-mix(in srgb, var(--c) 12%, transparent); }
 .tc-k i.miss { width: 8px; height: 8px; margin: 0 3px; border: 0; transform: rotate(45deg); background: var(--danger); }
-/* the contact card: every contact's card in one cell, so the space they take never changes while the footage plays and
-   the card of the contact under the playhead fades in over the last */
-.tc-cards { display: grid; margin: 12px 0 22px; }
-.tc-card { grid-area: 1 / 1; min-width: 0; margin: 0; opacity: 0; visibility: hidden;
+/* the contact card: only the card of the contact under the playhead takes space, so a short card (no contact at the
+   playhead) never sits in the height of a tall one; the others lie over it, faded out, and the box eases from one
+   card's height to the next (swapHeight) as the card fades in over the last */
+.tc-cards { position: relative; margin: 12px 0 22px; }
+.tc-card { position: absolute; top: 0; left: 0; right: 0; min-width: 0; margin: 0; opacity: 0; visibility: hidden;
   transition: opacity 180ms ease, visibility 0s linear 180ms; }
-.tc-card.on { opacity: 1; visibility: visible; transition: opacity 180ms ease, visibility 0s; }
+.tc-card.on { position: relative; opacity: 1; visibility: visible; transition: opacity 180ms ease, visibility 0s; }
+.tc-cards.sizing { overflow: hidden; transition: height 220ms ease; }
 .tc-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
 .tc-card-title { font: 700 13px/1.3 var(--sans); color: var(--fg); }
 .tc-pill { font: 600 11px/1.3 var(--mono); color: var(--c); padding: 2px 8px; border-radius: var(--r-pill);
@@ -1243,7 +1245,10 @@ h4.subsection .count { margin-left: 6px; font: 500 11px/1 var(--mono); color: va
 .tc-empty .tc-plain { margin-top: 0; color: var(--fg-3); }
 @media (prefers-reduced-motion: reduce) { .tc-card, .tc-seg, .tc-seg path { transition: none; } }
 .pub-list .pub-note { font-size: 12px; color: var(--fg-3); margin: 0 0 8px; line-height: 1.45; }
-.pub-list .pub-row { display: grid; grid-template-columns: 112px 1fr; gap: 10px; padding: 4px 6px; cursor: pointer;
+/* the labels share one grid, so the time column is as wide as the longest time and every label starts on one line */
+.pub-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 14px; }
+.pub-list > * { grid-column: 1 / -1; min-width: 0; }
+.pub-list .pub-row { display: grid; grid-template-columns: subgrid; padding: 4px 6px; cursor: pointer;
   border-radius: 3px; font-size: 13px; line-height: 1.4; }
 .pub-list .pub-row:hover { background: rgba(127,127,127,0.08); }
 .pub-list .pub-row.now { background: rgba(69,129,142,0.14); }
@@ -1258,6 +1263,11 @@ h4.subsection .count { margin-left: 6px; font: 500 11px/1 var(--mono); color: va
 .pub-list .pub-kv { display: contents; font-size: 13px; line-height: 1.4; }
 .pub-list .pub-kv .pub-k { min-width: 100px; margin: 0; padding: 4px 0 4px 6px; line-height: 1.6; overflow-wrap: anywhere; }
 .pub-list .pub-v { padding: 4px 6px 4px 0; font-size: 13px; overflow-wrap: anywhere; }
+/* the notes as a tree: a heading is the part of a path that differs from the one before it, indented by its depth (at
+   most four steps, so a deep path never pushes its values off the page), and a note sits one step in from it */
+.pub-list .pub-path { grid-column: 1 / -1; margin: 8px 0 2px; padding: 0 6px 0 calc(6px + min(var(--d, 0), 4) * 12px);
+  font: 500 11px/1.4 var(--mono); color: var(--fg-2); overflow-wrap: anywhere; }
+.pub-list .pub-kv .pub-k[style] { padding-left: calc(6px + min(var(--d, 0), 4) * 12px); }
 .pub-list .pub-at { margin-left: 6px; padding: 0; background: none; border: 0; cursor: pointer; font-family: var(--mono);
   font-size: 11.5px; color: var(--accent); }
 .pub-list .pub-at:hover { text-decoration: underline; }
@@ -5838,6 +5848,21 @@ function tcCurve(c, D, top) {
 }
 // wire the lane and the cards renderEp drew: which contact the playhead is in, the stepper, clicks, the strength curves
 // and the heatmaps of the shown card once the sensors file is in. Returns {sync(t)}.
+// A box whose content is swapped (one card for another) eases from the old content's height to the new one's, then
+// returns to its natural height, so it always fits what it shows.
+function swapHeight(box, swap) {
+  const h0 = box.offsetHeight;
+  swap();
+  const h1 = box.offsetHeight;
+  if (!h0 || h0 === h1 || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  box.classList.add('sizing');
+  box.style.height = h0 + 'px';
+  void box.offsetHeight;
+  box.style.height = h1 + 'px';
+  const done = () => { box.classList.remove('sizing'); box.style.height = ''; box.removeEventListener('transitionend', done); };
+  box.addEventListener('transitionend', done);
+  setTimeout(done, 300);
+}
 function setupTouch(T, file, duration, seek, on, vid, evidenceSync = null) {
   const lane = document.getElementById('lane-touch'), box = document.getElementById('tc-cards');
   if (!lane || !box) return null;
@@ -5856,8 +5881,8 @@ function setupTouch(T, file, duration, seek, on, vid, evidenceSync = null) {
     if (k >= 0) { if (k !== pinned) pinned = -1; return k; }
     return pinned;
   }
-  // every card's heatmaps are laid out when the sensors file is in, so the cards' shared height is set once; only the
-  // shown card's are drawn as the playhead moves
+  // every card's heatmaps are laid out when the sensors file is in; only the shown card's are drawn as the playhead
+  // moves
   function layMaps() {
     cards.slice(1).forEach((el, k) => {
       const ms = (C[k].signals || []).map(nm => D.signals.find(s => s.name === nm && s.map && s.shape
@@ -5877,7 +5902,7 @@ function setupTouch(T, file, duration, seek, on, vid, evidenceSync = null) {
     if (k !== shown) {
       shown = k;
       segs.forEach(g => g.classList.toggle('now', +g.dataset.c === k));
-      cards.forEach(el => el.classList.toggle('on', +el.dataset.c === k));
+      swapHeight(box, () => cards.forEach(el => el.classList.toggle('on', +el.dataset.c === k)));
       if (pos) pos.textContent = k >= 0 ? `${k + 1} of ${n}` : `${n} ${n === 1 ? 'contact' : 'contacts'}`;
       bindMaps(k);
     }
@@ -6726,13 +6751,29 @@ function renderEp(d, opts) {
         + `</div>` : '')
       + `</div>`;
   }
+  // A note's name is often a path (file / field / sub-field / leaf). The notes read as a tree: a heading names only the
+  // parts of its path that differ from the heading before it, indented by how deep they sit, and each note names only
+  // its own last part, one step in from its heading, so no part of a path is written twice in a row
+  const notePathRows = (items, kv) => {
+    let prev = [], out = '';
+    for (const it of items) {
+      const parts = String(it.name ?? '').split(' / ');
+      const head = parts.slice(0, -1);
+      let k = 0;
+      while (k < head.length && k < prev.length && head[k] === prev[k]) k++;
+      if (k < head.length) out += `<div class="pub-path" style="--d:${k}">${esc(head.slice(k).join(' / '))}</div>`;
+      prev = head;
+      out += kv(it, parts[parts.length - 1], head.length);
+    }
+    return out;
+  };
   // the notes an upload sent with the episode, as sent: its table rows, then the notes read from its files, folded
   const upl = d.uploader_notes || [];
   if (upl.length) {
-    const kv = (it) => `<div class="pub-kv"><span class="pub-k">${esc(it.name)}</span><span class="pub-v">`
+    const kv = (it, name, depth = 0) => `<div class="pub-kv"><span class="pub-k" style="--d:${depth}">${esc(name)}</span><span class="pub-v">`
       + `${esc(it.value)}${it.t != null ? `<button type="button" class="pub-at" data-t="${esc(it.t)}">at `
       + `${esc(fmtT(it.t))}</button>` : ''}</span></div>`;
-    const grp = (g) => `<div class="pub-group"><div class="pub-gt">${esc(g.title)}</div>${g.items.map(kv).join('')}</div>`;
+    const grp = (g) => `<div class="pub-group"><div class="pub-gt">${esc(g.title)}</div>${notePathRows(g.items, kv)}</div>`;
     const notes = upl.filter(g => g.kind !== 'row');
     const uplHtml = upl.filter(g => g.kind === 'row').map(grp).join('') + (notes.length
       ? `<div class="pub-fold"><div class="sn-fold"><div class="sn-fold-in">${notes.map(grp).join('')}</div></div>`
