@@ -4,7 +4,9 @@ Round after round of QA found data dropped silently: a camera or signal stream, 
 the other findings list, streams that share a name. Each was fixed where it was found. This test catches the class:
 a tiny recording of every setup the README lists is generated here, never downloaded, and run through `python -m
 review` (prepare, checks, clips, the request build, a reply, binding, the board build) and the JSON Lines export. One
-recording is labelled in parts and stitched, and one glove gets the separate regional pass. The model is offline
+recording is labelled in parts and stitched, and one glove gets the separate regional pass. Every setup runs in episode
+mode and in session mode, where each task's outcome and the instruction comparison must also reach the board and the
+export. The reviews run side by side in a few spawned workers (review_case). The model is offline
 (OfflineModel): each reply, for every part and every pass, cites every camera, signal and inspected evidence id its
 request offered, in every list the schema allows.
 
@@ -18,8 +20,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import sys
+import traceback
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -467,6 +471,16 @@ class OfflineModel:
         if views:
             reply['camera_observations'] = [{'view': v, 'content': 'scene', 'evidence': f'offline view {v}'}
                                             for v in views]
+        if '"tasks": [' in whole:
+            # a session (or a head camera's activities): two tasks, each with its own outcome
+            half = round(end / 2, 3)
+            reply['tasks'] = [{'start_s': a, 'end_s': b, 'task': f'{self.tag("tasks")}: move the object',
+                               'objects': ['object'], 'outcome': outcome, 'success_predicate': 'the object is moved',
+                               'completed_at_s': b if outcome == 'success' else None, 'note': None}
+                              for a, b, outcome in ((0.0, half, 'success'), (half, end, 'partial'))]
+        if '"goal_alignment"' in whole:
+            reply['goal_alignment'] = {'matches_given': True, 'relation': 'aligned',
+                                       'note': f'{self.tag("goal_alignment")}: the work matches the instruction'}
         return reply
 
     def cards(self, text: str) -> dict:
@@ -480,7 +494,7 @@ class OfflineModel:
 
 # ---- running review ----------------------------------------------------------------------------------------------------
 
-def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch) -> int:
+def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch, mode: str = 'episode') -> int:
     """python -m review on the fixture, as a person runs it, with the model answered offline. The checks and clips run
     as the child processes review starts; the dry run and the label run are the harness's own main, in this process,
     so they reach the offline model."""
@@ -517,7 +531,8 @@ def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch) -> int
             return saved
         monkeypatch.setattr(policy, 'persist', shorter_parts)
     monkeypatch.setattr(sys, 'argv', ['review', '--data', str(setup.data), '--rig', setup.rig, '--out', str(job),
-                                      '--concurrency', '1', '--jobs', '1', '--cap', '20', '--max-tokens', '4000'])
+                                      '--concurrency', '1', '--jobs', '1', '--cap', '20', '--max-tokens', '4000',
+                                      '--task-mode', mode])
     return review.main()
 
 
@@ -758,6 +773,32 @@ def reply_issues(record: dict) -> set:
     return issue_tags(reply_of(record))
 
 
+def tagged_tasks(d: dict) -> dict:
+    """{tag: outcome} of the reply's tasks an episode record holds, a task joined across a cut by each task it joined,
+    and a task a cut qualified by the outcome its part gave it."""
+    labels = d.get('labels') if isinstance(d.get('labels'), dict) else {}
+    out = {}
+    for task in d.get('tasks') or labels.get('tasks') or []:
+        for row in [task, *(task.get('joined_from') or [])] if isinstance(task, dict) else []:
+            text = row.get('task') if isinstance(row, dict) else None
+            if isinstance(text, str) and text.startswith('offline '):
+                outcome = row.get('outcome_in_part') or row.get('outcome')
+                # the board stores partial as a failure of the kind partial (board/to_board.py, board/scores.py)
+                out[text.split(':', 1)[0]] = 'partial' if outcome == 'failure' and row.get('failure_kind') == 'partial' \
+                    else outcome
+    return out
+
+
+def alignment_tags(d: dict) -> set:
+    """Tags of the reply's goal alignments an episode record holds: its own, or each part's (part_assessments)."""
+    labels = d.get('labels') if isinstance(d.get('labels'), dict) else {}
+    rows = [d.get('goal_alignment') or labels.get('goal_alignment'),
+            *(a.get('goal_alignment') for a in d.get('part_assessments') or labels.get('part_assessments') or []
+              if isinstance(a, dict))]
+    return {row['note'].split(':', 1)[0] for row in rows if isinstance(row, dict)
+            and isinstance(row.get('note'), str) and row['note'].startswith('offline ')}
+
+
 def reply_views(record: dict) -> set:
     return {r.get('view') for r in reply_of(record).get('camera_observations') or [] if isinstance(r, dict)}
 
@@ -787,8 +828,10 @@ def unit_losses(tag: str, record: dict) -> list:
 def carried_losses(tag: str, units: list, stages: list) -> list:
     """What binding kept in every request (bound findings, findings set aside with their reason, data issues, camera
     observations) reaches each later stage: the stitched episode, the board and the export."""
-    lost, bound, aside, issues, views = [], set(), {}, set(), set()
+    lost, bound, aside, issues, views, tasks, aligned = [], set(), {}, set(), set(), {}, set()
     for record in units:
+        tasks.update(tagged_tasks(reply_of(record)))
+        aligned |= alignment_tags(reply_of(record))
         got, got_aside = placed_findings(record)
         bound |= got
         aside.update(got_aside)
@@ -804,6 +847,11 @@ def carried_losses(tag: str, units: list, stages: list) -> list:
         kept, withheld = observation_views(doc)
         lost += [f'{stage}: {tag}the camera observation of {v} is neither kept nor withheld with a reason'
                  for v in sorted(views - kept - withheld, key=str)]
+        held = tagged_tasks(doc)
+        lost += [f'{stage}: {tag}task {t} is missing' for t in sorted(set(tasks) - set(held))]
+        lost += [f'{stage}: {tag}task {t} has outcome {held[t]!r}, not its reply\'s {tasks[t]!r}'
+                 for t in sorted(set(tasks) & set(held)) if held[t] != tasks[t]]
+        lost += [f'{stage}: {tag}goal alignment {t} is missing' for t in sorted(aligned - alignment_tags(doc))]
     return lost
 
 
@@ -888,37 +936,78 @@ def losses(setup: Setup, job: Path) -> list:
 
 # Losses that open pull requests fix, by (setup, pattern of the loss): the reason names the pull request. Each must still
 # occur, so when its pull request has merged and the loss is gone the test fails until its entry is removed.
-PR75_ROUTING = ('PR 75 (eric/data-loss-four) sends a finding written in the other findings list to the binder its '
-                'citations name; before it, a request with no supplied sensor evidence never binds sensor_findings')
-PR75_SAME_NAME = ('PR 75 (eric/data-loss-four) keeps signals of the same name from different files; before it, the '
-                  'file read last replaces the other')
-PR75_SECOND_FILE = ('PR 75 (eric/data-loss-four, from 533e829) names every source file on the one copy it keeps of '
-                    'identical readings; before it, a file whose data is kept through another file\'s copy is named '
-                    'nowhere')
-EXPECTED = {
-    **{(name, r'^bound: .*offline sensor_findings \d+ citing \[\{"evidence_id"'): PR75_ROUTING
-       for name in ('teleop_lerobot', 'mcap_arm', 'umi_gripper', 'ego_head', 'depth_mcap', 'zipped_mcap')},
-    ('hdf5_gloves', r'^prepared: .*signal pressure \((left|right)_glove\.h5\) is not in the prepared episode'):
-        PR75_SAME_NAME,
-    ('hdf5_gloves', r'^prepared: .*signal pressure \(right_backup_glove\.h5\) is not in the prepared episode'):
-        PR75_SECOND_FILE,
-}
+EXPECTED = {}
 
 
-@pytest.mark.parametrize('build', SETUPS, ids=[f.__name__ for f in SETUPS])
-def test_every_setup_keeps_every_stream_and_citation_through_to_the_export(build, tmp_path, monkeypatch):
-    setup = build(tmp_path / 'source')
-    model = OfflineModel()
-    rc = run_review(setup, tmp_path / 'job', model, monkeypatch)
-    assert 'final' in model.calls, model.calls
-    found = losses(setup, tmp_path / 'job')
-    expected = {pattern: why for (name, pattern), why in EXPECTED.items() if name == setup.name}
+MODES = ('episode', 'session')
+CASES = [(build.__name__, mode) for build in SETUPS for mode in MODES]
+WORKERS = 3     # reviews run side by side; each also starts its checks and clips as child processes
+
+
+def review_case(case) -> dict:
+    """One setup reviewed in one task mode, in a worker process: the setup's losses, or the error that stopped it."""
+    name, mode, root = case
+    os.environ['ARGUS_READER_ISOLATION'] = '0'       # as conftest.py sets for a test in this process
+    from label import harness
+    harness.AUTO_RESEND_DELAYS_S = (0.0,) * len(harness.AUTO_RESEND_DELAYS_S)
+    patch = pytest.MonkeyPatch()
+    try:
+        setup = globals()[name](root / 'source')
+        model = OfflineModel()
+        rc = run_review(setup, root / 'job', model, patch, mode)
+        return {'rc': rc, 'calls': model.calls, 'losses': losses(setup, root / 'job'),
+                'paths': sorted(paths_reached(root / 'job', model))}
+    except BaseException:  # noqa: BLE001 - reported by the case's own test
+        return {'error': traceback.format_exc()}
+    finally:
+        patch.undo()
+
+
+def paths_reached(job: Path, model: OfflineModel) -> set:
+    """The paths of the pipeline a review went through, so the corpus can show it reaches every one it checks."""
+    replies = [reply_of(_read(p) or {}) for p in (job / 'run' / 'out').glob('episode_*.json')]
+    return ({'parts'} if any('__p' in p.stem for p in (job / 'run' / 'out').glob('episode_*.json')) else set()) \
+        | ({'regional pass'} if 'regional' in model.calls else set()) \
+        | ({'tasks'} if any(tagged_tasks(r) for r in replies) else set()) \
+        | ({'goal alignment'} if any(alignment_tags(r) for r in replies) else set()) \
+        | ({'sensor findings'} if any(finding_tags(r.get('sensor_findings')) for r in replies) else set()) \
+        | ({'camera observations'} if any(r.get('camera_observations') for r in replies) else set())
+
+
+@pytest.fixture(scope='module')
+def reviewed(tmp_path_factory):
+    import multiprocessing
+    root = tmp_path_factory.mktemp('setups')
+    # spawned, not forked: a forked macOS process aborts when it first imports pyarrow
+    with multiprocessing.get_context('spawn').Pool(WORKERS) as pool:
+        results = pool.map(review_case, [(name, mode, root / f'{name}-{mode}') for name, mode in CASES], chunksize=1)
+    return dict(zip(CASES, results))
+
+
+@pytest.mark.parametrize('name,mode', CASES, ids=[f'{name}-{mode}' for name, mode in CASES])
+def test_every_setup_keeps_every_stream_and_citation_through_to_the_export(name, mode, reviewed):
+    result = reviewed[name, mode]
+    assert 'error' not in result, result.get('error')
+    assert 'final' in result['calls'], result['calls']
+    found = result['losses']
+    expected = {pattern: why for (setup, pattern), why in EXPECTED.items() if setup == name}
     unknown = [loss for loss in found if not any(re.search(p, loss) for p in expected)]
     stale = [p for p in expected if not any(re.search(p, loss) for loss in found)]
-    assert not unknown, f'{setup.name} lost data with no recorded reason (review exited {rc}):\n' + '\n'.join(unknown)
-    assert not stale, f'{setup.name}: these expected losses no longer occur, so remove them from EXPECTED: {stale}'
+    assert not unknown, f'{name} ({mode}) lost data with no recorded reason (review exited {result["rc"]}):\n' + \
+        '\n'.join(unknown)
+    assert not stale, f'{name} ({mode}): these expected losses no longer occur, so remove them from EXPECTED: {stale}'
     if found:
         pytest.xfail('; '.join(sorted(set(expected.values()))) + ': ' + ' | '.join(found))
+
+
+def test_the_corpus_reaches_every_path_it_checks(reviewed):
+    """A check that never runs proves nothing: in each task mode some setup is cut into parts, gets the regional
+    pass, writes tasks, a goal alignment, sensor findings and camera observations."""
+    for mode in MODES:
+        reached = {path for (name, case_mode), result in reviewed.items() if case_mode == mode
+                   for path in result.get('paths') or []}
+        assert reached >= {'parts', 'regional pass', 'tasks', 'goal alignment', 'sensor findings',
+                           'camera observations'}, (mode, sorted(reached))
 
 
 # ---- the check itself catches each kind of loss ----------------------------------------------------------------------
