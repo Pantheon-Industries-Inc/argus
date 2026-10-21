@@ -149,6 +149,7 @@
  "tests/test_sensor_scene.py": 1.3,
  "tests/test_sensor_semantics.py": 0.0,
  "tests/test_sharding.py": 0.0,
+ "tests/test_stream_timeouts.py": 14.0,
  "tests/test_shared_file_writes.py": 2.3,
  "tests/test_shared_sensor_copy.py": 0.4,
  "tests/test_signal_completeness.py": 0.1,

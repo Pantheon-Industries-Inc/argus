@@ -654,7 +654,8 @@ def test_split_refusals_keep_each_dispatch_receipt_in_native_board_download(tmp_
     assert all(row['no_reply_kind'] == 'spend_cap' for row in joined['config']['pieces'][1:])
     if first in ('claimed', 'unknown', 'newer_claimed', 'newer_unknown'):
         assert missing[0]['final_dispatch_outcome'] == ('claimed' if first.endswith('claimed') else 'unverified')
-        assert 'no_reply_kind' not in missing[0]
+        # the part's TimeoutError is our own client giving up, named apart from a provider failure on the board
+        assert missing[0]['no_reply_kind'] == 'client_timeout'
     elif ambiguous or first in ('paid_failed', 'contradicted_refusal'):
         assert 'final_dispatch_outcome' not in missing[0] and 'no_reply_kind' not in missing[0]
     if first in ('paid_failed', 'paid_unknown_cost'):
@@ -671,7 +672,7 @@ def test_split_refusals_keep_each_dispatch_receipt_in_native_board_download(tmp_
     if first != 'paid_reply':
         assert public['_label_failed']['status'] == 'no_part'
         assert len([row for row in public['_label_failed']['parts'] if row.get('no_reply_kind') == 'spend_cap']) == len(skipped)
-    assert 'token=secret' not in json.dumps(public)
+    assert 'token=secret' not in json.dumps(public) and 'client_timeout' not in json.dumps(public)
     assert label_spend(job) == expected_cost
     node = shutil.which('node')
     if not node:

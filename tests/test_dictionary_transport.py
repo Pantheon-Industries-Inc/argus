@@ -64,7 +64,8 @@ def test_dictionary_client_keeps_normal_request_and_usage(monkeypatch, key):
     monkeypatch.setattr(harness.urllib.request, "urlopen", answered)
     response = harness.call_model_once([{"type": "text", "text": "field descriptors"}], "openai/gpt-6-sol",
                                        "low", key, max_tokens=400, timeout=5)
-    assert len(sent) == 1 and sent[0][2] == 5
+    # a caller's short timeout never cuts off a reply: the socket waits as long as a live reply can be silent
+    assert len(sent) == 1 and sent[0][2] == harness.SILENT_CONNECTION_LIMIT_S
     body = sent[0][1]
     assert body["max_completion_tokens"] == 400
     assert body["messages"][0]["content"] == [{"type": "text", "text": "field descriptors"}]
