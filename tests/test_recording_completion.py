@@ -12,6 +12,8 @@ from compare import metrics
 TASK = {'start_s': 1.0, 'end_s': 9.0, 'task': 'stack the cups', 'objects': ['cup'], 'judged_against': 'instruction',
         'success_predicate': 'three cups stacked', 'outcome': 'success_then_undone', 'completed_at_s': None,
         'goal_reached_at_s': 7.5, 'undone_at_s': 8.5, 'undone_by': 'the stack is taken apart', 'note': 'reset'}
+# the same task in a request without an instruction, which can be judged only against its own end state
+OWN = {**TASK, 'judged_against': 'own_end_state'}
 
 
 def test_one_task_is_the_recordings_verdict():
@@ -47,13 +49,13 @@ def test_one_task_open_at_a_cut_is_no_verdict():
 
 def test_a_reply_supplied_completion_is_replaced_and_noted_where_none_was_asked():
     robot = dict(rig='teleop_arms', instruction=False)
-    labels = {'tasks': [TASK], 'completion': {'task_completed': 'failure'}}
+    labels = {'tasks': [OWN], 'completion': {'task_completed': 'failure'}}
     before = copy.deepcopy(labels)
     out = derive_completion(labels, **robot)
     assert labels == before, 'the reply is not changed in place'
     assert out['completion']['task_completed'] == 'success_then_undone'
     assert any(v.startswith('completion:') for v in out['_schema_violations'])
-    clean = derive_completion({'tasks': [TASK, TASK]}, **robot)
+    clean = derive_completion({'tasks': [OWN, OWN]}, **robot)
     assert clean['completion']['from_tasks'] == 2 and '_schema_violations' not in clean
     # labels read again keep their derived completion and gain no note
     assert derive_completion(clean, **robot) == clean
@@ -77,7 +79,7 @@ def test_the_head_camera_is_read_as_it_always_was_except_one_task():
     clip keeps the reply as it is, with no completion added, so it is read task by task exactly as before."""
     one = derive_completion({'tasks': [TASK]}, rig='ego_head', instruction=True)
     assert one['completion']['task_completed'] == 'success_then_undone'
-    for tasks, prompts in (([TASK, TASK], 0), ([], 0), ([TASK], 4)):
+    for tasks, prompts in (([OWN, OWN], 0), ([], 0), ([{**TASK, 'judged_against': 'subtask', 'subtask': 1}], 4)):
         labels = {'tasks': tasks}
         assert derive_completion(labels, rig='ego_head', instruction=False, task_prompts=prompts) == labels
 
