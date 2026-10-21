@@ -31,7 +31,9 @@ One file:
 
 A signal: "name", "dims", and when the dataset gives them "shape" ([16, 16]), "names" (one per value) with
 "names_source" when a declaration beside the values gave them (prepare/value_names.py), or "unnamed": true when nothing
-in the recording or its rig description names its values, "rate_hz" and "source", and "aligned_by" when its placement on the video is assumed, which the page says in its lane: "assumed
+in the recording or its rig description names its values, its "unit" (or "units", one per value) with
+"units_source" when a declaration beside the values gave it, "units_contradicted": true when its readings contradict a
+declared radian unit, or "units_undeclared": true when nothing declares one, "rate_hz" and "source", and "aligned_by" when its placement on the video is assumed, which the page says in its lane: "assumed
 start" from both starts, because no clock was shared (prepare/formats.py mark_assumed), or "row per frame", one row on
 each frame, because a table has as many rows as the video has frames (prepare/formats.py ALIGNED_ROWS). Each signal keeps its own length: one that ends
 before the others has no reading after its last row, and a gap or a stretch before a signal starts is no reading, which
@@ -279,7 +281,8 @@ def signal_doc(meta: dict, a: np.ndarray, t: np.ndarray, stride: int, in_contact
         a = a[:, None]
     d = a.shape[1]
     doc = {"name": meta["name"], "dims": d}
-    for k in ("shape", "names", "names_source", "unnamed", "rate_hz", "source", "aligned_by", "camera_aligned_by"):
+    for k in ("shape", "names", "names_source", "unnamed", "unit", "units", "units_source", "units_undeclared",
+              "units_contradicted", "rate_hz", "source", "aligned_by", "camera_aligned_by"):
         if meta.get(k) is not None:
             doc[k] = meta[k]
     fin = np.isfinite(a)

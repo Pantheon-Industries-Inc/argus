@@ -1142,12 +1142,30 @@ def summary_rows(name: str, a: np.ndarray, ks: list[int], shape=None, names=None
     return rows
 
 
+def unit_words(units, d: int, source=None, undeclared=False, contradicted=False) -> str:
+    """The unit part of a signal's line: ", in rad/s" for one unit, ", in rad, rad, normalized" for one per value (up
+    to PER_VALUE_MAX values), with " from <source>" when a declaration beside the values gave it, ", declared in rad,
+    which its readings contradict" when they do, and ", unit undeclared" when nothing declares one."""
+    if units and len(units) == d:
+        same = len(set(units)) == 1
+        if not same and d > PER_VALUE_MAX:
+            return ", units by value retained in episode metadata"
+        said = units[0] if same else ", ".join(units)
+        if contradicted:
+            return f", declared in {said}, which its readings contradict"
+        return f", in {said}" + (f" from {source}" if source else "")
+    return ", unit undeclared" if undeclared else ""
+
+
 def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=None, rate_hz=None,
              fps=None, aligned_by=None, camera_aligned_by=None, clock_problem=None,
-             source_rows=None, camera_frames=None, unnamed=False, names_source=None) -> str:
+             source_rows=None, camera_frames=None, unnamed=False, names_source=None, units=None,
+             units_source=None, units_undeclared=False, units_contradicted=False) -> str:
     """One line: the signal's name, its shape or value names (with where they were declared, names_source, when a
     description beside the values gave them, prepare/value_names.py), or that its values are unnamed when nothing in
-    the recording or its rig description names them (unnamed), its rate when it is recorded slower than the frames
+    the recording or its rig description names them (unnamed), its unit (unit_words: units, one per value, with
+    units_source where a declaration gave them, flagged when its readings contradict it) or that nothing declares
+    one (units_undeclared), its rate when it is recorded slower than the frames
     (rate_hz below RATE_SLOWER of fps), that it was placed from both starts when the reader had no clock in common
     to place it by (aligned_by, prepare/formats.py mark_assumed) or one row per frame when it has as many rows as the
     video has frames (ALIGNED_ROWS), or tied readings placed within each recorded stamp interval as an assumption
@@ -1168,6 +1186,7 @@ def describe(name: str, a: np.ndarray, shape=None, names=None, rest=None, swing=
                     + (f", {' x '.join(str(int(x)) for x in shape)} shape" if shape and len(shape) > 1 else ""))
         if names_source:
             what += f", names from {names_source}"
+    what += unit_words(units, d, units_source, units_undeclared, units_contradicted)
     if rate_hz and fps and float(rate_hz) < RATE_SLOWER * float(fps):
         rate = reading_text(float(rate_hz))
         what += (f", recorder arrivals at {rate} Hz" if aligned_by == RECORDER_ARRIVAL else

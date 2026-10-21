@@ -2459,6 +2459,34 @@ def degree_evidence(readings, columns) -> list[int] | None:
     return beyond
 
 
+RADIAN_UNITS = {"rad", "radian", "radians"}
+
+
+def radians_contradicted(name: str, a: np.ndarray, meta: dict) -> str | None:
+    """The reader issue sentence when a signal's values declared in radians (its unit or units, whoever declared them)
+    read as only degrees explain, by the rule qualified_state holds a state to: at least half of them, and at least
+    one, beyond one turn (2 pi), and none beyond 720. None otherwise. The declared unit is kept and named as
+    contradicted; it never rescales the readings."""
+    from prepare.value_names import recorded_units
+    a = np.asarray(a, dtype=float)
+    a = a.reshape(len(a), -1) if a.ndim != 2 else a
+    units = recorded_units(meta, a.shape[1]) if len(a) else None
+    columns = [i for i, u in enumerate(units or []) if str(u).strip().lower() in RADIAN_UNITS]
+    if not columns:
+        return None
+    values = np.abs(a[:, columns])
+    values[~np.isfinite(values)] = np.nan
+    if np.isnan(values).all(axis=0).any():
+        return None
+    peak = np.nanmax(values, axis=0)
+    beyond = int(np.sum(peak > 2 * np.pi))
+    if beyond == 0 or 2 * beyond < len(columns) or bool(np.any(peak > 720)):
+        return None
+    return (f"{name} declares {len(columns)} value{'s' if len(columns) != 1 else ''} in radians, but {beyond} read "
+            "beyond one turn (2 pi) and none beyond 720, which only degrees explain; the declared unit is kept and "
+            "named as contradicted, and the readings are not rescaled.")
+
+
 def joint_degrees(readings, names, roles, units, rig) -> dict | None:
     """The joint columns of a joint state (state_layout "joints") that hold degrees, and why: declared as degrees by the
     column metadata or by the names themselves (joint1_deg; units are state_units', which read both), or declared in
@@ -3624,6 +3652,14 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
     for issue in vn.resolve({k: meta[k] for k in keep}, {k: int(np.prod(np.shape(v)[1:])) for k, v in keep.items()},
                             claims):
         add_issue(ctx, **issue)
+    for k, v in keep.items():
+        what = radians_contradicted(k, np.asarray(v[:n]), meta[k])
+        if what:
+            meta[k]["units_contradicted"] = True
+            # a state the reader already found contradicted (qualified_state) keeps that one issue
+            if not any(i.get("kind") == STATE_UNIT_CONTRADICTED and i.get("signal") == k
+                       for i in ctx.get("reader_issues") or []):
+                add_issue(ctx, STATE_UNIT_CONTRADICTED, what, signal=k)
     size = lambda v: int(np.prod(np.shape(v)[1:])) * n * np.asarray(v).dtype.itemsize
     while sum(size(v) for v in keep.values()) + getattr(signals, 'native_table_bytes', 0) > SIGNAL_EPISODE_BYTES:
         k = max((k for k in keep if np.shape(keep[k])[1] > len(SUMMARY_NAMES)), key=lambda k: np.shape(keep[k])[1],
@@ -12935,7 +12971,7 @@ def assign_rig_descriptions(root: Path, items: list[dict]) -> None:
         for f in files:
             if f not in declares:
                 doc = read_description(Path(f))
-                declares[f] = isinstance(doc, (dict, list)) and bool(claims_in(doc, f))
+                declares[f] = isinstance(doc, (dict, list)) and bool(claims_in(doc, f, (), ("names", "units")))
         it["rig_descriptions_naming"] = [f for f in files if declares[f]]
 
 

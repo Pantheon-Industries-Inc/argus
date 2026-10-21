@@ -40,6 +40,24 @@ NAME_KEYS = frozenset({"names", "value_names", "joint_names", "channel_names", "
                        "labels", "columns", "fields"})
 # a key that ends in one of these names the field its first part says (joint_pos_names, joint_pos.names, jointPosNames)
 NAME_SUFFIX = re.compile(r"(?:[_. -]|(?<=[a-z0-9]))(?:value_?|joint_?|channel_?|column_?|element_?)?names$", re.I)
+# a key that ends in unit or units declares the unit of the field its first part says (joint_vel_unit)
+UNIT_KEY = re.compile(r"^(?P<field>.+?)[_. ](?P<key>units?)$", re.I)
+
+
+def unit_value(value):
+    """A declared unit as one string for every value, or a list of one per value; None for anything else (a number,
+    an empty string, a list holding something that is not a unit)."""
+    value = decoded(value)
+    if hasattr(value, "tolist") and not isinstance(value, (str, bytes)):
+        value = value.tolist()
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, (list, tuple)) and value and all(isinstance(_text(u), str) and _text(u).strip()
+                                                          for u in value):
+        return [_text(u).strip() for u in value]
+    return None
+
+
 # keys that only hold what they describe, never part of a field's identity
 CONTAINER_KEYS = frozenset({"properties", "features", "fields", "items", "prefixitems", "definitions", "$defs",
                             "signals", "channels", "topics", "streams", "datasets"})
@@ -112,14 +130,23 @@ def _field_of(key: str) -> str | None:
     return key[:m.start()].rstrip("_.- ") or None
 
 
-def claims_in(doc, source: str, scope=()) -> list[dict]:
+def claims_in(doc, source: str, scope=(), kinds=("names",)) -> list[dict]:
     """Every claim a declaration makes (module docstring), its paths under scope (an MCAP channel's topic, an HDF5
-    group's path)."""
+    group's path): name claims ({"names"}), and with "units" in kinds unit claims too ({"units": one unit for every
+    value, or one per value}), read from a unit or units key of what they describe, a {field}_unit or {field}_units
+    key, or a unit on every entry of a list of named entries."""
     out = []
+    want_units = "units" in kinds
 
     def claim(path, names):
         if names:
             out.append({"path": list(path), "names": names, "source": source})
+
+    def unit_claim(path, value) -> bool:
+        units = unit_value(value)
+        if want_units and units is not None:
+            out.append({"path": list(path), "units": units, "source": source})
+        return units is not None
 
     def walk(x, path, depth):
         x = _text(x)
@@ -130,6 +157,11 @@ def claims_in(doc, source: str, scope=()) -> list[dict]:
                 k = str(_text(k))
                 low = k.lower()
                 v = _text(v)
+                if low in ("unit", "units") and unit_claim(path, v):
+                    continue
+                m = UNIT_KEY.match(k)
+                if m and unit_claim(path + segments(m.group("field")), v):
+                    continue
                 if low in NAME_KEYS:
                     named = parse_names(v, text=True)
                     if named:
@@ -144,6 +176,11 @@ def claims_in(doc, source: str, scope=()) -> list[dict]:
                 here = path if low in CONTAINER_KEYS or low in NAME_KEYS else path + segments(k)
                 if isinstance(v, (list, tuple)):
                     claim(here if low in ("items", "prefixitems") else path + segments(k), parse_names(v))
+                    entries = [_text(e) for e in v]
+                    if len(entries) > 1 and all(isinstance(e, dict) and isinstance(_text(e.get("unit")), str)
+                                                for e in entries):
+                        unit_claim(here if low in ("items", "prefixitems") else path + segments(k),
+                                   [_text(e["unit"]) for e in entries])
                 walk(v, here, depth + 1)
         elif isinstance(x, (list, tuple)):
             for v in list(x)[:WALK_ITEMS]:
@@ -258,7 +295,7 @@ def description_claims() -> tuple[list[dict], list[str]]:
             label = Path(path).relative_to(root).as_posix() if root and root in Path(path).parents else Path(path).name
             # below every claim the recording makes itself (rank 0), and nearer the recording above farther
             rank = len(Path(path).parents) - DESCRIPTION_RANK_FLOOR
-            claims += [{**c, "rank": rank} for c in claims_in(doc, label)]
+            claims += [{**c, "rank": rank} for c in claims_in(doc, label, kinds=("names", "units"))]
         state["claims"] = claims
     return state["claims"], [Path(p).name for p in state["paths"]]
 
@@ -280,7 +317,7 @@ def mcap_claims(path: Path) -> list[dict]:
                 meta = {k: decoded(v) for k, v in (ch.metadata or {}).items()}
                 if meta:
                     out += [{**c, "channel": c["path"] == list(segments(ch.topic))}
-                            for c in claims_in(meta, f"{name} channel metadata", (ch.topic,))]
+                            for c in claims_in(meta, f"{name} channel metadata", (ch.topic,), ("names", "units"))]
                 schema = summary.schemas.get(ch.schema_id)
                 if schema is not None and schema.encoding == "jsonschema" and schema.data:
                     try:
@@ -289,19 +326,19 @@ def mcap_claims(path: Path) -> list[dict]:
                         doc = None
                     if isinstance(doc, dict):
                         out += [{**c, "channel": c["path"] == list(segments(ch.topic))}
-                                for c in claims_in(doc, f"{name} schema {schema.name}", (ch.topic,))]
+                                for c in claims_in(doc, f"{name} schema {schema.name}", (ch.topic,), ("names", "units"))]
             if summary.metadata_indexes:
                 for record in reader.iter_metadata():
                     doc = {k: decoded(v) for k, v in dict(record.metadata).items()}
                     # under the record's name (a record named for a topic) and as a description of its own
-                    out += claims_in({record.name: doc}, f"{name} metadata {record.name}")
-                    out += claims_in(doc, f"{name} metadata {record.name}")
+                    out += claims_in({record.name: doc}, f"{name} metadata {record.name}", (), ("names", "units"))
+                    out += claims_in(doc, f"{name} metadata {record.name}", (), ("names", "units"))
             if summary.attachment_indexes:
                 for att in reader.iter_attachments():
                     if Path(att.name).suffix.lower() in DESCRIPTION_SUFFIXES and len(att.data) <= DESCRIPTION_BYTES:
                         doc = decoded(bytes(att.data).decode("utf-8", "replace"))
                         if isinstance(doc, (dict, list)):
-                            out += claims_in(doc, f"{name} attachment {att.name}")
+                            out += claims_in(doc, f"{name} attachment {att.name}", (), ("names", "units"))
     except Exception:  # noqa: BLE001 - the mcap reader on upload bytes raises many types; the claims before stay
         pass
     return out
@@ -324,7 +361,7 @@ def h5_claims(f, paths) -> list[dict]:
             continue
         attrs = {k: decoded(v) for k, v in attribute_values(obj)}
         if attrs:
-            out += claims_in(attrs, f"HDF5 attributes of {g}", (g,))
+            out += claims_in(attrs, f"HDF5 attributes of {g}", (g,), ("names", "units"))
     return out
 
 
@@ -348,9 +385,6 @@ def dataset_names(ds, width: int) -> list[str] | None:
                 if len(flat) == width and all(isinstance(_text(x), str) for x in own):
                     return flat
     return None
-
-
-UNIT_KEY = re.compile(r"^(?P<field>.+?)[_. ](?P<key>units?)$", re.I)
 
 
 def _declared_units(value, width: int) -> list[str] | None:
@@ -428,14 +462,61 @@ def _channel_topic(meta: dict) -> str | None:
     return source[len("MCAP channel "):] if source.startswith("MCAP channel ") else None
 
 
+def _claim_values(claim, width: int):
+    """One entry per value from a claim, or None when it does not give one per value: its names, or its units (one
+    unit given for every value is repeated)."""
+    if "names" in claim:
+        return list(claim["names"]) if len(claim["names"]) == width else None
+    units = claim.get("units")
+    if isinstance(units, str):
+        return [units] * width
+    return list(units) if isinstance(units, list) and len(units) == width else None
+
+
+def _pick(name: str, m: dict, width: int, claims: list[dict], widths: dict, by_topic: dict):
+    """(the values the best matching claims give, their sources), ("conflict", their sources) when they disagree, or
+    None: the claims that match the most segments of name, the nearest of those (rank), and a claim on name's MCAP
+    channel as a whole only when name is that channel's one array of its width."""
+    segs = segments(name)
+    found = [(c, _matches(tuple(c["path"]), segs)) for c in claims if not c.get("channel")]
+    found = [(c, k) for c, k in found if k > 0 and _claim_values(c, width) is not None]
+    if not found:
+        topic = _channel_topic(m)
+        same = [n for n in by_topic.get(topic, []) if widths.get(n) == width] if topic else []
+        if topic and same == [name]:
+            found = [(c, 1) for c in claims if c.get("channel") and tuple(c["path"]) == segments(topic)
+                     and _claim_values(c, width) is not None]
+    if not found:
+        return None
+    best = max(k for _, k in found)
+    found = [c for c, k in found if k == best]
+    near = max(c.get("rank", 0) for c in found)
+    found = [c for c in found if c.get("rank", 0) == near]
+    sources = sorted({c["source"] for c in found})
+    values = {tuple(_claim_values(c, width)) for c in found}
+    return ("conflict", sources) if len(values) > 1 else (list(values.pop()), sources)
+
+
+def recorded_units(m: dict, width: int) -> list | None:
+    """One unit per value from what a reader kept with the values (its unit or units metadata), or None."""
+    for key in ("units", "unit"):
+        value = unit_value(m.get(key)) if m.get(key) is not None else None
+        if isinstance(value, str):
+            return [value] * width
+        if isinstance(value, list) and len(value) == width:
+            return value
+    return None
+
+
 def resolve(metas: dict, widths: dict, claims: list[dict]) -> list[dict]:
-    """Attach declared names to every array of metas ({name: its meta}, widths {name: values per frame}) that has none:
-    names and names_source (where the names were declared). Returns the issues (add_issue's arguments) for arrays that
-    claims name differently."""
+    """Attach what claims declare to every array of metas ({name: its meta}, widths {name: values per frame}): names
+    and names_source (where they were declared) to an array of two or more values a reader left unnamed, and a unit
+    (unit, or units when its values differ) and units_source to an array a reader kept no unit for; an array that
+    nothing gives a unit is marked units_undeclared. Returns the issues (add_issue's arguments) for arrays that claims
+    name, or give units, differently."""
     issues = []
-    if not claims:
-        return issues
-    field_claims = [c for c in claims if not c.get("channel")]
+    name_claims = [c for c in claims if "names" in c]
+    unit_claims = [c for c in claims if "units" in c]
     by_topic: dict[str, list[str]] = {}
     for name, m in metas.items():
         topic = _channel_topic(m)
@@ -443,30 +524,28 @@ def resolve(metas: dict, widths: dict, claims: list[dict]) -> list[dict]:
             by_topic.setdefault(topic, []).append(name)
     for name, m in metas.items():
         width = widths.get(name) or 0
-        if width < 2 or (m.get("names") and len(m["names"]) == width):
+        if width >= 2 and not (m.get("names") and len(m["names"]) == width) and name_claims:
+            got = _pick(name, m, width, name_claims, widths, by_topic)
+            if got and got[0] == "conflict":
+                issues.append({"kind": "value_names_conflict", "signal": name,
+                               "what": f"{name}: {' and '.join(got[1])} name its {width} values differently, so its "
+                                       "values keep their order without names"})
+            elif got:
+                m["names"], m["names_source"] = got[0], ", ".join(got[1])
+        if width < 1 or recorded_units(m, width) is not None:
             continue
-        segs = segments(name)
-        found = [(c, _matches(tuple(c["path"]), segs)) for c in field_claims if len(c["names"]) == width]
-        found = [(c, k) for c, k in found if k > 0]
-        if not found:
-            topic = _channel_topic(m)
-            same = [n for n in by_topic.get(topic, []) if widths.get(n) == width] if topic else []
-            if topic and same == [name]:
-                found = [(c, 1) for c in claims if c.get("channel") and len(c["names"]) == width
-                         and tuple(c["path"]) == segments(topic)]
-        if not found:
+        got = _pick(name, m, width, unit_claims, widths, by_topic) if unit_claims else None
+        if got and got[0] == "conflict":
+            issues.append({"kind": "value_units_conflict", "signal": name,
+                           "what": f"{name}: {' and '.join(got[1])} give its values different units, so no unit is "
+                                   "used"})
+        elif got:
+            units = got[0]
+            if len(set(units)) == 1:
+                m["unit"] = units[0]
+            else:
+                m["units"] = units
+            m["units_source"] = ", ".join(got[1])
             continue
-        best = max(k for _, k in found)
-        found = [c for c, k in found if k == best]
-        near = max(c.get("rank", 0) for c in found)
-        found = [c for c in found if c.get("rank", 0) == near]
-        lists = {tuple(c["names"]) for c in found}
-        if len(lists) > 1:
-            sources = sorted({c["source"] for c in found})
-            issues.append({"kind": "value_names_conflict", "signal": name,
-                           "what": f"{name}: {' and '.join(sources)} name its {width} values differently, so its "
-                                   "values keep their order without names"})
-            continue
-        m["names"] = list(found[0]["names"])
-        m["names_source"] = ", ".join(sorted({c["source"] for c in found}))
+        m["units_undeclared"] = True
     return issues

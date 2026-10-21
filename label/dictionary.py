@@ -172,7 +172,7 @@ def inventory(episodes: list[Path]) -> dict:
         descriptor = {"name": str(name), "kind": kind, "shape": shape, "dtype": dtype,
                       "names": meta.get("names") or [], "rate_hz": meta.get("rate_hz"),
                       "source": _relative(meta.get("source") or (file or "context.json") + "#" + context_path, ep)}
-        descriptor.update({k: meta[k] for k in ('unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description', 'action_semantics', 'recorded_role', 'names_source') if k in meta})
+        descriptor.update({k: meta[k] for k in ('unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description', 'action_semantics', 'recorded_role', 'names_source', 'units_source', 'units_contradicted') if k in meta})
         ident = _digest(descriptor)
         field = fields.setdefault(ident, {"id": ident, **descriptor, "episodes": [], "bindings": [], "limitations": []})
         if ep.name not in field["episodes"]:
@@ -353,7 +353,7 @@ def inventory(episodes: list[Path]) -> dict:
 
 def _request(inventory: dict):
     """Only descriptors and five numeric aggregates reach the text model."""
-    keys = ("id", "name", "kind", "shape", "dtype", "names", "names_source", "rate_hz", "source", "episodes", "limitations", 'unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description', 'action_semantics', 'recorded_role')
+    keys = ("id", "name", "kind", "shape", "dtype", "names", "names_source", "units_source", "units_contradicted", "rate_hz", "source", "episodes", "limitations", 'unit', 'units', 'response_direction', 'calibration', 'coordinate_frame', 'sensor_type', 'description', 'action_semantics', 'recorded_role')
     fields = [{key: field[key] for key in keys if key in field} for field in inventory["fields"]]
     for descriptor, field in zip(fields, inventory["fields"]):
         if "summary" in field:

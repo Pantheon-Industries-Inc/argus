@@ -135,8 +135,8 @@ def test_a_yam_recording_whose_station_names_no_joint_keeps_its_arrays_marked_un
     assert signals["/yam_leader_left/joint_pos joint_pos"]["unnamed"] is True
     assert "unnamed" not in signals["/yam_left/joint_state gripper_pos"]          # one value is named by its field
     assert not any(s.get("names_source") for s in signals.values())
-    assert "/yam_left/joint_state joint_pos (6 unnamed values):" in prompt
-    assert "/yam_leader_left/joint_pos joint_pos (7 unnamed values):" in prompt
+    assert "/yam_left/joint_state joint_pos (6 unnamed values, unit undeclared):" in prompt
+    assert "/yam_leader_left/joint_pos joint_pos (7 unnamed values, unit undeclared):" in prompt
     assert not any("station.yaml" in m for m in report["missing"]), report["missing"]
 
 
@@ -156,7 +156,7 @@ def test_a_rig_description_beside_the_recording_names_exactly_the_arrays_it_name
     assert signals["/yam_right/joint_state joint_pos"]["unnamed"] is True
     assert signals["/yam_left/joint_state joint_vel"]["unnamed"] is True
     assert ("/yam_left/joint_state joint_pos (6 values (waist, shoulder, elbow, wrist_1, wrist_2, wrist_3), names "
-            "from episode_125625_df6f654c/rig.yaml)") in prompt
+            "from episode_125625_df6f654c/rig.yaml, unit undeclared)") in prompt
 
 
 def test_an_mcap_names_its_values_in_channel_metadata_a_metadata_record_or_its_json_schema(tmp_path):
@@ -304,8 +304,9 @@ def test_a_lerobot_info_json_names_a_column_its_reader_left_unnamed():
     issues = vn.resolve(metas, {"observation.state": 3, "observation.effort": 3},
                         vn.claims_in(info, "meta/info.json"))
     assert not issues
-    assert metas["observation.state"] == {"names": ["x", "y", "z"], "names_source": "meta/info.json"}
-    assert metas["observation.effort"] == {}
+    assert metas["observation.state"] == {"names": ["x", "y", "z"], "names_source": "meta/info.json",
+                                          "units_undeclared": True}
+    assert metas["observation.effort"] == {"units_undeclared": True}
 
 
 def test_claims_that_disagree_name_nothing_and_say_so():
@@ -315,7 +316,7 @@ def test_claims_that_disagree_name_nothing_and_say_so():
     b = vn.claims_in({"joint_pos": ["b1", "b2"]}, "two.yaml")
     metas = {"/arm/state joint_pos": {}}
     issues = vn.resolve(metas, {"/arm/state joint_pos": 2}, a + b)
-    assert metas["/arm/state joint_pos"] == {} and issues[0]["kind"] == "value_names_conflict"
+    assert "names" not in metas["/arm/state joint_pos"] and issues[0]["kind"] == "value_names_conflict"
     specific = vn.claims_in({"arm/state": {"joint_pos": ["s1", "s2"]}}, "three.yaml")
     metas = {"/arm/state joint_pos": {}}
     assert not vn.resolve(metas, {"/arm/state joint_pos": 2}, a + b + specific)

@@ -54,6 +54,7 @@
  "tests/test_dedicated_camera_recovery.py": 1.7,
  "tests/test_depth_input_contract.py": 0.4,
  "tests/test_derived_measurements.py": 0.0,
+ "tests/test_declared_units.py": 1.5,
  "tests/test_dictionary.py": 0.6,
  "tests/test_dictionary_board.py": 3.0,
  "tests/test_dictionary_roles.py": 0.1,

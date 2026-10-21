@@ -4505,6 +4505,13 @@ function snWhat(s) {
   const un = s.unnamed && s.dims > 1 ? ' unnamed' : '';
   let w = s.act ? `${sh}${un} values, drawn as their activity` : `${sh}${un} ${s.dims === 1 ? 'value' : 'values'}`;
   if (s.names_source) w += `, names from ${s.names_source}`;
+  // its unit, as the prompt says it (label/signals.py unit_words)
+  const units = s.units && s.units.length === s.dims ? s.units : s.unit ? Array(s.dims).fill(s.unit) : null;
+  if (units) {
+    const said = units.every(u => u === units[0]) ? units[0] : units.join(', ');
+    w += s.units_contradicted ? `, declared in ${said}, which its readings contradict`
+      : `, in ${said}${s.units_source ? ` from ${s.units_source}` : ''}`;
+  } else if (s.units_undeclared) w += ', unit undeclared';
   if (s.touch || s.rests_and_rises) {
     if (s.direction === 'down') w += ', falls when active';
     else if (s.direction === 'up') w += ', rises when active';
