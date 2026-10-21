@@ -1,7 +1,7 @@
 """A model reply that holds the work any request asks for (label/completeness.py), for fixtures whose subject is
-something else: a timeline step over the footage, the one task's outcome, and the one activity with its outcome that
-a session or the head camera asks for instead. A fixture that sends only a task summary sends a hollow reply, which
-is never a finished annotation."""
+something else: a timeline step over the footage and its one task with its outcome. Like a reply in the tasks format
+(label/prompts.py), it writes no completion; the harness derives one from the task. A fixture that sends only a task
+summary sends a hollow reply, which is never a finished annotation."""
 import json
 import re
 
@@ -24,7 +24,6 @@ def labels(summary='The hand reaches.', *, request=None, **fields):
     return {'task_summary': summary,
             'timeline': [{'start_s': lo, 'end_s': hi, 'arm': 'right', 'action': 'reach', 'contribution': 'advancing',
                           'progress': 1.0}],
-            'completion': {'task_completed': 'success'},
             'tasks': [{'start_s': lo, 'end_s': hi, 'task': summary, 'objects': [], 'outcome': 'success'}],
             **fields}
 

@@ -1,5 +1,5 @@
-"""The shared instructions of the tasks format (label/prompts.py fixed_instructions with tasks): every recording is a
-list of tasks with an outcome each, and nothing the episode mode asked of a recording with one task is lost."""
+"""The shared instructions (label/prompts.py fixed_instructions): every recording is a list of tasks with an outcome
+each, and nothing the episode mode asked of a recording with one task is lost."""
 import re
 
 import pytest
@@ -15,7 +15,7 @@ def flat(text: str) -> str:
 
 
 def tasks_text(rig, given, recorded):
-    return prompts.fixed_instructions(rig, has_instruction=given, recorded=recorded, tasks=True)
+    return prompts.fixed_instructions(rig, has_instruction=given, recorded=recorded)
 
 
 # The sentences of the episode mode's instruction rules that the tasks format keeps word for word, so a recording of
@@ -68,7 +68,7 @@ def test_every_variant_asks_for_tasks_with_their_own_outcome_and_no_completion(r
     for sentence in PINNED_TASKS:
         assert s.count(sentence) == 1, sentence
     assert 'session' not in s.lower(), 'the task mode no longer shapes the text'
-    assert prompts.requested_outcome(rig, has_instruction=given, tasks=True) == 'tasks'
+    assert prompts.requested_outcome(rig, has_instruction=given) == 'tasks'
 
 
 @pytest.mark.parametrize('rig,recorded', [(r, rec) for r in RIGS[:2] for rec in (True, False)])
@@ -76,7 +76,6 @@ def test_a_robot_recording_with_an_instruction_keeps_every_episode_mode_clause(r
     s = flat(tasks_text(rig, True, recorded))
     for sentence in PINNED_INSTRUCTION:
         assert sentence in s, sentence
-        assert sentence in flat(prompts.INSTRUCTION_RULES) or sentence.startswith('cannot sit'), sentence
     assert prompts._INSTRUCTION_CLAUSES in tasks_text(rig, True, recorded)
     # the instruction is checked against the whole list of tasks, and a cycle is graded repeat by repeat
     assert '"goal_alignment"' in s and 'Every recording with an instruction has at least one task judged against it.' in s
@@ -98,7 +97,7 @@ def test_a_robot_recording_without_an_instruction_names_each_task_by_its_end_sta
 @pytest.mark.parametrize('recorded', [True, False])
 def test_the_head_camera_has_one_annotation_rule_whatever_the_source_declares(recorded):
     s = flat(tasks_text('ego_head', True, recorded))
-    assert flat(prompts.EGO_TASK_ANNOTATION_RULES) in s
+    assert flat(prompts.EGO_ANNOTATION_RULES) in s
     assert 'its tasks are the steps of that goal' not in s and 'independent activities' not in s
     assert 'is not a missing or invented task' in s
     assert 'demonstrator' not in s and 'object between the jaws' not in s
@@ -115,5 +114,3 @@ def test_the_rigs_words_survive_the_tasks_format(rig):
         assert 'It is NOT when the arms finish moving.' in text and 'by ONE arm' in text
     if rig == 'ego_head':
         assert 'by ONE hand' in text and 'hands_visible' in text
-    # the old path is unchanged until the switch
-    assert prompts.fixed_instructions(rig) != text

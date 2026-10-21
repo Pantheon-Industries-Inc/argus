@@ -1153,7 +1153,7 @@ def test_independent_request_goals_do_not_become_episode_tasks_or_progress(tmp_p
     original = copy.deepcopy(records)
     stitched = pieces.stitch(src, list(zip(contexts, records)))
     labels = stitched['labels']
-    assert stitched['annotation_policy']['task_mode'] == 'episode'
+    assert 'task_mode' not in stitched['annotation_policy']
     assert stitched['given_prompt'] == json.loads((src / 'context.json').read_text())['instruction']
     assert labels['tasks'] == [] and labels['completion']['task_completed'] == 'unclear'
     assert labels['progress_scope'] == 'request_parts'
@@ -1192,8 +1192,8 @@ def test_stitch_preserves_session_policy_and_segmented_jaw_receipts(tmp_path, mo
     _, src, parts = _three_parts(tmp_path, monkeypatch)
     path = src / 'context.json'
     parent = json.loads(path.read_text())
-    parent['task_mode'] = 'session'
-    parent['annotation_policy'] = policy.resolve(parent, dataset_note='Assembly session.')
+    # a job saved in the session mode, before every recording was labelled as a list of tasks, resumed
+    parent['annotation_policy'] = policy.resolve(parent, task_mode='session', dataset_note='Assembly session.')
     path.write_text(json.dumps(parent))
     contexts = [json.loads((part / 'context.json').read_text()) for part in parts]
     measured = jaws.analyse_frames(marker_frames, np.arange(18) * .04, DECLARATION)

@@ -263,8 +263,9 @@ def test_one_contribution_policy_reaches_runtime_requests(rig, evidence, given, 
 
 @pytest.mark.parametrize("recorded", [False, True])
 @pytest.mark.parametrize("declaration", ["episode", "source_session", "legacy_session", "explicit_session"])
-def test_ego_session_keeps_annotation_claims_without_a_global_goal(recorded, declaration):
-    """Verify scope in assembled requests; metadata claims do not establish observed activities."""
+def test_ego_annotation_claims_reach_one_prompt_whatever_the_source_declares(recorded, declaration):
+    """Verify scope in assembled requests; metadata claims do not establish observed activities, and a declared or
+    saved task mode never changes the text."""
     from PIL import Image
 
     ep, pl = case_ego_annotated_tracks()
@@ -292,25 +293,18 @@ def test_ego_session_keeps_annotation_claims_without_a_global_goal(recorded, dec
     assert grids == 1 and image_bytes > 0
     assert any(part["type"] == "image_url" for part in content)
     assert me.is_recorded(ep, pl) is recorded
-    assert prompts.EGO_SCHEMA in fixed
-    assert prompts.SESSION_RULES not in fixed
+    assert prompts.EGO_SCHEMA in fixed and prompts.task_rules("ego_head") in fixed
     assert "goal_alignment" in fixed and "instruction_mismatch" in fixed
     assert "Each failed\n  attempt is a key_event with outcome failure." in fixed
     assert "Every failure and every\n  wasteful stretch in the timeline belongs to exactly one operator mistake" in fixed
     assert "0.0-4.0s  chop the carrot" in episode
     assert "4.0-10.0s  wipe the work surface  (marked unsuccessful)" in episode
     assert "Publisher claims on the recording clock." in episode
-    if declaration == "episode":
-        assert prompts.EGO_ANNOTATION_RULES in fixed
-        assert prompts.EGO_SESSION_ANNOTATION_RULES not in fixed
-        assert "the clip is a task episode: its tasks are the steps of that goal" in fixed
-        assert '  goal: "chop the carrot"' in episode
-    else:
-        assert "the clip is a task episode: its tasks are the steps of that goal" not in fixed
-        assert "each activity's own end-state" in fixed
-        assert "independent activities" in fixed
-        assert '  recording context goal: "chop the carrot"' in episode
-        assert '  goal: "chop the carrot"' not in episode
+    assert prompts.EGO_ANNOTATION_RULES in fixed
+    assert "the clip is a task episode: its tasks are the steps of that goal" not in fixed
+    assert "independent activities" not in fixed
+    assert "it is judged by the task or tasks that carry it out" in fixed
+    assert '  goal: "chop the carrot"' in episode and "recording context goal" not in episode
 
 
 def _add(**ctx):
@@ -966,7 +960,7 @@ def test_sensor_contract_follows_visual_rules_without_replacing_them(case):
 
 
 @pytest.mark.parametrize("rig", ["teleop_arms", "handheld_gripper", "ego_head"])
-@pytest.mark.parametrize("kw", [{}, {"recorded": False}, {"sessions": True}, {"has_instruction": False}])
+@pytest.mark.parametrize("kw", [{}, {"recorded": False}, {"has_instruction": False}])
 def test_every_prompt_defines_a_subgoal_once_as_a_lasting_change_and_keeps_failure_kinds(rig, kw):
     s = " ".join(prompts.fixed_instructions(rig, **kw).split())
     assert s.count("A subgoal is a lasting step") == 1
@@ -980,25 +974,22 @@ def test_every_prompt_defines_a_subgoal_once_as_a_lasting_change_and_keeps_failu
 
 
 @pytest.mark.parametrize('rig', ['teleop_arms', 'handheld_gripper'])
-@pytest.mark.parametrize('recorded', [True, False])
-def test_a_session_with_an_instruction_is_checked_against_it(rig, recorded):
-    # whether the recording is checked against its instruction follows from having one, never from the task mode
-    with_one = prompts.fixed_instructions(rig, has_instruction=True, recorded=recorded, sessions=True)
-    without = prompts.fixed_instructions(rig, has_instruction=False, recorded=recorded, sessions=True)
-    assert "ABOUT THE RECORDING'S INSTRUCTION" in with_one and '"goal_alignment"' in with_one
-    assert 'instruction_mismatch data issue' in with_one and 'Each repeat of a cyclical instruction' in with_one
-    # the clauses about manner, initial state, quantity and object identity are the episode's own, word for word
-    assert prompts._INSTRUCTION_CLAUSES in with_one and prompts._INSTRUCTION_CLAUSES in prompts.INSTRUCTION_RULES
-    assert "ABOUT THE RECORDING'S INSTRUCTION" not in without
-    episode = prompts.fixed_instructions(rig, has_instruction=True, recorded=recorded)
-    assert prompts.INSTRUCTION_RULES in episode and "ABOUT THE RECORDING'S INSTRUCTION" not in episode
+@pytest.mark.parametrize('declared', ['episode', 'session'])
+def test_a_recording_with_an_instruction_is_checked_against_it_whatever_the_source_declares(rig, declared):
+    # whether the recording is checked against its instruction follows from having one, never from a task mode
+    ep, pl = (case_handheld_pose if rig == 'handheld_gripper' else case_teleop_joints)()
+    ep['context'].update(instruction='Stack the cups.', task_mode=declared)
+    fixed, episode = me.build_prompt(ep, pl, cell_w=64, cell_h=36)
+    assert prompts.INSTRUCTION_RULES in fixed and prompts._INSTRUCTION_CLAUSES in fixed
+    assert "ABOUT THE RECORDING'S INSTRUCTION" not in fixed and 'THE TASK FOR THIS EPISODE WAS GIVEN TO YOU' in episode
+    ep['context']['instruction'] = ''
+    fixed, _ = me.build_prompt(ep, pl, cell_w=64, cell_h=36)
+    assert prompts.NO_INSTRUCTION_RULES in fixed and prompts.INSTRUCTION_RULES not in fixed
 
 
-@pytest.mark.parametrize('rig', ['teleop_arms', 'handheld_gripper'])
-def test_in_a_session_each_repeat_of_a_cycle_is_its_own_task(rig):
-    from label import prompts
-    rules = ' '.join(prompts.session_rules(rig).split())
+def test_each_repeat_of_a_cycle_is_its_own_task_and_stages_are_one():
+    rules = ' '.join(prompts.TASK_RULES.split())
     assert ('starts the same unit of work again after its end-state was reached: in a cycle, where the objects are '
             'reset and the same work repeats, each repeat is its own task, judged on its own.') in rules
-    assert ('Stages toward one end state are one task with subgoals, never separate tasks: building a stack in two '
-            'halves, or packing a box item by item, is one task.') in rules
+    assert ('stages toward one end state (building a stack in two halves, or packing a box item by item, is one task '
+            'with subgoals)') in rules

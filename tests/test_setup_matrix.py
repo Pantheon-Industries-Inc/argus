@@ -4,9 +4,9 @@ Round after round of QA found data dropped silently: a camera or signal stream, 
 the other findings list, streams that share a name. Each was fixed where it was found. This test catches the class:
 a tiny recording of every setup the README lists is generated here, never downloaded, and run through `python -m
 review` (prepare, checks, clips, the request build, a reply, binding, the board build) and the JSON Lines export. One
-recording is labelled in parts and stitched, and one glove gets the separate regional pass. Every setup runs in episode
-mode and in session mode, where each task's outcome and the instruction comparison must also reach the board and the
-export. The reviews run side by side in a few spawned workers (review_case). The model is offline
+recording is labelled in parts and stitched, and one glove gets the separate regional pass. Every reply lists its
+tasks, and each task's outcome and the instruction comparison must also reach the board and the export. The reviews
+run side by side in a few spawned workers (review_case). The model is offline
 (OfflineModel): each reply, for every part and every pass, cites every camera, signal and inspected evidence id its
 request offered, in every list the schema allows.
 
@@ -521,7 +521,7 @@ class OfflineModel:
             reply['camera_observations'] = [{'view': v, 'content': 'scene', 'evidence': f'offline view {v}'}
                                             for v in views]
         if '"tasks": [' in whole:
-            # a session (or a head camera's activities): two tasks, each with its own outcome
+            # two tasks, each with its own outcome, so the recording has no single verdict
             half = round(end / 2, 3)
             reply['tasks'] = [{'start_s': a, 'end_s': b, 'task': f'{self.tag("tasks")}: move the object',
                                'objects': ['object'], 'outcome': outcome, 'success_predicate': 'the object is moved',
@@ -545,7 +545,7 @@ class OfflineModel:
 
 # ---- running review ----------------------------------------------------------------------------------------------------
 
-def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch, mode: str = 'episode') -> int:
+def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch) -> int:
     """python -m review on the fixture, as a person runs it, with the model answered offline. The checks and clips run
     as the child processes review starts; the dry run and the label run are the harness's own main, in this process,
     so they reach the offline model."""
@@ -582,8 +582,7 @@ def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch, mode: 
             return saved
         monkeypatch.setattr(policy, 'persist', shorter_parts)
     monkeypatch.setattr(sys, 'argv', ['review', '--data', str(setup.data), '--rig', setup.rig, '--out', str(job),
-                                      '--concurrency', '1', '--jobs', '1', '--cap', '20', '--max-tokens', '4000',
-                                      '--task-mode', mode])
+                                      '--concurrency', '1', '--jobs', '1', '--cap', '20', '--max-tokens', '4000'])
     return review.main()
 
 
@@ -1045,14 +1044,13 @@ def losses(setup: Setup, job: Path) -> list:
 EXPECTED = {}
 
 
-MODES = ('episode', 'session')
-CASES = [(build.__name__, mode) for build in SETUPS for mode in MODES]
+CASES = [build.__name__ for build in SETUPS]
 WORKERS = 3     # reviews run side by side; each also starts its checks and clips as child processes
 
 
 def review_case(case) -> dict:
-    """One setup reviewed in one task mode, in a worker process: the setup's losses, or the error that stopped it."""
-    name, mode, root = case
+    """One setup reviewed, in a worker process: the setup's losses, or the error that stopped it."""
+    name, root = case
     os.environ['ARGUS_READER_ISOLATION'] = '0'       # as conftest.py sets for a test in this process
     from label import harness
     harness.AUTO_RESEND_DELAYS_S = (0.0,) * len(harness.AUTO_RESEND_DELAYS_S)
@@ -1061,7 +1059,7 @@ def review_case(case) -> dict:
         setup = globals()[name](root / 'source')
         model = OfflineModel()
         model.fault = setup.fault
-        rc = run_review(setup, root / 'job', model, patch, mode)
+        rc = run_review(setup, root / 'job', model, patch)
         return {'rc': rc, 'calls': model.calls, 'losses': losses(setup, root / 'job'),
                 'paths': sorted(paths_reached(root / 'job', model)), 'untruths': request_untruths(root / 'job')}
     except BaseException:  # noqa: BLE001 - reported by the case's own test
@@ -1106,22 +1104,22 @@ def reviewed(tmp_path_factory):
     root = tmp_path_factory.mktemp('setups')
     # spawned, not forked: a forked macOS process aborts when it first imports pyarrow
     with multiprocessing.get_context('spawn').Pool(WORKERS) as pool:
-        results = pool.map(review_case, [(name, mode, root / f'{name}-{mode}') for name, mode in CASES], chunksize=1)
+        results = pool.map(review_case, [(name, root / name) for name in CASES], chunksize=1)
     return dict(zip(CASES, results))
 
 
-@pytest.mark.parametrize('name,mode', CASES, ids=[f'{name}-{mode}' for name, mode in CASES])
-def test_every_setup_keeps_every_stream_and_citation_through_to_the_export(name, mode, reviewed):
-    result = reviewed[name, mode]
+@pytest.mark.parametrize('name', CASES)
+def test_every_setup_keeps_every_stream_and_citation_through_to_the_export(name, reviewed):
+    result = reviewed[name]
     assert 'error' not in result, result.get('error')
     assert 'final' in result['calls'], result['calls']
     found = result['losses']
     expected = {pattern: why for (setup, pattern), why in EXPECTED.items() if setup == name}
     unknown = [loss for loss in found if not any(re.search(p, loss) for p in expected)]
     stale = [p for p in expected if not any(re.search(p, loss) for loss in found)]
-    assert not unknown, f'{name} ({mode}) lost data with no recorded reason (review exited {result["rc"]}):\n' + \
+    assert not unknown, f'{name} lost data with no recorded reason (review exited {result["rc"]}):\n' + \
         '\n'.join(unknown)
-    assert not stale, f'{name} ({mode}): these expected losses no longer occur, so remove them from EXPECTED: {stale}'
+    assert not stale, f'{name}: these expected losses no longer occur, so remove them from EXPECTED: {stale}'
     if found:
         pytest.xfail('; '.join(sorted(set(expected.values()))) + ': ' + ' | '.join(found))
 
@@ -1137,15 +1135,13 @@ def test_every_setups_request_states_only_what_its_recording_establishes(name, m
 
 
 def test_the_corpus_reaches_every_path_it_checks(reviewed):
-    """A check that never runs proves nothing: in each task mode some setup is cut into parts, gets the regional
-    pass, writes tasks, a goal alignment, sensor findings and camera observations, has an issue set aside at a cut,
-    and has a part that gave no labels for each kind of failure."""
-    for mode in MODES:
-        reached = {path for (name, case_mode), result in reviewed.items() if case_mode == mode
-                   for path in result.get('paths') or []}
-        assert reached >= {'parts', 'regional pass', 'tasks', 'goal alignment', 'sensor findings',
-                           'camera observations', 'issue set aside at a cut', 'part without labels (error)',
-                           'part without labels (cutoff)', 'part without labels (rejected)'}, (mode, sorted(reached))
+    """A check that never runs proves nothing: some setup is cut into parts, gets the regional pass, writes tasks, a
+    goal alignment, sensor findings and camera observations, has an issue set aside at a cut, and has a part that gave
+    no labels for each kind of failure."""
+    reached = {path for result in reviewed.values() for path in result.get('paths') or []}
+    assert reached >= {'parts', 'regional pass', 'tasks', 'goal alignment', 'sensor findings',
+                       'camera observations', 'issue set aside at a cut', 'part without labels (error)',
+                       'part without labels (cutoff)', 'part without labels (rejected)'}, sorted(reached)
 
 
 # ---- the check itself catches each kind of loss ----------------------------------------------------------------------

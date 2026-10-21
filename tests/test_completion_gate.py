@@ -39,6 +39,8 @@ def reply(timeline=((0.0, 30.0), (30.0, 60.0)), **fields):
 
 
 SUCCESS = {'completion': {'task_completed': 'success'}}
+# the same outcome as a request in the tasks format asks for it, which every request the harness sends now is
+TASKS = {'tasks': [{'start_s': 0.0, 'end_s': 600.0, 'task': 'put the cup in the bin', 'outcome': 'success'}]}
 
 
 def test_the_audit_minimal_reply_is_not_a_finished_annotation():
@@ -97,13 +99,25 @@ def test_the_outcome_asked_for_follows_the_requests_mode_and_instructions():
             'the request asks each activity in tasks with its outcome, and the reply lists none']
         no_outcome = {'tasks': [{**tasks['tasks'][0], 'outcome': None}]}
         assert harness.annotation_problems(saved(reply(**no_outcome), **kw)) == ['task 0 of 1 has no outcome']
-    # the field named is the one the request's own instructions declare
+    # the field named is the one the request's own instructions declare: every request now asks for tasks
     for rig in ('teleop_arms', 'handheld_gripper', 'ego_head'):
         for instructed in (True, False):
-            for sessions in (True, False):
-                field = prompts.requested_outcome(rig, has_instruction=instructed, sessions=sessions)
-                text = prompts.fixed_instructions(rig, has_instruction=instructed, sessions=sessions)
-                assert f'"{field.split(".")[-1]}"' in text
+            field = prompts.requested_outcome(rig, has_instruction=instructed)
+            assert field == 'tasks' and f'"{field}": [' in prompts.fixed_instructions(rig, has_instruction=instructed)
+
+
+def test_a_request_in_the_tasks_format_is_held_to_its_tasks_and_one_without_an_instruction_may_hold_none():
+    tasks = {'tasks': [{'start_s': 0.0, 'end_s': 60.0, 'task': 'put the cup in the bin', 'outcome': 'success'}]}
+    for rig in ('teleop_arms', 'ego_head'):
+        assert harness.annotation_complete(saved(reply(**tasks), rig=rig, task_mode=None))
+        assert harness.annotation_problems(saved(reply(**SUCCESS), rig=rig, task_mode=None)) == [
+            'the request asks each activity in tasks with its outcome, and the reply lists none']
+        # every recording with an instruction has a task judged against it; one without may have none (idle footage)
+        assert not harness.annotation_complete(saved(reply(tasks=[]), rig=rig, task_mode=None))
+        assert harness.annotation_complete(saved(reply(tasks=[]), rig=rig, task_mode=None, instruction=None))
+        # the record says so itself, whatever its policy names
+        record = saved(reply(**tasks), rig=rig, task_mode='episode')
+        assert harness.annotation_complete({**record, 'label_schema': 'tasks'})
 
 
 def test_each_part_of_a_recording_labelled_in_parts_is_judged_against_its_own_request(tmp_path, monkeypatch):
@@ -161,7 +175,7 @@ def test_an_incomplete_reply_is_recorded_as_such_and_never_resent_by_itself(tmp_
     from test_label import _packed_episode
     ep, _ = _packed_episode(tmp_path)
     out = tmp_path / 'out'
-    proper = reply(timeline=((0.0, 600.0),), **SUCCESS)
+    proper = reply(timeline=((0.0, 600.0),), **TASKS)
     sent = provider(monkeypatch, [AUDIT_REPLY, proper])
     assert harness.run_batch([ep], out, **run_options()) == 1
     record = json.loads((out / f'{ep.name}.json').read_text())
@@ -230,7 +244,7 @@ def test_an_unbound_finding_and_its_reason_reach_the_episode_json_the_export_and
     ep, _ = _packed_episode(tmp_path)
     inspected = {'evidence_id': 'inspection:0123456789abcdef0123', 'time_s': [1.0], 'columns': [0]}
     install(monkeypatch, lambda receipts: {
-        'task_summary': 'A hand reaches.', 'timeline': steps((0.0, 600.0)), **SUCCESS,
+        'task_summary': 'A hand reaches.', 'timeline': steps((0.0, 600.0)), **TASKS,
         'sensor_findings': [gripper_finding(1.0, 1.0, inspected)]})
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **run_options()) == 0

@@ -201,5 +201,6 @@
  "tests/test_packing_determinism.py": 2.2,
  "tests/test_recording_completion.py": 1.1,
  "tests/test_task_prompt.py": 0.3,
+ "tests/test_tasks_format.py": 6.0,
  "tests/test_caption_clock.py": 1.0
 }

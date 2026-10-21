@@ -663,8 +663,11 @@ def test_explicit_source_scope_reaches_local_preparation_and_request(tmp_path, n
     assert ctx['task_mode'] == 'session'
     assert policy.resolve(ctx) == policy.resolve(annotations().source_context(root, 'teleop_arms'))
     assert policy.resolve(ctx)['dataset_note'] == info['description']
+    # the declaration is provenance: the policy names no task mode and the request is the one tasks format
+    assert 'task_mode' not in policy.resolve(ctx)
     request = episode.build_request(directory)
-    assert 'This recording is a session:' in request['prompt']
+    assert 'This recording is a session:' not in request['prompt']
+    assert '\nTASKS. Segment the recording' in request['prompt']
     assert info['description'] in request['prompt']
     assert ctx['state_kind'] == 'none'
 
@@ -745,15 +748,14 @@ def test_hdf_scope_uses_only_explicit_recording_owners(tmp_path, declaration, ri
     directory = out / report['episodes'][0]['episode_id']
     ctx = json.loads((directory / 'context.json').read_text())
     selected = policy.resolve(ctx)
-    assert selected['task_mode'] == ('episode' if declaration in ('actor', 'description') else 'session')
+    assert 'task_mode' not in selected      # a declaration is provenance only
     expected_note = 'Upload collection\n' + note if declaration == 'json_agree' else note
     assert selected['dataset_note'] == ('' if declaration == 'actor' else expected_note)
     assert ctx['recorded_hdf5_metadata']['source_path'] == str(raw)
     request = episode.build_request(directory)
     if declaration in ('root', 'recording', 'sessions'):
         assert note in request['prompt']
-        if rig == 'teleop_arms':
-            assert 'This recording is a session:' in request['prompt']
+        assert 'This recording is a session:' not in request['prompt']
         assert not needs_extra_evidence(ctx)
     if declaration == 'actor':
         assert needs_extra_evidence(ctx)

@@ -4,9 +4,10 @@ A request has three parts: these instructions (identical for every episode of a 
 presence and the same recorded or video only variant, so the provider serves them from its prompt cache), then
 the facts about one episode (label/episode.py: its dataset, cameras, sampled instants, recorded state and
 instruction), then its frames. The instructions are, in order: what the footage
-is, the output schema, why the episode is labelled and what counts as a problem (the data contract), how to use
-the episode's instruction or the dataset's annotation (or, for a robot episode that has none, how to
-name its task), and the note that keeps the timeline at the level of action phases.
+is, the output schema, why the episode is labelled and what counts as a problem (the data contract), how to cut the
+recording into its tasks (one or several, each with its own outcome), how to use the episode's instruction or the
+dataset's annotation (or, for a robot episode that has none, how to name its tasks), and the note that keeps the
+timeline at the level of action phases.
 
 Three rigs: teleop_arms (a person teleoperates robot arms), handheld_gripper (a person does the task with
 handheld grippers that carry cameras) and ego_head (a person wears a head camera and works with their own
@@ -126,7 +127,7 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
      "<object acted on, or null>", "<where it goes, or null>", "<e.g. 'into the bin', 'onto the plate', or null>",
      "advancing" | "wasteful" | "idle", <progress float 0..1>, "<notes, e.g. what makes this uncertain, or null>"]
   ],
-  "task_summary": "<one imperative sentence describing the whole task>",
+  "task_summary": "<one imperative sentence describing the recording's work: its one task, or its tasks in order>",
   "key_events": [
     {"t_s": <float>,
      "label": "<the task-critical milestone in plain words>",
@@ -139,15 +140,19 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
      "from": "<state before>", "to": "<state after>",
      "seen_in": "<which camera showed the state before and which showed it after, and the direction each was looking>"}
   ],
-  "completion": {
-    "task_completed": "success" | "success_then_undone" | "failure" | "partial" | "unclear",
-    "success_predicate": "<the COMPLETE terminal state the given instruction asks for (with no instruction, the one task_summary describes): ALL sub-conditions that must hold for the task to be done, e.g. 'all hardware sorted into compartments AND the lid is closed AND both clasps are latched', not just the salient one, but do not pad it with trivia you cannot judge>",
-    "completed_at_s": <float or null>,
-    "goal_reached_at_s": <float or null>,
-    "undone_at_s": <float or null>,
-    "undone_by": "<what undid the reached goal, or null>",
-    "reason": "<if not a clean success, why>"
-  },
+  "tasks": [
+    {"start_s": <float>, "end_s": <float>,
+     "task": "<what the demonstrator set out to do, as observed, as an imperative, e.g. 'stack the three red blocks'>",
+     "objects": ["<the objects this task acts on>"],
+     "judged_against": "instruction" | "own_end_state",
+     "success_predicate": "<judged against the instruction: the COMPLETE terminal state the instruction asks of this task (for one repeat of a cyclical instruction, that repeat's); judged against its own end state: the end state its actions converge on. ALL sub-conditions that must hold for the task to be done, e.g. 'all hardware sorted into compartments AND the lid is closed AND both clasps are latched', not just the salient one, but do not pad it with trivia you cannot judge>",
+     "outcome": "success" | "success_then_undone" | "failure" | "partial" | "unclear",
+     "completed_at_s": <float or null>,
+     "goal_reached_at_s": <float or null>,
+     "undone_at_s": <float or null>,
+     "undone_by": "<what undid the reached end state, or null>",
+     "note": "<if not a clean success, why>"}
+  ],
   "scene_graph": [
     {"t_s": <float>,
      "relations": ["<subject> <relation> <object>"]}
@@ -196,10 +201,11 @@ Rules:
   attempt is a key_event with outcome failure. A step succeeded only when the frames show its result (the
   object between the jaws in the frames after, the things meant to meet meeting, the object staying where
   it was put); when they do not show it, it is not a success, even when the instruction asks for that step.
-- progress is per step, 0..1: how much of the whole task is done at that instant
-  (the absolute level), 0 at the start, 1.0 only when the full success_predicate
+- progress is per step, 0..1: how much of the CURRENT task is done at that instant
+  (the absolute level), 0 when the task starts, 1.0 only when its full success_predicate
   holds, a never-completed task plateaus below 1.0 at the best state reached, and
-  it may dip if progress is undone (a placed object is knocked out). progress
+  it may dip if progress is undone (a placed object is knocked out). It resets toward 0
+  when the next task starts; in a recording of one task it is the recording's progress. progress
   (absolute level) and contribution (direction given history) can diverge: while
   recovering from a fumble, contribution is advancing even though progress is only
   climbing back to where it had been.
@@ -217,8 +223,8 @@ Rules:
   on and that still holds once the hand or gripper that made it lets go, for example a cup on the stack,
   the drawer open, a fold made, a screw driven in. A pick, a grasp, a contact or a motion is not a subgoal,
   because what it gains is lost if the object is let go anywhere else. Every successful demonstration of a
-  task passes through the same subgoals whatever the operator's style, and the goal's end-state (each
-  task's, when there are tasks) is the last one, at the goal frame (completed_at_s, judged by its own rule
+  task passes through the same subgoals whatever the operator's style, and each task's end-state is the
+  last one, at the goal frame (completed_at_s, judged by its own rule
   below). Mark each subgoal as a key_event with kind subgoal_complete at the first moment its change holds
   once the hand or gripper that made it lets go, labelled with the state reached; nudging or straightening
   it afterwards neither moves it nor makes a new subgoal. Only the goal's end-state waits, as completed_at_s
@@ -226,7 +232,7 @@ Rules:
   subgoal of its own at the first moment it holds, and the goal follows once the straightening is done.
   Subgoals do not lengthen the list: a pick, a placement that is later undone, a contact or a failed attempt
   that belongs on it keeps a kind of its own (a grasp, a placement), never subgoal_complete.
-- completion judges the whole task on the BALANCE OF EVIDENCE, the way a fair
+- each task's outcome is judged on the BALANCE OF EVIDENCE, the way a fair
   human reviewer would, not as a strict verifier. Grade what the footage shows was
   ACHIEVED, not whether every detail was explicitly confirmed on camera.
   success: the core goal is clearly accomplished given the evidence; you do NOT
@@ -236,22 +242,23 @@ Rules:
   accomplished task down to partial. partial: a real, observable sub-goal is left
   undone. failure: the task is demonstrably not accomplished. unclear: the footage
   genuinely does not show enough to judge the CORE outcome.
-  success_then_undone: the full success_predicate WAS clearly reached at some moment, and
-  then something later in the episode undid it, so it does not hold at the end (the objects
-  are reset or scattered again, knocked out of place, the result is taken apart, e.g. the
-  recording kept running while the scene was reset for the next attempt). Use it instead of
+  success_then_undone: the task's full success_predicate WAS clearly reached at some moment,
+  and then something undid it while it still had to hold (TASKS below says how long a task's
+  result must hold): the objects are reset or scattered again, knocked out of place, the result
+  is taken apart, e.g. the recording kept running while the scene was reset with no further task
+  after it. Use it instead of
   failure or partial whenever the goal was genuinely achieved and later lost: this is a
-  demonstration that succeeded, and must not be confused with one that never got there. Only
+  task that succeeded, and must not be confused with one that never got there. Only
   use it when the full predicate was actually seen to hold, not when the task merely came
   close.
 - goal_reached_at_s is the FIRST frame at which the full success_predicate held, whether or
   not it then lasted: for success it equals completed_at_s; for success_then_undone it is the
   moment the goal was achieved (completed_at_s stays null, because the predicate does not hold
-  to the end), with undone_at_s the first frame it no longer holds and undone_by what undid it;
+  as long as it must), with undone_at_s the first frame it no longer holds and undone_by what undid it;
   null for every other outcome.
 - completed_at_s (the goal frame) is the FIRST frame at which the full
-  success_predicate is satisfied AND then stays satisfied through the end of the
-  episode. It marks the instant the world reaches its target end-state, i.e. the
+  success_predicate is satisfied AND then stays satisfied for as long as the task's
+  result must hold (TASKS below). It marks the instant the world reaches its target end-state, i.e. the
   last task-completing action that puts the manipulated objects into their final
   required configuration (the release, the seating, the placement, the closure).
   It is NOT when the arms finish moving. Motions that come after the end-state is
@@ -259,8 +266,7 @@ Rules:
   withdrawing the hands, never define or push back the goal frame, even when the
   instruction itself asks for such a retreat: a "pick it up, place it, then move
   away" task is complete at the place/release, not at the move-away, because
-  moving away does not alter the objects' final state. The "stays satisfied to the
-  end" test is how you reject false candidates: if a state briefly looks done but
+  moving away does not alter the objects' final state. The "stays satisfied" test is how you reject false candidates: if a state briefly looks done but
   is then undone or is still being worked on (a clasp that pops back open, bolts
   placed while the lid is still open), the predicate was not truly held there, so
   the true goal frame is later. Example: bolts are all in their compartments at
@@ -270,7 +276,7 @@ Rules:
   moment the arms retract to park. null if the full predicate never holds and
   stays held. You see the whole video at once, so decide this globally.
 - each key_event also gets an outcome, judged on the balance of evidence like
-  completion above: did that specific subevent succeed (the cup landed, the fold
+  the tasks' outcomes above: did that specific subevent succeed (the cup landed, the fold
   held) or fail (dropped, missed, slipped). Use unclear only when the evidence
   genuinely does not show whether it happened; a missing close-up confirmation of
   an otherwise-evident outcome is not grounds for unclear.
@@ -296,7 +302,8 @@ Rules:
   ACTUALLY did to recover. If it is never corrected, set recovered false,
   recovered_at_s null, correction null. how_to_fix is the ideal corrective action in
   either case. List only real failures; leave the list empty on a clean run.
-- instruction_variants are 2-3 natural rephrasings of the task, the kind a
+- instruction_variants are 2-3 natural rephrasings of the task the instruction asks for (with no
+  instruction, of the task that fills most of the recording), the kind a
   person might actually say, so a policy is not tied to one wording.
 """
 
@@ -309,84 +316,6 @@ HANDHELD_WORDING = [
     ("retracting, parking, returning the arms home,\n  withdrawing the hands,",
      "lowering, setting down or pointing away a gripper,\n  withdrawing the hands,"),
     ("moment the arms retract to park.", "moment the grippers are lowered."),
-]
-
-# The robot schema with a list of tasks in place of the one completion: every recording is one task or several, each
-# with the outcome fields the completion had, and progress, the outcome and the goal frame are judged per task.
-TASKS_WORDING = [
-    ('  "task_summary": "<one imperative sentence describing the whole task>",',
-     '  "task_summary": "<one imperative sentence describing the recording\'s work: its one task, or its tasks in '
-     'order>",'),
-    ('''  "completion": {
-    "task_completed": "success" | "success_then_undone" | "failure" | "partial" | "unclear",
-    "success_predicate": "<the COMPLETE terminal state the given instruction asks for (with no instruction, the one task_summary describes): ALL sub-conditions that must hold for the task to be done, e.g. 'all hardware sorted into compartments AND the lid is closed AND both clasps are latched', not just the salient one, but do not pad it with trivia you cannot judge>",
-    "completed_at_s": <float or null>,
-    "goal_reached_at_s": <float or null>,
-    "undone_at_s": <float or null>,
-    "undone_by": "<what undid the reached goal, or null>",
-    "reason": "<if not a clean success, why>"
-  },''',
-     '''  "tasks": [
-    {"start_s": <float>, "end_s": <float>,
-     "task": "<what the demonstrator set out to do, as observed, as an imperative, e.g. 'stack the three red blocks'>",
-     "objects": ["<the objects this task acts on>"],
-     "judged_against": "instruction" | "own_end_state",
-     "success_predicate": "<judged against the instruction: the COMPLETE terminal state the instruction asks of this task (for one repeat of a cyclical instruction, that repeat's); judged against its own end state: the end state its actions converge on. ALL sub-conditions that must hold for the task to be done, e.g. 'all hardware sorted into compartments AND the lid is closed AND both clasps are latched', not just the salient one, but do not pad it with trivia you cannot judge>",
-     "outcome": "success" | "success_then_undone" | "failure" | "partial" | "unclear",
-     "completed_at_s": <float or null>,
-     "goal_reached_at_s": <float or null>,
-     "undone_at_s": <float or null>,
-     "undone_by": "<what undid the reached end state, or null>",
-     "note": "<if not a clean success, why>"}
-  ],'''),
-    ('''- progress is per step, 0..1: how much of the whole task is done at that instant
-  (the absolute level), 0 at the start, 1.0 only when the full success_predicate
-  holds, a never-completed task plateaus below 1.0 at the best state reached, and
-  it may dip if progress is undone (a placed object is knocked out). progress''',
-     '''- progress is per step, 0..1: how much of the CURRENT task is done at that instant
-  (the absolute level), 0 when the task starts, 1.0 only when its full success_predicate
-  holds, a never-completed task plateaus below 1.0 at the best state reached, and
-  it may dip if progress is undone (a placed object is knocked out). It resets toward 0
-  when the next task starts; in a recording of one task it is the recording's progress. progress'''),
-    ('''and the goal's end-state (each
-  task's, when there are tasks) is the last one, at the goal frame''',
-     '''and each task's end-state is the
-  last one, at the goal frame'''),
-    ('''- completion judges the whole task on the BALANCE OF EVIDENCE, the way a fair
-  human reviewer would, not as a strict verifier.''',
-     '''- each task's outcome is judged on the BALANCE OF EVIDENCE, the way a fair
-  human reviewer would, not as a strict verifier.'''),
-    ('''  success_then_undone: the full success_predicate WAS clearly reached at some moment, and
-  then something later in the episode undid it, so it does not hold at the end (the objects
-  are reset or scattered again, knocked out of place, the result is taken apart, e.g. the
-  recording kept running while the scene was reset for the next attempt). Use it instead of
-  failure or partial whenever the goal was genuinely achieved and later lost: this is a
-  demonstration that succeeded,''',
-     '''  success_then_undone: the task's full success_predicate WAS clearly reached at some moment,
-  and then something undid it while it still had to hold (TASKS below says how long a task's
-  result must hold): the objects are reset or scattered again, knocked out of place, the result
-  is taken apart, e.g. the recording kept running while the scene was reset with no further task
-  after it. Use it instead of
-  failure or partial whenever the goal was genuinely achieved and later lost: this is a
-  task that succeeded,'''),
-    ('''(completed_at_s stays null, because the predicate does not hold
-  to the end)''',
-     '''(completed_at_s stays null, because the predicate does not hold
-  as long as it must)'''),
-    ('''success_predicate is satisfied AND then stays satisfied through the end of the
-  episode.''',
-     '''success_predicate is satisfied AND then stays satisfied for as long as the task's
-  result must hold (TASKS below).'''),
-    ('''The "stays satisfied to the
-  end" test''',
-     '''The "stays satisfied" test'''),
-    ('''judged on the balance of evidence like
-  completion above''',
-     '''judged on the balance of evidence like
-  the tasks' outcomes above'''),
-    ('''- instruction_variants are 2-3 natural rephrasings of the task, the kind a''',
-     '''- instruction_variants are 2-3 natural rephrasings of the task the instruction asks for (with no
-  instruction, of the task that fills most of the recording), the kind a'''),
 ]
 
 # Tags offered for reuse in the robot rigs' schema.
@@ -414,15 +343,11 @@ def camera_observation_block(views: list[tuple[str, str]]) -> str:
             'or a recording fault. Preserve explicit human and source descriptions separately.\n')
 
 
-def schema(r: str, recorded: bool = True, tasks: bool = False) -> str:
+def schema(r: str, recorded: bool = True) -> str:
     """The output schema for a robot rig (the head camera has its own, EGO_SCHEMA). A video only episode is offered no
-    tag for a state it does not have. tasks asks for a list of tasks, each with its own outcome, in place of the one
-    completion (TASKS_WORDING)."""
+    tag for a state it does not have."""
     tags = DATA_ISSUE_TAGS if recorded else _replace_once(DATA_ISSUE_TAGS, *VIDEO_ONLY_TAG)
     s = SCHEMA.replace("<<ISSUE_TAGS>>", tags).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
-    if tasks:
-        for old, new in TASKS_WORDING:
-            s = _replace_once(s, old, new)
     if r == "handheld_gripper":
         s = _replace_once(s, contribution_rules("teleop_arms"), contribution_rules(r))
         for old, new in HANDHELD_WORDING:
@@ -474,10 +399,14 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"start_s": <float>, "end_s": <float>,
      "task": "<the unit of work the person set out to do, open-vocab, e.g. 'pour water into the kettle', 'chop the onion'>",
      "objects": ["<the objects this task acts on>"],
-     "outcome": "success" | "partial" | "failure" | "unclear",
-     "success_predicate": "<the end-state that means THIS unit of work is done>",
+     "judged_against": "instruction" | "own_end_state",
+     "success_predicate": "<judged against the annotated goal: the end-state it asks of this task; otherwise the end-state that means THIS unit of work is done>",
+     "outcome": "success" | "success_then_undone" | "partial" | "failure" | "unclear",
      "completed_at_s": <float or null>,
-     "note": "<why, if partial/failure or unclear>"}
+     "goal_reached_at_s": <float or null>,
+     "undone_at_s": <float or null>,
+     "undone_by": "<what undid the reached end-state, or null>",
+     "note": "<why, if not a clean success>"}
   ],
   "scene_graph": [
     {"t_s": <float>,
@@ -528,7 +457,7 @@ Rules:
   object held by the hand in the frames after, the things meant to meet meeting, the object staying where
   it was put); when they do not show it, it is not a success, even when the instruction asks for that step.
 - progress is per step, 0..1, toward the CURRENT sub-task the operator is working on
-  (see tasks below), NOT the whole session: 0 when they start a sub-task, 1.0 when
+  (see tasks below), NOT the whole recording: 0 when they start a sub-task, 1.0 when
   that sub-task's end-state is reached, then it RESETS toward 0 when they move on to
   the next sub-task. It may dip if progress within a sub-task is undone. progress
   (level within the current sub-task) and contribution (direction given history) can
@@ -582,13 +511,13 @@ Rules:
   span, an open-vocab `task` describing what the person is doing (e.g. "pour water
   into the kettle", "chop the onion"), the `objects` involved, a `success_predicate`
   (the end-state that means THAT activity is done), an `outcome`, and `completed_at_s`
-  (its goal frame). A task is a coherent unit of intent, COARSER than key_events
-  (milestones WITHIN a task) and coarser than the dense timeline. Segment by intent
-  shift: a new task begins when the person turns to a different objective.
+  (its goal frame). TASKS below says where one task ends and the next
+  begins.
 - each task's outcome is judged on BALANCE OF EVIDENCE, the way a fair human reviewer
   would, per task independently: success = that mini-task's end-state is clearly
   reached; partial = a real observable part of it is left undone; failure = it is
-  demonstrably not accomplished (dropped, abandoned, undone); unclear = the available footage does not
+  demonstrably not accomplished (dropped, abandoned); success_then_undone = its end-state was
+  clearly reached and then lost while it still had to hold (TASKS below); unclear = the available footage does not
   establish the activity's core outcome. A missing confirming
   view of an incidental detail is NOT failure. An abandoned attempt the operator gives
   up on is a failure (or partial) for that task, and does not taint the others. An activity already
@@ -598,10 +527,13 @@ Rules:
   Preserve any observed failed attempts within that activity as failures; uncertainty about its eventual
   outcome does not erase a demonstrated fumble, missed attempt or unintended result.
 - each task's completed_at_s (its goal frame) is the FIRST frame that task's
-  success_predicate is satisfied AND stays satisfied for the rest of that task's span:
+  success_predicate is satisfied AND stays satisfied for as long as its result must hold (TASKS below):
   the last action that puts THAT task's objects into their final state (the release,
   seat, placement, closure), NOT when the hands move away to the next task. null if that
-  task's end-state is never reached (partial/failure). There is deliberately no single
+  task's end-state is never reached and held. goal_reached_at_s is the FIRST frame that task's
+  success_predicate held, whether or not it then lasted: for success it equals completed_at_s; for
+  success_then_undone it is when the end-state was reached, with undone_at_s the first frame it no
+  longer holds and undone_by what undid it; null for every other outcome. There is deliberately no single
   episode-level goal frame; each completed task carries its own.
 - each key_event also gets an outcome, judged on the balance of evidence: did that
   specific subevent succeed (the cup landed, the fold held) or fail (dropped, missed,
@@ -632,55 +564,6 @@ Rules:
   the activity that fills most of the clip, the kind a
   person might actually say, so a policy is not tied to one wording.
 """
-
-
-# The head camera's schema with the robot rigs' task fields: what each task is judged against, and an end state reached
-# and later undone. Where one task ends and the next begins is set out once, in TASK_RULES.
-EGO_TASKS_WORDING = [
-    ("(see tasks below), NOT the whole session:", "(see tasks below), NOT the whole recording:"),
-    ('''     "objects": ["<the objects this task acts on>"],
-     "outcome": "success" | "partial" | "failure" | "unclear",
-     "success_predicate": "<the end-state that means THIS unit of work is done>",
-     "completed_at_s": <float or null>,
-     "note": "<why, if partial/failure or unclear>"}''',
-     '''     "objects": ["<the objects this task acts on>"],
-     "judged_against": "instruction" | "own_end_state",
-     "success_predicate": "<judged against the annotated goal: the end-state it asks of this task; otherwise the end-state that means THIS unit of work is done>",
-     "outcome": "success" | "success_then_undone" | "partial" | "failure" | "unclear",
-     "completed_at_s": <float or null>,
-     "goal_reached_at_s": <float or null>,
-     "undone_at_s": <float or null>,
-     "undone_by": "<what undid the reached end-state, or null>",
-     "note": "<why, if not a clean success>"}'''),
-    ('''A task is a coherent unit of intent, COARSER than key_events
-  (milestones WITHIN a task) and coarser than the dense timeline. Segment by intent
-  shift: a new task begins when the person turns to a different objective.''',
-     '''TASKS below says where one task ends and the next
-  begins.'''),
-    ('''failure = it is
-  demonstrably not accomplished (dropped, abandoned, undone); unclear''',
-     '''failure = it is
-  demonstrably not accomplished (dropped, abandoned); success_then_undone = its end-state was
-  clearly reached and then lost while it still had to hold (TASKS below); unclear'''),
-    ('''success_predicate is satisfied AND stays satisfied for the rest of that task's span:''',
-     '''success_predicate is satisfied AND stays satisfied for as long as its result must hold (TASKS below):'''),
-    ('''task's end-state is never reached (partial/failure). There is deliberately no single
-  episode-level goal frame; each completed task carries its own.''',
-     '''task's end-state is never reached and held. goal_reached_at_s is the FIRST frame that task's
-  success_predicate held, whether or not it then lasted: for success it equals completed_at_s; for
-  success_then_undone it is when the end-state was reached, with undone_at_s the first frame it no
-  longer holds and undone_by what undid it; null for every other outcome. There is deliberately no single
-  episode-level goal frame; each completed task carries its own.'''),
-]
-
-
-def ego_schema(tasks: bool = False) -> str:
-    """The head camera's schema; tasks gives each task the robot rigs' outcome fields (EGO_TASKS_WORDING)."""
-    s = EGO_SCHEMA
-    if tasks:
-        for old, new in EGO_TASKS_WORDING:
-            s = _replace_once(s, old, new)
-    return s
 
 
 def what_this_is(r: str) -> str:
@@ -840,7 +723,8 @@ EGO_CONTRACT_WORDING = [
     ("the label (the\n  instruction contradicts the observed task, object or required order)",
      "the label (the\n  annotation contradicts the observed activity, object or required order)"),
     ("An operator who does a different task than the instruction has an instruction\n  mismatch (a data issue), not "
-     "an unfinished task (an operator mistake), and the outcome is still judged\n  against the instruction.",
+     "an unfinished task (an operator mistake), and the outcome of the task that stands in for it is still judged\n"
+     "  against the instruction.",
      "A person who does different work than the annotation describes has an instruction\n  mismatch, not "
      "unfinished work."),
     ("judged against what the instruction asks and what the\n  demonstrator evidently did.",
@@ -848,11 +732,11 @@ EGO_CONTRACT_WORDING = [
 ]
 
 
-def data_contract(r: str, recorded: bool = True, tasks: bool = False) -> str:
+def data_contract(r: str, recorded: bool = True) -> str:
     """Why the episode is labelled and what counts as a problem, in the words of this rig. The purpose, the two
     lists and the severity scale are shared; what the cameras are, what a mistake looks like and what normal
     slack is are the rig's own. A video only robot episode (recorded False) has the words about a recorded motion
-    taken out (VIDEO_ONLY_CONTRACT_WORDING). tasks judges the outcome of the task that stands in for the asked work."""
+    taken out (VIDEO_ONLY_CONTRACT_WORDING)."""
     robot = r != "ego_head"
     c = _DATA_CONTRACT_BASE
     c = _replace_once(c, "<<WHY>>", _WHY["robot" if robot else "ego_head"])
@@ -860,9 +744,6 @@ def data_contract(r: str, recorded: bool = True, tasks: bool = False) -> str:
     c = _replace_once(c, "<<VISIBILITY>>", _VISIBILITY[r])
     c = _replace_once(c, "<<MAP>>", _MAP["robot" if robot else "ego_head"])
     c = _replace_once(c, "<<MISTAKES>>", _MISTAKES[r])
-    if robot and tasks:
-        c = _replace_once(c, "and the outcome is still judged\n  against the instruction.",
-                          "and the outcome of the task that stands in for it is still judged\n  against the instruction.")
     if robot and not recorded:
         for old, new in VIDEO_ONLY_CONTRACT_WORDING:
             c = _replace_once(c, old, new)
@@ -898,7 +779,7 @@ _DATA_CONTRACT_BASE = """- WHY YOU ARE LABELLING THIS. These labels decide what 
   This does not excuse incorrect claims or missing and erroneous subtasks within declared timed coverage.
   Second, taking the recording as faithful, how well was the demonstration performed? Mistakes in the
   <<MISTAKES>> An operator who does a different task than the instruction has an instruction
-  mismatch (a data issue), not an unfinished task (an operator mistake), and the outcome is still judged
+  mismatch (a data issue), not an unfinished task (an operator mistake), and the outcome of the task that stands in for it is still judged
   against the instruction. An operator mistake is recorded correctly; the question it raises is
   whether a model should learn from it.
 - OPERATOR MISTAKES ARE THE FAILURES AND WASTEFUL STRETCHES, GROUPED AND GRADED. Every failure and every
@@ -943,6 +824,7 @@ def _replace_once(text: str, old: str, new: str) -> str:
     return text.replace(old, new)
 
 
+# How to check the dataset's annotation (the head camera): the annotated goal is judged by the tasks that carry it out.
 EGO_ANNOTATION_RULES = """
 ABOUT THE DATASET'S ANNOTATION (the annotation itself is given below with the episode, when the dataset has one).
 The dataset ships its own annotation of the episode: an overall goal and, when it has them, timed subtasks. They
@@ -959,270 +841,13 @@ are claims to check, not the truth about the video. Label what you see independe
   learn wrongly from: a goal that describes a different activity, a subtask whose label does not describe what
   happens in its span, a span far enough off to put a label on the wrong stretch, a subtask missing from the
   annotation or invented by it, a subtask marked successful that visibly failed (or the reverse).
-When the annotation gives a goal, the clip is a task episode: its tasks are the steps of that goal, and success is
-the goal's end-state. When it gives timed subtasks but no goal, goal_alignment compares the subtask sequence as a
-whole with what you observed. When it gives neither, each activity is judged on its own end-state.
+When the annotation gives a goal, it is judged by the task or tasks that carry it out: they are judged against it
+(judged_against "instruction"), and any other task on its own end-state. Steps toward one end-state are one task
+with subgoals, not tasks of their own, so a timed subtask at the granularity of a step is checked against the
+timeline and key events, and is not a missing or invented task. When the annotation gives timed subtasks but no
+goal, goal_alignment compares the subtask sequence as a whole with what you observed. When it gives neither, each
+task is judged on its own end-state.
 """
-
-
-EGO_SESSION_ANNOTATION_RULES = _replace_once(
-    EGO_ANNOTATION_RULES,
-    "When the annotation gives a goal, the clip is a task episode: its tasks are the steps of that goal, and success is\n"
-    "the goal's end-state. When it gives timed subtasks but no goal, goal_alignment compares the subtask sequence as a\n"
-    "whole with what you observed. When it gives neither, each activity is judged on its own end-state.",
-    "This recording is declared to be a session of independent activities. Any supplied goal remains recording\n"
-    "context; do not force every activity to be a step of that goal. Identify the observed activities in tasks,\n"
-    "and judge progress and outcome against each activity's own end-state. Retain the publisher's goal and timed\n"
-    "subtask claims, checking their labels, spans and stated outcomes against the footage as above. goal_alignment\n"
-    "compares the supplied goal to the observed activities, or the supplied subtask sequence as a whole when there\n"
-    "is no goal. When neither is supplied, each activity is judged on its own end-state.",
-)
-
-
-# How to grade against the episode's instruction and fill goal_alignment (the robot rigs).
-INSTRUCTION_RULES = """
-ABOUT THE EPISODE'S INSTRUCTION (the instruction itself is given below with the episode).
-This instruction is metadata whose correctness is NOT guaranteed; treat it as a claim to check,
-not as the truth about the video. The label uses it in two different ways, for two different
-purposes. The timeline describes the trajectory, so it follows what the operator is ACTUALLY,
-demonstrably doing (your independently-inferred task_summary), not the given goal. The outcome is
-what a policy learns the instruction means, so it follows the instruction:
-- contribution follows the shared rule in the schema, against the operator's evident activity,
-  never simply against whether the step serves the given instruction.
-- progress, like the outcome, is measured against the given goal: how much of what was ASKED
-  holds at that instant. It reaches 1.0 only when success_predicate holds, so a demo that never
-  reaches the given goal never reaches 1.0, however well it does its own task.
-- CRITICAL: if the operator is clearly performing a different-but-coherent task than the given
-  instruction, apply the same contribution rule and record
-  the divergence in goal_alignment
-  and as an instruction_mismatch data issue. A competent demonstration is good data even when it
-  is mislabeled; the dense timeline must stay a faithful description of the real behavior.
-- An instruction can say HOW as well as WHAT: a direction, a hand, a grip, the order of steps. A
-  demonstration that reaches the end state the instruction asks for in another way did the given
-  task, not a different one: judge the outcome and progress on that end state, choose the relation
-  by what was done (aligned, or narrower or broader), and record the difference in manner as an
-  instruction_mismatch whose severity is its training impact. A detail that changes the end state
-  itself (which face of a block is up, which object ends where) is part of the end state, not manner.
-  A step whose result already holds at the first frame (a cap already off, a plug already in) is
-  part of the end state that holds, not part of the goal that never happened: keep the relation
-  aligned. Absence of that motion alone is not an instruction_mismatch unless the source explicitly asserts
-  its occurrence within this recording or declared timed coverage. Describe the missing observation as a
-  coverage limitation, without inferring from the initial state or missing motion that the action occurred
-  before recording. An initially satisfied state does not establish which earlier actions produced it.
-  Still report observed task, method or order violations and missing required end states.
-- Judge quantity and completion from the instruction's actual constraints. When its goal is satisfied
-  and the operator repeats it or performs compatible additional activity, relation narrower can describe
-  that added scope. Extra activity that preserves the requested result and violates no explicit constraint
-  does not alone establish an instruction_mismatch. Report a mismatch when a violated constraint or a
-  materially misleading instruction would teach the wrong activity, method, object or outcome. This does
-  not exempt genuine fumbles or failed attempts from operator_mistakes.
-- The objects the instruction names are part of its claim. One instruction is often written once
-  for many recordings, so the object handled in this one can be a different kind of object from the
-  one it names. Identify every object from what the frames show of it (its shape and parts, how it
-  bends, folds or opens, any lettering or markings), as you would if the instruction named no
-  object, and call it that in every field. Then compare it with the instruction. A handled object
-  of a different kind from the one named is part of the end state (which object ends where), and it
-  is an instruction_mismatch; a more specific or differently worded name for the same kind of
-  object (a mug for a cup) is not.
-Use the given goal for the compliance question: completion.task_completed and
-success_predicate are the terminal state of THIS GIVEN goal (did the demo satisfy what was
-ASKED?), so a demo of a different task is a completion "failure" against the given goal even
-though its own steps are advancing. Calling it success would teach a policy that the instruction
-means that other task. Still fill task_summary with what you INDEPENDENTLY observe. Record materially
-contradicted instruction claims in data_issues; a narrower or broader scope alone is not such a contradiction.
-This does not change completion: a genuinely unmet requested goal remains partial or failed when the
-available recording establishes that outcome; unseen continuation is unknown.
-
-Also emit a top-level "goal_alignment" object comparing the given goal to what you
-independently observed, so a mismatch between the label and the footage is captured explicitly:
-  "goal_alignment": {
-    "matches_given": true | false,  // does the footage actually depict the given goal at all
-    "relation": "aligned" | "narrower" | "broader" | "different" | "unrelated",
-      // aligned: what you saw is exactly the given goal.
-      // narrower: the operator did the given goal AND meaningfully more.
-      // broader: only part of the given goal actually happened.
-      // different: coherent purposeful work, but a different task than the goal.
-      // unrelated: the footage does not match the instruction (likely mislabeled).
-    "note": "<one line: if given and observed diverge, why; empty if aligned>"
-  }
-A "different"/"unrelated" relation means the operator went off-script or the episode is
-mislabeled - both are exactly the cases downstream filtering needs to catch. Decide goal_alignment
-before completion, and keep the two consistent: they describe the same footage. A demonstration
-that reaches the given goal and then does more is "narrower". An outcome of
-success or success_then_undone (the given goal was reached) cannot sit beside a "different" or
-"unrelated" relation (the footage never shows the given goal).
-"""
-
-
-# The timeline at the level of action phases: every distinct action, grasp, release, error and recovery is still
-# its own segment.
-LEAN_NOTE = """
-
-TIMELINE GRANULARITY:
-- Segment the timeline at the level of distinct ACTION PHASES, not per-second or per-frame.
-  Merge contiguous frames of ONE continuous action by ONE arm into a SINGLE segment: a whole
-  reach is one segment, a whole transport is one segment, a whole placement is one segment. A
-  typical episode is a few dozen segments, not hundreds. This coarseness is deliberate.
-- You MUST still emit a separate segment for every distinct action, every grasp, every release,
-  every placement, every error, and every recovery, and whenever the acting arm or the
-  manipulated object changes. Coarser segmentation may NEVER drop a real event; it only merges
-  frames that are the same ongoing action.
-- Keep values terse: short action/object strings, and set "notes" to null unless it carries real
-  information.
-- Everything else (completion, goal_alignment, key_events, data_issues, recovery,
-  state_changes, scene) is unchanged in content; only the timeline's granularity and verbosity
-  change. Do not drop detail from those sections.
-"""
-
-
-def lean(r: str, tasks: bool = False) -> str:
-    """The note that keeps the timeline at the level of action phases, with the acting part named as the rig
-    names it, and the sections it leaves unchanged named as the schema has them (tasks: a list of tasks)."""
-    s = LEAN_NOTE
-    if r == "ego_head" or tasks:
-        s = _replace_once(s, "(completion, goal_alignment, key_events, data_issues, recovery,\n  state_changes, "
-                             "scene)",
-                          "(tasks, goal_alignment, key_events, data_issues, operator_mistakes,\n  recovery, "
-                          "state_changes, scene)")
-    if r == "handheld_gripper":
-        return _replace_once(s, "by ONE arm", "by ONE gripper").replace("acting arm", "acting gripper")
-    if r == "ego_head":
-        return _replace_once(s, "by ONE arm", "by ONE hand").replace("acting arm", "acting hand")
-    return s
-
-
-def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True, sessions: bool = False,
-                       tasks: bool = False) -> str:
-    """Everything before the episode's own facts. Head-camera episode and session modes each have recorded and
-    video only variants, whether or not annotated. A robot recording setup has up to four variants (instruction present or not,
-    recorded or video only). Every episode of the same variant shares the cached prefix. recorded False (no
-    recorded state and no other signal, label/episode.py is_recorded) takes out every word about a recorded
-    motion. tasks asks every recording for a list of tasks, each with its own outcome, whatever its task mode: the
-    schema with tasks, the data contract, TASK_RULES, then the instruction's rules (the annotation's, for the head
-    camera)."""
-    head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
-    if tasks:
-        if r == "ego_head":
-            return (head + what_this_is(r) + ego_schema(tasks=True) + data_contract(r) + task_rules(r)
-                    + EGO_TASK_ANNOTATION_RULES + lean(r, tasks=True))
-        rules = TASK_INSTRUCTION_RULES if has_instruction else TASK_NO_INSTRUCTION_RULES
-        return (head + what_this_is(r) + schema(r, recorded, tasks=True) + data_contract(r, recorded, tasks=True)
-                + task_rules(r) + rules + lean(r, tasks=True))
-    if r == "ego_head":
-        rules = EGO_SESSION_ANNOTATION_RULES if sessions else EGO_ANNOTATION_RULES
-        return head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + rules + lean(r)
-    rules = (session_rules(r) + (SESSION_INSTRUCTION_RULES if has_instruction else '') if sessions
-             else INSTRUCTION_RULES if has_instruction else NO_INSTRUCTION_RULES)
-    return head + what_this_is(r) + schema(r, recorded) + data_contract(r, recorded) + rules + lean(r)
-
-
-def requested_outcome(r: str, *, has_instruction: bool, sessions: bool = False, tasks: bool = False) -> str:
-    """Where the instructions of this request ask the reply to put its outcome, read from the text fixed_instructions
-    sends for it: "tasks" where the text asks for a tasks list (the head camera's schema, a session, the tasks
-    format), since each task then carries its own outcome, otherwise the one task's completion.task_completed."""
-    text = fixed_instructions(r, has_instruction=has_instruction, sessions=sessions, tasks=tasks)
-    if '"tasks": [' in text:
-        return 'tasks'
-    if '"task_completed"' not in text:
-        raise RuntimeError('the instructions ask for no outcome field')
-    return 'completion.task_completed'
-
-
-# An episode with no instruction (a bare video, or a dataset that ships none) still needs a task to grade the
-# outcome and progress against, and a description that any motion satisfies ("rearrange the objects") makes every
-# episode a success and hides a goal that was reached and then undone.
-NO_INSTRUCTION_RULES = """
-ABOUT THE TASK. This episode comes with no instruction, so the task is yours to infer from the whole episode.
-Name it as the most specific end state the demonstrator evidently worked toward (the blocks in a row, a
-tower, the cloth folded in half, the cup in the bin), read from where their actions converge, never as a
-description that any motion would satisfy (moving, repositioning or rearranging the objects). task_summary
-and success_predicate state that end state. When it was reached and later taken apart within the episode,
-the outcome is success_then_undone. When the actions fit no single end state, name the one that fits best and
-say in completion.reason what leaves it uncertain.
-"""
-
-
-# Session annotation preserves the original recording; request cuts do not create dataset episodes.
-SESSION_RULES = """
-ABOUT THE TASKS. This recording is a session: the source or caller declares several activities within one recording. Over it, the
-demonstrator does a SEQUENCE of distinct activities (stacking some blocks, then sorting cups, then putting a lid
-on a box). Any supplied instruction remains context for the activities; do not discard it. There is no single
-recording-wide goal, so do not force one. Segment the recording into its distinct activities and
-emit them as a top-level "tasks" list, in time order:
-  "tasks": [
-    {"start_s": <float>, "end_s": <float>,
-     "task": "<the unit of work the demonstrator set out to do, open-vocab, as an imperative, e.g. 'stack the three red blocks', 'put the lid on the box'>",
-     "objects": ["<the objects this task acts on>"],
-     "outcome": "success" | "partial" | "failure" | "unclear",
-     "success_predicate": "<the end-state that means THIS unit of work is done>",
-     "completed_at_s": <float or null>,
-     "note": "<why, if partial/failure or unclear>"}
-  ]
-- A task is a coherent unit of intent, COARSER than key_events (milestones within a task) and coarser than the
-  timeline. A new task begins when the demonstrator turns to a different objective, or starts the same unit of work
-  again after its end-state was reached: in a cycle, where the objects are reset and the same work repeats, each
-  repeat is its own task, judged on its own. Stages toward one end state are one task with subgoals, never separate
-  tasks: building a stack in two halves, or packing a box item by item, is one task. Name each task as the most
-  specific end state its actions converge on, never as a description any motion satisfies (moving, repositioning
-  or rearranging the objects). Stretches with no evident objective (idling, looking around, tidying between
-  activities) belong to no task; tasks need not cover the whole recording.
-- Each task's outcome is judged on BALANCE OF EVIDENCE, per task independently: success = its end-state is clearly
-  reached; partial = a real observable part of it is left undone; failure = it is demonstrably not accomplished
-  (unintentionally dropped, abandoned, undone); unclear = evidence does not settle the result. An abandoned attempt is a failure (or partial) for that task and does not taint
-  the others. A task already under way at the first frame, or still under way at the last, is judged only on what
-  the recording shows; say in its note what is outside this view. Internal request cuts are not evidence of a failed
-  activity or a defect in the original recording.
-- Each task's completed_at_s (its goal frame) is the FIRST frame its success_predicate holds AND keeps holding for
-  the rest of that task's span: the last action that puts the task's objects into their final state, not when the
-  grippers move on. null if the end-state is never reached.
-- progress in the timeline is toward the CURRENT task, not the whole session: 0 when a task starts, 1.0 when its
-  end-state is reached, then it resets for the next task. contribution follows the shared rule in the schema
-  within the activity each step served.
-- task_summary is one sentence summarising the session's activities. instruction_variants rephrase the activity
-  that fills most of the recording.
-- completion: there is no single goal, so set task_completed, success_predicate, completed_at_s,
-  goal_reached_at_s, undone_at_s and undone_by to null, and reason to "a session of several tasks; each task's
-  outcome is under tasks".
-"""
-
-# A session whose source gives an instruction is checked against it, as an episode is: the clauses about manner,
-# initial state, quantity and object identity are the episode's own (INSTRUCTION_RULES), taken from it unchanged, and
-# goal_alignment compares the instruction with the tasks as a whole.
-_INSTRUCTION_CLAUSES = INSTRUCTION_RULES[INSTRUCTION_RULES.index('- An instruction can say HOW as well as WHAT:'):INSTRUCTION_RULES.index('  object (a mug for a cup) is not.\n') + len('  object (a mug for a cup) is not.\n')]
-SESSION_INSTRUCTION_RULES = """
-ABOUT THE RECORDING'S INSTRUCTION (the instruction itself is given below with the recording).
-This instruction is metadata whose correctness is NOT guaranteed; treat it as a claim to check, not as the truth
-about the video. In a session it states the work the whole recording was meant to hold: one task, a cycle of the
-same task repeated, or several tasks.
-- Segment the tasks from what the operator actually does, as set out above; the instruction never creates, splits
-  or merges a task. Each repeat of a cyclical instruction is its own task.
-- A task that does work the instruction asks for is judged against the instruction: its success_predicate is the
-  end state the instruction asks of that task, and its outcome says whether that end state was reached. Other
-  tasks are judged on their own end state.
-- CRITICAL: if the operator clearly does coherent work in place of what the instruction asks, record it as an
-  instruction_mismatch data issue whose severity is its training impact, and say so in goal_alignment. Work added
-  beside the asked work, which keeps its result and breaks no constraint the instruction states, is not a mismatch.
-""" + _INSTRUCTION_CLAUSES + """
-Always emit a top-level "goal_alignment" object comparing the instruction to the tasks you observed, as a whole,
-also when the work does not match the instruction (then the relation is "different" or "unrelated"):
-  "goal_alignment": {
-    "matches_given": true | false,  // does the footage actually depict the asked work at all
-    "relation": "aligned" | "narrower" | "broader" | "different" | "unrelated",
-      // aligned: the tasks are the asked work (for a cyclical instruction, any number of repeats of it).
-      // narrower: the asked work AND meaningfully more.
-      // broader: only part of the asked work actually happened.
-      // different: coherent purposeful work, but not the asked work.
-      // unrelated: the footage does not match the instruction (likely mislabeled).
-    "note": "<one line: if the instruction and the tasks diverge, why; empty if aligned>"
-  }
-Decide goal_alignment before the tasks' outcomes, and keep them consistent: a task doing the asked work with
-outcome success cannot sit beside a "different" or "unrelated" relation.
-"""
-
-
-def session_rules(r: str) -> str:
-    """Reuse session intent and outcomes with the rig's acting parts."""
-    return SESSION_RULES if r == 'handheld_gripper' else SESSION_RULES.replace('grippers move on', 'arms move on')
 
 
 # Every recording is labelled as a list of tasks, and the model decides how many there are. A recording of one
@@ -1263,10 +888,40 @@ def task_rules(r: str) -> str:
     return TASK_RULES.replace("demonstrator", "person") if r == "ego_head" else TASK_RULES
 
 
-# INSTRUCTION_RULES for a recording labelled as tasks: every clause stays, with the outcome, success_predicate and
-# progress of each task judged against the instruction in place of the one completion, and goal_alignment comparing
-# the instruction with the whole list of tasks.
-TASK_INSTRUCTION_RULES = """
+# The clauses about manner, initial state, quantity and object identity, which every task judged against the
+# instruction is held to.
+_INSTRUCTION_CLAUSES = """- An instruction can say HOW as well as WHAT: a direction, a hand, a grip, the order of steps. A
+  demonstration that reaches the end state the instruction asks for in another way did the given
+  task, not a different one: judge the outcome and progress on that end state, choose the relation
+  by what was done (aligned, or narrower or broader), and record the difference in manner as an
+  instruction_mismatch whose severity is its training impact. A detail that changes the end state
+  itself (which face of a block is up, which object ends where) is part of the end state, not manner.
+  A step whose result already holds at the first frame (a cap already off, a plug already in) is
+  part of the end state that holds, not part of the goal that never happened: keep the relation
+  aligned. Absence of that motion alone is not an instruction_mismatch unless the source explicitly asserts
+  its occurrence within this recording or declared timed coverage. Describe the missing observation as a
+  coverage limitation, without inferring from the initial state or missing motion that the action occurred
+  before recording. An initially satisfied state does not establish which earlier actions produced it.
+  Still report observed task, method or order violations and missing required end states.
+- Judge quantity and completion from the instruction's actual constraints. When its goal is satisfied
+  and the operator repeats it or performs compatible additional activity, relation narrower can describe
+  that added scope. Extra activity that preserves the requested result and violates no explicit constraint
+  does not alone establish an instruction_mismatch. Report a mismatch when a violated constraint or a
+  materially misleading instruction would teach the wrong activity, method, object or outcome. This does
+  not exempt genuine fumbles or failed attempts from operator_mistakes.
+- The objects the instruction names are part of its claim. One instruction is often written once
+  for many recordings, so the object handled in this one can be a different kind of object from the
+  one it names. Identify every object from what the frames show of it (its shape and parts, how it
+  bends, folds or opens, any lettering or markings), as you would if the instruction named no
+  object, and call it that in every field. Then compare it with the instruction. A handled object
+  of a different kind from the one named is part of the end state (which object ends where), and it
+  is an instruction_mismatch; a more specific or differently worded name for the same kind of
+  object (a mug for a cup) is not.
+"""
+
+# How to grade against the episode's instruction and fill goal_alignment (the robot rigs): every task judged against
+# the instruction is graded on what it asks, and goal_alignment compares the instruction with the whole list of tasks.
+INSTRUCTION_RULES = """
 ABOUT THE EPISODE'S INSTRUCTION (the instruction itself is given below with the episode).
 This instruction is metadata whose correctness is NOT guaranteed; treat it as a claim to check,
 not as the truth about the video. The label uses it in two different ways, for two different
@@ -1324,8 +979,10 @@ success or success_then_undone (the given goal was reached) cannot sit beside a 
 """
 
 
-# NO_INSTRUCTION_RULES for a recording labelled as tasks: each task is named and judged on its own end state.
-TASK_NO_INSTRUCTION_RULES = """
+# An episode with no instruction (a bare video, or a dataset that ships none) still needs a task to grade the
+# outcome and progress against, and a description that any motion satisfies ("rearrange the objects") makes every
+# episode a success and hides a goal that was reached and then undone.
+NO_INSTRUCTION_RULES = """
 ABOUT THE TASKS. This episode comes with no instruction, so its tasks are yours to infer from the whole episode.
 Name each as the most specific end state the demonstrator evidently worked toward (the blocks in a row, a
 tower, the cloth folded in half, the cup in the bin), read from where their actions converge, never as a
@@ -1336,20 +993,60 @@ the one that fits best and say in the task's note what leaves it uncertain.
 """
 
 
-# EGO_ANNOTATION_RULES for a recording labelled as tasks: one rule whatever the source declares, with the annotated
-# goal judged by the tasks that carry it out.
-EGO_TASK_ANNOTATION_RULES = _replace_once(
-    EGO_ANNOTATION_RULES,
-    "When the annotation gives a goal, the clip is a task episode: its tasks are the steps of that goal, and success is\n"
-    "the goal's end-state. When it gives timed subtasks but no goal, goal_alignment compares the subtask sequence as a\n"
-    "whole with what you observed. When it gives neither, each activity is judged on its own end-state.",
-    "When the annotation gives a goal, it is judged by the task or tasks that carry it out: they are judged against it\n"
-    "(judged_against \"instruction\"), and any other task on its own end-state. Steps toward one end-state are one task\n"
-    "with subgoals, not tasks of their own, so a timed subtask at the granularity of a step is checked against the\n"
-    "timeline and key events, and is not a missing or invented task. When the annotation gives timed subtasks but no\n"
-    "goal, goal_alignment compares the subtask sequence as a whole with what you observed. When it gives neither, each\n"
-    "task is judged on its own end-state.",
-)
+# The timeline at the level of action phases: every distinct action, grasp, release, error and recovery is still
+# its own segment.
+LEAN_NOTE = """
+
+TIMELINE GRANULARITY:
+- Segment the timeline at the level of distinct ACTION PHASES, not per-second or per-frame.
+  Merge contiguous frames of ONE continuous action by ONE arm into a SINGLE segment: a whole
+  reach is one segment, a whole transport is one segment, a whole placement is one segment. A
+  typical episode is a few dozen segments, not hundreds. This coarseness is deliberate.
+- You MUST still emit a separate segment for every distinct action, every grasp, every release,
+  every placement, every error, and every recovery, and whenever the acting arm or the
+  manipulated object changes. Coarser segmentation may NEVER drop a real event; it only merges
+  frames that are the same ongoing action.
+- Keep values terse: short action/object strings, and set "notes" to null unless it carries real
+  information.
+- Everything else (tasks, goal_alignment, key_events, data_issues, operator_mistakes,
+  recovery, state_changes, scene) is unchanged in content; only the timeline's granularity and verbosity
+  change. Do not drop detail from those sections.
+"""
+
+
+def lean(r: str) -> str:
+    """The note that keeps the timeline at the level of action phases, with the acting part named as the rig
+    names it."""
+    if r == "handheld_gripper":
+        return _replace_once(LEAN_NOTE, "by ONE arm", "by ONE gripper").replace("acting arm", "acting gripper")
+    if r == "ego_head":
+        return _replace_once(LEAN_NOTE, "by ONE arm", "by ONE hand").replace("acting arm", "acting hand")
+    return LEAN_NOTE
+
+
+def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool = True) -> str:
+    """Everything before the episode's own facts: the schema, the data contract, TASK_RULES, then how to use the
+    episode's instruction (INSTRUCTION_RULES, or NO_INSTRUCTION_RULES without one) or, for the head camera, the
+    dataset's annotation, and the note on the timeline's granularity. A robot recording setup has up to four variants
+    (instruction present or not, recorded or video only), the head camera two (recorded or video only). Every
+    episode of the same variant shares the cached prefix. recorded False (no recorded state and no other signal,
+    label/episode.py is_recorded) takes out every word about a recorded motion. A saved task mode never changes the
+    text: every recording is a list of tasks."""
+    head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
+    if r == "ego_head":
+        return head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + task_rules(r) + EGO_ANNOTATION_RULES + lean(r)
+    rules = INSTRUCTION_RULES if has_instruction else NO_INSTRUCTION_RULES
+    return (head + what_this_is(r) + schema(r, recorded) + data_contract(r, recorded) + task_rules(r) + rules
+            + lean(r))
+
+
+def requested_outcome(r: str, *, has_instruction: bool) -> str:
+    """Where the instructions of this request ask the reply to put its outcome, read from the text fixed_instructions
+    sends for it: "tasks", since every task carries its own outcome."""
+    text = fixed_instructions(r, has_instruction=has_instruction)
+    if '"tasks": [' not in text:
+        raise RuntimeError('the instructions ask for no outcome field')
+    return 'tasks'
 
 
 def example_block(r: str, example_dir: str | Path | None) -> str:

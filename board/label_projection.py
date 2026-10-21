@@ -50,7 +50,11 @@ def recording_completion(tasks) -> dict:
         return {**empty, 'reason': 'its one task continues past a cut of the recording, so its outcome is open',
                 'from_tasks': 1}
     if len(rows) == 1:
-        return {**{name: copy.deepcopy(rows[0].get(key)) for name, key in COMPLETION_FROM_TASK}, 'from_tasks': 1}
+        out = {**{name: copy.deepcopy(rows[0].get(key)) for name, key in COMPLETION_FROM_TASK}, 'from_tasks': 1}
+        word = out['task_completed'].strip().lower() if isinstance(out['task_completed'], str) else None
+        if word in OUTCOMES:
+            out['task_completed'] = word      # "Success" is success, as the parser reads a completion's outcome
+        return out
     reason = 'no task observed' if not rows else f"{len(rows)} tasks; each task's outcome is under tasks"
     return {**empty, 'reason': reason, 'from_tasks': len(rows)}
 
@@ -63,10 +67,12 @@ def derive_completion(labels: dict) -> dict:
     if not isinstance(labels, dict):
         return labels
     out = dict(labels)
-    if 'completion' in out:
+    derived = recording_completion(out.get('tasks'))
+    # labels read again (a saved record checked on resume) already hold the derived completion
+    if 'completion' in out and out['completion'] != derived:
         out['_schema_violations'] = [*(out.get('_schema_violations') or []),
                                      'completion: the output format has no completion; it is derived from tasks']
-    out['completion'] = recording_completion(out.get('tasks'))
+    out['completion'] = derived
     return out
 
 

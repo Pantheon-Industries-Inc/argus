@@ -31,14 +31,36 @@ def test_model_policy_controls_real_request_cadence_and_resume_identity(tmp_path
     assert not harness.same_input_identity(default, changed)
 
 
-def test_policy_preserves_declared_session_context_and_explicit_model_precedence():
+def test_policy_preserves_saved_context_and_explicit_model_precedence():
     ctx = {'profile': 'handheld_gripper', 'instruction': 'Several assembly tasks at this station.', 'sessions': True}
     ctx['annotation_policy'] = policy.resolve(ctx, dataset_note='An open-ended assembly session.')
     resolved = policy.resolve(ctx, model=policy.SOL61)
-    assert resolved['task_mode'] == 'session' and resolved['reasoning'] == 'high'
-    assert resolved['dataset_note'] == 'An open-ended assembly session.'
-    assert policy.resolve(ctx, task_mode='episode')['task_mode'] == 'episode'
-    assert policy.resolve({'profile': 'handheld_gripper', 'instruction': ''})['task_mode'] == 'episode'
+    assert resolved['reasoning'] == 'high' and resolved['dataset_note'] == 'An open-ended assembly session.'
+
+
+@pytest.mark.parametrize('declared', [{'sessions': True}, {'task_mode': 'session'}, {'task_mode': 'episode'}, {}])
+def test_a_new_policy_names_no_task_mode_whatever_the_source_declares(declared):
+    """Every request asks for a list of tasks, so a source's declaration of episodes or sessions is provenance only and
+    a new policy carries no task mode."""
+    assert 'task_mode' not in policy.resolve({'profile': 'teleop_arms', **declared})
+
+
+@pytest.mark.parametrize('mode', policy.TASK_MODES)
+def test_a_saved_or_replayed_legacy_task_mode_comes_back_unchanged(mode):
+    """A policy saved in the episode or session mode resolves to itself, so a Data Review job prepared then resumes
+    (review/__main__.py verified_preparation compares them) and a saved request replays with its own identity."""
+    saved = {**policy.resolve({'profile': 'teleop_arms'}), 'task_mode': mode}
+    assert policy.resolve({'profile': 'teleop_arms', 'annotation_policy': saved}) == saved
+    assert policy.resolve({'profile': 'teleop_arms'}, task_mode=mode)['task_mode'] == mode
+    with pytest.raises(ValueError, match='task mode'):
+        policy.resolve({'profile': 'teleop_arms'}, task_mode='sessions')
+
+
+def test_the_command_line_has_no_task_mode():
+    import argparse
+    parser = argparse.ArgumentParser()
+    policy.add_arguments(parser)
+    assert not any('--task-mode' in action.option_strings for action in parser._actions)
 
 
 def test_inherited_provider_policy_is_checked_before_routing(tmp_path, monkeypatch):

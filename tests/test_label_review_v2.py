@@ -136,16 +136,16 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
     assert target.read_bytes() == original and sent == ['selection', 'final']
 
 
-@pytest.mark.parametrize('row,completion', [
-    ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': 50}, {'task_completed': 'success'}),
-    ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': '0.5'}, {'task_completed': 'success'}),
-    ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': .5}, {'task_completed': 'Success'}),
+@pytest.mark.parametrize('row,outcome', [
+    ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': 50}, 'success'),
+    ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': '0.5'}, 'success'),
+    ({'start_s': 0, 'end_s': 1, 'action': 'reach', 'progress': .5}, 'Success'),
 ])
-def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch, row, completion):
+def test_partial_paid_annotation_is_preserved_and_resumed(tmp_path, monkeypatch, row, outcome):
     from test_camera_timing import recording
     ep = recording(tmp_path, np.arange(12) / 30)
     sent = []
-    reply = {'timeline': [row], 'completion': completion}
+    reply = {'timeline': [row], 'tasks': [{'start_s': 0, 'end_s': 1, 'task': 'reach', 'outcome': outcome}]}
     def provider(request, timeout):
         payload = json.loads(request.data)
         selection = 'FIELD INVENTORY' in json.dumps(payload['messages'])

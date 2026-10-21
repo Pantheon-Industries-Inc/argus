@@ -7,6 +7,9 @@ VERSION = 1
 ASTRA = 'openai/gpt-6-astra'
 SOL61 = 'openai/gpt-6.1-sol'
 PERIODS = {'teleop_arms': 1.5, 'handheld_gripper': 1.0, 'ego_head': 0.5}
+# The task modes a policy saved before the tasks format names. Every request now asks for a list of tasks
+# (label/prompts.py fixed_instructions), so a new policy names none. A saved mode, or one a replay passes from a saved
+# policy, is kept as it is, so a job labelled then resumes and rebinds its paid replies; it never changes the request.
 TASK_MODES = ('episode', 'session')
 # OpenAI counts reasoning tokens inside max_completion_tokens, so a call's output limit is
 # the answer it writes plus room to reason at its effort. Medium is about twice the most
@@ -74,11 +77,9 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
         period = 1.0 if sol else PERIODS[rig]
     if sol and period > 1.0:
         raise ValueError('GPT-6.1 Sol requires at least 1 sample per second')
-    declared = ctx.get('task_mode')
-    if declared is None and ctx.get('sessions') is True:
-        declared = 'session'
-    mode = task_mode or saved.get('task_mode') or declared or 'episode'
-    if mode not in TASK_MODES:
+    # a source's declaration (ctx task_mode or sessions, prepare/annotations.py) is provenance only
+    mode = task_mode or saved.get('task_mode')
+    if mode is not None and mode not in TASK_MODES:
         raise ValueError('task mode must be episode or session')
     note = dataset_note if dataset_note is not None else saved.get('dataset_note', ctx.get('collection_note', ''))
     if not isinstance(note, str):
@@ -99,7 +100,8 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
         raise ValueError('field dictionary must be on or off')
     return {'version': VERSION, 'rig': rig, 'model': model, 'reasoning': reasoning,
             'sample_fps': float(sample_fps) if sample_fps is not None else None,
-            'sample_every_s': period, 'part_max_s': maximum, 'task_mode': mode,
+            'sample_every_s': period, 'part_max_s': maximum,
+            **({'task_mode': mode} if mode is not None else {}),
             'dataset_note': note,
             **({'inspection': inspect} if inspect != LEGACY_INSPECTION else {}),
             **({'field_dictionary': False} if not dictionary else {})}
@@ -115,8 +117,6 @@ def add_arguments(parser) -> None:
     parser.add_argument('--reasoning', default=None, help='reasoning effort (default medium for Astra, high for every other model)')
     parser.add_argument('--sample-fps', type=float, default=None,
                         help='optional sampling override; GPT-6.1 Sol defaults to at least 1 FPS')
-    parser.add_argument('--task-mode', choices=TASK_MODES, default=None,
-                        help='optional task-scope override; source declarations otherwise apply')
     parser.add_argument('--dataset-note', default=None, help='dataset description supplied as recording context')
     parser.add_argument('--inspection', choices=INSPECTION_MODES, default=None,
                         help='paid evidence selection before each annotation: auto (default) for a recording with depth '

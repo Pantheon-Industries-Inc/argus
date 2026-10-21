@@ -537,8 +537,8 @@ def test_videos_adapter_prepares_each_file_with_its_instruction(tmp_path):
 
 
 @pytest.mark.parametrize("rig,view,name,rule", [
-    ("teleop_arms", "exo", "clip", "ABOUT THE TASK. This episode comes with no instruction"),
-    ("handheld_gripper", "right", "gripper", "ABOUT THE TASK. This episode comes with no instruction"),
+    ("teleop_arms", "exo", "clip", "ABOUT THE TASKS. This episode comes with no instruction"),
+    ("handheld_gripper", "right", "gripper", "ABOUT THE TASKS. This episode comes with no instruction"),
     ("ego_head", "exo", "head", "THE DATASET'S ANNOTATION FOR THIS EPISODE: none")])
 def test_videos_adapter_takes_a_bare_video_of_any_rig(tmp_path, rig, view, name, rule):
     """One file with no instruction: the rig decides the camera's slot and name, and the model is told to infer the

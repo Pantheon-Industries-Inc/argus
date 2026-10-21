@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from board.label_projection import recording_completion
 from label import evidence_access as ea, harness
 from label.dictionary_stage import output_spend, output_spend_complete
 from label.errors import DispatchError, SpendCap
@@ -232,7 +233,9 @@ def test_batch_stage_cap_includes_final_floor_and_resume_does_not_rebill(tmp_pat
     assert harness.run_batch([ep], out, **args) == 0
     assert calls == ['selection', 'mechanics', 'final']
     saved = json.loads((out / (ep.name + '.json')).read_text())
-    assert saved['labels'] == complete_reply.labels('A hand holds the object.')
+    reply = complete_reply.labels('A hand holds the object.')
+    # the recording's completion is derived from its one task (board/label_projection.py recording_completion)
+    assert saved['labels'] == {**reply, 'completion': recording_completion(reply['tasks'])}
     assert saved['sensor_analysis']['response_text'] == '{"sensor_findings": []}'
     assert output_spend(out) == pytest.approx(.13) and output_spend_complete(out)
     assert harness.run_batch([ep], out, **args) == 0

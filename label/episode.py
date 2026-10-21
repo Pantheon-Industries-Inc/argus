@@ -2183,9 +2183,8 @@ def ego_annotation_block(ctx: dict) -> str:
         return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
     lines = annotation_lines(ctx)
-    goal_label = "recording context goal" if policy.effective(ctx).get("task_mode") == "session" else "goal"
     return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE (claims to check, see ABOUT THE DATASET'S ANNOTATION above):\n"
-            + (f"  {goal_label}: \"{goal}\"\n" if goal else "")
+            + (f"  goal: \"{goal}\"\n" if goal else "")
             + ("  subtasks, with the times the dataset gives:\n" + "\n".join(lines) + "\n" if lines else "")
             + (f"  about these annotations: {ctx['annotation_note'].strip()}\n" if ctx.get("annotation_note") else ""))
 
@@ -2839,11 +2838,8 @@ def task_block(ep: dict) -> str:
         return annotations
     label = "; ".join(ctx.get("task_label") or [])
     # the rules for using the instruction are the same for every episode and live in the cached
-    # instructions (instruction_rules); only the instruction itself belongs to the episode
-    if policy.effective(ctx).get("task_mode") == "session":
-        return ("\nTHE INSTRUCTION FOR THIS RECORDING, as the dataset gives it:\n"
-                f"  \"{given}\"\nHow to check it is set out under ABOUT THE RECORDING'S INSTRUCTION above.\n"
-                + annotations)
+    # instructions (INSTRUCTION_RULES); only the instruction itself belongs to the episode, whatever task mode a
+    # saved policy names
     s = ("\nTHE TASK FOR THIS EPISODE WAS GIVEN TO YOU as the dataset's per-episode instruction:\n"
          f"  \"{given}\"\nHow to use it is set out under ABOUT THE EPISODE'S INSTRUCTION above.\n")
     if ctx.get("instruction_note"):
@@ -2887,8 +2883,7 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
     native = (c0.get("width") or "native", c0.get("height") or "resolution")
     given = (ctx.get("instruction") or "").strip()
     blocks = present_blocks(ep, pl) if blocks is None else blocks
-    fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl, blocks),
-                                      sessions=policy.effective(ctx).get("task_mode") == "session")
+    fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl, blocks))
     fixed += prompts.example_block(r, example_dir)
     if any(block.name == 'sensor_evidence' for block in blocks):
         fixed = (prompts.EVIDENCE_CONTRACT + '\nVISUAL ANNOTATION CONTRACT\n' + fixed
@@ -2906,7 +2901,8 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
                   sample_fps=None, task_mode=None, dataset_note=None, derived_dir=None, read_only=False,
                   inspection=None) -> dict:
     """Everything the harness sends for one episode (content parts), and what it records about it. cell_w fixes
-    the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell."""
+    the cell width; max_cell_w (the routed width, label/route.py) replaces the rig's default widest cell. task_mode
+    only reproduces a saved policy (label/policy.py resolve); it never changes the request."""
     ep = load(ep_dir)
     ep['context']['annotation_policy'] = policy.resolve(ep['context'], model=model, reasoning=reasoning,
         sample_fps=sample_fps, task_mode=task_mode, dataset_note=dataset_note, inspection=inspection)

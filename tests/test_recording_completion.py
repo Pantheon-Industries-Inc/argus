@@ -46,6 +46,8 @@ def test_a_reply_supplied_completion_is_replaced_and_noted():
     assert any(v.startswith('completion:') for v in out['_schema_violations'])
     clean = derive_completion({'tasks': [TASK, TASK]})
     assert clean['completion']['from_tasks'] == 2 and '_schema_violations' not in clean
+    # labels read again keep their derived completion and gain no note
+    assert derive_completion(clean) == clean and derive_completion(out)['_schema_violations'] == out['_schema_violations']
     assert LABEL_SCHEMA == 'tasks'
 
 

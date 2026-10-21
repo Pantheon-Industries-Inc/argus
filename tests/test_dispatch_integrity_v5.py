@@ -10,6 +10,7 @@ import sys
 import numpy as np
 import pytest
 
+from board.label_projection import recording_completion
 from label import evidence_access as ea, harness, run
 from label.dictionary_stage import output_spend
 from test_camera_timing import recording
@@ -91,7 +92,8 @@ def test_unhashable_evidence_reference_keeps_paid_reply(tmp_path, monkeypatch, e
     out = tmp_path / 'out'
     assert harness.run_batch([ep], out, **options()) == 0
     result = json.loads((out / (ep.name + '.json')).read_text())
-    assert result['parse_ok'] and result['labels'] == final
+    # the recording's completion is derived from its one task (board/label_projection.py recording_completion)
+    assert result['parse_ok'] and result['labels'] == {**final, 'completion': recording_completion(final['tasks'])}
     assert result['sensor_evidence']['unbound_findings']
     assert output_spend(out) == pytest.approx(.006)
     assert harness.run_batch([ep], out, **options()) == 0 and sent == ['selection', 'final']

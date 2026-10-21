@@ -343,8 +343,8 @@ def main() -> int:
         ap.error("--timeout must be positive")
     if a.max_tokens is not None and a.max_tokens <= 0:
         ap.error('--max-tokens must be positive')
-    overrides = {key: getattr(a, key) for key in ("model", "reasoning", "sample_fps", "task_mode", "dataset_note",
-                                                  "inspection", "field_dictionary")}
+    overrides = {key: getattr(a, key) for key in ("model", "reasoning", "sample_fps", "dataset_note", "inspection",
+                                                  "field_dictionary")}
     policy.resolve({"profile": a.rig}, **overrides)
 
     if a.force and a.retry_received:
