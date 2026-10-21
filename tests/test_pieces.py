@@ -1091,6 +1091,31 @@ def test_blanket_continuation_requires_the_adjacent_parts_to_describe_a_continua
     assert len(ambiguous) == 3
 
 
+def test_an_unclear_task_ending_at_our_cut_continues_past_it_whatever_its_note_says():
+    """A UMI recording's real part-1 task (fob_47b204-1da855ba-867-234), in the model's own words: its span ends at the
+    part's internal cut, so its unclear outcome is the cut's, even with a fumble inside the task and a note that names
+    the cut in words no phrase test knows. A partial outcome is a judgment and keeps the stricter test."""
+    cut = 426.559
+    task = {'start_s': 0.0, 'end_s': 426.53, 'task': 'Thread the loose colored rings onto the blue peg board.',
+            'objects': ['colored rings', 'blue peg board'], 'outcome': 'unclear', 'success_predicate': 'All rings on posts.',
+            'completed_at_s': None,
+            'note': 'Only one continuing objective is visible in this window. Multiple ring stacks are built, but loose '
+                    'rings remain and the last ring is still being aligned when this preparation part ends; the eventual '
+                    'outcome is outside the supplied window.',
+            'source_piece': {'index': 1, 't0_s': 0.0, 't1_s': cut}}
+    labels = {'timeline': [{'start_s': 120.0, 'end_s': 124.0, 'contribution': 'wasteful',
+                            'source_piece': {'index': 1, 't0_s': 0.0, 't1_s': cut}}]}
+    [marked] = pieces.mark_cut_tasks([task], [cut], labels)
+    assert marked['outcome'] == 'continues_past_cut' and marked['outcome_in_part'] == 'unclear'
+    assert marked['cut_continuation']['t_s'] == cut
+    partial = {**task, 'outcome': 'partial'}
+    assert pieces.mark_cut_tasks([partial], [cut], labels) == [partial]
+    away = {**task, 'end_s': 300.0}
+    assert pieces.mark_cut_tasks([away], [cut], labels) == [away]
+    reached = {**task, 'goal_reached_at_s': 410.0}
+    assert pieces.mark_cut_tasks([reached], [cut], labels) == [reached]
+
+
 def test_stitch_retains_near_cut_failures_and_complete_task_outcome_evidence(tmp_path, monkeypatch):
     _, src, parts = _three_parts(tmp_path, monkeypatch)
     pcs = [json.loads((p / 'context.json').read_text()) for p in parts]

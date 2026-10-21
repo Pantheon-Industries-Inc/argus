@@ -1058,19 +1058,24 @@ def join_across_cuts(tasks: list, cuts_s: list[float]) -> list:
 
 
 def mark_cut_tasks(tasks: list, cuts_s: list[float], labels: dict | None = None) -> list:
-    """Qualify an explicitly unfinished task at its owning internal end, retaining the part's original judgment."""
+    """Qualify an unfinished task at its owning internal end, retaining the part's original judgment. The task's own
+    span establishes that our cut ended its view, so an unclear outcome there is qualified whatever its note says: it
+    holds no judgment to lose, and an incident inside the task stays recorded as its own event or mistake. A partial or
+    failure outcome is a judgment, so it is qualified only when the note attributes it to the cut alone and no incident
+    is observed in the task."""
     from label.episode import number
     out = []
     for task in tasks:
         tail = _last_task(task)
         end = number(task.get("end_s"))
         cut = _internal_boundary(tail.get("source_piece") or {}, "end", cuts_s)
-        if (cut is not None and end is not None and cut - JOIN_GUARD_S <= end <= cut + .001
+        at_cut = (cut is not None and end is not None and cut - JOIN_GUARD_S <= end <= cut + .001
+                  and number(task.get("goal_reached_at_s")) is None and number(task.get("undone_at_s")) is None)
+        if at_cut and (task.get("outcome") == "unclear" or (
+                task.get("outcome") in ("partial", "failure")
                 and "end" in _cut_sides({"note": tail.get("note")})
                 and _boundary_only_text(tail.get('note'))
-                and not _observed_incident(tail, labels or {}, cuts_s)
-                and task.get("outcome") in ("partial", "failure", "unclear")
-                and number(task.get("goal_reached_at_s")) is None and number(task.get("undone_at_s")) is None):
+                and not _observed_incident(tail, labels or {}, cuts_s))):
             task = {**task, "outcome": "continues_past_cut", "outcome_in_part": task.get("outcome"),
                     "completed_at_s_in_part": task.get("completed_at_s"), "completed_at_s": None,
                     "cut_continuation": {"side": "end", "t_s": cut, "evidence": tail.get("note")},
