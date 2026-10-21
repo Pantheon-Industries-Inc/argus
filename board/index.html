@@ -831,6 +831,12 @@ section.right { overflow-y: auto; padding: 22px 28px; }
   color: var(--fg-3); padding-top: 1px;
 }
 .prompt-banner .gr-text { font-size: 14px; line-height: 1.5; color: var(--fg-2); }
+/* the dataset's timed steps, numbered as a task's subtask names them */
+.prompt-banner .gs-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.prompt-banner .gs-step { display: grid; grid-template-columns: 2ch 9ch 1fr; gap: 8px; font-size: 13px; line-height: 1.45; }
+.prompt-banner .gs-n { color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.prompt-banner .gs-t { color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.prompt-banner .gs-l { color: var(--fg); overflow-wrap: anywhere; }
 /* alignment chip: whether the model's independent assessment matches the given goal */
 .align-chip {
   display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin-top: 10px;
@@ -6662,29 +6668,50 @@ function renderEp(d, opts) {
   // a session labelled from a recording that carries its own instruction shows that instruction above the summary:
   // whether there is one is read from the instruction, never from the mode the recording was labelled in
   const givenSession = hasTasks && !partProgress && !!meta.given_prompt;
+  // A record in the tasks format (its completion names its basis) shows every claim the dataset makes, each beside the
+  // model's own reading: the instruction beside its assessment, the dataset's timed steps beside the tasks it found,
+  // and with neither, the goal it inferred with its success criterion. An older record keeps its banner.
+  const tasksFormat = comp.basis != null;
+  const steps = tasksFormat ? (d.dataset_labels || []).filter(x => x && x.label != null) : [];
+  const stepsOnly = tasksFormat && !!steps.length && !meta.given_prompt;
+  const secs = t => (t == null || isNaN(Number(t)) ? '' : `${Number(t).toFixed(1)}s`);
+  const stepLines = steps.map((x, i) => `<div class="gs-step"><span class="gs-n">${i + 1}</span>`
+    + `<span class="gs-t">${esc([secs(x.t0), secs(x.t1)].filter(Boolean).join('-'))}</span>`
+    + `<span class="gs-l">${esc(x.label)}</span></div>`).join('');
+  const readTasks = (d.tasks || []).filter(t => t && t.task);
   const bannerLabel = partProgress && meta.given_prompt ? 'Source task'
+    : stepsOnly ? `The dataset's timed steps and ${whoOwn(who, 'tasks')}`
     : givenSession ? 'Given task and session summary' : hasTasks ? 'Session summary'
     : givenMode ? `Given goal and ${whoOwn(who, 'independent assessment')}`
     : `Task, as ${esc(nameParts(who)[0])}${nameParts(who)[1] ? ` (${esc(nameParts(who)[1])})` : ''} assessed it`;
-  // alignment chip: whether the model's independent assessment matches the given goal
+  // alignment chip: whether the model's independent reading matches what the dataset claims (its instruction, or with
+  // none its timed steps)
   const ga = d.goal_alignment || null;
+  const claim = stepsOnly ? "the dataset's steps" : 'given goal';
   let alignHtml = '';
-  if ((givenMode || givenSession) && ga && ga.relation) {
+  if ((givenMode || givenSession || stepsOnly) && ga && ga.relation) {
     const rel = String(ga.relation).toLowerCase();
     // green when the footage shows the given goal done (alone, or with more besides), red when it shows only part of
     // it or something else
     const matches = ga.matches_given !== false && (rel === 'aligned' || rel === 'narrower');
     const known = !Object.hasOwn(ga, 'matches_given') || typeof ga.matches_given === 'boolean';
     const cls = !known ? 'unknown' : matches ? 'match' : 'nomatch';
-    const label = !known ? 'goal match unclear' : rel === 'narrower' && matches ? 'matches given goal and does more'
-      : matches ? 'matches given goal'
-      : rel === 'broader' && ga.matches_given !== false ? 'only part of the given goal'
-      : 'does not match given goal';
+    const label = !known ? 'goal match unclear' : rel === 'narrower' && matches ? `matches ${claim} and does more`
+      : matches ? `matches ${claim}`
+      : rel === 'broader' && ga.matches_given !== false ? `only part of ${claim === 'given goal' ? 'the given goal' : claim}`
+      : `does not match ${claim}`;
     alignHtml = `<div class="align-chip ${cls}"><span>${esc(label)}</span>`
       + `${ga.note ? `<span class="ac-note">${esc(ga.note)}</span>` : ''}</div>`;
   }
+  const stepsHtml = steps.length ? `<div class="goal-given gs"><span class="gg-badge">dataset's timed steps</span>`
+    + `<div class="gs-list">${stepLines}</div></div>` : '';
+  const criterion = tasksFormat && comp.success_predicate ? `<div class="goal-read"><span class="gr-badge">success `
+    + `criterion</span><span class="gr-text">${esc(comp.success_predicate)}</span></div>` : '';
   const bannerBody = partProgress && meta.given_prompt
-    ? `<div class="text">${esc(meta.given_prompt)}</div>` : givenSession
+    ? `<div class="text">${esc(meta.given_prompt)}</div>` : stepsOnly
+    ? stepsHtml + `<div class="goal-read"><span class="gr-badge">${whoOwn(who, 'tasks')}</span>`
+        + `<span class="gr-text">${esc(readTasks.map(t => t.task).join('; ') || d.episode_prompt || '(empty)')}</span>`
+        + `</div>` + alignHtml : givenSession
     ? `<div class="goal-given"><span class="gg-badge">given task</span>`
         + `<span class="gg-text">${esc(meta.given_prompt)}</span></div>`
       + `<div class="goal-read"><span class="gr-badge">session summary</span>`
@@ -6693,8 +6720,8 @@ function renderEp(d, opts) {
         + `<span class="gg-text">${esc(meta.given_prompt)}</span></div>`
       + `<div class="goal-read"><span class="gr-badge">${whoOwn(who, 'independent assessment')}</span>`
         + `<span class="gr-text">${esc(d.episode_prompt || '(empty)')}</span></div>`
-      + alignHtml
-    : `<div class="text">${esc(d.episode_prompt || '(empty)')}</div>`;
+      + alignHtml + stepsHtml
+    : `<div class="text">${esc(d.episode_prompt || '(empty)')}</div>` + criterion;
 
   // Key events (milestone layer), sorted.
   const keyEvents = (d.key_events || []).filter(k => k.t_s != null)

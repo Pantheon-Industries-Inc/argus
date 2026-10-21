@@ -17,9 +17,9 @@ const cut = (a, b) => { const i = s.indexOf(a), j = s.indexOf(b, i); if (i < 0 |
 const fn = name => cut(`function ${name}(`, '\n}\n') + '\n}\n';
 const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const src = fn('nameParts') + fn('whoOwn') + cut('  // Given or inferred. When the dataset ships', '  // Key events (milestone layer), sorted.');
-const banner = new Function('d', 'meta', 'hasTasks', 'who', 'esc', src + 'return {bannerLabel, bannerBody};');
+const banner = new Function('d', 'comp', 'meta', 'hasTasks', 'who', 'esc', src + 'return {bannerLabel, bannerBody};');
 const cases = JSON.parse(process.argv[2]);
-console.log(JSON.stringify(cases.map(c => banner(c.d, c.meta, c.hasTasks, 'Astra', esc))));
+console.log(JSON.stringify(cases.map(c => banner(c.d, c.d.completion || {}, c.meta, c.hasTasks, 'Astra', esc))));
 '''
 
 CASES = [
@@ -64,11 +64,11 @@ ALIGNED = {'relation': 'aligned', 'matches_given': True}
 TASK_CASES = [
     # one task: its verdict is the recording's, shown as an episode against its instruction, with the alignment chip
     {'d': {'episode_prompt': 'stacks the cups', 'goal_alignment': ALIGNED, 'tasks': [TASK],
-           'completion': {'task_completed': 'success', 'from_tasks': 1}},
+           'completion': {'task_completed': 'success', 'from_tasks': 1, 'basis': 'one_task'}},
      'meta': {'prompt_mode': 'given', 'given_prompt': 'stack the cups'}},
     # several tasks: no verdict, each task shown, the instruction above the summary and the chip beside them
     {'d': {'episode_prompt': 'stacks the cups twice', 'goal_alignment': ALIGNED, 'tasks': [TASK, TASK],
-           'completion': {'task_completed': None, 'from_tasks': 2}},
+           'completion': {'task_completed': None, 'from_tasks': 2, 'basis': 'tasks'}},
      'meta': {'prompt_mode': 'given', 'given_prompt': '(Cyclical) stack the cups, then reset'}},
     # a record labelled before the tasks format with a verdict and tasks keeps its tasks
     {'d': {'episode_prompt': 'stacks the cups', 'tasks': [TASK, TASK], 'completion': {'task_completed': 'unclear'}},
@@ -89,3 +89,36 @@ def test_a_recording_of_one_task_reads_as_an_episode_and_one_of_several_task_by_
     assert several['shown'] == 2 and several['bannerLabel'] == 'Given task and session summary'
     assert 'matches given goal' in several['bannerBody']
     assert legacy['shown'] == 2 and episode['shown'] == 0
+
+
+STRUCTURE_CASES = [
+    # the dataset's timed steps and no instruction: the steps beside the tasks the model found, and their alignment
+    {'d': {'episode_prompt': 'stacks the cups', 'tasks': [TASK, {**TASK, 'task': 'wipe the table'}],
+           'goal_alignment': {'relation': 'broader', 'matches_given': True},
+           'dataset_labels': [{'t0': 0, 't1': 4.5, 'label': 'stack the cups'}, {'t0': 4.5, 't1': 9, 'label': 'wipe up'}],
+           'completion': {'task_completed': None, 'basis': 'task_prompts', 'from_tasks': 2}},
+     'meta': {'prompt_mode': 'inferred'}},
+    # neither: the goal the model inferred, with its success criterion
+    {'d': {'episode_prompt': 'stacks the cups', 'tasks': [TASK],
+           'completion': {'task_completed': 'success', 'success_predicate': 'three cups stacked', 'basis': 'one_task'}},
+     'meta': {'prompt_mode': 'inferred'}},
+    # an instruction and timed steps: the instruction and assessment, the chip, then the steps
+    {'d': {'episode_prompt': 'stacks the cups', 'goal_alignment': ALIGNED, 'tasks': [TASK],
+           'dataset_labels': [{'t0': 0, 't1': 9, 'label': 'stack the cups'}],
+           'completion': {'task_completed': 'success', 'basis': 'instruction'}},
+     'meta': {'prompt_mode': 'given', 'given_prompt': 'stack the cups'}},
+]
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='no node')
+def test_the_banner_shows_every_claim_the_dataset_makes_beside_the_models_reading():
+    p = subprocess.run(['node', '-e', TASKS_SCRIPT, str(PAGE), json.dumps(STRUCTURE_CASES)], text=True,
+                       capture_output=True)
+    assert p.returncode == 0, p.stderr
+    steps, neither, both = json.loads(p.stdout)
+    assert steps['bannerLabel'].startswith("The dataset's timed steps and")
+    assert 'wipe up' in steps['bannerBody'] and 'wipe the table' in steps['bannerBody']
+    assert "only part of the dataset's steps" in steps['bannerBody']
+    assert 'success criterion' in neither['bannerBody'] and 'three cups stacked' in neither['bannerBody']
+    body = both['bannerBody']
+    assert body.index('given goal') < body.index('matches given goal') < body.index('timed steps')
