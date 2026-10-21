@@ -2183,7 +2183,7 @@ def ego_annotation_block(ctx: dict) -> str:
         return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE: none; the dataset ships no task description for this "
                 "clip. Infer the activities from the footage alone and leave goal_alignment out.\n")
     lines = annotation_lines(ctx)
-    goal_label = "recording context goal" if policy.effective(ctx)["task_mode"] == "session" else "goal"
+    goal_label = "recording context goal" if policy.effective(ctx).get("task_mode") == "session" else "goal"
     return ("\nTHE DATASET'S ANNOTATION FOR THIS EPISODE (claims to check, see ABOUT THE DATASET'S ANNOTATION above):\n"
             + (f"  {goal_label}: \"{goal}\"\n" if goal else "")
             + ("  subtasks, with the times the dataset gives:\n" + "\n".join(lines) + "\n" if lines else "")
@@ -2840,7 +2840,7 @@ def task_block(ep: dict) -> str:
     label = "; ".join(ctx.get("task_label") or [])
     # the rules for using the instruction are the same for every episode and live in the cached
     # instructions (instruction_rules); only the instruction itself belongs to the episode
-    if policy.effective(ctx)["task_mode"] == "session":
+    if policy.effective(ctx).get("task_mode") == "session":
         return ("\nTHE INSTRUCTION FOR THIS RECORDING, as the dataset gives it:\n"
                 f"  \"{given}\"\nHow to check it is set out under ABOUT THE RECORDING'S INSTRUCTION above.\n"
                 + annotations)
@@ -2888,7 +2888,7 @@ def build_prompt(ep: dict, pl: dict, *, cell_w: int, cell_h: int, example_dir=No
     given = (ctx.get("instruction") or "").strip()
     blocks = present_blocks(ep, pl) if blocks is None else blocks
     fixed = prompts.fixed_instructions(r, has_instruction=bool(given), recorded=is_recorded(ep, pl, blocks),
-                                      sessions=policy.effective(ctx)["task_mode"] == "session")
+                                      sessions=policy.effective(ctx).get("task_mode") == "session")
     fixed += prompts.example_block(r, example_dir)
     if any(block.name == 'sensor_evidence' for block in blocks):
         fixed = (prompts.EVIDENCE_CONTRACT + '\nVISUAL ANNOTATION CONTRACT\n' + fixed

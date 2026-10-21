@@ -151,7 +151,7 @@ def _one(record: dict, ep_dir: Path) -> list[dict]:
     try:
         current = harness.input_identity(ep_dir, model=recipe['model'], reasoning=recipe['reasoning'],
             max_tokens=settings['max_tokens'], cell_w=settings['cell_w'], example_dir=examples,
-            sample_fps=selected.get('sample_fps'), task_mode=selected['task_mode'],
+            sample_fps=selected.get('sample_fps'), task_mode=selected.get('task_mode'),
             dataset_note=selected.get('dataset_note'),
             inspection=policy.inspection_mode(selected))
         if not _same_grid_inputs(identity, current):
@@ -159,7 +159,7 @@ def _one(record: dict, ep_dir: Path) -> list[dict]:
         req = me.build_request(ep_dir, cell_w=recipe['cell'][0], grid_cols=recipe['grid_cols'],
             grid_quality=recipe['grid_quality'], detail=recipe['detail'], example_dir=examples,
             model=recipe['model'], reasoning=recipe['reasoning'], sample_fps=1 / selected['sample_every_s'],
-            task_mode=selected['task_mode'], dataset_note=selected.get('dataset_note'), inspect_evidence=False)
+            task_mode=selected.get('task_mode'), dataset_note=selected.get('dataset_note'), inspect_evidence=False)
     except GridError:
         raise
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as error:

@@ -747,7 +747,7 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
     _combine_request_config(cfg)
     result = {"episode_dir": str(ep_dir), "model": first.get("model"), "reasoning_effort": first.get("reasoning_effort"),
             'annotation_policy': selected,
-            'prompt_mode': ('session' if selected['task_mode'] == 'session'
+            'prompt_mode': ('session' if selected.get('task_mode') == 'session'
                             else 'given' if (ctx.get('instruction') or '').strip() else 'inferred'),
             **({'jaw_evidence': jaw_evidence} if jaw_evidence else {}),
             **({'evidence_inspection': inspection} if inspection['parts'] else {}),
@@ -1371,7 +1371,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             # each part was checked against the recording's instruction on what it shows (write_pieces); the parts'
             # comparisons are under part_assessments, since no part sees the whole asked work
             "given_prompt": (ctx.get("instruction") or "").strip() or None,
-            "prompt_mode": ("session" if selected['task_mode'] == 'session'
+            "prompt_mode": ("session" if selected.get('task_mode') == 'session'
                             else "given" if (ctx.get("instruction") or "").strip() else "inferred"),
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,

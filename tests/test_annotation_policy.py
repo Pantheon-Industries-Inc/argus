@@ -89,3 +89,16 @@ def test_the_paid_calls_beside_the_annotation_are_on_by_default_and_written_only
     same = harness.input_identity(ep, **kw, inspection='auto')
     assert harness.same_input_identity(harness.input_identity(ep, **kw), same)
     assert not harness.same_input_identity(same, harness.input_identity(ep, **kw, inspection='off'))
+
+
+def test_every_reader_of_a_saved_policy_takes_its_task_mode_as_optional():
+    """A policy saved without a task mode (every policy from the tasks format on, label/policy.py resolve) is read
+    by request replay (grids, request attestation, resume's input check), parts and the request record alike; a
+    subscript read would raise KeyError, which resume swallows into "inputs changed" and refuses every dispatch."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    reads = [f'{path.relative_to(root)}:{n}' for path in sorted((root / 'label').glob('*.py'))
+             for n, line in enumerate(path.read_text().splitlines(), 1)
+             if re.search(r"""\[\s*['"]task_mode['"]\s*\]""", line) and not re.search(r"""\[\s*['"]task_mode['"]\s*\]\s*=""", line)]
+    assert reads == []

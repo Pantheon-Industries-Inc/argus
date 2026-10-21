@@ -470,7 +470,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         **billing,
         **({"sensor_evidence": req["sensor_evidence"]} if req.get("sensor_evidence", {}).get("sensors") else {}),
         "given_prompt": req["given_prompt"],
-        "prompt_mode": "session" if resolved["task_mode"] == "session" else "given" if req["given_prompt"] else "inferred",
+        "prompt_mode": "session" if resolved.get("task_mode") == "session" else "given" if req["given_prompt"] else "inferred",
         "task_label": req["task_label"],
         "sampling": req["sampling"],
         "arm_still_spans": req["still_spans"],
@@ -1376,7 +1376,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
             selected = settings['annotation_policy']
             current = input_identity(ep_dir, model=model, reasoning=reasoning, max_tokens=max_tokens,
                 cell_w=settings['cell_w'], example_dir=fields.get('example_dir'),
-                sample_fps=selected.get('sample_fps'), task_mode=selected['task_mode'],
+                sample_fps=selected.get('sample_fps'), task_mode=selected.get('task_mode'),
                 dataset_note=selected.get('dataset_note'),
                 inspection=policy.inspection_mode(selected))
             valid = same_input_identity(saved, current) and not any(item.get('missing') for item in current['source_proof'])
