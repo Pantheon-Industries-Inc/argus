@@ -35,7 +35,7 @@ It is the only harness to combine native multi-format ingestion (rather than res
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Pantheon-Industries-Inc/argus/refs/heads/main/media/architecture.svg?v=8d1d9e2c030a">
-    <img src="media/architecture.svg?v=8d1d9e2c030a" width="1900" alt="Annotation pipeline: format ingestion, field interpretation (on by default), visual, state and sensor evidence, evidence inspection (automatic for depth and touch recordings, and for fields the prompt does not carry), VLM annotation of behavior, state changes and sensor findings with a separate regional pass for tactile arrays, issue detection, temporal stitching of request parts and of the tasks that continue across them, and a viewer with chosen sensor cards, quality scores and JSON exports.">
+    <img src="media/architecture.svg?v=8d1d9e2c030a" width="1900" alt="Annotation pipeline: format ingestion, field interpretation (on by default), visual, state and sensor evidence, evidence inspection (automatic for depth and touch recordings, and for fields the prompt does not carry), VLM annotation of behavior, state changes and sensor findings with a separate regional pass for tactile arrays, issue detection, temporal stitching of request parts, and a viewer with chosen sensor cards, quality scores and JSON exports.">
   </a>
 </p>
 
@@ -100,7 +100,7 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 | [`--force`](review/__main__.py) | Off | Relabels every selected episode with new paid calls, keeping earlier replies and charges |
 | [`--retry-received EPISODE`](review/__main__.py) | None | Sends that episode's request again after an unusable reply the model wrote, or after a provider failure that has used its two automatic resends; repeat for each episode |
 
-Each recording produces one episode. A recording longer than one request allows (450s at default sampling, less at denser sampling) is cut at still moments, labelled in parts and rejoined on the original timeline. Each part is checked against the recording's instruction on what that part shows. No part sees both its start and its end, and the recording is judged by its tasks joined across the cuts. Rerunning a review with the same [`--out`](review/__main__.py) folder resumes it and reuses every output whose inputs still match. Inputs are matched by content hash, with the file stat only as a cache key ([`label/content_identity.py`](label/content_identity.py)). [`--free`](review/__main__.py) previews the base requests only, without field interpretation, routing, inspection or sensor cards.
+Each recording produces one episode. A recording longer than one request allows (450s at default sampling, less at denser sampling) is cut at still moments, labelled in parts and rejoined on the original timeline. Each part is checked against the recording's instruction on what that part shows. Rerunning a review with the same [`--out`](review/__main__.py) folder resumes it and reuses every output whose inputs still match. Inputs are matched by content hash, with the file stat only as a cache key ([`label/content_identity.py`](label/content_identity.py)). [`--free`](review/__main__.py) previews the base requests only, without field interpretation, routing, inspection or sensor cards.
 
 ## Results and further use
 
