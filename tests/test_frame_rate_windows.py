@@ -81,17 +81,25 @@ def test_a_clock_whose_median_step_is_a_microsecond_is_measured_over_its_span():
     assert f.measured_fps(np.arange(300) / 30.0) == 30.0
 
 
-def _prepared(tmp_path, n: int = 1800):
+def _doubled_clock(n: int = 301) -> np.ndarray:
+    """n capture times (s) of a camera whose median step is 1/60 s but just under half of whose intervals are doubled,
+    as ABC-130k stations stamp frames 1 or 2 intervals apart: 60 fps by the median step, about 40 over the span."""
+    steps = np.full(n - 1, 1 / 60)
+    steps[1:-2:2] = 2 / 60
+    return np.concatenate([[0.0], np.cumsum(steps)])
+
+
+def _prepared(tmp_path, n: int = 1800, clock=None, fps=STATED, name="episode_clustered"):
     """A prepared episode as ABC-130k's adapter wrote episode_0070d777: real capture times on a clustered clock, a
-    stated fps of 976562.5 and two signals that track each other."""
-    d = tmp_path / "episode_clustered"
+    stated fps of 976562.5 and two signals that track each other (or the given clock and stated fps)."""
+    d = tmp_path / name
     d.mkdir()
     cmd, arm = _follows(n)
     np.savez(d / "signals.npz", s0=cmd[:, None].astype(np.float32), s1=arm[:, None].astype(np.float32))
-    np.savez(d / "times.npz", exo=_clustered_clock(n))
+    np.savez(d / "times.npz", exo=_clustered_clock(n) if clock is None else clock)
     (d / "sources.json").write_text(json.dumps({"exo": {"n_frames": n}}))
     (d / "context.json").write_text(json.dumps({
-        "dataset": "fixture", "profile": "teleop_arms", "state_kind": "none", "fps": STATED, "n_state_frames": n,
+        "dataset": "fixture", "profile": "teleop_arms", "state_kind": "none", "fps": fps, "n_state_frames": n,
         "real_times": "times.npz", "cameras": {"exo": {"width": 64, "height": 36}},
         "signals": [{"name": "left command", "key": "s0", "dims": 1}, {"name": "left joint", "key": "s1", "dims": 1}]}))
     return d
@@ -124,14 +132,76 @@ def test_every_reader_of_an_already_prepared_episode_reads_its_frames_rate(tmp_p
     from gate import score
     from label import pieces
     from label.run import footage_hours
-    from prepare.frame_rate import episode_fps, frames_seconds
+    from prepare.frame_rate import episode_fps, episode_seconds
     d = _prepared(tmp_path)
     ctx = json.loads((d / "context.json").read_text())
     rate, note = episode_fps(ctx, ep_dir=d)
     assert abs(rate - 30.0) < 0.01 and note["stated_fps"] == STATED
-    for seconds in (frames_seconds(ctx, ep_dir=d), footage_hours(tmp_path, [d.name]) * 3600,
+    for seconds in (episode_seconds(ctx, ep_dir=d), footage_hours(tmp_path, [d.name]) * 3600,
                     pieces.duration(ctx, d), build.episode_seconds(ctx, d), score.duration_s(d)):
         assert abs(seconds - 60.0) < 0.1, seconds
+
+
+def test_a_median_step_the_span_contradicts_gives_way_to_the_frames_rate():
+    """A rate measured from capture times is the median step's only while the frames over their span agree with it
+    (frame_rate.measured_rate). 249 of 3,417 ABC-130k episodes were written at a median rate their span contradicts:
+    60 fps on frames that come at 30, and 976562.5 fps on frames 1 us apart in pairs."""
+    t = _doubled_clock()
+    own = (len(t) - 1) / (t[-1] - t[0])
+    assert abs(np.median(np.diff(t)) - 1 / 60) < 1e-12 and 40 < own < 41
+    assert abs(abc130k.measured_fps(np.round(t * 1e9)) - own) < 0.01
+    assert abs(f.measured_fps(t) - own) < 0.01
+    assert abs(abc130k.measured_fps(np.round(_clustered_clock(3077) * 1e9)) - 30.0) < 0.01
+    # frames that agree with their median step to within SPAN_AGREEMENT keep its rate exactly, and a pause in the
+    # recording is no frame interval: neither changes the rate an adapter writes
+    dropped = np.delete(np.arange(3000) / 30.0, np.arange(100, 3000, 100))      # 1% of frames dropped
+    paused = np.r_[np.arange(1500), np.arange(1500) + 6000] / 30.0               # recording stopped for 150 s
+    for t in (np.arange(300) / 30.0, dropped, paused):
+        assert f.measured_fps(t) == 30.0 and abc130k.measured_fps(t * 1e9) == 30.0
+
+
+def test_every_length_reader_takes_an_old_episodes_length_from_its_capture_span(tmp_path):
+    """An episode prepared before adapters wrote duration_s, at the 60 fps its median step gave while its frames come at
+    40 fps over their span: no reader divides its frame count by that rate, every one reads the capture span plus one
+    frame step, and a stated duration_s is read as written."""
+    from board import build
+    from gate import score
+    from label import pieces
+    from label.run import footage_hours
+    from prepare.frame_rate import episode_seconds, frames_seconds
+    t = _doubled_clock()
+    d = _prepared(tmp_path, n=len(t), clock=t, fps=60.0, name="episode_doubled")
+    ctx = json.loads((d / "context.json").read_text())
+    span = (t[-1] - t[0]) * len(t) / (len(t) - 1)
+    assert abs(frames_seconds(ctx, ep_dir=d) - span) > 2.0       # the length counted from the stated rate is wrong
+    readers = lambda c: (episode_seconds(c, ep_dir=d), footage_hours(tmp_path, [d.name]) * 3600,  # noqa: E731
+                         pieces.duration(c, d), build.episode_seconds(c, d), score.duration_s(d))
+    for seconds in readers(ctx):
+        assert abs(seconds - span) < 1e-6, seconds
+    (d / "context.json").write_text(json.dumps({**ctx, "duration_s": 12.5}))
+    for seconds in readers({**ctx, "duration_s": 12.5}):
+        assert seconds == 12.5
+
+
+def test_the_abc_adapter_writes_the_span_rate_and_the_capture_length(tmp_path):
+    """The ABC-130k adapter on a recording stamped 1 or 2 frame intervals apart (median 1/60 s): its context states the
+    frames' rate over their span and duration_s from the capture times, and the generic reader of the same file reads
+    the same length."""
+    from prepare.frame_rate import episode_seconds
+    from test_abc_generic import capture_mcap, converted, published
+    steps = np.ones(20)
+    steps[1:18:2] = 2                                  # 9 of 20 intervals doubled
+    capture = np.round(np.concatenate([[0.0], np.cumsum(steps)]) * 1e9 / 60).astype(np.int64)
+    root = tmp_path / "native"
+    root.mkdir()
+    capture_mcap(root / "episode.mcap", n=len(capture), capture_ns=capture)
+    _, ctx = published(root / "episode.mcap", tmp_path / "old")
+    span = (capture[-1] - capture[0]) / 1e9
+    assert abs(ctx["fps"] - 20 / span) < 0.01
+    # the wrist cameras are stamped 2 and 4 ms after the top camera, so the footage ends 4 ms after the top's last frame
+    assert abs(ctx["duration_s"] - (span + 0.004 + 1 / ctx["fps"])) < 0.002
+    generic, gctx = converted(root, tmp_path / "generic")
+    assert abs(episode_seconds(gctx, ep_dir=generic) - ctx["duration_s"]) < 0.05
 
 
 def _raw_rate_reads(path) -> list[str]:
@@ -156,6 +226,9 @@ def _raw_rate_reads(path) -> list[str]:
                 out.append(f"{path}:{t.start[0]}")
         if t.string == "declared_fps" and after[:1] == ["("] and after[1:2] in (["ctx"], ["context"], ["c"]):
             out.append(f"{path}:{t.start[0]}")
+        # a length counted from a frame count at a rate, where the capture times may say otherwise (episode_seconds)
+        if t.string == "frames_seconds" and after[:1] == ["("]:
+            out.append(f"{path}:{t.start[0]}")
     return out
 
 
@@ -173,7 +246,8 @@ def test_only_the_frame_rate_module_reads_a_frame_rate():
 def test_the_guard_sees_each_kind_of_raw_read(tmp_path):
     p = tmp_path / "m.py"
     for code in ('x = ctx.get("fps")', "x = ctx['fps']", 'x = ctx["n_state_frames"] / 30',
-                 "x = (c.get('n_state_frames') or 0) / rate", "keys = ('fps', 'n')", 'x = declared_fps(ctx)'):
+                 "x = (c.get('n_state_frames') or 0) / rate", "keys = ('fps', 'n')", 'x = declared_fps(ctx)',
+                 'x = ctx.get("duration_s") or frames_seconds(ctx, ep_dir=d)'):
         p.write_text(code + "\n")
         assert _raw_rate_reads(p), code
     for code in ('d = {"fps": 30}', "ctx['fps'] = 30", '"""a docstring that says fps"""', 'x = declared_fps(info)'):

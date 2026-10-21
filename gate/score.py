@@ -26,13 +26,11 @@ import json
 import re
 from pathlib import Path
 
-import numpy as np
-
 from board.label_projection import SEVERITY_RANK
 from checks import label_consistency
 from label.harness import PRICE_IN, DEFAULT_MODEL, annotation_record, billing_view
 from label.receipts import billing_summary
-from prepare.frame_rate import frames_seconds
+from prepare.frame_rate import episode_seconds
 
 HERE = Path(__file__).resolve().parent
 RIGS = ("teleop", "handheld", "ego")
@@ -61,15 +59,10 @@ def case_for(name: str, cases: dict) -> dict | None:
 
 
 def duration_s(ep_dir: Path) -> float:
-    """The episode's length: its recorded duration, else the span of its real frame times, else frames / fps."""
+    """The episode's length (prepare/frame_rate.py episode_seconds: its duration_s, else the span of its capture
+    times, else its frame count at its frame rate)."""
     c = json.loads((Path(ep_dir) / "context.json").read_text())
-    if c.get("duration_s"):
-        return float(c["duration_s"])
-    if c.get("real_times"):
-        z = np.load(Path(ep_dir) / c["real_times"])
-        t = z[next(v for v in ("exo", "left", "right") if v in z.files)]
-        return float(t[-1] - t[0])
-    return frames_seconds(c, ep_dir=ep_dir)
+    return episode_seconds(c, ep_dir=ep_dir)
 
 
 def texts_handled(labels: dict) -> list[str]:

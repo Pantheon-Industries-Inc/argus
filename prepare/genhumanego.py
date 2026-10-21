@@ -30,6 +30,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import formats
 from prepare import hub
+from prepare.frame_rate import capture_seconds
 from prepare.mcap_source import decoded_messages
 from prepare.remux import RemuxSourceError, remux  # each frame's recorded time as its pts (shared with ABC-130k, RealOmni)
 from label.presented import presented_pts
@@ -215,6 +216,8 @@ def write_sidecar(raw: Path, dst: Path) -> dict:
         # the recorded times place each frame; the file's own pts (the same times, rounded to its time base) find it
         np.savez(dst / "times.npz", exo=np.asarray(recorded, dtype=np.float64), exo_pts=np.asarray(pts, dtype=np.int64))
         ctx["real_times"] = "times.npz"
+        # the footage's length from the recorded times, so no reader counts it from the rate
+        ctx["duration_s"] = round(capture_seconds([recorded], fps), 3)
     src = {"exo": {"packed": str((raw / camera_file).resolve()), "base_s": 0.0, "n_frames": n}}
     (dst / "sources.json").write_text(json.dumps(src, indent=1))
     write_atomic(dst / "context.json", ctx, indent=1)

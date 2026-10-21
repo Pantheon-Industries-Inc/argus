@@ -35,7 +35,7 @@ import numpy as np
 
 from label.atomic import write_atomic
 from label import policy
-from prepare.frame_rate import frames_seconds
+from prepare.frame_rate import episode_seconds
 
 # Not read here: the part limit is piece_max (policy part_max_s). Kept because Data Review's vendor check
 # (upload/vendor_repo.py NEEDS in the Data repo) requires this name in this file.
@@ -51,7 +51,7 @@ def piece_max(ctx: dict) -> float:
 
 
 def duration(ctx: dict, ep_dir: Path | None = None) -> float:
-    return float(ctx.get("duration_s") or frames_seconds(ctx, ep_dir=ep_dir))
+    return float(episode_seconds(ctx, ep_dir=ep_dir))
 
 
 def needs_pieces(ep_dir: Path) -> bool:

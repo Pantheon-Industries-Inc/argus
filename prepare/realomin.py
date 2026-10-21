@@ -40,7 +40,7 @@ from prepare import formats
 from prepare.mcap_source import decoded_messages
 from prepare.remux import RemuxSourceError, remux  # each frame's capture time as its pts
 from label.presented import presented_pts
-from prepare.frame_rate import frames_seconds
+from prepare.frame_rate import capture_seconds, episode_seconds
 
 REPO = "genrobot2025/10Kh-RealOmin-OpenData"
 CAMERA_TOPICS = {"/robot0/sensor/camera0/compressed": "left", "/robot1/sensor/camera0/compressed": "right"}
@@ -179,9 +179,12 @@ def convert(mcap_path: Path, ep: Path, rel: str) -> dict:
             src[v]["kmap"] = f"kmap_{v}.npy"
     np.savez(ep / "times.npz", **times)
     task = task_of(rel)
+    fps = formats.measured_fps((anchor_t - t0) / 1e9) or 30.0     # the anchor camera's real rate, not assumed
     ctx = {"dataset": REPO, "profile": "handheld_gripper", "state_kind": "ee_pose" if state is not None else "none", "episode_id": ep.name,
            "robot_type": "two handheld GenDAS grippers with wrist fisheye cameras",
-           "fps": formats.measured_fps((anchor_t - t0) / 1e9) or 30.0,     # the anchor camera's real rate, not assumed
+           "fps": fps,
+           # the footage's length from the capture times on the anchor's clock, so no reader counts it from the rate
+           "duration_s": round(capture_seconds([times[v] for v in cts], fps, zero=0.0), 3),
            "n_state_frames": int(len(anchor_t)), "real_times": "times.npz", "instruction": task,
            "instruction_note": ("This instruction is only the task category of the folder the dataset files the clip "
                                 "under; the dataset ships no per-episode instruction, so judge alignment loosely."),
@@ -276,7 +279,7 @@ def cmd_sample(a) -> int:
             for ctx in ex.map(lambda r: drawn(r, a.raw, a.out, a.keep_mcap), batch):
                 if ctx:
                     got.append(ctx)
-                    secs += frames_seconds(ctx)
+                    secs += episode_seconds(ctx)
             print(f"clips {len(got)} hours {secs / 3600:.2f}", flush=True)
     lst = a.list or Path(f"{a.out}.txt")
     lst.write_text("\n".join(sorted(c["source"]["mcap"] for c in got)) + "\n")

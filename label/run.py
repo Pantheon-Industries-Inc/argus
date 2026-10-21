@@ -33,7 +33,7 @@ from pathlib import Path
 from label.harness import annotation_complete, annotation_record, execution_lock, get_keys, is_openrouter_key
 from label.dictionary_stage import output_spend, output_spend_complete
 from label.atomic import write_atomic
-from prepare.frame_rate import frames_seconds
+from prepare.frame_rate import episode_seconds
 
 REPO = Path(__file__).resolve().parent.parent
 PY = Path(sys.executable)
@@ -78,14 +78,12 @@ def billed_cost(run: Path) -> float:
 
 
 def footage_hours(slice_dir: Path, names: list[str]) -> float:
-    """Hours of recording from declared spans, with legacy frame-count fallback."""
+    """Hours of recording, each episode's length from prepare/frame_rate.py episode_seconds (its duration_s, else the
+    span of its capture times, else its frame count at its frame rate)."""
     s = 0.0
     for n in names:
         c = json.loads((slice_dir / n / "context.json").read_text())
-        duration = c.get('duration_s')
-        if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
-            duration = frames_seconds(c, ep_dir=slice_dir / n)
-        s += duration
+        s += episode_seconds(c, ep_dir=slice_dir / n)
     return s / 3600
 
 

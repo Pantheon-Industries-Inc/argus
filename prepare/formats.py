@@ -151,7 +151,7 @@ from prepare.isolation import allow_quiet, beating, quiet_allowance
 from prepare.camera_clock import UNKNOWN_CAMERA_FPS, camera_issue_kind, coarse_rows, presentation_clock
 from prepare.state_notes import STATE_WHY
 from prepare.signal_alignment import ALIGNED_ROWS, ALIGNED_ASSUMED, ALIGNED_CAMERA, COARSE_CLOCK
-from prepare.frame_rate import KEY as FPS_KEY, declared_fps, episode_fps, frames_seconds, stored_fps
+from prepare.frame_rate import KEY as FPS_KEY, declared_fps, episode_fps, episode_seconds, stored_fps
 
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -1116,12 +1116,11 @@ def seconds(pr: dict) -> np.ndarray:
 
 
 def measured_fps(t: np.ndarray) -> float | None:
-    """A clock's frame rate from its median step (seconds), or its frames' rate over their span when stamps a few
-    microseconds apart make that median no frame interval (frame_rate.supported_rate)."""
-    from prepare.frame_rate import supported_rate
-    d = np.diff(np.asarray(t, dtype=np.float64))
-    d = d[d > 1e-6]
-    return supported_rate(round(1.0 / float(np.median(d)), 3), t)[0] if len(d) else None
+    """A clock's frame rate from its median step (seconds), or its frames' rate over their span when that median is no
+    frame interval: stamps a few microseconds apart, or frames stamped 1, 2 or 3 intervals apart
+    (frame_rate.measured_rate)."""
+    from prepare.frame_rate import measured_rate
+    return measured_rate(t, min_step=1e-6, digits=3)
 
 
 def nearest(src_t: np.ndarray, q: np.ndarray) -> np.ndarray:
@@ -13831,7 +13830,7 @@ def _convert_upload(root, rig, out, dataset, max_seconds, grouping, ownership_co
             write_atomic(out / ctx["episode_id"] / "context.json", ctx, indent=1, default=str)
         if source["tables"]:
             ctx = add_table_notes(out / ctx["episode_id"], ctx, table_rows_for(source["tables"], it))
-        secs = float(ctx.get("duration_s") or frames_seconds(ctx, ep_dir=out / ctx["episode_id"]))
+        secs = float(episode_seconds(ctx, ep_dir=out / ctx["episode_id"]))
         if first and secs > max_seconds + 1:
             # one recording longer than the whole limit: its first max_seconds are labelled, never nothing
             ctx = trim_episode(out / ctx["episode_id"], max_seconds)

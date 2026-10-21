@@ -35,7 +35,7 @@ from label.atomic import write_atomic, write_bytes_atomic
 from prepare import cli
 from prepare import hub
 from label.presented import presented_pts
-from prepare.frame_rate import declared_fps, frames_seconds
+from prepare.frame_rate import capture_seconds, declared_fps, episode_seconds
 
 
 REPO = "builddotai/Egocentric-100K"
@@ -145,6 +145,8 @@ def prepare_clip(shard: str, member: str, raw: Path, out_root: Path) -> dict:
         t = np.asarray([float(p * tb) for p in pts]) - float(pts[0] * tb)
         np.savez(ep / "times.npz", exo=t, exo_pts=np.asarray(pts, dtype=np.int64))
         ctx["real_times"] = "times.npz"
+        # off the declared rate's grid: the footage's length from its frame times, not from the rate
+        ctx["duration_s"] = round(capture_seconds([t], fps), 3)
     src = {"exo": {"packed": str(mp4.resolve()), "base_s": 0.0, "n_frames": n}}
     (ep / "sources.json").write_text(json.dumps(src, indent=1))
     write_atomic(ep / "context.json", ctx, indent=1)
@@ -201,7 +203,7 @@ def cmd_sample(a) -> int:
             for ctx in ex.map(lambda j: drawn(j[0], j[1], a.raw, a.out), jobs):
                 if ctx:
                     got.append(ctx)
-                    secs += frames_seconds(ctx)
+                    secs += episode_seconds(ctx)
             print(f"clips {len(got)} hours {secs / 3600:.2f}", flush=True)
     lst = a.list or Path(f"{a.out}.txt")
     lst.write_text("\n".join(sorted(f"{c['source']['shard']} {c['source']['member']}" for c in got)) + "\n")

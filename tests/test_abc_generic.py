@@ -38,11 +38,14 @@ def schema(*, typed=False):
     return result
 
 
-def capture_mcap(path, *, n=6, omit=(), bad_header=None, top='/top-camera', tied=None, instruction=True, typed=False):
+def capture_mcap(path, *, n=6, omit=(), bad_header=None, top='/top-camera', tied=None, instruction=True, typed=False,
+                 capture_ns=None):
+    """capture_ns: each frame's capture time from the first, ns (default every 33 ms)."""
     types = schema(typed=typed)
     frames = _h264_frames(n)
     base = 1_700_000_000_000_000_000
-    capture = base + np.arange(n, dtype=np.int64) * 33_000_000
+    capture = base + (np.arange(n, dtype=np.int64) * 33_000_000 if capture_ns is None
+                      else np.asarray(capture_ns, dtype=np.int64))
     with Writer(str(path)) as writer:
         writer._writer.add_metadata('source', {'task_name': 'align fabric', 'operator_id': 'fixture operator',
             'station_id': 'fixture station', 'top_camera_width': '64', 'top_camera_height': '48'})

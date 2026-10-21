@@ -69,7 +69,7 @@ from label.atomic import temporary_path, write_atomic
 from label.presented import presented, presented_pts
 from prepare import tools
 from prepare.isolation import run_while_progressing
-from prepare.frame_rate import declared_fps, episode_fps, frames_seconds
+from prepare.frame_rate import declared_fps, episode_fps, episode_seconds
 
 CAMS = ("exo", "left", "right")
 
@@ -1453,7 +1453,7 @@ def record_cameras(ep_dir: Path, short: dict, broken: dict, cut, keep_clock: boo
         ctx = _context(ep_dir)
         src = json.loads((ep_dir / "sources.json").read_text())
     zero = float(ctx.get("clock_zero_s") or 0.0)
-    episode_end = float(ctx.get("duration_s") or frames_seconds(ctx, ep_dir=ep_dir))
+    episode_end = float(episode_seconds(ctx, ep_dir=ep_dir))
     for v in sorted(short, key=order):
         n = short[v]
         end = clip_end_s(ep_dir, ctx, src, v, int(n["clip_frames"]))

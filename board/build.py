@@ -124,7 +124,7 @@ from board.to_board import (and_list, convert, dumps, field_words, label_failed,
 from checks import label_consistency
 from board import scores
 from label.atomic import write_atomic
-from prepare.frame_rate import episode_fps, frames_seconds
+from prepare.frame_rate import episode_fps, episode_seconds as frame_episode_seconds
 
 SEVERITIES = ["low", "medium", "high"]
 # the deterministic checks copied from context.json into the episode's dataset_checks
@@ -145,21 +145,9 @@ def capture_names(cq: dict) -> dict:
 
 
 def episode_seconds(ctx: dict, ep_dir: Path | None = None) -> float | None:
-    """The episode's length: the sidecar's own duration (from the video's timestamps) when it has one, then
-    the span of its real per-frame capture times (ABC-130k stations record below the 30 fps their files
-    declare, so frame count over fps understates them), otherwise its frame count over its frame rate."""
-    if ctx.get("duration_s"):
-        return float(ctx["duration_s"])
-    if ep_dir is not None and ctx.get("real_times") and (ep_dir / ctx["real_times"]).exists():
-        import numpy as np
-        from prepare.camera_clock import load_times
-        z = load_times(ep_dir, ctx)
-        cam = next((k for k in ("exo", "left", "right") if k in z), None)
-        if cam is not None and len(z[cam]) > 1:
-            t = z[cam].astype(float)
-            return float(t[-1] - t[0] + np.median(np.diff(t)))
-    seconds = frames_seconds(ctx, ep_dir=ep_dir, default=None)
-    return seconds or None
+    """The episode's length (prepare/frame_rate.py episode_seconds: its duration_s, else the span of its capture
+    times, else its frame count at its frame rate), or None without one."""
+    return frame_episode_seconds(ctx, ep_dir=ep_dir, default=None) or None
 
 
 def _cap(issues: list, tags: list, cap: str, reason: str) -> list:

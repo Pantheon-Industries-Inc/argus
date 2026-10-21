@@ -39,6 +39,7 @@ from label.atomic import write_atomic
 from prepare import cli
 from prepare import hub
 from prepare import formats
+from prepare.frame_rate import capture_seconds
 from prepare.mcap_source import decoded_messages
 from prepare.remux import RemuxSourceError, remux  # each frame's real capture time as its pts (shared with RealOmni, Gen-HumanEgo)
 
@@ -124,13 +125,12 @@ def read_mcap(path: Path) -> dict:
 def measured_fps(t_ns: np.ndarray) -> float:
     """The anchor camera's real frame rate from its capture times (ns). Stations record at 30 or 60 Hz, and the
     harness samples one frame per second by counting fps frames, so a fixed 30 sampled 60 Hz episodes every 0.5 s.
-    A camera that stamps most frames microseconds after the one before has a median step that is no frame interval,
-    so its frames' rate over their span is used instead (frame_rate.supported_rate)."""
-    from prepare.frame_rate import supported_rate
-    t = np.asarray(t_ns, dtype=np.float64)
-    d = np.diff(t)
-    d = d[d > 0]
-    return supported_rate(round(1e9 / float(np.median(d)), 2), t / 1e9)[0] if len(d) else float(NOMINAL_FPS)
+    A camera that stamps frames 1, 2 or 3 intervals apart, or most of them microseconds after the one before, has a
+    median step that is no frame interval, so its frames' rate over their span is used instead
+    (frame_rate.measured_rate)."""
+    from prepare.frame_rate import measured_rate
+    rate = measured_rate(t_ns, per_second=1e9, digits=2)
+    return float(NOMINAL_FPS) if rate is None else rate
 
 
 def interp(stream: dict, q: np.ndarray) -> tuple[np.ndarray | None, tuple[float, float] | None]:
@@ -241,6 +241,7 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
     meta = d["meta"]
     cams = {"exo": ("top", top), "left": ("left", VIEW_TOPIC["left"]), "right": ("right", VIEW_TOPIC["right"])}
     station = "ZED-X" if top == "/top-left-camera" else "RealSense"
+    fps = measured_fps(anchor_t)
     context = {
         "dataset": REPO,
         "profile": "teleop_arms",
@@ -252,7 +253,9 @@ def convert(mcap: Path, ep_dir: Path, ep_name: str, task: str, split: str | None
         "episode_id": ep_name,
         "split": split,
         "robot_type": "bimanual YAM station (2x 6-DoF YAM arms, parallel-jaw grippers)",
-        "fps": measured_fps(anchor_t),
+        "fps": fps,
+        # the footage's length from the capture times, so no reader counts it from the rate
+        "duration_s": round(capture_seconds([times[v] for v in kept], fps), 3),
         "task_label": [task],
         "instruction": (d["instruction"] or meta.get("task_name") or "").strip(),
         "instruction_note": ("This instruction is the task name the recording rig stored for the episode "
