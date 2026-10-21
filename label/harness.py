@@ -938,6 +938,7 @@ def parse_response(text: str) -> tuple[dict, bool]:
         _model_diagnostics(labels)
         had_rows = bool(labels.get('timeline'))
         labels = typed_labels(normalize_timeline(labels))
+        derive_instruction_mismatch(labels)
         completion = labels.get('completion')
         if isinstance(completion, dict) and completion.get('task_completed') is not None and completion['task_completed'] not in (
                 'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
@@ -961,6 +962,32 @@ def parse_response(text: str) -> tuple[dict, bool]:
         return labels, True
     except Exception as e:  # noqa: BLE001 - any reply that does not parse is kept raw, with why
         return {"_raw": text, "_parse_error": f"{type(e).__name__}: {e}"[:300]}, False
+
+
+def derive_instruction_mismatch(labels: dict) -> None:
+    """The prompt's rule that a reply whose goal_alignment says the work is not the asked work also reports it as an
+    instruction_mismatch data issue (label/prompts.py INSTRUCTION_RULES and SESSION_INSTRUCTION_RULES), held in code.
+    When goal_alignment has relation different or unrelated, or matches_given false, and no data issue has the
+    category instruction_mismatch, one is added from the goal_alignment note, marked derived_from goal_alignment. A
+    reply that already reports one keeps it as it is. Running this again on its output changes nothing."""
+    alignment = labels.get('goal_alignment')
+    if not isinstance(alignment, dict):
+        return
+    relation = alignment.get('relation')
+    if relation not in ('different', 'unrelated') and alignment.get('matches_given') is not False:
+        return
+    issues = labels.get('data_issues')
+    if issues is not None and not isinstance(issues, list):
+        return
+    if any(isinstance(row, dict) and row.get('category') == 'instruction_mismatch' for row in issues or []):
+        return
+    note = alignment.get('note')
+    what = note.strip() if isinstance(note, str) and note.strip() else (
+        f"The recorded work does not match the instruction (goal_alignment relation {relation}, "
+        f"matches_given {str(alignment.get('matches_given')).lower()}).")
+    labels['data_issues'] = list(issues or []) + [{
+        'issue': what, 'category': 'instruction_mismatch', 'severity': 'high', 't_s': None, 'end_s': None,
+        'evidence': 'goal_alignment of this reply', 'derived_from': 'goal_alignment'}]
 
 
 def json_kind(x) -> str:

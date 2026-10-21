@@ -71,6 +71,17 @@ the board from it. A rerun's episode is matched to the entry's by its resolved e
 rerun over another slice (a model comparison's, whose names are the board's file names) replaces exactly that
 entry's episodes of it. Each label's _run names the run it came from.
 
+BOARD/additions/<board file>.json, when that folder exists, adds fields to an episode's label without touching the
+run's own output: a later pass over the same episodes (a text-only goal comparison) whose results belong beside the
+paid label. Each file is
+  {"provenance": {"source": "...", "model": "...", ...},     required: where the added content came from
+   "fields": {"goal_alignment": {...}},                      optional: fields set where the label has none
+   "append": {"data_issues": [{...}]}}                       optional: rows added to the label's list fields
+An added field never overwrites one the label (or the build) already has: the label's value stands and the conflict is
+listed in the episode's addition_conflicts and in BUILT.json, as is an addition that does not read or names no episode
+of the board. Every added field that is an object and every added row carries the provenance, and _additions lists
+what was added. The addition is part of the episode's build key, so changing it rebuilds that episode.
+
 "file_prefix" is for a dataset whose episode names repeat another dataset's on the same board (HABIT and
 MolmoAct2 both have episode_000494): its board files become episode_<prefix>000494.json, and `board clips
 --name-prefix` names its clips the same way.
@@ -1071,11 +1082,87 @@ def context_unreadable(why: str) -> dict:
                     "they are not shown; the model's reply is shown as it came."}
 
 
+ADDITIONS = "additions"
+
+
+def read_additions(board: Path) -> dict:
+    """{board file: (its text, the addition or None, why it does not read or None)} for every file of
+    BOARD/additions/, or {} when the board has no such folder."""
+    folder = board / ADDITIONS
+    out = {}
+    for f in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        try:
+            text = f.read_text()
+            a = json.loads(text)
+        except (OSError, ValueError) as e:
+            out[f.name] = ("", None, f"{type(e).__name__}: {e}"[:300])
+            continue
+        why = addition_problem(a)
+        out[f.name] = (text, None if why else a, why)
+    return out
+
+
+def addition_problem(a) -> str | None:
+    """Why an addition cannot be applied, or None: it is an object with a non-empty provenance object, fields as an
+    object and append as an object of lists of objects."""
+    if not isinstance(a, dict):
+        return "it is not an object"
+    if not isinstance(a.get("provenance"), dict) or not a["provenance"]:
+        return "it has no provenance object"
+    if not isinstance(a.get("fields", {}), dict):
+        return "its fields is not an object"
+    if not isinstance(a.get("append", {}), dict) or not all(
+            isinstance(rows, list) and all(isinstance(r, dict) for r in rows) for rows in a.get("append", {}).values()):
+        return "its append is not an object of lists of objects"
+    if not a.get("fields") and not a.get("append"):
+        return "it adds nothing"
+    return None
+
+
+def _empty(v) -> bool:
+    return v is None or v == "" or v == [] or v == {}
+
+
+def apply_addition(d: dict, a: dict) -> dict:
+    """Merges an addition (read_additions) into a converted label, in place. Each field of fields is set only where the
+    label has none (absent, null or empty), and each row of append is added to that list field of the label; every
+    added field that is an object and every added row carries the addition's provenance, unless it brings its own, and
+    _additions lists what was added. A field the label already has is never overwritten: it is kept, and the conflict
+    is listed in addition_conflicts. Returns {field: value added}, so the caller can check the build left it alone."""
+    prov = a["provenance"]
+    added, done, conflicts = {}, [], []
+    for field, value in (a.get("fields") or {}).items():
+        if field.startswith("_") or not _empty(d.get(field)):
+            conflicts.append({"field": field, "why": "the label already has this field, so the addition is not applied"
+                              if not field.startswith("_") else "fields starting with _ belong to the build"})
+            continue
+        if isinstance(value, dict):
+            value = {**value, "provenance": value.get("provenance") or prov}
+        d[field] = added[field] = value
+        done.append({"field": field, "provenance": prov})
+    for field, rows in (a.get("append") or {}).items():
+        have = d.get(field)
+        if field.startswith("_") or (have is not None and not isinstance(have, list)):
+            conflicts.append({"field": field, "why": "the label's field is not a list, so the rows are not added"
+                              if not field.startswith("_") else "fields starting with _ belong to the build"})
+            continue
+        rows = [{**r, "provenance": r.get("provenance") or prov} for r in rows]
+        d[field] = list(have or []) + rows
+        done.append({"field": field, "rows": len(rows), "provenance": prov})
+    if done:
+        d["_additions"] = done
+    if conflicts:
+        d["addition_conflicts"] = conflicts
+    return added
+
+
 def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path, ctx: dict,
-                 unread: str | None = None) -> dict:
-    """One episode's board file: its label (board/to_board.py convert), provenance, context (ctx, its context.json, or
-    {} with why it did not read in unread), rules, consistency check and the parts it was stitched from."""
+                 unread: str | None = None, addition: dict | None = None) -> dict:
+    """One episode's board file: its label (board/to_board.py convert) with its addition merged in (apply_addition),
+    provenance, context (ctx, its context.json, or {} with why it did not read in unread), rules, consistency check
+    and the parts it was stitched from."""
     d = convert(r, entry["dataset"])
+    added = apply_addition(d, addition) if addition else {}
     d["_run"] = {"run_id": info["run_id"], "code": info["code"], "kind": info["kind"], "slice": info.get("slice")}
     if manifest.get("labels_license"):
         d["labels_license"] = manifest["labels_license"]    # travels with the label into every download
@@ -1096,10 +1183,20 @@ def episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, in
         # the board finds clips by episode_id; the run's own name stays for the hand pose keypoints
         d["_meta"] = {**(d.get("_meta") or {}), "episode_id": Path(fname).stem, "run_episode": name}
     carry_pieces(d, r, ctx)
+    for field, value in added.items():
+        if d.get(field) != value:
+            # the build sets this field itself (the context, the checks): its own value stands, and the addition's
+            # is reported, never silently lost
+            d.setdefault("addition_conflicts", []).append(
+                {"field": field, "why": "the build sets this field, so the addition is not applied"})
+            d["_additions"] = [x for x in d.get("_additions") or [] if x.get("field") != field]
+            if not d["_additions"]:
+                d.pop("_additions")
     return normalize_enums(d)
 
 
-def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path) -> dict:
+def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: dict, info: dict, eps: Path,
+                         addition: dict | None = None) -> dict:
     """episode_file, which never stops the build. The context is read once (read_context). When the file cannot be
     built, the context is tried alone, with no reply: one it fails on (a capture record that is not an object) does not
     read either, and the episode is built with its labels and a context_unreadable issue, so a fault of the context is
@@ -1107,7 +1204,7 @@ def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: 
     reply as text and the error (not_shown)."""
     ctx, unread = read_context(eps / name)
     try:
-        return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread)
+        return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread, addition)
     except Exception as e:  # noqa: BLE001 - the context or the reply: found below, the build goes on
         err = e
     if ctx:
@@ -1117,11 +1214,11 @@ def guarded_episode_file(entry: dict, manifest: dict, fname: str, name: str, r: 
             print(f"board: {fname}: the context could not be read ({type(e).__name__}: {e})", file=sys.stderr)
             ctx, unread = {}, f"{type(e).__name__}: {e}"[:300]
             try:
-                return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread)
+                return episode_file(entry, manifest, fname, name, r, info, eps, ctx, unread, addition)
             except Exception as e2:  # noqa: BLE001 - the reply does not read either
                 err = e2
     print(f"board: {fname}: the reply could not be read ({type(err).__name__}: {err})", file=sys.stderr)
-    return episode_file(entry, manifest, fname, name, not_shown(r, err), info, eps, ctx, unread)
+    return episode_file(entry, manifest, fname, name, not_shown(r, err), info, eps, ctx, unread, addition)
 
 
 def add_scores(qa: Path, files: list[str]) -> None:
@@ -1199,14 +1296,18 @@ def _without_targets(value):
     return value
 
 
-def episode_key(manifest: dict, entry: dict, fname: str, name: str, src, r, info: dict, ep_dir: Path) -> str:
+def episode_key(manifest: dict, entry: dict, fname: str, name: str, src, r, info: dict, ep_dir: Path,
+                addition_text: str | None = None) -> str:
     """The key of everything a board file is made from (traced: the episode folder, the run's output and run.json,
-    the manifest and the code). Equal keys make equal files, so the last build's file is used as it is."""
+    the manifest, the code and its file in BOARD/additions when it has one). Equal keys make equal files, so the last
+    build's file is used as it is."""
     import hashlib
     label = _content_text(src) if src is not None else json.dumps(r, sort_keys=True, default=str)
     parts = [code_identity(), json.dumps(_without_targets(manifest), sort_keys=True, default=str),
              json.dumps(_without_targets(entry), sort_keys=True, default=str), fname, name, str(src), label,
              json.dumps(info, sort_keys=True, default=str), *folder_identity(ep_dir)]
+    if addition_text is not None:
+        parts.append("addition:" + addition_text)
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
@@ -1255,6 +1356,8 @@ def build(board: Path, cache: bool = True) -> dict:
     counts, built_entries, written = {}, [], []
     board_src = {}      # board file -> the run output its label came from
     episodes = {}       # board file -> its prepared episode folder
+    additions = read_additions(board)     # board file -> its addition, taken as each file is built
+    added = {"files": len(additions), "episodes": 0, "conflicts": []}
     for entry in manifest.get("datasets", []):
         skipped: list = []
         run, labels = entry_labels(entry, here, skipped)
@@ -1263,12 +1366,21 @@ def build(board: Path, cache: bool = True) -> dict:
         labels.update(unlabelled(entry, eps, run, labels))
         for fname, (name, src, r, from_run) in sorted(labels.items()):
             info = infos.get(from_run) or infos.setdefault(from_run, json.loads((from_run / "run.json").read_text()))
-            key = episode_key(manifest, entry, fname, name, src, r, info, eps / name)
+            text, addition, unusable = additions.pop(fname, (None, None, None))
+            key = episode_key(manifest, entry, fname, name, src, r, info, eps / name,
+                              None if text is None else text + (unusable or ""))
             d = cached_file(board / "qa", fname, key, last.get("qa") or {})
             if d is None:
-                d = guarded_episode_file(entry, manifest, fname, name, r, info, eps)
+                d = guarded_episode_file(entry, manifest, fname, name, r, info, eps, addition)
+                if unusable:
+                    d.setdefault("addition_conflicts", []).append(
+                        {"field": None, "why": f"the addition {ADDITIONS}/{fname} is not applied: {unusable}"})
             else:
                 reused += 1
+            if d.get("_additions"):
+                added["episodes"] += 1
+            for c in d.get("addition_conflicts") or []:
+                added["conflicts"].append({"file": fname, **c})
             keys["qa"][fname] = key
             if (eps / name / "context.json").exists():
                 episodes[fname] = eps / name
@@ -1288,6 +1400,13 @@ def build(board: Path, cache: bool = True) -> dict:
     add_scores(new, written)
     if reused:
         print(f"board: {reused} of {len(written)} episodes unchanged since the last build, reused", file=sys.stderr)
+    # an addition that names no episode of the board is reported, never dropped quietly
+    added["unused"] = sorted(additions)
+    for c in added["conflicts"]:
+        print(f"board: {c['file']}: {c['why']}" + (f" ({c['field']})" if c.get("field") else ""), file=sys.stderr)
+    if added["unused"]:
+        print(f"board: {len(added['unused'])} files of {ADDITIONS}/ name no episode of this board, not applied",
+              file=sys.stderr)
     compared = build_comparisons(board, manifest, new, board_src) if manifest.get("comparisons") else None
     hands = build_hands(board, manifest["hands"], new, episodes) if manifest.get("hands") else None
     sensors = (build_sensors(board, episodes, last.get("sensors") or {}, keys["sensors"])
@@ -1301,7 +1420,7 @@ def build(board: Path, cache: bool = True) -> dict:
     write_atomic(board / BUILD_KEYS, keys, indent=None, serializer=dumps)
     built = {"manifest": {**manifest, "datasets": built_entries}, "counts": counts,
              **({"comparisons": compared} if compared else {}), **({"hands": hands} if hands else {}),
-             **({"sensors": sensors} if sensors else {})}
+             **({"sensors": sensors} if sensors else {}), **({ADDITIONS: added} if added["files"] else {})}
     write_atomic(board / "BUILT.json", built, indent=1, serializer=dumps)
     return built
 
