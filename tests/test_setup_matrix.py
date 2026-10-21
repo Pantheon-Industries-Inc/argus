@@ -3,15 +3,16 @@
 Round after round of QA found data dropped silently: a camera or signal stream, a whole episode, findings written in
 the other findings list, streams that share a name. Each was fixed where it was found. This test catches the class:
 a tiny recording of every setup the README lists is generated here, never downloaded, and run through `python -m
-review` (prepare, checks, clips, the request build, a reply, binding, the board build) and the JSON Lines export. The
-model is offline (OfflineModel): its reply cites every camera, signal and inspected evidence id its request offered,
-in every list the schema allows.
+review` (prepare, checks, clips, the request build, a reply, binding, the board build) and the JSON Lines export. One
+recording is labelled in parts and stitched, and one glove gets the separate regional pass. The model is offline
+(OfflineModel): each reply, for every part and every pass, cites every camera, signal and inspected evidence id its
+request offered, in every list the schema allows.
 
 Each fixture lists what went in (its inventory: recordings, cameras, signals, recorded fields). Every item must come
 out at every stage, the prepared episode, the request's evidence, the bound annotations, the board's episode record
 and the export, or be named in a reason the pipeline recorded (a reader issue, a left-out note, a limitation, a
-set-aside episode). Every citation the reply made must be bound or named unbound with its reason, and every bound
-finding must reach the board and the export. The checks are the same for every setup: nothing here knows what a
+set-aside episode). Every citation a reply made must be bound or named unbound with its reason, and everything a part
+kept must reach the stitched episode, the board and the export. The checks are the same for every setup: nothing here knows what a
 setup is expected to lose, only what its fixture put in."""
 from __future__ import annotations
 
@@ -44,6 +45,7 @@ class Setup:
     rig: str
     data: Path
     items: list = field(default_factory=list)
+    part_s: float | None = None     # a request part this long, so a short recording is labelled in parts
 
 
 def teleop_lerobot(root: Path) -> Setup:
@@ -102,21 +104,22 @@ def ego_head(root: Path) -> Setup:
 
 def hdf5_gloves(root: Path) -> Setup:
     """A log split over files: the scene video beside one HDF5 file per glove, each glove's array and clock under the
-    same names, with different readings."""
+    same names, with different readings, and a backup file holding the right glove's readings again."""
     import h5py
     from test_formats import _clip, _glove_h5
     data = root / 'hdf5_gloves'
     data.mkdir(parents=True)
     _clip(data / 'scene.mp4', 90)
-    for side in ('left', 'right'):
+    for side in ('left', 'right', 'right_backup'):
         _glove_h5(data / f'{side}_glove.h5', 90)
         with h5py.File(data / f'{side}_glove.h5', 'a') as h:
             h.attrs[f'{side}_glove_serial'] = f'GLV-{side}-0042'
-            if side == 'right':
+            if side.startswith('right'):
                 h['pressure'][...] = h['pressure'][()][::-1]     # the other hand presses at other times
     return Setup('hdf5_gloves', 'teleop_arms', data, [
         Item('recording', 'scene'), Item('camera', 'scene'),
         Item('signal', 'pressure', 'left_glove.h5'), Item('signal', 'pressure', 'right_glove.h5'),
+        Item('signal', 'pressure', 'right_backup_glove.h5'),
         Item('field', 'left_glove_serial'), Item('field', 'right_glove_serial')])
 
 
@@ -180,8 +183,68 @@ def zipped_mcap(root: Path) -> Setup:
     return Setup('zipped_mcap', inner.rig, archive, inner.items)
 
 
+def long_hdf5(root: Path) -> Setup:
+    """A recording longer than its request part: two cameras, a force channel and a pressure pad in one HDF5 file,
+    20s at 10 fps. The test lowers the part length (Setup.part_s) instead of recording minutes, so it is labelled in
+    two parts and stitched."""
+    import h5py
+    data = root / 'long_hdf5'
+    data.mkdir(parents=True)
+    n, rng = 200, np.random.default_rng(7)
+    press = np.clip(np.sin(np.arange(n) / 15.0), 0, None)
+    with h5py.File(data / 'long_take.h5', 'w') as h:
+        h.attrs['fps'] = 10
+        h['images/top'] = (rng.random((n, 48, 64, 3)) * 255).astype(np.uint8)
+        h['images/wrist'] = (rng.random((n, 48, 64, 3)) * 255).astype(np.uint8)
+        h['force'] = np.cos(np.arange(n) / 7.0)
+        h['left_pressure'] = rng.random((n, 4, 4)) * 0.2 + press[:, None, None]
+    return Setup('long_hdf5', 'teleop_arms', data, [
+        Item('recording', 'long_take'), Item('camera', 'images/top'), Item('camera', 'images/wrist'),
+        Item('signal', 'force'), Item('signal', 'left_pressure')], part_s=12.0)
+
+
+def regional_glove(root: Path) -> Setup:
+    """A pressure glove in the OpenTouch layout, whose bundled publisher contract declares the hand regions, so the
+    pad gets its separate regional pass: the publisher-schema builder's file, lengthened to 4s of presses."""
+    import h5py
+    from PIL import Image
+    from test_publisher_schemas import recording
+    data = root / 'regional_glove'
+    data.mkdir(parents=True)
+    path = data / 'glove_take.h5'
+    recording(path)
+    n = 40
+    press = np.clip(np.sin(np.arange(n) / 4.0), 0, None)
+    with h5py.File(path, 'a') as h:
+        group = h['data/demo_00']
+        for name in list(group):
+            shape, dtype = group[name].shape[1:], group[name].dtype
+            del group[name]
+            if name == 'timestamps':
+                group[name] = np.arange(n) / 10
+            elif name == 'rgb':
+                frames = group.create_dataset(name, (n,), dtype=h5py.vlen_dtype(np.uint8))
+                for row in range(n):
+                    buffer = io.BytesIO()
+                    Image.new('RGB', (64, 36), (20 + 4 * row, 80, 130)).save(buffer, format='JPEG')
+                    frames[row] = np.frombuffer(buffer.getvalue(), np.uint8)
+            elif name == 'right_pressure':
+                base = np.full((n, *shape), 3000.0, dtype)
+                base[:, :8, :] -= 900 * press[:, None, None]
+                base[:, 8:, :] -= 300 * press[::-1, None, None]
+                group[name] = base
+            elif name == 'right_hand_landmarks':
+                hand = np.random.default_rng(3).random(shape)               # 21 distinct points, curling a little
+                group[name] = (hand[None] * (1 + 0.05 * press[:, None, None])).astype(dtype)
+            else:
+                group[name] = (np.ones((n, *shape)) + np.arange(n).reshape(-1, *[1] * len(shape)) * 0.01).astype(dtype)
+    return Setup('regional_glove', 'ego_head', data, [
+        Item('recording', 'glove_take'), Item('camera', 'rgb'), Item('signal', 'right_pressure'),
+        Item('signal', 'right_hand_landmarks'), Item('signal', 'right_palm_pos'), Item('signal', 'right_wrist_pos')])
+
+
 SETUPS = [teleop_lerobot, mcap_arm, umi_gripper, ego_head, hdf5_gloves, depth_mcap, tactile_lerobot,
-          plain_video, zipped_mcap]
+          plain_video, zipped_mcap, long_hdf5, regional_glove]
 
 
 # ---- the offline model -------------------------------------------------------------------------------------------------
@@ -223,11 +286,16 @@ class OfflineModel:
     sensor, series and inspection its request offered, in every list the schema allows (data issues and camera
     observations name the cameras, sensor_findings the supplied sensors, evidence_findings the inspections), and each
     finding is written in both finding lists. Its evidence selection asks for every measured field, three a round. The
-    reply is kept in the run record, so what it cited is read back from there (citation_losses)."""
+    reply is kept in the run record, so what it cited is read back from there (unit_losses)."""
 
     def __init__(self):
         self.calls = []
         self.selected = {}       # an inventory's field ids -> the ids already requested from it
+        self.written = 0         # findings and issues written so far, so every tag is unique across the parts
+
+    def tag(self, kind: str) -> str:
+        self.written += 1
+        return f'offline {kind} {self.written}'
 
     def __call__(self, request, timeout=None):
         body = json.loads(request.data)
@@ -243,7 +311,7 @@ class OfflineModel:
             kind, reply = 'cards', self.cards(whole)
         elif 'Analyze the supplied regional sensor responses' in whole:
             kind, reply = 'regional', {'sensor_findings': [
-                {**f, 'observation': f'offline regional {i}'} for i, f in enumerate(self.sensor_findings(texts))]}
+                {**f, 'observation': self.tag('regional')} for f in self.sensor_findings(texts)]}
         else:
             kind, reply = 'final', self.final(texts)
         self.calls.append(kind)
@@ -309,8 +377,9 @@ class OfflineModel:
         if not isinstance(ident, str) or not capabilities:
             return None
         ref = None
-        for row in series:
-            if row.get('sensor_id') != ident or row.get('derivation_id'):
+        # its own traces first, then a derived one (a hand-shape distance is the only trace a landmark set supplies)
+        for row in sorted(series, key=lambda row: bool(row.get('derivation_id'))):
+            if row.get('sensor_id') != ident:
                 continue
             times = _expand_clock(row, clocks)
             values = row.get('values') or []
@@ -377,19 +446,24 @@ class OfflineModel:
         observation (offline <list> <n>) so it can be found again after binding; a citation in the list that does
         not own it must be routed or set aside with its reason, never dropped."""
         whole = '\n'.join(texts)
-        cameras = []
-        for caption in re.findall(r'=== grid t=[^|]*\| rows ([^|]*) \|', whole):
+        cameras, end = [], 0.0
+        for start, stop, caption in re.findall(r'=== grid t=([0-9.]+)-([0-9.]+)s \| rows ([^|]*) \|', whole):
             cameras += [c.strip() for c in caption.split(',') if c.strip() and c.strip() not in cameras]
+            end = max(end, float(stop))
         observed = re.search(r'The supplied view IDs and image-row labels are: (.*?)\. Include', whole)
         views = [pair.split(':', 1)[0].strip() for pair in observed.group(1).split(';')] if observed else []
         cited = self.sensor_findings(texts) + self.evidence_findings(texts)
         reply = {'task_summary': 'Move the object.', 'timeline_columns': [], 'timeline': [],
-                 'data_issues': [{'issue': f'offline data_issues {i}: camera {c} is dim', 'category': 'camera_fault',
-                                  'severity': 'low', 't_s': 0.0, 'end_s': None, 'evidence': f'camera {c} at 0.0s'}
-                                 for i, c in enumerate(cameras)]}
+                 'data_issues': [{'issue': f'{self.tag("data_issues")}: camera {c} is dim', 'category': 'camera_fault',
+                                  'severity': 'low', 't_s': None, 'end_s': None, 'evidence': f'camera {c}'}
+                                 for c in cameras]}
+        if cameras:
+            # an issue at the request's last instant, which a part's cut can set aside with its reason
+            reply['data_issues'].append({'issue': f'{self.tag("data_issues")}: the task is still going at the end',
+                                         'category': 'truncated_episode', 'severity': 'medium', 't_s': end,
+                                         'end_s': end, 'evidence': f'camera {cameras[0]} at {end}s'})
         for name in FINDING_LISTS:
-            reply[name] = [{**json.loads(json.dumps(f)), 'observation': f'offline {name} {i}'}
-                           for i, f in enumerate(cited)]
+            reply[name] = [{**json.loads(json.dumps(f)), 'observation': self.tag(name)} for f in cited]
         if views:
             reply['camera_observations'] = [{'view': v, 'content': 'scene', 'evidence': f'offline view {v}'}
                                             for v in views]
@@ -426,6 +500,22 @@ def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch) -> int
                     local.setenv(name, env[name])
             return harness.main()
     monkeypatch.setattr(review, 'run_step', step)
+    if setup.part_s:
+        # the part length is the one saved in each episode's annotation policy, which resolve keeps when it is
+        # within the default; a shorter one here cuts a 20s recording as a long one is cut
+        from label import policy
+        persist = policy.persist
+
+        def shorter_parts(episodes, **overrides):
+            saved = persist(episodes, **overrides)
+            for name in saved:
+                path = Path(episodes) / name / 'context.json'
+                ctx = json.loads(path.read_text())
+                ctx['annotation_policy']['part_max_s'] = setup.part_s
+                path.write_text(json.dumps(ctx))
+                saved[name] = ctx['annotation_policy']
+            return saved
+        monkeypatch.setattr(policy, 'persist', shorter_parts)
     monkeypatch.setattr(sys, 'argv', ['review', '--data', str(setup.data), '--rig', setup.rig, '--out', str(job),
                                       '--concurrency', '1', '--jobs', '1', '--cap', '20', '--max-tokens', '4000'])
     return review.main()
@@ -549,8 +639,8 @@ def present(carriers: list, kind: str, ident: str) -> bool:
 
 def resolve(items: list, carriers: list, files: set) -> dict:
     """The prepared streams each fixture item became, {id(item): [names]}. A stream that names an item's name holds
-    it; when items share a name, a stream holds one of them only by also naming that item's file, or else it holds just
-    one of them. So one stream never passes for two streams of the same name."""
+    it; when items share a name, a stream holds those whose files it names, or, naming no file, just one of them. So one
+    stream never passes for two streams of the same name unless it names both their files."""
     held, by_name = {}, {}
     for item in items:
         by_name.setdefault((item.kind, item.name), []).append(item)
@@ -564,9 +654,9 @@ def resolve(items: list, carriers: list, files: set) -> dict:
         for c in candidates:
             named = {f for f in files if any(mentions(t, f) for t in c.texts)}
             owners = [item for item in group if item.file in named]
-            if len(owners) == 1:
-                held.setdefault(id(owners[0]), []).append(c.ident)
-            elif not named:
+            for owner in owners:            # a kept copy that names every file it holds serves each of them
+                held.setdefault(id(owner), []).append(c.ident)
+            if not named:
                 free.append(c)
         for item in group:
             if not held.get(id(item)) and free:
@@ -624,7 +714,14 @@ def placed_findings(d: dict) -> tuple:
 
 
 def issue_tags(d: dict) -> set:
-    rows = list(d.get('data_issues') or []) + list((d.get('_excluded') or {}).get('data_issues') or [])
+    """Tags of the reply's data issues an episode record holds, among its issues or excluded by a rule with its reason
+    (a run record holds them in its labels)."""
+    labels = d.get('labels') if isinstance(d.get('labels'), dict) else {}
+    excluded = d.get('_excluded') or labels.get('_excluded') or []
+    excluded = [row for rows in excluded.values() for row in rows] if isinstance(excluded, dict) else excluded
+    rows = [*(d.get('data_issues') or labels.get('data_issues') or []),
+            *(row for row in excluded if isinstance(row, dict) and any(isinstance(row.get(k), str) and row[k].strip()
+                                                                      for k in ('reason', 'excluded_reason', 'why')))]
     return {r['issue'].split(':', 1)[0] for r in rows if isinstance(r, dict) and isinstance(r.get('issue'), str)
             and r['issue'].startswith('offline ')}
 
@@ -643,12 +740,9 @@ def reply_of(record: dict) -> dict:
     return labels if isinstance(labels, dict) and not labels.get('_parse_error') else {}
 
 
-def citation_losses(tag: str, record: dict, board: dict, exported: dict) -> list:
-    """Every citation the reply made is bound or set aside with its reason, then reaches the board and the export."""
-    lost = []
+def reply_citations(record: dict) -> dict:
+    """{tag: evidence} of every finding a unit's reply wrote, its regional pass included."""
     reply = reply_of(record)
-    if not reply:
-        return [f'bound: {tag}the reply did not parse: {(record.get("labels") or {}).get("_parse_error")}']
     cited = {t: f.get('evidence') for name in FINDING_LISTS for f in reply.get(name) or [] if isinstance(f, dict)
              for t in finding_tags([f])}
     analysis = record.get('sensor_analysis') if isinstance(record.get('sensor_analysis'), dict) else {}
@@ -657,38 +751,73 @@ def citation_losses(tag: str, record: dict, board: dict, exported: dict) -> list
     except (ValueError, AttributeError):
         regional = None
     cited.update({t: f.get('evidence') for f in regional or [] if isinstance(f, dict) for t in finding_tags([f])})
+    return cited
+
+
+def reply_issues(record: dict) -> set:
+    return issue_tags(reply_of(record))
+
+
+def reply_views(record: dict) -> set:
+    return {r.get('view') for r in reply_of(record).get('camera_observations') or [] if isinstance(r, dict)}
+
+
+def unit_losses(tag: str, record: dict) -> list:
+    """At binding, in one request: every citation its reply made is bound or set aside with its reason, every camera
+    observation is kept or withheld with its reason, and every sensor the request offered was cited."""
+    if not reply_of(record):
+        return [f'bound: {tag}the reply did not parse: {(record.get("labels") or {}).get("_parse_error")}']
+    lost = []
+    cited = reply_citations(record)
     bound, aside = placed_findings(record)
-    for t, refs in cited.items():
-        if t not in bound and t not in aside:
-            lost.append(f'bound: {tag}{t} citing {json.dumps(refs)[:160]} is neither bound nor set aside with a reason')
-    for stage, doc in (('board', board), ('export', exported)):
+    lost += [f'bound: {tag}{t} citing {json.dumps(refs)[:160]} is neither bound nor set aside with a reason'
+             for t, refs in cited.items() if t not in bound and t not in aside]
+    kept, withheld = observation_views(record)
+    lost += [f'bound: {tag}the camera observation of {v} is neither kept nor withheld with a reason'
+             for v in sorted(reply_views(record) - kept - withheld, key=str)]
+    # the reply cites every sensor the request offered, so a sensor no finding cites is one binding never saw
+    refs = {r.get('sensor_id') or r.get('evidence_id') for f in cited.values() if isinstance(f, list)
+            for r in f if isinstance(r, dict)}
+    lost += [f'bound: {tag}offered sensor {s.get("id")} ({s.get("name")}) was never cited'
+             for s in (record.get('sensor_evidence') or {}).get('sensors') or []
+             if isinstance(s, dict) and s.get('id') not in refs and not str(s.get('id')).startswith('mechanics:')]
+    return lost
+
+
+def carried_losses(tag: str, units: list, stages: list) -> list:
+    """What binding kept in every request (bound findings, findings set aside with their reason, data issues, camera
+    observations) reaches each later stage: the stitched episode, the board and the export."""
+    lost, bound, aside, issues, views = [], set(), {}, set(), set()
+    for record in units:
+        got, got_aside = placed_findings(record)
+        bound |= got
+        aside.update(got_aside)
+        issues |= reply_issues(record)
+        kept, withheld = observation_views(record)
+        views |= kept | withheld
+    for stage, doc in stages:
         got, got_aside = placed_findings(doc)
         lost += [f'{stage}: {tag}bound finding {t} is missing' for t in sorted(bound - got)]
         lost += [f'{stage}: {tag}{t}, set aside at binding, is missing with its reason'
                  for t in sorted(set(aside) - set(got_aside) - got)]
-    issues = {r['issue'].split(':', 1)[0] for r in reply.get('data_issues') or []
-              if isinstance(r, dict) and isinstance(r.get('issue'), str) and r['issue'].startswith('offline ')}
-    for stage, doc in (('bound', reply), ('board', board), ('export', exported)):
         lost += [f'{stage}: {tag}{t} (a data issue naming a camera) is missing' for t in sorted(issues - issue_tags(doc))]
-    views = {r.get('view') for r in reply.get('camera_observations') or [] if isinstance(r, dict)}
-    for stage, doc in (('bound', record), ('board', board), ('export', exported)):
         kept, withheld = observation_views(doc)
         lost += [f'{stage}: {tag}the camera observation of {v} is neither kept nor withheld with a reason'
                  for v in sorted(views - kept - withheld, key=str)]
-    # the reply cites every sensor the request offered, so a sensor no finding cites is one binding never saw
-    refs = {r.get('sensor_id') or r.get('evidence_id') for f in cited.values() if isinstance(f, list)
-            for r in f if isinstance(r, dict)}
-    for s in (record.get('sensor_evidence') or {}).get('sensors') or []:
-        if isinstance(s, dict) and s.get('id') not in refs and not str(s.get('id')).startswith('mechanics:'):
-            lost.append(f'bound: {tag}offered sensor {s.get("id")} ({s.get("name")}) was never cited')
     return lost
 
 
 # ---- the inventory check ------------------------------------------------------------------------------------------------------
 
+def unit_names(job: Path, eid: str) -> list:
+    """The requests a recording was labelled in: its parts when it was cut (label/pieces.py), else itself."""
+    return sorted(p.stem for p in (job / 'run' / 'out').glob(f'{eid}__p*.json')) or [eid]
+
+
 def losses(setup: Setup, job: Path) -> list:
-    """Every item of the fixture's inventory, and every citation the reply made, that a stage holds neither itself nor
-    in a recorded reason. Empty means nothing was lost."""
+    """Every item of the fixture's inventory, and every citation the replies made, that a stage holds neither itself
+    nor in a recorded reason. A recording labelled in parts is checked in each part's request and binding, then in the
+    stitched episode. Empty means nothing was lost."""
     lost = []
     report = _read(job / 'report.json') or {}
     set_aside = _read(job / 'clips' / 'failed.json') or {}
@@ -706,26 +835,32 @@ def losses(setup: Setup, job: Path) -> list:
         tag = f'{eid}: '
         ep = job / 'episodes' / eid
         ctx = _read(ep / 'context.json')
-        record = _read(job / 'run_final' / 'out' / f'{eid}.json')
+        stitched = _read(job / 'run_final' / 'out' / f'{eid}.json')
         board = _read(job / 'qa' / f'{eid}.json')
-        missing = [stage for stage, doc in (('prepared', ctx), ('bound', record), ('board', board)) if doc is None]
+        names = unit_names(job, eid)
+        units = {name: _read(job / 'run' / 'out' / f'{name}.json') for name in names}
+        missing = [stage for stage, doc in (('prepared', ctx), ('stitched', stitched), ('board', board)) if doc is None]
+        missing += [f'bound ({name})' for name, record in units.items() if record is None]
         if missing:
             if not explained(report_reasons, eid):
                 lost += [f'{stage}: {tag}the episode is missing with no reason' for stage in missing]
             continue
         exported = export_line(board, f'{eid}.json')
-        dry = _read(job / 'dry' / f'{eid}.json') or {}
-        evidence = record.get('sensor_evidence') or {}
-        inspection = record.get('evidence_inspection') or {}
         source = ctx.get('source') if isinstance(ctx.get('source'), dict) else {}
         reasons = {'prepared': report_reasons + left_out_texts([v for k, v in source.items() if k.startswith('unused_')])
                    + flagged_texts([ctx.get('reader_issues')]),
-                   'request': flagged_texts([evidence.get('limitations'), inspection.get('limitations')]),
                    'board': left_out_texts([(board.get('reader_notes') or {}).get('left_out'), set_aside])
                    + flagged_texts([(board.get('dataset_checks') or {}).get('reader_issues')])}
+        stitched_evidence = stitched.get('sensor_evidence') or {}
+        reasons['stitched'] = flagged_texts([stitched_evidence.get('limitations'),
+                                             (stitched.get('evidence_inspection') or {}).get('limitations')])
         reasons['export'] = reasons['board']
-        carriers = {'request': request_carriers(record, dry.get('prompt_text') or ''),
-                    'board': board_carriers(job, eid, board), 'export': record_carriers(exported)}
+        carriers = {'stitched': request_carriers(stitched, ''), 'board': board_carriers(job, eid, board),
+                    'export': record_carriers(exported)}
+        for name, record in units.items():
+            evidence, inspection = record.get('sensor_evidence') or {}, record.get('evidence_inspection') or {}
+            carriers[name] = request_carriers(record, (_read(job / 'dry' / f'{name}.json') or {}).get('prompt_text') or '')
+            reasons[name] = flagged_texts([evidence.get('limitations'), inspection.get('limitations')])
         held = resolve(streams, prepared_carriers(ep, ctx), files)
         for item in streams:
             # a recorded field is metadata text, so it is found by its own name at every stage
@@ -734,12 +869,18 @@ def losses(setup: Setup, job: Path) -> list:
                 if not explained(reasons['prepared'], item.name, item.file):
                     lost.append(f'prepared: {tag}{item} is not in the prepared episode and no reason names it')
                 continue
-            for stage in ('request', 'board', 'export'):
+            # the stitched record joins the parts' labels and evidence; recorded fields stay in the episode's context,
+            # which the board reads again, so they are checked in each part's request, the board and the export
+            for stage in [*names, *(['stitched'] if item.kind != 'field' else []), 'board', 'export']:
+                label = f'request ({stage})' if stage in units else stage
                 for ident in idents:
                     if not (present(carriers[stage], item.kind, ident) or explained(reasons[stage], ident)
                             or explained(reasons[stage], item.name)):
-                        lost.append(f'{stage}: {tag}{item}, prepared as {ident!r}, is missing and no reason names it')
-        lost += citation_losses(tag, record, board, exported)
+                        lost.append(f'{label}: {tag}{item}, prepared as {ident!r}, is missing and no reason names it')
+        for name, record in units.items():
+            lost += unit_losses(f'{name}: ', record)
+        lost += carried_losses(tag, list(units.values()),
+                               [('stitched', stitched), ('board', board), ('export', exported)])
     return lost
 
 
@@ -751,11 +892,16 @@ PR75_ROUTING = ('PR 75 (eric/data-loss-four) sends a finding written in the othe
                 'citations name; before it, a request with no supplied sensor evidence never binds sensor_findings')
 PR75_SAME_NAME = ('PR 75 (eric/data-loss-four) keeps signals of the same name from different files; before it, the '
                   'file read last replaces the other')
+PR75_SECOND_FILE = ('PR 75 (eric/data-loss-four, from 533e829) names every source file on the one copy it keeps of '
+                    'identical readings; before it, a file whose data is kept through another file\'s copy is named '
+                    'nowhere')
 EXPECTED = {
     **{(name, r'^bound: .*offline sensor_findings \d+ citing \[\{"evidence_id"'): PR75_ROUTING
        for name in ('teleop_lerobot', 'mcap_arm', 'umi_gripper', 'ego_head', 'depth_mcap', 'zipped_mcap')},
     ('hdf5_gloves', r'^prepared: .*signal pressure \((left|right)_glove\.h5\) is not in the prepared episode'):
         PR75_SAME_NAME,
+    ('hdf5_gloves', r'^prepared: .*signal pressure \(right_backup_glove\.h5\) is not in the prepared episode'):
+        PR75_SECOND_FILE,
 }
 
 
@@ -802,11 +948,11 @@ def _record(findings=(), unbound=(), reply=()):
 
 def test_a_citation_dropped_at_binding_or_after_it_is_a_loss():
     cite = {'observation': 'offline sensor_findings 0', 'evidence': [{'sensor_id': 'signal:glove'}]}
-    dropped = citation_losses('ep: ', _record(reply=[cite]), _record(), _record())
-    assert dropped == ['bound: ep: offline sensor_findings 0 citing [{"sensor_id": "signal:glove"}] is neither bound '
-                       'nor set aside with a reason']
+    assert unit_losses('ep: ', _record(reply=[cite])) == [
+        'bound: ep: offline sensor_findings 0 citing [{"sensor_id": "signal:glove"}] is neither bound nor set aside '
+        'with a reason']
     aside = _record(unbound=[{'finding': cite, 'reason': 'no verified alignment'}], reply=[cite])
-    assert citation_losses('ep: ', aside, aside, aside) == []
+    assert unit_losses('ep: ', aside) == [] and carried_losses('ep: ', [aside], [('board', aside)]) == []
     bound = _record(findings=[cite], reply=[cite])
-    assert citation_losses('ep: ', bound, bound, _record()) == ['export: ep: bound finding offline sensor_findings 0 '
-                                                                'is missing']
+    assert carried_losses('ep: ', [bound, _record()], [('stitched', bound), ('export', _record())]) == [
+        'export: ep: bound finding offline sensor_findings 0 is missing']
