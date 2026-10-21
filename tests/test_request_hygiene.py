@@ -223,3 +223,25 @@ def test_the_invariant_reads_zero_on_the_audited_recording_and_catches_each_untr
     assert any(x.startswith("c1 is timed on the frames") for x in found)
     assert any(x.startswith("c2 names a hand or side without saying") for x in found)
     assert any("lists " + FOOT in x for x in found)
+
+
+def test_the_inspection_inventory_says_which_fields_take_seconds(tmp_path):
+    """The audited run's first selection round asked the left glove and the gaze confidence for a 0 to 51.69 s window;
+    both share no clock with the cameras, so both requests failed and the round bought nothing. The inventory now
+    says each numeric field takes source rows only, a refused window names the rows to ask instead, and a field on the
+    camera's clock is still read by seconds."""
+    from label import evidence_access as ea
+    ctx = {"episode_id": "episode_a", "fps": 10, "state_kind": "none"}
+    signals = {GLOVE: _glove()[:4, :8], IMU: _steps()[:4]}
+    a = ea.Access({"dir": tmp_path, "context": ctx, "sources": {}, "state": np.zeros((4, 0)), "action": None,
+                   "times": None, "signals": signals,
+                   "signal_meta": {GLOVE: {"aligned_by": "assumed start"}, IMU: {}}, "depth": {}})
+    fields = {f["name"]: f for f in a.inventory() if f["kind"] == "numeric"}
+    assert fields[GLOVE]["select_by"].startswith("start_row/end_row or rows only")
+    assert fields[IMU]["select_by"].startswith("start_s/end_s")
+    with pytest.raises(ValueError, match="start_row and end_row, or rows"):
+        a.inspect({"field_id": fields[GLOVE]["id"], "mode": "extrema", "start_s": 0, "end_s": 0.3})
+    rows = a.inspect({"field_id": fields[GLOVE]["id"], "mode": "extrema", "start_row": 0, "end_row": 4})
+    assert "times_s" not in rows
+    assert a.inspect({"field_id": fields[IMU]["id"], "start_s": 0, "end_s": 0.3})["times_s"] == pytest.approx(
+        [0, .1, .2, .3])
