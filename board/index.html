@@ -8839,8 +8839,10 @@ window.addEventListener('error', event => { void retryFrameImage(event.target); 
 // ellipsis where it cuts; and the page never scrolls sideways. Once an episode is drawn and the page has been still
 // for a moment, the defects are written as JSON into <pre id="layout-check"> (tests/test_layout_fits.py reads it),
 // and again after every resize. Each defect names the box, a short selector path to it, the text that runs out and
-// by how many px.
-function layoutDefects() {
+// by how many px. With &open=all every fold is opened first (openEveryFold), so the long lists inside folds are
+// checked too, and a fold still closed when the check runs is itself a defect, so a new kind of fold cannot hide
+// its content from the check.
+function layoutDefects(folds) {
   const vw = document.documentElement.clientWidth;
   const styles = new Map();
   const cs = el => { let s = styles.get(el); if (!s) { s = getComputedStyle(el); styles.set(el, s); } return s; };
@@ -8950,11 +8952,38 @@ function layoutDefects() {
         words.trim().slice(0, 80));
     }
   }
+  if (folds) {
+    // a fold left closed: a closed <details>, or a box that clips its content to no height, whose box around it shows
+    for (const el of document.body.querySelectorAll('*')) {
+      if (isHidden(el.parentElement)) continue;
+      const s = cs(el);
+      if (s.display === 'none' || s.visibility === 'hidden') continue;
+      const closed = el.tagName === 'DETAILS' ? !el.open
+        : (s.overflowY === 'hidden' || s.overflowY === 'clip') && el.clientHeight < 1 && el.scrollHeight > 1;
+      if (closed && el.textContent.trim()) note(el, 'fold left closed', 0, el.textContent.trim().slice(0, 80));
+    }
+  }
   const sw = document.documentElement.scrollWidth;
   if (sw > vw + 1) note(null, 'page scrolls sideways', sw - vw, '');
   return [...found.values()].sort((a, b) => b.over - a.over);
 }
+// Opens every fold on the page the way a reader would, and closes none: every <details> (the cause groups of the
+// recording checks, the check lists past five, the sensor details), every "Show all" of a list (.fold) and of the
+// capture checks (.ck-theirs), the dataset's notes and set-aside checks (.pub-fold), and the recorded signals (.sn).
+// Returns how many it opened.
+function openEveryFold() {
+  let n = 0;
+  const click = b => { b.click(); n++; };
+  document.querySelectorAll('details:not([open])').forEach(d => { d.open = true; n++; });
+  document.querySelectorAll('.fold:not(.open) > .fold-more').forEach(click);
+  document.querySelectorAll('.ck-theirs:not(.open) > .ck-more').forEach(click);
+  document.querySelectorAll('.pub-fold:not(.shown) > .pub-show').forEach(click);
+  document.querySelectorAll('.sn:not(.shown) > .sn-show').forEach(click);
+  document.querySelectorAll('.sn:not(.open) .sn-more').forEach(click);
+  return n;
+}
 if (new URLSearchParams(location.search).get('check') === 'layout') {
+  const openAll = new URLSearchParams(location.search).get('open') === 'all';
   const out = document.createElement('pre');
   out.id = 'layout-check';
   out.hidden = true;
@@ -8967,9 +8996,15 @@ if (new URLSearchParams(location.search).get('check') === 'layout') {
     timer = setTimeout(async () => {
       first = 0;
       if (!_activeFile) return;
+      if (openAll && openEveryFold()) { timer = setTimeout(run, 300); return; }
       try { await document.fonts.ready; } catch (_) {}
+      // the layout is checked where every transition ends (a fold opening, a bar growing), not part way through one;
+      // a browser that runs on virtual time (headless Chrome under the test) may otherwise never finish them
+      for (const a of document.getAnimations ? document.getAnimations() : []) {
+        try { if (a.effect && a.effect.getComputedTiming().iterations !== Infinity) a.finish(); } catch (_) {}
+      }
       out.textContent = JSON.stringify({episode: _activeFile, width: document.documentElement.clientWidth,
-                                        defects: layoutDefects()});
+                                        open: openAll, defects: layoutDefects(openAll)});
       out.dataset.state = 'done';
     }, Math.max(0, Math.min(1500, first + 5000 - Date.now())));
   };

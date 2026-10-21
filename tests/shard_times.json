@@ -9,7 +9,7 @@
  "tests/test_inspection_scope.py": 2.0,
  "tests/test_coverage_target.py": 1.0,
  "tests/test_live_board.py": 1.0,
- "tests/test_layout_fits.py": 7.0,
+ "tests/test_layout_fits.py": 31.0,
  "tests/test_readout_rule_pins.py": 1.0,
  "tests/test_frame_rate_windows.py": 0.4,
  "tests/test_annotations.py": 3.4,

@@ -4,8 +4,9 @@ The page checks itself under ?check=layout (board/index.html layoutDefects): onc
 piece of text (or image, video or control) that runs past a box it sits in, every box that clips text without an
 ellipsis, and the page scrolling sideways. This test serves a board whose content is larger than any board's so far
 (targets of millions of episodes and hours, a long dataset name, long subgoal, key event and timeline labels, many
-problems of one cause), opens each episode in headless Chrome at a phone's width and three desktop widths, and asks
-for no defects. Without Chrome the test is skipped."""
+problems of one cause, an upload's deep notes, long check lists), opens each episode in headless Chrome at a phone's
+width and three desktop widths, once as it opens and once with every fold opened (&open=all, where a fold left closed
+is a defect too), and asks for no defects. Without Chrome the test is skipped."""
 from __future__ import annotations
 
 import html
@@ -76,10 +77,36 @@ def _reader_issues(n: int) -> list[dict]:
             for i in range(n)]
 
 
+def _uploader_notes() -> dict:
+    """An upload's notes far deeper and longer than usual: a table row and notes from its files, nested many levels
+    under long field names, with long paths as values."""
+    deep = {"recording_session_metadata_with_a_long_name": {"left_arm_configuration": {"joint_calibration_offsets": {
+        f"joint_{i}_calibration_offset_in_radians_relative_to_the_factory_zero": {
+            "source_file": f"/mnt/shared/uploads/{LONG_DATASET}/sessions/2026-10-20/rig_07/calibration/joint_{i}.yaml",
+            "value": 0.0123 * i, "note": f"measured twice; the second reading is the one kept {LONG_WORD}"}
+        for i in range(8)}}}}
+    return {"table rows": [{"table": "episodes_with_an_unusually_long_table_name.parquet", **deep}], "notes": deep}
+
+
+def _capture_checks() -> dict:
+    """A capture-check result (checks/capture_qc.py) with every check listed and more than five fired, each with long
+    evidence, so the fired list and the full list both fold."""
+    from checks.capture_qc import NAMES
+    names = list(NAMES)
+    fired = names[:9]
+    return {"checks": [{"check": c, "status": "fired" if c in fired else "clear", "shown_as": "issue",
+                        "why": f"{c} {LONG_WORD}"} for c in names],
+            "flags": [{"check": c, "evidence": f"/mnt/shared/uploads/{LONG_DATASET}/{c}/{LONG_WORD}.parquet fails "
+                                                f"at rows 1 to 400 of the state stream recorded by the left arm"}
+                      for c in fired],
+            "notes": []}
+
+
 def oversized_board(tmp: Path) -> tuple[Path, list[str]]:
     """A board built by board/build.py with content larger than any so far, and the episode files to open: a teleop
     dataset with signals and a head-camera dataset of tasks whose name is longer than any tab, each against a target
-    of millions of episodes and hours, each episode many hours long."""
+    of millions of episodes and hours, each episode many hours long. Much of it lands inside folds: twenty key events,
+    forty problems of one cause, an upload's deep notes, and a capture-check list with nine fired."""
     board = tmp / "boards" / "b"
     entries, files = [], []
     for k, (ds, rig, hub, target) in enumerate((("molmo", "teleop_arms", "allenai/MolmoAct2-BimanualYAM-Dataset",
@@ -96,11 +123,12 @@ def oversized_board(tmp: Path) -> tuple[Path, list[str]]:
             (ep / "context.json").write_text(json.dumps({
                 "dataset": hub, "profile": rig, "duration_s": 3600.0 * 123.4,
                 "prompt": f"{LONG_WORD} and then put every object back where it was found " * 2,
-                "reader_issues": _reader_issues(40)}))
+                "reader_issues": _reader_issues(40), "uploader_notes": _uploader_notes(),
+                **({"capture_qc": _capture_checks()} if rig == "teleop_arms" else {})}))
             if rig == "teleop_arms":
                 _sensors(ep)
             out = _output(ep, "openai/gpt-6-astra", rig == "ego_head")
-            out["labels"].update(_labels(6))
+            out["labels"].update(_labels(18))
             if rig == "ego_head":
                 out["labels"].pop("completion", None)
                 out["labels"]["tasks"] = [{"task": f"task {k}: {LONG_WORD} {_labels(0)['task_summary']}",
@@ -168,13 +196,13 @@ def layout_check(browser: str, base: str, page: str, width: int, height: int = H
 
 
 def check_all(browser: str, base: str, files: list[str]) -> list[dict]:
-    """The layout check of every file at every width, four at a time."""
-    jobs = [(f, w) for f in files for w in WIDTHS]
+    """The layout check of every file at every width, as the page opens and with every fold opened, four at a time."""
+    jobs = [(f, w, o) for f in files for w in WIDTHS for o in (False, True)]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(lambda j: layout_check(browser, base, f"/?ep={urllib.parse.quote(j[0])}", j[1]),
-                                jobs))
-    for (f, w), res in zip(jobs, results):
-        res["asked"] = {"file": f, "width": w}
+        results = list(pool.map(lambda j: layout_check(
+            browser, base, f"/?ep={urllib.parse.quote(j[0])}" + ("&open=all" if j[2] else ""), j[1]), jobs))
+    for (f, w, o), res in zip(jobs, results):
+        res["asked"] = {"file": f, "width": w, "open": o}
     return results
 
 
@@ -189,8 +217,9 @@ def test_no_text_runs_out_of_its_box_at_any_width(tmp_path, monkeypatch):
         httpd.shutdown()
         httpd.server_close()
     for res in results:
-        # the check ran on the episode asked for, at the width asked for
-        assert (res["episode"], res["width"]) == (res["asked"]["file"], res["asked"]["width"]), res
-    bad = [f"{r['width']}px {r['episode']}: {d['kind']} {d['el']} by {d['over']}px ({d['text']!r})"
+        # the check ran on the episode asked for, at the width asked for, with the folds as asked
+        assert (res["episode"], res["width"], res["open"]) == tuple(res["asked"].values()), res
+    bad = [f"{r['width']}px {r['episode']}{' (every fold open)' if r['open'] else ''}: {d['kind']} {d['el']} by "
+           f"{d['over']}px ({d['text']!r})"
            for r in results for d in r["defects"]]
     assert not bad, "\n".join(bad)
