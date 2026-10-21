@@ -17,12 +17,22 @@ import pytest
 
 from board import build, rules, scores, serve, to_board
 from board.families import Families
-from board.label_projection import derive_completion, shown_tasks, verdict_or_tasks
+from board.label_projection import derive_completion, verdict_or_tasks
 from compare import metrics
 from gate.score import judge
 from label import episode as me, harness, pieces
-from label.task_claims import claims
 from prepare import formats as f
+
+
+def claims(ctx):
+    from label.task_claims import claims as read      # imported per test, so each one fails on its own before it
+    return read(ctx)
+
+
+def shown_tasks(record):
+    from board.label_projection import shown_tasks as shown
+    return shown(record)
+
 
 INSTANTS = [round(1.5 * k, 3) for k in range(7)]
 
