@@ -114,3 +114,19 @@ def test_the_rigs_words_survive_the_tasks_format(rig):
         assert 'It is NOT when the arms finish moving.' in text and 'by ONE arm' in text
     if rig == 'ego_head':
         assert 'by ONE hand' in text and 'hands_visible' in text
+
+
+@pytest.mark.parametrize('rig', RIGS)
+def test_the_in_context_example_is_in_the_format_it_closes(rig):
+    """A --with-example run shows one complete annotation after the schema (label/prompts.py example_block); it holds
+    the tasks the schema asks for, each with the schema's fields, and no completion."""
+    import json
+    from pathlib import Path
+    example = json.loads((Path(__file__).resolve().parents[1] / 'configs' / 'examples' / f'example_{rig}.json').read_text())
+    labels = example['labels']
+    text = tasks_text(rig, True, True)
+    fields = re.findall(r'"(\w+)":', text[text.index('"tasks": ['):text.index('"scene_graph"')])[1:]
+    assert 'completion' not in labels and labels['tasks']
+    for task in labels['tasks']:
+        assert set(fields) <= set(task), set(fields) - set(task)
+        assert task['judged_against'] in ('instruction', 'own_end_state')
