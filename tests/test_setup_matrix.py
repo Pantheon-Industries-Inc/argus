@@ -140,6 +140,20 @@ def depth_mcap(root: Path) -> Setup:
         Item('signal', '/joint_states')])
 
 
+def tactile_device_mcap(root: Path) -> Setup:
+    """A handheld MCAP shaped like the Sparsh DIGIT 360 bag: the sensor's own gel image beside its pressure topic in
+    one device namespace, and a RealSense scene camera. The gel image is a tactile camera, never the anchor."""
+    from test_camera_slots import D360, PRESSURE, SCENE, gel, pressure, scene
+    from test_reader_cameras import _json_mcap
+    data = root / 'tactile_device_mcap'
+    data.mkdir(parents=True)
+    _json_mcap(data / 'lego_tap.mcap', {D360: ('sensor_msgs/msg/CompressedImage', gel),
+                                       PRESSURE: ('d360_msgs/msg/PressureD360', pressure),
+                                       SCENE: ('sensor_msgs/msg/CompressedImage', scene)}, n=90)
+    return Setup('tactile_device_mcap', 'handheld_gripper', data, [
+        Item('recording', 'lego_tap'), Item('camera', D360), Item('camera', SCENE), Item('signal', PRESSURE)])
+
+
 def tactile_lerobot(root: Path) -> Setup:
     """A LeRobot dataset with touch: a numeric glove array, an 8 x 8 pad stored as grey PNG images and a fingertip
     pad stored as RGB PNG images, beside the scene camera and the arm state, in two episodes."""
@@ -248,7 +262,7 @@ def regional_glove(root: Path) -> Setup:
 
 
 SETUPS = [teleop_lerobot, mcap_arm, umi_gripper, ego_head, hdf5_gloves, depth_mcap, tactile_lerobot,
-          plain_video, zipped_mcap, long_hdf5, regional_glove]
+          plain_video, zipped_mcap, long_hdf5, regional_glove, tactile_device_mcap]
 
 
 # ---- the offline model -------------------------------------------------------------------------------------------------

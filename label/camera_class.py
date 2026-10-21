@@ -1,6 +1,7 @@
 """What a camera records: a scene, a tactile sensor's own image, or something no evidence decides.
 
-One function (camera_class) makes the decision for every reader of it (native tactile capture selection, sensor
+One function (camera_class) makes the decision for every reader of it (prepare's view slots and anchor,
+prepare/camera_slots.py; native tactile capture selection, sensor
 evidence, scene pairing), from evidence the recording carries, in this order:
 
 - An explicit content role (a person's dictionary edit, or recorded content_role, recorded_role or role metadata,
@@ -11,7 +12,8 @@ evidence, scene pairing), from evidence the recording carries, in this order:
   for camera names), and otherwise the camera's recorded device: a camera whose topic or key shares a device namespace
   with recorded touch measurements (a /d360_0/image_raw topic beside /d360_0/pressure_topic) is that device's image
   when its pictures show a fixed view. The namespace is a device only when no other camera of the recording sits in
-  it, so a recording root such as observations/ never makes every camera tactile.
+  it and none of its channels is the recording's state, joints or a command, so a robot or a dataset root never
+  makes its cameras tactile.
 - Whether a tactile image is an optical capture (a camera looking at its own contact surface, GelSight or DIGIT 360
   style) or a rendering of other readings (a heatmap) comes from a declared optical role or sensor type, a declared
   rendering in the camera's description, or the image statistics: an optical sensor's camera never moves relative to
@@ -66,10 +68,15 @@ def _segments(key) -> list[str]:
 def touch_device(ctx: dict, view: str, meta: dict | None = None) -> dict | None:
     """{namespace, measurements}: the recorded device namespace this camera shares with touch measurements, or None.
     A measurement is touch by its effective dictionary role or, without one, its recorded name (label/sensor_evidence.py
-    _quantity). The namespace is the longest leading path both share, and counts only when no other camera of the
-    recording (shown or retained) lies under it."""
+    _quantity), and sits directly in the namespace (/d360_0/pressure_topic beside /d360_0/image_raw, not
+    /robot/gripper/pressure beside /robot/camera). The namespace is the longest leading path both share, and counts
+    only when no other camera of the recording (shown or retained) lies under it, and none of its channels is the
+    recording's state, joints or a command (label/signals.py names_joints_or_state, prepare/formats.py COMMAND_WORDS):
+    a namespace holding those is a robot or a dataset, not one sensor device."""
     from label.dictionary_context import field_interpretation
     from label.sensor_evidence import _quantity
+    from label.signals import names_joints_or_state
+    from prepare.formats import COMMAND_WORDS, _names_word
     meta = meta if meta is not None else (ctx.get('cameras') or {}).get(view) or {}
     own = _segments(meta.get('key') or meta.get('name'))
     if len(own) < 2:
@@ -85,10 +92,14 @@ def touch_device(ctx: dict, view: str, meta: dict | None = None) -> dict | None:
             if a != b:
                 break
             depth += 1
-        if not depth or _quantity(name, field_interpretation(ctx, name)) is None:
+        if not depth or len(theirs) != depth + 1 or _quantity(name, field_interpretation(ctx, name)) is None:
             continue
         namespace = tuple(own[:depth])
         if any(tuple(other[:depth]) == namespace for other in others if len(other) > depth):
+            continue
+        members = [str(s.get('name')) for s in ctx.get('signals') or []
+                   if tuple(_segments(s.get('name'))[:depth]) == namespace]
+        if any(names_joints_or_state(m) or _names_word(m, COMMAND_WORDS + ('action', 'actions')) for m in members):
             continue
         found.setdefault(namespace, []).append(name)
     if not found:

@@ -1363,18 +1363,22 @@ def names_touch(name: str) -> bool:
     return _names_word(name, TOUCH_WORDS) and not _names_word(name, COMMAND_WORDS)
 
 
-def assign_views(names: list[str], rig: str) -> tuple[dict, list]:
+def assign_views(names: list[str], rig: str, tactile=(), prefer=None) -> tuple[dict, list]:
     """{view: camera name}: one scene and two mounted cameras by role, then every other camera as extra1, extra2, ...
-    (up to MAX_EXTRA_CAMERAS, in the scene cameras' rank order), and the names left unused."""
+    (up to MAX_EXTRA_CAMERAS, in the scene cameras' rank order), and the names left unused. A camera whose name says
+    it senses touch, and every name in tactile (the cameras label/camera_class.py classes as a tactile sensor's own
+    image, prepare/camera_slots.py), is never a scene or mounted camera, so never the anchor. prefer(name), when given,
+    ranks the scene cameras before their names do (the anchor evidence, prepare/camera_slots.py)."""
     out = {}
-    sensing = [nm for nm in names if is_sensing(nm)]
+    tactile = set(tactile)
+    sensing = [nm for nm in names if is_sensing(nm) or nm in tactile]
     # names that also say wrist/hand/gripper take a side before names that only carry a side
     for nm in sorted((n for n in names if n not in sensing), key=lambda n: (0 if is_mount_named(n) else 1, n)):
         v = mounted_side(nm)
         if v and v not in out:
             out[v] = nm
     rest = sorted((nm for nm in names if nm not in out.values() and nm not in sensing),
-                  key=lambda s: (scene_rank(s), s))
+                  key=lambda s: ((prefer(s),) if prefer else ()) + (scene_rank(s), s))
     if rest:
         out["exo"] = rest[0]
     if rig == "handheld_gripper" and list(out) == ["exo"]:
@@ -8992,6 +8996,22 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str, *, source_scope:
                                               n_frames=n_u, start_s=w.pts[0] / TIME_BASE_DEN,
                                               fps=measured_fps(np.asarray(w.pts, dtype=np.float64) / TIME_BASE_DEN)) if n_u else None
             unshown.append((nm, keep_unshown_clock(ep, entry, t, w.pts, fps)))
+        # Slots from what each camera records, now that its frames are written (prepare/camera_slots.py).
+        from prepare import camera_slots
+        shown = {v: nm for v, (nm, _) in files.items()}
+        slotted, slot_record = camera_slots.class_views(
+            shown, {v: path for v, (_, path) in files.items()}, rig,
+            [x["name"] for x in st["signal"]], unused, frames={nm: by_name[nm]["n"] for nm in shown.values()},
+            times={nm: times_of(by_name[nm]) for nm in shown.values() if by_name[nm]["clock"]})
+        if slotted != shown:
+            moved = {view: next(v for v, nm in slotted.items() if nm == name) for view, name in shown.items()}
+            for view in shown:      # through temporary names, so swapping two slots never overwrites a camera's file
+                files[view][1].replace(ep / f".slot_{view}.mp4")
+            for view in shown:
+                (ep / f".slot_{view}.mp4").replace(ep / f"{moved[view]}.mp4")
+            files = {moved[v]: (nm, ep / f"{moved[v]}.mp4") for v, (nm, _) in files.items()}
+            real = {moved[v]: t for v, t in real.items()}
+            chosen = {moved[v]: s for v, s in chosen.items()}
         from label import episode as me
         anchor = me.order_views(files)[0]
         q_abs = times_of(chosen[anchor])
@@ -9136,6 +9156,7 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str, *, source_scope:
                 native_meta[name] = {"source": ds.name, "units": units}
     extra = {"task_label": [item["name"]],
              "source": {"format": "hdf5", "file": item["file"].name, "group": g or None, "unused_cameras": unused}}
+    camera_slots.note(extra, slot_record)
     add_part_issues(extra, parts)
     for issue in st.get('clock_issues') or []:
         add_issue(extra, **issue)
@@ -11386,6 +11407,27 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
             raise ValueError(f"its camera channels ({', '.join(missing)}) are in the {' and '.join(encodings)} message "
                              "encoding, which we do not decode; MCAP messages in JSON, Protobuf, ROS 1 or ROS 2 work")
         raise ValueError(f"no frame could be decoded from {', '.join(missing)}")
+    # Slots from what each camera records, now that its frames are written (prepare/camera_slots.py): a tactile
+    # sensor's own image never takes a scene or gripper slot, so never the anchor whose clock times everything else.
+    from prepare import camera_slots
+    slotted, slot_record = camera_slots.class_views(
+        vmap, {v: writers[t].out for v, t in vmap.items() if t in writers}, rig, all_topics, unused,
+        frames={t: counts.get(t) for t in vmap.values()},
+        times={t: np.asarray(capture_ns[t], dtype=np.float64) / 1e9 for t in vmap.values() if capture_ns.get(t)})
+    if slotted != vmap:
+        moved = {view: next(v for v, topic in slotted.items() if topic == t) for view, t in vmap.items()}
+        # through temporary names, so swapping two slots never overwrites a camera's file
+        for view, topic in vmap.items():
+            writers[topic].out.replace(ep / f'.slot_{view}.mp4')
+            writers[topic].out = ep / f'.slot_{view}.mp4'
+        for view, topic in vmap.items():
+            target = ep / f'{moved[view]}.mp4'
+            writers[topic].out.replace(target)
+            writers[topic].out = target
+            view_of_topic[topic] = moved[view]
+        depth = {moved.get(v, v): d for v, d in depth.items()}
+        depth_of = {t: moved.get(v, v) for t, v in depth_of.items()}
+        vmap = slotted
     files = {v: (t, ep / f"{v}.mp4") for v, t in vmap.items()}
     shapes = {topic: next(iter(writer.source_sizes)) if len(writer.source_sizes) == 1 else None
               for topic, writer in writers.items()}
@@ -11410,6 +11452,7 @@ def convert_mcap_generic(item: dict, rig: str, ep: Path, dataset: str) -> dict:
     depth = associated
     extra = {"task_label": [item["name"]], "source": {"format": "mcap (cameras and text channels)", "file": item["name"],
                                                       "unused_cameras": unused}}
+    camera_slots.note(extra, slot_record)
     if recovered_schemas:
         extra['recovered_mcap_schemas'] = 'recovered_mcap_schemas.npz'
         np.savez(ep / extra['recovered_mcap_schemas'],
