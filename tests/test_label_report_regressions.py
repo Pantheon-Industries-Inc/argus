@@ -296,10 +296,21 @@ def test_placeholder_annotations_are_not_substantive(reply):
     {'timeline': [], 'data_issues': [{'issue': 'The camera is covered.', 'severity': 'high'}]},
     {'operator_mistakes': [{'issue': 'The cup is dropped.', 'severity': 'medium'}]},
     {'performance_review': 'The hands remain idle throughout the visible recording.'},
-    {'goal_alignment': {'matches_given': False, 'relation': 'unrelated', 'note': 'Only a blank screen is visible.'}},
+    {'goal_alignment': {'matches_given': False, 'relation': 'unrelated', 'note': 'Only a blank screen is visible.'},
+     'data_issues': [{'issue': 'The footage does not show the instruction.', 'category': 'instruction_mismatch'}]},
 ])
 def test_substantive_partial_schema_variants_remain_accepted(reply):
     assert harness.parse_response(json.dumps(reply)) == (reply, True)
+
+
+def test_a_goal_alignment_alone_is_accepted_with_the_mismatch_it_implies():
+    reply = {'goal_alignment': {'matches_given': False, 'relation': 'unrelated',
+                                'note': 'Only a blank screen is visible.'}}
+    labels, accepted = harness.parse_response(json.dumps(reply))
+    assert accepted and labels['goal_alignment'] == reply['goal_alignment']
+    assert labels['data_issues'] == [{'issue': 'Only a blank screen is visible.', 'category': 'instruction_mismatch',
+                                      'severity': 'high', 't_s': None, 'end_s': None,
+                                      'evidence': 'goal_alignment of this reply', 'derived_from': 'goal_alignment'}]
 
 
 @pytest.mark.parametrize('labels', [{'timeline': []}, {'timeline': [{}]}, {}])

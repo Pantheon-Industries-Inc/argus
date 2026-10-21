@@ -18,6 +18,7 @@
  "tests/test_atomic_results.py": 0.5,
  "tests/test_audit_families.py": 30.7,
  "tests/test_board.py": 3.1,
+ "tests/test_board_additions.py": 0.4,
  "tests/test_board_backend_safety.py": 2.6,
  "tests/test_board_cache_lifecycle_v6.py": 16.0,
  "tests/test_board_download_integrity.py": 9.9,
