@@ -1398,3 +1398,64 @@ def test_the_board_names_the_parts_a_stitched_object_came_from():
     assert to_board.convert(result, 'demo')['objects'] == [
         {'name': 'blanket', 'color': None, 'parts': [1, 2]}, {'name': 'cup', 'color': 'red', 'parts': [2]},
         {'name': 'plate', 'color': None}]
+
+
+def _tasks_part(p: Path, ctx: dict, tasks: list) -> dict:
+    """A part's record as the harness writes it in the tasks format: label_schema, and the part's completion derived
+    from its own tasks."""
+    from board.label_projection import recording_completion
+    record = _part_result(p, 'stack the cups')
+    record['label_schema'] = 'tasks'
+    record['labels'].update(tasks=tasks, completion=recording_completion(tasks))
+    return record
+
+
+def _cup_task(ctx, *, start=False, end=False, **fields):
+    """A task over the whole part on its own clock; start and end say it continues across that cut."""
+    span = round(ctx['piece']['t1_s'] - ctx['piece']['t0_s'], 3)
+    note = ' '.join([*(['Continues the task from the previous part.'] if start else []),
+                     *(['The clip ends while the task is still under way.'] if end else [])])
+    return {'start_s': 0.0, 'end_s': span, 'task': 'stack the cups', 'objects': ['cup'],
+            'judged_against': 'instruction', 'success_predicate': 'three cups stacked', 'note': note,
+            'outcome': 'partial' if end else 'success', 'completed_at_s': None if end else span - .05, **fields}
+
+
+def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_verdict(tmp_path, monkeypatch):
+    _, src, parts = _three_parts(tmp_path, monkeypatch)
+    contexts = [json.loads((part / 'context.json').read_text()) for part in parts]
+    tasks = [[_cup_task(contexts[0], end=True)], [_cup_task(contexts[1], start=True, end=True)],
+             [_cup_task(contexts[2], start=True)]]
+    records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, tasks)]
+    stitched = pieces.stitch(src, list(zip(contexts, records)))
+    (task,) = stitched['labels']['tasks']
+    completion = stitched['labels']['completion']
+    assert task['outcome'] == 'success' and task['judged_against'] == 'instruction' and len(task['joined_from']) == 3
+    assert (completion['task_completed'], completion['from_tasks'], completion['judged_against']) == (
+        'success', 1, 'instruction')
+    assert completion['completed_at_s'] == task['completed_at_s']
+    assert stitched['label_schema'] == 'tasks' and stitched['prompt_mode'] == 'given'
+    # a part with no labels may hold more of the work: no verdict, and the reason names the part
+    missing = [{'part': 3, 't0_s': contexts[2]['piece']['t0_s'], 't1_s': contexts[2]['piece']['t1_s'],
+                'why': 'no reply'}]
+    open_end = pieces.stitch(src, list(zip(contexts[:2], records[:2])), missing)
+    completion = open_end['labels']['completion']
+    assert completion['task_completed'] is None and completion['from_tasks'] == 1
+    assert completion['reason'] == '1 task in the parts with labels; part 3 has no labels, as no reply'
+
+
+def test_in_the_tasks_format_a_task_open_at_the_last_cut_or_parts_of_two_formats_give_no_verdict(tmp_path, monkeypatch):
+    _, src, parts = _three_parts(tmp_path, monkeypatch)
+    contexts = [json.loads((part / 'context.json').read_text()) for part in parts]
+    tasks = [[_cup_task(contexts[0], end=True)], [_cup_task(contexts[1], start=True, end=True)], []]
+    records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, tasks)]
+    stitched = pieces.stitch(src, list(zip(contexts, records)))
+    (task,) = stitched['labels']['tasks']
+    completion = stitched['labels']['completion']
+    assert task['outcome'] == 'continues_past_cut'
+    assert completion['task_completed'] is None and completion['from_tasks'] == 1 and 'cut' in completion['reason']
+    # one part asked before the tasks format: the parts give no single reading
+    older = _part_result(parts[2], 'stack the cups')
+    mixed = pieces.stitch(src, list(zip(contexts, records[:2] + [older])))
+    assert mixed['labels']['completion']['task_completed'] is None
+    assert mixed['labels']['completion']['reason'] == 'parts labelled with different output formats'
+    assert 'label_schema' not in mixed and mixed['prompt_mode'] == 'given'
