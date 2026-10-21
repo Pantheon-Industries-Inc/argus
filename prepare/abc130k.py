@@ -123,10 +123,14 @@ def read_mcap(path: Path) -> dict:
 
 def measured_fps(t_ns: np.ndarray) -> float:
     """The anchor camera's real frame rate from its capture times (ns). Stations record at 30 or 60 Hz, and the
-    harness samples one frame per second by counting fps frames, so a fixed 30 sampled 60 Hz episodes every 0.5 s."""
-    d = np.diff(np.asarray(t_ns, dtype=np.float64))
+    harness samples one frame per second by counting fps frames, so a fixed 30 sampled 60 Hz episodes every 0.5 s.
+    A camera that stamps most frames microseconds after the one before has a median step that is no frame interval,
+    so its frames' rate over their span is used instead (camera_clock.supported_rate)."""
+    from prepare.camera_clock import supported_rate
+    t = np.asarray(t_ns, dtype=np.float64)
+    d = np.diff(t)
     d = d[d > 0]
-    return round(1e9 / float(np.median(d)), 2) if len(d) else float(NOMINAL_FPS)
+    return supported_rate(round(1e9 / float(np.median(d)), 2), t / 1e9)[0] if len(d) else float(NOMINAL_FPS)
 
 
 def interp(stream: dict, q: np.ndarray) -> tuple[np.ndarray | None, tuple[float, float] | None]:

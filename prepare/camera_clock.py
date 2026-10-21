@@ -67,6 +67,38 @@ def presentation_clock(t: np.ndarray, nominal_fps: float | None = None) -> tuple
             "PTS are kept."}
 
 
+# A stated frame rate gives way to the rate its frames' own capture times show only past this factor either way. That
+# is a clock or units fault, never dropped frames or a pause: ABC-130k's top camera stamps about half its frames 1 us
+# after the frame before, so the median step reads 976562.5 fps for a recording of 3077 frames over 103 s (29.8 fps).
+FRAME_RATE_MISMATCH = 10.0
+
+
+def span_rate(t) -> float | None:
+    """Frames per second over a clock's own span, (n - 1) / (last - first) of its finite times in seconds, or None
+    without two of them a positive time apart."""
+    t = np.asarray(t, dtype=np.float64).ravel()
+    t = t[np.isfinite(t)]
+    span = float(t.max() - t.min()) if len(t) >= 2 else 0.0
+    return (len(t) - 1) / span if span > 0 else None
+
+
+def supported_rate(stated, t) -> tuple:
+    """(the frame rate seconds are turned into frames with, a note or None). The stated rate is kept unless the frames'
+    capture times t (seconds) show a rate more than FRAME_RATE_MISMATCH times higher or lower. Then the frames' own
+    rate is used, because a window or a lag of so many seconds counted at the stated rate would not be that long in
+    the recording (a 1 s window at 976562.5 fps is longer than the whole 3077-frame episode). The note names both."""
+    if isinstance(stated, bool) or not isinstance(stated, (int, float)) or not np.isfinite(stated) or stated <= 0:
+        return stated, None
+    own = span_rate(t)
+    if own is None or own / FRAME_RATE_MISMATCH <= float(stated) <= own * FRAME_RATE_MISMATCH:
+        return stated, None
+    used = round(own, 3)
+    return used, {"stated_fps": float(stated), "used_fps": used, "frames": int(np.isfinite(np.asarray(t)).sum()),
+                  "what": f"The stated frame rate of {float(stated):.10g} fps is not used, because the frames' own "
+                          f"capture times put them at {used:g} fps, more than {FRAME_RATE_MISMATCH:g} times apart; "
+                          f"every window and lag in seconds is counted in frames at {used:g} fps."}
+
+
 def load_times(ep_dir: Path, ctx: dict, recorded: bool = False) -> dict:
     """Stored camera times and exact encoded PTS. Only an explicitly opted in episode reads separate presentation
     times. Unmarked saved episodes keep their old label clock. recorded=True always reads the untouched originals."""

@@ -1105,9 +1105,12 @@ def seconds(pr: dict) -> np.ndarray:
 
 
 def measured_fps(t: np.ndarray) -> float | None:
+    """A clock's frame rate from its median step (seconds), or its frames' rate over their span when stamps a few
+    microseconds apart make that median no frame interval (camera_clock.supported_rate)."""
+    from prepare.camera_clock import supported_rate
     d = np.diff(np.asarray(t, dtype=np.float64))
     d = d[d > 1e-6]
-    return round(1.0 / float(np.median(d)), 3) if len(d) else None
+    return supported_rate(round(1.0 / float(np.median(d)), 3), t)[0] if len(d) else None
 
 
 def nearest(src_t: np.ndarray, q: np.ndarray) -> np.ndarray:

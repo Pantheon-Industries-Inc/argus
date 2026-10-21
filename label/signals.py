@@ -820,6 +820,20 @@ TRACK_APART_TIMES = 20.0
 TRACK_APART = 0.03
 
 
+def window_sum(a: np.ndarray, win: int) -> np.ndarray:
+    """The sum of a over the win frames centred on each frame (frames past either end count nothing), one value per
+    frame of a whatever win is. np.convolve(mode="same") returns max(len(a), win) values, so a window longer than the
+    frames gave a series that no longer lined up with them, and a per-frame mask applied to it stopped the whole
+    episode. Up to len(a) frames this is np.convolve(mode="same") itself, so its sums are unchanged."""
+    a = np.asarray(a, dtype=np.float64)
+    win = max(1, int(win))
+    if win <= len(a):
+        return np.convolve(a, np.ones(win), mode="same")
+    c = np.concatenate([[0.0], np.cumsum(a)])
+    i = np.arange(len(a))
+    return c[np.minimum(i + (win - 1) // 2 + 1, len(a))] - c[np.maximum(i - win // 2, 0)]
+
+
 def _r2_rows(xs: np.ndarray, y: np.ndarray) -> np.ndarray:
     """r squared of y against each row of xs, on the instants where both have a reading (0 where either is flat)."""
     ok = np.isfinite(xs) & np.isfinite(y)[None, :]
@@ -898,7 +912,7 @@ def apart_instants(x: np.ndarray, y: np.ndarray, ks: list[int], lag: int, fps: f
     ok = np.isfinite(xa) & np.isfinite(ya)
     win = max(1, int(round(TRACK_HOLD_S * fps)))
     flagged = np.zeros(len(idx), dtype=bool)
-    count = np.maximum(np.convolve(ok.astype(float), np.ones(win), mode="same"), 1)
+    count = np.maximum(window_sum(ok.astype(float), win), 1)
     for a, b in ((xa, ya), (ya, xa)):
         span = float(np.ptp(b[ok])) if ok.sum() >= 3 else 0.0
         if span == 0 or a[ok].std() == 0:
@@ -913,11 +927,10 @@ def apart_instants(x: np.ndarray, y: np.ndarray, ks: list[int], lag: int, fps: f
                 return list(range(len(ks)))
             fit = line[1] + line[0] * np.where(ok, a, 0.0)
             r = np.where(ok, np.abs(b - fit), 0.0)
-            held = np.convolve(r, np.ones(win), mode="same") / count
+            held = window_sum(r, win) / count
             # the pair's own normal: a follower behind its command is off by about its speed times the lag, and a
             # still pair by its noise, so its usual residual is b0 + c x speed, read from the pair itself
-            speed = np.convolve(np.where(ok, np.abs(np.diff(fit, prepend=fit[0])) * fps, 0.0), np.ones(win),
-                                mode="same") / count
+            speed = window_sum(np.where(ok, np.abs(np.diff(fit, prepend=fit[0])) * fps, 0.0), win) / count
             # moving means moving: a gripper still for most of the request has a median speed of its noise, and its
             # residual over noise speed would set the lag term from nothing
             moving = ok & (speed > max(float(np.median(speed[ok])), 0.1 * float(np.quantile(speed[ok], 0.99))))
