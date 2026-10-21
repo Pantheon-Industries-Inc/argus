@@ -226,11 +226,12 @@ def test_habit_gives_its_timed_steps_once(tmp_path):
     root = tmp_path / 'recording'
     native(root)
     ep, ctx = published(root, tmp_path / 'old')
+    for label in ('robot reach', 'robot fold', 'person hold', 'person release'):
+        assert label not in ctx['instruction_note'], label
     text = episode.build_request(ep, cell_w=128)['prompt']
     block = text[text.index("THE DATASET'S TIMED STEPS FOR THIS EPISODE"):]
     block = block[:block.index('\n\n')] if '\n\n' in block else block
     for label in ('robot reach', 'robot fold', 'person hold', 'person release'):
-        assert label not in ctx['instruction_note'], label
         assert block.count(label) == sum(s['label'] == label for s in ctx['annotation_subtasks']) > 0, label
 
 

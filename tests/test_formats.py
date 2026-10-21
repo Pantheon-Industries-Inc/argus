@@ -224,7 +224,8 @@ def mcap_task_text_checks() -> int:
         print(f"MCAP steps: {len(subs)} subtasks and {len(notes.get('/task/subtask') or [])} note lines of {f.TEXT_MSGS_MAX + 15} steps")
     # a task topic whose text changes names the task of each stretch: timed task prompts, each until the next, no
     # text chosen over another and no instruction for the recording: MicroAGI's placeholder at the start of a
-    # fragment, the title sent at the same moment, a later title
+    # fragment, the title sent at the same moment (the placeholder then names no stretch and is no prompt), a later
+    # title
     instr, notes, prompts = f.mcap_task_texts({"/task": [(s, "open the drawer"), (s + 4 * 10**9, "close the drawer")]},
                                               {"/task": 2}, s, 9.0)
     if instr is not None or "/task" in notes or prompts != [
@@ -236,8 +237,7 @@ def mcap_task_text_checks() -> int:
                       (s + 220 * 10**9, rec("A person slices potato pieces"))]}
     instr, notes, prompts = f.mcap_task_texts(idle, {"/task": 3}, s, 300.0)
     if instr is not None or [(p["t0"], p["t1"], p["label"]) for p in prompts] != [
-            (0.0, 0.0, "The agent is idle with no activity."), (0.0, 220.0, "A person minces ginger and garlic"),
-            (220.0, 300.0, "A person slices potato pieces")]:
+            (0.0, 220.0, "A person minces ginger and garlic"), (220.0, 300.0, "A person slices potato pieces")]:
         bad += 1
         print(f"MCAP task text: a placeholder then titles gave {instr!r} and {prompts}")
     return bad

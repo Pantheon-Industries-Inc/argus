@@ -499,7 +499,7 @@ def test_short_rows_with_identifiable_progress_keep_content_and_resume(tmp_path,
     def provider(request, timeout):
         selection = 'FIELD INVENTORY' in json.dumps(json.loads(request.data)['messages'])
         sent.append('selection' if selection else 'final')
-        return answer({'requests': []} if selection else {**complete_reply.labels(), 'timeline': [row]})
+        return answer({'requests': []} if selection else {**complete_reply.uninstructed(), 'timeline': [row]})
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, max_spend=1.,
