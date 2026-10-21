@@ -39,7 +39,7 @@ def _source(ep, sensor, derivation):
         raise ValueError('regional source is absent or exceeds the existing source-value bound')
     entry = field_interpretation(ep['context'], name)
     if (entry.get('provenance') == 'human' and 'role' in entry
-            and signals._role(entry['role']) not in ('touch', 'tactile', 'pressure', 'normal_force', 'shear_force', 'force_torque')):
+            and signals.signal_role(entry['role']) not in signals.TOUCH_QUANTITY_ROLES):
         raise ValueError('current human interpretation withdraws the regional sensor role')
     resolved = semantic._semantics(ep['context'], meta, entry, meta.get('shape') or list(a.shape[1:]))
     if resolved is not None and 'regions' in resolved:

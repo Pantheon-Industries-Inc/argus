@@ -1609,15 +1609,18 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
         result['camera_observations'] = bind_camera_observations(labels['camera_observations'], fields)
         result['camera_observations']['provenance'] = {'model': result.get('model_served') or model,
             'generation_id': result.get('generation_id'), 'method': 'same episode annotation request'}
-    if isinstance(fields.get("sensor_evidence"), dict):
-        from label.sensor_evidence import bind
-        result["sensor_evidence"] = bind(fields["sensor_evidence"], labels.get("sensor_findings"),
+    from label import sensor_evidence as se
+    request_doc = fields.get("sensor_evidence")
+    routes = se.route_findings(labels, inspection=evidence_access is not None,
+                               sensor_evidence=isinstance(request_doc, dict) and bool(request_doc.get('sensors')))
+    if isinstance(request_doc, dict):
+        result["sensor_evidence"] = se.bind(request_doc, routes['sensor_findings'],
                                          ep=evidence_access.ep if evidence_access is not None else None,
                                          copy_contract_version=(fields.get('config') or {}).get('sensor_copy_contract_version'))
         result["sensor_evidence"]["provenance"] = {"model": result.get("model_served") or model,
             "generation_id": result.get("generation_id"), "method": "same episode annotation request"}
     if evidence_access is not None:
-        additional = evidence_access.bind(labels.get('evidence_findings'))
+        additional = evidence_access.bind(routes['evidence_findings'])
         result['evidence_inspection']['untimed_findings'] = additional['untimed_findings']
         evidence = result.setdefault('sensor_evidence', additional)
         if evidence is not additional:
@@ -1625,6 +1628,12 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                 evidence.setdefault(key, []).extend(additional[key])
         evidence.setdefault('provenance', {}).update(model=result.get('model_served') or model,
             generation_id=result.get('generation_id'), method='episode annotation with bounded evidence inspection')
+    if routes['unbound'] or routes['routed']:
+        if not isinstance(result.get('sensor_evidence'), dict):
+            result['sensor_evidence'] = {**se.empty_doc(), 'provenance': {
+                'model': result.get('model_served') or model, 'generation_id': result.get('generation_id'),
+                'method': 'same episode annotation request'}}
+        se.keep_routing(result['sensor_evidence'], routes)
     if bound_sensor_analysis is not None:
         sensor_analysis.attach(result, bound_sensor_analysis)
     if msg.get("reasoning"):

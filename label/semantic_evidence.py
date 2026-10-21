@@ -195,9 +195,9 @@ def append(ep, pl, doc, times):
     for meta in ctx.get('signals') or []:
         name = meta['name']
         entry = field_interpretation(ctx, name)
-        role = sg._role(entry.get('role'))
+        role = sg.signal_role(entry.get('role'))
         if entry.get('provenance') == 'human' and 'role' in entry and role not in (
-                'touch', 'tactile', 'pressure', 'normal_force', 'shear_force', 'force_torque', *POINT_ROLES):
+                *sg.TOUCH_QUANTITY_ROLES, *POINT_ROLES):
             continue
         value = (ep.get('signals') or {}).get(name)
         if value is None or meta.get('summary_of'):

@@ -1500,7 +1500,7 @@ def touch_verdicts(ep: dict, n: int) -> frozenset:
             continue
         from prepare.formats import names_touch
         if (sg.declared_zero_reference(m, a.shape[1]) is not None and
-                (names_touch(name) or sg._role(role) in ('touch', 'tactile', 'pressure', 'normal_force', 'shear_force', 'force_torque'))):
+                (names_touch(name) or sg.signal_role(role) in sg.TOUCH_QUANTITY_ROLES)):
             out.add(name)
             continue
         # read as stored (a float32 skin is never copied whole as float64, label/signals.py CHUNK_VALUES)

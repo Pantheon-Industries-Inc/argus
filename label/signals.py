@@ -577,12 +577,38 @@ def _role(role):
     return role.strip().casefold() if isinstance(role, str) else ""
 
 
+# The roles a numeric reader reads as a touch measurement.
+TOUCH_QUANTITY_ROLES = ("touch", "tactile", "pressure", "normal_force", "shear_force", "force_torque")
+
+
+def signal_role(role) -> str:
+    """The role an interpretation gives a numeric signal, checked against what the signal is: numbers per frame. A
+    role that names a camera image's content (label/dictionary_context.py SCENE_CONTENT_ROLES, SENSOR_CONTENT_ROLES)
+    cannot be read as stated, since the signal is no image. A tactile image role still says the numbers are touch
+    readings, so it reads as touch; any other image role says nothing a numeric reader can use, so it reads as no
+    role and the signal's own name decides, as it does before a dictionary runs. Every other role is kept."""
+    from label.dictionary_context import SCENE_CONTENT_ROLES, SENSOR_CONTENT_ROLES, TACTILE_CONTENT_ROLES
+    role = _role(role)
+    if role in TOUCH_QUANTITY_ROLES or role not in SCENE_CONTENT_ROLES | SENSOR_CONTENT_ROLES:
+        return role
+    return "touch" if role in TACTILE_CONTENT_ROLES else ""
+
+
+def role_mismatch(name: str, role) -> str | None:
+    """The note that says a numeric signal's role names an image, and how it is read instead (signal_role)."""
+    if not isinstance(role, str) or signal_role(role) == _role(role):
+        return None
+    read = "touch readings" if signal_role(role) == "touch" else "a signal its name describes"
+    return (f"{name}: the field dictionary called this signal {role.strip()}, an image role, but it is recorded as "
+            f"numbers, so it is read as {read}.")
+
+
 def touch_permission(name: str, role=None):
     """Commands and known noncontact roles veto stored verdicts before any numeric reuse."""
     from prepare.formats import COMMAND_WORDS, _names_word
-    if _names_word(name, COMMAND_WORDS) or _role(role) in NON_TOUCH_ROLES:
+    if _names_word(name, COMMAND_WORDS) or signal_role(role) in NON_TOUCH_ROLES:
         return False
-    return True if _role(role) == "touch" else None
+    return True if signal_role(role) == "touch" else None
 
 
 def touch_cache_permission(name: str, role=None, qualified_role=None):

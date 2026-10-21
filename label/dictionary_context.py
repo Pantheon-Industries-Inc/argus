@@ -148,6 +148,18 @@ SENSOR_CONTENT_ROLES = frozenset(('sensor', 'sensor_view', 'tactile_image', 'opt
 TACTILE_CONTENT_ROLES = SENSOR_CONTENT_ROLES - {'sensor', 'sensor_view'}
 
 
+def image_role(role) -> str:
+    """The role an interpretation gives a camera, checked against what the camera is: images. A role that names a
+    numeric touch quantity (label/signals.py TOUCH_QUANTITY_ROLES, eg pressure) says the images show touch, so it reads
+    as tactile; a wrench (force_torque) has no image form, so it reads as no role and the camera's own name decides.
+    The numeric counterpart is label/signals.py signal_role. Every other role is kept."""
+    from label.signals import _role, TOUCH_QUANTITY_ROLES
+    role = _role(role)
+    if role in SENSOR_CONTENT_ROLES or role not in TOUCH_QUANTITY_ROLES:
+        return role
+    return '' if role == 'force_torque' else 'tactile'
+
+
 def camera_role(ctx: dict, view: str, interpretation: dict, meta: dict | None = None) -> str | None:
     """The role an interpretation gives a camera, with what the reader read from the camera's own recorded name taking
     precedence over a model's guess. A machine-interpreted sensor or tactile role is dropped when the reader placed the
@@ -155,9 +167,8 @@ def camera_role(ctx: dict, view: str, interpretation: dict, meta: dict | None = 
     name carries no sensing word (is_sensing, eg gelsight or digit): the dictionary model can fill a gap the reader
     left, or agree with it, but never turn a camera the reader identified into a touch sensor. A role a person set
     always stands."""
-    from label.signals import _role
     from prepare.formats import camera_role_provenance, is_sensing
-    role = _role(interpretation.get('role'))
+    role = image_role(interpretation.get('role'))
     if role not in SENSOR_CONTENT_ROLES or interpretation.get('provenance') != 'machine':
         return role
     meta = meta if meta is not None else (ctx.get('cameras') or {}).get(view) or {}
@@ -191,7 +202,7 @@ def camera_content_role(ctx: dict, view: str, entry: dict | None = None) -> dict
                     or any(row.get('field_id') == ident and 'role' in (row.get('after') or {})
                            for row in (overlay.get('override_history') or overlay.get('history') or [])))
         if explicit:
-            role = _role(interpretation['role'])
+            role = image_role(interpretation['role'])
             return {'role': 'scene' if role in SCENE_CONTENT_ROLES else
                     'tactile' if role in TACTILE_CONTENT_ROLES else
                     'sensor' if role in SENSOR_CONTENT_ROLES else 'other', 'provenance': 'human'}

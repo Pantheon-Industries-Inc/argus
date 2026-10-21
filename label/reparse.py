@@ -81,10 +81,15 @@ def rebind(record: dict) -> None:
         record['camera_observations'] = harness.bind_camera_observations(labels['camera_observations'], fields)
         record['camera_observations']['provenance'] = provenance
     evidence = record.get('sensor_evidence')
+    inspection = record.get('evidence_inspection')
+    native = None
     if isinstance(evidence, dict):
         # Inspected fields have their separate request receipts and binder below.
         native = sensor_analysis.without_attached(evidence)
         native['sensors'] = [s for s in native.get('sensors', []) if 'access_field_id' not in s]
+    routes = se.route_findings(labels, sensor_evidence=bool(native and native['sensors']),
+                               inspection=isinstance(inspection, dict))
+    if native is not None:
         sensor_ids = {s['id'] for s in native['sensors']}
         native['series'] = [r for r in native.get('series', []) if r['sensor_id'] in sensor_ids]
         source_context = None
@@ -94,7 +99,7 @@ def rebind(record: dict) -> None:
                 current_context = source_context
             except (OSError, ValueError):
                 pass
-        record['sensor_evidence'] = se.bind(native, labels.get('sensor_findings'),
+        record['sensor_evidence'] = se.bind(native, routes['sensor_findings'],
                                             source_context=source_context, copy_contract_version=copy_version)
         retain_reviews(record['sensor_evidence']['findings'])
         retain_reviews(unbound_findings(record['sensor_evidence']))
@@ -104,7 +109,11 @@ def rebind(record: dict) -> None:
             bound.setdefault('withheld_findings', []).extend(bound['findings'])
             bound['findings'] = []
             bound.setdefault('limitations', []).append(problem)
-    inspection = record.get('evidence_inspection')
+    if routes['unbound'] or routes['routed'] or isinstance(record.get('sensor_evidence'), dict):
+        if not isinstance(record.get('sensor_evidence'), dict):
+            record['sensor_evidence'] = {**se.empty_doc(), 'provenance': provenance}
+        se.keep_routing(record['sensor_evidence'], routes)
+        retain_reviews(row['finding'] for row in routes['unbound'] if isinstance(row['finding'], dict))
     if not isinstance(inspection, dict):
         restore_analysis()
         return
@@ -118,7 +127,7 @@ def rebind(record: dict) -> None:
         if any(r.get('field_id') not in access.fields for r in receipts):
             raise ValueError('saved inspection field is no longer available')
         access.receipts = receipts
-        additional = access.bind(labels.get('evidence_findings'))
+        additional = access.bind(routes['evidence_findings'])
         retain_reviews(additional['findings'])
         retain_reviews(additional['untimed_findings'])
         inspection['untimed_findings'] = additional['untimed_findings']
@@ -128,7 +137,7 @@ def rebind(record: dict) -> None:
         inspection.setdefault('limitations', []).append(f'Reparse evidence binding withheld: {error}')
         additional = {'sensors': [], 'series': [], 'findings': [], 'coverage': [], 'limitations': [],
                       'unbound_findings': [{'finding': copy.deepcopy(f), 'reason': str(error)}
-                                           for f in labels.get('evidence_findings') or []]}
+                                           for f in routes['evidence_findings']]}
     retain_reviews(unbound_findings(additional))
     evidence = record.setdefault('sensor_evidence', {'version': 1})
     for key in ('sensors', 'series', 'findings', 'unbound_findings', 'coverage', 'limitations'):

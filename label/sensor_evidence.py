@@ -113,7 +113,7 @@ def _quantity(name, entry, columns=None):
     """What a numeric signal measures, from its dictionary role or, without one, its name. A force reading that is a
     wrench at one point (its name says torque or wrench, or six values at the wrist or flange: three forces and three
     torques) is force_torque, not touch, whether or not the field dictionary ran."""
-    role = sg._role(entry.get('role'))
+    role = sg.signal_role(entry.get('role'))
     if sg.touch_permission(name, role) is False:
         return None
     roles = {'touch': 'sensor_response', 'tactile': 'sensor_response', 'pressure': 'pressure_response',
@@ -212,7 +212,7 @@ def _groups(meta, entry, a, remaining, valid_indices=None):
     unit_list = [u if isinstance(u, str) else None for u in units] if isinstance(units, list) and len(units) == width else [units if isinstance(units, str) else None] * width
     # Group names describe organization, not permission to cancel force axes or
     # opposing taxels when every component already fits the evidence budget.
-    vector = sg._role(entry.get('role')) in ('force_torque', 'shear_force')
+    vector = sg.signal_role(entry.get('role')) in ('force_torque', 'shear_force')
     layout = [] if meta.get('summary_of') or len(eligible) <= remaining or vector else entry.get('layout') or []
     claimed = []
     groups = []
@@ -281,6 +281,9 @@ def build(ep, pl, *, shown=None, images=None, native_images=None, capture_select
                   else 'unsupported interpretation' if quantity is None
                   else 'readings unavailable' if name not in ep.get('signals', {}) else 'pending')
         doc['coverage'].append({'id': 'signal:' + name, 'name': name, 'status': status})
+        mismatch = sg.role_mismatch(name, entry.get('role'))
+        if mismatch and mismatch not in doc['limitations']:
+            doc['limitations'].append(mismatch)
         if status == 'pending':
             numeric.append(meta)
     series_limit = max(MAX_SERIES, min(MAX_SENSORS, len(numeric)))
@@ -887,6 +890,61 @@ def _component_union(sensor, table, position, row, trace):
                                       'values': list(trace['values'])},
                               'constituent_series_id': table['series_ids'][position]}
     return result
+
+
+FINDING_FIELDS = {'sensor_findings': 'supplied sensor evidence', 'evidence_findings': 'inspected evidence'}
+
+
+def _cited_field(finding):
+    """The findings list whose binder can read this finding's citations: evidence_id cites an inspection receipt,
+    sensor_id cites supplied sensor evidence. None when the citations are missing or mix the two."""
+    refs = finding.get('evidence') if isinstance(finding, dict) else None
+    if not isinstance(refs, list) or not refs or not all(isinstance(ref, dict) for ref in refs):
+        return None
+    kinds = {'evidence_findings' if 'evidence_id' in ref else 'sensor_findings' if 'sensor_id' in ref else None
+             for ref in refs}
+    return kinds.pop() if len(kinds) == 1 and None not in kinds else None
+
+
+def route_findings(labels, *, sensor_evidence, inspection):
+    """Send every row of the reply's two findings lists to exactly one place. A finding goes to the binder its
+    citations name, whichever list the model wrote it in, and otherwise to the binder of its own list. When that
+    binder was not part of the request, the finding is returned as unbound with the reason, so a populated list is
+    never skipped without a trace. sensor_evidence and inspection say which binders the request has.
+
+    Returns {'sensor_findings': [...], 'evidence_findings': [...], 'unbound': [{finding, reason, field, row}],
+    'routed': [{field, row, bound_as}]}."""
+    available = {'sensor_findings': bool(sensor_evidence), 'evidence_findings': bool(inspection)}
+    out = {'sensor_findings': [], 'evidence_findings': [], 'unbound': [], 'routed': []}
+    for field in FINDING_FIELDS:
+        rows = labels.get(field) if isinstance(labels, dict) else None
+        for row, finding in enumerate(rows if isinstance(rows, list) else []):
+            target = _cited_field(finding) or field
+            if not available[target]:
+                out['unbound'].append({'finding': copy.deepcopy(finding), 'field': field, 'row': row,
+                                       'reason': f'cites {FINDING_FIELDS[target]}, which this request did not have'})
+                continue
+            out[target].append(finding)
+            if target != field:
+                out['routed'].append({'field': field, 'row': row, 'bound_as': target})
+    return out
+
+
+def keep_routing(doc, routes):
+    """The routing outcome recorded on a bound sensor document: unbound rows join its unbound_findings, and the rows
+    bound from the other list are listed in routed_findings."""
+    doc.setdefault('unbound_findings', []).extend(routes['unbound'])
+    if routes['routed']:
+        doc['routed_findings'] = copy.deepcopy(routes['routed'])
+    else:
+        doc.pop('routed_findings', None)
+    return doc
+
+
+def empty_doc():
+    """A bound sensor document with no evidence, for a reply whose findings had no binder in the request."""
+    return {'version': 1, 'sensors': [], 'series': [], 'findings': [], 'unbound_findings': [], 'coverage': [],
+            'limitations': []}
 
 
 def bind(doc, findings, *, ep=None, source_context=None, copy_contract_version=None):

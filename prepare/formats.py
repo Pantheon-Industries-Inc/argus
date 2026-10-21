@@ -2761,17 +2761,24 @@ class Signals(dict):
         self.no_gaps: set[str] = set()               # signals whose frames with no reading are no issue (write_signals)
         self.bytes = 0                               # the kept signals' size as float32, for SIGNAL_EPISODE_BYTES
         self._sizes: dict[str, int] = {}             # what keep counted for each name, given back when it leaves
+        self.origins: dict[str, str] = {}            # the file each signal was read from, when one file holds it
 
     def fits(self, rows: int, values: int) -> bool:
         """Whether a signal of rows x values keeps the running total within SIGNAL_EPISODE_BYTES."""
         return self.bytes + self.native_table_bytes + int(rows) * int(values) * 4 <= SIGNAL_EPISODE_BYTES
 
-    def keep(self, name: str, a: np.ndarray, m: dict) -> None:
+    def keep(self, name: str, a: np.ndarray, m: dict, origin: str | None = None) -> str:
         """a kept under name with its meta m, as its summary per frame (summarise_rows, a data issue) when it would take
-        the running total past SIGNAL_EPISODE_BYTES. A signal kept under a name already held replaces it, and gives
-        its size back first."""
-        self._release(name)
+        the running total past SIGNAL_EPISODE_BYTES; origin is the file it was read from, when known. Returns the name
+        it is kept under. A name already held with other values is a second source recording a field of the same name,
+        and neither replaces the other (distinct_name). The same values under the same name are kept once."""
         a = np.asarray(a)
+        if name in self:
+            if same_values(self[name], a):
+                return name
+            name = self.distinct_name(name, origin)
+        if origin:
+            self.origins[name] = origin
         width = int(a.shape[1]) if a.ndim > 1 else 1
         if not self.fits(len(a), width) and width > len(SUMMARY_NAMES):
             a = summarise_rows(a)
@@ -2783,6 +2790,43 @@ class Signals(dict):
         self.bytes += self._sizes[name]
         self[name] = a
         self.meta[name] = m
+        return name
+
+    def distinct_name(self, name: str, origin: str | None) -> str:
+        """The name a second signal called name is kept under, beside the one already held. When both files are known
+        and differ, each takes its file's name first ("left_log glove/pressure", "right_log glove/pressure"), so the
+        order the files were read in names neither; otherwise the held one keeps name and the new one takes its file's
+        name first, or a number. Either way a data issue (signal_name_collision) says which source each name holds."""
+        held = self.origins.get(name)
+        if held and origin and held != origin and f"{Path(held).stem} {name}" not in self:
+            self.rename(name, f"{Path(held).stem} {name}")
+            first = f"{Path(held).stem} {name}"
+        else:
+            first = name
+        new = f"{Path(origin).stem} {name}" if origin and Path(origin).stem != Path(held or "").stem else None
+        number = 2
+        while new is None or new in self:
+            new, number = f"{name} ({number})", number + 1
+        self.issues.append({"kind": "signal_name_collision", "signal": new,
+                            "what": f"{name} is recorded by two sources ({held or 'the first read'} and "
+                                    f"{origin or 'a second'}); both are kept, as {first} and {new}, and neither "
+                                    "replaces the other"})
+        return new
+
+    def rename(self, old: str, new: str) -> None:
+        """The signal old, with its meta, size, file and the issues about it, kept under new instead."""
+        self[new] = dict.pop(self, old)
+        for store in (self.meta, self._sizes, self.origins):
+            if old in store:
+                store[new] = store.pop(old)
+        if old in self.no_gaps:
+            self.no_gaps.discard(old)
+            self.no_gaps.add(new)
+        for issue in self.issues:
+            if issue.get("signal") == old:
+                issue["signal"] = new
+                if str(issue.get("what", "")).startswith(old):
+                    issue["what"] = new + issue["what"][len(old):]
 
     def _release(self, name: str) -> None:
         """The size keep counted for name given back to the running total."""
@@ -2797,7 +2841,8 @@ class Signals(dict):
         self._release(name)
         super().__delitem__(name)
 
-    def add(self, name: str, a: np.ndarray, shape=None, names=None, source: str | None = None, metadata=None) -> None:
+    def add(self, name: str, a: np.ndarray, shape=None, names=None, source: str | None = None, metadata=None,
+            origin: str | None = None) -> str:
         m = signal_metadata(metadata)
         if shape is not None and tuple(int(x) for x in shape) != (a.shape[1],):
             m["shape"] = [int(x) for x in shape]
@@ -2805,24 +2850,49 @@ class Signals(dict):
             m["names"] = [str(x) for x in names]
         if source:
             m["source"] = source
-        self.keep(name, a, m)
+        return self.keep(name, a, m, origin)
 
 
 def merge_signals(into: Signals, more: Signals) -> Signals:
     """more's signals, notes and clocks added to into (a plain dict of arrays is read as Signals), each counting toward
-    into's running total (Signals.keep)."""
+    into's running total (Signals.keep). A name both hold with other values is two sources, and both are kept under
+    names that tell them apart (Signals.distinct_name); so is a clock both hold."""
+    origins, kept = getattr(more, "origins", {}) or {}, {}
     for k, v in more.items():
-        into.keep(k, v, dict((getattr(more, "meta", {}) or {}).get(k) or {}))
+        kept[k] = into.keep(k, v, dict((getattr(more, "meta", {}) or {}).get(k) or {}), origins.get(k))
+        if kept[k] != k:
+            for issue in getattr(more, "issues", []) or []:
+                if issue.get("signal") == k:
+                    issue["signal"] = kept[k]
+                    if str(issue.get("what", "")).startswith(k):
+                        issue["what"] = kept[k] + issue["what"][len(k):]
     into.left_out += list(getattr(more, "left_out", []) or [])
-    into.clocks.update(getattr(more, "clocks", {}) or {})
-    into.clock_metadata.update(getattr(more, "clock_metadata", {}) or {})
+    for k, v in (getattr(more, "clocks", {}) or {}).items():
+        meta = (getattr(more, "clock_metadata", {}) or {}).get(k)
+        if k in into.clocks and not same_values(into.clocks[k], v):
+            number = 2
+            while f"{k} ({number})" in into.clocks:
+                number += 1
+            into.issues.append({"kind": "clock_name_collision",
+                                "what": f"the clock {k} is recorded by two sources; both are kept, the second as "
+                                        f"{k} ({number})"})
+            k = f"{k} ({number})"
+        into.clocks[k] = v
+        if meta is not None:
+            into.clock_metadata[k] = meta
     into.native_table_fields += list(getattr(more, "native_table_fields", []) or [])
     into.native_table_bytes += getattr(more, "native_table_bytes", 0)
     if getattr(more, "native_table_frames", None) is not None:
         into.native_table_frames = more.native_table_frames
     into.issues += list(getattr(more, "issues", []) or [])
-    into.no_gaps |= set(getattr(more, "no_gaps", ()) or ())
+    into.no_gaps |= {kept.get(k, k) for k in getattr(more, "no_gaps", ()) or ()}
     return into
+
+
+def same_values(a, b) -> bool:
+    """Whether two arrays hold the same values in the same shape, a missing reading (NaN) matching a missing one."""
+    a, b = np.asarray(a), np.asarray(b)
+    return a.shape == b.shape and bool(np.array_equal(a, b, equal_nan=a.dtype.kind == "f" == b.dtype.kind))
 
 
 def is_clock(x: np.ndarray) -> bool:
@@ -2944,12 +3014,18 @@ def recorded_signals(df, used, n: int, features: dict | None = None) -> Signals:
                 out.left_out.append((str(c), "none of its images could be decoded"))
                 continue
             a, shape, bad = got
-            if bad:
-                bad_cells_issue(out, str(c), bad, len(a), "images that could not be decoded")
             if declared_bookkeeping:
+                if bad:
+                    bad_cells_issue(out, str(c), bad, len(a), "images that could not be decoded")
                 out.left_out.append((str(c), 'declared bookkeeping by source metadata'))
             else:
-                out.add(str(c), on_frames(a, at, n), shape=shape, source="image column " + str(c), metadata=f)
+                for name, plane, plane_shape, channels in image_planes(str(c), a, shape):
+                    if bad:
+                        bad_cells_issue(out, name, bad, len(a), "images that could not be decoded")
+                    kept = out.add(name, on_frames(plane, at, n), shape=plane_shape, source="image column " + str(c),
+                                   metadata=f)
+                    if channels is not None:
+                        out.meta[kept]["image_channels"] = channels
             _retain_table_native(out, str(c), cells, f, bookkeeping=declared_bookkeeping)
             continue
         cells = [_native_table_cell(x) for x in df[c].to_numpy()]
@@ -3164,6 +3240,33 @@ def _image_cells(col, decoded=None):
         if a is not None and a.shape == shape:
             rows[i] = a.ravel()
     return rows, list(shape), sum(1 for a in got if a is None or a.shape != shape)
+
+
+def image_planes(name: str, rows: np.ndarray, shape: list) -> list[tuple]:
+    """The planes the decoded rows of an image column are kept as, each a height x width map: [(name, rows, shape,
+    channels)]. An image of one channel is kept as it is (channels None). The channels of a colour image (height x
+    width x channels) are compared at every pixel of every frame: channels that hold the same values are one plane,
+    kept once, which loses nothing, and channels that differ are each a plane of their own, named for their channel.
+    So a pad stored as a grey RGB image is one map of its cells, never three copies of each cell side by side, and a
+    channel is never read as a neighbouring cell. channels says which stored channels a plane holds:
+    {"stored": channels in the image, "channels": [indices], "identical": whether they hold the same values}."""
+    if len(shape) != 3 or shape[2] < 2:
+        return [(name, rows, shape, None)]
+    h, w, c = (int(x) for x in shape)
+    cube = np.asarray(rows).reshape(len(rows), h, w, c)
+    groups: list[list[int]] = []
+    for k in range(c):
+        same = next((g for g in groups if np.array_equal(cube[..., g[0]], cube[..., k], equal_nan=True)), None)
+        if same is None:
+            groups.append([k])
+        else:
+            same.append(k)
+    planes = []
+    for g in groups:
+        label = name if len(groups) == 1 else f"{name} channel{'s' if len(g) > 1 else ''} {','.join(map(str, g))}"
+        planes.append((label, np.ascontiguousarray(cube[..., g[0]]).reshape(len(rows), h * w), [h, w],
+                       {"stored": c, "channels": g, "identical": len(g) > 1}))
+    return planes
 
 
 def _cell_shape(col, dims: int):
@@ -4503,6 +4606,7 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             continue
         parts = name_parts(p.stem)
         name = parts["cam"] or p.stem
+        pending = []                  # issues about this table, given the name it is kept under once it is kept
         v = vals.to_numpy(dtype=np.float64)
         t = timed = coarse = None
         if tcol is not None:
@@ -4512,7 +4616,7 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             if t is not None:
                 t, coarse = coarse_rows(t)
                 if coarse is not None:
-                    out.issues.append(coarse_issue(name, coarse))
+                    pending.append(coarse_issue(name, coarse))
         # recorded timing only when both are on a recorder's clock, as split_sensors places a sensor file: capture times
         # and a time column that both count from 0 overlap whatever they are (a frame count read as 1 Hz)
         on_clock = (t is not None and real_anchor is not None and recorder_clock(real_anchor) and recorder_clock(t)
@@ -4554,10 +4658,10 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
                 continue
             if j in empty:
                 what = f"{name} {names[j]} has no reading in any of its {len(v)} rows, so it is left out"
-                out.issues.append({"kind": "signal_bad_cells", "signal": name, "what": what})
+                pending.append({"kind": "signal_bad_cells", "signal": name, "what": what})
                 continue
             rows_bad = np.flatnonzero(bad[:, j])
-            out.issues.append({"kind": "signal_bad_cells", "signal": name,
+            pending.append({"kind": "signal_bad_cells", "signal": name,
                                "what": f"{name} {names[j]} has {k} of {len(v)} cells that are empty, not a number or "
                                        "not finite; they are read as missing",
                                "t0_s": float(row_t[rows_bad[0]]), "t1_s": float(row_t[rows_bad[-1]])})
@@ -4565,11 +4669,17 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             out.left_out += [(f"{names[j]} in {p.name}", "no reading in any row") for j in empty]
             keep = [j for j in range(v.shape[1]) if j not in empty]
             if not keep:
+                out.issues += pending
                 continue
             a = np.asarray(a)[:, keep]
             names = [names[j] for j in keep]
         a = np.where(np.isfinite(a), a, np.nan)
-        out.add(name, a, names=names, source=f"table {p.name}")
+        kept = out.add(name, a, names=names, source=f"table {p.name}", origin=p.name)
+        for issue in pending:
+            if kept != name and issue.get("signal") == name:
+                issue["signal"], issue["what"] = kept, kept + issue["what"][len(name):]
+        out.issues += pending
+        name = kept
         if coarse is not None:
             out.meta[name]["aligned_by"] = COARSE_CLOCK
         if gaps:
@@ -9002,13 +9112,12 @@ def h5_file_signals(paths: list[Path], q_abs: np.ndarray, n_anchor: int, fps: fl
                                  n_anchor, presentation_q=presentation_q)
                 # with several files each array, kept or left out, carries its file's name first
                 named = (lambda k: f"{p.stem} {k}") if len(paths) > 1 else (lambda k: k)
-                for k, v in got.items():
-                    out[named(k)] = v
-                    out.meta[named(k)] = got.meta[k]
+                kept = {k: out.keep(named(k), v, got.meta[k], p.name) for k, v in got.items()}
                 out.left_out += [(named(k), why) for k, why in got.left_out]
                 for i in got.issues:
                     k = i.get("signal")
-                    out.issues.append({**i, "signal": named(k), "what": named(k) + i["what"][len(k):]}
+                    out.issues.append({**i, "signal": kept.get(k, named(k)),
+                                       "what": kept.get(k, named(k)) + i["what"][len(k):]}
                                       if k and i["what"].startswith(k) else i)
                 out.left_out += [(named(s["name"]), "no clock to place it against the videos") for s in st["signal"]
                                  if not s["clock"]]
@@ -12908,7 +13017,11 @@ def sensors_from_start(paths: list[Path], t_video: np.ndarray, extra: dict) -> S
             continue
         q = float(t[0]) + t_video
         got = mcap_signals([p], q) if p.suffix.lower() == ".mcap" else h5_file_signals([p], q, len(q))
-        merge_signals(out, mark_assumed(got, extra, p.name))
+        got.origins.update({k: p.name for k in got if k not in got.origins})
+        merge_signals(out, got)
+    for k in out:
+        mark_assumed(Signals({k: out[k]}), extra, out.origins.get(k, "a sensor file"))
+        out.meta.setdefault(k, {})["aligned_by"] = ALIGNED_ASSUMED
     return out
 
 

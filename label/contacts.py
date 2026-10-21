@@ -92,8 +92,8 @@ def find(signals: dict, meta: dict, t: np.ndarray, verdicts=None) -> list[dict]:
             continue
         from prepare.formats import names_touch
         response = sg.declared_zero_activity(a, m)
-        literal = response is not None and (names_touch(name) or sg._role(role) in
-            ('touch', 'tactile', 'pressure', 'normal_force', 'shear_force', 'force_torque', 'contact', 'contact_state'))
+        literal = response is not None and (names_touch(name) or sg.signal_role(role) in
+            (*sg.TOUCH_QUANTITY_ROLES, 'contact', 'contact_state'))
         if len(a) == n and (literal or (name in verdicts if verdicts is not None
                             else sg.is_touch(name, a, m.get("rest"), m.get("swing"), role=role))):
             touch[name] = (a, m)
