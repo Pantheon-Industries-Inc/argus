@@ -1,6 +1,7 @@
 // The recording checks card's rows for the problems an episode was kept and flagged with (board/serve.py
-// readerIssueRows, from board/build.py reader_issues): one row per entry in the sentence it carries, escaped, under the
-// name of the family it raises, with its time and signal when it has them; an entry with no sentence draws nothing.
+// readerIssueRows and readerIssueGroups, from board/build.py reader_issues): one row per entry in the sentence it
+// carries, escaped, under the name of the family it raises, with its time and signal when it has them; an entry with no
+// sentence draws nothing.
 // One whose family is not a fault in the recording (board/families.py COUNTED_LISTS) is marked as not counted.
 //
 //   node tests/reader_issues.js [PAGE_SOURCE]     (default board/serve.py)
@@ -23,7 +24,7 @@ const NAMES = {'clip-frames': 'Camera video has fewer frames than the episode',
                'camera-undecodable': 'Camera video does not decode', 'label-failed': 'Model reply gave no labels'};
 const LISTS = {'label-failed': 'labelling'};
 const T = new Function('famName', 'famList', piece('partFailureReason') + src.slice(e0, e1) + src.slice(t0, t1) + src.slice(r0, r1)
-  + 'return {readerIssueRows};')(s => NAMES[s] || String(s).slice(2), s => LISTS[s] || 'data');
+  + piece('readerIssueGroups') + piece('readerIssueEntries') + 'return {readerIssueRows, readerIssueGroups};')(s => NAMES[s] || String(s).slice(2), s => LISTS[s] || 'data');
 
 let bad = 0;
 const check = (ok, what) => { if (!ok) { bad++; console.log('FAIL: ' + what); } };
@@ -59,4 +60,16 @@ const [gap] = T.readerIssueRows({dataset_checks: {reader_issues: [{kind: 'part_n
 check(gap && gap.includes('Start of the reply') && gap.includes('I am sorry, &lt;b&gt;no&lt;/b&gt;'),
   'a part whose reply gave no labels shows the start of its reply');
 check(!rows.some(r => r.includes('Start of the reply')), 'an entry with no reply shows none');
+// one cause with many entries (every field of a file placed from both starts) is one row naming the cause and how many
+// it holds, opening to every entry; a cause with one entry is its row; causes keep the order of their first entry
+const fieldsOf = n => Array.from({length: n}, (_, i) => ({kind: 'signal_alignment_assumed', family: 'd:alignment assumed',
+  signal: `f${i}`, what: `f${i} (from log.hdf5) was placed on the footage from both starts`}));
+const groups = T.readerIssueGroups({dataset_checks: {reader_issues: [...fieldsOf(2), {kind: 'clip_frames',
+  family: 'clip-frames', what: 'The left video has 29 frames.'}, ...fieldsOf(150).slice(2)]}});
+check(groups.length === 2, 'two causes, two rows: ' + groups.length);
+check(groups[0].startsWith('<details class="di-group">') && groups[0].includes('>alignment assumed</span>')
+  && groups[0].includes('>150 signals</span>') && (groups[0].match(/class="di-row high"/g) || []).length === 151
+  && groups[0].includes('f149 (from log.hdf5)'), 'a cause with 150 entries is one row that opens to all of them');
+check(groups[1].startsWith('<div class="di-row high"') && groups[1].includes('29 frames'), 'a single entry is its row');
+check(T.readerIssueGroups({}).length === 0, 'no entries, no rows');
 process.exit(bad ? 1 : 0);

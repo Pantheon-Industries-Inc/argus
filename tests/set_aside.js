@@ -1,6 +1,5 @@
-// What the episode page shows that has no place on the timeline or in the counts (board/serve.py): the steps and key
-// events the model gave with no time the board can read (untimedRows), listed after the timed ones with "no time"
-// where the time goes, and the issues and checks this dataset's rules set aside (setAsideHtml): each excluded issue
+// What the episode page shows that has no place on the timeline or in the counts (board/serve.py): the steps the model
+// gave with no time the board can read (untimedRows), listed after the timed ones with "no time" where the time goes, and the issues and checks this dataset's rules set aside (setAsideHtml): each excluded issue
 // with the rule's reason, and each check a rule withheld with the reason, in a fold that is closed until opened.
 //
 //   node tests/set_aside.js [PAGE_SOURCE]     (default board/serve.py)
@@ -24,12 +23,10 @@ const u = T.untimedRows({event_labels: [{t_s: 1, verb_class: 'reach'}, {t_s: nul
                          key_events: [{t_s: 2, label: 'grasp'}, {t_s: null, label: 'lid open', outcome: 'success'}]});
 check(u.steps.length === 1 && u.steps[0].includes('wipe &lt;b&gt;') && u.steps[0].includes('no time')
   && !u.steps[0].includes('data-t'), 'an untimed step is a row with no time and nothing to seek to');
-check(u.keys.length === 1 && u.keys[0].includes('lid open') && u.keys[0].includes('no time')
-  && !u.keys[0].includes('data-t'), 'an untimed key event is a row with no time');
 const malformed = T.untimedRows({event_labels:[{t_s:null,verb_class:'lift the object',contribution:42}]});
 check(malformed.steps.length===1 && malformed.steps[0].includes('lift the object'),
   'one malformed contribution does not hide the rest of the paid annotation');
-check(T.untimedRows({}).steps.length === 0 && T.untimedRows({}).keys.length === 0, 'nothing untimed, no rows');
+check(T.untimedRows({}).steps.length === 0, 'nothing untimed, no rows');
 
 check(T.setAsideHtml({}) === '' && T.setAsideHtml({_excluded: [], set_aside_checks: []}) === '',
   'nothing set aside draws nothing');

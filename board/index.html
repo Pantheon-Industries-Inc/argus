@@ -403,13 +403,17 @@ aside.rail {
   background: var(--border-strong); pointer-events: none; }
 /* board totals: their own segment over the rail, set apart from the per-dataset tabs by a heavy rule centred on the
    rail's border (the segment is 1px wider than the rail) */
-.cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 0 24px 0 10px;
+.cv-all { box-sizing: border-box; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 0 24px 0 10px;
   background: var(--surface); border-right: 3px solid var(--border-strong); }
 .cv-all .cv-k { font: 600 11px/1 var(--sans); color: var(--fg-2); letter-spacing: 0.01em; white-space: nowrap; }
-.cv-all .cv-fig { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
+.cv-all .cv-fig { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; min-width: 0; overflow: hidden; }
 .cv-all .cv-fig b { font: 600 18px/1 var(--mono); color: var(--fg); letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums; }
 .cv-all .cv-fig small { font: 500 11px/1 var(--sans); color: var(--fg-3); margin-left: 4px; }
+/* against a target, each total puts its "of" under the number, so two totals and their targets share the rail's width */
+.cv-all .cv-fig.of { align-items: start; gap: 18px; }
+.cv-all .cv-fig.of > span { display: grid; gap: 3px; }
+.cv-all .cv-fig.of small { margin-left: 0; }
 /* one tab per dataset: click to open it */
 /* each tab at least as wide as its text; more tabs than fit scroll sideways instead of truncating */
 .cv-cells { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(max-content, 1fr); min-width: 0;
@@ -1271,40 +1275,24 @@ aside.left .cam-row-grippers.cam-main-scene:has(.sensor-overlay-stack) .cam-cell
   border-radius: 2px;
 }
 .timeline .marker.key:hover { width: 6px; z-index: 7; }
-.key-events { display: flex; flex-direction: column; gap: 6px; }
-.key-ev {
-  display: grid; grid-template-columns: 20px 46px 1fr; gap: 11px; align-items: start;
-  padding: 9px 11px; border-radius: var(--r-sm); cursor: pointer;
-  border-left: 3px solid var(--fg-disabled);
-  background: rgba(28,28,26,0.050);
-  transition: background 100ms;
-}
-.key-ev.success { border-left-color: var(--border-strong); }
-.key-ev.failure { border-left-color: var(--danger); }
-.key-ev.unclear { border-left-color: var(--border-strong); }
-.key-ev.goal { border-left-color: var(--success); }
-.key-ev:hover { background: rgba(28,28,26,0.054); }
-.key-ev .ke-time { color: var(--fg-3); font-family: var(--mono); font-size: 11.5px; padding-top: 1px; }
-/* a key event or step with no time the board can read: listed after the timed ones, nothing to seek to */
-.key-ev.untimed, .feed .ev.untimed { cursor: default; }
-.key-ev.untimed .ke-time, .feed .ev.untimed .t { font-size: 10.5px; white-space: nowrap; }
-.key-ev .ke-body { min-width: 0; }
-.key-ev .ke-row1 { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
-.key-ev .ke-kind { display: inline-block; margin-right: 8px; padding: 1px 7px; border-radius: var(--r-pill);
+/* a step with no time the board can read: listed after the timed ones, nothing to seek to */
+.feed .ev.untimed { cursor: default; }
+.feed .ev.untimed .t { font-size: 10.5px; white-space: nowrap; }
+.mo-row .ke-kind { display: inline-block; margin-right: 8px; padding: 1px 7px; border-radius: var(--r-pill);
   font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--fg-2); border: 1px solid var(--border);
   vertical-align: 1px; }
-.key-ev .ke-kind.sub { background: var(--fg); color: var(--bg, #fff); border-color: var(--fg); }
-.key-ev .ke-label { color: var(--fg); font-size: 13px; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
-.key-ev .outcome {
+.mo-row .ke-kind.sub { background: var(--fg); color: var(--bg, #fff); border-color: var(--fg); }
+.mo-row .ke-label { color: var(--fg); font-size: 13px; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
+.mo-row .outcome {
   flex: 0 0 auto; font-size: 10px; font-family: var(--mono); font-weight: 600;
   padding: 3px 9px; border-radius: var(--r-pill); border: 1px solid transparent; white-space: nowrap;
 }
-.key-ev .outcome.success { background: rgba(78,194,127,0.12); color: var(--success);
+.mo-row .outcome.success { background: rgba(78,194,127,0.12); color: var(--success);
   border-color: rgba(78,194,127,0.22); }
-.key-ev .outcome.failure { background: rgba(179,38,60,0.12); color: var(--danger);
+.mo-row .outcome.failure { background: rgba(179,38,60,0.12); color: var(--danger);
   border-color: rgba(179,38,60,0.22); }
-.key-ev .outcome.unclear { background: rgba(28,28,26,0.05); color: var(--fg-2); border-color: var(--border); }
-.key-ev .ke-note { margin-top: 5px; font-size: 11.5px; color: var(--fg-3); font-style: italic; line-height: 1.45; }
+.mo-row .outcome.unclear { background: rgba(28,28,26,0.05); color: var(--fg-2); border-color: var(--border); }
+.mo-row .ke-note { margin-top: 5px; font-size: 11.5px; color: var(--fg-3); font-style: italic; line-height: 1.45; }
 .timeline .marker:hover { width: 4px; z-index: 5; }
 .timeline .marker .tip {
   position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
@@ -1418,6 +1406,18 @@ h3.section .count {
 .di-verified { font-size: 10px; font-weight: 600; color: var(--fg-2); border: 1px solid var(--border-strong);
   background: rgba(28,28,26,0.05); padding: 1px 6px; border-radius: var(--r-pill); }
 .di-block .di-row[data-t]:hover { background: rgba(127,127,127,0.06); }
+/* one cause with many entries: a single row naming the cause and its count, opening to its entries */
+.di-group { border-top: 1px solid var(--row-divider); }
+.di-group:first-child { border-top: none; }
+.di-group > summary { list-style: none; cursor: pointer; border-top: none; }
+.di-group > summary::-webkit-details-marker { display: none; }
+.di-group > summary:hover { background: rgba(127,127,127,0.06); }
+.di-group .di-issue { display: flex; align-items: baseline; gap: 10px; }
+.di-group .di-gn { font: 600 11px/1 var(--mono); color: var(--fg-2); white-space: nowrap; }
+.di-group .di-gn::after { content: " \25B8"; color: var(--fg-3); }
+.di-group[open] .di-gn::after { content: " \25BE"; }
+.di-group .di-gin { margin-left: 64px; border-left: 2px solid var(--row-divider); padding-left: 8px; }
+.di-group .di-gin .di-row:first-child { border-top: 1px solid var(--row-divider); }
 .di-block.op .di-row .di-sev { color: var(--warning); background: rgba(77,90,160,0.10);
   border: 1px solid rgba(77,90,160,0.30); }
 .di-block.op .di-row.high .di-sev { color: #36407a; background: rgba(77,90,160,0.22);
@@ -1634,9 +1634,16 @@ h3.section .count {
   vector-effect: non-scaling-stroke; }
 .prog-overlay .po-past { fill: none; stroke: #f3f2ec; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .prog-overlay .po-dot { fill: #f3f2ec; }
-/* the Quality section: Execution and Outcome are two boxes side by side, each its score over a grid of cells, and
-   Subgoals is a table in a box of its own; every box has the same header, the same cell and the same bar */
-.qual { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* the Quality section: the outcome's verdict in the largest words below the footage, in its colour; then Execution and
+   Outcome, two boxes side by side, each its score over a grid of cells; then the Subgoals and key events table, whose
+   rows carry each stretch's scores. Every box has the same header, the same cell and the same bar */
+.verdict { --v: var(--fg-2); display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 14px; padding: 2px 0 2px 14px;
+  border-left: 4px solid var(--v); }
+.verdict-word { font-size: 30px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; color: var(--v); }
+.verdict-sub { font-size: 13px; color: var(--fg-2); }
+.verdict .tasks-gap, .verdict > :nth-child(n+3) { flex-basis: 100%; }
+h4.subsection { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--fg-2); }
+.qual { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 .qual-box { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--raised); overflow: hidden; }
 .qual-box.wide { grid-column: 1 / -1; }
 .qual-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
@@ -1653,61 +1660,65 @@ h3.section .count {
 .qual-cells { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .qual-cell { padding: 10px 14px 12px; border-right: 1px solid var(--row-divider); min-width: 0; }
 .qual-cell:last-child { border-right: 0; }
-.qual-cell .qc-k { font-size: 11px; color: var(--fg-2); font-weight: 600; }
+.qual-cell .qc-k { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; color: var(--fg-2); font-weight: 600; }
+/* the weight a part carries in execution, beside its name */
+.qc-w { font: 500 10px/1.2 var(--mono); color: var(--fg-3); }
 .qual-cell .qc-v { font-family: var(--mono); font-size: 17px; font-weight: 700; margin: 3px 0 6px; }
 .qual-cell .qual-bar { height: 6px; margin-bottom: 6px; }
 .qual-cell .qc-sub { font-family: var(--mono); font-size: 11px; color: var(--fg-2); line-height: 1.35; }
-.qual-cell .qc-bad, .qual-table .qc-bad { color: var(--danger); }
+.qual-cell .qc-bad { color: var(--danger); }
 .qual-cell .qc-word { font-family: var(--sans, inherit); font-size: 14px; font-weight: 600; }
-.qual-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.qual-table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--fg-2); padding: 8px 14px;
-  border-bottom: 1px solid var(--row-divider); white-space: nowrap; }
-.qual-table td { padding: 8px 14px; border-bottom: 1px solid var(--row-divider); vertical-align: middle; }
-.qual-table tr:last-child td { border-bottom: 0; }
-.qual-table .num { font-family: var(--mono); text-align: right; white-space: nowrap; }
-
-.qual-table .qt-score { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; align-items: center; }
-.qual-table col.q-task { width: 64px; }
-.qual-table col.q-no { width: 48px; }
-.qual-table col.q-at { width: 92px; }
-.qual-table col.q-took { width: 64px; }
-.qual-table col.q-med { width: 72px; }
-.qual-table col.q-fail { width: 100px; }
-.qual-table col.q-exec { width: 164px; }
-.qual-table .qt-score b { font-family: var(--mono); text-align: right; }
-.qual-table { table-layout: fixed; }
-.qual-table .qt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qual-box.folds .ck-all-in .qual-table tr:first-child td { border-top: 1px solid var(--row-divider); }
-.qual-box.open .ck-all { grid-template-rows: 1fr; }
-.qual-box.open .ck-all-in { opacity: 1; }
-.qual-box .qual-more { margin: 0; padding: 10px 14px; border-top: 1px solid var(--row-divider); width: 100%; text-align: left; }
-.qual-table tr[data-t] { cursor: pointer; }
-.qual-table tr[data-t]:hover td { background: var(--hover, rgba(0,0,0,0.03)); }
-/* a box too narrow for the table's columns (a phone) stacks each row: the subgoal on its own line over its time, its
-   failed tries and its execution, on one grid shared by the header, the shown rows and the folded ones; Took and
-   Median are left to the wide table */
-.qual-box { container-type: inline-size; }
+.moments { --mo-cols: 24px 52px minmax(0, 1fr); margin-bottom: 12px; border: 1px solid var(--border);
+  border-radius: var(--r-md); background: var(--raised); overflow: hidden; container-type: inline-size; }
+.moments.scored { --mo-cols: 24px 52px minmax(0, 1fr) 96px 72px 48px 72px 76px; }
+.mo-row { display: grid; grid-template-columns: var(--mo-cols); column-gap: 10px; align-items: start; padding: 9px 14px 9px 11px;
+  border-top: 1px solid var(--row-divider); border-left: 3px solid transparent; cursor: pointer; font-size: 12.5px;
+  transition: background 100ms; }
+.mo-row.mo-head { cursor: default; border-top: 0; align-items: end; padding-top: 10px; padding-bottom: 8px;
+  font-size: 11px; font-weight: 600; color: var(--fg-2); }
+.mo-row.goal { border-left-color: var(--success); }
+.mo-row.failure { border-left-color: var(--danger); }
+.mo-row.untimed { cursor: default; }
+.mo-row:not(.mo-head):hover { background: rgba(127,127,127,0.06); }
+.mo-row > * { min-width: 0; }
+.mo-no, .mo-at { font-family: var(--mono); font-size: 11.5px; color: var(--fg-3); padding-top: 1px; white-space: nowrap; }
+.mo-head .mo-no, .mo-head .mo-at { font-family: var(--sans); font-size: 11px; color: var(--fg-2); }
+.mo-l1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 0; }
+.mo-row .mo-label { flex: 1 1 140px; margin-right: 8px; color: var(--fg); font-size: 13px; line-height: 1.4;
+  overflow-wrap: anywhere; }
+.mo-task { margin-right: 8px; font: 600 10px/1.6 var(--mono); color: var(--fg-3); }
+.mo-d { font-family: var(--mono); font-size: 12.5px; text-align: right; padding-top: 1px; }
+.mo-head .mo-d { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-family: var(--sans);
+  font-size: 11px; }
+.mo-exec { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 6px; align-items: center; padding-top: 1px; }
+.mo-exec b { font-family: var(--mono); font-size: 12.5px; text-align: right; }
+.mo-head .mo-exec { display: block; text-align: right; }
+.mo-exec .qual-bar { height: 6px; }
+.mo-mis { display: flex; flex-wrap: wrap; gap: 3px; padding-top: 1px; }
+.mo-sev { font: 600 10px/1.3 var(--mono); padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--border);
+  color: var(--fg-2); white-space: nowrap; }
+.mo-sev.high { color: var(--danger); background: rgba(179,38,60,0.12); border-color: rgba(179,38,60,0.35); }
+.mo-sev.medium { color: var(--warning); background: rgba(77,90,160,0.12); border-color: rgba(77,90,160,0.35); }
+.mo-none { font-family: var(--mono); font-size: 11px; color: var(--fg-3); }
+.moments .fold-more { margin: 0; padding: 10px 14px; border-top: 1px solid var(--row-divider); width: 100%; text-align: left; }
+/* a table too narrow for its columns (a phone, a narrow column) puts each row's scores on a second line, each cell
+   named, on one grid shared by the shown rows and the folded ones */
 @container (max-width: 620px) {
-  .qual-table, .qual-table thead, .qual-table tbody { display: block; }
-  .qual-table colgroup, .qual-table .q-took, .qual-table .q-med { display: none; }
-  .qual-table tr { display: grid; grid-template-columns: 26px minmax(0, 1fr) 76px 96px; column-gap: 10px; row-gap: 3px;
-    grid-template-areas: "no name name name" ". at fail exec"; align-items: center; padding: 8px 14px;
-    border-bottom: 1px solid var(--row-divider); }
-  .qual-table.has-task tr { grid-template-columns: 50px 26px minmax(0, 1fr) 76px 96px;
-    grid-template-areas: "task no name name name" ". at at fail exec"; }
-  .qual-table tr:last-child { border-bottom: 0; }
-  .qual-table th, .qual-table td { padding: 0; border: 0; }
-  .qual-table th, .qual-table th.num { white-space: normal; }
-  .qual-table .q-task { grid-area: task; text-align: left; }
-  .qual-table .q-no { grid-area: no; text-align: left; }
-  .qual-table .qt-name { grid-area: name; }
-  .qual-table .q-at { grid-area: at; text-align: left; }
-  .qual-table .q-fail { grid-area: fail; }
-  .qual-table .q-exec { grid-area: exec; }
-  .qual-table tr[data-t]:hover { background: var(--hover, rgba(0,0,0,0.03)); }
-  .qual-table tr[data-t]:hover td { background: none; }
-  .qual-box.folds .ck-all-in .qual-table tr:first-child { border-top: 1px solid var(--row-divider); }
-  .qual-box.folds .ck-all-in .qual-table tr:first-child td { border-top: 0; }
+  .moments.scored .mo-row { grid-template-columns: 24px 52px repeat(4, minmax(0, 1fr)) 76px; row-gap: 6px;
+    grid-template-areas: "no at what what what what what" ". mis mis cl sp st ex"; }
+  .moments.scored .mo-head { display: none; }
+  .moments.scored .mo-no { grid-area: no; }
+  .moments.scored .mo-at { grid-area: at; }
+  .moments.scored .mo-what { grid-area: what; }
+  .moments.scored .mo-mis { grid-area: mis; }
+  .moments.scored .mo-d.cleanliness { grid-area: cl; }
+  .moments.scored .mo-d.speed { grid-area: sp; }
+  .moments.scored .mo-d.steadiness { grid-area: st; }
+  .moments.scored .mo-exec { grid-area: ex; }
+  .moments.scored .mo-row [data-k]::before { content: attr(data-k); display: block; grid-column: 1 / -1;
+    font: 500 9.5px/1.4 var(--sans); color: var(--fg-3); text-align: left; }
+  .moments.scored .mo-row .mo-mis[data-k]::before { flex-basis: 100%; }
+  .moments.scored .mo-d { text-align: left; }
 }
 @media (max-width: 900px) { .qual { grid-template-columns: 1fr; } }
 /* top-right transient toast: object state changes, below the fullscreen button (.fs-btn, 8 px + 26 px) */
@@ -1728,14 +1739,9 @@ h3.section .count {
 .state-toast .st-from { color: rgba(255,255,255,0.6); }
 .state-toast .st-arr { color: #d9dcd2; margin: 0 5px; font-weight: 700; }
 .state-toast .st-to { color: #ffffff; font-weight: 600; }
-.key-ev .ke-num {
-  width: 20px; height: 20px; border-radius: 4px; background: #d6d5cc;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-family: var(--mono); font-size: 11px; font-weight: 700; color: #0b0b0c;
-}
-/* the key event the playhead last passed, updated live during playback, as the dense timeline marks its row */
-.key-ev.now { background: rgba(69,129,142,0.10); box-shadow: inset 0 0 0 1px rgba(69,129,142,0.28); }
-.key-ev.now .ke-time { color: var(--accent); font-weight: 600; }
+/* the row of the Subgoals and key events table the playhead last passed, updated live during playback, as the dense timeline marks its row */
+.mo-row.now { background: rgba(69,129,142,0.10); box-shadow: inset 0 0 0 1px rgba(69,129,142,0.28); }
+.mo-row.now .mo-at { color: var(--accent); font-weight: 600; }
 
 /* ---------- recovery overlay (top of exo) ----------
    Full-width banner spanning the frame, so verbose text stays SHORT (1-2 lines)
@@ -1939,14 +1945,24 @@ h3.section { border-top: 1px solid var(--border-strong); }
 .ck-theirs.open .ck-all { grid-template-rows: 1fr; }
 .fold.open .ck-all { grid-template-rows: 1fr; }
 .fold.open .ck-all-in { opacity: 1; }
-.key-events .fold-in { display: flex; flex-direction: column; gap: 6px; }
-.key-events .fold.open .fold-in { padding-top: 0; }
 .tasks-panel .fold-in .task-row:first-child { border-top: 1px solid var(--row-divider); }
 .ck-theirs.open .ck-all-in { opacity: 1; }
 .ck-more .fold-now { color: var(--accent); font-weight: 600; }
 .ck-more { margin-top: 6px; padding: 4px 0; background: none; border: 0; font: 500 12px/1.3 var(--sans);
   color: #2f7f76; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) { .ck-all, .ck-all-in { transition: none; } }
+/* a check list past its first five rows: the rest open under one line */
+.ck-fold > summary { list-style: none; margin-top: 6px; padding: 4px 0; font: 500 12px/1.3 var(--sans); color: #2f7f76;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.ck-fold > summary::-webkit-details-marker { display: none; }
+.ck-fold .cf-open, .ck-fold[open] .cf-closed { display: none; }
+.ck-fold[open] .cf-open { display: inline; }
+/* a fold that is a details element opens with the same motion as the others */
+.ck-fold, .di-group { interpolate-size: allow-keywords; }
+.ck-fold::details-content, .di-group::details-content { block-size: 0; overflow: hidden;
+  transition: block-size 320ms cubic-bezier(.32,.72,0,1), content-visibility 320ms allow-discrete; }
+.ck-fold[open]::details-content, .di-group[open]::details-content { block-size: auto; }
+@media (prefers-reduced-motion: reduce) { .ck-all, .ck-all-in, .ck-fold::details-content,
+  .di-group::details-content { transition: none; } }
 /* capture-check notes: quiet facts about the recording, never counted as problems */
 .cq-notes { margin: -8px 0 22px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-md);
   background: var(--raised); }
@@ -2177,7 +2193,7 @@ table.et a.et-o { font: 600 11px/1.2 var(--mono); text-decoration: none; white-s
   .ep-head { position: static; }
   section.right { overflow: visible; padding: 20px 16px; }
   /* in one column a long list scrolls inside its own panel, so the page never runs on for screens */
-  #feed, .key-events, .di-block, #left-col > .info-block, .inv-list { max-height: 60vh; overflow-y: auto;
+  #feed, .moments, .di-block, #left-col > .info-block, .inv-list { max-height: 60vh; overflow-y: auto;
     overscroll-behavior: contain; }
 }
 @media (max-width: 599px) {
@@ -2889,6 +2905,29 @@ function datasetSourceHtml(s) {
 // when the entry has them, and the start of the reply of a long recording's part that gave no labels. Nothing is drawn
 // when the episode has none.
 function readerIssueRows(d) {
+  return readerIssueEntries(d).map(x => x.html);
+}
+// The same rows grouped by cause: a cause with one entry is its row, and a cause with several (one per recorded signal,
+// eg every field of a file placed from both starts) is one line naming the cause and how many it holds, which opens to
+// its rows. Causes keep the order of their first entry.
+function readerIssueGroups(d) {
+  const groups = new Map();
+  for (const x of readerIssueEntries(d)) {
+    if (!groups.has(x.fam)) groups.set(x.fam, []);
+    groups.get(x.fam).push(x);
+  }
+  return [...groups.entries()].map(([fam, xs]) => {
+    if (xs.length === 1) return xs[0].html;
+    const counted = xs.some(x => x.counted);
+    const noun = xs.every(x => x.signal) ? 'signals' : 'entries';
+    return `<details class="di-group"><summary class="di-row ${counted ? 'high' : 'low minor'}">`
+      + `<span class="di-sev">${counted ? 'check' : 'not counted'}</span><div class="di-body"><div class="di-issue">`
+      + `<span class="di-gname">${esc(famName(fam))}</span><span class="di-gn">${xs.length} ${noun}</span></div>`
+      + `<div class="di-ev">${esc(xs[0].what)}</div></div></summary>`
+      + `<div class="di-gin">${xs.map(x => x.html).join('')}</div></details>`;
+  });
+}
+function readerIssueEntries(d) {
   const ri = (d && d.dataset_checks || {}).reader_issues;
   const gaps = d && d._stitched && d._stitched.missing;
   const num = v => v != null && v !== '' && !isNaN(parseFloat(v));
@@ -2901,7 +2940,8 @@ function readerIssueRows(d) {
     const fam = x.family || ('d:' + String(x.kind || 'reader issue').replace(/_/g, ' '));
     // a reply that gave no labels or a limit of how we read the recording is no fault in it, and is not counted
     const counted = ['data', 'mistake'].includes(famList(fam));
-    return `<div class="di-row ${counted ? 'high' : 'low minor'}"${t != null ? ` data-t="${esc(t)}"` : ''}>
+    return {fam, counted, what, signal: x.signal || null,
+      html: `<div class="di-row ${counted ? 'high' : 'low minor'}"${t != null ? ` data-t="${esc(t)}"` : ''}>
       <span class="di-sev">${counted ? 'check' : 'not counted'}</span>
       <div class="di-body">
         <div class="di-issue">${esc(what)}</div>
@@ -2909,13 +2949,13 @@ function readerIssueRows(d) {
           + `${esc(fmtT(t))}</span>` : ''}${x.signal ? `<span class="di-cat">${esc(x.signal)}</span>` : ''}</div>
         ${x.reply_head ? `<div class="di-ev">Start of the reply</div><pre class="di-raw">${esc(x.reply_head)}</pre>`
           : ''}
-      </div></div>`;
+      </div></div>`};
   });
 }
-// The steps and key events the model gave with no time the board can read (board/to_board.py keeps them with t_s
-// null): rows of the dense timeline and of the key events, listed after the timed ones, with "no time" where the time
-// goes and nothing to seek to; the key events are numbered on from the timed ones (first).
-function untimedRows(d, first = 1) {
+// The steps the model gave with no time the board can read (board/to_board.py keeps them with t_s null): rows of the
+// dense timeline, listed after the timed ones, with "no time" where the time goes and nothing to seek to (the key events
+// with no time are rows of the Subgoals and key events table, momentRows)
+function untimedRows(d) {
   const steps = (d.event_labels || []).filter(e => e && e.t_s == null).map(e => {
     const cl = contribText(e.contribution) || '-';
     return `<div class="ev untimed">
@@ -2925,19 +2965,7 @@ function untimedRows(d, first = 1) {
         <span class="contrib ${contribClass(e.contribution)}">${esc(cl)}</span>
       </div>`;
   });
-  const keys = (d.key_events || []).filter(k => k && k.t_s == null).map((k, i) => {
-    const oc = (k.outcome || '').toLowerCase();
-    return `<div class="key-ev untimed ${esc(oc)}">
-      <span class="ke-num">${first + i}</span>
-      <span class="ke-time">no time</span>
-      <div class="ke-body">
-        <div class="ke-row1"><span class="ke-label">${esc(k.label || '')}</span>${oc
-          ? `<span class="outcome ${esc(oc)}">${esc(oc)}</span>` : ''}</div>
-        ${k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}
-      </div>
-    </div>`;
-  });
-  return {steps, keys};
+  return {steps};
 }
 // what a withheld check found (board/serve.py withheld_status) in words: a set of checks says how many of those that
 // ran fired or stopped with an error
@@ -3276,8 +3304,6 @@ let ISSUE_FILTER = null;   // null = show all; else an issue-class string
 // included. Remembered per viewer.
 let INCLUDE_MINOR = false;
 let CHECKS_OPEN = false;
-let SUBS_OPEN = false;         // the Subgoals table past its first rows, kept open or closed across episodes
-const SUBS_FIRST = 5;          // subgoal rows shown before "Show all"
 const FOLD_FIRST = 5;          // rows of a list under the video shown before "Show all"
 const FOLD_OPEN = {};          // which of those lists are open, kept across episodes
 // a list that grows with the episode: its first rows, then the rest folded behind "Show all N <noun>"
@@ -3340,11 +3366,15 @@ function checksSection(d) {
   const word = {issue: 'fired', note: 'note', clear: 'clear', na: 'not applicable', err: 'error'};
   const row = r => `<div class="ck-row ${r.st}">${dot(r.st)}<span class="ck-name">${esc(r.name)}</span><span `
     + `class="ck-st">${word[r.st]}</span>${r.text ? `<div class="ck-text">${esc(r.text)}</div>` : ''}</div>`;
+  // a list longer than five shows its first five, and the rest open under one line that says how many there are
+  const rowsOf = list => list.slice(0, 5).map(row).join('') + (list.length > 5 ? `<details class="ck-fold"><summary><span `
+    + `class="cf-closed">Show ${list.length - 5} more</span><span class="cf-open">Show the first 5</span></summary>`
+    + `${list.slice(5).map(row).join('')}</details>` : '');
   const ours = rows.length ? `<div class="ck-block"><div class="ck-head"><span class="ck-title">Our checks</span><span `
     + `class="ck-sum">${rows.filter(r => r.st === 'issue').length} of ${rows.length} fired${rows.some(r => r.st
       === 'err') ? `, ${rows.filter(r => r.st === 'err').length} ${rows.filter(r => r.st === 'err').length === 1
       ? 'error' : 'errors'}` : ''}</span>`
-    + `</div>${rows.map(row).join('')}</div>` : '';
+    + `</div>${rowsOf(rows)}</div>` : '';
   let theirs = '';
   if (cq) {
     const notes = {};
@@ -3370,7 +3400,7 @@ function checksSection(d) {
           : 'issues'} &middot; ${n('note')} ${n('note') === 1 ? 'note' : 'notes'} &middot; ${n('clear')} clear `
           + `&middot; ${n('na')} not applicable${n('err') ? ` &middot; ${n('err')} ${n('err') === 1 ? 'error'
             : 'errors'}` : ''}</span></div>
-      ${fired.map(row).join('')}
+      ${rowsOf(fired)}
       <div class="ck-all"><div class="ck-all-in">${groups.map(g => `<div class="ck-group">${esc(g)}`
         + `</div>${all.filter(c => c.group === g).map(c => `<div class="ck-row ${c.st}">${dot(c.st)}<span `
         + `class="ck-name">${esc(c.name)}</span><span class="ck-st">${word[c.st]}</span>${(c.st === 'na'
@@ -3399,7 +3429,7 @@ function checksSection(d) {
     if (all.length) sensors = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Sensor and depth checks`
       + `</span><span class="ck-sum">${all.filter(r => r.st === 'note').length} of ${all.filter(r => r.st
         !== 'na').length} noted</span></div>`
-      + `${all.map(row).join('')}</div>`;
+      + `${rowsOf(all)}</div>`;
   }
   let touch = '';
   if (tc) {
@@ -3439,7 +3469,7 @@ function checksSection(d) {
     }
     if (all.length) touch = `<div class="ck-block"><div class="ck-head"><span class="ck-title">Contact checks</span>`
       + `<span class="ck-sum">${tc.checked || 0} of ${tc.contacts || 0} contacts checked, ${all.filter(r => r.st
-        === 'note').length} of ${all.filter(r => r.st !== 'na').length} noted</span></div>${all.map(row).join('')}</div>`;
+        === 'note').length} of ${all.filter(r => r.st !== 'na').length} noted</span></div>${rowsOf(all)}</div>`;
   }
   if (!ours && !sensors && !touch && !theirs) return '';
   return `<h3 class="section">Checks <span class="count">every check run on this episode</span></h3><div `
@@ -3768,6 +3798,26 @@ function fmtOf(sec, hours, long) {
   return hours >= 1 ? [(sec / 3600).toFixed(1), hours.toFixed(1), long ? 'hours' : 'h']
     : [(sec / 60).toFixed(1), (hours * 60).toFixed(1), long ? 'minutes' : 'min'];
 }
+// A line of figures in a box of fixed width (the totals over the rail): its numbers step down in size until the line
+// fits, and then its words, so a larger number never runs out of its box and under the next column. It is fitted again
+// whenever the box changes width.
+function fitLine(el, minPx = 11) {
+  if (!el) return;
+  const parts = [...el.querySelectorAll('b, small')];
+  parts.forEach(x => { x.style.fontSize = ''; });
+  const over = () => el.scrollWidth > el.clientWidth + 0.5;
+  for (const sel of ['b', 'small']) {
+    const xs = parts.filter(x => x.matches(sel));
+    let px = xs.length ? parseFloat(getComputedStyle(xs[0]).fontSize) : 0;
+    while (over() && px > minPx) { px -= 1; xs.forEach(x => { x.style.fontSize = px + 'px'; }); }
+    if (sel === 'b') minPx = Math.min(minPx, 10);
+  }
+  if (!el._fitWatch && typeof ResizeObserver === 'function') {
+    let w = el.clientWidth;
+    el._fitWatch = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; fitLine(el); } });
+    el._fitWatch.observe(el);
+  }
+}
 // the bar starts from where it was drawn last, so a rebuild that labels more grows it instead of redrawing it
 const coverageWas = {};
 function coverageBar(key, sec, hours) {
@@ -3798,10 +3848,10 @@ function renderCoverage(ds, shown) {
     // the open dataset's tab also says how much of it the current filter or search keeps
     const num = on && narrowed
       ? `<em>${shown.length.toLocaleString()}</em> of ${p.n.toLocaleString()} &middot; <em>${fmtSpan(shownSec)[0]}`
-        + `</em> ${fmtSpan(shownSec)[1]}`
+        + `</em>${fmtSpan(shownSec)[1]}`
       : p.t ? `${p.n.toLocaleString()} of ${p.t.episodes.toLocaleString()}<span class="u"> eps</span> &middot; `
-        + `${fmtOf(p.sec, p.t.hours)[0]} of ${fmtOf(p.sec, p.t.hours)[1]} ${fmtOf(p.sec, p.t.hours)[2]}`
-      : `${p.n.toLocaleString()}<span class="u"> ${p.n === 1 ? 'ep' : 'eps'}</span> &middot; ${fmtSpan(p.sec)[0]} ${fmtSpan(p.sec)[1]}`;
+        + `${fmtOf(p.sec, p.t.hours)[0]} of ${fmtOf(p.sec, p.t.hours)[1]}${fmtOf(p.sec, p.t.hours)[2]}`
+      : `${p.n.toLocaleString()}<span class="u"> ${p.n === 1 ? 'ep' : 'eps'}</span> &middot; ${fmtSpan(p.sec)[0]}${fmtSpan(p.sec)[1]}`;
     return `<div class="cv-cell${on ? ' on' : ''}${p.n ? '' : ' none'}" role="tab" aria-selected="${on}" `
       + `aria-disabled="${!p.n}" aria-label="${esc(dsLabel(p.d))}" data-ds="${esc(p.d)}">`
       + `<span class="cv-name">${esc(DS_SHORT[p.d] || dsLabel(p.d))}</span><span class="cv-num">${num}</span>`
@@ -3815,13 +3865,14 @@ function renderCoverage(ds, shown) {
   const figs = whole
     // short units, as on the tabs: the totals sit over the rail, which is too narrow for "of 2,682 episodes"
     ? `<span><b>${src.length.toLocaleString()}</b><small>of ${whole.episodes.toLocaleString()} eps</small></span>`
-      + `<span><b>${fmtOf(allSec, whole.hours)[0]}</b><small>of ${fmtOf(allSec, whole.hours)[1]} `
+      + `<span><b>${fmtOf(allSec, whole.hours)[0]}</b><small>of ${fmtOf(allSec, whole.hours)[1]}`
       + `${fmtOf(allSec, whole.hours)[2]}</small></span>`
     : `<span><b>${src.length.toLocaleString()}</b><small>${src.length === 1 ? 'episode' : 'episodes'}</small></span>`
       + `<span><b>${fmtSpan(allSec, true)[0]}</b><small>${fmtSpan(allSec, true)[1]}</small></span>`;
   coverageEl.innerHTML = `<div class="cv-all"><span class="cv-k">All datasets</span>`
-    + `<span class="cv-fig">${figs}</span>${whole ? coverageBar('', allSec, whole.hours) : ''}`
+    + `<span class="cv-fig${whole ? ' of' : ''}">${figs}</span>${whole ? coverageBar('', allSec, whole.hours) : ''}`
     + `</div><div class="cv-cells" role="tablist">${tabs}</div>`;
+  fitLine(coverageEl.querySelector('.cv-all .cv-fig'));
   // grow each bar from where it was to where it is now
   requestAnimationFrame(() => coverageEl.querySelectorAll('.cv-bar i[data-to]').forEach(i => {
     i.style.width = i.dataset.to;
@@ -6519,8 +6570,7 @@ function renderEp(d, opts) {
   const cell = (k, v, sub, tip, bad, shown) => `<div class="qual-cell" title="${esc(tip)}"><div class="qc-k">${k}</div>`
     + (v == null ? `<div class="qc-v qc-word${bad ? ' qc-bad' : ''}">${esc(sub)}</div>`
        : `<div class="qc-v">${shown ?? qNum(v)}</div>${bar(v)}${sub ? `<div class="qc-sub">${esc(sub)}</div>` : ''}`) + '</div>';
-  const box = (title, v, body, wide, folds, tip) => `<div class="qual-box${wide ? ' wide' : ''}${folds ? ' folds' : ''}${folds
-    && SUBS_OPEN ? ' open' : ''}"><div class="qual-head">`
+  const box = (title, v, body, tip) => `<div class="qual-box"><div class="qual-head">`
     + `<span class="qual-title"${tip ? ` title="${esc(tip)}"` : ''}>${title}</span>${v === undefined ? '' : `<span class="qual-score">${v == null ? '-'
       : `${qNum(v)}<small>/10</small>`}</span>`}</div>`
     + (v === undefined ? '' : `<div class="qual-headbar">${v == null ? '<span class="qual-bar none"></span>' : bar(v)}</div>`)
@@ -6530,41 +6580,43 @@ function renderEp(d, opts) {
   const peerWords = (basis, n, what) => basis === 'task' ? `Median of ${n ?? 'the'} demo${n === 1 ? '' : 's'} of this task`
     : basis === 'similar' ? `Median of ${n ?? 'the'} similar ${what}${n === 1 ? '' : 's'} in this dataset`
     : 'Nothing comparable on this board';
-  // the Subgoals table: one row per subgoal stretch, the first SUBS_FIRST shown and the rest folded; both parts are
-  // tables with the same fixed columns so the folded rows line up under the header
-  const subCols = `<colgroup>${qIn.tasks_total ? '<col class="q-task">' : ''}<col class="q-no"><col class="q-at">`
-    + '<col><col class="q-took"><col class="q-med"><col class="q-fail"><col class="q-exec"></colgroup>';
-  const subTable = `<table class="qual-table${qIn.tasks_total ? ' has-task' : ''}">${subCols}`;
-  let subRowN = 0;
-  const subRows = subs.map(st => `<tr data-t="${st.start_s}">${qIn.tasks_total ? `<td class="num q-task">${st.task ?? '-'}</td>` : ''}
-        <td class="num q-no">${st.goal ? (qIn.tasks_total ? 'End' : 'Goal') : ++subRowN}</td>
-        <td class="num q-at${!st.reached && st.outcome !== 'unclear' ? ' qc-bad' : ''}">${st.reached ? fmtT(st.end_s)
-          : st.outcome === 'unclear' ? 'unclear' : 'not reached'}</td><td class="qt-name">${esc(st.label || '')}</td>
-        <td class="num q-took">${st.duration_s != null ? qNum(st.duration_s) + 's' : '-'}</td><td class="num q-med" title="${
-          esc(peerWords(st.peer_basis ?? null, st.peers, 'subgoal'))}">${st.peer_median_s != null ? qNum(st.peer_median_s) + 's' : '-'}</td>
-        <td class="num q-fail${(st.failed_attempts || []).length ? ' qc-bad' : ''}" title="${esc((st.failed_attempts || [])
-          .map(k => fmtT(k.t_s) + '  ' + (k.label || '')).join('\n'))}">${(st.failed_attempts || []).length}</td>
-        <td class="q-exec"><span class="qt-score"><b>${qNum(st.execution)}</b>${st.execution == null ? ''
-          : bar(st.execution)}</span></td></tr>`);
-  const subsTable = `${subTable}<thead><tr>${qIn.tasks_total ? '<th class="num q-task">Subtask</th>' : ''}`
-    + `<th class="num q-no">#</th><th class="num q-at">Done at</th><th class="qt-name">Subgoal</th><th class="num q-took">Took</th>`
-    + `<th class="num q-med">Median</th><th class="num q-fail">Failed tries</th><th class="q-exec">Execution</th></tr></thead>`
-    + `<tbody>${subRows.slice(0, SUBS_FIRST).join('')}</tbody></table>`
-    + (subRows.length > SUBS_FIRST ? `<div class="ck-all"><div class="ck-all-in">${subTable}`
-      + `<tbody>${subRows.slice(SUBS_FIRST).join('')}</tbody></table></div></div>`
-      + `<button class="ck-more qual-more" type="button" onclick="SUBS_OPEN = !SUBS_OPEN; `
-      + `this.closest('.qual-box').classList.toggle('open', SUBS_OPEN); this.textContent = SUBS_OPEN ? 'Show the first ${SUBS_FIRST}' `
-      + `: 'Show all ${subRows.length} subgoals'">${SUBS_OPEN ? `Show the first ${SUBS_FIRST}` : `Show all ${subRows.length} subgoals`}</button>`
-      : '');
+  // a subgoal's scores as cells of a row of the Subgoals and key events table: its mistakes by severity (and failed
+  // tries no mistake explains), its three parts and its execution; a row that is no scored stretch has empty cells, so
+  // every row keeps the table's columns
+  const sevOrder = ['high', 'medium', 'low'];
+  const mistakeCell = st => {
+    const pens = Array.isArray(st.penalties) ? st.penalties : (st.mistakes || []).map(m => ({mistake: m}));
+    const tries = (st.failed_attempts || []).length;
+    const tip = pens.map(p => `${p.t_s != null ? fmtT(p.t_s) + '  ' : ''}${p.mistake}${p.severity ? ` (${p.severity}`
+      + `${p.recovered ? ', recovered' : ''})` : ''}`).concat((st.failed_attempts || []).map(k => `${fmtT(k.t_s)}  failed: `
+      + `${k.label || ''}`)).join('\n');
+    const chips = sevOrder.map(s => [s, pens.filter(p => p.severity === s).length]).filter(([, n]) => n)
+      .map(([s, n]) => `<span class="mo-sev ${s}">${n > 1 ? n + ' ' : ''}${s}</span>`)
+      .concat(pens.filter(p => !sevOrder.includes(p.severity)).length
+        ? [`<span class="mo-sev">${pens.filter(p => !sevOrder.includes(p.severity)).length} unrated</span>`] : [])
+      .concat(tries ? [`<span class="mo-sev try">${tries} failed ${tries === 1 ? 'try' : 'tries'}</span>`] : []);
+    return `<span class="mo-mis" data-k="Mistakes" title="${esc(tip)}">${chips.join('') || '<span class="mo-none">none</span>'}</span>`;
+  };
+  const dimCell = (k, v, tip) => `<span class="mo-d num ${k.toLowerCase()}" data-k="${k}" title="${esc(tip)}">${qNum(v)}</span>`;
+  const momentScoreCells = st => !st ? '<span></span>'.repeat(5) : mistakeCell(st)
+    + dimCell('Cleanliness', st.cleanliness, `${Math.round(100 * (st.wasteful_share || 0))}% of the work wasteful`)
+    + dimCell('Speed', st.efficiency, `Took ${st.duration_s != null ? qNum(st.duration_s) + 's' : '-'}${st.peer_median_s != null
+      ? `, median ${qNum(st.peer_median_s)}s` : ''}. ${peerWords(st.peer_basis ?? null, st.peers, 'subgoal')}`)
+    + dimCell('Steadiness', st.steady, 'Share of the stretch with every arm waiting, scored absolutely')
+    + `<span class="mo-exec" data-k="Execution"><b>${qNum(st.execution)}</b>${st.execution == null ? '' : bar(st.execution)}</span>`;
+  // the weight each part carries in execution, from the scores themselves (board/scores.py EXECUTION_WEIGHTS)
+  const weightOf = k => Q && Q.weights && Q.weights[k] != null ? `${Math.round(100 * Q.weights[k])}%` : '';
+  const weighted = (name, k) => `${name}${weightOf(k) ? `<span class="qc-w" title="Its weight in execution">${weightOf(k)}`
+    + `</span>` : ''}`;
   const nMistakes = (qIn.penalties || []).length;
   const goalT = episodeGoalT;
-  const qualityHtml = Q ? `<h3 class="section" id="quality">Quality</h3><div class="qual">
+  const scoresHtml = Q ? `<div class="qual">
     ${box('Execution', Q.execution, `<div class="qual-cells">
-      ${cell('Cleanliness', Q.cleanliness, Q.cleanliness == null ? 'not measured'
-        : `${Math.round(100 * (qIn.wasteful_share || 0))}% wasteful, ${nMistakes} mistake${nMistakes === 1 ? '' : 's'}`,
+      ${cell(weighted('Cleanliness', 'cleanliness'), Q.cleanliness, Q.cleanliness == null ? 'not measured'
+        : `${nMistakes} mistake${nMistakes === 1 ? '' : 's'}, ${Math.round(100 * (qIn.wasteful_share || 0))}% wasteful`,
         (qIn.penalties || []).map(x => `${x.mistake} (${x.severity}${x.recovered ? ', recovered' : ''}, -${x.points})`).join('\n')
         || 'Share of the work marked wasteful, and points off per operator mistake')}
-      ${cell('Speed', Q.efficiency, Q.efficiency == null ? (qIn.tasks_total ? 'several subtasks'
+      ${cell(weighted('Speed', 'efficiency'), Q.efficiency, Q.efficiency == null ? (qIn.tasks_total ? 'several subtasks'
           : qIn.outcome === 'success' ? (qIn.time_to_goal_s == null ? 'no goal time' : 'no peers')
           : qIn.outcome === 'success_then_undone' ? 'goal undone' : 'goal not reached')
         : `${qNum(qIn.time_to_goal_s)}s, median ${qNum(qIn.peer_median_time_to_goal_s)}s`,
@@ -6574,11 +6626,11 @@ function renderEp(d, opts) {
           ? 'Time from the first action to the goal, measured only on a single task that reached its goal'
           : Q.efficiency == null && qIn.time_to_goal_s == null ? 'No timed work before the goal to measure'
           : peerWords(null))}
-      ${cell('Steadiness', Q.fluency, Q.fluency == null ? 'not measured' : `${Math.round(100 * (qIn.hesitation_share || 0))}% waiting`,
+      ${cell(weighted('Steadiness', 'fluency'), Q.fluency, Q.fluency == null ? 'not measured' : `${Math.round(100 * (qIn.hesitation_share || 0))}% waiting`,
         `The mean of waiting (share of the work with every arm waiting${qIn.steadiness != null ? `, scores ${qNum(qIn.steadiness)}` : ''})`
         + ` and busyness (actions per unit of progress against other demos of this task${qIn.actions_per_progress == null
           ? ', not measured' : qIn.busyness != null ? `, scores ${qNum(qIn.busyness)}` : ', too few to compare'})`)}
-    </div>`, false, false, 'Execution weighs cleanliness 50%, speed 25% and steadiness 25%, over the ones that exist')}
+    </div>`, 'How well the operator worked: the weighted mean of the parts that exist')}
     ${box('Outcome', Q.outcome, `<div class="qual-cells">
       ${qIn.tasks_total ? `${cell('Subtasks', null, `${qIn.tasks_done} of ${qIn.tasks_total} done`,
           'Subtasks whose end state the footage shows reached', qIn.tasks_done < qIn.tasks_judged)}
@@ -6594,8 +6646,7 @@ function renderEp(d, opts) {
         : cell('Progress', 10 * qIn.progress_reached, '', 'The furthest the work got toward the labelled goal',
           false, `${Math.round(100 * qIn.progress_reached)}%`)}`}
       ${cell('Label', null, Q.relation || 'no label', 'How the work done relates to the labelled task', Q.relation && Q.relation !== 'aligned')}
-    </div>`)}
-    ${subs.length ? box('Subgoals', undefined, subsTable, true, SUBS_FIRST < subs.length) : ''}
+    </div>`, 'How much of the labelled goal was reached')}
   </div>` : '';
 
   // lanes under the timeline, on its time scale: when the wearer's hands leave a head camera (the model's
@@ -6771,30 +6822,60 @@ function renderEp(d, opts) {
       + `class="tip">${esc(fmtT(k.t_s))}   ${k.kind ? esc(keyKindName(k)) + ': ' : ''}${esc(k.label || '')}${oc
       ? '  [' + esc(oc) + ']' : ''}</div></div>`;
   }
-  const keyRows = [];
-  const untimed = untimedRows(d, keyEvents.length + 1);
-  // each key event names its kind, and the ones tagged subgoal_complete say which subgoal they end (Quality scores them)
-  keyEvents.forEach((k, i) => {
-    const oc = (k.outcome || '').toLowerCase();
-    const goalish = k.kind === 'goal_reached' || k.kind === 'subgoal_complete';
-    const kindChip = k.kind ? `<span class="ke-kind${k.kind === 'subgoal_complete' ? ' sub' : ''}">${esc(keyKindName(k))}</span>`
-      : '';
-    keyRows.push(`<div class="key-ev ${esc(oc)}${goalish ? ' goal' : ''}" data-t="${esc(k.t_s)}">
-      <span class="ke-num">${i + 1}</span>
-      <span class="ke-time">${fmtT(k.t_s)}</span>
-      <div class="ke-body">
-        <div class="ke-row1"><span class="ke-label">${kindChip}${esc(k.label || '')}</span>${oc
-          ? `<span class="outcome ${esc(oc)}">${esc(oc)}</span>` : ''}</div>
-        ${k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}
-      </div>
-    </div>`);
+  const untimed = untimedRows(d);
+  // Subgoals and key events, one table in time order: every key event, each subgoal on the row of the key event that
+  // ends it, and the goal on the goal's key event (or a row of its own when no key event marks it). A scored episode adds
+  // the stretch's mistakes by severity, its three parts and its execution, so each row reads what happened and how well.
+  const stAt = new Map(subs.map(st => [Math.round(st.end_s * 100) + (st.goal ? 'g' : ''), st]));
+  const used = new Set();
+  const moments = keyEvents.map((k, i) => {
+    const key = Math.round(k.t_s * 100) + (k.kind === 'goal_reached' ? 'g' : '');
+    const st = (k.kind === 'subgoal_complete' || k.kind === 'goal_reached') && !used.has(key) ? stAt.get(key) : null;
+    if (st) used.add(key);
+    return {t: k.t_s, k, st, i};
   });
-  const keyPanelHtml = foldRows([...keyRows, ...untimed.keys], 'key events', 'key');
+  for (const [key, st] of stAt) if (!used.has(key)) moments.push({t: st.end_s, k: null, st});
+  moments.sort((a, b) => a.t - b.t);
+  const scored = !!Q && subs.length > 0;
+  const momentRow = (m, n) => {
+    const k = m.k, st = m.st;
+    const oc = k ? (k.outcome || '').toLowerCase() : st.reached ? 'success' : (st.outcome || '').toLowerCase();
+    const goalish = k ? (k.kind === 'goal_reached' || k.kind === 'subgoal_complete') : true;
+    const name = k ? (k.kind ? keyKindName(k) : '') : (qIn.tasks_total ? 'Subtask end' : 'Goal');
+    const label = k ? k.label : st.label;
+    return `<div class="mo-row ${esc(oc)}${goalish ? ' goal' : ''}" data-t="${esc(m.t)}">
+      <span class="mo-no">${n}</span>
+      <span class="mo-at">${fmtT(m.t)}</span>
+      <div class="mo-what"><div class="mo-l1">${st && st.task != null && qIn.tasks_total ? `<span class="mo-task">Subtask `
+        + `${esc(st.task)}</span>` : ''}${name ? `<span class="ke-kind${goalish ? ' sub' : ''}">${esc(name)}</span>` : ''}<span `
+        + `class="mo-label">${esc(label || '')}</span>${oc ? `<span class="outcome ${esc(oc)}">${esc(st && !st.reached
+          && oc !== 'unclear' ? 'not reached' : oc)}</span>` : ''}</div>
+        ${k && k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}
+      </div>${scored ? momentScoreCells(st) : ''}
+    </div>`;
+  };
+  const untimedKeys = (d.key_events || []).filter(k => k && k.t_s == null);
+  const momentRows = moments.map((m, i) => momentRow(m, i + 1)).concat(untimedKeys.map((k, i) => {
+    const oc = (k.outcome || '').toLowerCase();
+    return `<div class="mo-row untimed ${esc(oc)}"><span class="mo-no">${moments.length + i + 1}</span>`
+      + `<span class="mo-at">no time</span><div class="mo-what"><div class="mo-l1"><span class="mo-label">`
+      + `${esc(k.label || '')}</span>${oc ? `<span class="outcome ${esc(oc)}">${esc(oc)}</span>` : ''}</div>`
+      + `${k.note ? `<div class="ke-note">${esc(k.note)}</div>` : ''}</div>${scored ? momentScoreCells(null) : ''}</div>`;
+  }));
+  const nSub = subs.filter(st => !st.goal).length;
+  const momentsHtml = momentRows.length ? `<h3 class="section" id="moments">${nSub ? 'Subgoals and key events'
+      : 'Key events'} <span class="count">${momentRows.length}</span></h3>
+    <div class="moments${scored ? ' scored' : ''}">
+      <div class="mo-row mo-head"><span class="mo-no">#</span><span class="mo-at">At</span><span `
+        + `class="mo-what">${nSub ? 'Subgoal or key event' : 'Key event'}</span>${scored ? '<span class="mo-mis">Mistakes</span>'
+        + `<span class="mo-d num">${weighted('Cleanliness', 'cleanliness')}</span><span class="mo-d num">${weighted('Speed',
+          'efficiency')}</span><span class="mo-d num">${weighted('Steadiness', 'fluency')}</span>`
+        + '<span class="mo-exec">Execution</span>' : ''}</div>
+      ${foldRows(momentRows, nSub ? 'subgoals and key events' : 'key events', 'key')}
+    </div>` : '';
 
-  // the review of how the task was performed, and the state changes; the scene graph is a snapshot that follows the
+  // the state changes; the scene graph is a snapshot that follows the
   // playhead (renderSceneGraph)
-  const perfHtml = d.performance_review
-    ? `<div class="info-block"><div class="perf">${esc(d.performance_review)}</div></div>` : '';
   const scHtml = foldRows((d.state_changes || []).map(x =>
     `<div class="line"><span class="t">${fmtT(x.t_s)}</span> <span class="v">${esc(x.object || '')}</span>: ${esc(x.from
       || '')} <span style="color:var(--fg-3)">-&gt;</span> ${esc(x.to || '')}</div>`), 'changes', 'sc');
@@ -6967,7 +7048,7 @@ function renderEp(d, opts) {
       <p class="ip-sub">${sub}</p>
       <div class="ip-body">${body}</div>
     </section>`;
-  const riRows = readerIssueRows(d);
+  const riRows = readerIssueGroups(d);
   const riHtml = riRows.length ? `<div class="info-block di-block">${riRows.join('')}</div>` : '';
   const nChecks = [tbHtml, spHtml, rjHtml, gcHtml].filter(Boolean).length + cqFlags.length + riRows.length;
   const checksPanel = nChecks ? panel('checks', 'Recording checks', 'Deterministic checks on the recorded data, run on '
@@ -6988,7 +7069,11 @@ function renderEp(d, opts) {
     : `<h3 class="section">Problems in this episode</h3><div class="ip-none">${cmpInfo ? `${esc(who)} reported no data `
       + `issue or operator mistake.`
         : 'No recording check fired, and the model reported no data issue or operator mistake.'}</div>`;
-  const problemsAndNotes = problemsHtml + setAsideHtml(d) + (checksSection(d) || cqNotesHtml);
+  // the problems: the cards, what this dataset's rules set aside, then how the operator recovered from failures
+  const problemsBlock = problemsHtml + setAsideHtml(d) + (rcHtml ? `<h4 class="subsection">Recoveries</h4>`
+    + `<div class="info-block">${rcHtml}</div>` : '');
+  // every check run on the episode, then the dataset's own labels, after what the reader came for
+  const checksBlock = (checksSection(d) || cqNotesHtml) + pubHtml;
 
   // a session has a goal frame per task: one panel follows the playhead and shows the goal frame of the task nearest
   // the current time
@@ -6997,45 +7082,63 @@ function renderEp(d, opts) {
       <div class="goal-frame-cap" id="task-goal-cap"></div>
       <img id="task-goal-img" alt="task goal frame" loading="lazy">
     </div>` : '';
-  const tasksSection = hasTasks ? `
-    <h3 class="section">What tasks did the operator do?</h3>
-    <div class="tasks-summary"><b>${tasks.length}</b> self-directed tasks &nbsp;
-      <span class="ts-ok">${tcount.success} success</span> /
-      <span class="ts-fail">${tcount.failure} failure${tPartly ? `, ${tPartly} of them partly done` : ''}</span>${
-        partsGapHtml(d)}
-      <div class="tasks-note">Each task is graded on its own.</div>
-    </div>
-    ${taskGoalFrameHtml}
-    <div class="info-block tasks-panel">${tasksHtml}</div>
-  ` : `
-    <h3 class="section">Was the task completed?</h3>
-    <div class="completion-banner" style="border-left:4px solid ${vColor}">
-      <span class="comp-verdict" style="color:${vColor}">${esc(comp.task_completed
-        ? outcomeWords(verdict, comp.failure_kind) : '-')}</span>
-      <span class="comp-detail">${partProgress ? 'Whole-recording goal frame unassessed' : undone
+  // the performance review sits with what decided the outcome, as one more labelled row
+  const perfKv = d.performance_review ? `<div class="kv"><div class="kv-k">How it was done</div><div `
+    + `class="kv-v">${esc(d.performance_review)}</div></div>` : '';
+  // The outcome, first under the footage: the verdict in large type and its colour, the two scores and what each is
+  // built from, then what decided the verdict (the success criterion, what happened, the goal frame). A session of
+  // tasks counts its tasks in the verdict and lists each task with its own outcome.
+  const tAll = tasks.length, tOk = tcount.success;
+  const tColor = !tAll ? 'var(--fg-2)' : tOk === tAll ? 'var(--success)' : tcount.failure ? 'var(--danger)' : 'var(--fg-2)';
+  const verdictHtml = hasTasks
+    ? `<div class="verdict" style="--v:${tColor}"><span class="verdict-word">${tOk} of ${tAll}</span><span `
+      + `class="verdict-sub">${tAll === 1 ? 'task' : 'tasks'} succeeded${tPartly ? `, ${tPartly} partly done` : ''}`
+      + `</span>${partsGapHtml(d)}</div>`
+    : `<div class="verdict" style="--v:${vColor}"><span class="verdict-word">${esc(comp.task_completed
+        ? cap(outcomeWords(verdict, comp.failure_kind)) : 'Not judged')}</span><span class="verdict-sub">${partProgress
+        ? 'Whole-recording goal frame unassessed' : undone
         ? `goal reached ${comp.goal_reached_at_s != null ? fmtT(comp.goal_reached_at_s)
           : '?'}, undone ${comp.undone_at_s != null ? fmtT(comp.undone_at_s) : '?'}`
-        : `goal frame ${comp.completed_at_s != null ? fmtT(comp.completed_at_s) : 'not reached'}`}</span>
-    </div>
-    <div class="info-block kv-block">
+        : `goal frame ${comp.completed_at_s != null ? fmtT(comp.completed_at_s) : 'not reached'}`}</span></div>`;
+  const outcomeKv = hasTasks ? (perfKv ? `<div class="info-block kv-block">${perfKv}</div>` : '')
+    : (comp.success_predicate || comp.reason || (undone && comp.undone_by) || perfKv) ? `<div class="info-block kv-block">
       ${comp.success_predicate ? `<div class="kv"><div class="kv-k">${esc(who)}'s success criterion</div><div `
         + `class="kv-v">${esc(comp.success_predicate)}</div></div>` : ''}
       ${comp.reason ? `<div class="kv"><div class="kv-k">What actually happened</div><div `
         + `class="kv-v">${esc(comp.reason)}</div></div>` : ''}
       ${undone && comp.undone_by ? `<div class="kv"><div class="kv-k">What undid it</div><div `
         + `class="kv-v">${esc(comp.undone_by)}</div></div>` : ''}
-    </div>
-    ${comp.completed_at_s != null ? `<div class="goal-frame" data-t="${esc(comp.completed_at_s)}"><div `
-      + `class="goal-frame-cap">Goal frame at ${fmtT(comp.completed_at_s)} (click to jump)</div><img `
-      + `src="${esc(frameSrc(eidEnc, mainCam, comp.completed_at_s))}" alt="goal frame" loading="lazy" `
+      ${perfKv}
+    </div>` : '';
+  const goalFramesHtml = hasTasks ? taskGoalFrameHtml : `${comp.completed_at_s != null ? `<div class="goal-frame" `
+      + `data-t="${esc(comp.completed_at_s)}"><div class="goal-frame-cap">Goal frame at ${fmtT(comp.completed_at_s)} (click `
+      + `to jump)</div><img src="${esc(frameSrc(eidEnc, mainCam, comp.completed_at_s))}" alt="goal frame" loading="lazy" `
       + `onerror="this.parentElement.classList.add('nofr')"></div>` : ''}
     ${(undone && comp.goal_reached_at_s != null) ? `<div class="goal-frame" data-t="${esc(comp.goal_reached_at_s)}"><div `
       + `class="goal-frame-cap">Goal reached at ${fmtT(comp.goal_reached_at_s)}, later undone${comp.undone_at_s != null
       ? ` at ${fmtT(comp.undone_at_s)}` : ''} (click to jump)</div><img src="${esc(frameSrc(eidEnc, mainCam,
       comp.goal_reached_at_s))}" alt="goal reached frame" loading="lazy" `
-      + `onerror="this.parentElement.classList.add('nofr')"></div>` : ''}
+      + `onerror="this.parentElement.classList.add('nofr')"></div>` : ''}`;
+  const outcomeSection = `
+    <h3 class="section" id="outcome">${hasTasks ? 'Outcome of each task' : 'Outcome'}</h3>
+    ${verdictHtml}
+    ${scoresHtml}
+    ${outcomeKv}
+    ${goalFramesHtml}
+    ${hasTasks ? `<div class="info-block tasks-panel">${tasksHtml}</div>` : ''}
+    ${requestPartAssessmentsHtml(d)}
   `;
 
+  // the recording's sensors: the findings at the playhead and every recorded signal
+  const sensorsHtml = evidencePanel || belowLanes ? `<h3 class="section" id="sensors">Sensors</h3>${evidencePanel}`
+    + belowLanes : '';
+  // the scene: what physically changed, the objects' relationships at the playhead, and what is in the workspace
+  const sceneHtml = `<h3 class="section" id="scene">Scene</h3>
+    ${scHtml ? `<h4 class="subsection">What changed</h4><div class="info-block">${scHtml}</div>` : ''}
+    <h4 class="subsection">Object relationships</h4>
+    <div class="info-block sg-snap" id="sg-snap"></div>
+    <h4 class="subsection">Workspace</h4>
+    <div class="info-block"><div class="inv-list">${invHtml || '<span style="color:var(--fg-3)">empty</span>'}</div></div>`;
   const gripOnly = !isEgo && !hasTop;
   const mainIsScene = cameraPresentation(d, mainCam) === 'scene';
   const sensorBand = '<div class="sensor-evidence-band" id="sensor-evidence-band" hidden></div>';
@@ -7103,38 +7206,18 @@ function renderEp(d, opts) {
         + `class="tip">task done ${fmtT(gt)}</div></div>`).join('')}${ticksHtml}
       <div class="playhead" id="playhead" style="left:0%"></div>
     </div>
-    ${evidencePanel}${recordingLanes}${laneHtml}${belowLanes}
-    ${failed ? '' : noLabels ? `${noLabelsHtml(d._label_failed)}
-
-    ${problemsAndNotes}
-
-    ${pubHtml}
+    ${recordingLanes}${laneHtml}
+    ${failed ? sensorsHtml : noLabels ? `${noLabelsHtml(d._label_failed)}
+    ${sensorsHtml}
+    ${problemsBlock}
+    ${checksBlock}
     ` : `
-    <h3 class="section">Key events <span class="count">${keyEvents.length + untimed.keys.length}</span>${Q && subs.some(st => !st.goal)
-      ? `<span class="ke-what">(${subNo.size} ${subNo.size === 1 ? 'is a subgoal' : 'are subgoals'}, scored under Quality)</span>` : ''}</h3>
-    <div class="info-block"><div class="key-events">${keyPanelHtml || '<span style="color:var(--fg-3)">none</span>'}`
-      + `</div></div>
-
-    ${tasksSection}
-    ${requestPartAssessmentsHtml(d)}
-
-    ${qualityHtml}
-    ${perfHtml ? `<h3 class="section">How well was the task executed?</h3>${perfHtml}` : ''}
-    ${rcHtml ? `<h3 class="section">Recoveries</h3><div class="info-block">${rcHtml}</div>` : ''}
-
-    ${problemsAndNotes}
-
-    ${pubHtml}
-
-    ${scHtml ? `<h3 class="section">What physically changed over the episode?</h3><div class="info-block">${scHtml}`
-      + `</div>` : ''}
-
-    <h3 class="section">Object relationships</h3>
-    <div class="info-block sg-snap" id="sg-snap"></div>
-
-    <h3 class="section">Workspace inventory</h3>
-    <div class="info-block"><div class="inv-list">${invHtml || '<span style="color:var(--fg-3)">empty</span>'}</div>`
-      + `</div>
+    ${outcomeSection}
+    ${problemsBlock}
+    ${momentsHtml}
+    ${sensorsHtml}
+    ${sceneHtml}
+    ${checksBlock}
     `}
   `;
   if (keep) {
@@ -7343,9 +7426,6 @@ function renderEp(d, opts) {
   document.querySelectorAll('.feed .ev[data-t]').forEach(r => {
     r.addEventListener('click', () => seek(r.dataset.t));
   });
-  document.querySelectorAll('.key-events .key-ev[data-t]').forEach(r => {
-    r.addEventListener('click', () => seek(r.dataset.t));
-  });
   document.querySelectorAll('#lane-hands .lane-step').forEach(bt => bt.addEventListener('click', () => {
     const t = vid ? vid.currentTime : 0;
     // previous: the start of the stretch the playhead is in once it is over a second into it, else the one before
@@ -7498,7 +7578,7 @@ function renderEp(d, opts) {
     if (!sig) { scoreChip.classList.remove('active'); fitCaptionBesideChip(); return; }
     // the chip names what it scores: the episode at its goal, else the numbered subgoal the caption is on
     scoreChip.innerHTML = atGoal
-      ? `<span class="sc-k">Episode</span><span class="sc-v">${qNum(Q.execution)}</span>`
+      ? `<span class="sc-k">Execution</span><span class="sc-v">${qNum(Q.execution)}</span>`
         + `<span class="sc-k">Outcome</span><span class="sc-v">${qNum(Q.outcome)}</span>`
       : `<span class="sc-k">Subgoal${subNo.get(Math.round(st.end_s * 100)) ? ' ' + subNo.get(Math.round(st.end_s * 100)) : ''}</span>`
         + `<span class="sc-v">${qNum(st.execution)}</span>`;
@@ -7506,7 +7586,7 @@ function renderEp(d, opts) {
     fitCaptionBesideChip();
   }
 
-  document.querySelectorAll('.qual-table tr[data-t]').forEach(r => r.addEventListener('click', () => seek(Number(r.dataset.t))));
+  document.querySelectorAll('.moments .mo-row[data-t]').forEach(r => r.addEventListener('click', () => seek(Number(r.dataset.t))));
 
   // ----- head camera: hands out of view -----
   // A head camera often points away from the hands, so a step's action is inferred rather than seen. The model marks
@@ -7813,14 +7893,14 @@ function renderEp(d, opts) {
     }
   }
 
-  // ----- key events: the one the playhead last passed is marked -----
+  // ----- subgoals and key events: the row the playhead last passed is marked -----
   // (past the first FOLD_FIRST rows it may sit in the closed fold, whose button then names its number)
-  const keyEls = [...document.querySelectorAll('.key-events .key-ev')];
-  const keyMore = document.querySelector('.key-events .fold-more');
+  const keyEls = [...document.querySelectorAll('.moments .mo-row[data-t]')];
+  const keyMore = document.querySelector('.moments .fold-more');
   let lastKey = -2;
   function syncKeyEvents(t) {
     let ai = -1;
-    for (let i = 0; i < keyEvents.length && keyEvents[i].t_s <= t + 0.05; i++) ai = i;
+    for (let i = 0; i < keyEls.length && Number(keyEls[i].dataset.t) <= t + 0.05; i++) ai = i;
     if (ai === lastKey) return;
     lastKey = ai;
     keyEls.forEach((el, i) => el.classList.toggle('now', i === ai));

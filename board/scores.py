@@ -15,8 +15,8 @@ Four dimensions, each 0 to 10, each with the numbers it came from (inputs), so t
 | efficiency | How quickly the goal was reached, for this task | time from the first action to the goal | within the task group |
 | fluency | How steadily the work went | hesitation inside the work (absolute), and actions per unit of progress | hesitation absolute, actions within the task group |
 
-execution, the quality of what the operator actually did, is cleanliness, efficiency and fluency weighted 0.5, 0.25 and
-0.25 (EXECUTION_WEIGHTS), over the ones that exist, for an episode and for each subgoal alike; outcome is kept apart, so
+execution, the quality of what the operator actually did, is cleanliness, efficiency and fluency weighted 0.75, 0.10 and
+0.15 (EXECUTION_WEIGHTS), over the ones that exist, for an episode and for each subgoal alike; outcome is kept apart, so
 a clean demonstration of a mislabelled task reads as a good execution with relation "different", never as a bad one.
 Speed is 10 at or below the median of its peers, which means typical, not fast. A dimension with too few peers is None,
 never a guess, and every score stays between 0 and 10 whatever the labels hold. One malformed record is scored as an
@@ -52,7 +52,7 @@ SEVERITY_POINTS = {"low": 0.5, "medium": 1.5, "high": 3.0}
 FAILED_ATTEMPT_POINTS = 1.0       # a failed incident (_incidents), beyond the mistake that may describe it
 RECOVERY_WINDOW_S = 1.5           # a recovery belongs to a mistake when its failure is this close to the mistake's time
 OUTCOME_CAPS = {"success": 1.0, "success_then_undone": 0.7, "partial": 0.9, "failure": 0.4}
-EXECUTION_WEIGHTS = {"cleanliness": 0.5, "efficiency": 0.25, "fluency": 0.25}
+EXECUTION_WEIGHTS = {"cleanliness": 0.75, "efficiency": 0.10, "fluency": 0.15}
 # the record fields the scores read, so a board build can hold every episode at once without its whole record
 FIELDS = ("dataset", "episode_prompt", "task_label", "event_labels", "key_events", "operator_mistakes", "recovery",
           "completion", "goal_alignment", "tasks", "_meta", "_rig", "_stitched")
@@ -474,6 +474,8 @@ def subgoals(d: dict, f: dict) -> list:
                     "duration_s": round(b - a, 2),
                     "cleanliness": _clamp(clean), "steady": _clamp(10 * (1 - 2 * hes)),
                     "wasteful_share": round(share, 3), "mistakes": [m["issue"] for m in ms],
+                    "penalties": [{"mistake": m["issue"], "severity": m["severity"], "recovered": m["recovered"],
+                                   "t_s": m["t_s"], "points": _points(m)} for m in ms],
                     "failed_attempts": [{"t_s": k["t_s"], "label": _str(k.get("label")), "kind": _str(k.get("kind"))}
                                         for k in failed]})
     return out
@@ -618,6 +620,7 @@ def score_board(records: dict) -> dict:
             outcome = None
             o_in = {**o_in, "unlabelled_parts": [{key: g.get(key) for key in ("part", "t0_s", "t1_s")} for g in missing]}
         out[f] = {"version": VERSION, "execution": _weighted(dims), "outcome": outcome, **dims, "relation": x["relation"],
+                  "weights": dict(EXECUTION_WEIGHTS),
                   "subgoals": subs,
                   "peers": peers, "peer_basis": "task" if efficiency is not None else None, "group": g,
                   "inputs": {**o_in, **c_in, "time_to_goal_s": took, "peer_median_time_to_goal_s":
