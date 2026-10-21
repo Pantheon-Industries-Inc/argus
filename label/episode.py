@@ -140,9 +140,14 @@ def load(ep_dir: Path) -> dict:
         # so a field a reader adds reaches the checks without being listed here. Signals on the frames of a camera
         # taken out of the episode, with nothing to place them on the others (state_unaligned), are not read. One whose
         # rows stop short of the episode's frames has no reading past them (label/signals.py pad_rows)
+        # an image stored with its colour channels by an older preparation reads as the planes a new one stores
+        # (prepare/formats.py stored_planes, which the board's signal reader uses too)
         from label import signals as sg
-        z = np.load(ep_dir / "signals.npz")
-        ep["signals"] = {s["name"]: sg.pad_rows(sg.columns(z[s["key"]]), len(state)) for s in ctx["signals"]}
+        from prepare.formats import stored_planes
+        with np.load(ep_dir / "signals.npz") as z:
+            ctx["signals"], rows = stored_planes(ctx["signals"], {s["key"]: z[s["key"]] for s in ctx["signals"]},
+                                                 ctx.get("reader_issues"))
+        ep["signals"] = {s["name"]: sg.pad_rows(sg.columns(rows[s["name"]]), len(state)) for s in ctx["signals"]}
         ep["signal_meta"] = {s["name"]: {k: v for k, v in s.items() if k not in ("name", "key")}
                              for s in ctx["signals"]}
         from label.dictionary_context import field_interpretation

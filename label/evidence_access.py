@@ -607,7 +607,8 @@ class Access:
             private = {}
             stored = next((m for m in ctx.get('signals') or [] if m['name'] == name), {})
             path = Path(self.ep['dir']) / 'signals.npz'
-            if stored.get('key') and path.is_file():
+            # a plane read from an older image column's stored channels (stored_shape) has no columns of its own there
+            if stored.get('key') and path.is_file() and 'stored_shape' not in meta:
                 shape, _, dtype, _ = header(path, stored['key'])
                 if dtype.kind in 'biuf':
                     private = {'raw_path': path, 'raw_key': stored['key'], 'raw_rows': shape[0]}

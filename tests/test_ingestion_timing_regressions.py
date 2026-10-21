@@ -26,8 +26,11 @@ def test_signals_from_overlapping_files_keep_values_on_their_capture_times(tmp_p
     sensor_file(late, [(t, {'pressure': v}) for t, v in [(.1, 7), (.3, 1), (.5, 8)]])
     q = np.arange(6) / 10
     out = formats.mcap_signals([late, early], q)
-    np.testing.assert_array_equal(out['/sensor'][:, 0], [2, 7, 9, 1, 3, 8])
-    assert out.meta['/sensor']['rate_hz'] == 12
+    # The two files' readings overlap in time, so nothing recorded says they are one recording: each is kept apart,
+    # every value on its own capture time, and a note says why (Signals.keep, same_recording).
+    np.testing.assert_array_equal(out['early /sensor'][[0, 2, 4], 0], [2, 9, 3])
+    np.testing.assert_array_equal(out['late /sensor'][[1, 3, 5], 0], [7, 1, 8])
+    assert any(i['kind'] == 'signal_name_collision' and 'overlap' in i['what'] for i in out.issues)
 
 
 def test_one_bad_message_keeps_later_signals_and_records_decode_failure(tmp_path):

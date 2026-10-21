@@ -221,9 +221,11 @@ def overview_indices(metas: list, arrays: dict, n: int, budget: int, touched: se
         return np.arange(n), {"method": "native rows", "extrema_complete": True}
     columns = []
     for meta in metas:
-        if meta.get("key") not in arrays:
+        # rows by the signal's name (stored_planes), or by its stored key
+        a = arrays.get(meta.get("name"), arrays.get(meta.get("key")))
+        if a is None:
             continue
-        a = pad(arrays[meta["key"]], n)
+        a = pad(a, n)
         if a.ndim == 1:
             a = a[:, None]
         rest = np.asarray(meta["rest"]) if meta.get("rest") is not None else None
@@ -388,8 +390,11 @@ def episode_doc(ep_dir: Path) -> dict | None:
         return None
     doc: dict = {"format": FORMAT}
     if has_sig:
+        from prepare.formats import stored_planes
         with np.load(ep_dir / "signals.npz") as z:
-            arrays = {m["key"]: np.asarray(z[m["key"]]) for m in metas if m.get("key") in z.files}
+            # the same reading of the stored signals as labelling (an older image column as its planes)
+            metas, arrays = stored_planes([m for m in metas if m.get("key") in z.files],
+                                          {m["key"]: np.asarray(z[m["key"]]) for m in metas if m.get("key") in z.files})
         # The anchor camera owns the episode span. Signals never extend it or shorten one another; pad marks their
         # missing rows and cuts only rows past the footage. A context frame count serves old sidecars without sources.
         from label.episode import order_views
@@ -406,10 +411,8 @@ def episode_doc(ep_dir: Path) -> dict | None:
         pick, sampling = overview_indices(metas, arrays, n, len(range(0, n, stride)), touched)
         docs, errors = [], []
         for m in metas:
-            if m.get("key") not in arrays:
-                continue
             try:
-                docs.append(signal_doc(m, pad(arrays[m["key"]], n), t, stride, m["name"] in touched, pick=pick))
+                docs.append(signal_doc(m, pad(arrays[m["name"]], n), t, stride, m["name"] in touched, pick=pick))
             except Exception as err:  # noqa: BLE001 - this signal is named with the reason, the others are drawn
                 errors.append({"name": m["name"], "error": f"{type(err).__name__}: {err}"[:300]})
         doc.update({"frames": n, "times": encode_times(t), "stride": stride, "n": len(pick), "sample_indices": pick.tolist(), "sampling": sampling,

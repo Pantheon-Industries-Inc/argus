@@ -241,7 +241,8 @@ def add_issue(ctx: dict, kind: str, what: str, camera: str | None = None, signal
               t0_s: float | None = None, t1_s: float | None = None,
               footage_complete: bool | None = None, unreadable_spans_s: list | None = None,
               clock_problem: str | None = None, source_rows: int | None = None,
-              camera_frames: int | None = None, source: str | None = None) -> dict:
+              camera_frames: int | None = None, source: str | None = None, signal_source: str | None = None,
+              signal_field: str | None = None) -> dict:
     """One entry appended to ctx["reader_issues"] (the module docstring's No drop): kind, a short snake_case tag; what,
     one plain sentence for the board; the camera or signal it is about and its time span in seconds of the episode
     when known. An entry already there is not added twice, so a reader that writes an episode's context twice
@@ -249,7 +250,8 @@ def add_issue(ctx: dict, kind: str, what: str, camera: str | None = None, signal
     entry = {"kind": str(kind), "what": str(what)}
     if source is not None:
         entry["source"] = str(source)
-    for k, v in (("camera", camera), ("signal", signal)):
+    for k, v in (("camera", camera), ("signal", signal), ("signal_source", signal_source),
+                 ("signal_field", signal_field)):
         if v is not None:
             entry[k] = str(v)
     for k, v in (("t0_s", t0_s), ("t1_s", t1_s)):
@@ -2762,23 +2764,32 @@ class Signals(dict):
         self.bytes = 0                               # the kept signals' size as float32, for SIGNAL_EPISODE_BYTES
         self._sizes: dict[str, int] = {}             # what keep counted for each name, given back when it leaves
         self.origins: dict[str, str] = {}            # the file each signal was read from, when one file holds it
+        self.fields: dict[str, str] = {}             # the name each signal was read under, before any rename
 
     def fits(self, rows: int, values: int) -> bool:
         """Whether a signal of rows x values keeps the running total within SIGNAL_EPISODE_BYTES."""
         return self.bytes + self.native_table_bytes + int(rows) * int(values) * 4 <= SIGNAL_EPISODE_BYTES
 
-    def keep(self, name: str, a: np.ndarray, m: dict, origin: str | None = None) -> str:
+    def keep(self, name: str, a: np.ndarray, m: dict, origin: str | None = None, field: str | None = None) -> str:
         """a kept under name with its meta m, as its summary per frame (summarise_rows, a data issue) when it would take
-        the running total past SIGNAL_EPISODE_BYTES; origin is the file it was read from, when known. Returns the name
-        it is kept under. A name already held with other values is a second source recording a field of the same name,
-        and neither replaces the other (distinct_name). The same values under the same name are kept once."""
+        the running total past SIGNAL_EPISODE_BYTES; origin is the file it was read from, when known, and field the
+        name it was read under (its identity, with origin, whatever name it is later kept under). Returns the name it
+        is kept under. A name already held is decided by its evidence (same_recording): the same values are kept once,
+        pieces of one recording are joined, and anything else is a second source, kept beside the first
+        (distinct_name). One never replaces the other."""
         a = np.asarray(a)
+        field = field or name
         if name in self:
-            if same_values(self[name], a):
+            how = same_recording(self[name], self.meta.get(name) or {}, a, m)
+            if how == "same":
+                return name
+            if how == "pieces":
+                self._join(name, a, m, origin)
                 return name
             name = self.distinct_name(name, origin)
         if origin:
             self.origins[name] = origin
+        self.fields[name] = field
         width = int(a.shape[1]) if a.ndim > 1 else 1
         if not self.fits(len(a), width) and width > len(SUMMARY_NAMES):
             a = summarise_rows(a)
@@ -2791,6 +2802,28 @@ class Signals(dict):
         self[name] = a
         self.meta[name] = m
         return name
+
+    def _join(self, name: str, a: np.ndarray, m: dict, origin: str | None) -> None:
+        """A later piece of the recording held under name filled into the frames the held pieces leave without a
+        reading; the joined signal spans both pieces and lists the files it was joined from."""
+        held, meta = np.asarray(self[name]), self.meta[name]
+        held2, a2 = held.reshape(len(held), -1), a.reshape(len(a), -1)
+        empty = ~np.isfinite(held2).any(axis=1)
+        joined = np.where(empty[:, None], a2, held2).reshape(held.shape)
+        self[name] = joined
+        (s0, s1), (t0, t1) = meta["span_s"], m["span_s"]
+        rates = [(x.get("rate_hz"), y1 - y0) for x, (y0, y1) in ((meta, (s0, s1)), (m, (t0, t1)))]
+        if all(isinstance(r, (int, float)) for r, _ in rates) and sum(d for _, d in rates) > 0:
+            meta["rate_hz"] = round(sum(r * d for r, d in rates) / sum(d for _, d in rates), 2)
+        meta["span_s"] = [min(s0, t0), max(s1, t1)]
+        finite = np.flatnonzero(np.isfinite(joined.reshape(len(joined), -1)).any(axis=1))
+        if "gaps" in meta and len(finite):
+            meta["gaps"] = int(finite[-1] - finite[0] + 1 - len(finite))
+        files = meta.get("joined_from") or ([self.origins[name]] if self.origins.get(name) else [])
+        if origin and origin not in files:
+            files = files + [origin]
+        if files:
+            meta["joined_from"] = files
 
     def distinct_name(self, name: str, origin: str | None) -> str:
         """The name a second signal called name is kept under, beside the one already held. When both files are known
@@ -2807,26 +2840,44 @@ class Signals(dict):
         number = 2
         while new is None or new in self:
             new, number = f"{name} ({number})", number + 1
+        why = ("their readings overlap in time and differ" if self.meta.get(first, {}).get("span_s") is not None
+               else "nothing recorded shows whether they are one recording")
         self.issues.append({"kind": "signal_name_collision", "signal": new,
+                            **({"signal_source": origin} if origin else {}), "signal_field": name,
                             "what": f"{name} is recorded by two sources ({held or 'the first read'} and "
-                                    f"{origin or 'a second'}); both are kept, as {first} and {new}, and neither "
-                                    "replaces the other"})
+                                    f"{origin or 'a second'}) and {why}; both are kept, as {first} and {new}, and "
+                                    "neither replaces the other"})
         return new
 
+    def note(self, kind: str, what: str, name: str, **more) -> dict:
+        """A data issue about the kept signal name, carrying its identity (signal_source, signal_field) as well as its
+        name, so it follows the signal through any rename (rename, merge_signals) to the episode's reader_issues."""
+        source, field = self.identity(name)
+        issue = {"kind": kind, "what": what, "signal": name, **({"signal_source": source} if source else {}),
+                 "signal_field": field, **more}
+        if issue not in self.issues:
+            self.issues.append(issue)
+        return issue
+
+    def identity(self, name: str) -> tuple:
+        """What a signal is, whatever name it is kept under: the file it was read from and the field it was read as."""
+        return self.origins.get(name), self.fields.get(name, name)
+
     def rename(self, old: str, new: str) -> None:
-        """The signal old, with its meta, size, file and the issues about it, kept under new instead."""
+        """The signal old, with its meta, size, file and every issue about it, kept under new instead. An issue is
+        about it when it carries its identity (signal_source and signal_field), or, carrying none, names it."""
+        source, field = self.identity(old)
         self[new] = dict.pop(self, old)
-        for store in (self.meta, self._sizes, self.origins):
+        for store in (self.meta, self._sizes, self.origins, self.fields):
             if old in store:
                 store[new] = store.pop(old)
+        self.fields.setdefault(new, field)
         if old in self.no_gaps:
             self.no_gaps.discard(old)
             self.no_gaps.add(new)
         for issue in self.issues:
-            if issue.get("signal") == old:
-                issue["signal"] = new
-                if str(issue.get("what", "")).startswith(old):
-                    issue["what"] = new + issue["what"][len(old):]
+            if about(issue, old, source, field):
+                follow(issue, old, new)
 
     def _release(self, name: str) -> None:
         """The size keep counted for name given back to the running total."""
@@ -2843,6 +2894,8 @@ class Signals(dict):
 
     def add(self, name: str, a: np.ndarray, shape=None, names=None, source: str | None = None, metadata=None,
             origin: str | None = None) -> str:
+        """a kept under name (keep) with its shape, its values' names and where it was read; returns the name it is
+        kept under."""
         m = signal_metadata(metadata)
         if shape is not None and tuple(int(x) for x in shape) != (a.shape[1],):
             m["shape"] = [int(x) for x in shape]
@@ -2853,20 +2906,57 @@ class Signals(dict):
         return self.keep(name, a, m, origin)
 
 
+def same_recording(held, held_meta: dict, a, meta: dict) -> str | None:
+    """How a signal arriving under a name already held relates to the held one, decided from what was recorded:
+    "same" when it holds the same values; "pieces" when both say the span of their readings (meta "span_s", seconds
+    of the episode on the clock they were placed by) and the spans do not overlap, as the files of one recording split
+    in time do; None, two sources, when the spans overlap with other values or nothing recorded tells the two apart,
+    so the data is kept apart (Signals.distinct_name)."""
+    if same_values(held, a):
+        return "same"
+    spans = [m.get("span_s") for m in (held_meta, meta)]
+    if not all(isinstance(x, (list, tuple)) and len(x) == 2 and all(isinstance(v, (int, float)) and bool(np.isfinite(v))
+                                                                  for v in x) for x in spans):
+        return None
+    (a0, a1), (b0, b1) = spans
+    if np.shape(held) != np.shape(a) or not (a1 < b0 or b1 < a0):
+        return None
+    return "pieces"
+
+
+def about(issue: dict, name: str, source: str | None, field: str) -> bool:
+    """Whether an issue is about the signal whose identity is (source, field) and that is now called name: an issue
+    carrying an identity (signal_source, signal_field) matches by it, one carrying none by the name."""
+    if "signal_field" in issue:
+        return issue.get("signal_source") == source and issue["signal_field"] == field
+    return issue.get("signal") == name
+
+
+def follow(issue: dict, old: str, new: str) -> None:
+    """An issue about a signal renamed from old to new names it as new, in its signal and in its sentence."""
+    issue["signal"] = new
+    if str(issue.get("what", "")).startswith(old):
+        issue["what"] = new + issue["what"][len(old):]
+
+
 def merge_signals(into: Signals, more: Signals) -> Signals:
     """more's signals, notes and clocks added to into (a plain dict of arrays is read as Signals), each counting toward
     into's running total (Signals.keep). A name both hold with other values is two sources, and both are kept under
     names that tell them apart (Signals.distinct_name); so is a clock both hold."""
-    origins, kept = getattr(more, "origins", {}) or {}, {}
+    origins, fields, kept = getattr(more, "origins", {}) or {}, getattr(more, "fields", {}) or {}, {}
+    issues = list(getattr(more, "issues", []) or [])
+    for issue in issues:
+        # an issue about a signal of more carries that signal's identity, so a later rename finds it by what it is
+        if issue.get("signal") in more and "signal_field" not in issue and origins.get(issue["signal"]):
+            issue.update(signal_source=origins[issue["signal"]], signal_field=fields.get(issue["signal"], issue["signal"]))
     for k, v in more.items():
-        kept[k] = into.keep(k, v, dict((getattr(more, "meta", {}) or {}).get(k) or {}), origins.get(k))
+        source, field = origins.get(k), fields.get(k, k)
+        kept[k] = into.keep(k, v, dict((getattr(more, "meta", {}) or {}).get(k) or {}), source, field)
         if kept[k] != k:
-            for issue in getattr(more, "issues", []) or []:
-                if issue.get("signal") == k:
-                    issue["signal"] = kept[k]
-                    if str(issue.get("what", "")).startswith(k):
-                        issue["what"] = kept[k] + issue["what"][len(k):]
-    into.left_out += list(getattr(more, "left_out", []) or [])
+            for issue in issues:
+                if about(issue, k, source, field):
+                    follow(issue, k, kept[k])
+    into.left_out += [x for x in getattr(more, "left_out", []) or [] if x not in into.left_out]
     for k, v in (getattr(more, "clocks", {}) or {}).items():
         meta = (getattr(more, "clock_metadata", {}) or {}).get(k)
         if k in into.clocks and not same_values(into.clocks[k], v):
@@ -2884,7 +2974,7 @@ def merge_signals(into: Signals, more: Signals) -> Signals:
     into.native_table_bytes += getattr(more, "native_table_bytes", 0)
     if getattr(more, "native_table_frames", None) is not None:
         into.native_table_frames = more.native_table_frames
-    into.issues += list(getattr(more, "issues", []) or [])
+    into.issues += [issue for issue in issues if issue not in into.issues]
     into.no_gaps |= {kept.get(k, k) for k in getattr(more, "no_gaps", ()) or ()}
     return into
 
@@ -3267,6 +3357,43 @@ def image_planes(name: str, rows: np.ndarray, shape: list) -> list[tuple]:
         planes.append((label, np.ascontiguousarray(cube[..., g[0]]).reshape(len(rows), h * w), [h, w],
                        {"stored": c, "channels": g, "identical": len(g) > 1}))
     return planes
+
+
+def stored_planes(metas: list[dict], arrays: dict, issues: list | None = None) -> tuple[list[dict], dict]:
+    """The signals of a prepared episode as every reader of signals.npz uses them: (descriptors, {name: rows}) from
+    context.json's descriptors and {key: stored rows}. An image column an older preparation stored with its colour
+    channels (a descriptor whose source is an image column, shape height x width x channels, and no image_channels) is
+    read as the planes image_planes gives a new preparation, so an episode prepared before that rule reads the same
+    as one prepared after it, without preparing it again. A plane keeps the stored key and says the shape it was
+    stored in (stored_shape), so a reader of the stored file knows its columns are not the plane's. The first plane
+    keeps the descriptor's place and the others follow the last descriptor, so every other descriptor keeps its index
+    (a data dictionary binds a field by it). Each issue in issues (the episode's reader_issues) about a split image
+    is repeated for every plane it became. Every other descriptor and its rows are returned as they are."""
+    out_metas, extra, rows = [], [], {}
+    for meta in metas:
+        a = arrays[meta["key"]]
+        shape = meta.get("shape") or []
+        if (meta.get("image_channels") is not None or len(shape) != 3
+                or not str(meta.get("source") or "").startswith("image column ")):
+            out_metas.append(meta)
+            rows[meta["name"]] = a
+            continue
+        planes = image_planes(meta["name"], np.asarray(a).reshape(len(a), -1), list(shape))
+        for i, (name, plane, plane_shape, channels) in enumerate(planes):
+            m = {k: v for k, v in meta.items() if k not in ("names", "units") or not isinstance(v, list)}
+            m.update(name=name, shape=plane_shape, image_channels=channels, stored_shape=list(shape),
+                     dims=int(np.prod(plane_shape)))
+            (out_metas if i == 0 else extra).append(m)
+            rows[name] = plane
+        if len(planes) > 1 and issues is not None:
+            about_image = [x for x in issues if isinstance(x, dict) and x.get("signal") == meta["name"]]
+            for issue in about_image:
+                issues.remove(issue)
+                for name, *_ in planes:
+                    copy_ = dict(issue)
+                    follow(copy_, meta["name"], name)
+                    issues.append(copy_)
+    return out_metas + extra, rows
 
 
 def _cell_shape(col, dims: int):
@@ -4676,8 +4803,10 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
         a = np.where(np.isfinite(a), a, np.nan)
         kept = out.add(name, a, names=names, source=f"table {p.name}", origin=p.name)
         for issue in pending:
-            if kept != name and issue.get("signal") == name:
-                issue["signal"], issue["what"] = kept, kept + issue["what"][len(name):]
+            if issue.get("signal") == name:
+                if kept != name:
+                    follow(issue, name, kept)
+                issue.update(signal_source=p.name, signal_field=name)
         out.issues += pending
         name = kept
         if coarse is not None:
@@ -4688,15 +4817,12 @@ def table_signals(paths: list[Path], real_anchor, pr_anchor: dict, extra: dict) 
             out.meta[name]["rate_hz"] = round(rate, 2)
         if assumed:
             # its time column shares no clock with the videos: placed from both starts, marked and flagged
-            one = Signals()
-            one.add(name, a)
-            mark_assumed(one, extra, p.name)
-            out.meta[name]["aligned_by"] = ALIGNED_ASSUMED
+            mark_assumed(out, p.name, [name])
         if aligned:
             out.meta[name]["aligned_by"] = aligned
-            add_issue(extra, "signal_alignment_assumed", ROWS_ASSUMED.format(name, p.name), signal=name)
+            out.note("signal_alignment_assumed", ROWS_ASSUMED.format(name, p.name), name)
         if span_note:
-            add_issue(extra, "table_span_differs", span_note, signal=name)
+            out.note("table_span_differs", span_note, name)
     return out
 
 
@@ -9938,7 +10064,14 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
     inside the footage is NaN outside its messages. A field's messages are grouped by the names they give its values
     (name_group), each put in its group's order, and a field of several groups is one signal per group, its name
     followed by the group's label (group_label). used names a field, or a (field, its value names) pair for a field
-    of that name set only (state_fields)."""
+    of that name set only (state_fields). Each file is read on its own and the files are joined by merge_signals, so
+    whether two files' channel of one name are pieces of one recording or two recordings is decided there, from the
+    span of each one's readings (Signals.keep, meta "span_s")."""
+    if len(paths) > 1:
+        out = Signals()
+        for p in paths:
+            merge_signals(out, mcap_signals([p], q, used, capture_clock=capture_clock))
+        return out
     used, facs = used or {}, _decoders()
     q = np.asarray(q, dtype=np.float64)
     rows: dict[tuple, dict] = {}
@@ -10094,8 +10227,11 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
         # a frame with no message near it (a hand the tracker lost, a sensor that paused) is NaN, not the last value
         # held; a sensor faster than the camera gives each frame the mean of its interval (place_on_frames)
         a, var, gaps = place_on_frames(t, v, q)
-        out.add(name, a, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
+        origin = Path(paths[0]).name if paths else None
+        readings_s = [float(t[0] - q[0]), float(t[-1] - q[0])]
+        out.add(name, a, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}", origin=origin)
         out.meta[name]["rate_hz"] = round(rate, 2)
+        out.meta[name]["span_s"] = readings_s
         if capture_clock:
             clocks = clock_sources[r["topic"]]
             errors = clock_errors.get(r["topic"], set())
@@ -10114,8 +10250,8 @@ def mcap_signals(paths: list[Path], q: np.ndarray, used: dict | None = None, *, 
         if (var is not None and a.shape[1] <= VARIATION_MAX_VALUES
                 and _variation_matters(name, a, var, bool(r.get("kind")))):
             vn = f"{name} variation within each frame"
-            out.add(vn, var, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}")
-            out.meta[vn].update(rate_hz=round(rate, 2), variation_of=name)
+            out.add(vn, var, shape=r["shape"], names=r["names"], source=f"MCAP channel {r['topic']}", origin=origin)
+            out.meta[vn].update(rate_hz=round(rate, 2), variation_of=name, span_s=readings_s)
             for key in ("aligned_by", "clock_source", "clock_problem"):
                 if key in out.meta[name]:
                     out.meta[vn][key] = out.meta[name][key]
@@ -12993,12 +13129,14 @@ ASSUMED_START = ("{} (from {}) was placed on the footage from both starts, since
                  "alignment assumes a common start")
 
 
-def mark_assumed(sig: Signals, extra: dict, source: str) -> Signals:
-    """Every signal of sig marked as placed from both starts: meta "aligned_by" ALIGNED_ASSUMED, which the prompt and
-    the board state beside it, and one data issue per signal (signal_alignment_assumed) naming it and its source."""
-    for k in sig:
+def mark_assumed(sig: Signals, source: str | None = None, names=None) -> Signals:
+    """The signals names of sig (all of them by default) marked as placed from both starts: meta "aligned_by"
+    ALIGNED_ASSUMED, which the prompt and the board state beside it, and one data issue per signal
+    (signal_alignment_assumed, Signals.note) naming it and the file it came from (source, or the file it was read
+    from). The issue travels with the signal, so a later rename renames it too."""
+    for k in list(sig) if names is None else names:
         sig.meta.setdefault(k, {})["aligned_by"] = ALIGNED_ASSUMED
-        add_issue(extra, "signal_alignment_assumed", ASSUMED_START.format(k, source), signal=k)
+        sig.note("signal_alignment_assumed", ASSUMED_START.format(k, source or sig.origins.get(k, "a sensor file")), k)
     return sig
 
 
@@ -13018,10 +13156,7 @@ def sensors_from_start(paths: list[Path], t_video: np.ndarray, extra: dict) -> S
         q = float(t[0]) + t_video
         got = mcap_signals([p], q) if p.suffix.lower() == ".mcap" else h5_file_signals([p], q, len(q))
         got.origins.update({k: p.name for k in got if k not in got.origins})
-        merge_signals(out, got)
-    for k in out:
-        mark_assumed(Signals({k: out[k]}), extra, out.origins.get(k, "a sensor file"))
-        out.meta.setdefault(k, {})["aligned_by"] = ALIGNED_ASSUMED
+        merge_signals(out, mark_assumed(got, p.name))
     return out
 
 

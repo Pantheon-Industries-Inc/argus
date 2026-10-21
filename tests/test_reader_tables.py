@@ -686,8 +686,8 @@ def test_a_table_with_one_row_per_frame_is_placed_one_row_per_frame_whatever_its
     out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), extra)
     assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS and "rate_hz" not in out.meta["traj"]
     assert out["traj"][120, 0] == 60.0                              # row 120 on frame 120
-    assert len(_issues(extra, "signal_alignment_assumed")) == 1
-    span = _issues(extra, "table_span_differs")
+    assert len(_issues(out, "signal_alignment_assumed")) == 1
+    span = _issues(out, "table_span_differs")
     assert len(span) == 1 and span[0]["signal"] == "traj"
     assert "10.3 s" in span[0]["what"] and "8.0 s" in span[0]["what"] and "plays fast" in span[0]["what"]
 
@@ -708,7 +708,7 @@ def test_a_table_with_one_row_per_frame_whose_times_agree_has_no_span_issue(tmp_
     extra = {}
     out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), extra)
     assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS and out["traj"][120, 0] == 60.0
-    assert not _issues(extra, "table_span_differs")
+    assert not _issues(out, "table_span_differs")
 
 
 def test_a_table_with_no_time_column_and_one_row_per_frame_is_marked_as_placed_row_by_row(tmp_path):
@@ -718,7 +718,7 @@ def test_a_table_with_no_time_column_and_one_row_per_frame_is_marked_as_placed_r
     out = f.table_signals([tmp_path / "traj.csv"], None, _anchor(n), extra)
     assert out.meta["traj"]["aligned_by"] == f.ALIGNED_ROWS
     assert out["traj"][30, 0] == 15.0
-    got = _issues(extra, "signal_alignment_assumed")
+    got = _issues(out, "signal_alignment_assumed")
     assert len(got) == 1 and "one row per frame" in got[0]["what"]
 
 
