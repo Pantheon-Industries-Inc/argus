@@ -57,9 +57,14 @@ def _signals(ctx):
 
 
 def test_no_family_has_its_readout_dropped_or_a_video_only_claim(landed):
+    from prepare.signal_alignment import timed
     for name, (ctx, prompt, _) in landed.items():
-        if ctx.get("signals"):
+        # a family whose every signal shares no clock with the cameras (sidecars placed from both starts) gives them
+        # as ranges under the line that says so, never at the instants
+        if any(timed(s, ctx) for s in ctx.get("signals") or []):
             assert "Each signal that changes, at every instant you receive" in prompt, name
+        elif ctx.get("signals"):
+            assert "share no clock with the cameras, so their timing relative to the video is unknown" in prompt, name
         assert "because not even one row fits" not in prompt, name
         if ctx.get("signals") or ctx["state_kind"] != "none":
             assert "this dataset records no" not in prompt, name

@@ -22,7 +22,8 @@ from label.dictionary_context import _public_source, field_interpretation, nativ
 from label import sensor_evidence as se
 from label import sensor_copy
 from prepare.mcap_fields import SAMPLE_RATE_KEY
-from prepare.signal_alignment import RECORDER_ARRIVAL, RECORDER_ARRIVAL_LIMITATION, recorder_arrival
+from prepare.signal_alignment import (ARRIVAL, RECORDED, RECORDER_ARRIVAL_LIMITATION, recorder_arrival,
+                                      video_timing)
 from prepare.frame_rate import KEY as FPS_KEY, declared_fps
 
 MAX_ROWS = 64
@@ -579,6 +580,16 @@ class Access:
         row.update(_validity_metadata(private.get('component_validity')))
         self.fields[ident] = {'public': row, 'value': value, 'descriptor': meta or {}, **private}
         return ident
+
+    def episode_seconds(self, field) -> bool:
+        """Whether a numeric field's rows can be chosen and cited by episode seconds: a prepared signal on a recorded
+        or recorder-arrival clock the cameras share (prepare/signal_alignment.py video_timing), with the state's
+        frames on the cameras. Any other field (an original native array, a value placed on the frames by an
+        assumption or from both starts) is selected by its source rows and inspected untimed."""
+        if field['public']['kind'] != 'numeric' or not self.state_usable:
+            return False
+        from label.episode import anchor
+        return video_timing(field['descriptor'], self.ep['context'], anchor(self.ep))['grade'] in (RECORDED, ARRIVAL)
 
     def local(self, name):
         root = Path(self.ep['context'].get('retained_evidence_root') or self.ep['dir']).resolve()
@@ -1156,13 +1167,7 @@ class Access:
             limit = min(8, MAX_VALUES // width)
         if not limit:
             raise ValueError('one native row exceeds inspection budget')
-        timing = field['descriptor']
-        arrival = timing.get('aligned_by') == RECORDER_ARRIVAL and recorder_arrival(self.ep['context'])
-        unverified = (bool(timing.get('aligned_by')) and not arrival or
-                      any(timing.get(k) for k in ('camera_aligned_by', 'clock_problem')))
-        from label import episode as me
-        unverified = unverified or bool((self.ep['context'].get('camera_clock') or {}).get(me.anchor(self.ep)))
-        ts = None if native or not self.state_usable or unverified else self.times()[:n]
+        ts = self.times()[:n] if not native and self.episode_seconds(field) else None
         rows, total = self.selection(request, n, ts, n if extrema else limit)
         validity = _selected_component_validity(field.get('component_validity'), cols)
         if validity is not None:
@@ -1556,12 +1561,7 @@ class Access:
                 or receipt.get('mode') not in ('samples', 'extrema')
                 or not receipt.get('times_s') or not self.state_usable):
             return None
-        timing = field['descriptor']
-        arrival = timing.get('aligned_by') == RECORDER_ARRIVAL and recorder_arrival(self.ep['context'])
-        from label import episode as me
-        if ((timing.get('aligned_by') and not arrival)
-                or any(timing.get(key) for key in ('camera_aligned_by', 'clock_problem'))
-                or (self.ep['context'].get('camera_clock') or {}).get(me.anchor(self.ep))):
+        if not self.episode_seconds(field):
             return None
         source = field['value']
         n = min(len(self.ep['state']), len(source))

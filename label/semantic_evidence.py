@@ -9,6 +9,7 @@ import numpy as np
 from label import derived_measurements as dm
 from label.dictionary_context import field_interpretation
 from prepare.sensor_semantics import validate
+from prepare.signal_alignment import video_timing
 
 MAX_SOURCE_VALUES = 16_000_000  # At most 128 MB when a real-valued source is converted to float64.
 MAX_DERIVED_SERIES = 24
@@ -237,9 +238,7 @@ def append(ep, pl, doc, times):
                       'source': str(meta.get('source') or name), 'columns': math.prod(shape), 'supplied_columns': 0,
                       'timing': {key: timing[key] for key in ('aligned_by', 'camera_aligned_by', 'clock_problem', 'rate_hz')
                                  if timing.get(key) is not None},
-                      'episode_alignment_verified': not (ctx.get('state_unaligned') or
-                          (ctx.get('camera_clock') or {}).get(anchor(ep)) or
-                          any(timing.get(key) for key in ('aligned_by', 'camera_aligned_by', 'clock_problem')))}
+                      'episode_alignment_verified': video_timing(timing, ctx, anchor(ep))['verified']}
             sensors[sensor_id] = sensor
             doc['sensors'].append(sensor)
             doc['coverage'].append({'id': sensor_id, 'name': name, 'status': 'sampled'})

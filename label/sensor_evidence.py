@@ -17,6 +17,7 @@ from label import signals as sg
 from label import sensor_copy
 from prepare.formats import TOUCH_WORDS, names_touch, _names_word
 from prepare.frame_rate import KEY as STORED_FPS
+from prepare.signal_alignment import video_timing
 
 MAX_SERIES = 12
 MAX_SAMPLES = 96
@@ -83,8 +84,7 @@ def _unsafe_timed_alignment(doc, ctx):
             if (sensor.get('kind') == 'numeric' and sensor.get('access_kind') != 'depth' and ctx.get('state_unaligned') or
                     sensor.get('kind') == 'image' and (ctx.get('camera_clock') or {}).get(sensor.get('view'))):
                 return True
-            if sensor.get('episode_alignment_verified') is False or any((sensor.get('timing') or {}).get(k)
-                    for k in ('aligned_by', 'camera_aligned_by', 'clock_problem', 'method')):
+            if sensor.get('episode_alignment_verified') is False or not video_timing(sensor.get('timing'))['verified']:
                 return True
     return False
 
@@ -299,7 +299,6 @@ def _groups(meta, entry, a, remaining, valid_indices=None):
 def build(ep, pl, *, shown=None, images=None, native_images=None, capture_selection=None):
     from label.episode import anchor, frame_window
     ctx = ep['context']
-    anchor_clock_assumed = bool((ctx.get('camera_clock') or {}).get(anchor(ep)))
     doc = {'version': 1, 'copy_contract_version': sensor_copy.VERSION,
            'interpretation_digest': signature(ctx), 'clock_digest': _clock_digest(ctx), 'sensors': [], 'series': [],
            'findings': [], 'coverage': [], 'limitations': [], 'method': 'Recorded values and explicit derived comparisons on prepared clocks; bounded extrema-preserving evidence. Source mappings retain their authority and calibration limits.'}
@@ -377,8 +376,7 @@ def build(ep, pl, *, shown=None, images=None, native_images=None, capture_select
                   'shape': meta.get('shape') or list(a.shape[1:]), 'capabilities': capabilities,
                   'interpretation': entry, 'source': str(meta.get('source') or name),
                   'timing': {k: timing[k] for k in ('aligned_by', 'camera_aligned_by', 'clock_problem', 'rate_hz') if timing.get(k) is not None},
-                  'episode_alignment_verified': not (anchor_clock_assumed or ctx.get('state_unaligned') or
-                      any(timing.get(k) for k in ('aligned_by', 'camera_aligned_by', 'clock_problem'))),
+                  'episode_alignment_verified': video_timing(timing, ctx, anchor(ep))['verified'],
                   'response_direction': meta.get('response_direction'), 'calibration': meta.get('calibration'),
                   'coordinate_frame': meta.get('coordinate_frame'),
                   'columns': a.shape[1], 'supplied_columns': 0,
@@ -1091,8 +1089,7 @@ def bind(doc, findings, *, ep=None, source_context=None, copy_contract_version=N
                     reason = 'unknown or withheld sensor/series reference'; break
                 if s['kind'] == 'image' and 'series_id' in ref:
                     reason = 'image reference cannot cite a numeric series'; break
-                if s.get('episode_alignment_verified') is False or any((s.get('timing') or {}).get(k)
-                        for k in ('aligned_by', 'camera_aligned_by', 'clock_problem', 'method')):
+                if s.get('episode_alignment_verified') is False or not video_timing(s.get('timing'))['verified']:
                     reason = 'cited sensor has no verified episode alignment'; break
                 supports = f.get('claim_type') in s['capabilities']
                 if supports and f.get('claim_type') == 'marker_motion':

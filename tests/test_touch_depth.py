@@ -588,18 +588,19 @@ def _glove_beside_a_video(root: Path, n: int = 300) -> Path:
     return root / "up"
 
 
-def test_a_contact_placed_from_both_starts_says_its_times_are_not_recorded(tmp_path):
+def test_a_contact_placed_from_both_starts_is_counted_never_timed_on_the_frames(tmp_path):
     """A glove placed on the footage from both starts (no clock shared) times contacts whose times are the
-    placement's. Each carries aligned_by, its line in the prompt says the times are not recorded times, and a context
-    prepared before contacts carried it gets it from its signal's meta."""
+    placement's. Each carries aligned_by and the untimed grade; the prompt counts them and gives no time or picture
+    of them, and a context prepared before contacts carried it gets it from its signal's meta."""
     rep = formats.convert(_glove_beside_a_video(tmp_path), "teleop_arms", tmp_path / "eps", "x", 900)
     ep_dir = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
     ctx = json.loads((ep_dir / "context.json").read_text())
     assert ctx["contacts"] and all(c["aligned_by"] == "assumed start" for c in ctx["contacts"]), ctx["contacts"]
     r = me.build_request(ep_dir)
-    lines = [ln for ln in r["prompt"].splitlines() if ln.startswith("  c1:")]
-    assert lines and ("these times are placed from both starts, as the touch signal shares no clock with the "
-                      "cameras, so they are not recorded times") in lines[0], lines
+    assert not [ln for ln in r["prompt"].splitlines() if ln.startswith("  c1:")] and "contact_views" not in r
+    assert (f"  {len(ctx['contacts'])} sensor-activity intervals are not given, as their touch signals share no "
+            "clock with the cameras") in r["prompt"]
+    assert all(c["video_timing"] == "untimed" for c in lc.of_episode(me.load(ep_dir)))
     for c in ctx["contacts"]:
         del c["aligned_by"]
     (ep_dir / "context.json").write_text(json.dumps(ctx))
@@ -610,7 +611,8 @@ def test_a_contact_on_a_recorded_clock_reads_as_before():
     c = {"id": "c1", "hand": "right", "signals": ["right_pressure"], "start_s": 1.0, "peak_s": 1.25, "end_s": 1.5,
          "from_start": False, "to_end": False, "peak_strength": 2.0, "dips_s": [],
          "regions": {"right_pressure": {"cells": 4, "rows": [1, 2], "columns": [1, 2], "of": [4, 4]}}}
-    assert me._contact_line(c) == ("  c1: right hand, from right_pressure, 1.00 s to 1.50 s, largest response at 1.25 s; at "
+    assert me._contact_line(c) == ("  c1: from right_pressure (right side, from its signal's name; the recording does "
+                                   "not say which hand or gripper), 1.00 s to 1.50 s, largest response at 1.25 s; at "
                                    "its largest response right_pressure: 4 cells, rows 1-2 and columns 1-2 of 4 x 4. "
                                    "Response activity has no verified unloaded reference or physical-contact interpretation.")
     qualified = lc.mark_aligned([c], {"right_pressure": {"shape": [4, 4]}})[0]

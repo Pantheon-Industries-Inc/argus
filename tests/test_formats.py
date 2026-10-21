@@ -2691,7 +2691,8 @@ def test_a_streamed_table_keeps_its_epoch_times_and_rows_sit_on_their_frame_inde
 def _a_table_placed_from_both_starts_is_marked_signal_by_signal(tmp_path):
     """A table beside videos with no capture times is placed from both starts. It had no data issue, a second table
     overwrote the first's note, and nothing told the model the alignment was assumed. Each such signal is a data
-    issue naming it, carries aligned_by in its meta, and its line in the prompt says so."""
+    issue naming it, carries aligned_by in its meta, and its line in the prompt sits under the one that says its timing
+    relative to the video is unknown, with no value of it at a sampled instant."""
     import numpy as np
     from label import episode as me
     root = tmp_path / "upload"
@@ -2709,8 +2710,10 @@ def _a_table_placed_from_both_starts_is_marked_signal_by_signal(tmp_path):
     assert {i["signal"] for i in _issues(ctx, "signal_alignment_assumed")} == {"traj", "grip"}, ctx["reader_issues"]
     ep = me.load(tmp_path / "eps" / ctx["episode_id"])
     text = me.build_prompt(ep, me.plan(ep), cell_w=448, cell_h=252)[1]
-    lines = [x for x in str(text).splitlines() if x.strip().startswith(("traj (", "grip ("))]
-    assert len(lines) == 2 and all("both starts" in x for x in lines), lines
+    unplaced = str(text).split("share no clock with the cameras, so their timing relative to the video is unknown")[1]
+    lines = [x for x in unplaced.splitlines() if x.strip().startswith(("traj (", "grip ("))]
+    assert len(lines) == 2, lines
+    assert "at every instant you receive" not in str(text)
 
 
 def test_a_table_placed_from_both_starts_is_marked_signal_by_signal():

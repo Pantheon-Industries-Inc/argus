@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from prepare.signal_alignment import (PLACEMENT_FIELDS, placement_text, recorder_arrival,
-                                      RECORDER_ARRIVAL, RECORDER_ARRIVAL_LIMITATION)
+                                      RECORDER_ARRIVAL, RECORDER_ARRIVAL_LIMITATION, video_timing)
 
 MIN_CONTACTS = 3
 OFFSET_FRAMES = 1.0
@@ -52,7 +52,7 @@ def check(labels: dict, contacts: list[dict], strips: dict, fps: float, instrume
     # a contact with an alignment assumption (label/contacts.py mark_aligned) has the placement's times, so where the frames
     # show its touch says how far off the placement is, not that the sensor's clock is, nor that the sensor fired on
     # its own: it is left out of clock_offset and touch_not_seen and named by its placement
-    placed = [cid for cid, rec in by_id.items() if rec.get("aligned_by")]
+    placed = [cid for cid, rec in by_id.items() if not video_timing(rec)["verified"]]
     arrival = {cid for cid, rec in by_id.items() if rec.get('aligned_by') == RECORDER_ARRIVAL}
     arrival_clock = recorder_arrival(timing_context or {})
     if arrival_clock:

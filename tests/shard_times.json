@@ -140,6 +140,7 @@
  "tests/test_release_execution_contracts.py": 9.3,
  "tests/test_request_attestation.py": 5.9,
  "tests/test_request_body_identity.py": 0.1,
+ "tests/test_request_hygiene.py": 2.0,
  "tests/test_review.py": 26.7,
  "tests/test_review_download_limits.py": 0.4,
  "tests/test_rig_subtasks.py": 0.0,

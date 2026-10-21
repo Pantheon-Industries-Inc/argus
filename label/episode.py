@@ -56,7 +56,8 @@ from label import lens
 from label import prompts, policy
 from label import sensor_evidence as se
 from label import state as ms
-from prepare.signal_alignment import ALIGNED_CAMERA, ALIGNED_ASSUMED, recorder_arrival, placement_text
+from prepare.signal_alignment import (ALIGNED_CAMERA, ALIGNED_ASSUMED, recorder_arrival,
+                                      placement_text, timed)
 from prepare.state_notes import ASSUMED_CLOCK, LAYOUT, NOT_RECORDED, SHORT, UNREADABLE
 
 FPS = 30
@@ -467,7 +468,8 @@ def plan(ep: dict) -> dict:
         # no arm state to find still spans in: the instant every moving signal falls quiet, and the instant it moves
         # again, are sent as an arm's still span would give them (label/signals.py quiet_spans), never as a claim
         from label import signals as sg
-        quiet = sg.quiet_spans({k: np.asarray(v)[:n] for k, v in ep["signals"].items()},
+        untimed = untimed_signals(ep)
+        quiet = sg.quiet_spans({k: np.asarray(v)[:n] for k, v in ep["signals"].items() if k not in untimed},
                                int(round(ms.MIN_STILL_S * fps)))
         sample_spans = quiet
     presentation = (ep.get('times') or {}).get(a)
@@ -1431,13 +1433,22 @@ def contact_strips(c: dict) -> tuple[bool, bool]:
 
 def chosen_contacts(ep: dict, contacts: list[dict]) -> list[dict]:
     """The contacts shown to the model: the strongest, at most CONTACT_VIEWS_MAX and one per CONTACT_EVERY_S of
-    footage, in time order."""
+    footage, in time order. A contact with no established time on the video (untimed_contacts) is never shown: its
+    begin and end would be read as frames of the footage."""
+    untimed = {c["id"] for c in untimed_contacts(ep, contacts)}
+    contacts = [c for c in contacts or [] if c["id"] not in untimed]
     if not contacts:
         return []
     dur = frame_time(ep, len(ep["state"]) - 1) if len(ep["state"]) else 0.0
     cap = min(CONTACT_VIEWS_MAX, max(1, int(round(dur / CONTACT_EVERY_S))))
     best = sorted(contacts, key=lambda c: -float(c.get("peak_strength") or 0))[:cap]
     return sorted(best, key=lambda c: c["start_s"])
+
+
+def untimed_contacts(ep: dict, contacts) -> list[dict]:
+    """The contacts whose times rest on no clock the cameras share (prepare/signal_alignment.py video_timing of the
+    placement label/contacts.py mark_aligned gave them): they are counted in the prompt, never timed on the frames."""
+    return [c for c in contacts or [] if not timed(c, ep["context"])]
 
 
 # a contact timed by a signal placed from both starts (label/contacts.py mark_aligned): its times are the placement's
@@ -1460,7 +1471,8 @@ def _contact_timing(c: dict) -> str:
 
 
 def _contact_line(c: dict) -> str:
-    hand = f"{c['hand']} hand" if c.get("hand") else "hand not named by the recording"
+    from label.signal_class import place_words
+    hand = place_words(c.get("hand"), c.get("place"), len(c.get("signals") or []))
     physical = c.get('evidence_kind') == 'recorded_contact_state'
     state = 'touching' if physical else 'active'
     when = (f"{c['start_s']:.2f} s" + (f" (already {state} at the first frame)" if c.get("from_start") else "")
@@ -1476,7 +1488,7 @@ def _contact_line(c: dict) -> str:
     act = (c.get("regions") or {}).get("active_signals")
     if act:
         where.append("active: " + ", ".join(act))
-    return (f"  {c['id']}: {hand}, from {', '.join(c['signals'])}, {when}"
+    return (f"  {c['id']}: from {', '.join(c['signals'])} ({hand}), {when}"
             + (f"; at its largest response {'; '.join(where)}" if where else "")
             + (f"; it weakens and comes back at {', '.join(f'{x:.2f}' for x in c['dips_s'])} s"
                if c.get("dips_s") else "")
@@ -1541,6 +1553,30 @@ def _contact_coverage(ep: dict) -> dict:
                      for name, entry in (ep.get('signal_meta') or {}).items()})
 
 
+def _coverage_words(ep: dict, covered: dict) -> str:
+    """What the contacts block calls the sides with touch signals, and what says so (label/signal_class.py):
+    "instrumented hands and their recorded touch signals, each hand and its side from its signals' names" when every
+    side's signals say the part they are on, else "recorded touch signals by the side their names give; the recording
+    does not say which hand or gripper carries them"."""
+    from label.dictionary_context import field_interpretation
+    from label.signal_class import BASES, contact_place
+    meta = {name: {**entry, 'dictionary': field_interpretation(ep['context'], name)}
+            for name, entry in (ep.get('signal_meta') or {}).items()}
+    places = [contact_place(names, meta) for names in covered.values()]
+    if not all(p["part"] for p in places):
+        return ("recorded touch signals by the side their names give; the recording does not say which hand or "
+                "gripper carries them")
+    parts = list(dict.fromkeys(p["part"] for p in places))
+    part = ' or '.join(parts)
+    basis = {p["basis"] for p in places}
+    sources = {"declared": "the recording's own description", "name": "its signals' names",
+               "interpreted": "the field dictionary's reading"}
+    said = (f"each {part} and its side from its signals' names" if basis == {"name"} else
+            f"each {part} from " + " or ".join(sources[b] for b in BASES if b in basis)
+            + ", its side from its signals' names")
+    return f"instrumented {_and_list([p + 's' for p in parts])} and their recorded touch signals, {said}"
+
+
 def contacts_block(ep: dict, pl: dict) -> str:
     """Recorded contacts and instrumented-hand coverage, including quiet touch streams."""
     covered = _contact_coverage(ep)
@@ -1553,14 +1589,26 @@ def contacts_block(ep: dict, pl: dict) -> str:
     if arrival:
         missing = ('  "contacts_missing": [], because recorder-arrival placement does not establish when a '
                    'physical tactile response should coincide with a visible grasp.\n')
-    instruments = ('\nCONTACTS: instrumented hands and their recorded touch signals: '
+    untimed_names = untimed_signals(ep)
+    if covered and all(nm in untimed_names for names in covered.values() for nm in names):
+        missing = ('  "contacts_missing": [], because the touch signals share no clock with the cameras, so no grasp '
+                   'in the frames can be matched to their readings.\n')
+    instruments = ('\nCONTACTS: ' + _coverage_words(ep, covered) + ': '
                    + '; '.join(f'{hand}: {", ".join(names)}' for hand, names in covered.items()) + '.\n') if covered else (
                    '\nCONTACTS: no instrumented hand is identified by the recorded touch signals. '
                    'Return an empty contacts_missing list.\n')
+    recorded = touch_contacts(ep, pl, ep.get("contacts"))
+    untimed = untimed_contacts(ep, recorded)
+    # intervals of touch signals with no clock in common with the cameras are counted, never timed on the frames
+    many = len(untimed) != 1
+    unplaced = (f'  {len(untimed)} sensor-activity interval{"s are" if many else " is"} not given, as '
+                f'{"their" if many else "its"} touch signals share no clock with the cameras, so '
+                f'{"their" if many else "its"} times say nothing about the frames.\n') if untimed else ""
     shown = touch_contacts(ep, pl, ep.get("contacts_shown"))
     if not shown:
-        return instruments + '  "contacts": [], no sensor-activity intervals were supplied.\n' + missing if covered else ""
-    rest = [c for c in touch_contacts(ep, pl, ep.get("contacts")) if c["id"] not in {x["id"] for x in shown}]
+        return (instruments + unplaced + '  "contacts": [], no sensor-activity intervals were supplied.\n' + missing
+                if covered else "")
+    rest = [c for c in recorded if c["id"] not in {x["id"] for x in shown} and c not in untimed]
     physical = all(c.get('evidence_kind') == 'recorded_contact_state' for c in shown)
     event = 'touch' if physical else 'signal activity'
     state = 'touching' if physical else 'active'
@@ -1582,7 +1630,7 @@ def contacts_block(ep: dict, pl: dict) -> str:
              "These spans describe sensor response activity, not confirmed physical contact. An inferred response reference "
              "is not a verified unloaded baseline. Even a declared calibration zero does not independently verify touch. "
              "Describe visible touch from the pictured frames independently; sensor activity boundaries do not establish touch onset or release.\n")
-    return (instruments + claim + "\n".join(_contact_line(c) for c in shown) + "\n"
+    return (instruments + unplaced + claim + "\n".join(_contact_line(c) for c in shown) + "\n"
             + (("  More sensor-activity intervals are not shown: "
                 + "; ".join(f"{c['id']} {c['start_s']:.2f}-{c['end_s']:.2f} s"
                             + (" " + contact_placement(c) if c.get("aligned_by") else "") for c in rest)
@@ -1622,7 +1670,9 @@ def _signals_table(ep: dict, pl: dict) -> str:
     with its shape, its value names and the range its values take (label/signals.py describe); over each recorded
     still span how much each one changed (the claim they bear on: a mobile base can drive while the arms are still);
     and the values at every sampled instant (_signal_readout), except a touch signal's, whose timing is given once as
-    the episode's contacts (contacts_block). They are shown, not interpreted: the model reads what each is from its
+    the episode's contacts (contacts_block). A signal with no established time on the video (untimed_signals) is
+    given only as its range, under a line that says its timing relative to the video is unknown, and takes no part
+    in the still spans or the instants. They are shown, not interpreted: the model reads what each is from its
     name and the robot's description."""
     from label import signals as sg
     from label.dictionary_context import field_interpretation
@@ -1635,7 +1685,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
     # as stored: every number below is the one a float64 copy would give (largest and smallest readings are exact in
     # any precision, and their differences are taken in float64), with no whole copy of a large signal
     arrs = {k: a[:n] for k, a in sig.items()}
-    lines, still, wherever = [], [], []
+    lines, still, wherever, unplaced = [], [], [], []
+    untimed = untimed_signals(ep)
     for name, a in arrs.items():
         interpretation = field_interpretation(ep["context"], name)
         wording = _interpretation_words(interpretation)
@@ -1658,17 +1709,25 @@ def _signals_table(ep: dict, pl: dict) -> str:
                     still.append(said)
                 continue
             m = meta.get(name) or {}
-            lines.append(sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
-                                     fps=ep_fps(ep), aligned_by=m.get("aligned_by"),
-                                     camera_aligned_by=m.get("camera_aligned_by"),
-                                     clock_problem=m.get("clock_problem"), source_rows=m.get("source_rows"),
-                                     camera_frames=m.get("camera_frames"), unnamed=m.get("unnamed"),
-                                     names_source=m.get("names_source"),
-                                     units=recorded_units(m, int(np.prod(np.shape(a)[1:]))),
-                                     units_source=m.get("units_source"),
-                                     units_contradicted=m.get("units_contradicted")) + wording)
+            # a signal with no established time on the video is listed under the line that says so, not with its
+            # placement beside each range
+            (unplaced if name in untimed else lines).append(
+                sg.describe(name, a, m.get("shape"), m.get("names"), rate_hz=m.get("rate_hz"),
+                            fps=ep_fps(ep), aligned_by=None if name in untimed else m.get("aligned_by"),
+                            camera_aligned_by=m.get("camera_aligned_by"),
+                            clock_problem=m.get("clock_problem"), source_rows=m.get("source_rows"),
+                            camera_frames=m.get("camera_frames"), unnamed=m.get("unnamed"),
+                            names_source=m.get("names_source"),
+                            units=recorded_units(m, int(np.prod(np.shape(a)[1:]))),
+                            units_source=m.get("units_source"),
+                            units_contradicted=m.get("units_contradicted")) + wording)
         except Exception as e:  # noqa: BLE001 - one signal that cannot be read is named, the others are shown
             lines.append(f"  {name}: could not be read ({type(e).__name__})")
+    if unplaced:
+        lines.append("  These signals share no clock with the cameras, so their timing relative to the video is "
+                     "unknown. Each is given only as its range over the stretch of its recording placed beside the "
+                     "footage, never at a frame instant or a time:")
+        lines += unplaced
     if still:
         lines.append("  The same at every frame: " + "; ".join(still))
     if wherever:
@@ -1679,6 +1738,8 @@ def _signals_table(ep: dict, pl: dict) -> str:
         for a0, b0 in pl["spans"]:
             ch = []
             for name, a in arrs.items():
+                if name in untimed:
+                    continue
                 seg = a[a0:b0 + 1]
                 lo, hi = sg.finite_range(seg)
                 c = float(np.nanmax(hi - lo)) if np.isfinite(seg).any() else 0.0
@@ -1700,11 +1761,12 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     """(lines, whole): the values of the signals at every sampled instant, and the signals every row of which is in
     them. A touch signal has no rows (its timing is given once as the episode's contacts, contacts_block, so the frames
     are read on their own first and the contacts are checked against them; touch is the rule the contacts shown follow,
-    touch_verdicts), nor has a signal that never changes or has no reading. The rows are ranked by how much their
-    values move over the episode (label/signals.py movements) and kept when they fit the allowance for the selected
-    instants, then printed in the signals' own order. An oversized row does not prevent smaller rows being shown.
-    A row whose readings at the instants do not resolve its value (label/signals.py resolved), or track a row already
-    sent (_drop_tracking), is left out and named with why.
+    touch_verdicts), nor has a signal that never changes or has no reading, nor one with no established time on the
+    video (untimed_signals), whose values at an instant would be read as happening there. The rows are ranked by how
+    much their values move over the episode (label/signals.py movements) and kept when they fit the allowance for the
+    selected instants, then printed in the signals' own order. An oversized row does not prevent smaller rows being
+    shown. A row whose readings at the instants do not resolve its value (label/signals.py resolved), or track a row
+    already sent (_drop_tracking), is left out and named with why.
     Every signal left out, whole or in part, is named with its size and rate; original value names remain in metadata.
     """
     from label import signals as sg
@@ -1713,7 +1775,7 @@ def _signal_readout(ep: dict, pl: dict) -> tuple[list[str], frozenset]:
     meta = ep.get("signal_meta") or {}
     n = pl["n"]
     arrs = {k: a[:n] for k, a in sig.items()}      # as stored; label/signals.py reads them in float64 pieces
-    touch = _touch(ep, pl)
+    touch = _touch(ep, pl) | untimed_signals(ep)
     ks = pl["ks"]
     rows = []             # (how much the row's values move, the signal's place, the row's place, signal, label, values)
     unread = {}           # signal: the error that kept its rows out, named below
@@ -2150,6 +2212,14 @@ class Block:
 
 def _has_signals(ep: dict, pl: dict) -> bool:
     return bool(ep.get("signals"))
+
+
+def untimed_signals(ep: dict) -> frozenset:
+    """The signals with no established time on the video (prepare/signal_alignment.py video_timing: placed from both
+    starts, or by an unknown placement). Each is given only as its whole-recording summary: never at a sampled
+    instant, over a still span, as the time of its extremes, nor as a reason to sample an instant."""
+    meta = ep.get("signal_meta") or {}
+    return frozenset(nm for nm in ep.get("signals") or {} if not timed(meta.get(nm), ep["context"]))
 
 
 def _has_state(ep: dict, pl: dict) -> bool:

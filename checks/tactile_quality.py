@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
+from prepare.signal_alignment import video_timing
+
 MIN_CONTACTS = 3
 MIN_GAP_S = 1.0
 MIN_OFFSET_S = .15
@@ -47,12 +49,12 @@ def _boundaries(contacts, strips, meta):
     used = set()
     for c in contacts:
         seen = c.get('seen') or {}
-        if (not c.get('shown') or c.get('aligned_by') or c.get('review_status') == 'rejected'
+        if (not c.get('shown') or not video_timing(c)['verified'] or c.get('review_status') == 'rejected'
                 or seen.get('review_status') == 'rejected' or seen.get('touch_seen') != 'yes'
                 or c.get('hand') not in ('left', 'right') or seen.get('hand') != c.get('hand')):
             continue
         names = tuple(sorted(n for n in c.get('signals') or [] if _allowed(n, meta)))
-        if any((meta.get(n) or {}).get('aligned_by') for n in names):
+        if not all(video_timing(meta.get(n))['verified'] for n in names):
             continue
         if not names or not all(_number(c.get(k)) for k in ('start_s', 'end_s')) or c['end_s'] < c['start_s']:
             continue

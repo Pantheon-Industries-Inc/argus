@@ -248,7 +248,7 @@ def _render_sheet(sensor, snapshots):
                f"signed change scale {-delta_max:g} to {delta_max:g}. "
                'All frames use the same scales. Raw is dark to yellow. For signed change, ' + SIGNED_CHANGE_KEY[0].lower() + SIGNED_CHANGE_KEY[1:] + ' '
                'Grey means missing. Axes are source array indices, not hand anatomy. '
-               + _response_caption(sensor) + ' '
+               + _timing_caption(sensor) + _response_caption(sensor) + ' '
                'The numeric summary gives 10th, 50th and 90th percentiles across finite cells. Read individual spatial patterns from these images; cite sensor_id without series_id for these full-array snapshots.')
     return [{'type': 'text', 'text': caption}, {'type': 'image_url', 'image_url': {
         'url': 'data:image/jpeg;base64,' + base64.b64encode(raw).decode('ascii'), 'detail': 'high'}}]
@@ -263,6 +263,19 @@ def render(sensor):
         parts.extend(_render_physical(sensor, frames) if array.get('physical_layout')
                      else _render_sheet(sensor, frames))
     return parts
+
+
+def _timing_caption(sensor):
+    """What the times printed on a sensor's snapshots are, by the one timing rule (prepare/signal_alignment.py
+    video_timing): nothing for a sensor on a recorded clock the cameras share."""
+    from prepare.signal_alignment import video_timing
+    timing = video_timing(sensor.get('timing'))
+    if timing['timed'] and sensor.get('episode_alignment_verified') is not False:
+        return ''
+    if not timing['timed']:
+        return ('The times on these snapshots place a recording that shares no clock with the cameras from both '
+                'starts, so they say nothing about the frames at those times. ')
+    return 'The times on these snapshots are placements without verified alignment to the video. '
 
 
 def _response_caption(sensor):
@@ -337,6 +350,7 @@ def _render_physical(sensor, snapshots):
     stream = io.BytesIO()
     image.save(stream, format='JPEG', quality=90)
     caption = (f"TACTILE ARRAY SNAPSHOTS | {sensor['id']} | Declared physical layout, authority {layout['authority']}. "
+               + _timing_caption(sensor) +
                f"Raw scale {raw_low:g} to {raw_high:g}, dark to yellow. Fixed raw-minus-reference color scale {-maximum:g} to {maximum:g} for every instant. "
                f"{color_scale['method']} Underlying raw values and full signed ranges are unchanged. "
                + SIGNED_CHANGE_KEY + ' White rings mark raw zero. Grey means missing raw; purple means valid raw with a missing reference, so no change can be computed. '

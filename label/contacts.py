@@ -1,8 +1,11 @@
 """Contacts: the moments a recording's touch signals say a hand or a gripper is touching something.
 
 A touch signal is one whose name says touch and whose numbers behave like touch (label/signals.py is_touch): a glove's
-pressure map, a fingertip's force, a pad's reading. Its name also says which hand it is on, read the way a camera's
-side is (prepare/formats.py side_of: right_pressure is on the right hand).
+pressure map, a fingertip's force, a pad's reading. Where it sits comes from label/signal_class.py signal_place: its
+side from its name, read the way a camera's side is (prepare/formats.py side_of: right_pressure says right), and the
+part it is on from what the recording declares, its name or the field dictionary, each saying which one decided. A
+signal on a part that never grasps (a foot, a heel, a leg: xsens foot_contact_points) is no hand or gripper touch,
+whatever its name says about touch or contact: it times no contact and instruments no hand.
 
 A contact is a span in which one hand's touch signals are away from rest (label/signals.py active_spans), timed from
 every recorded frame. Spans of the same hand's signals that overlap are one contact (the pads of one hand touching
@@ -14,6 +17,8 @@ companion signal) is part of its signal, never a contact of its own. For each co
 
   id            c1, c2, ... in time order
   hand          "left", "right", or null when the signals' names do not say
+  place         where its signals sit and what says so (label/signal_class.py contact_place): part (hand, or the
+                end-effector word: gripper, finger), basis of the part, side_basis ("name") of the hand
   signals       the touch signals active in it
   start_s, peak_s, end_s
                 when it begins, when it is strongest and when it ends, on the episode's clock; from_start / to_end
@@ -27,6 +32,8 @@ companion signal) is part of its signal, never a contact of its own. For each co
                 no clock with the cameras (prepare/formats.py mark_assumed): its times are then the placement's, not
                 recorded times, and the prompt, the checks and the board say so. Absent for a contact of signals on a
                 recorded clock (mark_aligned)
+  video_timing  how its time on the video is established (prepare/signal_alignment.py video_timing): "untimed" for a
+                placement from both starts, whose times the prompt and the board never show on the frames
 
 Strength is summed over the contact's signals as each signal's activity over its swing (the upload's, when prepare
 measured it), so signals in different units add up.
@@ -36,7 +43,8 @@ from __future__ import annotations
 import numpy as np
 
 from label import signals as sg
-from prepare.signal_alignment import ALIGNED_CAMERA, RECORDER_ARRIVAL, recorder_arrival
+from label.signal_class import contact_place, grasps
+from prepare.signal_alignment import ALIGNED_CAMERA, RECORDER_ARRIVAL, recorder_arrival, video_timing
 
 DIP_BELOW = 0.5      # a dip is a fall under this share of the contact's peak
 VARIATION_SUFFIX = " variation within each frame"   # prepare/formats.py's name for a fast signal's companion
@@ -57,7 +65,7 @@ def coverage(meta: dict[str, dict]) -> dict[str, list[str]]:
             continue
         role = (m.get('dictionary') or {}).get('role')
         permission = sg.touch_cache_permission(name, role, m.get('touch_role'))
-        if permission is False or permission is not True and not names_touch(name):
+        if permission is False or permission is not True and not names_touch(name) or not grasps(name, m):
             continue
         hand = _side(name)
         if hand:
@@ -88,7 +96,7 @@ def find(signals: dict, meta: dict, t: np.ndarray, verdicts=None) -> list[dict]:
         if m.get("variation_of") or name.endswith(VARIATION_SUFFIX):
             continue
         role = (m.get("dictionary") or {}).get("role")
-        if sg.touch_cache_permission(name, role, m.get("touch_role")) is False:
+        if sg.touch_cache_permission(name, role, m.get("touch_role")) is False or not grasps(name, m):
             continue
         from prepare.formats import names_touch
         response = sg.declared_zero_activity(a, m)
@@ -163,7 +171,9 @@ def mark_aligned(contacts: list[dict], meta: dict) -> list[dict]:
     """contacts, each timed by a signal placed from both starts (its meta's "aligned_by", prepare/formats.py
     mark_assumed) carrying that aligned_by, so its times are never read as recorded ones. A contact found before
     contacts carried it (a context.json prepared earlier) gets it here from its signals' meta; a contact of signals on
-    a recorded clock is returned as it was."""
+    a recorded clock is returned as it was. Each with signals carries its video_timing grade
+    (prepare/signal_alignment.py), which the prompt, the checks and the board read to know whether its times may be
+    shown on the frames."""
     out = []
     for c in contacts:
         names = c.get('signals') or []
@@ -178,15 +188,16 @@ def mark_aligned(contacts: list[dict], meta: dict) -> list[dict]:
             c = {**c, 'evidence_kind': 'recorded_contact_state' if recorded_state else 'response_activity',
                  'reference_kind': 'declared_contact_state' if recorded_state else kind,
                  'reference_note': 'Recorded contact-state channel; compare its state with the pictured frames independently.'
-                                   if recorded_state else note}
+                                   if recorded_state else note,
+                 'place': contact_place(names, meta)}
         camera = any((meta.get(nm) or {}).get("camera_aligned_by") == ALIGNED_CAMERA
                      for nm in c.get("signals") or [])
         if camera:
-            out.append({**c, "aligned_by": ALIGNED_CAMERA})
-            continue
+            c = {**c, "aligned_by": ALIGNED_CAMERA}
         by = next((m["aligned_by"] for nm in c.get("signals") or [] if (m := meta.get(nm) or {}).get("aligned_by")),
                   None)
-        out.append({**c, "aligned_by": by} if by and not c.get("aligned_by") else c)
+        c = {**c, "aligned_by": by} if by and not c.get("aligned_by") else c
+        out.append({**c, "video_timing": video_timing(c)["grade"]} if c.get("signals") else c)
     return out
 
 
@@ -212,6 +223,25 @@ def _regions(touch: dict, names: set, k: int) -> dict:
     return out
 
 
+def hand_contacts(contacts, meta: dict) -> list[dict]:
+    """The contacts a hand or a gripper may have made, of saved ones (a prepared context.json, a labelling result),
+    each keeping only its signals that may time one: touch by their role or name (label/signals.py
+    touch_cache_permission) on a part that grasps (label/signal_class.py signal_place). A context prepared before
+    signal_place held contacts of a foot's contact points; they are no contact of a hand or a gripper."""
+    out = []
+    for contact in contacts or []:
+        names = contact.get("signals") or []
+        if not names:
+            out.append(contact)
+            continue
+        permitted = [name for name in names if sg.touch_cache_permission(
+            name, (meta.get(name, {}).get("dictionary") or {}).get("role"),
+            meta.get(name, {}).get("touch_role")) is not False and grasps(name, meta.get(name))]
+        if permitted:
+            out.append({**contact, "signals": permitted})
+    return out
+
+
 def of_episode(ep: dict, verdicts=None) -> list[dict]:
     """The episode's contacts: the ones prepare wrote (context["contacts"], found with the upload's scales), else found
     now from its signals, with the caller's touch verdicts when it has them (find)."""
@@ -228,18 +258,7 @@ def of_episode(ep: dict, verdicts=None) -> list[dict]:
     calibrated = any(sg.declared_zero_reference(meta.get(name) or {}, a.shape[1]) is not None
                      for name, a in sig.items())
     if "contacts" in ep["context"] and not calibrated:
-        contacts = []
-        for contact in ep["context"]["contacts"] or []:
-            names = contact.get("signals") or []
-            if not names:
-                contacts.append(contact)
-                continue
-            permitted = [name for name in names if sg.touch_cache_permission(
-                name, (meta.get(name, {}).get("dictionary") or {}).get("role"),
-                meta.get(name, {}).get("touch_role")) is not False]
-            if permitted:
-                contacts.append({**contact, "signals": permitted})
-        return mark_aligned(contacts, meta)
+        return mark_aligned(hand_contacts(ep["context"]["contacts"], meta), meta)
     from label import episode as me
     sig = ep.get("signals") or {}
     if not sig:
