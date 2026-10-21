@@ -4441,7 +4441,7 @@ function snBlock(blk, rows, bits) {
   return {dims, v};
 }
 function snDecode(doc) {
-  const out = {depth: doc.depth || {}, signals: [], constant: [], none: [], t: new Float64Array(0),
+  const out = {depth: doc.depth || {}, signals: [], constant: [], none: [], untimed: [], t: new Float64Array(0),
     errors: doc.errors || [], playback: doc.playback || null};
   if (!doc.signals || !doc.frames) return out;
   const n = doc.n, stride = doc.stride || 1, ft = new Float64Array(doc.frames), tr = hpReader(doc.times.d);
@@ -4460,6 +4460,9 @@ function snDecode(doc) {
   for (const s of doc.signals) {
     if (s.no_reading) { out.none.push(s); continue; }
     if (s.constant) { out.constant.push(s); continue; }
+    // a signal with no clock in common with the cameras (prepare/signal_alignment.py video_timing) is named with its
+    // range, never drawn on the video's timeline nor read at the playhead
+    if (s.video_timing === 'untimed') { out.untimed.push(s); continue; }
     const g = Object.assign({}, s, {sampling: doc.sampling || null});
     if (s.values) g.vals = snBlock(s.values, n, 16);
     if (s.activity) g.act = snBlock(s.activity, n, 16).v;
@@ -4553,8 +4556,9 @@ function snWhat(s) {
   }
   // placed on the video from both starts, because the recording shares no clock with the cameras
   // (prepare/formats.py mark_assumed), or one row per frame, because a table has as many rows as the video has
-  // frames (prepare/formats.py ALIGNED_ROWS), as the prompt says it
-  if (s.aligned_by === 'row per frame') w += ', placed one row per frame, as it has as many rows as the video has frames';
+  // frames (prepare/formats.py ALIGNED_ROWS), as the prompt says it; an untimed signal's note says it once for all
+  if (s.video_timing === 'untimed') {}
+  else if (s.aligned_by === 'row per frame') w += ', placed one row per frame, as it has as many rows as the video has frames';
   else if (s.aligned_by === 'coarse clock')
     w += ', tied readings placed within each stamp interval as an assumption';
   else if (s.aligned_by === 'assumed camera clock') w += ', shown on an assumed camera presentation clock';
@@ -4744,7 +4748,11 @@ function snStillHtml(D) {
       ? '. ' : ': '}${gaps.map(s =>
       `${what(s)}, with ${gapsText(s)}`).join('; ')}.</div>` : '')
     + (D.none.length ? `<div class="sn-note">No reading at any frame: ${D.none.map(s =>
-      `${esc(s.name)} (${size(s)})`).join(', ')}.</div>` : '');
+      `${esc(s.name)} (${size(s)})`).join(', ')}.</div>` : '')
+    + ((D.untimed || []).length ? `<div class="sn-note">Not drawn on the video's timeline, as ${D.untimed.length === 1
+      ? 'it shares' : 'they share'} no clock with the cameras, so ${D.untimed.length === 1 ? 'its' : 'their'} timing `
+      + `relative to the video is unknown: ${D.untimed.map(s => `${esc(s.name)} (${esc(snWhat(s))})`).join('; ')}.</div>`
+      : '');
 }
 // lay out the panel for the episode renderEp just drew, and wire it to the playhead (its listeners go with the render).
 // On an episode with contacts the Touch lane above shows what matters, so the signals start folded away.
@@ -4756,12 +4764,13 @@ function setupSensors(file, duration, seek, on, vid, camName, order, hasContacts
     if (!D || !document.body.contains(slot) || file !== _activeFile) return;
     const sigs = D.signals, maps = sigs.filter(s => s.map && s.shape && s.shape.length === 2);
     const nDepth = Object.keys(D.depth || {}).length;
-    const still = D.constant.length + D.none.length;
+    const still = D.constant.length + D.none.length + (D.untimed || []).length;
     if (!sigs.length && !still && !nDepth && !(D.errors || []).length) return;
     const counts = [];
     if (sigs.length || still) counts.push(`${sigs.length} ${sigs.length === 1 ? 'signal changes'
       : 'signals change'}${D.constant.length ? `, ${D.constant.length} constant` : ''}${D.none.length
-      ? `, ${D.none.length} with no reading` : ''}`);
+      ? `, ${D.none.length} with no reading` : ''}${(D.untimed || []).length
+      ? `, ${D.untimed.length} not timed to the video` : ''}`);
     if (nDepth) counts.push(`${nDepth} depth ${nDepth === 1 ? 'stream' : 'streams'}`);
     const lane = (s, i) => `<div class="lane sn-lane">
         <div class="lane-head"><span class="lane-title">${esc(s.name)} <span class="lane-sum">${esc(snWhat(s))}`
@@ -5164,13 +5173,16 @@ function sensorEvidence(d) {
       display: grip.generic && f.display && f.display.version === 1 && Array.isArray(f.display.rows) ? f.display.rows : null,
       videoCard, addsBeyond: f.adds_beyond_video === true || f.adds_beyond_rgb_pose === true, cellGroups: Array.isArray(f.cell_groups) ? f.cell_groups : []});
   }
-  for (const [i, c] of (d.contacts || []).entries()) {
+  // a contact whose touch signals share no clock with the cameras (video_timing "untimed") has no moment on the video
+  for (const [i, c] of (d.contacts || []).filter(c => !c || c.video_timing !== 'untimed').entries()) {
     if (!c || c.review_status === 'rejected' || !finite(c.start_s) || !finite(c.end_s) || c.end_s < c.start_s) continue;
     const s = c.shown && c.seen && c.seen.review_status !== 'rejected' ? c.seen : {};
     const visual = !c.shown ? 'Not visually checked' : !c.seen || c.seen.review_status === 'rejected' ? 'No visual verdict'
       : s.touch_seen === 'yes' ? 'Touch seen in sampled frames'
       : s.touch_seen === 'no' ? 'Touch not seen in sampled frames' : 'Visual touch unclear';
-    const hand = c.hand === 'left' ? 'Left hand' : c.hand === 'right' ? 'Right hand' : 'Hand';
+    // its side and the part it sits on, only as far as the recording says (label/signal_class.py contact_place)
+    const side = c.hand === 'left' ? 'Left' : c.hand === 'right' ? 'Right' : '', part = c.place && c.place.part;
+    const hand = side ? `${side} ${part || 'side'}` : part ? part[0].toUpperCase() + part.slice(1) : 'Sensor';
     const object = s.touch_seen === 'yes' ? text(s.object) : '';
     let headline = `${hand} contact${object ? ' with ' + object : ''}`, priority = 0;
     if (s.touch_seen === 'unclear') headline = 'Contact signal, visual touch unclear';
@@ -5388,7 +5400,7 @@ function sensorMedianTrace(ts, values) {
 function sensorProfiles(d, D) {
   if (!D || !D.t || !D.t.length) return [];
   const groups = new Map();
-  for (const c of d.contacts || []) {
+  for (const c of (d.contacts || []).filter(c => !c || c.video_timing !== 'untimed')) {
     const names = [...new Set(c.signals || [])].sort();
     if (!names.length) continue;
     const signals = names.map(name => D.signals.find(s => s.name === name && s.str));
@@ -5772,11 +5784,27 @@ function tcState(c) {
 const tcCls = st => st === 'unanswered' ? 'st-unclear' : 'st-' + st;
 const tcHandKey = h => { const v = String(h || '').toLowerCase(); return v === 'left' || v === 'right' ? v : ''; };
 const tcHandName = h => h === 'left' ? 'Left hand' : h === 'right' ? 'Right hand' : 'Hand not named';
+// a sensor's side and the part it sits on, only as far as the recording says (label/signal_class.py contact_place):
+// "Left hand" for a glove its name places on a hand, "Right side" for right_pressure, "Sensor" when nothing says
+const tcSideName = (h, part) => {
+  const cap = w => w[0].toUpperCase() + w.slice(1);
+  return h ? `${cap(h)} ${part || 'side'}` : part ? cap(part) : 'Sensor';
+};
+const tcRowPart = (contacts, h) => {
+  const parts = [...new Set(contacts.filter(c => tcHandKey(c.hand) === h).map(c => (c.place && c.place.part) || ''))];
+  return parts.length === 1 ? parts[0] : '';
+};
 // a list of times in words: 3.8s, 4.1s and 5.0s
 const tcList = xs => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
 // the episode's contacts in time order and the model's other grasps, both checked for times
+// the contacts whose times may be drawn on the video: one whose touch signals share no clock with the cameras
+// (label/contacts.py mark_aligned, video_timing "untimed") is counted under the Touch lane, never placed on it
+function timedContacts(d) {
+  return (d.contacts || []).filter(c => !c || c.video_timing !== 'untimed');
+}
 function tcData(d) {
-  const contacts = (d.contacts || []).filter(c => c && c.review_status !== 'rejected' && isFinite(c.start_s) && isFinite(c.end_s))
+  const untimed = (d.contacts || []).filter(c => c && c.video_timing === 'untimed' && c.review_status !== 'rejected');
+  const contacts = timedContacts(d).filter(c => c && c.review_status !== 'rejected' && isFinite(c.start_s) && isFinite(c.end_s))
     .map(c => c.seen && c.seen.review_status === 'rejected' ? {...c, seen: null} : c)
     .slice().sort((a, b) => a.start_s - b.start_s || String(a.hand).localeCompare(String(b.hand)));
   const missing = (d.contacts_missing || []).filter(x => x && !x.withheld_from_final && x.review_status !== 'rejected' && x.t_s != null && isFinite(parseFloat(x.t_s)))
@@ -5785,7 +5813,7 @@ function tcData(d) {
   const named = new Set(contacts.map(c => tcHandKey(c.hand)));
   for (const x of missing) if (tcHandKey(x.hand) && named.size && !named.has('')) named.add(tcHandKey(x.hand));
   const rows = ['left', 'right', ''].filter(h => named.has(h));
-  return {contacts, missing, rows};
+  return {contacts, missing, rows, untimed};
 }
 // the Touch lane, in the lane markup the Hands out of view lane uses
 function touchLaneHtml(T, lanePct, chev, duration = null) {
@@ -5809,7 +5837,7 @@ function touchLaneHtml(T, lanePct, chev, duration = null) {
   const rowHtml = h => {
     const indices = contacts.map((c, i) => tcHandKey(c.hand) === h ? i : -1).filter(i => i >= 0);
     const states = [...new Set(indices.map(i => st[i]))];
-    return `<div class="tc-row"><div class="tc-row-head">${h ? `<span class="tc-hand">${tcHandName(h)}</span>` : '<span>Sensor response</span>'}
+    return `<div class="tc-row"><div class="tc-row-head">${h ? `<span class="tc-hand">${tcSideName(h, tcRowPart(contacts, h))}</span>` : '<span>Sensor response</span>'}
       <span class="tc-verdict">${states.length === 1 ? words[states[0]] : 'Inspect a sensor interval for its visual verdict'}</span></div>
       <div class="lane-bar tc-bar">${indices.map(i => seg(contacts[i], i)).join('')}<div class="lane-ph"></div></div>
       <div class="recording-axis"><span>${fmtT(0)}</span><span>${fmtT(end)}</span></div></div>`;
@@ -5852,6 +5880,8 @@ function tcCardHtml(c, i, st) {
   const kv = (k, vs) => `<div class="kv"><div class="kv-k">${k}</div>${[].concat(vs).map(v => `<div class="kv-v">${v}`
     + `</div>`).join('')}</div>`;
   const rows = [];
+  // where its signals sit and what says so, as the prompt said it (label/signal_class.py place_words)
+  if (c.place_words) rows.push(kv('Where', esc(c.place_words)));
   if (c.reference_note) rows.push(kv('Reference', esc(c.reference_note)));
   else if (!physical) rows.push(kv('Reference', 'Response activity has no verified unloaded reference or physical-contact interpretation.'));
   if (c.shown && c.seen) {
@@ -5881,7 +5911,7 @@ function tcCardHtml(c, i, st) {
     ? TC_CAMERA_PLACED : c.aligned_by === 'assumed start' ? TC_PLACED
     : esc('Its times are ' + placementText(c.aligned_by) + '. They are not measured contact times.')}</div>` : '';
   return `<div class="tc-card info-block" data-c="${i}">
-      <div class="tc-card-head"><span class="tc-card-title">${tcHandKey(c.hand) ? tcHandName(tcHandKey(c.hand)) + ', '
+      <div class="tc-card-head"><span class="tc-card-title">${tcHandKey(c.hand) ? tcSideName(tcHandKey(c.hand), c.place && c.place.part) + ', '
         + (physical ? 'contact' : 'response activity') : physical ? 'Contact' : 'Response activity'} ${esc(c.id || String(i + 1))}</span><span class="tc-pill ${tcCls(st)}">${TC_WORD[st]}</span></div>
       <div class="tc-times">${times}</div>
       ${placed}${plain}
@@ -5890,12 +5920,16 @@ function tcCardHtml(c, i, st) {
     </div>`;
 }
 function tcCardsHtml(T) {
-  if (!T.contacts.length) return '';
+  const untimed = (T.untimed || []).length ? `<div class="sn-note">${T.untimed.length} sensor-activity `
+    + `${T.untimed.length === 1 ? 'interval is' : 'intervals are'} not drawn, as ${T.untimed.length === 1 ? 'its'
+    : 'their'} touch signals share no clock with the cameras, so ${T.untimed.length === 1 ? 'its' : 'their'} times `
+    + `say nothing about the video.</div>` : '';
+  if (!T.contacts.length) return untimed;
   return `<div class="tc-cards" id="tc-cards">
       <div class="tc-card info-block tc-empty on" data-c="-1"><div class="tc-plain">No sensor interval at the playhead. Click one `
         + `on the Touch lane, or step through them with its arrows.</div></div>
       ${T.contacts.map((c, i) => tcCardHtml(c, i, tcState(c))).join('')}
-    </div>`;
+    </div>${untimed}`;
 }
 // a contact's strength over its span, from the sensors file: its signals' strength summed per sample, as label/contacts.py
 // sums them, as an area path in a 100 x 100 box scaled to top, the strongest contact of the episode

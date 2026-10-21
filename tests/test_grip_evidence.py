@@ -161,10 +161,10 @@ assert.equal(api.sensorEvidenceHtml(api.sensorEvidence({}),[]),'');
 const reviewed=api.sensorEvidence({contacts:[
  {id:'discarded',start_s:1,end_s:2,hand:'right',shown:true,review_status:'rejected',seen:{touch_seen:'no',hand:'left'}},
  {id:'raw',start_s:3,end_s:4,hand:'right',shown:true,seen:{review_status:'rejected',touch_seen:'no',hand:'left',slip:'yes',action:'Rejected action'}},
- {id:'accepted',start_s:5,end_s:6,hand:'right',shown:true,seen:{touch_seen:'yes',hand:'right',object:'mug'}}],
+ {id:'accepted',start_s:5,end_s:6,hand:'right',place:{part:'hand',basis:'name'},shown:true,seen:{touch_seen:'yes',hand:'right',object:'mug'}}],
  contacts_missing:[{t_s:7,hand:'left',object:'cup',review_status:'rejected'},{t_s:8,hand:'right',object:'lid'}]});
 assert.deepEqual(reviewed.contacts.map(c=>c.id),['raw','accepted']);
-assert.equal(api.activeSensorEvidence(reviewed,3.8).headline,'Right hand contact');
+assert.equal(api.activeSensorEvidence(reviewed,3.8).headline,'Right side contact');
 assert.equal(api.activeSensorEvidence(reviewed,3.8).visual,'No visual verdict');
 assert.equal(api.activeSensorEvidence(reviewed,3.8).detail,'');
 assert.equal(api.activeSensorEvidence(reviewed,5.8).headline,'Right hand contact with mug');

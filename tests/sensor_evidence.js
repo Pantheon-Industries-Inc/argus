@@ -79,7 +79,7 @@ assert.equal(E.sensorProfileAt(profiles[0],.3).percent,100);
 assert.equal(E.sensorProfileAt(profiles[0],-.1),null,'do not extrapolate before a recorded sample');
 const quantitative = E.sensorProfileHtml(profiles[0],.3);
 assert(quantitative.includes('100%') && quantitative.includes('episode peak'));
-assert(!quantitative.includes('Right hand contact') && !quantitative.includes('with cup'),'do not repeat the action caption');
+assert(!/Right (hand|side) contact/.test(quantitative) && !quantitative.includes('with cup'),'do not repeat the action caption');
 assert(!/force|newton|kg|stable grasp|slip recovered/i.test(quantitative),'relative intensity is not calibrated force');
 const missingRaw = {...raw,signals:[{name:'pressure',str:Float32Array.from([1,NaN,4,8,6,4]),act:Float32Array.from([1,NaN,4,8,6,4])}]};
 assert.equal(E.sensorProfileAt(E.sensorProfiles(episode,missingRaw)[0],.1),null,'missing readings cannot become zero intensity');

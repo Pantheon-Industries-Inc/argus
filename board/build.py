@@ -633,12 +633,15 @@ def add_contacts(d: dict, ctx: dict, result: dict | None = None, ep_dir: Path | 
             d.pop(k, None)
         return
     from checks import contacts as cc
-    # a contact timed by a signal placed from both starts says so, also one found before contacts carried it
-    recorded = lc.mark_aligned(recorded, meta)
+    # a contact timed by a signal placed from both starts says so, also one found before contacts carried it, and a
+    # contact a context prepared earlier found on a foot's contact points is no hand or gripper contact
+    recorded = lc.mark_aligned(lc.hand_contacts(recorded, meta), meta)
     seen = {c.get("id"): c for c in d.pop("contacts_model", None) or []}
     views = d.pop("contact_views", None) or {}
     shown = set(views.get("shown") or [])
-    d["contacts"] = [{**c, **({"seen": seen[c["id"]]} if c["id"] in seen else {}), "shown": c["id"] in shown}
+    from label.signal_class import place_words
+    d["contacts"] = [{**c, **({"seen": seen[c["id"]]} if c["id"] in seen else {}), "shown": c["id"] in shown,
+                      "place_words": place_words(c.get("hand"), c.get("place"), len(c.get("signals") or []))}
                      for c in recorded]
     res = cc.check({"contacts": list(seen.values()), "contacts_missing": d.get("contacts_missing") or []}, recorded,
                    views.get("strips") or {}, float(episode_fps(ctx, ep_dir=ep_dir)[0]),

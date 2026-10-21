@@ -60,7 +60,10 @@ check(D.rows.join() === 'left,right', 'one row per hand, left first');
 check(D.missing.length === 1 && D.missing[0].t_s === 6.5, 'a grasp with no time is left out');
 const lane = T.touchLaneHtml(D, lanePct, chev);
 check(lane.includes('Recorded touch') && !lane.includes('3 checked, 1 not seen'), 'plain heading without the count sentence');
-check(lane.includes('>Left hand<') && lane.includes('>Right hand<'), 'each row is named by its hand');
+check(lane.includes('>Left side<') && lane.includes('>Right side<'), 'each row is named by its side when no signal says its part');
+const gloves = T.touchLaneHtml(T.tcData({contacts: [contact('c1', 'right', 0, 1, {place: {part: 'hand', basis: 'name'}})]}),
+  lanePct, chev);
+check(gloves.includes('>Right hand<'), 'a row is named by the part its signals say they sit on');
 check(count(lane, /class="tc-seg /g) === 4 && count(lane, /class="tc-peak /g) === 0, 'contact curves without unexplained peak ticks');
 check(lane.includes('tc-seg st-yes') && lane.includes('tc-seg st-no') && lane.includes('tc-seg st-unshown')
   && lane.includes('tc-seg st-unclear'), 'each contact styled by what the model found');
@@ -74,7 +77,7 @@ check(lane.includes('id="lane-touch-pos">4 contacts<'), 'multiple contacts keep 
 check(T.tcData({contacts: [contact('c1', 'right', 0, 1)], contacts_missing: [{t_s: 2, hand: 'left'}]}).rows.join()
   === 'left,right', 'a hand only a grasp names gets a row');
 const single = T.touchLaneHtml(T.tcData({contacts:[contact('c1','right',0,1,seen('yes'))],contacts_missing:[{t_s:0,hand:'left',object:'bowl'}]}),lanePct,chev);
-check(!single.includes('class="tc-hand">Left hand') && single.includes('Left hand takes hold of bowl'), 'no empty left sensor row for a video observation');
+check(!single.includes('class="tc-hand">Left') && single.includes('Left hand takes hold of bowl'), 'no empty left sensor row for a video observation');
 check(single.includes('Touch seen in sampled frames') && single.includes('No covering sensor interval supplied for this hand'), 'sensor and video evidence are labeled');
 check(!single.includes('Previous contact') && !single.includes('class="tc-key"'), 'one contact needs no stepper or legend');
 const one = T.tcData({contacts: [contact('c1', null, 0, 1, seen('yes'))], contacts_missing: [{t_s: 2, hand: 'left'}]});
@@ -98,7 +101,7 @@ check(count(cards, /class="tc-card info-block/g) === 5 && cards.includes('tc-emp
   'a card per contact and the one for no contact, which shows first');
 const c0 = T.tcCardHtml(contact('c1', 'right', 0, 4.25, {...seen('yes', {hand: 'left', notes: 'null'}), from_start: true,
   dips_s: [1.24, 3]}), 0, 'yes');
-check(c0.includes('Right hand, contact c1') && c0.includes('Already touching at the start')
+check(c0.includes('Right side, contact c1') && c0.includes('Already touching at the start')
   && c0.includes('ends <span data-t="4.25">4.3s</span>'), 'the card\'s hand and times');
 check(c0.includes('The frames show the left hand, and the signal&#39;s name says right'), 'a hand the frames disagree on');
 check(!c0.includes('>Notes<'), 'a null note is left out');

@@ -35,7 +35,10 @@ in the recording or its rig description names its values, its "unit" (or "units"
 "units_source" when a declaration beside the values gave it, "units_contradicted": true when its readings contradict a
 declared radian unit, or "units_undeclared": true when nothing declares one, "rate_hz" and "source", and "aligned_by" when its placement on the video is assumed, which the page says in its lane: "assumed
 start" from both starts, because no clock was shared (prepare/formats.py mark_assumed), or "row per frame", one row on
-each frame, because a table has as many rows as the video has frames (prepare/formats.py ALIGNED_ROWS). Each signal keeps its own length: one that ends
+each frame, because a table has as many rows as the video has frames (prepare/formats.py ALIGNED_ROWS). Every signal
+carries its "video_timing" grade (prepare/signal_alignment.py video_timing); one "untimed" shares no clock with the
+cameras, and the page names it with its range instead of drawing it on the video's timeline.
+Each signal keeps its own length: one that ends
 before the others has no reading after its last row, and a gap or a stretch before a signal starts is no reading, which
 the page draws as a gap. A signal that cannot be drawn is left out and named in the file's "errors" ([{"name",
 "error"}]), and the page names it under the lanes it drew. "no_reading": true when it has no reading at any frame, and
@@ -414,9 +417,11 @@ def episode_doc(ep_dir: Path) -> dict | None:
         touched = {nm for c in ctx.get("contacts") or [] for nm in c.get("signals") or []}
         pick, sampling = overview_indices(metas, arrays, n, len(range(0, n, stride)), touched)
         docs, errors = [], []
+        from prepare.signal_alignment import video_timing
         for m in metas:
             try:
-                docs.append(signal_doc(m, pad(arrays[m["name"]], n), t, stride, m["name"] in touched, pick=pick))
+                docs.append({**signal_doc(m, pad(arrays[m["name"]], n), t, stride, m["name"] in touched, pick=pick),
+                             "video_timing": video_timing(m, ctx, anchor[0] if anchor else None)["grade"]})
             except Exception as err:  # noqa: BLE001 - this signal is named with the reason, the others are drawn
                 errors.append({"name": m["name"], "error": f"{type(err).__name__}: {err}"[:300]})
         doc.update({"frames": n, "times": encode_times(t), "stride": stride, "n": len(pick), "sample_indices": pick.tolist(), "sampling": sampling,
