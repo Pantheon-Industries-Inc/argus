@@ -1140,14 +1140,14 @@ task.
 _CLAIMS = {
     (True, True): ('"subtask" when one of the dataset\'s timed steps covers it (its work falls within the step\'s span\n'
                    '  and is the work the step names; subtask is that step\'s number), else "instruction" when it does the\n'
-                   '  work the instruction asks for or stands in for it, else "own_end_state", the end state of what\n'
-                   '  it evidently set out to do.'),
+                   '  work the instruction asks for or stands in for it, else "own_end_state", the task\'s own end\n'
+                   '  state.'),
     (True, False): ('"instruction" for a task that does the work the instruction asks for or stands in for it, and\n'
-                    '  "own_end_state" (the end state of what it evidently set out to do) for every other task; subtask is null.'),
+                    '  "own_end_state" (the task\'s own end state) for every other task; subtask is null.'),
     (False, True): ('"subtask" when one of the dataset\'s timed steps covers it (its work falls within the step\'s span\n'
-                    '  and is the work the step names; subtask is that step\'s number), else "own_end_state", the end state\n'
-                    '  of what it evidently set out to do.'),
-    (False, False): '"own_end_state" for every task, the end state of what it evidently set out to do; subtask is null.',
+                    '  and is the work the step names; subtask is that step\'s number), else "own_end_state", the task\'s own\n'
+                    '  end state.'),
+    (False, False): '"own_end_state" for every task, the task\'s own end state; subtask is null.',
 }
 
 
