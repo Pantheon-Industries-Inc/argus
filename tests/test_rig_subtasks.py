@@ -42,12 +42,19 @@ def test_each_rig_shows_typed_step_claims_without_inventing_a_goal(rig, instruct
     assert "no time  invalid time claim" in text
     assert "Original step declarations." in text
     assert "claims" in text
-    assert fixed == prompt(rig, instruction)[0]
-    if rig != "ego_head":
+    if rig == "ego_head":
+        assert fixed == prompt(rig, instruction)[0]
+    else:
+        # a robot's timed steps are each a prompt its tasks are judged against (label/prompts.py STEP_RULES), numbered
+        assert "ABOUT THE DATASET'S TIMED STEPS" in fixed
+        assert "ABOUT THE DATASET'S TIMED STEPS" not in prompt(rig, instruction)[0]
+        assert "  1. 0.5-1.5s  reach" in text
         assert "see ABOUT THE DATASET'S ANNOTATION above" not in text
         assert "goal:" not in text
         assert text.count('"Place the cup."') == (1 if instruction else 0)
+        # goal_alignment compares the instruction when there is one, and otherwise the steps as one sequence
         assert ('"goal_alignment": {' in fixed) == bool(instruction)
+        assert ("comparing the dataset's steps, as one sequence" in " ".join(fixed.split())) == (not instruction)
 
 
 @pytest.mark.parametrize("rig", ["teleop_arms", "handheld_gripper"])

@@ -270,8 +270,8 @@ def test_recorded_and_video_only_instructions_keep_the_same_output_contract(rig,
         assert offered == columns
         for field in ("scene", "timeline", "key_events", "data_issues", "operator_mistakes", "recovery"):
             assert f'"{field}":' in text
-        # every rig asks for a list of tasks, each with its own outcome, and no one completion
-        assert '"tasks": [' in text and '"completion":' not in text
+        # every rig asks for a list of tasks; a robot episode with an instruction also for its completion against it
+        assert '"tasks": [' in text and ('"completion":' in text) is (has_instruction and rig != "ego_head")
     assert "recorded motion" in recorded
     assert "recorded motion" not in video and "what is recorded" not in video
     assert "state_video_mismatch" not in video

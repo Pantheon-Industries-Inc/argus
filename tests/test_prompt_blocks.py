@@ -293,7 +293,7 @@ def test_ego_annotation_claims_reach_one_prompt_whatever_the_source_declares(rec
     assert grids == 1 and image_bytes > 0
     assert any(part["type"] == "image_url" for part in content)
     assert me.is_recorded(ep, pl) is recorded
-    assert prompts.EGO_SCHEMA in fixed and prompts.task_rules("ego_head") in fixed
+    assert prompts.EGO_SCHEMA in fixed and "\nTASKS. " not in fixed
     assert "goal_alignment" in fixed and "instruction_mismatch" in fixed
     assert "Each failed\n  attempt is a key_event with outcome failure." in fixed
     assert "Every failure and every\n  wasteful stretch in the timeline belongs to exactly one operator mistake" in fixed
@@ -301,9 +301,9 @@ def test_ego_annotation_claims_reach_one_prompt_whatever_the_source_declares(rec
     assert "4.0-10.0s  wipe the work surface  (marked unsuccessful)" in episode
     assert "Publisher claims on the recording clock." in episode
     assert prompts.EGO_ANNOTATION_RULES in fixed
-    assert "the clip is a task episode: its tasks are the steps of that goal" not in fixed
+    assert "the clip is a task episode: its tasks are the steps of that goal" in fixed
     assert "independent activities" not in fixed
-    assert "it is judged by the task or tasks that carry it out" in fixed
+    assert "This recording is declared to be a session of independent activities" not in fixed
     assert '  goal: "chop the carrot"' in episode and "recording context goal" not in episode
 
 
@@ -980,7 +980,7 @@ def test_a_recording_with_an_instruction_is_checked_against_it_whatever_the_sour
     ep, pl = (case_handheld_pose if rig == 'handheld_gripper' else case_teleop_joints)()
     ep['context'].update(instruction='Stack the cups.', task_mode=declared)
     fixed, episode = me.build_prompt(ep, pl, cell_w=64, cell_h=36)
-    assert prompts.INSTRUCTION_RULES in fixed and prompts._INSTRUCTION_CLAUSES in fixed
+    assert prompts.INSTRUCTION_RULES in fixed and '"task_completed"' in fixed
     assert "ABOUT THE RECORDING'S INSTRUCTION" not in fixed and 'THE TASK FOR THIS EPISODE WAS GIVEN TO YOU' in episode
     ep['context']['instruction'] = ''
     fixed, _ = me.build_prompt(ep, pl, cell_w=64, cell_h=36)
