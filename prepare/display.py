@@ -10,6 +10,7 @@ on 456 px) leaves the size as stored."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from fractions import Fraction
 
@@ -33,8 +34,9 @@ def geometry(path: str, ffprobe: str | None = None) -> dict:
 
 
 def _version(path) -> tuple:
-    from label.content_identity import stat_version
-    return stat_version(path)
+    # the whole stat, as label/content_identity.py stat_version keys it (the Modal image carries this file alone)
+    st = os.stat(path)
+    return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
 
 
 @cached_while_unchanged(4096, lambda path, version, ffprobe: version is not None and _version(path) == version)

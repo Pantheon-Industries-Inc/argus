@@ -22,7 +22,8 @@ interruption; --detach keeps it running if your machine disconnects. `pull` writ
 "hands": {"src": "../../hand_pose/keypoints", "clips": "../../clips"}, and `python -m board build` turns it into
 the overlay (board/hands.py).
 
-This file imports only modal and the standard library on your machine; everything else runs in the image.
+This file imports only modal and the standard library on your machine (pull adds sync.py and
+label/content_identity.py, which need nothing more); everything else runs in the image.
 
 A rerun beside an earlier one names its own output volume and, when the specs change, its own specs volume, so
 nothing of the earlier run is overwritten:
@@ -35,7 +36,7 @@ Volumes (created on first use, names from HAND_POSE_VOLUMES, default "hand-pose"
   <prefix>-weights  ckpt/Wan2.2-Fun-5B-Control/..., checkpoints/ace_ego_hand_{k,kfree}.pt, cache/caption_embed.pt,
                     mano/mano/MANO_{LEFT,RIGHT}.pkl
   <prefix>-clips    <dataset>/<episode>/source.mp4 and spec.json
-  <prefix>-out      <dataset>/<episode>/{hands2d.json, raw.npz, run.json}
+  <prefix>-out      <dataset>/<episode>/{hands2d.json, raw.npz, run.json, digests.json}
 
 Measured on H100 80GB: about 80 s of GPU per 3-minute Egocentric-100K clip, 130 s per Gen-HumanEgo episode and
 180 s per 5-minute 1080p OpenAoE clip with the model loaded, plus about a minute per container start.
@@ -86,6 +87,7 @@ image = (
           "HAND_POSE_VOLUMES": PREFIX, "HAND_POSE_OUT": OUT, "HAND_POSE_SPECS": SPECS or ""})
     .add_local_file(HERE / "core.py", "/opt/ace/ace_core.py", copy=True)
     .add_local_file(HERE.parent.parent / "prepare" / "display.py", "/opt/ace/display.py", copy=True)
+    .add_local_file(HERE / "sync.py", "/opt/ace/hand_pose_sync.py", copy=True)
 )
 
 WINDOW, STRIDE = 22, 11                  # latents per window, and the step between windows (half overlap)
@@ -295,6 +297,9 @@ class Ace:
                         meta, pin, src_cam, K_used, K_source, blended, n_src, SMOOTH, extra)
         extra["total_gpu_fn_sec"] = time.time() - t_all
         (out_dir / "run.json").write_text(json.dumps(extra, indent=1, default=str))
+        # the content of each output, read where it was written, so pull copies by content (sync.py)
+        import hand_pose_sync
+        (out_dir / hand_pose_sync.DIGESTS).write_text(json.dumps(hand_pose_sync.digests(out_dir), indent=1))
         ovol.commit()
         return extra
 
@@ -330,20 +335,12 @@ def full(specs: str, force: bool = False):
 
 @app.local_entrypoint()
 def pull(out: str):
-    """Every output to OUT/<dataset>/<episode>/ and OUT/index.json, which board/hands.py reads."""
-    root = Path(out)
-    index = {}
-    for e in ovol.iterdir("/", recursive=True):
-        p = e.path.lstrip("/").split("/")
-        if len(p) != 3 or p[2] not in ("hands2d.json", "raw.npz", "run.json"):
-            continue
-        dst = root / p[0] / p[1] / p[2]
-        if not (dst.exists() and dst.stat().st_size == e.size):
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            with open(dst, "wb") as f:
-                for chunk in ovol.read_file(e.path):
-                    f.write(chunk)
-        if p[2] == "hands2d.json":
-            index[f"{p[0]}/{p[1]}"] = {"hands2d": f"{p[0]}/{p[1]}/hands2d.json", "raw": f"{p[0]}/{p[1]}/raw.npz"}
-    (root / "index.json").write_text(json.dumps(dict(sorted(index.items())), indent=1))
-    print(f"{len(index)} episodes in {root}")
+    """Every output to OUT/<dataset>/<episode>/ and OUT/index.json, which board/hands.py reads. A local file is kept
+    only when it holds the remote bytes (sync.py)."""
+    import sys
+    sys.path.insert(0, str(HERE.parent.parent))      # sync.py and label/content_identity.py need only the stdlib
+    from board.hand_pose.sync import pull_outputs
+    entries = [(e.path, e.size) for e in ovol.iterdir("/", recursive=True)]
+    done = pull_outputs(Path(out), entries, ovol.read_file)
+    print(f"{len(done['index'])} episodes in {out}: {len(done['copied'])} files copied, "
+          f"{len(done['kept'])} already held the same bytes")
