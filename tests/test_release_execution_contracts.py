@@ -42,8 +42,9 @@ def review_fixture(tmp_path, monkeypatch):
                 return harness.main()
         return 0
     monkeypatch.setattr(review, 'run_step', step)
+    # these contracts cover the paid field dictionary's resume and billing, so it is turned on (default off)
     argv = ['review', '--data', str(upload), '--out', str(job), '--rig', 'ego_head',
-            '--concurrency', '1', '--max-tokens', '100']
+            '--concurrency', '1', '--max-tokens', '100', '--field-dictionary', 'on']
     def run(*extra):
         monkeypatch.setattr(sys, 'argv', argv + list(extra))
         return review.main()
