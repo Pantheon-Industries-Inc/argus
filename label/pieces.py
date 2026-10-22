@@ -1357,25 +1357,46 @@ def join_across_cuts(tasks: list, cuts_s: list[float], seams: dict | None = None
 
 
 def window_copies(items: list, windows: list[dict], key: str) -> tuple[list, list]:
-    """(the items kept, the items left out) of one list, timeline steps by start_s or key events by t_s, where two
-    parts both labelled a shared window: inside it the left part's items before the window's midpoint and the right
-    part's from the midpoint on are kept, so each moment of the window is described once, never twice."""
+    """(the items kept, the items left out) of one list, timeline steps by start_s to end_s or key events by t_s, where
+    two parts both labelled a shared window: inside it the left part describes the moments before the window's
+    midpoint and the right part those from the midpoint on, so each moment of the window is described once, never
+    twice. An item wholly in the other part's half is left out; a step across the midpoint is clipped to its own
+    part's half and kept, so what it describes past the window is never lost, and its part's own times are left out
+    beside it with clipped_to."""
     from label.episode import number
     kept, dropped = [], []
     for item in items:
         t = number(item.get(key))
+        if t is None:               # an untimed item is in no window
+            kept.append(item)
+            continue
+        end = number(item.get("end_s")) if key == "start_s" else None
+        end = end if end is not None and end > t else None
         source = item.get("source_piece") or {}
         lo, hi = number(source.get("t0_s")), number(source.get("t1_s"))
-        other = False
+        a, b = t, end
         for window in windows:
             w0, w1 = float(window["t0_s"]), float(window["t1_s"])
-            if t is None or not w0 - .001 <= t <= w1 + .001:
+            if a is None or not w0 - .001 <= t <= w1 + .001 and not (b is not None and w0 < b and t < w1):
                 continue
             mid = (w0 + w1) / 2
-            if (hi is not None and abs(hi - w1) <= .001 and t >= mid) or (lo is not None and abs(lo - w0) <= .001
-                                                                          and t < mid):
-                other = True
-        (dropped if other else kept).append(item)
+            if hi is not None and abs(hi - w1) <= .001:          # the left part of this window: its half ends at mid
+                if a >= mid:
+                    a = None
+                elif b is not None and b > mid:
+                    b = mid
+            elif lo is not None and abs(lo - w0) <= .001:        # the right part: its half starts at mid
+                if (a < mid) if b is None else (b <= mid):
+                    a = None
+                elif a < mid:
+                    a = mid
+        if a is None:
+            dropped.append(item)
+        elif a == t and b == end:
+            kept.append(item)
+        else:
+            kept.append({**item, key: round(a, 3), **({"end_s": round(b, 3)} if b is not None else {})})
+            dropped.append({**item, "clipped_to": [round(a, 3), round(b, 3) if b is not None else None]})
     return kept, dropped
 
 
@@ -1733,7 +1754,9 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     for k, key in (("timeline", "start_s"), ("key_events", "t_s")):
         L[k], copies = window_copies(L[k], list(windows.values()), key)
         excluded += [{**item, "list": k, "excluded_by": "shared_window",
-                      "reason": "both parts labelled these seconds around the cut; the other part's copy is kept"}
+                      "reason": "both parts labelled these seconds around the cut; "
+                                + ("this step is kept only over its own part's half of the window"
+                                   if item.get("clipped_to") else "the other part's copy is kept")}
                      for item in copies]
     for k in ("timeline",):
         L[k].sort(key=lambda s: (s.get("start_s") is None, s.get("start_s") or 0))      # an untimed step last

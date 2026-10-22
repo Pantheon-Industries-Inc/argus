@@ -1978,3 +1978,37 @@ def test_a_long_head_camera_clip_whose_parts_were_not_asked_the_goals_outcome_re
     assert 'goal_outcome' not in old and old['completion']['task_completed'] is None
     assert all('goal_outcome' not in a for a in old['part_assessments'])
     assert old['completion']['reason'].startswith('a head-camera clip labelled in 2 requests')
+
+
+def test_a_step_across_the_window_midpoint_is_clipped_to_its_half_never_dropped_with_its_tail(tmp_path, monkeypatch):
+    """Code review of dff0988: window_copies dropped a whole step by its start time, so a right-part step that began
+    before the window's midpoint and ran on past the window was lost, and the left part's copy ended at the cut,
+    leaving the seconds after the window with no step at all. A step across the midpoint is now clipped to its own
+    part's half, so each moment of the window is described once and nothing outside it is lost; a step wholly in the
+    other part's half is still left out, as before."""
+    src, parts, contexts = _windowed_parts(tmp_path, monkeypatch)
+    (window,) = contexts[0]['piece']['windows']
+    w0, w1 = window['t0_s'], window['t1_s']
+    mid = round((w0 + w1) / 2, 3)
+    at = lambda share: round(w0 + share * (w1 - w0), 3)
+    origin = [ctx['piece']['t0_s'] for ctx in contexts]
+    local = lambda i, x: round(x - origin[i], 3)
+    end2 = contexts[1]['piece']['t1_s']
+    spans = [[(0.3, at(.1)), (at(.1), w1)],                       # the left part's last step runs to its end
+             [(w0, at(.25)), (at(.25), end2)]]                     # the right part's step runs on past the window
+    records = []
+    for i, (p, ctx) in enumerate(zip(parts, contexts)):
+        record = _part_result(p, 'stack')
+        record['labels'].update(timeline=[{'start_s': local(i, a), 'end_s': local(i, b), 'action': f'part {i + 1} {a}'}
+                                          for a, b in spans[i]], key_events=[])
+        records.append(record)
+    labels = pieces.stitch(src, list(zip(contexts, records)))['labels']
+    got = [(s['action'], round(s['start_s'], 3), round(s['end_s'], 3)) for s in labels['timeline']]
+    assert got == [('part 1 0.3', 0.3, at(.1)), (f'part 1 {at(.1)}', at(.1), mid),
+                   (f'part 2 {at(.25)}', mid, round(end2, 3))]
+    # the steps cover the recording with no gap and no second copy of any moment
+    assert all(a[2] == b[1] for a, b in zip(got, got[1:]))
+    # the part's own times are kept on the record of what was set aside
+    copies = [x for x in labels['_excluded'] if x['excluded_by'] == 'shared_window']
+    assert sorted((x['source_piece']['index'], x.get('clipped_to') is not None) for x in copies) == [
+        (1, True), (2, False), (2, True)]
