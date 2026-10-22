@@ -181,10 +181,12 @@ def test_review_keeps_mixed_nested_archives_immutable_and_reuses_preparation(tmp
     assert (job / 'preparation_receipt.json').read_bytes() == receipt
 
 
-@pytest.mark.parametrize('extra,cap,expected', [(False, 20.0, 'skipped'),
-                                                  (True, 20.0, 'success'),
-                                                  (True, .001, 'skipped')])
-def test_review_cli_raw_hdf_dictionary_gate(tmp_path, monkeypatch, extra, cap, expected):
+# the last case: an upload with a field the dictionary would read makes no call when the flag is left at its default
+@pytest.mark.parametrize('extra,cap,flag,expected', [(False, 20.0, ['--field-dictionary', 'on'], 'skipped'),
+                                                       (True, 20.0, ['--field-dictionary', 'on'], 'success'),
+                                                       (True, .001, ['--field-dictionary', 'on'], 'skipped'),
+                                                       (True, 20.0, [], 'skipped')])
+def test_review_cli_raw_hdf_dictionary_gate(tmp_path, monkeypatch, extra, cap, flag, expected):
     import h5py
     from review import __main__ as review_main
     from label import dictionary, harness
@@ -216,7 +218,7 @@ def test_review_cli_raw_hdf_dictionary_gate(tmp_path, monkeypatch, extra, cap, e
     monkeypatch.setattr(harness, 'call_model_once', provider)
     monkeypatch.setattr(review_main, 'run_step', lambda *a, **k: (_ for _ in ()).throw(ReachedChecks()))
     monkeypatch.setattr(sys, 'argv', ['review', '--data', str(upload), '--rig', 'teleop_arms',
-                                      '--out', str(job), '--cap', str(cap)])
+                                      '--out', str(job), '--cap', str(cap), *flag])
     with pytest.raises(ReachedChecks):
         review_main.main()
     receipt = json.loads((job / 'dictionary_status.json').read_text())
@@ -272,7 +274,7 @@ def test_review_native_dictionary_retires_only_verified_unpaid_key(tmp_path, mon
     monkeypatch.setattr(harness.urllib.request, 'urlopen', transport)
     monkeypatch.setattr(rv, 'run_step', lambda *a, **k: (_ for _ in ()).throw(ReachedChecks()))
     monkeypatch.setattr(sys, 'argv', ['review', '--data', str(upload), '--rig', 'teleop_arms',
-                                     '--out', str(job), '--cap', '20'])
+                                     '--out', str(job), '--cap', '20', '--field-dictionary', 'on'])
     with pytest.raises(ReachedChecks):
         rv.main()
     saved = json.loads((job / 'dictionary.json').read_text())

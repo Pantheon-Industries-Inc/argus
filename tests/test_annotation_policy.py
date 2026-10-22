@@ -86,15 +86,20 @@ def test_only_astra_defaults_to_medium_reasoning_and_every_other_model_to_high()
     assert policy.resolve(saved)['reasoning'] == 'medium'                       # a saved choice is kept on resume
 
 
-def test_the_paid_calls_beside_the_annotation_are_on_by_default_and_written_only_when_turned_off(tmp_path):
+def test_inspection_is_on_and_the_field_dictionary_off_by_default_and_a_saved_choice_is_kept(tmp_path):
     ctx = {'profile': 'teleop_arms'}
     default = policy.resolve(ctx)
-    assert default['inspection'] == 'auto' and 'field_dictionary' not in default     # a new policy writes its mode
-    assert policy.resolve(ctx, inspection='auto', field_dictionary=True) == default
-    off = policy.resolve(ctx, inspection='off', field_dictionary=False)
-    assert off == {**default, 'inspection': 'off', 'field_dictionary': False}
+    # a new policy writes its inspection mode, and writes the field dictionary off: arm state alone qualified nearly
+    # every teleop upload for the call
+    assert default['inspection'] == 'auto' and default['field_dictionary'] is False
+    assert policy.resolve(ctx, inspection='auto', field_dictionary=False) == default
+    on = policy.resolve(ctx, field_dictionary=True)
+    assert on == {k: v for k, v in default.items() if k != 'field_dictionary'}
+    assert policy.resolve({**ctx, 'annotation_policy': on}) == on               # asked for, it stays on on resume
+    off = policy.resolve(ctx, inspection='off')
+    assert off == {**default, 'inspection': 'off'}
     assert policy.resolve({**ctx, 'annotation_policy': off}) == off             # a saved choice is kept on resume
-    assert policy.resolve({**ctx, 'annotation_policy': off}, inspection='auto', field_dictionary=True) == default
+    assert policy.resolve({**ctx, 'annotation_policy': off}, inspection='auto', field_dictionary=True) == on
     # a policy saved before the setting existed inspected every recorded field, and keeps doing so on resume, with
     # the saved policy unchanged, so a job labelled then rebinds its paid replies instead of refusing them as stale
     legacy = {key: value for key, value in default.items() if key != 'inspection'}

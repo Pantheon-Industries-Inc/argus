@@ -83,11 +83,11 @@ uv run python -m board serve --board data/review/mine --clips data/review/mine/c
 
 | Setting | Default | Options |
 |---|---|---|
+| [`--field-dictionary`](review/__main__.py) | `off` | **Turn on for recordings with unusual sensors.** `on` sends one text request per upload (at most $3, no frames) that asks a model what each recorded field beyond the cameras means, such as which signal is a touch sensor and which body part it is on. Its answers set the camera, signal and contact roles the labelling prompt uses. Turn it on when a recording carries tactile, audio, force or other custom streams whose names do not say what they are. Ordinary teleop, UMI and human ego recordings label well with it off; with it on, nearly every teleop upload pays for the call, because arm state qualifies. With `off`, fields are labelled as recorded |
 | [`--model`](label/policy.py) | `openai/gpt-6-astra` | `openai/gpt-6.1-sol` (Sol 6.1), or `google/gemini-4-argon` (Gemini 4 Argon) with an OpenRouter key, priced from OpenRouter's published rates ([`label/pricing.py`](label/pricing.py)) |
 | [`--reasoning`](label/policy.py) | Medium for Astra, high for every other model | `none`, `minimal`, `low`, `medium`, `high` or `xhigh` |
 | [`--sample-fps`](label/policy.py) | A frame every 1.5s for teleop, 1s for UMI and 0.5s for human ego, plus the edges of still spans and the first and last frames; Sol samples every 1s on every rig, human ego included, and refuses sparser sampling | `2` catches subsecond fumbles and rapid recoveries, at the cost of more images and, on teleop and UMI, shorter request windows |
 | [`--inspection`](label/policy.py) | `auto`, for recordings with depth or a touch sensor, or with fields the prompt does not carry | `all` also inspects recordings with no depth or touch sensor, such as one with only force/torque, arm signals, actions or source metadata; `off` makes no evidence selection call, though a tactile array still gets its separate regional pass |
-| [`--field-dictionary`](review/__main__.py) | `on` | `off` skips the one call per upload (at most $3) that asks a model what unclear recorded fields mean; fields are then labelled as recorded |
 | [`--cap`](review/__main__.py) | $20 | The most the job may spend, counting every call and outstanding reservation |
 | [`--max-minutes`](review/__main__.py) | All footage | Reads at most this many minutes of footage |
 | [`--dataset`](review/__main__.py) | The name of `--data` | The name shown on the board and told to the model |

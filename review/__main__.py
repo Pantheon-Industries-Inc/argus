@@ -340,8 +340,8 @@ def main() -> int:
                     help='JSON {folder: "takes" | "cameras"} for folders whose files cannot tell takes from cameras')
     policy.add_arguments(ap)
     ap.add_argument("--field-dictionary", choices=("on", "off"), default=None,
-                    help="ask a model what uncertain recorded fields mean, once per upload (default on; off labels "
-                         "with the fields as recorded and makes no dictionary call)")
+                    help="ask a model what uncertain recorded fields mean, once per upload (default off: fields are "
+                         "labelled as recorded and no dictionary call is made)")
     a = ap.parse_args()
     a.field_dictionary = None if a.field_dictionary is None else a.field_dictionary == "on"
     if not math.isfinite(a.cap) or a.cap <= 0:

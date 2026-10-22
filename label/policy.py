@@ -42,6 +42,9 @@ def output_limit(answer_tokens: int, reasoning: str) -> int:
     return answer_tokens + REASONING_TOKENS[reasoning]
 
 
+FIELD_DICTIONARY = False
+
+
 def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None,
             sample_fps: float | None = None, task_mode: str | None = None,
             dataset_note: str | None = None, inspection: str | None = None,
@@ -95,7 +98,11 @@ def resolve(ctx: dict, *, model: str | None = None, reasoning: str | None = None
     inspect = inspection if inspection is not None else inspection_mode(saved) if saved else INSPECTION
     if inspect not in INSPECTION_MODES:
         raise ValueError(f'inspection must be one of {", ".join(INSPECTION_MODES)}')
-    dictionary = field_dictionary if field_dictionary is not None else saved.get('field_dictionary', True)
+    # a new policy has no field dictionary unless asked for: arm state alone qualifies an upload for the call, so it
+    # ran on nearly every teleop upload. A policy saved without the key was made when the dictionary ran by default,
+    # and resumes with it
+    dictionary = (field_dictionary if field_dictionary is not None
+                  else saved.get('field_dictionary', True) if saved else FIELD_DICTIONARY)
     if type(dictionary) is not bool:
         raise ValueError('field dictionary must be on or off')
     return {'version': VERSION, 'rig': rig, 'model': model, 'reasoning': reasoning,
