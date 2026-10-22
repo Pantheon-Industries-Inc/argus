@@ -215,6 +215,18 @@ TRANSIENT_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 529})
 UNPAID_ATTEMPTS = 4          # a provably unpaid failure is retried even on a paid call: retrying it cannot pay twice
 
 
+def enveloped_status(resp: dict) -> int | None:
+    """The error status OpenRouter wraps in an HTTP 200 reply with no completion ({"error": {"code": 400, ...}}).
+    None when the body names no status, the status may still be billed (UNKNOWN_OUTCOME_STATUS), or the reply
+    reports a cost; such a reply keeps an unknown outcome."""
+    error = resp.get('error') if isinstance(resp, dict) else None
+    code = error.get('code') if isinstance(error, dict) else None
+    usage = resp.get('usage') if isinstance(resp.get('usage'), dict) else {}
+    if type(code) is not int or not 400 <= code <= 599 or code in UNKNOWN_OUTCOME_STATUS or usage.get('cost'):
+        return None
+    return code
+
+
 def _retry_after(headers, attempt: int) -> float:
     try:
         stated = float((headers or {}).get('Retry-After'))
@@ -354,6 +366,18 @@ def _post(url: str, body: dict, api_key: str, timeout: int, *, attempts: int = 6
             if not resp.get("choices"):
                 # HTTP 200 carrying an error body and no completion: fail loudly, never record an empty parse
                 err = json.dumps(resp.get("error") or resp)[:300]
+                status = enveloped_status(resp)
+                if status is not None:
+                    # OpenRouter's error envelope: the status inside it is the provider declining the request (eg an
+                    # upstream's 50-image limit), so it is classified as that status would be
+                    last = f"HTTP {status} inside a 200 reply: {err}"
+                    if status in TRANSIENT_STATUS:
+                        unpaid_left -= 1
+                        if unpaid_left > 0:
+                            time.sleep(_retry_after(None, tries - 1))
+                            continue
+                    raise DispatchError(f"model call failed after {tries} HTTP attempts: {last}", http_status=status,
+                                        verified_unpaid=clean, stage='rejected')
                 raise DispatchError(f"200 response with no choices: {err}", http_status=200, stage='unknown')
             failure = reply_error(resp)
             cost = (resp.get('usage') or {}).get('cost') if isinstance(resp.get('usage'), dict) else None
