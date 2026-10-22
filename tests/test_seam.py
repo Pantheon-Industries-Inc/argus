@@ -167,3 +167,51 @@ def test_a_task_its_part_judged_a_success_is_never_asked_about_even_without_a_ti
     done = {**left, 'outcome': 'success', 'completed_at_s': None}
     assert pieces.seam_candidates([left, right], [CUT]) != []
     assert pieces.seam_candidates([done, right], [CUT]) == []
+
+
+def test_an_export_row_is_named_by_its_take_episode_uid_or_episode_and_a_row_without_a_name_is_refused(
+        tmp_path, monkeypatch):
+    """The teleop export names a recording by "episode" (robot/day/episode), which the reader did not know: every row
+    was named None, and the first request crashed on its footage folder before anything was asked. Every name an
+    export uses is read, the teleop episode's footage is its nested folder, and a row with no name, or two rows under
+    one name, is refused before anything is asked."""
+    import shutil
+    src = _episode(tmp_path)
+    views = me.views(me.load(src))
+    left, right = _halves(cut=1.5, end=3.0)
+    left.update(start_s=0.1, end_s=1.5)
+    right.update(end_s=2.8, completed_at_s=2.7)
+    result = _result([left, right], [1.5], [1.5, 3.0], views=views, label_schema='tasks', **{'given_prompt': None})
+    result['labels']['completion'] = {'basis': 'tasks', 'from_tasks': 2}
+    name = 'robot08-teleop/20260914/episode_162358_1b6d49f5'
+    footage = tmp_path / 'foot'
+    shutil.copytree(src, footage / name)
+
+    def write(rows):
+        path = tmp_path / 'labels.jsonl.gz'
+        with gzip.open(path, 'wt') as stream:
+            stream.write(''.join(json.dumps(row) + '\n' for row in rows))
+        return path
+
+    def reply(content, model, reasoning, key, max_tokens, timeout, **kwargs):
+        return {'id': 'gen-1', 'provider': 'test', 'usage': {'cost': 0.004, 'prompt_tokens': 900, 'completion_tokens': 40},
+                'choices': [{'finish_reason': 'stop', 'message': {
+                    'content': '{"same_task": false, "evidence": "A new task starts at the cut."}'}}]}
+    monkeypatch.setattr(harness, 'get_keys', lambda: ['sk-or-test'])
+    monkeypatch.setattr(harness, 'call_model_once', reply)
+    out, joined = tmp_path / 'seams.json', tmp_path / 'joined'
+    path = write([{'episode': name, 'job': 'r2_a', 'label': result}])
+    assert [n for n, *_ in seam.read_labels(path)] == [name]
+    assert seam.main(['--label', str(path), '--footage', str(footage), '--out', str(out), '--apply', str(joined)]) == 0
+    assert json.loads(out.read_text())['seams'][name]['1.5']['same_task'] is False
+    assert (joined / f'{name}.json').is_file()
+    # each name an export uses, in the order a row is read by
+    for key in seam.ROW_NAMES:
+        assert [n for n, *_ in seam.read_labels(write([{key: 'rec_a', 'label': result}]))] == ['rec_a']
+    for rows in ([{'label': result}], [{'episode': '', 'label': result}]):
+        with pytest.raises(SystemExit, match='line 1: the row has no name'):
+            list(seam.read_labels(write(rows)))
+    two = write([{'episode': name, 'label': result}, {'take': name, 'label': result}])
+    with pytest.raises(SystemExit):
+        seam.main(['--label', str(two), '--footage', str(footage), '--out', str(tmp_path / 'other.json')])
+    assert not (tmp_path / 'other.json').exists()

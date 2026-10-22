@@ -11,10 +11,11 @@ frames on both sides of it, and label/pieces.py join_across_cuts joins the halve
     python -m review seam --label LABEL --footage FOOTAGE --out SEAMS.json [--dry-run] [--cap 5]
 
 LABEL is a stitched result (a long recording's JSON in a job's final out/ folder), a folder of them, or an export's
-JSON lines (.jsonl or .jsonl.gz, one take per row with the result under "label"). FOOTAGE is the recording's prepared
+JSON lines (.jsonl or .jsonl.gz, one recording per row with the result under "label", named by its take, episode_uid
+or episode, ROW_NAMES). FOOTAGE is the recording's prepared
 episode folder or a folder of its camera videos named by view (exo.mp4, left.mp4, right.mp4); for many recordings, a
-folder that holds one such folder per recording, named as the recording is (the label file's name, or the export's
-take). SEAMS.json is {"seams": {recording: {cut: verdict}}, ...}; stitch_run reads it as JOB/seams.json, and --apply
+folder that holds one such folder per recording, at the recording's name (the label file's name, or the export row's;
+a teleop episode robot/day/episode is a nested folder). SEAMS.json is {"seams": {recording: {cut: verdict}}, ...}; stitch_run reads it as JOB/seams.json, and --apply
 writes LABEL's recordings joined by it. --dry-run builds no images and calls nothing: it counts the requests and
 prices them from the labels' own camera layout.
 """
@@ -318,6 +319,11 @@ def ask(content: list, chosen: dict, key: str, timeout: int) -> tuple[dict, dict
 
 # ---------------------------------------------------------------- inputs and outputs
 
+# the field that names a recording in an export's rows: a UMI take, a LeRobot episode_uid, a teleop episode
+# (robot/day/episode). A verdict is stored under the name, so a row without one is refused, never asked
+ROW_NAMES = ("take", "episode_uid", "episode")
+
+
 def read_labels(path: Path):
     """[(recording name, stitched result, camera sync or None)] from one result, a folder of them, or export rows."""
     path = Path(path)
@@ -329,11 +335,13 @@ def read_labels(path: Path):
     if path.name.endswith((".jsonl", ".jsonl.gz")):
         opener = gzip.open if path.name.endswith(".gz") else open
         with opener(path, "rt") as stream:
-            for line in stream:
+            for n, line in enumerate(stream, 1):
                 if line.strip():
                     row = json.loads(line)
-                    yield row.get("take") or row.get("episode_uid"), row.get("label") or {}, \
-                        (row.get("sync") or {}).get("start_s")
+                    name = next((row[k] for k in ROW_NAMES if isinstance(row.get(k), str) and row[k].strip()), None)
+                    if name is None:
+                        raise SystemExit(f"{path} line {n}: the row has no name ({', '.join(ROW_NAMES)})")
+                    yield name, row.get("label") or {}, (row.get("sync") or {}).get("start_s")
         return
     yield path.stem, json.loads(path.read_text()), None
 
@@ -398,7 +406,12 @@ def main(argv: list[str] | None = None) -> int:
     seams = saved.get("seams") or {}
     work, recordings, totals = [], 0, {"low_usd": 0.0, "high_usd": 0.0, "images": 0, "input_tokens": 0}
     unpriced = set()
+    named = set()
     for name, result, sync in read_labels(a.label):
+        if name in named:
+            # two recordings under one name would share one recording's verdicts
+            ap.error(f"{name} names two recordings in --label")
+        named.add(name)
         if not (result.get("stitched") or {}).get("cuts_s"):
             continue
         recordings += 1
@@ -475,5 +488,6 @@ def main(argv: list[str] | None = None) -> int:
         a.apply.mkdir(parents=True, exist_ok=True)
         for name, result, _ in read_labels(a.label):
             if (result.get("stitched") or {}).get("cuts_s"):
+                (a.apply / f"{name}.json").parent.mkdir(parents=True, exist_ok=True)
                 write_atomic(a.apply / f"{name}.json", rejoin(result, seams.get(name) or {}))
     return 0 if all(x is True for x in asked) else 1
