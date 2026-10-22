@@ -933,6 +933,24 @@ whole with what you observed. When it gives neither, each activity is judged on 
 """
 
 
+# The one field a head-camera clip with an annotated goal is asked beyond main's prompt (the owner's third approved
+# edit, 2026-10-21): whether the clip reached the goal's end state. Its schema asks no completion, so without it a clip
+# of several tasks had no verdict against its goal; board/label_projection.py derive_completion reads it as the clip's
+# completion. A clip with no annotated goal is never asked it, so its prompt is main's.
+EGO_GOAL_OUTCOME = """
+THE ANNOTATED GOAL'S OUTCOME. Because the annotation gives a goal, also emit a top-level "goal_outcome" object saying
+whether the clip reached that goal's end-state:
+  {"outcome": "success" | "partial" | "failure" | "unclear",
+   "success_predicate": "<the end-state that means the annotated goal is done>",
+   "completed_at_s": <float: when that end-state is first reached, or null>,
+   "note": "<why, if partial, failure or unclear>"}
+Judge it against the annotated goal alone, from what the clip shows, whatever tasks you segment: success when the frames
+show the goal's end-state; partial when only part of it is reached; failure when the frames show it is not reached,
+including when the person does different work; unclear when the clip ends before it can be told or the view hides it.
+Keep it consistent with goal_alignment: success never sits beside a "different" or "unrelated" relation.
+"""
+
+
 # How to grade against the episode's instruction and fill goal_alignment (the robot rigs).
 INSTRUCTION_RULES = """
 ABOUT THE EPISODE'S INSTRUCTION (the instruction itself is given below with the episode).
@@ -1052,14 +1070,14 @@ def fixed_instructions(r: str, *, has_instruction: bool = True, recorded: bool =
     (TASK_RULES); with no instruction it asks only for tasks (NO_INSTRUCTION_RULES); when the dataset times its own
     steps, each task a step covers is judged against it (STEP_RULES). So a robot rig has up to eight variants
     (instruction present or not, timed steps or not, recorded or video only). The head camera keeps its own schema
-    and annotation rules, with the rule for naming each task's end state when the clip has no annotated goal: four
-    variants. Every episode of the same variant shares the cached prefix. recorded False (no recorded state and no
+    and annotation rules, with the rule for naming each task's end state when the clip has no annotated goal and the
+    one question of the goal's outcome (EGO_GOAL_OUTCOME) when it has one: four variants. Every episode of the same variant shares the cached prefix. recorded False (no recorded state and no
     other signal, label/episode.py is_recorded) takes out every word about a recorded motion. A saved task mode never
     changes the text."""
     head = FIXED_HEADER if recorded else _replace_once(FIXED_HEADER, *VIDEO_ONLY_HEADER)
     if r == "ego_head":
         return (head + what_this_is(r) + EGO_SCHEMA + data_contract(r) + EGO_ANNOTATION_RULES
-                + ("" if has_instruction else no_instruction_rules(r)) + lean(r))
+                + (EGO_GOAL_OUTCOME if has_instruction else no_instruction_rules(r)) + lean(r))
     body = head + what_this_is(r) + schema(r, recorded, has_instruction) + data_contract(r, recorded)
     if has_instruction:
         body += INSTRUCTION_RULES + task_rules(r, has_instruction=True, has_steps=has_steps)

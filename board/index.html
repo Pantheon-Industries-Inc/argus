@@ -7177,8 +7177,12 @@ function renderEp(d, opts) {
     const oc = (t.outcome || '').toLowerCase();
     const span = (t.start_s != null && t.end_s != null) ? `${fmtT(t.start_s)}-${fmtT(t.end_s)}` : '';
     const done = t.completed_at_s != null ? ` &middot; done ${fmtT(t.completed_at_s)}` : '';
-    // what the task was judged against (label/prompts.py TASK_RULES): one of the dataset's timed steps, the instruction
-    const against = t.judged_against === 'subtask' && t.subtask != null ? ` &middot; against step ${esc(t.subtask)}`
+    // what the task was judged against (label/prompts.py TASK_RULES): one of the dataset's timed steps, the instruction.
+    // A head camera's reply never says (board/label_projection.py judge_head_camera_tasks derives it), so its task
+    // shows only what the time overlap supports: the step it covers
+    const against = t.judged_against_derived
+      ? (t.judged_against === 'subtask' && t.subtask != null ? ` &middot; covers step ${esc(t.subtask)}` : '')
+      : t.judged_against === 'subtask' && t.subtask != null ? ` &middot; against step ${esc(t.subtask)}`
       : t.judged_against === 'instruction' ? ' &middot; against the instruction' : '';
     const jump = t.completed_at_s != null ? t.completed_at_s : t.start_s;
     taskRows.push(`<div class="task-row ${esc(oc)}"${jump != null ? ` data-t="${esc(jump)}"` : ''}>

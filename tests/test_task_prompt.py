@@ -1,7 +1,7 @@
 """The shared instructions (label/prompts.py fixed_instructions) by what the dataset gives: a robot episode with an
 instruction keeps main's episode prompt word for word and adds its list of tasks; one without asks only for tasks;
 the dataset's own timed steps add the rules for judging a task against its step; and the head camera keeps main's
-prompt except for two approved edits. tests/fixtures/main_prompts.json holds main's (58c452e) text."""
+prompt except for three approved edits. tests/fixtures/main_prompts.json holds main's (58c452e) text."""
 import json
 import re
 from pathlib import Path
@@ -45,18 +45,52 @@ EGO_SOFTENED = [
 ]
 
 
+# The second approved edit, word for word as PR 107 left it: a clip with no annotated goal names each task's end state.
+# The test holds its own copy, so a change to it fails here until the copy is changed with an approved edit.
+EGO_NO_GOAL = """
+ABOUT THE TASKS. This clip comes with no annotated goal, so the end state of each of its tasks is yours to infer. Name
+each as the most specific end state the person evidently worked toward (the blocks in a row, a tower, the cloth folded
+in half, the cup in the bin), read from what their actions were evidently trying to achieve and not from how far they
+got, never as a description that any motion would satisfy (moving, repositioning or rearranging the objects, or the
+work coming to a stop). Each task's success_predicate states that end state, and whatever the work was evidently meant
+to cover but did not is a shortfall in the outcome, not something outside the task. When the actions fit no single end
+state, name the one that fits best and
+say in the task's note what leaves it uncertain.
+"""
+# The third approved edit (Eric, 2026-10-21, audit_2026-10-21 S3): a clip with an annotated goal is asked one optional
+# field, whether it reached the goal's end state, and nothing else changes.
+EGO_GOAL_OUTCOME = """
+THE ANNOTATED GOAL'S OUTCOME. Because the annotation gives a goal, also emit a top-level "goal_outcome" object saying
+whether the clip reached that goal's end-state:
+  {"outcome": "success" | "partial" | "failure" | "unclear",
+   "success_predicate": "<the end-state that means the annotated goal is done>",
+   "completed_at_s": <float: when that end-state is first reached, or null>,
+   "note": "<why, if partial, failure or unclear>"}
+Judge it against the annotated goal alone, from what the clip shows, whatever tasks you segment: success when the frames
+show the goal's end-state; partial when only part of it is reached; failure when the frames show it is not reached,
+including when the person does different work; unclear when the clip ends before it can be told or the view hides it.
+Keep it consistent with goal_alignment: success never sits beside a "different" or "unrelated" relation.
+"""
+
+
 @pytest.mark.parametrize('given', [True, False])
 @pytest.mark.parametrize('recorded', [True, False])
 @pytest.mark.parametrize('steps', [True, False])
-def test_the_head_camera_prompt_is_mains_but_for_the_two_approved_edits(given, recorded, steps):
+def test_the_head_camera_prompt_is_mains_but_for_the_three_approved_edits(given, recorded, steps):
+    """main's text, the softened framing, and in the slot before the timeline note either the goal's outcome (a clip
+    with an annotated goal) or the end-state rule (one without), each pinned here as a literal: B6, the earlier test
+    took the end-state block from the function under test, so PR 107 rewrote it and the test still passed."""
     expected = main('ego_head', recorded)
     for old, new in EGO_SOFTENED:
         assert expected.count(old) == 1, old[:60]
         expected = expected.replace(old, new)
-    if not given:
-        lean = prompts.lean('ego_head')
-        expected = expected[:expected.index(lean)] + prompts.no_instruction_rules('ego_head') + lean
+    lean = prompts.lean('ego_head')
+    assert expected.count(lean) == 1
+    expected = expected[:expected.index(lean)] + (EGO_GOAL_OUTCOME if given else EGO_NO_GOAL) + lean
     assert text('ego_head', given, recorded, steps) == expected
+    # the goal's outcome is asked only with a goal, the end-state rule only without one
+    assert ('"goal_outcome"' in text('ego_head', given, recorded, steps)) is given
+    assert ('This clip comes with no annotated goal' in text('ego_head', given, recorded, steps)) is not given
 
 
 def test_the_head_camera_keeps_its_own_segmentation_outcomes_and_no_undo():

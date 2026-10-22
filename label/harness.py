@@ -1131,7 +1131,7 @@ def normalize_timeline(labels: dict) -> dict:
 # the reply's fields by the type the output format gives them (label/prompts.py)
 LIST_FIELDS = ("timeline", "key_events", "state_changes", "scene_graph", "recovery", "data_issues", "operator_mistakes",
                "tasks", "contacts", "contacts_missing", "sensor_findings", "evidence_findings", "camera_observations")
-DICT_FIELDS = ("scene", "completion", "goal_alignment")
+DICT_FIELDS = ("scene", "completion", "goal_alignment", "goal_outcome")
 TEXT_FIELDS = ("task_summary", "performance_review", "viewpoint")
 TIME_FIELDS = ("t_s", "start_s", "end_s", "completed_at_s", "goal_reached_at_s", "undone_at_s", "failure_t_s",
                "recovered_at_s")
@@ -1271,7 +1271,7 @@ def typed_labels(labels: dict) -> dict:
             labels[k] = _rows(labels, k, labels[k])
             for i, r in enumerate(labels[k]):
                 _times(r, f"{k} row {i}", labels)
-    for k in ("completion", "goal_alignment"):
+    for k in ("completion", "goal_alignment", "goal_outcome"):
         if isinstance(labels.get(k), dict):
             _times(labels[k], k, labels)
     sc = labels.get("scene")

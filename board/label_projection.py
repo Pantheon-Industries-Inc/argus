@@ -81,13 +81,23 @@ def recording_completion(tasks, *, task_prompts: int = 0) -> dict:
     return {**empty, 'reason': reason, 'from_tasks': n, 'basis': 'tasks'}
 
 
+def goal_outcome_word(goal_outcome) -> str | None:
+    """The outcome a head-camera reply gives its annotated goal (goal_outcome.outcome), as one of OUTCOMES, else
+    None."""
+    word = goal_outcome.get('outcome') if isinstance(goal_outcome, dict) else None
+    word = word.strip().lower() if isinstance(word, str) else None
+    return word if word in OUTCOMES else None
+
+
 def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts: int = 0) -> dict:
     """labels with the recording's completion as the LABEL_SCHEMA format reads it, by what the request gave. A robot
     request with an instruction asks for the completion itself, judged against the instruction as the episode prompt
     always did; it is kept and marked basis "instruction". One without asks only for tasks, and its completion is
     derived from them (recording_completion); a completion the reply writes anyway is replaced and noted in
-    _schema_violations. The head camera's schema has no completion: a clip of one task with no timed steps takes that
-    task's verdict, and any other clip is read task by task, as it always was. Call it only on a record whose
+    _schema_violations. The head camera's schema has no completion: a clip with an annotated goal whose reply gives
+    the goal's outcome (goal_outcome, label/prompts.py EGO_GOAL_OUTCOME) takes it as its completion, judged against
+    the goal; otherwise a clip of one task with no timed steps takes that task's verdict, and any other clip is read
+    task by task, as it always was. Call it only on a record whose
     label_schema is LABEL_SCHEMA: an older record keeps the completion its own request asked for."""
     if not isinstance(labels, dict):
         return labels
@@ -127,18 +137,28 @@ def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts
         if notes:
             out['_schema_violations'] = [*(out.get('_schema_violations') or []), *notes]
         return out
+    derived = None
     if rig == 'ego_head':
-        # one task gives the clip its verdict when the clip has an annotated goal, or has no timed steps to judge it
-        # against instead; any other clip is read task by task, as on main
         tasks = [t for t in out.get('tasks') or [] if isinstance(t, dict)] if isinstance(out.get('tasks'), list) else []
-        if len(tasks) != 1 or (task_prompts and not instruction):
+        if instruction and goal_outcome_word(out.get('goal_outcome')):
+            # the clip has an annotated goal and the reply says whether it reached the goal's end state: that is the
+            # clip's verdict, whatever its tasks
+            g = out['goal_outcome']
+            derived = {name: None for name, _ in COMPLETION_FROM_TASK}
+            derived.update(task_completed=goal_outcome_word(g), success_predicate=g.get('success_predicate'),
+                           completed_at_s=g.get('completed_at_s'), reason=g.get('note'), judged_against='instruction',
+                           from_tasks=len(tasks), basis='instruction')
+        # otherwise one task gives the clip its verdict when the clip has an annotated goal, or has no timed steps to
+        # judge it against instead; any other clip is read task by task, as on main
+        elif len(tasks) != 1 or (task_prompts and not instruction):
             return out
         task_prompts = 0
-    derived = recording_completion(out.get('tasks'), task_prompts=task_prompts)
+    source = 'goal_outcome' if derived else 'tasks'
+    derived = derived or recording_completion(out.get('tasks'), task_prompts=task_prompts)
     # labels read again (a saved record checked on resume) already hold the derived completion
     if 'completion' in out and out['completion'] != derived:
         out['_schema_violations'] = [*(out.get('_schema_violations') or []),
-                                     'completion: the output format has no completion; it is derived from tasks']
+                                     f'completion: the output format has no completion; it is derived from {source}']
     out['completion'] = derived
     return out
 
@@ -264,6 +284,7 @@ TEXT = {
     'data_issues': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
     'operator_mistakes': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
     'goal_alignment': ('relation', 'reason', 'observed_goal', 'given_goal', 'evidence', 'note'),
+    'goal_outcome': ('outcome', 'success_predicate', 'note'),
     'scene': ('setting',), 'scene.objects': ('name', 'location'),
     'contacts': ('id', 'hand', 'object', 'action', 'touch_seen', 'slip', 'note', 'evidence'),
     'contacts_missing': ('hand', 'object', 'action', 'note', 'evidence'),

@@ -423,3 +423,84 @@ def test_head_camera_tasks_record_what_they_were_judged_against_and_one_task_wit
     bare = {'tasks': [{'start_s': 0.0, 'end_s': 4.0, 'task': 'wipe'}]}
     judge_head_camera_tasks(bare, [], None)
     assert bare['tasks'][0]['judged_against'] == 'own_end_state' and bare['tasks'][0]['judged_against_derived']
+
+
+# A real Gen-HumanEgo reply with an annotated goal and two tasks (paid check B, 82c0fc2,
+# episode_f2fa4df231a64d63abcbace97a4ca8ab, goal "Store toothpicks on the tabletop", 2 timed steps), trimmed to the fields
+# the verdict reads. Main gave it no verdict, like 16 of 16 such clips (audit_2026-10-21 task_semantics.md S3).
+TOOTHPICKS = {
+    'task_summary': 'The person gathers loose toothpicks into a holder and sets the filled holder on a tray.',
+    'goal_alignment': {'matches_given': True, 'relation': 'aligned', 'note': ''},
+    'timeline': [{'start_s': 0.0, 'end_s': 94.07, 'arm': 'both', 'action': 'transfer toothpicks into the holder',
+                  'contribution': 'advancing', 'progress': 1.0, 'hands_visible': True}],
+    'tasks': [
+        {'start_s': 0.0, 'end_s': 93.5, 'task': 'Collect the loose tabletop toothpicks into the holder',
+         'objects': ['wooden toothpicks', 'toothpick holder', 'white tissue'], 'outcome': 'success',
+         'success_predicate': 'The loose toothpicks have been transferred into the holder and the tissue is clear.',
+         'completed_at_s': 93.5, 'note': 'The repeated transfers and cleared ending surface establish completion; '
+                                         'precise counts per pinch are not resolvable.'},
+        {'start_s': 93.5, 'end_s': 94.07, 'task': 'Place the filled toothpick holder on the tabletop tray',
+         'objects': ['toothpick holder', 'white tray'], 'outcome': 'success',
+         'success_predicate': 'The filled holder rests upright on the tray without hand support.',
+         'completed_at_s': 94.04, 'note': None}]}
+GOAL_OUTCOME = {'outcome': 'success', 'success_predicate': 'The toothpicks are stored in the holder on the tray.',
+                'completed_at_s': 94.04, 'note': None}
+
+
+def test_a_head_camera_clip_with_an_annotated_goal_takes_its_verdict_from_the_goals_outcome():
+    """S3, decided by Eric: a head-camera clip with an annotated goal is asked one optional field, whether it reached
+    the goal's end state, and derive_completion reads it as the clip's completion, judged against the goal, while every
+    task keeps its own outcome beside it. A reply without the field, or a clip without a goal, is read as on main."""
+    request = {'annotation_policy': {'version': 1, 'rig': 'ego_head'}, 'label_schema': 'tasks', 'task_prompts': 2,
+               'given_prompt': 'Store toothpicks on the tabletop', 'config': {'timesteps_s': [0.0, 47.0, 94.0]}}
+    reply = {**TOOTHPICKS, 'goal_outcome': GOAL_OUTCOME}
+    labels, ok = harness.read_reply(json.dumps(reply), request)
+    assert ok
+    c = labels['completion']
+    assert (c['task_completed'], c['basis'], c['judged_against'], c['completed_at_s'], c['from_tasks']) == (
+        'success', 'instruction', 'instruction', 94.04, 2)
+    assert c['success_predicate'] == GOAL_OUTCOME['success_predicate']
+    assert not any(v.startswith('completion') for v in labels.get('_schema_violations') or [])
+    d = to_board.convert({'episode_dir': 'episode_f2fa4', 'parse_ok': True, 'labels': labels, 'label_schema': 'tasks',
+                          'given_prompt': request['given_prompt']}, 'genhumanego')
+    assert verdict_or_tasks(d) == ('success', []) and len(shown_tasks(d)) == 2
+    rail = serve._rail_record(Path('e.json'), d)
+    assert (rail['task_completed'], rail['n_tasks'], rail.get('verdict_first')) == ('success', 2, True)
+    assert judge({'outcome': ['success']}, labels)[0]
+    # read again, as a resumed job reads a saved record, it is the same
+    again, ok = harness.read_reply(json.dumps(labels), request)
+    assert ok and again['completion'] == c
+    # main's reading: the same reply without the field, an unknown outcome word, or a clip with no goal
+    for other, given in ((TOOTHPICKS, request['given_prompt']), ({**reply, 'goal_outcome': {'outcome': 'done'}},
+                                                                 request['given_prompt']), (reply, None)):
+        got, ok = harness.read_reply(json.dumps(other), {**request, 'given_prompt': given})
+        assert ok and 'completion' not in got
+
+
+AGAINST_SCRIPT = r'''
+const fs = require('fs');
+const s = fs.readFileSync(process.argv[1], 'utf8');
+const i = s.indexOf('    // what the task was judged against'), j = s.indexOf('    const jump', i);
+if (i < 0 || j < i) throw new Error('task row source not found');
+const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const f = new Function('t', 'esc', s.slice(i, j) + 'return against;');
+console.log(JSON.stringify(JSON.parse(process.argv[2]).map(t => f(t, esc))));
+'''
+
+
+def test_the_board_names_only_what_a_head_camera_tasks_time_overlap_supports():
+    """S3: a head camera's reply never says what a task was judged against; the board derived it from time overlap and
+    printed "against step N" or "against the instruction", which nobody established. A derived step now reads
+    "covers step N", a derived goal nothing, and a robot task's own judged_against is printed as before."""
+    import shutil
+    import subprocess
+    if not shutil.which('node'):
+        pytest.skip('no node')
+    page = Path(__file__).resolve().parents[1] / 'board' / 'index.html'
+    tasks = [{'judged_against': 'subtask', 'subtask': 2, 'judged_against_derived': True},
+             {'judged_against': 'instruction', 'judged_against_derived': True},
+             {'judged_against': 'subtask', 'subtask': 3}, {'judged_against': 'instruction'}]
+    p = subprocess.run(['node', '-e', AGAINST_SCRIPT, str(page), json.dumps(tasks)], text=True, capture_output=True)
+    assert p.returncode == 0, p.stderr
+    assert json.loads(p.stdout) == [' &middot; covers step 2', '', ' &middot; against step 3',
+                                    ' &middot; against the instruction']
