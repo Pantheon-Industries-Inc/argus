@@ -140,6 +140,22 @@ def clip_size(w: int, h: int, main: bool) -> tuple:
     return even(w * s, w), even(h * s, h), s
 
 
+# H.264 levels (ITU-T H.264 Table A-1): name, most macroblocks a frame may hold, most macroblocks a second
+H264_LEVELS = (("3", 1620, 40500), ("3.1", 3600, 108000), ("3.2", 5120, 216000), ("4", 8192, 245760),
+               ("4.2", 8704, 522240), ("5", 22080, 589824), ("5.1", 36864, 983040), ("5.2", 36864, 2073600))
+
+
+def h264_level(w: int, h: int, fps: float = 60.0) -> str:
+    """The lowest H.264 level that holds a w x h picture at fps frames a second. libx264 takes its level from the
+    encoder's time base, and a clip that keeps its source timestamps (-enc_time_base demux) has a 1/1000000 s base:
+    it declared level 6.2 for a 640x480, 30 fps clip, which iPhones refuse to play (they decode up to 5.2)."""
+    mbs = -(-w // 16) * -(-h // 16)
+    for name, max_fs, max_mbps in H264_LEVELS:
+        if mbs <= max_fs and mbs * fps <= max_mbps:
+            return name
+    return H264_LEVELS[-1][0]
+
+
 def video_args(w: int, h: int, main: bool, threads: int, resample: bool = False, pre: tuple = ()) -> list:
     """The recipe's output arguments for a source shown w x h. resample: its pixels are not square
     (prepare/display.py), so it is scaled to its shown size and given square pixels like every other copy. pre: filters
@@ -153,8 +169,9 @@ def video_args(w: int, h: int, main: bool, threads: int, resample: bool = False,
     # enc_time_base demux: every frame keeps its source timestamp exactly. The encoder's default time base is the
     # frame rate's, which rounds a variable-rate recording's times to a 1/30 s grid (up to half a frame off, and a
     # frame squeezed to 0 s where two round to the same tick)
+    # the level is the clip's own (h264_level): taken from the time base, it read 6.2 and phones refused the clip
     return [*vf, "-c:v", "libx264", "-preset", PRESET, "-crf", str(CRF), "-pix_fmt", "yuv420p",
-            "-profile:v", "high", "-force_key_frames", f"expr:gte(t,n_forced*{KEY_S})", "-enc_time_base", "demux",
+            "-profile:v", "high", "-level:v", h264_level(cw, ch), "-force_key_frames", f"expr:gte(t,n_forced*{KEY_S})", "-enc_time_base", "demux",
             "-movflags", "+faststart", "-threads", str(threads)]
 
 

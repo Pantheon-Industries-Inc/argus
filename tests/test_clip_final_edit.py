@@ -1,5 +1,6 @@
 """A fresh encode can discard its final packet even when every packet has a duration."""
 import shutil
+from fractions import Fraction
 import struct
 import subprocess
 
@@ -32,6 +33,36 @@ def _shorten_final_edit(path, duration_ms):
             offset += size
     visit(0, len(data))
     path.write_bytes(data)
+
+
+def test_a_clip_cut_from_a_packed_recording_declares_a_level_a_phone_plays(tmp_path):
+    """A packed recording (prepare/formats.py _encode: a 1/1000000 s time base) reads a base rate of 1000000 frames a
+    second, and ffmpeg 7.1 (Data Review's image, Debian 13) gave libx264 that rate through extract_one's timing filter:
+    a 640x480, 30 fps clip declared level 6.2, and iPhones (H.264 up to level 5.2) showed it as unplayable."""
+    from prepare import formats
+    packed, output = tmp_path/'packed.mp4', tmp_path/'clip.mp4'
+    with av.open(str(packed), 'w', options={'movie_timescale': str(formats.TIME_BASE_DEN)}) as dst:
+        enc = dst.add_stream('libx264', rate=30, time_base=Fraction(1, formats.TIME_BASE_DEN))
+        enc.width, enc.height, enc.pix_fmt = 640, 480, 'yuv420p'
+        enc.codec_context.time_base = Fraction(1, formats.TIME_BASE_DEN)
+        enc.options = dict(formats.X264_OPTIONS)
+        t = 0
+        for i in range(30):
+            frame = av.VideoFrame.from_ndarray(np.full((480, 640, 3), 8 * i, np.uint8), format='rgb24')
+            frame = frame.reformat(format='yuv420p')
+            frame.pts, frame.time_base = t, Fraction(1, formats.TIME_BASE_DEN)
+            for packet in enc.encode(frame):
+                dst.mux(packet)
+            t += 33333 + (4000 if i % 3 else -6000)      # a recorder's uneven frame times
+        for packet in enc.encode():
+            dst.mux(packet)
+    subprocess.run([clips.find_ffmpeg(), '-y', '-v', 'error', '-i', str(packed), '-an', '-fps_mode', 'passthrough',
+                    *clips.video_args(640, 480, True, 1, pre=('setpts=PTS-STARTPTS',)), str(output)], check=True)
+    with av.open(str(output)) as container:
+        level = container.streams.video[0].codec_context.level
+    assert 0 < level <= 52, level
+    assert clips.h264_level(640, 480) == '3.1' and clips.h264_level(1920, 1080) == '4.2'
+    assert clips.h264_level(1280, 1080) == '4.2' and clips.h264_level(64, 48) == '3'
 
 
 @pytest.mark.parametrize('start', [0, 0.5])
