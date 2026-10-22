@@ -27,7 +27,8 @@ the output schema, not from any one episode:
   schema makes them the same frame.
 - progress_before_goal: the outcome is success, yet the timeline's progress reaches 1.0 more than 3 s before the
   goal frame, which is the first frame the success predicate holds. (Within a few seconds the two differ only by
-  where a step ends.)
+  where a step ends.) A cyclical instruction, done in two or more tasks judged against it, is checked against the
+  first repeat's goal, since progress reaches 1.0 at the end of each repeat.
 - progress_past_goal: the outcome is success, yet the timeline's progress reaches 1.0 only more than 3 s after the
   goal frame, while the goal alignment calls the footage exactly the given goal ("aligned") and no instruction
   mismatch is recorded. The demonstration kept working past the goal, typically handling more of a
@@ -122,10 +123,18 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
         GAP = 3.0   # seconds; within this the timeline and the goal frame differ only by where a step ends
         mism = any(str((i or {}).get("category") or (i or {}).get("family") or "").replace("-", "_") == "instruction_mismatch"
                    for i in label.get("data_issues") or [] if isinstance(i, dict))
-        if first_full is not None and first_full < done - GAP:
+        # a cyclical instruction is done once per repeat, each repeat its own task judged against it (label/prompts.py
+        # TASK_RULES), and progress can reach 100% at the end of every repeat, while the goal frame is the last
+        # repeat's: progress reaching 100% early is checked against the first repeat's goal
+        repeats = [t for t in label.get("tasks") or [] if isinstance(t, dict) and t.get("judged_against") == "instruction"]
+        reached = [x for t in repeats for x in [next((stored_number(t.get(k)) for k in ("completed_at_s",
+                   "goal_reached_at_s") if stored_number(t.get(k)) is not None), None)] if x is not None]
+        first_goal = min(reached) if len(repeats) >= 2 and reached else done
+        if first_full is not None and first_full < first_goal - GAP:
             out.append({"rule": "progress_before_goal",
                         "note": f"The timeline's progress reaches 100% at {first_full:.1f} s, before the goal frame at "
-                                f"{done:.1f} s, which is the first frame the goal holds."})
+                                f"{first_goal:.1f} s, which is the first frame the goal holds"
+                                + (" in its first repeat." if first_goal != done else ".")})
         elif first_full is not None and first_full > done + GAP and rel == "aligned" and not mism:
             out.append({"rule": "progress_past_goal",
                         "note": f"The demonstration keeps working past the goal frame: progress is {at_goal:.0%} at "

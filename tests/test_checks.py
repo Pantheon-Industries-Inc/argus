@@ -517,6 +517,29 @@ def test_progress_before_goal():
     assert rules({"completion": c, "timeline": parked}) == []
 
 
+def _real_cyclical(name):
+    real = json.loads((Path(__file__).with_name("fixtures") / "cyclical_labels.json").read_text())[name]
+    return {**real, "timeline": _steps(*map(tuple, real["timeline"]))}
+
+
+def test_progress_before_goal_reads_a_cyclical_instruction_by_its_first_repeat():
+    """B4: a cyclical instruction is done once per repeat, each repeat a task judged against it, and progress reaches
+    100% at the end of every repeat while the goal frame is the last repeat's. Main flagged the produce basket session
+    (115213: 100% at 62.7s, the end of repeat 1, against the goal frame at 140.0s). The first repeat's goal is the
+    reference now; one task (the first aid kit, a real 8s slip) and progress that counts both repeats (the lids) are
+    read as before."""
+    basket = _real_cyclical("episode_20261008_episode_115213")
+    assert len([t for t in basket["tasks"] if t["judged_against"] == "instruction"]) == 2
+    assert rules(basket, None) == []
+    first_aid = _real_cyclical("episode_20261013_episode_141924")
+    assert len(first_aid["tasks"]) == 1 and rules(first_aid, None) == ["progress_before_goal"]
+    lids = _real_cyclical("episode_20261002_episode_080412")
+    assert rules(lids, None) == []
+    # a repeat that does reach 100% well before its own goal is still flagged
+    early = {**basket, "timeline": _steps((0, 20, 1.0, "advancing"), (20, 140, 1.0, "advancing"))}
+    assert rules(early, None) == ["progress_before_goal"]
+
+
 def test_consistent_label_has_no_findings():
     label = {"completion": {"task_completed": "success_then_undone", "goal_reached_at_s": 4.0, "undone_at_s": 8.0},
              "goal_alignment": {"relation": "aligned"}, "state_changes": [{"t_s": 4.0}, {"t_s": 8.0}],
