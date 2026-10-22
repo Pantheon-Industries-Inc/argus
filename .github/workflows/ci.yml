@@ -43,21 +43,38 @@ jobs:
         with:
           node-version: "24"
           package-manager-cache: false
+      # ffmpeg's packages are kept in the Actions cache, keyed on the runner image, so a run installs them from the
+      # cache and needs no package mirror; only the first run on a new image downloads them. A mirror that stopped
+      # answering held this step until the job's limit (PR 136, two shards, 17 min, 2026-10-22).
+      - name: Name the video tools cache
+        id: video-key
+        run: echo "key=video-debs-$ImageOS-$ImageVersion-v1" >> "$GITHUB_OUTPUT"
+      - name: Restore the video tools packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/video-debs
+          key: ${{ steps.video-key.outputs.key }}
       - name: Install video tools
         timeout-minutes: 12
         run: |
-          # the runner image lists third-party repositories (packages.microsoft.com among them) whose index can
-          # refuse a fetch; that must not fail the job, and the install below still fails if Ubuntu's index is missing.
-          # A package mirror that stops answering held this step until the job's limit (two shards, 14 min, on
-          # 2026-10-22): every fetch gives up after 30s and is retried, and the whole install is tried three times.
-          APT="-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60"
-          for attempt in 1 2 3; do
-            sudo timeout 240 apt-get $APT update || echo "some package indexes could not be fetched; installing from those that were"
-            if sudo timeout 240 apt-get $APT install --yes --no-install-recommends ffmpeg; then break; fi
-            if [ "$attempt" = 3 ]; then exit 1; fi
-            echo "ffmpeg install attempt $attempt failed; trying again"
-            sleep 10
-          done
+          mkdir -p ~/video-debs/partial
+          if ls ~/video-debs/*.deb >/dev/null 2>&1 && sudo dpkg -i ~/video-debs/*.deb >/dev/null; then
+            echo "installed $(ls ~/video-debs/*.deb | wc -l) cached packages"
+          else
+            # the runner image lists third-party repositories (packages.microsoft.com among them) whose index can
+            # refuse a fetch; that must not fail the job, and the install still fails if Ubuntu's index is missing.
+            # Every fetch gives up after 30s and is retried, and the whole install is tried three times.
+            APT="-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60"
+            for attempt in 1 2 3; do
+              sudo timeout 240 apt-get $APT update || echo "some package indexes could not be fetched; installing from those that were"
+              if sudo timeout 240 apt-get $APT -o Dir::Cache::archives="$HOME/video-debs" -o APT::Keep-Downloaded-Packages=true \
+                  install --yes --no-install-recommends ffmpeg; then break; fi
+              if [ "$attempt" = 3 ]; then exit 1; fi
+              echo "install attempt $attempt failed; trying again"
+              sleep 10
+            done
+            sudo chown -R "$USER" ~/video-debs
+          fi
           node --version
           ffmpeg -version
           ffprobe -version
