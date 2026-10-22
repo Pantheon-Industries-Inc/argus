@@ -6756,9 +6756,13 @@ function renderEp(d, opts) {
   const keyEvents = (d.key_events || []).filter(k => k.t_s != null)
       .slice().sort((a, b) => a.t_s - b.t_s);
 
-  const progPts = progressPoints(eventLabels, duration, {progressScope: d.progress_scope, ...(hasTasks ? {tasks}
+  // progress that restarts at each task (a head-camera clip judged on its annotated goal, progress_scope "tasks") is
+  // charted as tasks done, as a clip read task by task is; it never measures progress to the goal
+  const perTaskProgress = hasTasks || d.progress_scope === 'tasks';
+  const progPts = progressPoints(eventLabels, duration, {progressScope: d.progress_scope, ...(perTaskProgress
+    ? {tasks: hasTasks ? tasks : allTasks}
     : {completedAt: comp.completed_at_s, reachedAt: comp.goal_reached_at_s, undoneAt: comp.undone_at_s})});
-  const progSubLabel = hasTasks ? 'tasks done' : 'to goal';
+  const progSubLabel = perTaskProgress ? 'tasks done' : 'to goal';
   let progOverlayHtml = '';
   if (progPts.length >= 2) {
     const W = 100, H = 24;

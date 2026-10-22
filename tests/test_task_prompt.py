@@ -69,6 +69,9 @@ whether the clip reached that goal's end-state:
 Judge it against the annotated goal alone, from what the clip shows, whatever tasks you segment: success when the frames
 show the goal's end-state; partial when only part of it is reached; failure when the frames show it is not reached,
 including when the person does different work; unclear when the clip ends before it can be told or the view hides it.
+The success_predicate is the whole end-state the goal names, never narrowed to the part the clip shows: when the goal's
+work is still under way at the clip's end (more of its items left to do), the outcome is unclear, never a success at
+the first finished item.
 Keep it consistent with goal_alignment: success never sits beside a "different" or "unrelated" relation.
 """
 

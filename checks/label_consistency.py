@@ -33,6 +33,9 @@ the output schema, not from any one episode:
   goal frame, while the goal alignment calls the footage exactly the given goal ("aligned") and no instruction
   mismatch is recorded. The demonstration kept working past the goal, typically handling more of a
   repeated item than the instruction names ("place the coffee filter" with two filters), and nothing says so.
+The three progress rules read the timeline only when its progress measures the verdict: a record with a progress_scope
+(board/label_projection.py, a recording labelled in parts or a head-camera clip judged on its annotated goal, whose
+progress restarts at each sub-task) has no progress toward its verdict to contradict it.
 A recording labelled as tasks (its completion names its basis) with an instruction or one task is checked through its
 completion by the rules above. One with no verdict (several tasks, or the dataset's own timed steps) has each task
 checked on its own:
@@ -71,7 +74,7 @@ def _levels(steps: list[dict]) -> list[tuple[float, float]]:
 
 
 def check(label: dict, duration_s: float | None = None) -> list[dict]:
-    from board.label_projection import project
+    from board.label_projection import progress_toward_verdict, project
     # Board episodes store the same rows under event_labels. Validate that view
     # through the same schema rather than interpreting rejected progress values.
     if 'timeline' not in label and isinstance(label.get('event_labels'), list):
@@ -104,8 +107,10 @@ def check(label: dict, duration_s: float | None = None) -> list[dict]:
             out.append({"rule": "nothing_after_goal",
                         "note": "The outcome is success then undone, but the label records no state change after "
                                 "the goal was reached."})
-    # the harness returns timeline rows; the board stores them as event_labels
-    steps = label.get('timeline') or []
+    # the harness returns timeline rows; the board stores them as event_labels. The progress rules read them only when
+    # their progress measures this verdict (board/label_projection.py progress_toward_verdict): a head-camera clip's
+    # restarts at each sub-task, so its first task reaches 1.0 long before its annotated goal holds
+    steps = (label.get('timeline') or []) if progress_toward_verdict(label) else []
     peak = max((p for p in (stored_number(s.get("progress")) for s in steps) if p is not None), default=None)
     if outcome in NOT_REACHED and peak is not None and peak >= 0.99:
         out.append({"rule": "progress_vs_outcome",

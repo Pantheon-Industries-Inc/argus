@@ -31,7 +31,8 @@ import re
 import statistics
 
 from board.families import Families, union_seconds as _union
-from board.label_projection import severity as _severity, verdict_or_tasks as _verdict_or_tasks
+from board.label_projection import (progress_toward_verdict, severity as _severity,
+                                    verdict_or_tasks as _verdict_or_tasks)
 from checks.results import stored_number
 
 
@@ -181,6 +182,9 @@ def facts(d: dict) -> dict:
     # unknown, never 0
     progress = [min(1.0, max(0.0, p)) for p in (_num(e.get("progress")) for e in steps) if p is not None]
     reached = max(progress) if progress else None
+    # a head-camera clip judged on its annotated goal has progress per sub-task (progress_scope), none toward the goal
+    # its verdict is about, so its outcome is never scaled by it
+    goal_progress = reached if progress_toward_verdict(d) else None
     mistakes, explaining = _mistakes(d)
     any_mistakes = len(explaining)
     incident = _incidents(d)
@@ -200,6 +204,7 @@ def facts(d: dict) -> dict:
     return {"tasks": tasks, "measured": bool(steps), "start_s": start, "goal_s": goal, "end_s": end, "active_s": active,
             "wasteful_s": wasteful, "hesitation_s": hesitation, "window_s": (end - start) if window else None,
             "actions": sum(1 for e in steps if e.get("contribution") == "advancing"), "progress_reached": reached,
+            "goal_progress": goal_progress,
             "outcome": _verdict(comp) if comp else None, "mistakes": mistakes, "any_mistakes": any_mistakes,
             "failed_attempts": len(set(incident.values())),
             "relation": _str(_dict(d.get("goal_alignment")).get("relation"))}
@@ -391,11 +396,12 @@ def _outcome(f: dict):
         return (_clamp(10 * statistics.mean(values)) if values else None,
                 {"outcome": None, "tasks_total": len(f["tasks"]), "tasks_judged": len(judged),
                  "tasks_done": sum(1 for t in judged if t["outcome"] == "success")})
-    cap = OUTCOME_CAPS.get(f["outcome"])
-    if cap is None or (f["outcome"] != "success" and f["progress_reached"] is None):
-        return None, {"outcome": f["outcome"], "progress_reached": f["progress_reached"]}
-    value = 1.0 if f["outcome"] == "success" else min(cap, f["progress_reached"])
-    return _clamp(10 * value), {"outcome": f["outcome"], "progress_reached": f["progress_reached"]}
+    # the progress toward the verdict's goal, never a sub-task's (facts, goal_progress)
+    cap, reached = OUTCOME_CAPS.get(f["outcome"]), f["goal_progress"]
+    if cap is None or (f["outcome"] != "success" and reached is None):
+        return None, {"outcome": f["outcome"], "progress_reached": reached}
+    value = 1.0 if f["outcome"] == "success" else min(cap, reached)
+    return _clamp(10 * value), {"outcome": f["outcome"], "progress_reached": reached}
 
 
 def _cleanliness(f: dict):

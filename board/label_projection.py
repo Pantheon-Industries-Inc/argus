@@ -81,6 +81,18 @@ def recording_completion(tasks, *, task_prompts: int = 0) -> dict:
     return {**empty, 'reason': reason, 'from_tasks': n, 'basis': 'tasks'}
 
 
+# A record's progress_scope says what its timeline's progress measures when that is not the recording's verdict:
+# "request_parts" for a recording labelled in parts (label/pieces.py), whose steps keep each part's local progress, and
+# PROGRESS_PER_TASK for a head-camera clip whose verdict is its annotated goal's outcome, whose progress restarts at
+# each sub-task. A record without one measures progress toward its verdict.
+PROGRESS_PER_TASK = 'tasks'
+
+
+def progress_toward_verdict(record) -> bool:
+    """Whether a record's timeline progress measures progress toward its own verdict (no progress_scope)."""
+    return not (isinstance(record, dict) and record.get('progress_scope'))
+
+
 def goal_outcome_word(goal_outcome) -> str | None:
     """The outcome a head-camera reply gives its annotated goal (goal_outcome.outcome), as one of OUTCOMES, else
     None."""
@@ -148,6 +160,9 @@ def derive_completion(labels: dict, *, rig: str, instruction: bool, task_prompts
             derived.update(task_completed=goal_outcome_word(g), success_predicate=g.get('success_predicate'),
                            completed_at_s=g.get('completed_at_s'), reason=g.get('note'), judged_against='instruction',
                            from_tasks=len(tasks), basis='instruction')
+            # the head camera's timeline measures progress toward the current sub-task (label/prompts.py), never toward
+            # this goal: no reader may take it for the goal's progress (PROGRESS_PER_TASK)
+            out['progress_scope'] = PROGRESS_PER_TASK
         # otherwise one task gives the clip its verdict when the clip has an annotated goal, or has no timed steps to
         # judge it against instead; any other clip is read task by task, as on main
         elif len(tasks) != 1 or (task_prompts and not instruction):

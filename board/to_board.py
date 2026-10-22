@@ -237,7 +237,7 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         completion["task_completed"], completion["failure_kind"] = "failure", "partial"
     # head-camera clips have no single completion: they carry a `tasks` list of activities, each with its
     # own outcome and goal frame, which the board shows as a Tasks panel
-    from board.label_projection import effective_outcome
+    from board.label_projection import PROGRESS_PER_TASK, effective_outcome
     tasks = []
     for t in labels.get("tasks") or []:
         oc = str(t.get("outcome") or "").lower()
@@ -289,7 +289,9 @@ def convert(result: dict, dataset: str | None = None) -> dict:
         "operator_mistakes": labels.get("operator_mistakes") or [],
         "completion": completion,
         "tasks": tasks,
-        **({"progress_scope": "request_parts"} if labels.get("progress_scope") == "request_parts" else {}),
+        # what the timeline's progress measures when it is not the verdict (board/label_projection.py progress_scope)
+        **({"progress_scope": labels["progress_scope"]}
+           if labels.get("progress_scope") in ("request_parts", PROGRESS_PER_TASK) else {}),
         **({"part_assessments": finite(copy.deepcopy([a for a in labels["part_assessments"]
             if isinstance(a, dict)]))} if isinstance(labels.get("part_assessments"), list) else {}),
         **({"evidence_inspection": finite(copy.deepcopy(result["evidence_inspection"]))}
