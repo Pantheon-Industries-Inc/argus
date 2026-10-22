@@ -1243,6 +1243,11 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             'progress': [copy.deepcopy(step) for step in lab['timeline'] if step.get('progress') is not None],
         })
         for step in lab['timeline']:
+            # a step's progress is toward the sub-task under way in its own part: no reading of the whole recording,
+            # so it leaves the recording's progress, and stays with the step for the task it belongs to
+            # (board/scores.py, a task's own progress)
+            if step.get('progress') is not None:
+                step['progress_in_part'] = step['progress']
             step['progress'] = None
         off = outside_part(lab, t0, t1)
         if off:

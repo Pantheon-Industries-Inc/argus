@@ -191,8 +191,11 @@ def facts(d: dict) -> dict:
     for t in _subtasks(d):
         if not isinstance(t, dict) or _num(t.get("start_s")) is None or _num(t.get("end_s")) is None:
             continue
+        # in a recording labelled in parts a step keeps its progress toward its own part's sub-task, which is this
+        # task's progress; without it every failed or partial task went unjudged and every stitched score was 10
         own = [min(1.0, max(0.0, p)) for e in steps if t["start_s"] <= e["t_s"] <= t["end_s"]
-               for p in [_num(e.get("progress"))] if p is not None]
+               for p in [_num(e.get("progress")) if _num(e.get("progress")) is not None
+                         else _num(e.get("progress_in_part"))] if p is not None]
         tasks.append({"outcome": _verdict(t), "progress": max(own) if own else None})
     return {"tasks": tasks, "measured": bool(steps), "start_s": start, "goal_s": goal, "end_s": end, "active_s": active,
             "wasteful_s": wasteful, "hesitation_s": hesitation, "window_s": (end - start) if window else None,

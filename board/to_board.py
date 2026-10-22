@@ -206,6 +206,8 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "carry_phase": (f"-> {dest}" if dest else ""),
             "contribution": s.get("contribution") or "",
             "progress": s.get("progress"),
+            # a recording labelled in parts: the step's progress toward its own part's sub-task (label/pieces.py)
+            **({"progress_in_part": s["progress_in_part"]} if s.get("progress_in_part") is not None else {}),
             "end_s": s.get("end_s"),
             "confidence": s.get("confidence"),
             # head camera: per step whether the person's hands are in the frame, so the board can mark

@@ -1552,3 +1552,12 @@ def test_times_that_fit_the_episode_but_not_their_order_or_part_are_never_said_t
                            "footage, from 3.0 s to 6.0 s; and 2 steps and 1 key event of part 3 lie outside that "
                            "part's footage, from 6.0 s to 9.0 s. They are kept as given.")
     assert steps_outside({"duration_s": float("nan"), "event_labels": [{"t_s": 50.0}], "key_events": []}) == []
+
+
+def test_a_stitched_steps_progress_in_its_own_part_reaches_the_board_and_other_steps_are_unchanged():
+    out = _output("episode_long", progress_scope="request_parts")
+    out["labels"]["timeline"][0].update(progress=None, progress_in_part=0.4)
+    d = to_board.convert(out, "demo")
+    first, *rest = d["event_labels"]
+    assert first["progress"] is None and first["progress_in_part"] == 0.4
+    assert all("progress_in_part" not in e for e in rest)

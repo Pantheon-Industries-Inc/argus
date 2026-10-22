@@ -457,3 +457,20 @@ def test_labels_that_all_share_their_common_words_stay_fast_to_compare():
     t = time.time()
     scores.score_board(recs)
     assert time.time() - t < 10
+
+
+def test_a_stitched_recordings_failed_task_is_judged_from_its_steps_progress_in_their_own_part():
+    # the UMI 900h stitched takes all scored 10: the stitch keeps no recording-wide progress, so every failed or partial
+    # task went unjudged and only the successes counted; a step's progress toward its own part's sub-task is the
+    # progress of the task it belongs to
+    rec = _record("", None, [(0, 10, "advancing", None), (12, 20, "advancing", None), (22, 25, "advancing", None)])
+    for step, p in zip(rec["event_labels"], (1.0, 0.4, 0.2)):
+        step["progress_in_part"] = p
+    rec["completion"] = {}
+    rec["_stitched"] = {"parts": 2, "cuts_s": [11.0]}
+    rec["tasks"] = [{"start_s": 0, "end_s": 10, "task": "wash the bowl", "outcome": "success", "completed_at_s": 10},
+                    {"start_s": 12, "end_s": 20, "task": "peel the carrot", "outcome": "failure", "completed_at_s": None},
+                    {"start_s": 22, "end_s": 25, "task": "wipe the board", "outcome": "partial", "completed_at_s": None}]
+    s = scores.score_board({"umi.json": rec})["umi.json"]
+    assert (s["inputs"]["tasks_total"], s["inputs"]["tasks_judged"], s["inputs"]["tasks_done"]) == (3, 3, 1)
+    assert s["outcome"] == round(10 * (1.0 + 0.4 + 0.2) / 3, 1)

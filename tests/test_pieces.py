@@ -1183,6 +1183,8 @@ def test_independent_request_goals_do_not_become_episode_tasks_or_progress(tmp_p
     assert labels['tasks'] == [] and labels['completion']['task_completed'] == 'unclear'
     assert labels['progress_scope'] == 'request_parts'
     assert all(step['progress'] is None for step in labels['timeline'])
+    # each step keeps its progress toward its own part's sub-task, for the task it belongs to (board/scores.py)
+    assert [step.get('progress_in_part') for step in labels['timeline'] if step.get('object') == 'cup'] == [1.0, .03, .03]
     assert [assessment['progress'][0]['progress'] for assessment in labels['part_assessments']] == [1.0, .03, .03]
     for i, assessment in enumerate(labels['part_assessments']):
         offset = contexts[i]['piece']['t0_s']
