@@ -43,12 +43,13 @@ jobs:
         with:
           node-version: "24"
           package-manager-cache: false
-      # ffmpeg's packages are kept in the Actions cache, keyed on the runner image, so a run installs them from the
-      # cache and needs no package mirror; only the first run on a new image downloads them. A mirror that stopped
-      # answering held this step until the job's limit (PR 136, two shards, 17 min, 2026-10-22).
+      # ffmpeg's packages are kept in the Actions cache, keyed on the runner OS, so a run installs them from the cache
+      # and needs no package mirror. A mirror that slowed to about 60 KB/s on some runners held this step until the
+      # job's limit (PR 136, two shards, 17 min, 2026-10-22); a cached package that no longer fits a newer image falls
+      # back to apt below.
       - name: Name the video tools cache
         id: video-key
-        run: echo "key=video-debs-$ImageOS-$ImageVersion-v1" >> "$GITHUB_OUTPUT"
+        run: echo "key=video-debs-$ImageOS-v1" >> "$GITHUB_OUTPUT"
       - name: Restore the video tools packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -63,11 +64,17 @@ jobs:
           else
             # the runner image lists third-party repositories (packages.microsoft.com among them) whose index can
             # refuse a fetch; that must not fail the job, and the install still fails if Ubuntu's index is missing.
-            # Every fetch gives up after 30s and is retried, and the whole install is tried three times.
+            # Every fetch gives up after 30s and is retried, and the install is tried three times, each time from
+            # another mirror: a slow mirror trickles data, so a fetch timeout alone never fires. Packages a slow
+            # attempt finished stay in ~/video-debs and are not fetched again.
             APT="-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60"
+            MIRRORS=("" "http://archive.ubuntu.com/ubuntu/" "http://mirrors.edge.kernel.org/ubuntu/")
             for attempt in 1 2 3; do
-              sudo timeout 240 apt-get $APT update || echo "some package indexes could not be fetched; installing from those that were"
-              if sudo timeout 240 apt-get $APT -o Dir::Cache::archives="$HOME/video-debs" -o APT::Keep-Downloaded-Packages=true \
+              if [ -n "${MIRRORS[$((attempt - 1))]}" ] && [ -f /etc/apt/apt-mirrors.txt ]; then
+                echo "${MIRRORS[$((attempt - 1))]}" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+              fi
+              sudo timeout 60 apt-get $APT update || echo "some package indexes could not be fetched; installing from those that were"
+              if sudo timeout 170 apt-get $APT -o Dir::Cache::archives="$HOME/video-debs" -o APT::Keep-Downloaded-Packages=true \
                   install --yes --no-install-recommends ffmpeg; then break; fi
               if [ "$attempt" = 3 ]; then exit 1; fi
               echo "install attempt $attempt failed; trying again"
