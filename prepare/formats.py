@@ -3729,7 +3729,7 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
     for k in keep:
         meta.setdefault(k, {})
     for issue in vn.resolve({k: meta[k] for k in keep}, {k: int(np.prod(np.shape(v)[1:])) for k, v in keep.items()},
-                            claims, getattr(signals, "origins", None)):
+                            claims, getattr(signals, "origins", None), getattr(signals, "fields", None)):
         add_issue(ctx, **issue)
     for k, v in keep.items():
         what = radians_contradicted(k, np.asarray(v[:n]), meta[k])
@@ -8662,8 +8662,11 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
     """Every signal of an episode on the anchor camera's frames: by its own clock, as mcap_signals places a channel
     (nearest sample, NaN where none is near, so a signal that starts or ends inside the footage is NaN outside its
     readings, and left out only when it records nothing inside the footage), or, with no clock, one row per anchor
-    frame when it has as many rows as the anchor has frames. A value that is not finite is NaN (not_finite)."""
+    frame when it has as many rows as the anchor has frames. A value that is not finite is NaN (not_finite). Every
+    array kept carries the file's name as its origin, the name its file's own claims carry (h5_claims), so a
+    declaration in one file of an upload never names another file's arrays."""
     out = Signals()
+    origin = Path(str(getattr(f, "filename", "") or "")).name or None
     out.issues.extend(streams.get('clock_issues') or [])
     from prepare.value_names import h5_claims
     out.claims += h5_claims(f, [s["path"] for s in streams["signal"]])
@@ -8729,7 +8732,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
                     continue
                 out.add(s["name"], not_finite(s["name"], a, q, q[0], out),
                         shape=shape if len(shape) > 1 else None, names=names, source=f"HDF5 dataset {s['path']}",
-                        metadata=metadata)
+                        metadata=metadata, origin=origin)
                 out.meta[s["name"]].update(aligned_by=ALIGNED_ROWS, clock_problem=problem,
                                            source_rows=source_rows, camera_frames=camera_frames)
                 if summarised:
@@ -8756,7 +8759,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
                 variation_metadata = {k: v for k, v in metadata.items()
                                       if k in ('unit', 'units', 'coordinate_frame', 'sensor_type')}
                 out.add(vn, var, shape=shape if len(shape) > 1 else None, names=names,
-                        source=f"HDF5 dataset {s['path']}", metadata=variation_metadata)
+                        source=f"HDF5 dataset {s['path']}", metadata=variation_metadata, origin=origin)
                 out.meta[vn]["variation_of"] = s["name"]
                 if coarse is not None:
                     out.meta[vn]["aligned_by"] = COARSE_CLOCK
@@ -8766,7 +8769,7 @@ def h5_signals(f, streams: dict, q_abs: np.ndarray, fps: float | None, n_anchor:
             out.left_out.append((s["name"], f"{len(a)} rows and no clock, while the camera has {n_anchor} frames"))
             continue
         out.add(s["name"], v, shape=shape if len(shape) > 1 else None, names=names,
-                source=f"HDF5 dataset {s['path']}", metadata=metadata)
+                source=f"HDF5 dataset {s['path']}", metadata=metadata, origin=origin)
         if s["clock"] and coarse is not None:
             out.meta[s["name"]]["aligned_by"] = (ALIGNED_CAMERA if camera_note and camera_note.get("clock_problem")
                                                        else COARSE_CLOCK)
@@ -8798,7 +8801,7 @@ H5_ACTION_GROUP = re.compile(r"(^|/)actions?/", re.I)
 
 
 def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None = None,
-             identity_ctx: dict | None = None) -> tuple:
+             identity_ctx: dict | None = None, own_file: str | None = None) -> tuple:
     """(state, action, value names, the state array's name, note) of an HDF5 episode, from its signals (h5_signals,
     already on the anchor camera's frames, at times q). The arrays named as the state (H5_STATE_NAME, outside an action
     group) are tried shortest name first, and the first that state_layout lays out with the names the file gives its
@@ -8809,7 +8812,10 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
     Both leave the signals when the state is read; otherwise they stay, and note gives the first array's reason, named.
     All None on a head camera, which has no state and no note about one, or when no array is named as the state.
     files are the names of the HDF5 files whose arrays carry them first (h5_file_signals), passed over to read each
-    array's own name. identity_ctx retains each selected group's source claims before their metadata is removed."""
+    array's own name. identity_ctx retains each selected group's source claims before their metadata is removed.
+    own_file is the name of the HDF5 file the episode's cameras are read from: its arrays are tried by the name they
+    were read under, so another file's array of the same name, which puts each one's file name first
+    (Signals.distinct_name), never moves the episode's own array behind it."""
     if rig == "ego_head":
         return None, None, None, None, None
     meta = getattr(signals, "meta", {}) or {}
@@ -8829,7 +8835,12 @@ def h5_state(signals: Signals, rig: str, q: np.ndarray, files: list[str] | None 
             return False
         return (any(H5_STATE_NAME.search(path) or H5_JOINT_ACTION.search(path) for path in paths)
                 and not any(H5_ACTION_GROUP.search(path) for path in paths))
-    cands = sorted({k for k in [*signals, *left_out] if named(k)}, key=lambda k: (len(k), k))
+    origins, fields = getattr(signals, "origins", {}) or {}, getattr(signals, "fields", {}) or {}
+
+    def rank(k):
+        n = fields.get(k, k) if own_file and origins.get(k) == own_file else k
+        return len(n), n
+    cands = sorted({k for k in [*signals, *left_out] if named(k)}, key=rank)
 
     q = np.asarray(q, dtype=np.float64)
 
@@ -9253,7 +9264,8 @@ def convert_hdf5(item: dict, rig: str, out: Path, dataset: str, *, source_scope:
         with part(parts, "the recorded state"):
             skip_when_cameras_only()
             state, action, state_names, state_src, state_note = h5_state(signals, rig, q_selected,
-                                                                         identity_ctx=identity_extra)
+                                                                         identity_ctx=identity_extra,
+                                                                         own_file=Path(f.filename).name)
         sensor_extra: dict = {}
         if assumed:
             with part(parts, "the sensor files placed from both starts"):

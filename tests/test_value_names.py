@@ -443,3 +443,131 @@ def test_hdf5_attributes_name_only_the_arrays_of_their_own_file(tmp_path):
     assert metas["b observations/qpos"]["names"] == ["b1", "b2"]
     assert "names" not in metas["observations/qpos"]
     assert [i["signal"] for i in issues if i["kind"] == "value_names_conflict"] == ["observations/qpos"]
+
+
+def _h5_upload(tmp_path, files: dict) -> tuple[dict, Path]:
+    """Prepare an upload of HDF5 files ({file name: fill(h5py.File)}), one of which holds the camera, as one episode;
+    returns its context and folder."""
+    import h5py
+    root = tmp_path / "upload"
+    root.mkdir()
+    for name, fill in files.items():
+        with h5py.File(root / name, "w") as h:
+            fill(h)
+    rep = f.convert(root, "teleop_arms", tmp_path / "eps", "test", 900)
+    assert not rep["failed"] and len(rep["episodes"]) == 1, rep
+    ep = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    return json.loads((ep / "context.json").read_text()), ep
+
+
+H5_T = T0 + np.arange(40) / 10
+
+
+def _h5_camera(h, arrays: dict, attrs: dict | None = None) -> None:
+    """An HDF5 episode file: a camera on its clock, and arrays {path: values} on a clock of their group."""
+    h.attrs["fps"] = 10
+    h.create_dataset("timestamps", data=H5_T).attrs["units"] = "s"
+    h["images/top"] = np.stack([np.full((36, 64, 3), 5 * k, np.uint8) for k in range(len(H5_T))])
+    _h5_sensor(h, arrays, attrs)
+
+
+def _h5_sensor(h, arrays: dict, attrs: dict | None = None) -> None:
+    """Arrays {path: values}, each on a clock of its group (or the file's), and attributes {group: {key: value}}."""
+    for path, values in arrays.items():
+        group = path.rsplit("/", 1)[0] if "/" in path else ""
+        clock = f"{group}/timestamps" if group else "timestamps"
+        if clock not in h:
+            h.create_dataset(clock, data=H5_T).attrs["units"] = "s"
+        h[path] = values
+    for group, kv in (attrs or {}).items():
+        for k, v in kv.items():
+            h[group].attrs[k] = v
+
+
+def test_an_hdf5_files_attributes_never_name_the_arrays_of_another_file_of_the_upload(tmp_path):
+    """An episode file whose sensors/pressure names nothing, beside a sensor file whose /sensors attributes name its own
+    pressure: the episode's array had taken the sensor file's names, since the HDF5 reader recorded no file for its
+    arrays. Each file's attributes now name only that file's arrays, and two files that name the array differently
+    each keep their own names, with no conflict."""
+    rows = np.arange(120, dtype=np.float32).reshape(40, 3)
+    theirs = {"/sensors": {"pressure_names": ["a1", "a2", "a3"]}}
+    for ours, want in ((None, None), ({"/sensors": {"pressure_names": ["b1", "b2", "b3"]}}, ["b1", "b2", "b3"])):
+        case = tmp_path / ("ours" if ours else "none")
+        case.mkdir()
+        ctx, _ = _h5_upload(case, {"b.h5": lambda h: _h5_camera(h, {"sensors/pressure": rows}, ours),
+                                   "a.h5": lambda h: _h5_sensor(h, {"sensors/pressure": rows + 1000}, theirs)})
+        got = {s["name"]: s for s in ctx["signals"]}
+        assert set(got) == {"sensors/pressure", "pressure"}, set(got)
+        assert got["pressure"]["names"] == ["a1", "a2", "a3"], got["pressure"]
+        assert got["sensors/pressure"].get("names") == want, got["sensors/pressure"]
+        assert (got["sensors/pressure"].get("unnamed") is True) == (want is None), got["sensors/pressure"]
+        assert not [i for i in ctx.get("reader_issues") or [] if i["kind"] == "value_names_conflict"], ctx
+
+
+def test_two_hdf5_files_of_one_array_name_are_told_apart_by_their_files(tmp_path):
+    """The episode file and a sensor file both record pressure, with other readings: both are kept, each under its
+    file's name, and the note names both files. Each takes only its own file's names, matched by the name it was read
+    under: the episode file's array had kept the bare name and taken the sensor file's names (or lost both to a
+    conflict), been called "the first read", and the sensor file's array, renamed, had matched no names at all."""
+    rows = np.arange(120, dtype=np.float32).reshape(40, 3)
+    for ours in (None, ["b1", "b2", "b3"]):
+        case = tmp_path / ("ours" if ours else "none")
+        case.mkdir()
+        ctx, _ = _h5_upload(case, {
+            "b.h5": lambda h: _h5_camera(h, {"pressure": rows}, {"/": {"pressure_names": ours}} if ours else None),
+            "a.h5": lambda h: _h5_sensor(h, {"sensors/pressure": rows + 1000},
+                                         {"/sensors": {"pressure_names": ["a1", "a2", "a3"]}})})
+        got = {s["name"]: s for s in ctx["signals"]}
+        assert set(got) == {"b pressure", "a pressure"}, set(got)
+        assert got["a pressure"].get("names") == ["a1", "a2", "a3"], got["a pressure"]
+        assert got["b pressure"].get("names") == ours and (got["b pressure"].get("unnamed") is True) == (not ours), got
+        issues = ctx["reader_issues"]
+        notes = [i for i in issues if i["kind"] == "signal_name_collision"]
+        assert len(notes) == 1 and "(b.h5 and a.h5)" in notes[0]["what"], notes
+        assert notes[0]["signal"] == "a pressure" and notes[0]["signal_source"] == "a.h5", notes
+        assert not [i for i in issues if i["kind"] == "value_names_conflict"], issues
+
+
+def test_the_episode_files_own_state_stays_first_beside_another_files_array_of_its_name(tmp_path):
+    """Two HDF5 files that record observations/qpos on one clock: the camera file's array is the state as before, now
+    named with its file, and the other stays a signal. When the file names say the sides (left.h5, right.h5), the two
+    are the two arms of one state, left first, as the same two files beside videos are read; the camera file's array
+    had been read as the whole state, since its name carried no side."""
+    joints = [f"joint{i}_rad" for i in range(1, 7)] + ["gripper"]
+    th = np.arange(40) / 10
+    mine = np.stack([0.3 * np.sin(th + j) for j in range(7)], axis=1)
+    other = np.stack([0.3 * np.cos(th + j) for j in range(7)], axis=1)
+
+    def arm(values, more=None):
+        # another group beside observations keeps the group in the array's name (h5_streams leaves off only a group
+        # that holds everything), so the two files' arrays have one name
+        return {"observations/qpos": values, **(more or {})}, {"/observations/qpos": {"names": joints}}
+    for ep_file, other_file, state, kept in (
+            ("b.h5", "a.h5", "b observations/qpos", {"a observations/qpos"}),
+            ("left.h5", "right.h5", "left observations/qpos and right observations/qpos", set())):
+        case = tmp_path / ep_file
+        case.mkdir()
+        ctx, ep = _h5_upload(case, {ep_file: lambda h: _h5_camera(h, *arm(mine)),
+                                    other_file: lambda h: _h5_sensor(h, *arm(other, {"extra/v": th[:, None]}))})
+        assert ctx["state_kind"] == "joints" and ctx["source"]["state"] == state, ctx.get("state_note")
+        z = np.load(ep / "state.npz")
+        assert np.allclose(z["state"][:, :7], mine, atol=1e-6)
+        if not kept:
+            assert np.allclose(z["state"][:, 7:], other, atol=1e-6)
+        assert {s["name"] for s in ctx.get("signals") or [] if "qpos" in s["name"]} == kept, ctx.get("signals")
+
+
+def test_a_single_hdf5_file_reads_its_names_units_and_issues_as_before(tmp_path):
+    """One HDF5 file, whose arrays all carry its name as their origin: its group's attributes still name and give the
+    units of its arrays, a dataset's own names still win, and the issues are the same as before."""
+    rows = np.arange(120, dtype=np.float64).reshape(40, 3)
+    rows[5, 1] = np.inf
+    ctx, _ = _h5_upload(tmp_path, {"rec.h5": lambda h: _h5_camera(
+        h, {"sensors/pressure": rows, "sensors/force": np.ones((40, 2))},
+        {"/sensors": {"pressure_names": ["p1", "p2", "p3"], "pressure_unit": "kPa", "force_names": "f1, f2"}})})
+    got = {s["name"]: s for s in ctx["signals"]}
+    assert got["sensors/pressure"]["names"] == ["p1", "p2", "p3"] and got["sensors/pressure"]["unit"] == "kPa", got
+    assert got["sensors/force"]["names"] == ["f1", "f2"] and got["sensors/force"].get("units_undeclared") is True, got
+    assert [(i["kind"], i.get("signal")) for i in ctx.get("reader_issues") or []] == [
+        ("signal_not_finite", "sensors/pressure")], ctx.get("reader_issues")
+    assert not any("signal_source" in i for i in ctx.get("reader_issues") or []), ctx.get("reader_issues")

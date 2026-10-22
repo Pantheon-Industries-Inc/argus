@@ -21,15 +21,16 @@ that each carry a name or a title (a JSON schema's prefixItems). The list names 
 part of a path, and an entry of a list that carries a name adds its name (arms: [{name: left, ...}] is arms/left).
 
 write_signals (prepare/formats.py), the step every reader's arrays pass through on their way to context.json, attaches
-them (resolve). A claim names an array when its path ends the array's name, or the name ends its path (both split at
-/, . and spaces, in any case), and it gives one name per value; the claims that match the most segments win,
-the nearer declaration wins a tie, and claims that still disagree name nothing, which is a data issue. A claim on an
-MCAP channel as a whole names that channel's one array of its width. A claim with an origin names only arrays read
-from that file (Signals.origins, or a file a joined array was read from), so a second file's channel of the same name
-neither takes the first file's names nor loses its own to a disagreement with them; a description beside the
-recording has no origin and names an array of any file. Names a reader already attached are kept. An
-array of two or more values that nothing names is kept as it is and marked unnamed, so the readout, the board and the
-exports say that its values are known only by their order."""
+them (resolve). A claim names an array when its path ends the array's name, or the name ends its path (both split at /,
+. and spaces, in any case), and it gives one name per value; an array renamed to keep it apart from another source of
+its name (formats.Signals.distinct_name) is also matched by the name it was read under. The claims that match the most
+segments win, the nearer declaration wins a tie, and claims that still disagree name nothing, which is a data issue. A
+claim on an MCAP channel as a whole names that channel's one array of its width. A claim with an origin names only
+arrays read from that file (Signals.origins, or a file a joined array was read from), so a second file's channel of the
+same name neither takes the first file's names nor loses its own to a disagreement with them; a description beside the
+recording has no origin and names an array of any file. Names a reader already attached are kept. An array of two or
+more values that nothing names is kept as it is and marked unnamed, so the readout, the board and the exports say that
+its values are known only by their order."""
 from __future__ import annotations
 
 import contextlib
@@ -485,16 +486,18 @@ def _from(claim: dict, files) -> bool:
     return not files or not claim.get("origin") or claim["origin"] in files
 
 
-def _pick(name: str, m: dict, width: int, claims: list[dict], widths: dict, by_topic: dict, files_of=None):
+def _pick(name: str, m: dict, width: int, claims: list[dict], widths: dict, by_topic: dict, files_of=None,
+          read_as: str | None = None):
     """(the values the best matching claims give, their sources), ("conflict", their sources) when they disagree, or
     None: of the claims that may name it (_from, files_of {name: the files it was read from}), the claims that match
     the most segments of name, the nearest of those (rank), and a claim on name's MCAP channel as a whole only when
-    name is that channel's one array of its width in its files."""
+    name is that channel's one array of its width in its files. An array read under another name (read_as, before it
+    was kept apart from another source of that name) is matched by either."""
     files_of = files_of or {}
     files = files_of.get(name) or frozenset()
     claims = [c for c in claims if _from(c, files)]
-    segs = segments(name)
-    found = [(c, _matches(tuple(c["path"]), segs)) for c in claims if not c.get("channel")]
+    segs = {segments(name), segments(read_as or name)}
+    found = [(c, max(_matches(tuple(c["path"]), x) for x in segs)) for c in claims if not c.get("channel")]
     found = [(c, k) for c, k in found if k > 0 and _claim_values(c, width) is not None]
     if not found:
         topic = _channel_topic(m)
@@ -525,9 +528,11 @@ def recorded_units(m: dict, width: int) -> list | None:
     return None
 
 
-def resolve(metas: dict, widths: dict, claims: list[dict], origins: dict | None = None) -> list[dict]:
+def resolve(metas: dict, widths: dict, claims: list[dict], origins: dict | None = None,
+            fields: dict | None = None) -> list[dict]:
     """Attach what claims declare to every array of metas ({name: its meta}, widths {name: values per frame}, origins
-    {name: the file it was read from}, with any file a joined array lists in its meta's joined_from): names
+    {name: the file it was read from}, with any file a joined array lists in its meta's joined_from, fields {name: the
+    name it was read under}): names
     and names_source (where they were declared) to an array of two or more values a reader left unnamed, and a unit
     (unit, or units when its values differ) and units_source to an array a reader kept no unit for; an array that
     nothing gives a unit is marked units_undeclared. Returns the issues (add_issue's arguments) for arrays that claims
@@ -545,7 +550,7 @@ def resolve(metas: dict, widths: dict, claims: list[dict], origins: dict | None 
     for name, m in metas.items():
         width = widths.get(name) or 0
         if width >= 2 and not (m.get("names") and len(m["names"]) == width) and name_claims:
-            got = _pick(name, m, width, name_claims, widths, by_topic, files_of)
+            got = _pick(name, m, width, name_claims, widths, by_topic, files_of, (fields or {}).get(name))
             if got and got[0] == "conflict":
                 issues.append({"kind": "value_names_conflict", "signal": name,
                                "what": f"{name}: {' and '.join(got[1])} name its {width} values differently, so its "
@@ -554,7 +559,8 @@ def resolve(metas: dict, widths: dict, claims: list[dict], origins: dict | None 
                 m["names"], m["names_source"] = got[0], ", ".join(got[1])
         if width < 1 or recorded_units(m, width) is not None:
             continue
-        got = _pick(name, m, width, unit_claims, widths, by_topic, files_of) if unit_claims else None
+        got = (_pick(name, m, width, unit_claims, widths, by_topic, files_of, (fields or {}).get(name))
+               if unit_claims else None)
         if got and got[0] == "conflict":
             issues.append({"kind": "value_units_conflict", "signal": name,
                            "what": f"{name}: {' and '.join(got[1])} give its values different units, so no unit is "
