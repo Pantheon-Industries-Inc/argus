@@ -1,7 +1,9 @@
 """Several board servers share one footage folder: none acts on its own earlier read of a file another one changes.
 
-Each server here is its own OS process, reached over real HTTP; only ticket lifetimes and cache budgets are shortened.
-The helper tests race a writer process against a remover process on one file."""
+Each server here is its own OS process, reached over real HTTP; only ticket lifetimes and cache budgets are shortened,
+and the time the board's ticket code reads is one clock the test sets for both servers, so whether a ticket is live
+never depends on how fast the machine runs the requests between two steps. The helper tests race a writer process
+against a remover process on one file."""
 import json
 import os
 from pathlib import Path
@@ -20,7 +22,8 @@ from label.atomic import file_version, remove_if, small_file, sweep_removals
 REPO = Path(__file__).resolve().parents[1]
 
 SERVER = textwrap.dedent('''
-    import sys, threading
+    import sys, threading, types
+    import time as real_time
     from pathlib import Path
     sys.path.insert(0, sys.argv[1])
     from board import serve
@@ -28,6 +31,15 @@ SERVER = textwrap.dedent('''
     serve.HERE, serve.MP4_DIR, serve.FOOTAGE_DIR = root / 'qa', root / 'clips', root / 'footage'
     serve._FOOTAGE_TICKET_SECONDS = float(sys.argv[3])
     serve._FOOTAGE_DISK_FILES = int(sys.argv[4])
+
+    class Clock(types.ModuleType):
+        """serve's time module, except that time() is the moment the test last wrote to <root>/clock."""
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+        def time(self):
+            return float((root / 'clock').read_text())
+    serve.time = Clock('time')
     server = serve.BoardHTTPServer(('127.0.0.1', 0), serve.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(server.server_address[1], flush=True)
@@ -36,10 +48,31 @@ SERVER = textwrap.dedent('''
 ''')
 
 
+class Clock:
+    """The time both servers' ticket code reads. It stands still between steps and moves only when the test moves it."""
+
+    def __init__(self, root):
+        self.path = root / 'clock'
+        self.set(time.time())
+
+    def set(self, moment):
+        staged = self.path.with_name('clock.next')
+        staged.write_text(repr(moment))
+        os.replace(staged, self.path)
+        self.now = moment
+
+    def advance(self, seconds):
+        self.set(self.now + seconds)
+
+    def past(self, moment):
+        self.set(max(self.now, moment + .15))
+
+
 class Servers:
-    """Two board server processes on one board and one footage folder."""
+    """Two board server processes on one board and one footage folder, reading one clock."""
 
     def __init__(self, root, ticket_seconds, disk_files):
+        self.clock = Clock(root)
         self.processes = []
         for _ in range(2):
             process = subprocess.Popen([sys.executable, '-c', SERVER, str(REPO), str(root), str(ticket_seconds),
@@ -88,10 +121,6 @@ def expiry(root, token):
     return json.loads((root / 'footage' / '.tickets' / f'{token}.json').read_text())['expires_at']
 
 
-def wait_past(moment):
-    time.sleep(max(0.0, moment - time.time() + .15))
-
-
 @pytest.mark.parametrize('later', ['footage', 'other client prepares'])
 def test_a_ticket_renewed_by_one_server_survives_the_other_servers_earlier_read(board, later):
     servers = Servers(board, ticket_seconds=2, disk_files=8)
@@ -100,16 +129,17 @@ def test_a_ticket_renewed_by_one_server_survives_the_other_servers_earlier_read(
         assert status == 200
         first = expiry(board, token)
         assert servers.get(1, 'api/footage?id=episode_x&t0=0&t1=0.3')[0] == 200    # server 1 reads the ticket
-        time.sleep(.5)
+        time.sleep(.5)                                  # the renewed record gets a new modification time
+        servers.clock.advance(.5)
         assert servers.prepare(0, (0, .3)) == (200, token)                          # server 0 renews the same token
         renewed = expiry(board, token)
         assert renewed > first
-        wait_past(first)
+        servers.clock.past(first)                       # server 1's earlier read has expired; the renewal has not
         if later == 'footage':
             assert servers.get(1, 'api/footage?id=episode_x&t0=0&t1=0.3')[0] == 200
         else:
             assert servers.prepare(1, (.1, .4), client='10.0.0.2')[0] == 200
-        assert time.time() < renewed
+        assert servers.clock.now < renewed
         assert servers.get(0, f'api/footage?ticket={token}')[0] == 200
         assert servers.get(1, f'api/footage?ticket={token}')[0] == 200
     finally:
@@ -125,8 +155,9 @@ def test_eviction_by_another_server_never_takes_the_movie_of_a_renewed_ticket(bo
         first = expiry(board, token)
         assert servers.get(1, 'api/footage?id=episode_x&t0=0&t1=0.3')[0] == 200
         time.sleep(.5)
+        servers.clock.advance(.5)
         assert servers.prepare(0, (0, .3)) == (200, token)
-        wait_past(first)
+        servers.clock.past(first)
         # a second client's span needs the only cache slot, which the renewed ticket still holds
         assert servers.prepare(1, (.1, .4), client='10.0.0.2')[0] == 503
         assert servers.get(1, f'api/footage?ticket={token}') == held
@@ -140,7 +171,7 @@ def test_an_expired_ticket_is_still_removed_by_the_other_server(board):
     try:
         status, token = servers.prepare(0, (0, .3))
         assert status == 200
-        wait_past(expiry(board, token))
+        servers.clock.past(expiry(board, token))
         assert servers.get(1, 'api/footage?id=episode_x&t0=0&t1=0.3')[0] == 200
         assert not (board / 'footage' / '.tickets' / f'{token}.json').exists()
         assert servers.get(0, f'api/footage?ticket={token}')[0] == 404
