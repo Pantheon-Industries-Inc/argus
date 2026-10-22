@@ -7,6 +7,8 @@ one task of the next part starts there (label/pieces.py seam_candidates), the tw
 not always: in 40 such UMI pairs about 6 were a new task that began right at the cut. The stitch never decides this
 from what the parts wrote (their notes, task text or object names). This check asks once per candidate cut, with the
 frames on both sides of it, and label/pieces.py join_across_cuts joins the halves only on a verdict of same_task true.
+A joined task keeps the goal the part before the cut wrote unless the verdict's goal_from says "after": a part that
+ends mid-activity can name an end state the work is not aiming at (assembling where both sides show taking apart).
 
     python -m review seam --label LABEL --footage FOOTAGE --out SEAMS.json [--dry-run] [--cap 5]
 
@@ -116,18 +118,25 @@ def prompt(candidate: dict, times: list[float], cam_labels: list[str]) -> str:
         "The part after the cut began with this task:\n" + _task_lines(candidate["right"]) + "\n\n"
         "Each description was written by a request that saw only its own side of the cut, so the two can name one "
         "task differently, and a new task can also begin right at the cut. If you answer true, the two become one "
-        "task: the goal the part before the cut wrote, judged by the outcome the part after the cut gave. So the "
-        "question is whether the work on both sides is aimed at the same end state, not whether the hands keep "
-        "moving: the hands nearly always keep moving across a cut.\n"
+        "task: the goal the part before the cut wrote (or the one after it, by goal_from), judged by the outcome the "
+        "part after the cut gave. So the question is whether the work on both sides is aimed at the same end state, "
+        "not whether the hands keep moving: the hands nearly always keep moving across a cut.\n"
         "- true: the work after the cut carries on toward the same end state as the work before it (the same build, "
         "fill, sort or arrangement, perhaps described more narrowly as what was left).\n"
         "- false: the end states differ, even with no pause between them (building, then taking it apart; laying "
         "pieces out, then assembling something new from them; one object finished and set aside, then another "
         "begun), or the frames show one task ending and another starting near the cut.\n"
         "- unclear: the frames do not show which.\n\n"
+        "goal_from, when you answer true, says which written goal the joined task takes:\n"
+        '- "before": the goal the part before the cut wrote names the end state the work on both sides aims at, also '
+        "when the part after the cut describes only what was left of it.\n"
+        '- "after": the goal the part before the cut wrote names an end state the work is not aiming at (the part '
+        "ended mid-activity and read it wrongly, for example assembling where the frames on both sides show taking "
+        "apart), and the goal the part after the cut wrote names the one it is.\n"
+        "- null when you do not answer true.\n\n"
         "Answer with one JSON object and nothing else:\n"
-        '{"same_task": true | false | "unclear", "evidence": "<the end state the work aims at on each side of the '
-        'cut, as the frames show it, in one or two sentences>"}')
+        '{"same_task": true | false | "unclear", "goal_from": "before" | "after" | null, "evidence": "<the end state '
+        'the work aims at on each side of the cut, as the frames show it, in one or two sentences>"}')
 
 
 def settings(result: dict, model: str | None = None, reasoning: str | None = None) -> dict:
@@ -283,14 +292,17 @@ def build_request(result: dict, candidate: dict, footage: Path, sync: dict | Non
 
 def read_answer(text: str) -> dict:
     """{"same_task", "evidence"} from the reply, or "unclear" with why when the reply is not that strict JSON, so a
-    reply that cannot be read never joins two tasks."""
+    reply that cannot be read never joins two tasks. goal_from is kept only as "before" or "after"; any other value is
+    left out, and the join then keeps the goal the part before the cut wrote, as every join did before it existed."""
     try:
         fenced = re.fullmatch(r"\s*```(?:json)?\s*(.*?)\s*```\s*", text or "", re.S)
         answer = json.loads(fenced.group(1) if fenced else text)
         same = answer.get("same_task") if isinstance(answer, dict) else None
         if not (type(same) is bool or same == "unclear") or not isinstance(answer.get("evidence"), str):
             raise ValueError('the reply is not {"same_task": true | false | "unclear", "evidence": text}')
-        return {"same_task": answer["same_task"], "evidence": answer["evidence"]}
+        goal = answer.get("goal_from")
+        return {"same_task": answer["same_task"], **({"goal_from": goal} if goal in ("before", "after") else {}),
+                "evidence": answer["evidence"]}
     except (ValueError, TypeError) as error:
         return {"same_task": "unclear", "evidence": "", "reply_problem": f"{type(error).__name__}: {error}"[:300],
                 "reply": str(text)[:1000]}

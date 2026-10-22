@@ -926,8 +926,12 @@ def outside_part(lab: dict, t0: float, t1: float) -> dict:
 JOIN_GUARD_S = 2.0
 KEY_CUT_GUARD_S = 1.0
 # a task joined across a cut takes how it ended from the half that saw the end, and what it set out to do from the half
-# that saw it start: a goal inferred from the second part alone names only what was left (PR 107's rule)
+# that saw it start: a goal inferred from the second part alone names only what was left (PR 107's rule). The one
+# exception is a seam verdict with goal_from "after" (label/seam.py): the check saw frames on both sides and found that
+# the goal written before the cut names a different end state than the work aims at, so the goal comes from the right
+# half (GOAL_FIELDS, the goal and what it is judged against)
 END_FIELDS = ("outcome", "completed_at_s", "goal_reached_at_s", "undone_at_s", "undone_by")
+GOAL_FIELDS = ("task", "success_predicate", "judged_against", "subtask")
 
 
 def _cut_sides(entry: dict) -> set[str]:
@@ -1300,7 +1304,8 @@ def _window_pairs(tasks: list, window: dict) -> list[tuple[dict, dict, dict]]:
 
 def _join(tasks: list, left: dict, right: dict, cut: float, how: dict) -> list:
     """The tasks with left and right as one task: how it ended from the right half (END_FIELDS), what it set out to do
-    from the left half, both halves under joined_from and how they were matched under cut_joins."""
+    (GOAL_FIELDS) from the left half unless the seam verdict that matched them says goal_from "after", both halves
+    under joined_from and how they were matched under cut_joins."""
     from label.episode import number
     objects = []
     for obj in [*(left.get("objects") or []), *(right.get("objects") or [])]:
@@ -1317,6 +1322,8 @@ def _join(tasks: list, left: dict, right: dict, cut: float, how: dict) -> list:
               "note": f"Continues across the internal request cut at {cut:g}s. " + str(right.get("note") or "")}
     if None not in starts and starts[1] < starts[0]:
         joined["start_s"] = right.get("start_s")
+    if how.get("by") == "seam_check" and how.get("goal_from") == "after":
+        joined.update({key: copy.deepcopy(right.get(key)) for key in GOAL_FIELDS if key in left or key in right})
     return [joined if task is left else task for task in tasks if task is not right]
 
 
@@ -1330,8 +1337,9 @@ def join_across_cuts(tasks: list, cuts_s: list[float], seams: dict | None = None
     inside the window by the time they share (_window_pairs). A cut without a window has a seam candidate when exactly
     one task is still under way where the part before it ends and exactly one task of the next part starts there
     (_cut_pairs). Position alone does not make them one task: in 40 such UMI pairs about 6 were a new task that began
-    right at the cut. So a candidate joins only when its seam verdict (seams, {cut: {"same_task", "evidence",
-    "request"}}, label/seam.py) says same_task true. A verdict of false or unclear leaves the halves apart with the
+    right at the cut. So a candidate joins only when its seam verdict (seams, {cut: {"same_task", "goal_from",
+    "evidence", "request"}}, label/seam.py) says same_task true, and the joined task takes the right half's goal only
+    when the verdict's goal_from says "after" (_join). A verdict of false or unclear leaves the halves apart with the
     verdict under cut_seams on both, and with no verdict they stay apart as they came."""
     from label.episode import number
     order = lambda task: (number(task.get("start_s")) is None, number(task.get("start_s")) or 0)

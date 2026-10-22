@@ -1122,6 +1122,64 @@ def test_blanket_continuation_joins_only_on_a_seam_verdict_that_says_same_task()
     assert len(two_open) == 3
 
 
+def test_a_seam_verdict_that_takes_the_goal_from_after_the_cut_names_the_joined_task_by_the_right_half():
+    """A part that ends mid-activity can name the wrong end state: the left half below was written up as assembling a
+    toy while the frames on both sides show it being taken apart. The seam check says which side's written goal is
+    the one the work aims at (goal_from), and the joined task takes its task, success_predicate, judged_against and
+    subtask from that side. Its outcome comes from the right half as before, and both halves stay under joined_from."""
+    source = lambda index, lo, hi: {'index': index, 't0_s': lo, 't1_s': hi}
+    cut = 304.833
+    left = {'start_s': 190., 'end_s': 304.8, 'task': 'Assemble the toy figure', 'objects': ['toy figure'],
+            'judged_against': 'own_end_state', 'subtask': None, 'outcome': 'unclear', 'completed_at_s': None,
+            'success_predicate': 'The toy figure stands fully assembled.', 'note': '',
+            'source_piece': source(1, 0., cut)}
+    right = {'start_s': cut, 'end_s': 360., 'task': 'Take the toy figure apart', 'objects': ['toy figure'],
+             'judged_against': 'own_end_state', 'subtask': None, 'outcome': 'success', 'completed_at_s': 358.,
+             'success_predicate': 'Every piece of the toy figure lies separate on the table.', 'note': '',
+             'source_piece': source(2, cut, 500.)}
+    originals = json.loads(json.dumps([left, right]))
+    verdict = lambda **x: {cut: {'same_task': True, 'evidence': 'The figure is taken apart on both sides.', **x}}
+    (joined,) = pieces.join_across_cuts([left, right], [cut], verdict(goal_from='after'))
+    assert (joined['task'], joined['success_predicate']) == (right['task'], right['success_predicate'])
+    assert (joined['outcome'], joined['completed_at_s'], joined['start_s'], joined['end_s']) == (
+        'success', 358., 190., 360.)
+    # both halves' own texts stay on the record, and the verdict that chose the right half's is kept with the join
+    assert joined['joined_from'] == originals and [left, right] == originals
+    assert joined['cut_joins'] == [{'cut_s': cut, 'by': 'seam_check', **verdict(goal_from='after')[cut]}]
+    # the right half's judged_against and subtask go with its goal, so the goal and what it is judged against agree
+    instructed = {**right, 'judged_against': 'subtask', 'subtask': 3}
+    (joined,) = pieces.join_across_cuts([left, instructed], [cut], verdict(goal_from='after'))
+    assert (joined['judged_against'], joined['subtask']) == ('subtask', 3)
+    # "before", no goal_from (every verdict asked before the field existed) and any other value keep the left half's
+    # goal, as every join did before
+    for seen in (verdict(goal_from='before'), verdict(), verdict(goal_from='After'), verdict(goal_from=True),
+                 verdict(goal_from=None), verdict(goal_from=['after'])):
+        (joined,) = pieces.join_across_cuts([left, right], [cut], seen)
+        assert (joined['task'], joined['success_predicate'], joined['outcome']) == (
+            left['task'], left['success_predicate'], 'success'), seen
+    # a left half its part saw end is no candidate, so goal_from cannot rename it either
+    done = {**left, 'outcome': 'success', 'completed_at_s': 300.}
+    assert pieces.join_across_cuts([done, right], [cut], verdict(goal_from='after')) == [done, right]
+    # a verdict that does not join decides nothing about the goal either
+    apart = pieces.join_across_cuts([left, right], [cut], {cut: {'same_task': False, 'goal_from': 'after',
+                                                                 'evidence': 'A new task.'}})
+    assert [t['task'] for t in apart] == [left['task'], right['task']]
+    # over two cuts each join takes its own verdict's side: renamed at the first cut, kept at the second
+    middle = {**right, 'end_s': 500., 'outcome': 'unclear', 'completed_at_s': None}
+    last = {**right, 'task': 'Sort the loose pieces', 'success_predicate': 'The pieces are sorted.',
+            'start_s': 500., 'end_s': 530., 'completed_at_s': 529., 'source_piece': source(3, 500., 600.)}
+    both = {**verdict(goal_from='after'), 500.: {'same_task': True, 'evidence': 'Still taking it apart.'}}
+    (joined,) = pieces.join_across_cuts([left, middle, last], [cut, 500.], both)
+    assert (joined['task'], joined['completed_at_s']) == (right['task'], 529.)
+    assert [h['task'] for h in joined['joined_from']] == [left['task'], right['task'], last['task']]
+    # a shared window has no verdict to say so: the left half's goal, as before
+    window = {'cut_s': 300., 't0_s': 292.5, 't1_s': 307.5}
+    w_left = {**left, 'end_s': 307.5, 'source_piece': source(1, 0., 307.5)}
+    w_right = {**right, 'start_s': 292.5, 'source_piece': source(2, 292.5, 500.)}
+    (joined,) = pieces.join_across_cuts([w_left, w_right], [300.], windows={300.: window})
+    assert joined['task'] == left['task']
+
+
 def test_an_unclear_task_ending_at_our_cut_continues_past_it_whatever_its_note_says():
     """A UMI recording's real part-1 task (fob_47b204-1da855ba-867-234), in the model's own words: its span ends at the
     part's internal cut, so its unclear outcome is the cut's, even with a fumble inside the task and a note that names

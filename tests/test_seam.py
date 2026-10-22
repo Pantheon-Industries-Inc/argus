@@ -96,6 +96,20 @@ def test_only_a_strict_answer_is_read_as_a_verdict(text, same, read):
     assert ('reply_problem' not in answer) is read
 
 
+@pytest.mark.parametrize('goal_from, kept', [
+    ('"after"', 'after'), ('"before"', 'before'), ('null', None), ('"After"', None), ('"the left one"', None),
+    ('true', None), (None, None)])
+def test_a_verdict_keeps_which_sides_goal_the_work_aims_at_only_as_one_of_its_two_words(goal_from, kept):
+    """goal_from says whose written goal the joined task takes (label/pieces.py _join). Only "before" or "after" is
+    kept; anything else is left out, so the join keeps the goal the part before the cut wrote, as it did before."""
+    field = f', "goal_from": {goal_from}' if goal_from is not None else ''
+    answer = seam.read_answer('{"same_task": true' + field + ', "evidence": "Taken apart on both sides."}')
+    assert answer['same_task'] is True and 'reply_problem' not in answer
+    assert answer.get('goal_from') == kept and ('goal_from' in answer) is (kept is not None)
+    content = seam.prompt({'cut_s': CUT, 'left': _halves()[0], 'right': _halves()[1]}, [CUT - 1, CUT + 1], ['exo'])
+    assert '"goal_from": "before" | "after" | null' in content
+
+
 def _episode(tmp_path):
     recorder_folder(tmp_path / 'upload', n=90, duplicate_stamps=False)
     rep = f.convert(tmp_path / 'upload', 'handheld_gripper', tmp_path / 'eps', 'test', 900)
