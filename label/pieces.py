@@ -9,6 +9,11 @@ joined. Nothing about the recording's episode boundaries is invented: an unsplit
 and only actual model-emitted activities become tasks on its one timeline. Request-local
 goals, outcomes and progress remain attributed assessments, not recording-level judgments.
 
+Neighbouring parts share a few seconds around each cut (OVERLAP_S), so an activity under way at a cut is seen by
+both requests: the stitch joins the two parts' tasks there by the time they share, and keeps each step and key event
+of those seconds from one part only. A recording cut without them (labelled before they existed) has its tasks
+joined at a cut only on a seam check's verdict (label/seam.py).
+
 Each part is told it is one part of a continuous recording cut at a still moment, so activity carrying across
 a cut is expected; an issue a part reports about being cut off at one of our cuts (a truncated start or end)
 describes our cut, not the recording, and is set aside with that reason. The recording's task text describes
@@ -46,6 +51,15 @@ SEARCH = 0.3                # a cut is sought within +-30% of a part's length ar
 SMOOTH_S = 2.0              # motion is averaged over 2 s so a cut lands in a still stretch, not a still frame
 CUT_GUARD_S = 10.0          # maximum distance for an explicitly described issue at its owning internal boundary
 CUT_TAGS = ("truncat", "incomplete", "cut_off", "starts_mid", "ends_mid", "mid_task")
+# Seconds of footage two neighbouring parts share around each cut, half before it and half after, so an activity that
+# runs across the cut is seen by both requests and the stitch can match it by time (join_across_cuts). The shared
+# seconds count toward each part's request limit. A window is used only when it fits: at most a quarter of the part
+# limit, so at least half of every part is footage no other part shows, and at most half the stretch between two cuts;
+# otherwise the recording is cut without one, and the recording's context says why (write_pieces). At the 330s to 450s
+# limits real recordings are cut at, cuts fall well over 30s apart (2 of 1,279 stitched UMI takes have a part under
+# 150s).
+OVERLAP_S = 15.0
+OVERLAP_FIT = 4
 
 
 def piece_max(ctx: dict) -> float:
@@ -179,6 +193,43 @@ def choose_cuts(t: np.ndarray, m: np.ndarray, max_s: float, end_s: float | None 
     return cuts
 
 
+def overlap_for(max_s: float, overlap_s: float | None = None) -> float:
+    """The window two neighbouring parts share at each cut: the asked seconds (OVERLAP_S by default) when they fit in
+    the part limit (OVERLAP_FIT), else none."""
+    want = OVERLAP_S if overlap_s is None else float(overlap_s)
+    if not math.isfinite(want) or want < 0:
+        raise ValueError("the shared window at a cut must be finite and not negative")
+    return want if 0 < want and OVERLAP_FIT * want <= max_s else 0.0
+
+
+def part_spans(t: np.ndarray, cuts: list[dict], n: int, overlap_s: float = 0.0) -> tuple[list, list]:
+    """([(first frame, frame after the last) of each part], [the window each cut's two parts share, or None]). Without
+    a window the parts touch at each cut frame. With one, part i ends at the last frame no later than overlap_s / 2
+    after its cut and part i + 1 starts at the first frame no earlier than overlap_s / 2 before it, so the two parts
+    share the frames in between; a window never reaches past the frame halfway to the next cut, so no frame is in
+    three parts. Each window is {"cut_s", "t0_s", "t1_s"}: the cut, the right part's first frame time and the left
+    part's end time, which is where the left part's footage stops."""
+    t = np.asarray(t, dtype=float)
+    ks = [int(c["frame"]) for c in cuts]
+    if not overlap_s:
+        bounds = [0] + ks + [n]
+        return [(bounds[i], bounds[i + 1]) for i in range(len(bounds) - 1)], [None] * len(ks)
+    lo, hi, windows = [], [], []
+    for i, k in enumerate(ks):
+        a = int(np.searchsorted(t, t[k] - overlap_s / 2 - 1e-9, side="left"))
+        b = int(np.searchsorted(t, t[k] + overlap_s / 2 + 1e-9, side="right")) - 1
+        if i:
+            a = max(a, (ks[i - 1] + k) // 2)
+        if i + 1 < len(ks):
+            b = min(b, (k + ks[i + 1]) // 2)
+        a, b = min(a, k), max(b, k)
+        lo.append(a)
+        hi.append(b)
+        windows.append({"cut_s": round(float(t[k]), 3), "t0_s": round(float(t[a]), 3), "t1_s": round(float(t[b]), 3)})
+    starts, ends = [0] + lo, hi + [n]
+    return list(zip(starts, ends)), windows
+
+
 def fmt_clock(s: float) -> str:
     s = max(0, int(round(s)))
     return f"{s // 60}:{s % 60:02d}"
@@ -194,9 +245,11 @@ def _reuse_array(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
 
 
-def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
+def write_pieces(ep_dir: Path, pieces_root: Path, overlap_s: float | None = None) -> list[Path]:
     """Write one sidecar folder per part under pieces_root (named <episode>__pNN) and record the cuts in the
-    episode's context (context["pieces"]). Returns the part folders."""
+    episode's context (context["pieces"]). Neighbouring parts share a window of overlap_s seconds around each cut
+    (OVERLAP_S by default, none when it does not fit, overlap_for), planned within the part limit, and each part's
+    context records the windows it shares (piece["windows"]). Returns the part folders."""
     from label import episode as me
     from prepare.formats import CLOCK_TIME_KEYS, shift_context_times
     ep_dir = Path(ep_dir)
@@ -210,8 +263,23 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
     total = me.request_duration(ep)
     unaligned = bool(ctx.get('state_unaligned'))
     max_s = piece_max(ctx)
-    cuts = choose_cuts(t, m, max_s, total)
-    bounds = [0] + [c["frame"] for c in cuts] + [n]
+    # the shared seconds count toward each part's limit: a part between two cuts holds its own stretch plus half a
+    # window at each end, so the cuts are planned at most max_s - window apart
+    window = overlap_for(max_s, overlap_s)
+    asked = OVERLAP_S if overlap_s is None else float(overlap_s)
+    unused = None if window or not asked else (f"a {asked:g}s window at each cut does not fit in the {max_s:g}s "
+                                               "part limit (it may be at most a quarter of it)")
+    cuts = choose_cuts(t, m, max_s - window, total)
+    stretches = np.diff([float(t[0])] + [float(t[c["frame"]]) for c in cuts] + [total])
+    if window and cuts and stretches.min() < 2 * window:
+        # each window reaches half its length into the stretch on either side of its cut, so a stretch shorter than
+        # two windows would put a frame in three parts; such a recording is cut as it was before windows existed
+        unused = f"a {window:g}s window at each cut does not fit between cuts {stretches.min():.1f}s apart"
+        window, cuts = 0.0, choose_cuts(t, m, max_s, total)
+    spans, windows = part_spans(t, cuts, n, window)
+    for cut, shared in zip(cuts, windows):
+        if shared is not None:
+            cut["window"] = shared
     a = me.anchor(ep)
     fps = me.ep_fps(ep)
     src = ep["sources"]
@@ -237,9 +305,10 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         from label import contacts as lc
         contacts = lc.of_episode(ep, frozenset(nm for nm, v in touch.items() if v))
     out = []
-    count = len(bounds) - 1
+    count = len(spans)
     for i in range(count):
-        k0, k1 = bounds[i], bounds[i + 1]
+        k0, k1 = spans[i]
+        shared = [w for w in (windows[i - 1] if i else None, windows[i] if i < len(windows) else None) if w]
         name = f"{ep_dir.name}__p{i + 1:02d}"
         d = pieces_root / name
         if d.exists():
@@ -284,7 +353,8 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         if held:
             c2["placeholder_frames"] = held       # on the part's own frames
         c2.update(episode_id=name, n_state_frames=int(k1 - k0), duration_s=round(t1 - t0, 3),
-                  piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3), "max_s": max_s})
+                  piece={"of": ep_dir.name, "index": i + 1, "count": count, "t0_s": round(t0, 3), "t1_s": round(t1, 3), "max_s": max_s,
+                         **({"windows": copy.deepcopy(shared)} if shared else {})})
         if ctx.get('recorded_mcap_fields') or ctx.get('recorded_table_fields') or ctx.get('recorded_sensor_fields'):
             c2['retained_evidence_root'] = str(Path(ctx.get('retained_evidence_root') or ep_dir).resolve())
         if ctx.get("recorded_camera_ns"):
@@ -316,6 +386,13 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
                 "frame boundaries, preferring moments of little motion, to label it; activity across a cut is expected, and a part "
                 "that starts or ends in the middle of an activity is how we cut it, not a truncated or cut-off "
                 "recording.")
+        if shared:
+            # the shared seconds are labelled by both parts, so the stitch can match an activity across the cut by time
+            sides = [(f"its first {w['t1_s'] - w['t0_s']:.1f}s are also the end of part {i}"
+                      if w["t0_s"] == round(t0, 3) else
+                      f"its last {w['t1_s'] - w['t0_s']:.1f}s are also the start of part {i + 2}") for w in shared]
+            note += (" Neighbouring parts share a few seconds around each cut: " + ", and ".join(sides) + ". Label "
+                     "everything this clip shows, those seconds included.")
         if read["instruction"]:
             # the part is checked against the recording's instruction, on what the part shows
             note += (" The instruction given with this part describes the whole recording, not this part: check this "
@@ -401,12 +478,14 @@ def write_pieces(ep_dir: Path, pieces_root: Path) -> list[Path]:
         write_atomic(d / "context.json", c2, indent=1, default=str)
         (d / "instruction.txt").write_text("\n")
         out.append(d)
-    stored["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out]}
+    stored["pieces"] = {"max_s": piece_max(ctx), "cuts": cuts, "parts": [p.name for p in out],
+                        **({"overlap_s": window} if window and cuts else {}),
+                        **({"overlap_not_used": unused} if unused and cuts else {})}
     write_atomic(ep_dir / "context.json", stored, indent=1, default=str)
     return out
 
 
-def write_units(job: Path, eps: Path, *, refresh_unpaid_interpretation=False) -> dict:
+def write_units(job: Path, eps: Path, *, refresh_unpaid_interpretation=False, overlap_s: float | None = None) -> dict:
     """The requests to send for a folder of prepared episodes: short episodes as they are, long recordings as their
     parts. job/units holds one link per request so one labelling run covers both, and job/pieces the parts.
     Returns {long episode: [its part folders' names]}."""
@@ -418,7 +497,8 @@ def write_units(job: Path, eps: Path, *, refresh_unpaid_interpretation=False) ->
     long_eps = {}
     for d in sorted(Path(eps).glob("episode_*")):
         if needs_pieces(d):
-            parts = _write_or_reuse(d, proot, refresh_unpaid_interpretation=refresh_unpaid_interpretation)
+            parts = _write_or_reuse(d, proot, refresh_unpaid_interpretation=refresh_unpaid_interpretation,
+                                    overlap_s=overlap_s)
             long_eps[d.name] = [p.name for p in parts]
             for p in parts:
                 (units / p.name).symlink_to(p.resolve())
@@ -427,14 +507,15 @@ def write_units(job: Path, eps: Path, *, refresh_unpaid_interpretation=False) ->
     return long_eps
 
 
-def _write_or_reuse(d: Path, proot: Path, *, refresh_unpaid_interpretation=False) -> list[Path]:
+def _write_or_reuse(d: Path, proot: Path, *, refresh_unpaid_interpretation=False,
+                    overlap_s: float | None = None) -> list[Path]:
     from label.evidence_access import same_source_proof, source_proof
     ctx = json.loads((d / "context.json").read_text())
     names = (ctx.get("pieces") or {}).get("parts") or []
     proof_path = proot / f".{d.name}.source_proof.json"
     if names and not proof_path.exists() and not any((proot / n).exists() for n in names):
         # A different job may have cut this source before. This job has no saved parts or paid replies to reuse.
-        parts = write_pieces(d, proot)
+        parts = write_pieces(d, proot, overlap_s)
         ctx = json.loads((d / "context.json").read_text())
         write_atomic(proof_path, source_proof(ctx, d))
         return parts
@@ -457,7 +538,7 @@ def _write_or_reuse(d: Path, proot: Path, *, refresh_unpaid_interpretation=False
                     and not any(receipt and has_dispatch_receipt(receipt[1]) for receipt in receipts)):
                 # Review verified the preparation before applying dictionary overlays.
                 # No request used these parts, so rebuild their derived interpretation.
-                parts = write_pieces(d, proot)
+                parts = write_pieces(d, proot, overlap_s)
                 ctx = json.loads((d / 'context.json').read_text())
                 write_atomic(proof_path, source_proof(ctx, d))
                 return parts
@@ -468,7 +549,7 @@ def _write_or_reuse(d: Path, proot: Path, *, refresh_unpaid_interpretation=False
             if needs_pieces(proot / name):
                 raise RuntimeError(f"{name}: saved part exceeds the request duration limit; use an explicit fresh job")
         return [proot / n for n in names]
-    parts = write_pieces(d, proot)
+    parts = write_pieces(d, proot, overlap_s)
     ctx = json.loads((d / "context.json").read_text())
     write_atomic(proof_path, source_proof(ctx, d))
     return parts
@@ -615,8 +696,12 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
     named in the result's stitched["missing"] with its span and why (the board flags it at that span, board/build.py
     reader_issues), and the recording is listed under "incomplete". A recording none of whose parts parsed is still
     written, as a reply that gave no labels, so the board shows its footage, checks and sensors and says why; it is
-    listed under "unlabelled"."""
+    listed under "unlabelled". The seam verdicts a seam check wrote for this job (job/seams.json, python -m review seam
+    --out JOB/seams.json) decide the joins at cuts without a shared window (join_across_cuts)."""
     src = Path(job) / "run" / "out"
+    seams = None
+    if (Path(job) / "seams.json").is_file():
+        seams = json.loads((Path(job) / "seams.json").read_text()).get("seams") or {}
     short_outputs = [p for p in [*src.glob("episode_*.json"), *src.glob("failed_episode_*.json"),
                                   *src.glob("noreply_episode_*.json")] if "__p" not in p.stem]
     # Upload resumes can skip the harness when every saved reply parsed. Verify
@@ -672,11 +757,12 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
             piece = pc["piece"]
             # with the start of what came back, so the board can show it (board/to_board.py label_failed)
             missing.append({"part": piece["index"], "t0_s": piece["t0_s"], "t1_s": piece["t1_s"], "why": why,
+                            **({"windows": copy.deepcopy(piece["windows"])} if piece.get("windows") else {}),
                             **_part_dispatch(r),
                             **({"raw_head": _raw_head(r)} if _raw_head(r) else {})})
             failed.append((pc, r))
         if got:
-            result = stitch(Path(eps) / ep, got, missing)
+            result = stitch(Path(eps) / ep, got, missing, seams=(seams or {}).get(ep))
             from label.evidence_access import merge as merge_inspection
             inspection = merge_inspection(got + [(pc, r) for pc, r in failed if r], Path(eps) / ep)
             if inspection['parts']:
@@ -766,7 +852,7 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
             **({'sensor_evidence': sensor} if sensor['sensors'] else {}),
             "config": cfg, "parse_ok": False, "no_part": True, "usage": usage,
             "labels": {"_raw": raw, "_parse_error": f"no part of the recording returned labels that parse ({whys})"},
-            "stitched": {"parts": count, "cuts_s": [g["t0_s"] for g in missing[1:]], "missing": missing},
+            "stitched": {"parts": count, "cuts_s": [c["cut_s"] for c in cut_layout(missing)], "missing": missing},
             "decode_failed": [x for _, r in failed for x in (r or {}).get("decode_failed") or []]}
     _carry_part_billing(result, failed)
     return result
@@ -839,8 +925,9 @@ def outside_part(lab: dict, t0: float, t1: float) -> dict:
 
 JOIN_GUARD_S = 2.0
 KEY_CUT_GUARD_S = 1.0
-OUTCOME_FIELDS = ("outcome", "success_predicate", "completed_at_s", "goal_reached_at_s", "undone_at_s", "undone_by",
-                  "judged_against", "subtask")
+# a task joined across a cut takes how it ended from the half that saw the end, and what it set out to do from the half
+# that saw it start: a goal inferred from the second part alone names only what was left (PR 107's rule)
+END_FIELDS = ("outcome", "completed_at_s", "goal_reached_at_s", "undone_at_s", "undone_by")
 
 
 def _cut_sides(entry: dict) -> set[str]:
@@ -957,13 +1044,13 @@ def join_scene_objects(objects: list, tasks: list) -> list:
     """The recording's scene objects from its parts' [(part number, part object)], each part object carrying its own
     source_piece. Parts are labelled by separate requests, so a name proves nothing across them: two parts' "cup" can be
     two cups, and one cup can be named differently in each. Objects are joined only where the parts show they are one:
-    a task joined across a cut (join_across_cuts, which already requires its halves to share an object) names the
-    object in both halves, the name in each half answers to exactly one name in the other, and in each half's part
-    exactly one listed object answers to that name. A join never holds two objects of one part: part 1's red cup and
-    blue cup are two objects, so part 2's cup cannot join both of them into one. That holds because an object joins at
-    most one object of the next part and one of the part before (two pairings of one object contradict each other and
-    neither joins), so a joined object is a chain of one record per part. A joined object keeps its first part's
-    record, with every later part's own record under "continues"; every other object stays its own entry."""
+    a task joined across a cut (join_across_cuts) names the object in both halves, the name in each half answers to
+    exactly one name in the other, and in each half's part exactly one listed object answers to that name. A join
+    never holds two objects of one part: part 1's red cup and blue cup are two objects, so part 2's cup cannot join
+    both of them into one. That holds because an object joins at most one object of the next part and one of the part
+    before (two pairings of one object contradict each other and neither joins), so a joined object is a chain of one
+    record per part. A joined object keeps its first part's record, with every later part's own record under
+    "continues"; every other object stays its own entry."""
     parent = list(range(len(objects)))
 
     def root(k):
@@ -1012,49 +1099,204 @@ def join_scene_objects(objects: list, tasks: list) -> list:
     return out
 
 
-def join_across_cuts(tasks: list, cuts_s: list[float]) -> list:
-    """Join unambiguous adjacent-part continuations, keeping every source judgment and its outcome evidence."""
+def _under_way_at_end(task: dict) -> bool:
+    """The part saw no end to the task: no completion, no goal reached and no undo before its last frame."""
+    from label.episode import number
+    return all(number(task.get(k)) is None for k in ("completed_at_s", "goal_reached_at_s", "undone_at_s"))
+
+
+def _first_task(task):
+    return (task.get("joined_from") or [task])[0]
+
+
+def at_cut(table, cut: float):
+    """The value a {cut time: value} table holds for this cut, its keys numbers or text that reads as one (a JSON
+    file's keys are text), or None."""
+    from label.episode import number
+    for key, value in (table or {}).items():
+        at = number(key)
+        if at is not None and abs(at - cut) <= .001:
+            return value
+    return None
+
+
+def cut_layout(pieces: list[dict]) -> list[dict]:
+    """The cuts between a recording's parts in order, each {"cut_s", "window", "parts"}, from the parts' records
+    ({"index" or "part", "t0_s", "t1_s", "windows"}, labelled or not). A part cut with a shared window records it
+    (write_pieces), and the cut is the window's; a part cut without one starts at the cut, as every part did before
+    windows existed, and its window is None."""
+    from label.episode import number
+    pieces = sorted(pieces, key=lambda p: float(p["t0_s"]))
+    out = []
+    for a, b in zip(pieces, pieces[1:]):
+        window = next((w for w in (a.get("windows") or []) + (b.get("windows") or [])
+                       if number(w.get("t1_s")) is not None and number(w.get("t0_s")) is not None
+                       and abs(number(w["t1_s"]) - float(a["t1_s"])) <= .001
+                       and abs(number(w["t0_s"]) - float(b["t0_s"])) <= .001), None)
+        out.append({"cut_s": float(window["cut_s"]) if window else float(b["t0_s"]), "window": window,
+                    "parts": [p.get("index") if p.get("index") is not None else p.get("part") for p in (a, b)]})
+    return out
+
+
+def _cut_pairs(tasks: list, cut: float) -> list[tuple[dict, dict]]:
+    """The one (left task, right task) at a cut with no shared window where the halves of one task could meet, or none:
+    exactly one task of the part before the cut still under way when that part ends there (its span ends within
+    JOIN_GUARD_S of the cut and the part saw no completion, goal or undo, _under_way_at_end), and exactly one task of
+    the next part starting there. With two open tasks on either side the halves cannot be paired from the spans."""
+    from label.episode import number
+    pairs = []
+    for left in tasks:
+        end = number(left.get("end_s"))
+        tail = _last_task(left)
+        source = tail.get("source_piece") or {}
+        if end is None or end > cut + .001 or abs(end - cut) > JOIN_GUARD_S \
+                or _internal_boundary(source, "end", [cut]) is None or not _under_way_at_end(tail):
+            continue
+        for right in tasks:
+            start = number(right.get("start_s"))
+            other = _first_task(right).get("source_piece") or {}
+            if right is left or start is None or start < cut - .001 or abs(start - cut) > JOIN_GUARD_S:
+                continue
+            if _internal_boundary(other, "start", [cut]) is None or not isinstance(source.get("index"), int) \
+                    or other.get("index") != source["index"] + 1:
+                continue
+            pairs.append((left, right))
+    return [(a, b) for a, b in pairs if sum(x is a or y is b for x, y in pairs) == 1]
+
+
+def seam_candidates(tasks: list, cuts_s: list[float]) -> list[tuple[float, dict, dict]]:
+    """[(cut, left task, right task)] for every cut without a shared window whose two sides could be one task
+    (_cut_pairs): the cuts a seam check asks about (label/seam.py)."""
     from label.episode import number
     tasks = sorted(tasks, key=lambda task: (number(task.get("start_s")) is None, number(task.get("start_s")) or 0))
+    return [(cut, left, right) for cut in cuts_s for left, right in _cut_pairs(tasks, cut)]
+
+
+def _in_window(task: dict, window: dict) -> tuple[float, float] | None:
+    from label.episode import number
+    start, end = number(task.get("start_s")), number(task.get("end_s"))
+    if start is None or end is None:
+        return None
+    lo, hi = max(start, float(window["t0_s"])), min(end, float(window["t1_s"]))
+    return (lo, hi) if hi - lo > 1e-6 else None
+
+
+def _window_pairs(tasks: list, window: dict) -> list[tuple[dict, dict, dict]]:
+    """[(left task, right task, how they were matched)] in a window two neighbouring parts both labelled. A task of the
+    left part and one of the right part are one activity when the time their spans share inside the window is at least
+    half of the shorter one's time inside it. Each task joins at most one: the pairs sharing the most time are taken
+    first, and pairs tied for the most time that would give a task two partners are all left apart, since time alone
+    cannot say which one is the same activity."""
+    from label.episode import number
+    w0, w1 = float(window["t0_s"]), float(window["t1_s"])
+
+    def edge(task, side):
+        source = (_last_task(task) if side == "end" else _first_task(task)).get("source_piece") or {}
+        at = number(source.get("t1_s" if side == "end" else "t0_s"))
+        return source.get("index") if at is not None and abs(at - (w1 if side == "end" else w0)) <= .001 else None
+
+    pairs = []
+    for left in tasks:
+        a, part = _in_window(left, window), edge(left, "end")
+        if a is None or not isinstance(part, int):
+            continue
+        for right in tasks:
+            b = _in_window(right, window)
+            if right is left or b is None or edge(right, "start") != part + 1:
+                continue
+            shared, shorter = min(a[1], b[1]) - max(a[0], b[0]), min(a[1] - a[0], b[1] - b[0])
+            if shared > 1e-6 and shared >= shorter / 2 - 1e-9:
+                pairs.append((left, right, shared, shorter))
+    chosen = []
+    while pairs:
+        most = max(p[2] for p in pairs)
+        top = [p for p in pairs if p[2] >= most - 1e-6]
+        chosen += [p for p in top if sum(q[0] is p[0] or q[1] is p[1] for q in top) == 1]
+        taken = [task for p in top for task in p[:2]]
+        pairs = [p for p in pairs if not any(p[0] is task or p[1] is task for task in taken)]
+    return [(left, right, {"by": "shared_window", "window_s": [w0, w1], "shared_s": round(shared, 3),
+                           "shorter_s": round(shorter, 3)}) for left, right, shared, shorter in chosen]
+
+
+def _join(tasks: list, left: dict, right: dict, cut: float, how: dict) -> list:
+    """The tasks with left and right as one task: how it ended from the right half (END_FIELDS), what it set out to do
+    from the left half, both halves under joined_from and how they were matched under cut_joins."""
+    from label.episode import number
+    objects = []
+    for obj in [*(left.get("objects") or []), *(right.get("objects") or [])]:
+        if obj not in objects:
+            objects.append(copy.deepcopy(obj))
+    originals = copy.deepcopy((left.get("joined_from") or [left]) + (right.get("joined_from") or [right]))
+    starts = [number(left.get("start_s")), number(right.get("start_s"))]
+    ends = [number(left.get("end_s")), number(right.get("end_s"))]
+    joined = {**left, "end_s": left.get("end_s") if None not in ends and ends[0] > ends[1] else right.get("end_s"),
+              "objects": objects, **{key: right.get(key) for key in END_FIELDS},
+              "source_piece": copy.deepcopy(right["source_piece"]), "joined_from": originals,
+              "cut_joins": [*copy.deepcopy(left.get("cut_joins") or []), {"cut_s": cut, **copy.deepcopy(how)},
+                            *copy.deepcopy(right.get("cut_joins") or [])],
+              "note": f"Continues across the internal request cut at {cut:g}s. " + str(right.get("note") or "")}
+    if None not in starts and starts[1] < starts[0]:
+        joined["start_s"] = right.get("start_s")
+    return [joined if task is left else task for task in tasks if task is not right]
+
+
+def join_across_cuts(tasks: list, cuts_s: list[float], seams: dict | None = None, windows: dict | None = None) -> list:
+    """The tasks with each task the cuts split into halves joined back into one, keeping every source judgment under
+    joined_from. Where the cuts are is known, and nothing the model wrote in a task (its note, its text, its object
+    names) decides a join: the halves are matched by time, and where time cannot tell, by a check that looked at the
+    seam.
+
+    windows ({cut: window}, write_pieces) are the seconds the two parts of a cut both labelled: their tasks are matched
+    inside the window by the time they share (_window_pairs). A cut without a window has a seam candidate when exactly
+    one task is still under way where the part before it ends and exactly one task of the next part starts there
+    (_cut_pairs). Position alone does not make them one task: in 40 such UMI pairs about 6 were a new task that began
+    right at the cut. So a candidate joins only when its seam verdict (seams, {cut: {"same_task", "evidence",
+    "request"}}, label/seam.py) says same_task true. A verdict of false or unclear leaves the halves apart with the
+    verdict under cut_seams on both, and with no verdict they stay apart as they came."""
+    from label.episode import number
+    order = lambda task: (number(task.get("start_s")) is None, number(task.get("start_s")) or 0)
+    tasks = sorted(tasks, key=order)
     for cut in cuts_s:
-        pairs = []
-        for left in tasks:
-            end = number(left.get("end_s"))
-            tail = _last_task(left)
-            source = tail.get("source_piece") or {}
-            if end is None or end > cut + .001 or abs(end - cut) > JOIN_GUARD_S \
-                    or _internal_boundary(source, "end", [cut]) is None:
+        window = at_cut(windows, cut)
+        if window is not None:
+            for left, right, how in _window_pairs(tasks, window):
+                tasks = _join(tasks, left, right, cut, how)
+            continue
+        verdict = at_cut(seams, cut)
+        if not isinstance(verdict, dict):
+            continue
+        for left, right in _cut_pairs(tasks, cut):
+            seen = {"cut_s": cut, **copy.deepcopy(verdict)}
+            if verdict.get("same_task") is True:
+                tasks = _join(tasks, left, right, cut, {"by": "seam_check", **{k: v for k, v in seen.items()
+                                                                                if k != "cut_s"}})
+            else:
+                tasks = [{**task, "cut_seams": [*(task.get("cut_seams") or []), seen]}
+                         if task is left or task is right else task for task in tasks]
+    return sorted(tasks, key=order)
+
+
+def window_copies(items: list, windows: list[dict], key: str) -> tuple[list, list]:
+    """(the items kept, the items left out) of one list, timeline steps by start_s or key events by t_s, where two
+    parts both labelled a shared window: inside it the left part's items before the window's midpoint and the right
+    part's from the midpoint on are kept, so each moment of the window is described once, never twice."""
+    from label.episode import number
+    kept, dropped = [], []
+    for item in items:
+        t = number(item.get(key))
+        source = item.get("source_piece") or {}
+        lo, hi = number(source.get("t0_s")), number(source.get("t1_s"))
+        other = False
+        for window in windows:
+            w0, w1 = float(window["t0_s"]), float(window["t1_s"])
+            if t is None or not w0 - .001 <= t <= w1 + .001:
                 continue
-            if "end" not in _cut_sides({"note": tail.get("note")}):
-                continue
-            for right in tasks:
-                start = number(right.get("start_s"))
-                other = right.get("source_piece") or {}
-                if right is left or start is None or start < cut - .001 or abs(start - cut) > JOIN_GUARD_S:
-                    continue
-                if _internal_boundary(other, "start", [cut]) is None or not isinstance(source.get("index"), int) \
-                        or other.get("index") != source["index"] + 1:
-                    continue
-                if "start" not in _cut_sides({"note": right.get("note")}):
-                    continue
-                if any(a <= b or b <= a for a in _object_tokens(left.get("objects"))
-                       for b in _object_tokens(right.get("objects"))):
-                    pairs.append((left, right))
-        # Ambiguous simultaneous tasks stay separate; do not select the first shared object in a list.
-        for left, right in pairs:
-            if sum(a is left or b is right for a, b in pairs) != 1:
-                continue
-            objects = []
-            for obj in [*(left.get("objects") or []), *(right.get("objects") or [])]:
-                if obj not in objects:
-                    objects.append(copy.deepcopy(obj))
-            originals = copy.deepcopy((left.get("joined_from") or [left]) + (right.get("joined_from") or [right]))
-            joined = {**left, "end_s": right.get("end_s"), "objects": objects,
-                      **{key: right.get(key) for key in OUTCOME_FIELDS},
-                      "source_piece": copy.deepcopy(right["source_piece"]), "joined_from": originals,
-                      "note": f"Continues across the internal request cut at {cut:g}s. " + str(right.get("note") or "")}
-            tasks = [joined if task is left else task for task in tasks if task is not right]
-    return tasks
+            mid = (w0 + w1) / 2
+            if (hi is not None and abs(hi - w1) <= .001 and t >= mid) or (lo is not None and abs(lo - w0) <= .001
+                                                                          and t < mid):
+                other = True
+        (dropped if other else kept).append(item)
+    return kept, dropped
 
 
 def mark_cut_tasks(tasks: list, cuts_s: list[float], labels: dict | None = None) -> list:
@@ -1204,21 +1446,31 @@ def merge_camera_observations(ep_dir: Path, parts: list[tuple[dict, dict]], miss
     return result
 
 
-def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = ()) -> dict:
+def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (), seams: dict | None = None) -> dict:
     """One labelling result for the whole recording from its parts' results [(part context, part result), ...]
     in order. Times are shifted onto the recording's clock; observations and actual tasks are joined.
     Independently inferred request goals/outcomes/progress retain their scope under part_assessments,
     never becoming episode tasks or whole-recording progress. Cut issues are set aside in _excluded. missing names
     the parts that gave no labels ({"part", "t0_s", "t1_s", "why"}, stitch_run): the recording is stitched from the
-    rest, its cuts are still every cut, and the record keeps the gaps under stitched["missing"]."""
+    rest, its cuts are still every cut, and the record keeps the gaps under stitched["missing"]. Where two labelled
+    parts share a window at their cut (write_pieces), their tasks are joined by time and each step and key event of
+    the window is kept from one part only; at a cut without one, seams ({cut: verdict}, label/seam.py) decide the
+    joins (join_across_cuts)."""
     from label import episode as me
     ep_dir = Path(ep_dir)
     ep = me.load(ep_dir)
     pl = me.plan(ep)
     missing = sorted(missing, key=lambda g: g["part"])
     count = len(parts) + len(missing)
-    starts = sorted([float(pc["piece"]["t0_s"]) for pc, _ in parts] + [float(g["t0_s"]) for g in missing])
-    cuts_s = starts[1:]
+    labelled = {int(pc["piece"].get("index") or n) for n, (pc, _) in enumerate(parts, start=1)}
+    layout = cut_layout([{**pc["piece"], "index": int(pc["piece"].get("index") or n)}
+                         for n, (pc, _) in enumerate(parts, start=1)] + list(missing))
+    cuts_s = [c["cut_s"] for c in layout]
+    # the windows both of whose parts gave labels; a part's view of the recording ends at its own edge, which is the
+    # window's edge where it has one and the cut where it has none
+    windows = {c["cut_s"]: c["window"] for c in layout if c["window"] and set(c["parts"]) <= labelled}
+    edges_s = sorted({e for c in layout for e in ((float(c["window"]["t0_s"]), float(c["window"]["t1_s"]))
+                                                  if c["window"] else (c["cut_s"],))})
     L = {"scene": {"objects": [], "setting": ""}, "timeline": [], "key_events": [], "state_changes": [],
          "scene_graph": [], "recovery": [], "instruction_variants": [], "data_issues": [], "operator_mistakes": [],
          "tasks": [], "part_assessments": [], "progress_scope": "request_parts"}
@@ -1270,7 +1522,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
                     # an issue about a whole part, reported by several parts, is one issue about the recording
                     same["parts"] = sorted(set(same.get("parts") or [same["part"]]) | {i})
                     continue
-                if is_cut_artifact(iss, i, count, t0, t1, cuts_s, lab):
+                if is_cut_artifact(iss, i, count, t0, t1, edges_s, lab):
                     excluded.append({**iss, "list": k, "excluded_by": "piece_cut",
                                      "reason": "the labelling pipeline cut the recording into parts here; being cut "
                                                "off at this point describes our cut, not the recording"})
@@ -1350,9 +1602,15 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         # labelled in parts always was, and every reader reads that verdict as main does; its tasks joined across the
         # cuts are listed beside it (basis "parts", board/label_projection.py shown_tasks)
         L["completion"] = {**empty, "task_completed": "unclear", "reason": parted + gaps, "basis": "parts"}
+    # both parts of a shared window described it: each step and key event in it is kept from one of them
+    for k, key in (("timeline", "start_s"), ("key_events", "t_s")):
+        L[k], copies = window_copies(L[k], list(windows.values()), key)
+        excluded += [{**item, "list": k, "excluded_by": "shared_window",
+                      "reason": "both parts labelled these seconds around the cut; the other part's copy is kept"}
+                     for item in copies]
     for k in ("timeline",):
         L[k].sort(key=lambda s: (s.get("start_s") is None, s.get("start_s") or 0))      # an untimed step last
-    L["tasks"] = mark_cut_tasks(join_across_cuts(L["tasks"], cuts_s), cuts_s, L)
+    L["tasks"] = mark_cut_tasks(join_across_cuts(L["tasks"], cuts_s, seams, windows), edges_s, L)
     if tasks_format and not (rig != "ego_head" and instruction):
         # the tasks joined across the cuts give the completion as one request's would; a part with no labels may hold
         # more of the work, so then there is no verdict
@@ -1369,7 +1627,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     L["scene"]["objects"] = join_scene_objects(scene_objects, L["tasks"])
     events = []
     for event in L["key_events"]:
-        if is_cut_key_event(event, cuts_s):
+        if is_cut_key_event(event, edges_s):
             excluded.append({**event, "list": "key_events", "excluded_by": "piece_cut",
                              "reason": "This event explicitly describes the owning part's internal request boundary."})
         else:
@@ -1431,7 +1689,10 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,
             "stitched": {"parts": count, "cuts_s": cuts_s, **({"missing": missing} if missing else {}),
-                         **({"outside_part": outside} if outside else {})},
+                         **({"outside_part": outside} if outside else {}),
+                         **({"windows": [c["window"] for c in layout if c["window"]]}
+                            if any(c["window"] for c in layout) else {}),
+                         **({"seams": copy.deepcopy(seams)} if seams else {})},
             # each part's undecodable stretches, already on the recording's clock (label/episode.py decode_failures)
             "decode_failed": [x for _, r in parts for x in r.get("decode_failed") or []],
             **({"contacts": [c for c in recorded if c.get("id") in asked], "contact_views": views}

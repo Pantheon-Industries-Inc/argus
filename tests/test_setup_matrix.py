@@ -52,6 +52,7 @@ class Setup:
     part_s: float | None = None     # a request part this long, so a short recording is labelled in parts
     fault: str | None = None        # the offline model fails the second part's annotation: error, cutoff or rejected
     tasks: int = 2                  # how many tasks the offline model finds in the recording (one, or two)
+    overlap_s: float | None = None  # seconds neighbouring parts share at each cut, scaled down with part_s
 
 
 def teleop_lerobot(root: Path) -> Setup:
@@ -330,9 +331,10 @@ def one_task_mcap(root: Path) -> Setup:
 
 def long_one_task(root: Path) -> Setup:
     """Neither, one task over a recording labelled in parts: the task is joined across the cuts and its verdict is the
-    recording's."""
+    recording's. Its parts share 2s around the cut, as a long recording's parts share 15s at a 450s part limit, so
+    both parts see the task there and the stitch joins it by time."""
     setup = long_hdf5(root)
-    return Setup('long_one_task', setup.rig, setup.data, setup.items, part_s=setup.part_s, tasks=1)
+    return Setup('long_one_task', setup.rig, setup.data, setup.items, part_s=setup.part_s, tasks=1, overlap_s=2.0)
 
 
 SETUPS = [teleop_lerobot, mcap_arm, umi_gripper, ego_head, hdf5_gloves, depth_mcap, tactile_lerobot,
@@ -655,6 +657,9 @@ def run_review(setup: Setup, job: Path, model: OfflineModel, monkeypatch) -> int
                 saved[name] = ctx['annotation_policy']
             return saved
         monkeypatch.setattr(policy, 'persist', shorter_parts)
+    if setup.overlap_s is not None:
+        from label import pieces
+        monkeypatch.setattr(pieces, 'OVERLAP_S', setup.overlap_s)
     monkeypatch.setattr(sys, 'argv', ['review', '--data', str(setup.data), '--rig', setup.rig, '--out', str(job),
                                       '--concurrency', '1', '--jobs', '1', '--cap', '20', '--max-tokens', '4000'])
     return review.main()

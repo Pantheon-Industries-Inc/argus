@@ -1049,46 +1049,77 @@ def test_stitch_preserves_observed_incidents_with_unfinished_recovery_at_cuts(tm
     assert records == original
 
 
-def test_blanket_continuation_requires_the_adjacent_parts_to_describe_a_continuation():
-    # The UMI pilot split blanket work at 304.833s. Retain that motivating join with explicit evidence.
+def test_blanket_continuation_joins_only_on_a_seam_verdict_that_says_same_task():
+    # The UMI pilot split blanket work at 304.833s. Where the halves meet is known, but a task can also begin right at
+    # a cut, so the halves join only when a check of the seam says they are one task; nothing the parts wrote decides.
     source = lambda index, lo, hi: {'index': index, 't0_s': lo, 't1_s': hi}
+    cut = 304.833
     first = {'start_s': 190., 'end_s': 304.8, 'task': 'Unfold the blanket over the bed',
              'objects': ['floral fleece blanket', 'penguin plush'], 'outcome': 'partial',
+             'success_predicate': 'The blanket lies flat over the whole bed.',
              'note': 'The clip ends while the task is still under way.', 'completed_at_s': None,
-             'source_piece': source(1, 0., 304.833)}
-    second = {'start_s': 304.833, 'end_s': 313.833, 'task': 'Settle the floral blanket over the bed',
+             'source_piece': source(1, 0., cut)}
+    second = {'start_s': cut, 'end_s': 313.833, 'task': 'Settle the floral blanket over the bed',
               'objects': ['floral blanket', 'bed'], 'outcome': 'success', 'completed_at_s': 313.4,
+              'success_predicate': 'The last corner is tucked in.',
               'goal_reached_at_s': 313.4, 'note': 'Continues the task from the previous part.',
-              'source_piece': source(2, 304.833, 500.)}
+              'source_piece': source(2, cut, 500.)}
+    same = {cut: {'same_task': True, 'evidence': 'The same blanket is spread over the bed on both sides of the cut.'}}
+    different = {'304.833': {'same_task': False, 'evidence': 'The blanket is put down and a new task starts.'}}
+    unclear = {cut: {'same_task': 'unclear', 'evidence': 'The operator blocks the view.'}}
     originals = json.loads(json.dumps([first, second]))
-    joined = pieces.join_across_cuts([first, second], [304.833])
+    # without a verdict the halves stay apart, exactly as they came
+    assert pieces.join_across_cuts([first, second], [cut]) == [first, second]
+    joined = pieces.join_across_cuts([first, second], [cut], same)
     assert len(joined) == 1 and joined[0]['end_s'] == 313.833
-    assert joined[0]['task'] == first['task'] and joined[0]['goal_reached_at_s'] == 313.4
+    # the joined task keeps what it set out to do from the left half and how it ended from the right half
+    assert joined[0]['task'] == first['task'] and joined[0]['success_predicate'] == first['success_predicate']
+    assert (joined[0]['outcome'], joined[0]['completed_at_s'], joined[0]['goal_reached_at_s']) == (
+        'success', 313.4, 313.4)
     assert joined[0]['joined_from'] == originals
+    assert joined[0]['cut_joins'] == [{'cut_s': cut, 'by': 'seam_check', **same[cut]}]
     assert [first, second] == originals
-    # Proximity plus the same object is insufficient for two different goals.
+    # A new goal right at the cut stays apart without a verdict, with a "different" verdict and with an unclear one,
+    # and joins with "same": the verdict decides, never the task text.
     new_goal = {**second, 'task': 'Put the blanket in the hamper', 'note': 'Starts a new task.'}
-    assert pieces.join_across_cuts([first, new_goal], [304.833]) == [first, new_goal]
+    assert pieces.join_across_cuts([first, new_goal], [cut]) == [first, new_goal]
+    apart = pieces.join_across_cuts([first, new_goal], [cut], different)
+    assert [t['task'] for t in apart] == [first['task'], new_goal['task']]
+    assert all(t['cut_seams'] == [{'cut_s': cut, **different['304.833']}] for t in apart)
+    assert [t['task'] for t in pieces.join_across_cuts([first, new_goal], [cut], unclear)] == [
+        first['task'], new_goal['task']]
+    assert len(pieces.join_across_cuts([first, new_goal], [cut], same)) == 1
+    # an answer that is not the boolean true joins nothing
+    assert len(pieces.join_across_cuts([first, second], [cut], {cut: {'same_task': 'true'}})) == 2
+    # Object names are what a part wrote, so they decide nothing either way.
     wrong_object = {**second, 'objects': ['blue blanket']}
-    assert pieces.join_across_cuts([first, wrong_object], [304.833]) == [first, wrong_object]
+    assert pieces.join_across_cuts([first, wrong_object], [cut]) == [first, wrong_object]
+    assert len(pieces.join_across_cuts([first, wrong_object], [cut], same)) == 1
     no_owner = {k: v for k, v in second.items() if k != 'source_piece'}
-    assert pieces.join_across_cuts([first, no_owner], [304.833]) == [first, no_owner]
+    assert pieces.join_across_cuts([first, no_owner], [cut], same) == [first, no_owner]
+    # A left task its part saw end, or one that ends well before the cut, is no candidate, whatever the verdict.
+    assert len(pieces.join_across_cuts([{**first, 'completed_at_s': 300.}, second], [cut], same)) == 2
+    assert len(pieces.join_across_cuts([{**first, 'end_s': cut - pieces.JOIN_GUARD_S - .5}, second], [cut], same)) == 2
     # Joining an earlier cut does not erase the fact that the task is still open at a later cut.
     middle = {**second, 'end_s': 500., 'outcome': 'partial', 'completed_at_s': None, 'goal_reached_at_s': None,
               'note': second['note'] + ' The clip ends while this task is still under way.'}
-    open_task = pieces.mark_cut_tasks(pieces.join_across_cuts([first, middle], [304.833, 500.]), [304.833, 500.])
+    both = {**same, 500.: {'same_task': True, 'evidence': 'The blanket is still being spread at 500s.'}}
+    open_task = pieces.mark_cut_tasks(pieces.join_across_cuts([first, middle], [cut, 500.], both), [cut, 500.])
     assert len(open_task) == 1 and open_task[0]['outcome'] == 'continues_past_cut'
     assert len(open_task[0]['joined_from']) == 2 and open_task[0]['cut_continuation']['t_s'] == 500.
     last = {**second, 'start_s': 500., 'end_s': 530., 'completed_at_s': 529., 'goal_reached_at_s': 529.,
             'source_piece': source(3, 500., 600.)}
-    all_parts = pieces.join_across_cuts([first, middle, last], [304.833, 500.])
+    all_parts = pieces.join_across_cuts([first, middle, last], [cut, 500.], both)
     assert len(all_parts) == 1 and len(all_parts[0]['joined_from']) == 3
-    assert all_parts[0]['goal_reached_at_s'] == 529.
-    # Missing and ambiguous parts never borrow another candidate just because its object matches.
-    gap = {**second, 'source_piece': source(3, 304.833, 500.)}
-    assert pieces.join_across_cuts([first, gap], [304.833]) == [first, gap]
-    ambiguous = pieces.join_across_cuts([first, second, {**second, 'task': 'Another blanket activity'}], [304.833])
+    assert all_parts[0]['goal_reached_at_s'] == 529. and [j['cut_s'] for j in all_parts[0]['cut_joins']] == [cut, 500.]
+    assert len(pieces.join_across_cuts([first, middle, last], [cut, 500.], same)) == 2
+    # Missing and ambiguous parts never borrow another candidate, whatever the verdict says.
+    gap = {**second, 'source_piece': source(3, cut, 500.)}
+    assert pieces.join_across_cuts([first, gap], [cut], same) == [first, gap]
+    ambiguous = pieces.join_across_cuts([first, second, {**second, 'task': 'Another blanket activity'}], [cut], same)
     assert len(ambiguous) == 3
+    two_open = pieces.join_across_cuts([first, {**first, 'task': 'Hold the pillow'}, second], [cut], same)
+    assert len(two_open) == 3
 
 
 def test_an_unclear_task_ending_at_our_cut_continues_past_it_whatever_its_note_says():
@@ -1300,7 +1331,10 @@ def test_an_object_a_task_carries_across_the_cut_is_one_object_with_each_parts_r
     second = {'start_s': 304.833, 'end_s': 313.833, 'task': 'Settle the floral blanket over the bed',
               'objects': ['floral blanket', 'bed'], 'outcome': 'success', 'completed_at_s': 313.4,
               'note': 'Continues the task from the previous part.', 'source_piece': source(2, 304.833, 500.)}
-    tasks = pieces.join_across_cuts([first, second], [304.833])
+    # the halves are one task because a seam check said so; their notes and object names decide nothing
+    seams = {304.833: {'same_task': True, 'evidence': 'one blanket'}}
+    tasks = pieces.join_across_cuts([first, second], [304.833], seams)
+    assert len(tasks) == 1
     one, two = source(1, 0., 304.833), source(2, 304.833, 500.)
     objects = [(1, {'name': 'floral fleece blanket', 'source_piece': one}), (1, {'name': 'penguin plush', 'source_piece': one}),
                (1, {'name': 'cup', 'source_piece': one}),
@@ -1463,7 +1497,11 @@ def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_v
     tasks = [[_cup_task(contexts[0], end=True)], [_cup_task(contexts[1], start=True, end=True)],
              [_cup_task(contexts[2], start=True)]]
     records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, tasks)]
-    given = pieces.stitch(src, list(zip(contexts, records)))
+    # the parts touch at each cut with no shared seconds, so a seam check decides each join; without its verdicts the
+    # task stays one row per part
+    seams = {c['piece']['t0_s']: {'same_task': True, 'evidence': 'the same cups on both sides'} for c in contexts[1:]}
+    assert len(pieces.stitch(src, list(zip(contexts, records)))['labels']['tasks']) == 3
+    given = pieces.stitch(src, list(zip(contexts, records)), seams=seams)
     (task,) = given['labels']['tasks']
     assert task['outcome'] == 'success' and task['judged_against'] == 'instruction' and len(task['joined_from']) == 3
     completion = given['labels']['completion']
@@ -1475,7 +1513,7 @@ def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_v
     _without_instruction(src)
     own = [[{**t, 'judged_against': 'own_end_state'} for t in part] for part in tasks]
     records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, own)]
-    stitched = pieces.stitch(src, list(zip(contexts, records)))
+    stitched = pieces.stitch(src, list(zip(contexts, records)), seams=seams)
     (task,) = stitched['labels']['tasks']
     completion = stitched['labels']['completion']
     assert task['outcome'] == 'success' and task['judged_against'] == 'own_end_state'
@@ -1486,7 +1524,7 @@ def test_in_the_tasks_format_one_task_joined_across_the_cuts_is_the_recordings_v
     # a part with no labels may hold more of the work: no verdict, and the reason names the part
     missing = [{'part': 3, 't0_s': contexts[2]['piece']['t0_s'], 't1_s': contexts[2]['piece']['t1_s'],
                 'why': 'no reply'}]
-    open_end = pieces.stitch(src, list(zip(contexts[:2], records[:2])), missing)
+    open_end = pieces.stitch(src, list(zip(contexts[:2], records[:2])), missing, seams=seams)
     completion = open_end['labels']['completion']
     assert completion['task_completed'] is None and completion['from_tasks'] == 1
     assert completion['reason'] == '1 task in the parts with labels; part 3 has no labels, as no reply'
@@ -1499,7 +1537,8 @@ def test_in_the_tasks_format_a_task_open_at_the_last_cut_or_parts_of_two_formats
     tasks = [[_cup_task(contexts[0], end=True, judged_against='own_end_state')],
              [_cup_task(contexts[1], start=True, end=True, judged_against='own_end_state')], []]
     records = [_tasks_part(p, c, t) for p, c, t in zip(parts, contexts, tasks)]
-    stitched = pieces.stitch(src, list(zip(contexts, records)))
+    seams = {contexts[1]['piece']['t0_s']: {'same_task': True, 'evidence': 'the same cups on both sides'}}
+    stitched = pieces.stitch(src, list(zip(contexts, records)), seams=seams)
     (task,) = stitched['labels']['tasks']
     completion = stitched['labels']['completion']
     assert task['outcome'] == 'continues_past_cut'
@@ -1510,3 +1549,164 @@ def test_in_the_tasks_format_a_task_open_at_the_last_cut_or_parts_of_two_formats
     assert mixed['labels']['completion']['task_completed'] is None
     assert mixed['labels']['completion']['reason'] == 'parts labelled with different output formats'
     assert 'label_schema' not in mixed and mixed['prompt_mode'] == 'inferred'
+
+
+# ---- shared windows at the cuts and seam verdicts ---------------------------------------------------------------
+
+def test_cuts_planned_with_a_shared_window_keep_every_part_within_the_request_limit():
+    """A 1,000s recording at the 450s limit: neighbouring parts share 15s around each cut, the shared seconds count
+    toward each part's limit, and each window is exactly where one part ends and the next begins."""
+    rng = np.random.default_rng(7)
+    t = np.arange(0, 1000, 1 / 30)
+    window = pieces.overlap_for(450.)
+    assert window == pieces.OVERLAP_S == 15.
+    cuts = pieces.choose_cuts(t, rng.random(len(t)), 450. - window, 1000.)
+    spans, windows = pieces.part_spans(t, cuts, len(t), window)
+    ends = [float(t[b]) if b < len(t) else 1000. for _, b in spans]
+    assert len(spans) == 3 and max(e - float(t[a]) for (a, _), e in zip(spans, ends)) <= 450.
+    for k, (cut, w) in enumerate(zip(cuts, windows)):
+        assert w['t0_s'] == round(float(t[spans[k + 1][0]]), 3) and w['t1_s'] == round(ends[k], 3)
+        assert w['t0_s'] < cut['t_s'] < w['t1_s'] and 15. - 2 / 30 - .002 <= w['t1_s'] - w['t0_s'] <= 15.002
+    # a window that does not fit in a quarter of the part limit is not used, and none is asked for at 0
+    assert pieces.overlap_for(40.) == 0. and pieces.overlap_for(450., 0) == 0.
+    assert pieces.part_spans(t, cuts, len(t))[1] == [None, None]
+
+
+def _windowed_parts(tmp_path, monkeypatch, overlap_s=0.4):
+    """A 3s recording cut into two parts that share overlap_s seconds around their cut, written where a job keeps
+    them."""
+    monkeypatch.setattr(pieces, 'piece_max', lambda ctx: 2.0)
+    recorder_folder(tmp_path / 'upload', n=90, duplicate_stamps=False)
+    rep = f.convert(tmp_path / 'upload', 'teleop_arms', tmp_path / 'eps', 'test', 900)
+    src = tmp_path / 'eps' / rep['episodes'][0]['episode_id']
+    parts = pieces.write_pieces(src, tmp_path / 'job' / 'pieces', overlap_s=overlap_s)
+    (tmp_path / 'job' / 'run' / 'out').mkdir(parents=True)
+    return src, parts, [json.loads((p / 'context.json').read_text()) for p in parts]
+
+
+def test_parts_cut_with_a_shared_window_record_it_and_both_hold_its_frames(tmp_path, monkeypatch):
+    src, parts, contexts = _windowed_parts(tmp_path, monkeypatch)
+    whole = me.load(src)
+    n = int(whole['sources']['exo']['n_frames'])
+    assert len(parts) == 2
+    (window,) = contexts[0]['piece']['windows']
+    assert contexts[1]['piece']['windows'] == [window]
+    assert window['t1_s'] == contexts[0]['piece']['t1_s'] and window['t0_s'] == contexts[1]['piece']['t0_s']
+    assert 0.4 - 2 / 30 - .002 <= window['t1_s'] - window['t0_s'] <= 0.4 + .002      # whole frames, times in ms
+    for p, ctx in zip(parts, contexts):
+        assert ctx['duration_s'] <= 2.0 and ctx['piece']['t1_s'] - ctx['piece']['t0_s'] <= 2.0
+        assert not pieces.needs_pieces(p)
+        assert 'Neighbouring parts share a few seconds around each cut' in ctx['collection_note']
+    clock = [me.frame_time(whole, k) for k in range(n)]
+    shared = sum(window['t0_s'] - 1e-6 <= x < window['t1_s'] - 1e-6 for x in clock)
+    assert sum(int(me.load(p)['sources']['exo']['n_frames']) for p in parts) == n + shared and shared > 0
+    stored = json.loads((src / 'context.json').read_text())['pieces']
+    assert stored['overlap_s'] == 0.4 and stored['cuts'][0]['window'] == window
+    # the default 15s window does not fit a 2s part limit, so the parts touch at the cut as before, and the recording
+    # says why
+    plain = pieces.write_pieces(src, tmp_path / 'plain')
+    assert all('windows' not in json.loads((p / 'context.json').read_text())['piece'] for p in plain)
+    assert sum(int(me.load(p)['sources']['exo']['n_frames']) for p in plain) == n
+    assert 'does not fit' in json.loads((src / 'context.json').read_text())['pieces']['overlap_not_used']
+
+
+def test_tasks_in_a_shared_window_join_one_to_one_by_the_time_they_share():
+    window = {'cut_s': 300., 't0_s': 292.5, 't1_s': 307.5}
+    one, two = {'index': 1, 't0_s': 0., 't1_s': 307.5}, {'index': 2, 't0_s': 292.5, 't1_s': 600.}
+    task = lambda name, lo, hi, part, **x: {'start_s': lo, 'end_s': hi, 'task': name, 'source_piece': dict(part),
+                                            'objects': [], 'note': '', **x}
+    tower = task('Build a freestanding tower from the loose blocks', 200., 307.5, one, outcome='unclear',
+                 success_predicate='All blocks stand in one tower.', objects=['wooden blocks'])
+    finish = task('Finish stacking the remaining cubes', 292.5, 400., two, outcome='success', completed_at_s=399.,
+                  success_predicate='The last cube is on top.', objects=['cubes'], note='Already under way.')
+    lid = task('Set the lid down', 280., 295., one, outcome='success', completed_at_s=294.)
+    lid_again = task('Put the lid on the table', 292.5, 296., two, outcome='success', completed_at_s=295.8)
+    new = task('Wipe the table', 301., 306., two, outcome='success', completed_at_s=305.)
+    tasks = pieces.join_across_cuts([tower, finish, lid, lid_again, new], [300.], windows={300.: window})
+    by_name = {t['task']: t for t in tasks}
+    assert len(tasks) == 3 and set(by_name) == {tower['task'], lid['task'], new['task']}
+    # the tower and its finish share the whole window: one task, judged on the left half's goal with the right
+    # half's outcome, whatever each part called it or its objects
+    joined = by_name[tower['task']]
+    assert [h['task'] for h in joined['joined_from']] == [tower['task'], finish['task']]
+    assert (joined['outcome'], joined['completed_at_s'], joined['end_s']) == ('success', 399., 400.)
+    assert joined['success_predicate'] == tower['success_predicate']
+    assert joined['cut_joins'] == [{'cut_s': 300., 'by': 'shared_window', 'window_s': [292.5, 307.5],
+                                    'shared_s': 15., 'shorter_s': 15.}]
+    # the lid's two copies share all of the shorter one's 2.5s in the window, after the tower took its partner first
+    assert [h['task'] for h in by_name[lid['task']]['joined_from']] == [lid['task'], lid_again['task']]
+    assert by_name[new['task']] == new          # no partner: kept as it came
+    # two tasks of each part over the whole window cannot be told apart by time: none of them joins
+    twin = [task('Hold the left cup', 250., 307.5, one), task('Hold the right cup', 250., 307.5, one),
+            task('Hold a cup', 292.5, 350., two), task('Hold the other cup', 292.5, 350., two)]
+    assert len(pieces.join_across_cuts(twin, [300.], windows={300.: window})) == 4
+    # spans that share less than half of the shorter one's time inside the window stay apart
+    brief = [task('Reach', 250., 294., one), task('Carry', 293.5, 330., two)]
+    assert len(pieces.join_across_cuts(brief, [300.], windows={300.: window})) == 2
+    # a seam verdict is not read at a cut with a window
+    assert len(pieces.join_across_cuts(brief, [300.], {300.: {'same_task': True}}, {300.: window})) == 2
+
+
+def test_steps_and_key_events_of_a_shared_window_are_kept_from_one_part_only(tmp_path, monkeypatch):
+    src, parts, contexts = _windowed_parts(tmp_path, monkeypatch)
+    (window,) = contexts[0]['piece']['windows']
+    w0, w1 = window['t0_s'], window['t1_s']
+    at = lambda share: round(w0 + share * (w1 - w0), 3)
+    origin = [ctx['piece']['t0_s'] for ctx in contexts]
+    local = lambda i, x: round(x - origin[i], 3)
+    records = []
+    for i, (p, ctx) in enumerate(zip(parts, contexts)):
+        record = _part_result(p, 'stack')
+        span = round(ctx['piece']['t1_s'] - ctx['piece']['t0_s'], 3)
+        times = [0.3, at(.25), at(.75)] if i == 0 else [at(.25), at(.75), 2.8]
+        record['labels'].update(
+            timeline=[{'start_s': local(i, x), 'end_s': local(i, x) + .05, 'action': f'part {i + 1} at {x}'}
+                      for x in times],
+            key_events=[{'t_s': local(i, x), 'label': f'part {i + 1} event at {x}', 'outcome': 'success'}
+                        for x in times],
+            tasks=[{'start_s': 0.1 if i == 0 else 0.0, 'end_s': span if i == 0 else local(i, 2.5),
+                    'task': 'Build the tower' if i == 0 else 'Finish stacking the cubes', 'objects': [],
+                    'outcome': 'unclear' if i == 0 else 'success', 'completed_at_s': None if i == 0 else local(i, 2.4),
+                    'success_predicate': 'four blocks stacked' if i == 0 else 'last cube on top', 'note': ''}],
+            data_issues=[{'category': 'starts_mid_task', 'issue': 'starts mid task', 't_s': 0.0, 'severity': 'low'}]
+            if i == 1 else [])
+        records.append(record)
+    stitched = pieces.stitch(src, list(zip(contexts, records)))
+    labels = stitched['labels']
+    assert [s['action'] for s in labels['timeline']] == ['part 1 at 0.3', f'part 1 at {at(.25)}',
+                                                         f'part 2 at {at(.75)}', 'part 2 at 2.8']
+    assert [e['label'] for e in labels['key_events']] == ['part 1 event at 0.3', f'part 1 event at {at(.25)}',
+                                                          f'part 2 event at {at(.75)}', 'part 2 event at 2.8']
+    copies = [x for x in labels['_excluded'] if x['excluded_by'] == 'shared_window']
+    assert sorted((x['list'], x['source_piece']['index']) for x in copies) == [
+        ('key_events', 1), ('key_events', 2), ('timeline', 1), ('timeline', 2)]
+    # the task across the window is one task, and nothing is left open at the cut
+    (task,) = labels['tasks']
+    assert task['task'] == 'Build the tower' and task['outcome'] == 'success' and len(task['joined_from']) == 2
+    assert task['success_predicate'] == 'four blocks stacked'
+    # the right part's "starts mid task" is about where its footage starts, the window's start, so it is our cut's
+    assert [x['excluded_by'] for x in labels['_excluded'] if x.get('category') == 'starts_mid_task'] == ['piece_cut']
+    assert stitched['stitched']['cuts_s'] == [window['cut_s']] and stitched['stitched']['windows'] == [window]
+
+
+def test_a_job_with_seam_verdicts_joins_the_cut_they_say_is_one_task(tmp_path, monkeypatch):
+    """Saved parts without a shared window are stitched as on main, except that a task across the cut is joined only
+    by the job's seam verdicts (JOB/seams.json, which the seam check writes)."""
+    job, src, parts = _three_parts(tmp_path, monkeypatch)
+    contexts = [json.loads((part / 'context.json').read_text()) for part in parts]
+    tasks = [[_cup_task(contexts[0], end=True)], [_cup_task(contexts[1], start=True)], []]
+    for p, c, t in zip(parts, contexts, tasks):
+        (job / 'run' / 'out' / f'{p.name}.json').write_text(json.dumps(_tasks_part(p, c, t)))
+    long_eps = {src.name: [p.name for p in parts]}
+    pieces.stitch_run(job, src.parent, long_eps, tmp_path / 'apart')
+    apart = json.loads((tmp_path / 'apart' / f'{src.name}.json').read_text())
+    assert [t['outcome'] for t in apart['labels']['tasks']] == ['continues_past_cut', 'success']
+    cut = contexts[1]['piece']['t0_s']
+    verdict = {'same_task': True, 'evidence': 'The same cups are stacked on both sides of the cut.'}
+    (job / 'seams.json').write_text(json.dumps({'seams': {src.name: {str(cut): verdict}}}))
+    pieces.stitch_run(job, src.parent, long_eps, tmp_path / 'joined')
+    joined = json.loads((tmp_path / 'joined' / f'{src.name}.json').read_text())
+    (task,) = joined['labels']['tasks']
+    assert task['outcome'] == 'success' and len(task['joined_from']) == 2
+    assert task['cut_joins'] == [{'cut_s': cut, 'by': 'seam_check', **verdict}]
+    assert joined['stitched']['seams'] == {str(cut): verdict}
