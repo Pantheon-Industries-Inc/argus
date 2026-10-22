@@ -3140,17 +3140,20 @@ function cardOutcomeHtml(ep) {
     // a model's response that did not parse, was cut off or never came: a result, listed like any other
     return `<span class="outcome-tag fail">${esc(ST_WORDS[ep.cmp_status] || ep.cmp_status)}</span>`;
   }
-  if (ep.n_tasks && ep.verdict_first && ep.task_completed) {
+  // a task still under way at a cut has no known outcome (serve.py n_tasks_open): it is in neither count, and the tag
+  // says how many it left out
+  const open = ep.n_tasks_open ? `, ${ep.n_tasks_open} open at a cut` : '';
+  if ((ep.n_tasks || ep.n_tasks_open) && ep.verdict_first && ep.task_completed) {
     // a recording judged as a whole that also lists its tasks: its verdict, and how many of its tasks succeeded
     const oc = String(ep.task_completed).toLowerCase();
     return `<span class="outcome-tag ${esc(oc)}">${esc(outcomeWords(oc, ep.failure_kind))}, `
-      + `${ep.n_task_success}/${ep.n_tasks} tasks</span>`;
+      + `${ep.n_task_success}/${ep.n_tasks} tasks${open}</span>`;
   }
-  if (ep.n_tasks) {
-    const allOk = ep.n_task_success === ep.n_tasks && !ep.parts_missing;
+  if (ep.n_tasks || ep.n_tasks_open) {
+    const allOk = ep.n_tasks && ep.n_task_success === ep.n_tasks && !ep.parts_missing;
     const gap = ep.parts_missing ? `, ${ep.parts_missing} of ${ep.parts} parts not labelled` : '';
-    return `<span class="outcome-tag ${allOk ? 'success' : 'partial'}">${ep.n_task_success}/${ep.n_tasks} tasks${gap}`
-      + `</span>`;
+    return `<span class="outcome-tag ${allOk ? 'success' : 'partial'}">${ep.n_task_success}/${ep.n_tasks} tasks${open}`
+      + `${gap}</span>`;
   }
   const oc = (ep.task_completed || '').toLowerCase();
   return `<span class="outcome-tag ${esc(oc || 'none')}">${esc(oc ? outcomeWords(oc, ep.failure_kind) : 'unrated')}</span>`;
@@ -7339,14 +7342,17 @@ function renderEp(d, opts) {
   // built from, then what decided the verdict (the success criterion, what happened, the goal frame). A session of
   // tasks counts its tasks in the verdict and lists each task with its own outcome.
   const tAll = tasks.length, tOk = tcount.success;
+  // a task still under way at a cut has no known outcome, so it is in neither count and named on its own
+  const tOpen = tasks.filter(t => String(t.outcome || '').toLowerCase() === 'continues_past_cut').length;
+  const tKnown = tAll - tOpen;
   const tUndone = tcount.success_then_undone;
-  const tColor = !tAll ? 'var(--fg-2)' : tOk === tAll ? 'var(--success)' : tcount.failure || tUndone ? 'var(--danger)'
+  const tColor = !tKnown ? 'var(--fg-2)' : tOk === tKnown ? 'var(--success)' : tcount.failure || tUndone ? 'var(--danger)'
     : 'var(--fg-2)';
   const verdictHtml = hasTasks
-    ? `<div class="verdict" style="--v:${tColor}"><span class="verdict-word">${tOk} of ${tAll}</span><span `
-      + `class="verdict-sub">${tAll === 1 ? 'task' : 'tasks'} succeeded${tUndone ? `, ${tUndone} undone` : ''}${tcount.failure
-        ? `, ${tcount.failure} failed${tPartly ? ` (${tPartly} partly done)` : ''}` : ''}${tAll - tOk - tUndone - tcount.failure
-        ? `, ${tAll - tOk - tUndone - tcount.failure} unclear` : ''}`
+    ? `<div class="verdict" style="--v:${tColor}"><span class="verdict-word">${tOk} of ${tKnown}</span><span `
+      + `class="verdict-sub">${tKnown === 1 ? 'task' : 'tasks'} succeeded${tUndone ? `, ${tUndone} undone` : ''}${tcount.failure
+        ? `, ${tcount.failure} failed${tPartly ? ` (${tPartly} partly done)` : ''}` : ''}${tKnown - tOk - tUndone - tcount.failure
+        ? `, ${tKnown - tOk - tUndone - tcount.failure} unclear` : ''}${tOpen ? `, ${tOpen} open at a cut` : ''}`
       + `</span>${partsGapHtml(d)}</div>`
     : `<div class="verdict" style="--v:${vColor}"><span class="verdict-word">${esc(comp.task_completed
         ? cap(outcomeWords(verdict, comp.failure_kind)) : 'Not judged')}</span><span class="verdict-sub">${partProgress
@@ -9089,9 +9095,11 @@ async function renderEpisodeTable(order, first) {
     const by = !m.reference && cmpHas(m.key, e.file) ? m.key : '';
     let cls, txt;
     if (r.status === 'parsed') {
-      if (r.tasks && r.verdict_first && r.outcome) {
-        cls = r.outcome; txt = `${r.outcome.replace(/_/g, ' ')}, ${r.tasks[1]} of ${r.tasks[0]} tasks`;
-      } else if (r.tasks) { cls = 'tasks'; txt = `${r.tasks[1]} of ${r.tasks[0]} tasks`; }
+      // a task still under way at a cut is in neither count (compare/metrics.py tasks_open)
+      const done = r.tasks || [0, 0], open = r.tasks_open ? `, ${r.tasks_open} open at a cut` : '';
+      if ((r.tasks || r.tasks_open) && r.verdict_first && r.outcome) {
+        cls = r.outcome; txt = `${r.outcome.replace(/_/g, ' ')}, ${done[1]} of ${done[0]} tasks${open}`;
+      } else if (r.tasks || r.tasks_open) { cls = 'tasks'; txt = `${done[1]} of ${done[0]} tasks${open}`; }
       else { cls = r.outcome || 'unclear'; txt = (r.outcome || 'no outcome').replace(/_/g, ' '); }
     } else if (r.status === 'pending') return '<td><span class="et-none">not yet</span></td>';
     else { cls = 'fail'; txt = ST_WORDS[r.status] || r.status; }

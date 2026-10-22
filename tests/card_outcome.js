@@ -27,6 +27,13 @@ check(both.includes('failure">failure, 1/2 tasks<'), 'a verdict beside its tasks
 check(T.cardOutcomeHtml({task_completed: 'unclear', n_tasks: 4, n_task_success: 3}).includes('>3/4 tasks<'),
   'an older record lists its tasks as before');
 check(T.cardOutcomeHtml({}).includes('>unrated<'), 'no outcome');
+// a task still under way at a cut (serve.py n_tasks_open) is in neither count, and the tag says how many it left out
+check(T.cardOutcomeHtml({n_tasks: 1, n_task_success: 1, n_tasks_open: 1}).includes('success">1/1 tasks, 1 open at a cut<'),
+  'an open half is neither done nor not done');
+check(T.cardOutcomeHtml({n_tasks: 0, n_task_success: 0, n_tasks_open: 2}).includes('partial">0/0 tasks, 2 open at a cut<'),
+  'a take of open halves alone never reads complete');
+check(T.cardOutcomeHtml({task_completed: 'unclear', verdict_first: true, n_tasks: 2, n_task_success: 2, n_tasks_open: 1})
+  .includes('unclear">unclear, 2/2 tasks, 1 open at a cut<'), 'a verdict beside its tasks and an open half');
 const malformed = T.cardOutcomeHtml({task_completed: 'success"><img src=x onerror="throw Error(1)">'});
 check(!malformed.includes('<img') && malformed.includes('&lt;img'),
   'malformed saved completion remains text inside the outcome card');

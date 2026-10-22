@@ -75,7 +75,7 @@ from pathlib import Path
 
 from board.clips import DEPTH, clip_path    # one rule for where a camera's clip is, for the writer and this server
 from board.families import Families
-from board.label_projection import shown_tasks, tasks_format, verdict_or_tasks
+from board.label_projection import open_at_cut, shown_tasks, tasks_format, verdict_or_tasks
 from board.public_export import project as public_json
 from board.to_board import dumps, finite
 from prepare import tools
@@ -1756,6 +1756,9 @@ def _rail_record(p: Path, d: dict) -> dict:
     # the tasks it lists (board/label_projection.py shown_tasks)
     verdict, _ = verdict_or_tasks(d)
     tasks = [t for t in shown_tasks(d) if t.get("task") or t.get("start_s") is not None]
+    # a task still under way at a cut has no known outcome: it is in neither count, and the rail says how many
+    open_tasks = sum(1 for t in tasks if open_at_cut(t))
+    tasks = [t for t in tasks if not open_at_cut(t)]
     return {
         "episode_id": (d.get("_meta") or {}).get("episode_id") or p.stem,
         "file": p.name,
@@ -1774,6 +1777,7 @@ def _rail_record(p: Path, d: dict) -> dict:
         "n_tasks": len(tasks),
         **({"verdict_first": True} if tasks_format(d) and verdict is not None else {}),
         "n_task_success": sum(1 for t in tasks if (t.get("outcome") or "").lower() == "success"),
+        **({"n_tasks_open": open_tasks} if open_tasks else {}),
         # the episode's length (board/build.py measures it); files without one fall back on the sampled times
         "duration_s": d.get("duration_s") or _duration_s(d.get("timesteps_s")),
         # which problems the episode has (board/families.py): the families that count, and those it has only

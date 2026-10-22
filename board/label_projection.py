@@ -27,6 +27,13 @@ def effective_outcome(value):
     return 'failure' if value == 'partial' else value
 
 
+def open_at_cut(task) -> bool:
+    """Whether a task is still under way at a cut of the recording (continues_past_cut, label/pieces.py
+    mark_cut_tasks). Its outcome is unknown, so a count of tasks done leaves it out of both the done count and the
+    total, and says how many it left out."""
+    return isinstance(task, dict) and str(task.get('outcome') or '').strip().lower() == 'continues_past_cut'
+
+
 # The output format of a request that asks every recording for a list of tasks, each with its own outcome
 # (label/prompts.py fixed_instructions). label/harness.py writes it into every request record as label_schema, so it
 # names the prompt actually sent; a record without it was asked in the episode or session mode of its saved policy.

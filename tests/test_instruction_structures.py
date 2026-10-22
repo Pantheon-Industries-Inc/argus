@@ -304,10 +304,13 @@ def test_the_verdict_line_counts_an_undone_task_and_a_stitched_task_verdict_has_
         {'d': {'completion': {'task_completed': 'success', 'completed_at_s': 12.5, 'basis': 'one_task'}}, 'tasks': [],
          'partProgress': True},
         {'d': {'completion': {'task_completed': 'unclear', 'basis': 'parts'}}, 'tasks': [], 'partProgress': True},
+        # F4: the open first half of a task that succeeded in the next part is neither done nor unclear
+        {'d': {}, 'tasks': [task('continues_past_cut'), task('success')], 'partProgress': True},
     ]
     p = subprocess.run(['node', '-e', VERDICT_SCRIPT, str(PAGE), json.dumps(cases)], text=True, capture_output=True)
     assert p.returncode == 0, p.stderr
-    several, joined, parted = json.loads(p.stdout)
+    several, joined, parted, open_half = json.loads(p.stdout)
+    assert open_half == '1 of 1 task succeeded, 1 open at a cut'
     assert several == '1 of 4 tasks succeeded, 1 undone, 1 failed, 1 unclear'
     assert joined == 'success goal frame 12.5s'
     assert parted == 'unclear Whole-recording goal frame unassessed'

@@ -170,3 +170,44 @@ def test_goal_frames_rail_and_compare_read_the_verdict_first():
     assert rail['task_completed'] is None and (rail['n_tasks'], rail['n_task_success']) == (2, 1)
     m = metrics.measure(several, 'ds')
     assert m['outcome'] is None and m['tasks'] == [2, 1]
+
+
+# A real stitched UMI 900h take as main writes it (fob_f4e9d4-ffd66b8e-2845-2, cut at 403.603s,
+# audit_2026-10-21/long_recordings.md F1): one tower built across the cut, whose first half is still under way at it.
+TOWER_OPEN = {'start_s': 6.01, 'end_s': 403.57, 'task': 'Build a freestanding tower from the loose wooden blocks using '
+              'alternating three-block layers.', 'objects': ['wooden blocks'], 'judged_against': 'own_end_state',
+              'outcome': 'continues_past_cut', 'outcome_in_part': 'unclear',
+              'note': 'A substantial, standing tower is built, but the demonstrator is still adding and aligning blocks '
+                      'at the internal preparation cut.'}
+TOWER_DONE = {'start_s': 403.603, 'end_s': 647.843, 'task': 'Finish stacking the remaining wooden blocks into the '
+              'alternating-layer tower.', 'objects': ['wooden blocks', 'wooden block tower'],
+              'judged_against': 'own_end_state', 'outcome': 'success', 'completed_at_s': 647.0,
+              'note': 'This is the continuation of a tower-building activity begun before the supplied window.'}
+
+
+def test_a_task_open_at_a_cut_is_neither_done_nor_not_done_on_the_rail_in_compare_and_in_the_gate():
+    """F4: the rail, compare and the gate counted a continues_past_cut task in the total and never as done, so 595 of
+    1,279 stitched UMI takes (46.5%) read amber "1/2 tasks" only because of the open first half of a task that succeeded
+    in the next part. Its outcome is unknown: it is in neither count, and each reader says how many it left out."""
+    from gate.score import judge
+    tasks = [TOWER_OPEN, TOWER_DONE]
+    take = {**_episode(), 'episode_prompt': '', 'duration_s': 647.843, 'tasks': tasks,
+            'completion': {**recording_completion(tasks), 'basis': 'tasks'}}
+    rail = serve._rail_record(Path('fob_f4e9d4-ffd66b8e-2845-2.json'), take)
+    assert (rail['n_tasks'], rail['n_task_success'], rail['n_tasks_open']) == (1, 1, 1)
+    m = metrics.measure(take, 'umi')
+    assert m['tasks'] == [1, 1] and m['tasks_open'] == 1
+    assert judge({'outcome': ['tasks:success']}, take)[0]
+    # an open half beside a real failure still reads as the failure, and a take of open halves alone has no known
+    # outcome, so a fact about what it must not be stays unmet
+    failed = [TOWER_OPEN, {**TOWER_DONE, 'outcome': 'failure', 'completed_at_s': None}]
+    assert judge({'outcome': ['tasks:failure']}, {**take, 'tasks': failed})[0]
+    only_open = {**take, 'tasks': [TOWER_OPEN, {**TOWER_OPEN, 'start_s': 403.603, 'end_s': 647.843}]}
+    rail = serve._rail_record(Path('x.json'), only_open)
+    assert (rail['n_tasks'], rail['n_task_success'], rail['n_tasks_open']) == (0, 0, 2)
+    assert 'tasks' not in metrics.measure(only_open, 'umi') and metrics.measure(only_open, 'umi')['tasks_open'] == 2
+    assert not judge({'not_outcome': ['failure']}, only_open)[0]
+    # with no task open, nothing changes and no count of open tasks is written
+    done = {**take, 'tasks': [TOWER_DONE]}
+    assert 'n_tasks_open' not in serve._rail_record(Path('x.json'), {**done, 'tasks': [TOWER_DONE, TOWER_DONE]})
+    assert 'tasks_open' not in metrics.measure({**done, 'tasks': [TOWER_DONE, TOWER_DONE]}, 'umi')

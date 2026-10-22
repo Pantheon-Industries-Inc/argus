@@ -203,7 +203,8 @@ def test_task_outcomes_survive_projection_and_use_completion_precedence():
     assert not any('tasks' in issue for issue in measured['violations'])
     assert judge({'outcome': ['success']}, labels)[0]
     labels.pop('completion')
-    assert judge({'outcome': ['tasks:continues_past_cut,failure,success_then_undone']}, labels)[0]
+    # a task still under way at a cut has no known outcome, so the set of the tasks' outcomes leaves it out (F4)
+    assert judge({'outcome': ['tasks:failure,success_then_undone']}, labels)[0]
 
 
 def test_scoped_event_outcomes_and_actor_names_agree_with_comparison():

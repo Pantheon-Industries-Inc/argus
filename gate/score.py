@@ -96,7 +96,7 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
     """(the label meets every fact of the case, why not). Every fact is read from the label's projection
     (board/label_projection.py), the same values the board shows: its effective outcome, its issues and their
     severity tiers. A reason starting "needs review:" can come with a met case; it marks what the label leaves open."""
-    from board.label_projection import effective_outcome, issues, max_severity, project, severity
+    from board.label_projection import effective_outcome, issues, max_severity, open_at_cut, project, severity
     from board.polarity import asserted
     labels, _ = project(labels)
     unknown = set(case) - FACTS
@@ -107,10 +107,12 @@ def judge(case: dict, labels: dict) -> tuple[bool, list[str]]:
     outcome = effective_outcome(comp.get("task_completed"))
     if labels.get("tasks") and not outcome:
         # a recording with no verdict of its own (several tasks): the one task judged against the instruction stands
-        # for the asked work when there is exactly one; otherwise the set of the tasks' outcomes
+        # for the asked work when there is exactly one; otherwise the set of the tasks' known outcomes (a task still under
+        # way at a cut has none, open_at_cut)
         asked = [t for t in labels["tasks"] if isinstance(t, dict) and t.get("judged_against") == "instruction"]
         outcome = (effective_outcome(asked[0].get("outcome")) if len(asked) == 1 else
-                   "tasks:" + ",".join(sorted({str(effective_outcome(t.get("outcome"))) for t in labels["tasks"]})))
+                   "tasks:" + ",".join(sorted({str(effective_outcome(t.get("outcome"))) for t in labels["tasks"]
+                                               if not open_at_cut(t)})))
     if "outcome" in case:
         ok.append(outcome in case["outcome"])
         ok[-1] or why.append(f"outcome {outcome}")
