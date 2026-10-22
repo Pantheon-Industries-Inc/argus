@@ -309,6 +309,11 @@ def build_review_board(job: Path, eps: Path, long_eps, info: dict, dataset: str,
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["seam"]:
+        # python -m review seam: whether one task continues across each cut of recordings stitched without a shared
+        # window, asked once per candidate cut (label/seam.py)
+        from label import seam
+        return seam.main(sys.argv[2:])
     ap = argparse.ArgumentParser(prog="python -m review", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True, help="a folder, file or archive, or an http(s) URL of one")

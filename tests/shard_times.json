@@ -115,6 +115,7 @@
  "tests/test_part_boundaries.py": 0.5,
  "tests/test_phase4_state_audit.py": 1.9,
  "tests/test_pieces.py": 28.1,
+ "tests/test_seam.py": 1.0,
  "tests/test_pipeline_fidelity_audit.py": 0.1,
  "tests/test_polarity_reference.py": 0.0,
  "tests/test_prepare.py": 1.8,
