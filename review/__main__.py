@@ -308,13 +308,17 @@ def build_review_board(job: Path, eps: Path, long_eps, info: dict, dataset: str,
     return result
 
 
+# python -m review COMMAND: a command of its own, picked by the first argument before the review's options are read.
+# seam asks, once per candidate cut of recordings stitched without a shared window, whether one task continues
+# across it (label/seam.py)
+COMMANDS = {"seam": "label.seam"}
+
+
 def main() -> int:
-    if sys.argv[1:2] == ["seam"]:
-        # python -m review seam: whether one task continues across each cut of recordings stitched without a shared
-        # window, asked once per candidate cut (label/seam.py)
-        from label import seam
-        return seam.main(sys.argv[2:])
-    ap = argparse.ArgumentParser(prog="python -m review", description=__doc__,
+    if sys.argv[1:2] and sys.argv[1] in COMMANDS:
+        import importlib
+        return importlib.import_module(COMMANDS[sys.argv[1]]).main(sys.argv[2:])
+    ap =argparse.ArgumentParser(prog="python -m review", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True, help="a folder, file or archive, or an http(s) URL of one")
     ap.add_argument("--rig", required=True, choices=["teleop_arms", "handheld_gripper", "ego_head"])

@@ -4,8 +4,9 @@ every repo link and cited line still resolves.
 Options come from the parsers themselves. Every module `python -m` can run (a package's __main__.py, or a module
 with a __main__ guard) is run in this process with ArgumentParser.parse_known_args stopped at its first call, which
 hands back the parser it was about to parse with. A dispatcher that picks a module by its first argument (board,
-prepare) is run once per key of its command table, a subcommand is followed into its subparser or into the parser it
-delegates to (gate score), and a command's options are documented in the README's command table, in the row whose
+prepare) is run once per key of its command table, as is a command with a COMMANDS table of its own (review seam), a
+subcommand is followed into its subparser or into the parser it delegates to (gate score), and a command's options
+are documented in the README's command table, in the row whose
 command is the longest prefix of the parser's own. A row whose options cell links to a heading also takes the options
 in the first column of the first table under it (review's Settings). External URLs are not checked, since CI runs
 offline.
@@ -110,6 +111,11 @@ def collect_parsers(root: Path = REPO) -> dict[str, argparse.ArgumentParser]:
         parser, ns = _run(module, [])
         if parser is not None:
             _walk(module, [], parser, found, origin)
+            # a command whose first argument can also pick a command of its own from COMMANDS (review seam)
+            for name in ns.get('COMMANDS') or {}:
+                sub, _ = _run(module, [name])
+                assert sub is not None and sub.prog != parser.prog, f'{module} {name} parses no command line of its own'
+                _walk(module, [name], sub, found, origin)
             continue
         # a dispatcher: its first argument picks a command from a table of names, such as COMMANDS or ADAPTERS
         tables = [v for k, v in ns.items() if k.isupper() and isinstance(v, dict) and v
