@@ -183,12 +183,15 @@ RACE = textwrap.dedent('''
     import json, os, sys, time
     sys.path.insert(0, sys.argv[1])
     from label.atomic import remove_if, small_file, write_atomic
-    path, role, until = sys.argv[2], sys.argv[3], float(sys.argv[4])
+    path, role, until, target = sys.argv[2], sys.argv[3], float(sys.argv[4]), int(sys.argv[5])
+    done, ready = path + '.writer-done', path + '.remover-ready'
     read = small_file(4096)
     lapsed = lambda snapshot: snapshot[2] is not None and not json.loads(snapshot[2])['live']
     if role == 'remover':
         removed = 0
-        while time.time() < until:
+        open(ready, 'w').close()
+        # races the writer for as long as it writes, however fast the machine is
+        while not os.path.exists(done) and time.time() < until:
             try:
                 removed += remove_if(path, lapsed, read=read)
             except (FileNotFoundError, ValueError):
@@ -196,7 +199,9 @@ RACE = textwrap.dedent('''
         print(removed)
         sys.exit()
     lost = written = 0
-    while time.time() < until:
+    while not os.path.exists(ready) and time.time() < until:      # the writes start once the remover is racing
+        time.sleep(.01)
+    while written < target and time.time() < until:
         written += 1
         for live in (True, False):
             write_atomic(path, {'seq': written, 'live': live}, indent=None)
@@ -212,18 +217,21 @@ RACE = textwrap.dedent('''
                     time.sleep(.0001)
                 else:
                     lost += 1
+    open(done, 'w').close()
     print(lost, written)
 ''')
 
 
 def test_remove_if_never_removes_a_version_written_after_its_read_across_processes(tmp_path):
-    path, until = tmp_path / 'ticket.json', time.time() + 2.5
-    run = lambda role: subprocess.Popen([sys.executable, '-c', RACE, str(REPO), str(path), role, str(until)],
-                                        stdout=subprocess.PIPE, text=True)
+    # a set number of writes rather than a time budget: a slow runner made 45 writes in 2.5s against a floor of 100
+    # and failed with nothing lost; the deadline only stops a hung run
+    path, until, target = tmp_path / 'ticket.json', time.time() + 60, 150
+    run = lambda role: subprocess.Popen([sys.executable, '-c', RACE, str(REPO), str(path), role, str(until),
+                                         str(target)], stdout=subprocess.PIPE, text=True)
     remover, writer = run('remover'), run('writer')
-    lost, written = map(int, writer.communicate(timeout=30)[0].split())
-    removed = int(remover.communicate(timeout=30)[0])
-    assert written > 100 and removed > 0
+    lost, written = map(int, writer.communicate(timeout=90)[0].split())
+    removed = int(remover.communicate(timeout=90)[0])
+    assert written == target and removed > 0
     assert lost == 0
     assert not [name for name in os.listdir(tmp_path) if name.endswith('.removing')]
 
