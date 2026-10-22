@@ -2870,18 +2870,22 @@ class Signals(dict):
         the running total past SIGNAL_EPISODE_BYTES; origin is the file it was read from, when known, and field the
         name it was read under (its identity, with origin, whatever name it is later kept under). Returns the name it
         is kept under. A name already held is decided by its evidence (relate): the same values are kept once,
-        pieces of one recording are joined, and anything else is a second source, kept beside the first
-        (distinct_name). One never replaces the other."""
+        pieces of one recording are joined, each piece's values lined up with the held piece's by name (piece_order),
+        and anything else, including pieces whose shapes or value names differ, is a second source, kept beside the
+        first (distinct_name). One never replaces the other."""
         a = np.asarray(a)
         field = field or name
         if name in self:
             how = relate((self.meta.get(name) or {}).get("span_s"), m.get("span_s"), same_values(self[name], a))
             if how == "same":
                 return name
-            if how == "pieces" and np.shape(self[name]) == np.shape(a):
-                self._join(name, a, m, origin)
+            order = piece_order((self.meta.get(name) or {}).get("names"), m.get("names"),
+                                int(np.prod(np.shape(a)[1:], dtype=int))) if how == "pieces" else None
+            if order is not None and np.shape(self[name]) == np.shape(a):
+                self._join(name, a, m, origin, order)
                 return name
-            name = self.distinct_name(name, origin, "overlap" if how == "pieces" else how)
+            # pieces in time whose layouts differ: nothing says they are one recording
+            name = self.distinct_name(name, origin, "unknown" if how == "pieces" else how)
         if origin:
             self.origins[name] = origin
         self.fields[name] = field
@@ -2898,11 +2902,12 @@ class Signals(dict):
         self.meta[name] = m
         return name
 
-    def _join(self, name: str, a: np.ndarray, m: dict, origin: str | None) -> None:
-        """A later piece of the recording held under name filled into the frames the held pieces leave without a
-        reading; the joined signal spans both pieces and lists the files it was joined from."""
+    def _join(self, name: str, a: np.ndarray, m: dict, origin: str | None, order: list[int]) -> None:
+        """A later piece of the recording held under name, its values taken in order (piece_order) so each falls
+        under the held piece's name and unit for it, filled into the frames the held pieces leave without a reading;
+        the joined signal spans both pieces and lists the files it was joined from."""
         held, meta = np.asarray(self[name]), self.meta[name]
-        held2, a2 = held.reshape(len(held), -1), a.reshape(len(a), -1)
+        held2, a2 = held.reshape(len(held), -1), a.reshape(len(a), -1)[:, order]
         empty = ~np.isfinite(held2).any(axis=1)
         joined = np.where(empty[:, None], a2, held2).reshape(held.shape)
         self[name] = joined
@@ -2985,6 +2990,22 @@ class Signals(dict):
         if source:
             m["source"] = source
         return self.keep(name, a, m, origin)
+
+
+def piece_order(held_names, new_names, width: int) -> list[int] | None:
+    """The order to take a later piece's width values in so each lines up with the held piece's value of its name
+    (Signals.keep): as they are when both pieces give the same names in the same order, or neither names its values;
+    by name when both name every value once and the same set in another order (a log split in files that list its
+    joints in different orders); None when the names say the layouts differ (another set, names on one side only,
+    or a name given twice in another order), so the pieces are not joined."""
+    held = [str(x) for x in held_names] if held_names is not None else None
+    new = [str(x) for x in new_names] if new_names is not None else None
+    if held == new:
+        return list(range(width))
+    if held is None or new is None or not len(held) == len(new) == len(set(held)) == width or set(held) != set(new):
+        return None
+    at = {x: j for j, x in enumerate(new)}
+    return [at[x] for x in held]
 
 
 def relate(span_a, span_b, same: bool) -> str:

@@ -166,3 +166,100 @@ def test_an_arms_joint_stream_follows_the_same_rule_across_mcap_files(tmp_path):
     blocked = f.collided_arms(extra, said)
     assert blocked is not None and blocked.why == "layout" and "left.mcap" in blocked
     assert [i["kind"] for i in extra["reader_issues"]] == ["signal_name_collision"]
+
+
+JOINTS = ["joint1", "joint2", "joint3"]
+
+
+def joint_truth(t):
+    """Each joint's true reading at t seconds, far enough apart that a swapped column shows."""
+    return {"joint1": 1.0 + 0.1 * t, "joint2": -2.0 + 0.2 * t, "joint3": 5.0 - 0.3 * t, "wrist": 9.0 + t}
+
+
+def test_mcap_pieces_that_list_their_values_in_another_order_join_by_name(tmp_path):
+    # a sensor log split in two files, the second listing the same joints in another order: each file reads right
+    # alone, and the joined signal had kept the first file's names over the second file's values in its own order
+    t0 = 1_790_000_000.0
+    q = t0 + np.arange(120) / 30
+
+    def piece(path, start, stop, order):
+        _json_mcap(path, {"/arm/joint_states": [
+            (s, {"name": order, "position": [joint_truth(s)[j] for j in order]})
+            for s in np.arange(start, stop, 1 / 60)]}, t0)
+    piece(tmp_path / "part_a.mcap", 0.0, 2.0, JOINTS)
+    piece(tmp_path / "part_b.mcap", 2.05, 4.0, ["joint3", "joint1", "joint2"])
+    joined = f.mcap_signals([tmp_path / "part_a.mcap", tmp_path / "part_b.mcap"], q)
+    name = "/arm/joint_states position"
+    assert [k for k in joined if k.startswith("/arm") and "variation" not in k] == [name], list(joined)
+    assert joined.meta[name]["names"] == JOINTS
+    assert joined.meta[name]["joined_from"] == ["part_a.mcap", "part_b.mcap"]
+    rows, at = joined[name], q - t0
+    late = np.flatnonzero((at > 2.1) & np.isfinite(rows).all(axis=1))
+    assert len(late) > 50
+    for j, joint in enumerate(JOINTS):
+        assert np.allclose(rows[late, j], [joint_truth(s)[joint] for s in at[late]], atol=0.02), joint
+    assert not [i for i in joined.issues if i["kind"] == "signal_name_collision"]
+
+
+def piece_meta(names, span, **more):
+    """A signal's meta as the MCAP reader keeps it for one file's piece (mcap_signals): its value names when the
+    messages give them, its source, rate and the span of its readings."""
+    return {**({"names": list(names)} if names is not None else {}), "source": "MCAP channel /arm",
+            "rate_hz": 60.0, "span_s": list(span), **more}
+
+
+def two_pieces(names_a, names_b, units_a=None, units_b=None):
+    """Two pieces of one 3-value signal, read from part_a.mcap (frames 0 to 4) and part_b.mcap (frames 5 to 9), each
+    holding joint_truth in its own names' order (in JOINTS order when it names none), kept one after the other."""
+    n, t = 10, np.arange(10) / 2
+    out = f.Signals()
+    for names, units, rows, span, origin in ((names_a, units_a, range(0, 5), (0.0, 2.0), "part_a.mcap"),
+                                             (names_b, units_b, range(5, 10), (2.5, 4.5), "part_b.mcap")):
+        a = np.full((n, 3), np.nan)
+        for k in rows:
+            a[k] = [joint_truth(t[k])[j] for j in (names or JOINTS)]
+        out.keep("/arm position", a, piece_meta(names, span, **({"units": list(units)} if units else {})), origin)
+    return out, t
+
+
+def test_pieces_naming_their_values_in_one_order_join_as_before():
+    for names in (JOINTS, ["joint1", "joint1", "joint2"]):        # a name given twice, in one order in both pieces
+        out, t = two_pieces(names, names)
+        assert list(out) == ["/arm position"] and not out.issues
+        expected = np.array([[joint_truth(s)[j] for j in names] for s in t])
+        assert np.array_equal(out["/arm position"], expected)
+        assert out.meta["/arm position"]["names"] == names
+        assert out.meta["/arm position"]["joined_from"] == ["part_a.mcap", "part_b.mcap"]
+        assert out.meta["/arm position"]["span_s"] == [0.0, 4.5]
+
+
+def test_pieces_naming_no_values_join_as_before():
+    out, t = two_pieces(None, None)
+    assert list(out) == ["/arm position"] and not out.issues
+    assert "names" not in out.meta["/arm position"]
+    assert np.array_equal(out["/arm position"], np.array([[joint_truth(s)[j] for j in JOINTS] for s in t]))
+
+
+def test_a_piece_naming_its_values_in_another_order_is_put_in_the_held_order_with_its_units():
+    out, t = two_pieces(JOINTS, ["joint2", "joint3", "joint1"], ["rad", "m", "deg"], ["m", "deg", "rad"])
+    assert list(out) == ["/arm position"] and not out.issues
+    meta = out.meta["/arm position"]
+    assert meta["names"] == JOINTS and meta["units"] == ["rad", "m", "deg"]
+    assert meta["joined_from"] == ["part_a.mcap", "part_b.mcap"]
+    # every column holds its own joint in both pieces, so the second piece's values follow their names
+    assert np.array_equal(out["/arm position"], np.array([[joint_truth(s)[j] for j in JOINTS] for s in t]))
+
+
+def test_pieces_whose_value_names_conflict_are_kept_apart_as_two_sources():
+    for names_a, names_b in ((JOINTS, ["joint1", "joint2", "wrist"]),       # another set of names
+                             (JOINTS, None), (None, JOINTS),                  # names on one side only
+                             (["joint1", "joint1", "joint2"], ["joint1", "joint2", "joint1"])):   # a name twice
+        out, t = two_pieces(names_a, names_b)
+        assert sorted(out) == ["part_a /arm position", "part_b /arm position"], (names_a, names_b, list(out))
+        a, b = out["part_a /arm position"], out["part_b /arm position"]
+        assert np.isfinite(a[:5]).all() and np.isnan(a[5:]).all() and np.isfinite(b[5:]).all() and np.isnan(b[:5]).all()
+        assert out.meta["part_a /arm position"].get("names") == names_a
+        assert out.meta["part_b /arm position"].get("names") == names_b
+        notes = [i for i in out.issues if i["kind"] == "signal_name_collision"]
+        assert len(notes) == 1 and "part_a.mcap" in notes[0]["what"] and "part_b.mcap" in notes[0]["what"], notes
+        assert "overlap" not in notes[0]["what"], notes[0]["what"]
