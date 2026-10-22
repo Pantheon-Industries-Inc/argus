@@ -6232,9 +6232,15 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
     failures = {path: original(table) for (column, path), table in tables.items() if column is None}
     owned = {column for column, _ in tables if column is not None}
     columns = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and (c in owned or c.endswith("_index"))]
-    text_columns = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and c not in columns
-                    and (c in ANNOT_TEXT_COLS or any(isinstance(v, str) for v in df[c]))]
-    columns += text_columns
+    strings = [c for c in df.columns if c not in BOOKKEEPING_COLUMNS and c not in columns
+               and (c in ANNOT_TEXT_COLS or any(isinstance(v, str) for v in df[c]))]
+    # a text column is task text only when its name says so, by the words an MCAP text or step topic is read by
+    # (names_text: language_instruction, task, subtask; a step, as a whole word, so timestep is not one); any other
+    # recorded text (HABIT's robot1.action_source, "teleop" or "policy") is uploader metadata, kept with its rows in
+    # the notes and never a claim about the task
+    text_columns = [c for c in strings if c in ANNOT_TEXT_COLS or names_text(c) or {"step", "steps"} & set(tokens(c))]
+    other_text = [c for c in strings if c not in text_columns]
+    columns += strings
     language = []
     complete_language = True
     for column in text_columns:
@@ -6289,13 +6295,13 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
                 mapped = [x / fps for x in indices]
         except (TypeError, ValueError):
             pass                        # no mapping: each step is named below as having incomplete timing
-    spans, unresolved, table_notes = [], [], {}
+    spans, unresolved, table_notes, recorded_text = [], [], {}, []
     for column in columns:
         selected = {key: table for key, table in tables.items() if key[0] == column}
         sources = [path for _, path in selected]
         source = sources[0] if len(sources) == 1 else str(data_path)
         labels = resolved_labels(selected, column)
-        if column in text_columns:
+        if column in strings:
             steps, missing = language_spans(df[column].tolist(), times, str(data_path), column, frame_indices=frames)
         else:
             steps, missing = annotation_spans(df[column].tolist(), times, labels, source, column, frame_indices=frames)
@@ -6326,7 +6332,7 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
             unavailable, invalid = False, False
             for claim in missing:
                 try:
-                    no_mapping = column not in text_columns and recorded_index(claim["value"]) not in labels
+                    no_mapping = column not in strings and recorded_index(claim["value"]) not in labels
                 except (TypeError, ValueError):
                     no_mapping = False
                 unavailable |= no_mapping
@@ -6335,7 +6341,7 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
                 if present:
                     add_issue(ctx, kind, f"{column} in {data_path} has unresolved recorded annotation codes; "
                               "all original rows and table claims are retained as uploader notes.", source=str(data_path))
-        spans.extend(steps)
+        (recorded_text if column in other_text else spans).extend(steps)
         unresolved.extend(missing)
         for (_, path), table in selected.items():
             root["metadata_read"].add(Path(path).resolve())
@@ -6376,6 +6382,12 @@ def lerobot_annotations(ctx, root, df, data_path, *, image_clock=False):
     notes = {**({"previous recorded notes": previous} if previous else {}),
              "recorded annotation data source": str(data_path), "recorded annotation tables": table_notes,
              "recorded annotation spans": shown, "unresolved recorded annotation rows": missing}
+    if recorded_text:
+        other = {}
+        for step in recorded_text:
+            other.setdefault(step["column"], []).append({k: v for k, v in step.items()
+                if k not in ("values", "claims", "data_source", "source", "column")})
+        notes["recorded text columns that do not name the task"] = other
     if failures:
         notes["unreadable annotation table sources"] = failures
     set_uploader_notes(ctx, notes)

@@ -278,3 +278,32 @@ def test_habit_native_contract_keeps_commands_without_redundant_units(tmp_path, 
     with np.load(generic_ep / 'signals.npz') as values:
         np.testing.assert_array_equal(values[descriptor['key']], recorded)
     assert source_hashes(root) == original
+
+
+@pytest.mark.parametrize('read', [converted, published])
+def test_a_recorded_text_column_that_names_no_task_is_metadata_never_a_task_claim(tmp_path, read):
+    """B5: the LeRobot reader took every column holding a string as task text, so HABIT's robot1.action_source
+    ("teleop") was sent as "the dataset's task for the whole episode" in 5 of 7 HABIT gate requests, and
+    robot0.action_source's change to "policy" as a timed step. A text column is task text only when its name says so,
+    by the rule an MCAP text topic is read by; any other recorded text stays with its rows in the uploader notes."""
+    root = tmp_path / 'habit'
+    native(root)
+    path = root / 'data/chunk-000/episode_000000.parquet'
+    df = pd.read_parquet(path)
+    df['robot1.action_source'] = ['teleop'] * len(df)
+    df['robot0.action_source'] = ['teleop'] * 4 + ['policy'] * (len(df) - 4)
+    df['language_instruction'] = ['fold the recorded cloth neatly'] * len(df)
+    df.to_parquet(path)
+    info = json.loads((root / 'meta' / 'info.json').read_text())
+    for column in ('robot1.action_source', 'robot0.action_source', 'language_instruction'):
+        info['features'][column] = {'dtype': 'string', 'shape': [1]}
+    (root / 'meta' / 'info.json').write_text(json.dumps(info))
+    ep, ctx = read(root, tmp_path / 'out')
+    claimed = [row.get('column') for key in ('annotation_subtasks', 'annotation_task_claims')
+               for row in ctx.get(key) or []]
+    assert not any(str(c).endswith('action_source') for c in claimed)
+    assert 'language_instruction' in claimed
+    notes = json.dumps(ctx.get('uploader_notes'))
+    assert 'robot1.action_source' in notes and '"policy"' in notes
+    _, text = prompt(ep)
+    assert 'action_source):' not in text and 'action_source)' not in text
