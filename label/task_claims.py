@@ -16,9 +16,11 @@ Each source keeps its own semantics.
 - An empty or missing text claims nothing, and it is not covered by any text either.
 - Identical texts of one source join into one claim only where their spans touch, with no gap between them; moments
   never join.
-- A claim holds over the whole recording only when it is one unbroken span from within 1s of the recording's start (or
-  its first row) to within 1s of its end (or its last row), on established times: a moment, a row with no time, or a
-  claim in a recording whose length is not stated never is. A message source's leading text replaced within 0.1s does
+- A claim holds over the whole recording only when it is one unbroken span from its first row to its last row, or on
+  times from within 1s of the recording's start to within 1s of its end, and on a short recording within 5% of its
+  length of each, covering at least 90% of it: a step of a fraction of a second on a 2s clip is a step, never the
+  clip's task. It holds on established times only: a moment, a row with no time, or a claim in a recording whose length
+  is not stated never does. A message source's leading text replaced within 0.1s does
   not break that coverage; any other leading text, or an empty one, does.
 
 claims() applies the law when the context is read, so a context prepared before it is read the same way with no new
@@ -43,8 +45,11 @@ import math
 
 # a message source's text replaced within this many seconds of being sent holds no stretch of the recording
 INSTANT_S = 0.1
-# how close to the recording's start and end a claim must reach to hold over the whole recording
+# how close to the recording's start and end a claim must reach to hold over the whole recording: within EDGE_S, and
+# within EDGE_SHARE of the recording's length when that is less, and over at least COVER_SHARE of the length
 EDGE_S = 1.0
+EDGE_SHARE = 0.05
+COVER_SHARE = 0.9
 # two spans of one text touch when the second starts within this of the first's end (times are kept to the ms)
 TOUCH_S = 0.001
 
@@ -139,8 +144,11 @@ def _covers(row: dict, start_row: dict, end_s: float | None, n_rows) -> bool:
     if isinstance(start_row.get('row_start'), int) and isinstance(row.get('row_end'), int) and isinstance(n_rows, int):
         return start_row['row_start'] == 0 and row['row_end'] >= n_rows - 1
     t0, t1 = _number(start_row.get('t0')), _number(row.get('t1'))
-    return (end_s is not None and t0 is not None and t1 is not None
-            and t0 <= EDGE_S and t1 >= end_s - EDGE_S)
+    if end_s is None or t0 is None or t1 is None:
+        return False
+    # the edge is relative on a short recording, so 1s is never most of a 2s clip
+    edge = min(EDGE_S, EDGE_SHARE * end_s)
+    return t0 <= edge and t1 >= end_s - edge and t1 - t0 >= COVER_SHARE * end_s
 
 
 def claims(ctx: dict, duration_s: float | None = None) -> dict:

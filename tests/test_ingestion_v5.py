@@ -902,15 +902,17 @@ def test_mcap_faster_text_retains_exact_timing_only_with_recorded_clock_evidence
         assert [step['t0'] for step in steps(context)] == [
             round(1.001 - camera_delay, 3), round(2.501 - camera_delay, 3), round(3.501 - camera_delay, 3)]
         assert context['source']['presentation_clock']['basis'] == 'mcap_log_time'
-        # "prepare" and "fold the cloth" are sent at the same moment: one text holds over the whole recording
-        assert context['instruction'] == 'fold the cloth' and not task_prompts(context)
+        # "prepare" and "fold the cloth" are sent at the same moment, 1s into a 4s recording: the one text left holds
+        # its last three seconds, a timed task prompt and not the recording's instruction (a claim must reach within
+        # 5% of a short recording's ends, label/task_claims.py)
+        assert 'instruction' not in context and task_prompts(context) == {'fold the cloth': round(1.001 - camera_delay, 3)}
         assert 'unverified' in context['collection_note']
         loaded = episode.load(tmp_path / 'out' / context['episode_id'])
         prompt = episode.build_request(loaded['dir'])['prompt']
         assert 'pick up' in prompt and 'fold the cloth' in prompt and 'arrival' in prompt
     else:
         assert [step['t0'] for step in steps(context)] == [1., 2.5, 3.5]
-        assert context['instruction'] == 'fold the cloth' and not task_prompts(context)
+        assert 'instruction' not in context and task_prompts(context) == {'fold the cloth': 1.}
 
 
 @pytest.mark.parametrize('bias', [-3., 2.])

@@ -134,6 +134,39 @@ def test_a_whole_recording_claim_reaches_within_a_second_of_both_ends(t0, t1, wh
     assert (_read([{'t0': t0, 't1': t1, 'label': 'wipe the table'}])[0] == 'wipe the table') is whole
 
 
+@pytest.mark.parametrize('duration,rows,instruction,steps', [
+    # the audit's probe (task_semantics.md B3): main read each of these short clips' steps as the clip's instruction
+    (2.0, [{'t0': 0.9, 't1': 1.1, 'label': 'pick up the cup'}], None, ['pick up the cup']),
+    (1.5, [{'t0': 0.95, 't1': 1.0, 'label': 'tap'}], None, ['tap']),
+    (5.0, [{'t0': 0.8, 't1': 4.2, 'label': 'insert hex key'}], None, ['insert hex key']),
+    (3.0, [{'t0': 0.0, 't1': 2.1, 'label': 'grasp', 'column': 'a'},
+           {'t0': 0.9, 't1': 3.0, 'label': 'place', 'column': 'b'}], None, ['grasp', 'place']),
+    # a short clip's text that does hold over it is still its instruction
+    (2.0, [{'t0': 0.05, 't1': 1.95, 'label': 'pick up the cup'}], 'pick up the cup', []),
+    (5.0, [{'t0': 0.0, 't1': 4.8, 'label': 'insert hex key'}], 'insert hex key', []),
+    # from 20s on the edge is 1s, as before
+    (20.0, [{'t0': 0.9, 't1': 19.1, 'label': 'wipe the table'}], 'wipe the table', []),
+    (60.0, [{'t0': 0.8, 't1': 59.2, 'label': 'fold the towel'}], 'fold the towel', []),
+])
+def test_on_a_short_clip_the_edge_is_a_share_of_its_length_so_a_short_step_stays_a_step(duration, rows, instruction,
+                                                                                          steps):
+    """B3: a claim holds over the whole recording when it starts and ends within min(1s, 5% of the length) of the edges
+    and covers at least 90% of it. Main's absolute 1s edge took almost any single step of a clip of 2s or less as the
+    clip's instruction, which flips the request to the with-goal variant and judges the clip against that step."""
+    read = claims({'duration_s': duration, 'annotation_subtasks': rows})
+    assert read['instruction'] == instruction and [s['label'] for s in read['steps']] == steps
+
+
+def test_the_mcap_task_reader_keeps_a_short_clips_late_task_text_as_a_timed_prompt():
+    """B3 through the MCAP reader: on a 2s clip a /task text first sent 0.9s in (and repeated) holds 1.1s of it, a
+    timed prompt, never the clip's instruction; sent 0.05s in, it holds the clip."""
+    S, base = 10 ** 9, 100 * 10 ** 9
+    for start, instruction, prompts in [(9 * S // 10, None, ['pick up the cup']), (S // 20, 'pick up the cup', [])]:
+        texts = {'/task': [(base + start, 'pick up the cup'), (base + 3 * S // 2, 'pick up the cup')]}
+        got, _, timed = f.mcap_task_texts(texts, {'/task': 2}, base, 2.0)
+        assert got == instruction and [p['label'] for p in timed] == prompts
+
+
 @pytest.mark.parametrize('case,instruction,prompts', [
     # a placeholder and the title sent at once: one text over the whole clip
     ('placeholder_then_title_at_once', 'fold the cloth', []),
