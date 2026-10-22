@@ -258,7 +258,8 @@ TEXT = {
     'key_events': ('label', 'kind', 'outcome', 'note'),
     'state_changes': ('object', 'from', 'to', 'seen_in'),
     'completion': ('task_completed', 'success_predicate', 'undone_by', 'reason', 'judged_against', 'basis'),
-    'tasks': ('task', 'outcome', 'success_predicate', 'note', 'undone_by', 'judged_against'),
+    'tasks': ('task', 'outcome', 'success_predicate', 'note', 'undone_by', 'judged_against', 'own_outcome',
+              'own_success_predicate'),
     'recovery': ('failure', 'correction', 'how_to_fix'),
     'data_issues': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
     'operator_mistakes': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
@@ -267,7 +268,7 @@ TEXT = {
     'contacts': ('id', 'hand', 'object', 'action', 'touch_seen', 'slip', 'note', 'evidence'),
     'contacts_missing': ('hand', 'object', 'action', 'note', 'evidence'),
 }
-ENUMS = {'task_completed': OUTCOMES, 'outcome': OUTCOMES,
+ENUMS = {'task_completed': OUTCOMES, 'outcome': OUTCOMES, 'own_outcome': OUTCOMES,
          'severity': ('low', 'medium', 'high'), 'contribution': ('advancing', 'wasteful', 'idle'),
          'relation': ('aligned', 'narrower', 'broader', 'different', 'unrelated'),
          'deliberate': ('yes', 'no', 'unclear'), 'judged_against': JUDGED_AGAINST, 'basis': BASES}

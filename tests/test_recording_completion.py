@@ -211,3 +211,54 @@ def test_a_task_open_at_a_cut_is_neither_done_nor_not_done_on_the_rail_in_compar
     done = {**take, 'tasks': [TOWER_DONE]}
     assert 'n_tasks_open' not in serve._rail_record(Path('x.json'), {**done, 'tasks': [TOWER_DONE, TOWER_DONE]})
     assert 'tasks_open' not in metrics.measure({**done, 'tasks': [TOWER_DONE, TOWER_DONE]}, 'umi')
+
+
+# The real reply of the polymailer session's second part (paid check C', 82c0fc2,
+# episode_20261013_episode_153320_8aefd0dd__p02): its one task files padded mailers into a rigid bin and empties it,
+# judged against the instruction "(Cyclical) Place items into polymailer bag then take out of bag and arrange on table",
+# and its note says the bin work reaches its own end state by 309.01s. The own fields are what the S1 prompt asks.
+POLYMAILER_TASK = {
+    'start_s': 0.0, 'end_s': 314.84,
+    'task': 'Collect the loose padded mailers in the plastic bin, then empty the bin and spread its mailers on the table.',
+    'objects': ['yellow padded mailers', 'black padded mailers', 'white padded mailers', 'plastic bin'],
+    'judged_against': 'instruction', 'subtask': None,
+    'success_predicate': 'Items are placed inside a polymailer bag, then removed from that bag and arranged on the '
+                         'table.',
+    'outcome': 'failure', 'completed_at_s': None, 'goal_reached_at_s': None, 'undone_at_s': None, 'undone_by': None,
+    'note': 'The coherent observed bin-loading and unloading cycle reaches its own end state by 309.01 s. It stands in '
+            'for the instructed work but uses a rigid bin containing mailers rather than a polymailer containing items; '
+            'the bin is already partly filled at the preparation cut.'}
+
+
+def test_a_task_standing_in_for_the_instruction_keeps_its_own_outcome_beside_the_instructions():
+    """S1: the compliance verdict stays the instruction's (different work never passes it), and the task keeps the
+    outcome of the work it did, so a relabelling step can tell a clean bin-filing from a fumbled one."""
+    import json
+    from board import to_board
+    from label import harness
+    own = {**POLYMAILER_TASK, 'own_outcome': 'Success',
+           'own_success_predicate': 'The padded mailers are gathered in the plastic bin, then the bin is emptied and '
+                                    'its mailers lie spread on the table.'}
+    completion = {'task_completed': 'failure', 'success_predicate': POLYMAILER_TASK['success_predicate'],
+                  'completed_at_s': None, 'goal_reached_at_s': None, 'undone_at_s': None, 'undone_by': None,
+                  'reason': 'a different container-and-contents task'}
+    request = {'annotation_policy': {'version': 1, 'rig': 'teleop_arms'}, 'label_schema': 'tasks',
+               'given_prompt': '(Cyclical) Place items into polymailer bag then take out of bag and arrange on table'}
+    reply = {'task_summary': 'Collect padded mailers in a bin, then empty it.', 'completion': completion,
+             'timeline': [{'start_s': 0.0, 'end_s': 314.84, 'arm': 'both', 'action': 'file mailers',
+                           'contribution': 'advancing', 'progress': 0.0}],
+             'goal_alignment': {'matches_given': False, 'relation': 'different', 'note': 'a rigid bin'},
+             'tasks': [own]}
+    labels, ok = harness.read_reply(json.dumps(reply), request)
+    assert ok and labels['completion']['task_completed'] == 'failure'
+    from board.label_projection import project
+    projected, _ = project(labels)
+    task = projected['tasks'][0]
+    assert (task['outcome'], task['own_outcome']) == ('failure', 'success')
+    shown = to_board.convert({'episode_dir': 'episode_x', 'parse_ok': True, 'labels': labels, 'label_schema': 'tasks',
+                              'given_prompt': request['given_prompt']}, 'demo')
+    assert shown['tasks'][0]['own_outcome'] == 'success' and shown['tasks'][0]['outcome'] == 'failure'
+    assert shown['tasks'][0]['own_success_predicate'] == own['own_success_predicate']
+    # an own outcome that is no outcome word is set aside and named, as any other outcome is
+    projected, dropped = project({**labels, 'tasks': [{**own, 'own_outcome': 'great'}]})
+    assert 'own_outcome' not in projected['tasks'][0] and any(d['field'] == 'tasks.own_outcome' for d in dropped)

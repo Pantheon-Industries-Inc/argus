@@ -330,6 +330,13 @@ TASK_FIELDS = """  "tasks": [
      "note": "<if not a clean success, why>"}
   ],"""
 
+# A recording with an instruction: a task that stands in for the instruction by doing other work is judged against the
+# instruction, and also against the end state of the work it did (own_outcome), so a competent demonstration of other
+# work keeps an outcome of its own for relabelling (audit_2026-10-21 S1). Every other task leaves both null.
+OWN_TASK_FIELDS = """     "own_success_predicate": "<for a task judged against the instruction whose work is not the work it asks for: the end state of the work it evidently set out to do; otherwise null>",
+     "own_outcome": "success" | "success_then_undone" | "failure" | "partial" | "unclear" | null,
+"""
+
 # The robot schema of an episode with no instruction: the list of tasks in place of the one completion, with
 # progress, the outcome and the goal frame judged per task. With an instruction the schema keeps its completion, word
 # for word, and adds the list after it (schema).
@@ -430,7 +437,9 @@ def schema(r: str, recorded: bool = True, has_instruction: bool = True) -> str:
     s = SCHEMA.replace("<<ISSUE_TAGS>>", tags).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
     if has_instruction:
         s = _replace_once(s, '    "reason": "<if not a clean success, why>"\n  },\n',
-                          '    "reason": "<if not a clean success, why>"\n  },\n' + TASK_FIELDS + '\n')
+                          '    "reason": "<if not a clean success, why>"\n  },\n'
+                          + _replace_once(TASK_FIELDS, '     "note": "<if not a clean success, why>"}',
+                                          OWN_TASK_FIELDS + '     "note": "<if not a clean success, why>"}') + '\n')
     else:
         for old, new in TASKS_WORDING:
             s = _replace_once(s, old, new)
@@ -1163,7 +1172,12 @@ def task_rules(r: str, *, has_instruction: bool, has_steps: bool) -> str:
   above, applied to the task and to what it is judged against, except how long its result must hold. The tasks
   never change completion, which judges the whole recording against the instruction by its own rules: work the
   instruction does not ask for never raises it, different work never passes it, and its goal must hold through the
-  end of the episode, so a scene reset for the next attempt still makes completion success_then_undone.""" if
+  end of the episode, so a scene reset for the next attempt still makes completion success_then_undone.
+- A task judged against the instruction whose work is not the work it asks for (it stands in for it) is also judged
+  against the end state of the work it evidently set out to do, as a task with no instruction would be:
+  own_success_predicate states that end state and own_outcome says whether the footage shows it reached, by the same
+  rules. They never change the task's outcome against the instruction, or completion. Every other task leaves both
+  null.""" if
             has_instruction else """
 - task_summary is one sentence: the one task, or the recording's tasks in order.""")
     return (TASK_RULES.replace("<<LEAD>>", lead).replace("<<CLAIMS>>", _CLAIMS[has_instruction, has_steps])

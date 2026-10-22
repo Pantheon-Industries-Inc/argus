@@ -7186,6 +7186,8 @@ function renderEp(d, opts) {
           ? `<span class="outcome ${esc(oc)}">${esc(outcomeWords(oc, t.failure_kind))}</span>` : ''}</div>
         <div class="task-meta">${span}${done}${against}</div>
         ${t.success_predicate ? `<div class="task-pred">${esc(t.success_predicate)}</div>` : ''}
+        ${t.own_outcome ? `<div class="task-pred">Its own work: ${esc(outcomeWords(String(t.own_outcome)
+          .toLowerCase()))}${t.own_success_predicate ? `, ${esc(t.own_success_predicate)}` : ''}</div>` : ''}
         ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
       </div>
     </div>`);

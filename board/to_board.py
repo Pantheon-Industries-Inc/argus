@@ -253,7 +253,8 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "note": t.get("note") or "",
             **{key: copy.deepcopy(t[key]) for key in ("outcome_in_part", "joined_from", "source_piece",
                 "goal_reached_at_s", "undone_at_s", "undone_by", "completed_at_s_in_part",
-                "cut_continuation", "judged_against", "subtask", "judged_against_derived") if key in t},
+                "cut_continuation", "judged_against", "subtask", "judged_against_derived", "own_outcome",
+                "own_success_predicate") if key in t},
         })
     key_events = []
     for k in labels.get("key_events") or []:

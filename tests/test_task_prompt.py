@@ -69,13 +69,28 @@ def test_the_head_camera_keeps_its_own_segmentation_outcomes_and_no_undo():
         assert 'belong to no task' not in s and 'recording context goal' not in s
 
 
+# S1 (audit_2026-10-21): with an instruction, a task that stands in for it by doing other work also gets the outcome of
+# the work it did, beside its outcome against the instruction
+OWN_FIELDS = '''     "own_success_predicate": "<for a task judged against the instruction whose work is not the work it asks for: the end state of the work it evidently set out to do; otherwise null>",
+     "own_outcome": "success" | "success_then_undone" | "failure" | "partial" | "unclear" | null,
+'''
+OWN_RULE = '''
+- A task judged against the instruction whose work is not the work it asks for (it stands in for it) is also judged
+  against the end state of the work it evidently set out to do, as a task with no instruction would be:
+  own_success_predicate states that end state and own_outcome says whether the footage shows it reached, by the same
+  rules. They never change the task's outcome against the instruction, or completion. Every other task leaves both
+  null.'''
+
+
 def _robot_expected(rig, recorded, steps):
     """Main's episode prompt with the list of tasks after its completion, the task rules (and the step rules) before
     the granularity note, and that note naming the tasks."""
     expected = main(rig, recorded)
     end = '    "reason": "<if not a clean success, why>"\n  },\n'
     assert expected.count(end) == 1
-    expected = expected.replace(end, end + prompts.TASK_FIELDS + '\n')
+    note = '     "note": "<if not a clean success, why>"}'
+    assert prompts.TASK_FIELDS.count(note) == 1
+    expected = expected.replace(end, end + prompts.TASK_FIELDS.replace(note, OWN_FIELDS + note) + '\n')
     lean = prompts.lean(rig, has_instruction=True)
     old_lean = lean.replace('(completion, tasks, goal_alignment,', '(completion, goal_alignment,')
     assert expected.endswith(old_lean)
@@ -184,3 +199,17 @@ def test_the_in_context_example_is_in_the_format_it_closes(rig):
     assert labels['tasks'] and ('completion' in labels) is ('"task_completed"' in got)
     for task in labels['tasks']:
         assert set(task_fields) <= set(task), set(task_fields) - set(task)
+
+
+@pytest.mark.parametrize('rig', ROBOTS)
+@pytest.mark.parametrize('recorded', [True, False])
+@pytest.mark.parametrize('steps', [True, False])
+def test_a_task_standing_in_for_the_instruction_is_also_judged_on_its_own_work(rig, recorded, steps):
+    """S1: a task that stands in for the instruction by doing other work had only its outcome against the instruction,
+    so a competent demonstration of other work kept no outcome of its own. With an instruction the tasks ask for both;
+    with none every task is already judged on its own end state, and that prompt is unchanged."""
+    given = text(rig, True, recorded, steps)
+    assert given.count(OWN_RULE) == 1 and given.count(OWN_FIELDS) == 1
+    bare = text(rig, False, recorded, steps)
+    assert 'own_outcome' not in bare and 'own_success_predicate' not in bare
+    assert 'own_outcome' not in text('ego_head', True, recorded, steps)
