@@ -71,8 +71,10 @@ def _clip(path: Path, n: int) -> None:
     c.close()
 
 
-def _node_mcap(path: Path, topic: str, row, *, channel_metadata=None, schema=b'{"type": "object"}', records=()):
-    """One robots_realtime node's MCAP: JSON messages on topic at 100 Hz on the recorder clock, row(k) each."""
+def _node_mcap(path: Path, topic: str, row, *, channel_metadata=None, schema=b'{"type": "object"}', records=(),
+               start=T0 - 0.1):
+    """One robots_realtime node's MCAP: JSON messages on topic at 100 Hz on the recorder clock from start, row(k)
+    each."""
     from mcap.writer import Writer
     with open(path, "wb") as fh:
         w = Writer(fh)
@@ -81,7 +83,7 @@ def _node_mcap(path: Path, topic: str, row, *, channel_metadata=None, schema=b'{
         cid = w.register_channel(topic=topic, message_encoding="json", schema_id=sid,
                                  metadata=channel_metadata or {})
         for k in range(int(0.8 * 100)):
-            ns = int((T0 - 0.1 + k / 100) * 1e9)
+            ns = int((start + k / 100) * 1e9)
             w.add_message(cid, log_time=ns, publish_time=ns, data=json.dumps(row(k)).encode())
         for name, data in records:
             w.add_metadata(name, data)
@@ -352,3 +354,92 @@ def test_the_readout_and_the_board_say_whether_values_are_named():
     assert doc["unnamed"] is True
     doc = signal_doc({"name": "arm q", "names": ["a", "b"], "names_source": "rig.yaml"}, a, t, 1)
     assert doc["names"] == ["a", "b"] and doc["names_source"] == "rig.yaml"
+
+
+def _arm(phase):
+    return lambda k: {"joint_pos": [0.3 * np.sin(0.05 * k + j + phase) for j in range(3)]}
+
+
+def _two_files(tmp_path, meta_a, meta_b, start_b=T0 - 0.1, description=None):
+    """Two MCAP files of one upload that each record /arm/state (b's at start_b), read the way every reader reads
+    several files (mcap_signals, then write_signals), with description the text of a rig.yaml beside them."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    _node_mcap(tmp_path / "a.mcap", "/arm/state", _arm(0.0), channel_metadata=meta_a)
+    _node_mcap(tmp_path / "b.mcap", "/arm/state", _arm(1.0), channel_metadata=meta_b, start=start_b)
+    q = T0 + np.arange(18) / 30
+    if start_b > T0:
+        q = T0 + np.arange(60) / 30
+    sig = f.mcap_signals([tmp_path / "a.mcap", tmp_path / "b.mcap"], q)
+    ep = tmp_path / "ep"
+    ep.mkdir()
+    ctx = {"n_state_frames": len(q), "fps": 30.0}
+    files = []
+    if description is not None:
+        (tmp_path / "rig.yaml").write_text(description)
+        files = [tmp_path / "rig.yaml"]
+    with vn.describing(files, tmp_path):
+        f.write_signals(ep, ctx, sig)
+    return {s["name"]: s for s in ctx["signals"]}, ctx
+
+
+def test_a_file_that_declares_nothing_never_takes_another_files_names_or_units(tmp_path):
+    """Two files of one upload record a channel of the same name, two recordings kept apart. Claims were matched by
+    the field's name alone, so b.mcap's undeclared arm took a.mcap's names and unit. A declaration in a file names
+    only what that file recorded."""
+    got, _ = _two_files(tmp_path, {"joint_pos_names": '["a1", "a2", "a3"]', "joint_pos_unit": "rad"}, None)
+    a, b = got["a /arm/state joint_pos"], got["b /arm/state joint_pos"]
+    assert a["names"] == ["a1", "a2", "a3"] and a["names_source"] == "a.mcap channel metadata" and a["unit"] == "rad"
+    assert b.get("unnamed") is True and "names" not in b and "unit" not in b and b.get("units_undeclared") is True
+
+
+def test_two_files_that_name_one_channel_differently_each_keep_their_own_names(tmp_path):
+    """a.mcap and b.mcap name their own /arm/state differently. The two declarations were one conflict that named
+    neither arm; each file settles its own arm, and no conflict is raised."""
+    got, ctx = _two_files(tmp_path, {"joint_pos_names": '["a1", "a2", "a3"]', "joint_pos_unit": "rad"},
+                          {"joint_pos_names": '["b1", "b2", "b3"]', "joint_pos_unit": "deg"})
+    a, b = got["a /arm/state joint_pos"], got["b /arm/state joint_pos"]
+    assert (a["names"], a["unit"], a["names_source"]) == (["a1", "a2", "a3"], "rad", "a.mcap channel metadata")
+    assert (b["names"], b["unit"], b["names_source"]) == (["b1", "b2", "b3"], "deg", "b.mcap channel metadata")
+    assert not [i for i in ctx.get("reader_issues") or [] if i["kind"] in ("value_names_conflict",
+                                                                            "value_units_conflict")]
+
+
+def test_a_description_beside_the_files_and_the_pieces_of_one_recording_still_name_every_file(tmp_path):
+    """A rig description beside the recording is tied to no file, so it names the arm of every file that declares
+    nothing for it; and pieces of one recording split across files, joined into one array, take what either piece's
+    file declares."""
+    got, _ = _two_files(tmp_path, None, None, description="arm/state:\n  joint_pos_names: [r1, r2, r3]\n")
+    for name in ("a /arm/state joint_pos", "b /arm/state joint_pos"):
+        assert got[name]["names"] == ["r1", "r2", "r3"] and got[name]["names_source"] == "rig.yaml"
+    got, _ = _two_files(tmp_path / "pieces", None, {"joint_pos_names": '["b1", "b2", "b3"]'}, start_b=T0 + 0.8)
+    joined = got["/arm/state joint_pos"]
+    assert joined["names"] == ["b1", "b2", "b3"] and joined["names_source"] == "b.mcap channel metadata"
+
+
+def test_a_claim_on_a_whole_channel_names_that_files_channel_when_another_file_records_one_of_the_same_name(tmp_path):
+    """A name list on a.mcap's /arm/state as a whole names that channel's one array of its width. With b.mcap also
+    recording /arm/state, the topic held two such arrays and the claim named neither; it names a.mcap's."""
+    got, _ = _two_files(tmp_path, {"names": '["c1", "c2", "c3"]'}, None)
+    assert got["a /arm/state joint_pos"]["names"] == ["c1", "c2", "c3"]
+    assert got["b /arm/state joint_pos"].get("unnamed") is True
+
+
+def test_hdf5_attributes_name_only_the_arrays_of_their_own_file(tmp_path):
+    """Two HDF5 files that each name /observations/qpos in their group's attributes: each file's arrays take that
+    file's names, and an array whose file is not known is matched against every claim, as before."""
+    import h5py
+    claims = []
+    for stem, names in (("a", ["a1", "a2"]), ("b", ["b1", "b2"])):
+        with h5py.File(tmp_path / f"{stem}.h5", "w") as h:
+            h["observations/qpos"] = np.zeros((4, 2))
+            h["observations"].attrs["qpos_names"] = names
+        with h5py.File(tmp_path / f"{stem}.h5", "r") as h:
+            claims += vn.h5_claims(h, ["/observations/qpos"])
+    assert {c["origin"] for c in claims} == {"a.h5", "b.h5"}
+    metas = {"a observations/qpos": {}, "b observations/qpos": {}, "observations/qpos": {}}
+    widths = dict.fromkeys(metas, 2)
+    issues = vn.resolve(metas, widths, claims, {"a observations/qpos": "a.h5", "b observations/qpos": "b.h5"})
+    assert metas["a observations/qpos"]["names"] == ["a1", "a2"]
+    assert metas["b observations/qpos"]["names"] == ["b1", "b2"]
+    assert "names" not in metas["observations/qpos"]
+    assert [i["signal"] for i in issues if i["kind"] == "value_names_conflict"] == ["observations/qpos"]

@@ -3708,7 +3708,7 @@ def write_signals(ep: Path, ctx: dict, signals: dict | None, t: np.ndarray | Non
     for k in keep:
         meta.setdefault(k, {})
     for issue in vn.resolve({k: meta[k] for k in keep}, {k: int(np.prod(np.shape(v)[1:])) for k, v in keep.items()},
-                            claims):
+                            claims, getattr(signals, "origins", None)):
         add_issue(ctx, **issue)
     for k, v in keep.items():
         what = radians_contradicted(k, np.asarray(v[:n]), meta[k])

@@ -11,7 +11,8 @@ them is a declaration somewhere else in the upload, and each format has its own:
 - any recording: a YAML or JSON description in its folder or a folder above it, up to the upload's root, such as the
   station.yaml robots_realtime writes beside each episode (description_files, read through describing).
 
-A declaration becomes claims, {"path": the keys that lead to a list of names, "names", "source"}. A list of two or more
+A declaration becomes claims, {"path": the keys that lead to a list of names, "names", "source"}, and a declaration
+inside a recorded file (an MCAP's or an HDF5 file's own) also has "origin", the file's name. A list of two or more
 distinct non empty strings is a list of names (parse_names): a list, a JSON list in a string, a comma separated
 string under a key that says names, a mapping holding one list (LeRobot's {"motors": [...]}), or a list of entries
 that each carry a name or a title (a JSON schema's prefixItems). The list names the key it sits under (joint_pos:
@@ -23,7 +24,10 @@ write_signals (prepare/formats.py), the step every reader's arrays pass through 
 them (resolve). A claim names an array when its path ends the array's name, or the name ends its path (both split at
 /, . and spaces, in any case), and it gives one name per value; the claims that match the most segments win,
 the nearer declaration wins a tie, and claims that still disagree name nothing, which is a data issue. A claim on an
-MCAP channel as a whole names that channel's one array of its width. Names a reader already attached are kept. An
+MCAP channel as a whole names that channel's one array of its width. A claim with an origin names only arrays read
+from that file (Signals.origins, or a file a joined array was read from), so a second file's channel of the same name
+neither takes the first file's names nor loses its own to a disagreement with them; a description beside the
+recording has no origin and names an array of any file. Names a reader already attached are kept. An
 array of two or more values that nothing names is kept as it is and marked unnamed, so the readout, the board and the
 exports say that its values are known only by their order."""
 from __future__ import annotations
@@ -341,7 +345,7 @@ def mcap_claims(path: Path) -> list[dict]:
                             out += claims_in(doc, f"{name} attachment {att.name}", (), ("names", "units"))
     except Exception:  # noqa: BLE001 - the mcap reader on upload bytes raises many types; the claims before stay
         pass
-    return out
+    return [{**c, "origin": name} for c in out]
 
 
 def h5_claims(f, paths) -> list[dict]:
@@ -362,7 +366,8 @@ def h5_claims(f, paths) -> list[dict]:
         attrs = {k: decoded(v) for k, v in attribute_values(obj)}
         if attrs:
             out += claims_in(attrs, f"HDF5 attributes of {g}", (g,), ("names", "units"))
-    return out
+    origin = Path(str(getattr(f, "filename", "") or "")).name
+    return [{**c, "origin": origin} for c in out] if origin else out
 
 
 def dataset_names(ds, width: int) -> list[str] | None:
@@ -473,16 +478,28 @@ def _claim_values(claim, width: int):
     return list(units) if isinstance(units, list) and len(units) == width else None
 
 
-def _pick(name: str, m: dict, width: int, claims: list[dict], widths: dict, by_topic: dict):
+def _from(claim: dict, files) -> bool:
+    """Whether claim may name an array read from files (the names of the files it was read from): a claim tied to no
+    file names an array of any, a claim a file makes names only that file's arrays, and an array whose file is not
+    known is matched against every claim."""
+    return not files or not claim.get("origin") or claim["origin"] in files
+
+
+def _pick(name: str, m: dict, width: int, claims: list[dict], widths: dict, by_topic: dict, files_of=None):
     """(the values the best matching claims give, their sources), ("conflict", their sources) when they disagree, or
-    None: the claims that match the most segments of name, the nearest of those (rank), and a claim on name's MCAP
-    channel as a whole only when name is that channel's one array of its width."""
+    None: of the claims that may name it (_from, files_of {name: the files it was read from}), the claims that match
+    the most segments of name, the nearest of those (rank), and a claim on name's MCAP channel as a whole only when
+    name is that channel's one array of its width in its files."""
+    files_of = files_of or {}
+    files = files_of.get(name) or frozenset()
+    claims = [c for c in claims if _from(c, files)]
     segs = segments(name)
     found = [(c, _matches(tuple(c["path"]), segs)) for c in claims if not c.get("channel")]
     found = [(c, k) for c, k in found if k > 0 and _claim_values(c, width) is not None]
     if not found:
         topic = _channel_topic(m)
-        same = [n for n in by_topic.get(topic, []) if widths.get(n) == width] if topic else []
+        same = [n for n in by_topic.get(topic, []) if widths.get(n) == width
+                and (not files or not files_of.get(n) or files_of[n] & files)] if topic else []
         if topic and same == [name]:
             found = [(c, 1) for c in claims if c.get("channel") and tuple(c["path"]) == segments(topic)
                      and _claim_values(c, width) is not None]
@@ -508,8 +525,9 @@ def recorded_units(m: dict, width: int) -> list | None:
     return None
 
 
-def resolve(metas: dict, widths: dict, claims: list[dict]) -> list[dict]:
-    """Attach what claims declare to every array of metas ({name: its meta}, widths {name: values per frame}): names
+def resolve(metas: dict, widths: dict, claims: list[dict], origins: dict | None = None) -> list[dict]:
+    """Attach what claims declare to every array of metas ({name: its meta}, widths {name: values per frame}, origins
+    {name: the file it was read from}, with any file a joined array lists in its meta's joined_from): names
     and names_source (where they were declared) to an array of two or more values a reader left unnamed, and a unit
     (unit, or units when its values differ) and units_source to an array a reader kept no unit for; an array that
     nothing gives a unit is marked units_undeclared. Returns the issues (add_issue's arguments) for arrays that claims
@@ -518,6 +536,8 @@ def resolve(metas: dict, widths: dict, claims: list[dict]) -> list[dict]:
     name_claims = [c for c in claims if "names" in c]
     unit_claims = [c for c in claims if "units" in c]
     by_topic: dict[str, list[str]] = {}
+    files_of = {name: frozenset(x for x in [(origins or {}).get(name), *(m.get("joined_from") or [])] if x)
+                for name, m in metas.items()}
     for name, m in metas.items():
         topic = _channel_topic(m)
         if topic:
@@ -525,7 +545,7 @@ def resolve(metas: dict, widths: dict, claims: list[dict]) -> list[dict]:
     for name, m in metas.items():
         width = widths.get(name) or 0
         if width >= 2 and not (m.get("names") and len(m["names"]) == width) and name_claims:
-            got = _pick(name, m, width, name_claims, widths, by_topic)
+            got = _pick(name, m, width, name_claims, widths, by_topic, files_of)
             if got and got[0] == "conflict":
                 issues.append({"kind": "value_names_conflict", "signal": name,
                                "what": f"{name}: {' and '.join(got[1])} name its {width} values differently, so its "
@@ -534,7 +554,7 @@ def resolve(metas: dict, widths: dict, claims: list[dict]) -> list[dict]:
                 m["names"], m["names_source"] = got[0], ", ".join(got[1])
         if width < 1 or recorded_units(m, width) is not None:
             continue
-        got = _pick(name, m, width, unit_claims, widths, by_topic) if unit_claims else None
+        got = _pick(name, m, width, unit_claims, widths, by_topic, files_of) if unit_claims else None
         if got and got[0] == "conflict":
             issues.append({"kind": "value_units_conflict", "signal": name,
                            "what": f"{name}: {' and '.join(got[1])} give its values different units, so no unit is "
