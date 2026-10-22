@@ -53,9 +53,11 @@ each as the most specific end state the person evidently worked toward (the bloc
 in half, the cup in the bin), read from what their actions were evidently trying to achieve and not from how far they
 got, never as a description that any motion would satisfy (moving, repositioning or rearranging the objects, or the
 work coming to a stop). Each task's success_predicate states that end state, and whatever the work was evidently meant
-to cover but did not is a shortfall in the outcome, not something outside the task. When the actions fit no single end
-state, name the one that fits best and
-say in the task's note what leaves it uncertain.
+to cover but did not is a shortfall in the outcome, not something outside the task. A task still under way when the
+clip ends is named by the end state of the work the clip shows under way, and is unclear when that end is not shown; a
+further step that would follow that work (setting the result down, packing, boxing or storing it, carrying it away) is
+part of the task only when the clip shows it begin. When the actions fit no single end state, name the one that fits
+best and say in the task's note what leaves it uncertain.
 """
 # The third approved edit (Eric, 2026-10-21, audit_2026-10-21 S3): a clip with an annotated goal is asked one optional
 # field, whether it reached the goal's end state, and nothing else changes.
