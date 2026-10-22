@@ -1358,14 +1358,54 @@ def mark_cut_tasks(tasks: list, cuts_s: list[float], labels: dict | None = None)
     return out
 
 
-def is_cut_key_event(event: dict, cuts_s: list[float]) -> bool:
-    """Exclude a boundary-only event with explicit truncation evidence, never a nearby physical failure."""
+FRAME_TIME_S = 0.01         # a reply writes a frame's time to two decimals: 310.74 for the frame at 310.744
+
+
+def part_frames(pieces_cfg: list) -> dict:
+    """{part number: ((first frame, within), (last frame, within))} for each part's request on the recording's clock,
+    from the parts' records as the stitched config keeps them (config["pieces"], each {"part", "t0_s", "config":
+    {"timesteps_s"}}). A time names that frame when it lies within FRAME_TIME_S of it and nearer to it than to the
+    frame sent next to it, which is what "within" holds. A part whose record holds no sampled instants is left out."""
+    from label.episode import number
+    out = {}
+    for part in pieces_cfg or []:
+        times = [number(t) for t in ((part.get("config") or {}).get("timesteps_s") or [])]
+        t0 = number(part.get("t0_s"))
+        if not isinstance(part.get("part"), int) or t0 is None or not times or None in times:
+            continue
+        times = sorted(set(times))
+        gap = lambda a, b: min(FRAME_TIME_S, abs(b - a) / 2) if a != b else FRAME_TIME_S
+        out[part["part"]] = ((round(t0 + times[0], 3), gap(times[0], times[1 if len(times) > 1 else 0])),
+                             (round(t0 + times[-1], 3), gap(times[-1], times[-2 if len(times) > 1 else -1])))
+    return out
+
+
+def is_cut_key_event(event: dict, cuts_s: list[float], frames: dict | None = None) -> bool:
+    """A key event that describes the owning part's internal request edge, never a physical failure.
+
+    Where the part's sent frames are known (frames, part_frames), the edge is decided by where the event sits, not by
+    what it says. An event at the first frame of a part that opens at one of our cuts has no earlier frame in its
+    request to see a change against, so whatever it says is the state the part opened on ("already under way"); one
+    at the last frame of a part that ends at one of our cuts with outcome unclear is the part not seeing how the work
+    went on after its last frame ("still under way at the boundary"). Both are set aside. A success at a part's last
+    frame can be a change seen between its last two frames and is kept, as is every failure. Otherwise only a failure
+    or unclear event whose label and note are wholly about the clip starting or ending is set aside."""
     from label.episode import number
     ts = number(event.get("t_s"))
     source = event.get("source_piece") or {}
     lo, hi = number(source.get("t0_s")), number(source.get("t1_s"))
-    if ts is None or lo is None or hi is None or not lo - .001 <= ts <= hi + .001 \
-            or event.get("outcome") not in ("failure", "unclear"):
+    if ts is None or lo is None or hi is None or not lo - .001 <= ts <= hi + .001:
+        return False
+    edge = (frames or {}).get(source.get("index"))
+    if edge is not None:
+        (first, near_first), (last, near_last) = edge
+        if event.get("outcome") in ("success", "unclear") and abs(ts - first) <= near_first + 1e-6 \
+                and _internal_boundary(source, "start", cuts_s) is not None:
+            return True
+        if event.get("outcome") == "unclear" and abs(ts - last) <= near_last + 1e-6 \
+                and _internal_boundary(source, "end", cuts_s) is not None:
+            return True
+    if event.get("outcome") not in ("failure", "unclear"):
         return False
     label = str(event.get("label") or "").strip().lower()
     # A real event with an incidental end-of-clip note keeps its label and outcome.
@@ -1662,11 +1702,11 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         else:
             L["completion"] = recording_completion(L["tasks"], task_prompts=0 if instruction else steps)
     L["scene"]["objects"] = join_scene_objects(scene_objects, L["tasks"])
-    events = []
+    events, frames = [], part_frames(part_info)
     for event in L["key_events"]:
-        if is_cut_key_event(event, edges_s):
+        if is_cut_key_event(event, edges_s, frames):
             excluded.append({**event, "list": "key_events", "excluded_by": "piece_cut",
-                             "reason": "This event explicitly describes the owning part's internal request boundary."})
+                             "reason": "This event describes the owning part's internal request boundary."})
         else:
             events.append(event)
     L["key_events"] = events

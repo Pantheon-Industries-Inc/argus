@@ -1794,3 +1794,77 @@ def test_a_stitched_recording_carries_its_parts_goal_alignment_to_every_reader(t
     from checks.label_consistency import check
     reached = {**labels, 'completion': {'task_completed': 'success'}}
     assert 'outcome_vs_alignment' in {x['rule'] for x in check(reached)}
+
+
+# ---- key events that describe our cut ----------------------------------------------------------------------------
+
+UMI_CUT_EVENTS = json.loads((Path(__file__).parent / 'fixtures' / 'umi_cut_key_events.json').read_text())['takes']
+
+
+def test_a_key_event_at_the_frame_a_part_opens_or_closes_on_at_our_cut_is_set_aside_by_where_it_sits():
+    """Five real stitched UMI 900h takes, every key event within 2.5s of a cut. Main set aside none of them: its rule
+    reads the label's opening words, and the parts write "remains in progress" or "is already underway". The part
+    after a cut has no frame before its first one, so an event at that frame is the state it opened on; the part
+    before a cut cannot see past its last frame, so an unclear event there is the boundary. Both are set aside by
+    where they sit. Kept: the grasp the next part sees 1s in, a placement and a pickup 1.7s and 2.5s from the cut, a
+    real fall 0.13s before the cut, and a success at the last frame, which can be a change seen between the last two
+    frames (here a status, "Manga remains open", that the rule cannot tell from one without reading it)."""
+    out, kept = [], []
+    for take in UMI_CUT_EVENTS:
+        frames = pieces.part_frames(take['pieces'])
+        for event in take['key_events']:
+            (out if pieces.is_cut_key_event(event, take['cuts_s'], frames) else kept).append(event['label'])
+    assert out == ['Manga handling is already underway', 'Left gripper is engaging the queen at the window boundary',
+                   'Second collection activity continues at the window boundary',
+                   'Kernel-collection activity is already underway', 'Two-gripper bottle pressing remains in progress',
+                   'Both grippers are already holding the bag edges', 'Cap handoff is still between the two grips',
+                   'Small-container closure manipulation is already underway', 'Fine bead-to-pin work still underway']
+    assert kept == ['Manga remains open in both grippers at the cut', 'Left gripper acquires the queen at the window start',
+                    'Ten placed below the back row; queen remains separate on the left', 'First visible card pickup',
+                    'Upper cutters fall from the fifth tower during tray movement']
+    # a reply writes a frame's time to two decimals (322.99 for the last frame at 322.99x): the event is at that frame
+    queen = UMI_CUT_EVENTS[[t['take'] for t in UMI_CUT_EVENTS].index('fob_47b204-977a6219-36-36')]
+    (first, _), (last, near) = pieces.part_frames(queen['pieces'])[1]
+    assert first == 0.0 and near == pieces.FRAME_TIME_S and abs(322.99 - last) <= near
+    # the recording's own first and last frames are no cut: an event there is kept
+    for take in UMI_CUT_EVENTS:
+        frames = pieces.part_frames(take['pieces'])
+        (start, _), _ = frames[1]
+        _, (end, _) = frames[max(frames)]
+        last_part = {'index': max(frames), 't0_s': take['pieces'][-1]['t0_s'], 't1_s': take['pieces'][-1]['t1_s']}
+        assert not pieces.is_cut_key_event({'t_s': start, 'outcome': 'success', 'label': 'Already underway',
+                                            'source_piece': {'index': 1, 't0_s': 0.0,
+                                                             't1_s': take['pieces'][0]['t1_s']}},
+                                           take['cuts_s'], frames)
+        assert not pieces.is_cut_key_event({'t_s': end, 'outcome': 'unclear', 'label': 'Still underway',
+                                            'source_piece': last_part}, take['cuts_s'], frames)
+
+
+def test_stitch_sets_aside_the_events_at_the_frames_each_part_opens_and_closes_on_at_our_cuts(tmp_path, monkeypatch):
+    """Three parts whose replies carry the real UMI wording at their edge frames: the stitch sets aside the status at
+    each internal edge and keeps the same wording at the recording's own start and end, every failure, and an event
+    one frame in."""
+    _, src, parts = _three_parts(tmp_path, monkeypatch)
+    pcs = [json.loads((p / 'context.json').read_text()) for p in parts]
+    records = [_part_result(p, 'collect the kernels') for p in parts]
+    for record in records:
+        record['config']['timesteps_s'] = [0.0, 0.4, 0.8]
+        record['labels']['key_events'] = [
+            {'t_s': 0.0, 'kind': 'phase', 'outcome': 'success', 'label': 'Kernel-collection activity is already underway'},
+            {'t_s': 0.4, 'kind': 'grasp', 'outcome': 'success', 'label': 'Left gripper acquires the spoon'},
+            {'t_s': 0.8, 'kind': 'carry', 'outcome': 'failure', 'label': 'Kernels spill from the spoon'},
+            {'t_s': 0.8, 'kind': 'phase', 'outcome': 'unclear',
+             'label': 'Second collection activity continues at the window boundary',
+             'note': 'The end of this activity is outside the supplied part.'}]
+    labels = pieces.stitch(src, list(zip(pcs, records)))['labels']
+    gone = [(x['source_piece']['index'], x['label']) for x in labels['_excluded'] if x['list'] == 'key_events']
+    assert gone == [(1, 'Second collection activity continues at the window boundary'),
+                    (2, 'Kernel-collection activity is already underway'),
+                    (2, 'Second collection activity continues at the window boundary'),
+                    (3, 'Kernel-collection activity is already underway')]
+    assert all(x['excluded_by'] == 'piece_cut' for x in labels['_excluded'] if x['list'] == 'key_events')
+    kept = [(e['source_piece']['index'], e['label']) for e in labels['key_events']]
+    assert (1, 'Kernel-collection activity is already underway') in kept
+    assert (3, 'Second collection activity continues at the window boundary') in kept
+    assert sum(label == 'Kernels spill from the spoon' for _, label in kept) == 3
+    assert sum(label == 'Left gripper acquires the spoon' for _, label in kept) == 3

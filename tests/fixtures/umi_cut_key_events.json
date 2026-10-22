@@ -1,0 +1,397 @@
+{
+ "_source": "umi900h_labels.jsonl.gz (the UMI 900h export on HF, stitched on main before shared windows): five takes, every key event within 2.5s of a cut, and each part's first two and last two sampled instants (config.pieces[].config.timesteps_s)",
+ "takes": [
+  {
+   "take": "fob_ca4b70-d50c5258-96-34",
+   "export_version": 5,
+   "argus_commit": "argus@d423957",
+   "cuts_s": [
+    281.414
+   ],
+   "pieces": [
+    {
+     "part": 1,
+     "t0_s": 0.0,
+     "t1_s": 281.414,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       281.281,
+       281.381
+      ]
+     }
+    },
+    {
+     "part": 2,
+     "t0_s": 281.414,
+     "t1_s": 516.282,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       234.234,
+       234.835
+      ]
+     }
+    }
+   ],
+   "key_events": [
+    {
+     "t_s": 281.38,
+     "label": "Manga remains open in both grippers at the cut",
+     "kind": "phase",
+     "outcome": "success",
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 281.414
+     }
+    },
+    {
+     "t_s": 281.414,
+     "label": "Manga handling is already underway",
+     "kind": "phase",
+     "outcome": "success",
+     "source_piece": {
+      "index": 2,
+      "t0_s": 281.414,
+      "t1_s": 516.282
+     }
+    }
+   ]
+  },
+  {
+   "take": "fob_47b204-977a6219-36-36",
+   "export_version": 5,
+   "argus_commit": "argus@d423957",
+   "cuts_s": [
+    323.023,
+    654.053
+   ],
+   "pieces": [
+    {
+     "part": 1,
+     "t0_s": 0.0,
+     "t1_s": 323.023,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       322.322,
+       322.989
+      ]
+     }
+    },
+    {
+     "part": 2,
+     "t0_s": 323.023,
+     "t1_s": 654.053,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       330.33,
+       330.997
+      ]
+     }
+    },
+    {
+     "part": 3,
+     "t0_s": 654.053,
+     "t1_s": 1092.992,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       438.438,
+       438.905
+      ]
+     }
+    }
+   ],
+   "key_events": [
+    {
+     "t_s": 322.99,
+     "label": "Left gripper is engaging the queen at the window boundary",
+     "kind": "phase",
+     "outcome": "unclear",
+     "note": "The subsequent lift or placement is outside the supplied window.",
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 323.023
+     }
+    },
+    {
+     "t_s": 324.023,
+     "label": "Left gripper acquires the queen at the window start",
+     "kind": "grasp",
+     "outcome": "success",
+     "source_piece": {
+      "index": 2,
+      "t0_s": 323.023,
+      "t1_s": 654.053
+     }
+    },
+    {
+     "t_s": 652.353,
+     "label": "Ten placed below the back row; queen remains separate on the left",
+     "kind": "subgoal_complete",
+     "outcome": "success",
+     "source_piece": {
+      "index": 2,
+      "t0_s": 323.023,
+      "t1_s": 654.053
+     }
+    },
+    {
+     "t_s": 656.553,
+     "label": "First visible card pickup",
+     "kind": "grasp",
+     "outcome": "success",
+     "source_piece": {
+      "index": 3,
+      "t0_s": 654.053,
+      "t1_s": 1092.992
+     }
+    }
+   ]
+  },
+  {
+   "take": "fob_c92df4-b31f53e7-254-5",
+   "export_version": 5,
+   "argus_commit": "argus@d423957",
+   "cuts_s": [
+    306.439
+   ],
+   "pieces": [
+    {
+     "part": 1,
+     "t0_s": 0.0,
+     "t1_s": 306.439,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       306.306,
+       306.406
+      ]
+     }
+    },
+    {
+     "part": 2,
+     "t0_s": 306.439,
+     "t1_s": 539.105,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       232.232,
+       232.632
+      ]
+     }
+    }
+   ],
+   "key_events": [
+    {
+     "t_s": 306.41,
+     "label": "Second collection activity continues at the window boundary",
+     "kind": "phase",
+     "outcome": "unclear",
+     "note": "The end of this activity is outside the supplied part.",
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 306.439
+     }
+    },
+    {
+     "t_s": 306.439,
+     "label": "Kernel-collection activity is already underway",
+     "kind": "phase",
+     "outcome": "success",
+     "source_piece": {
+      "index": 2,
+      "t0_s": 306.439,
+      "t1_s": 539.105
+     }
+    }
+   ]
+  },
+  {
+   "take": "fob_e9bfb4-b94888c2-199-12",
+   "export_version": 5,
+   "argus_commit": "argus@d423957",
+   "cuts_s": [
+    441.574
+   ],
+   "pieces": [
+    {
+     "part": 1,
+     "t0_s": 0.0,
+     "t1_s": 441.574,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       441.441,
+       441.541
+      ]
+     }
+    },
+    {
+     "part": 2,
+     "t0_s": 441.574,
+     "t1_s": 849.916,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       407.407,
+       408.308
+      ]
+     }
+    }
+   ],
+   "key_events": [
+    {
+     "t_s": 441.44,
+     "label": "Upper cutters fall from the fifth tower during tray movement",
+     "kind": "carry",
+     "outcome": "failure",
+     "note": "Several red rings and an orange cutter are loose on the tray at the final instant.",
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 441.574
+     }
+    }
+   ]
+  },
+  {
+   "take": "fob_0ff0a4-88ebce55-945-26",
+   "export_version": 5,
+   "argus_commit": "argus@d423957",
+   "cuts_s": [
+    397.197,
+    742.875,
+    1165.598
+   ],
+   "pieces": [
+    {
+     "part": 1,
+     "t0_s": 0.0,
+     "t1_s": 397.197,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       396.396,
+       397.163
+      ]
+     }
+    },
+    {
+     "part": 2,
+     "t0_s": 397.197,
+     "t1_s": 742.875,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       345.345,
+       345.645
+      ]
+     }
+    },
+    {
+     "part": 3,
+     "t0_s": 742.875,
+     "t1_s": 1165.598,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       422.422,
+       422.689
+      ]
+     }
+    },
+    {
+     "part": 4,
+     "t0_s": 1165.598,
+     "t1_s": 1548.847,
+     "config": {
+      "timesteps_s": [
+       0.0,
+       1.001,
+       382.382,
+       383.216
+      ]
+     }
+    }
+   ],
+   "key_events": [
+    {
+     "t_s": 397.16,
+     "label": "Two-gripper bottle pressing remains in progress",
+     "kind": "phase",
+     "outcome": "unclear",
+     "note": "The supplied window ends during the activity, not at its observed finish.",
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 397.197
+     }
+    },
+    {
+     "t_s": 397.197,
+     "label": "Both grippers are already holding the bag edges",
+     "kind": "contact",
+     "outcome": "success",
+     "source_piece": {
+      "index": 2,
+      "t0_s": 397.197,
+      "t1_s": 742.875
+     }
+    },
+    {
+     "t_s": 742.847,
+     "label": "Cap handoff is still between the two grips",
+     "kind": "handoff",
+     "outcome": "unclear",
+     "note": "The final view does not establish release by the right gripper.",
+     "source_piece": {
+      "index": 2,
+      "t0_s": 397.197,
+      "t1_s": 742.875
+     }
+    },
+    {
+     "t_s": 742.875,
+     "label": "Small-container closure manipulation is already underway",
+     "kind": "phase",
+     "outcome": "success",
+     "source_piece": {
+      "index": 3,
+      "t0_s": 742.875,
+      "t1_s": 1165.598
+     }
+    },
+    {
+     "t_s": 1165.565,
+     "label": "Fine bead-to-pin work still underway",
+     "kind": "phase",
+     "outcome": "unclear",
+     "note": "No unsupported completed connection is established within this supplied window.",
+     "source_piece": {
+      "index": 3,
+      "t0_s": 742.875,
+      "t1_s": 1165.598
+     }
+    }
+   ]
+  }
+ ]
+}
