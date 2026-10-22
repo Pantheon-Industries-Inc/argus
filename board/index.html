@@ -6700,7 +6700,8 @@ function renderEp(d, opts) {
   const readTasks = (d.tasks || []).filter(t => t && t.task);
   const bannerLabel = partProgress && meta.given_prompt ? 'Source task'
     : stepsOnly ? `The dataset's timed steps and ${whoOwn(who, 'tasks')}`
-    : givenSession ? 'Given task and session summary' : hasTasks ? 'Session summary'
+    : givenSession ? (tasksFormat ? 'Given task and summary of the tasks' : 'Given task and session summary')
+    : hasTasks ? (tasksFormat ? 'Summary of the tasks' : 'Session summary')
     : givenMode ? `Given goal and ${whoOwn(who, 'independent assessment')}`
     : `Task, as ${esc(nameParts(who)[0])}${nameParts(who)[1] ? ` (${esc(nameParts(who)[1])})` : ''} assessed it`;
   // a text the dataset holds over the whole recording beside the instruction (label/task_claims.py), never a step
@@ -6737,7 +6738,7 @@ function renderEp(d, opts) {
         + `</div>` + alignHtml : givenSession
     ? `<div class="goal-given"><span class="gg-badge">given task</span>`
         + `<span class="gg-text">${esc(meta.given_prompt)}</span></div>`
-      + `<div class="goal-read"><span class="gr-badge">session summary</span>`
+      + `<div class="goal-read"><span class="gr-badge">${tasksFormat ? 'summary of the tasks' : 'session summary'}</span>`
         + `<span class="gr-text">${esc(d.episode_prompt || '(empty)')}</span></div>` + alignHtml : givenMode
     ? `<div class="goal-given"><span class="gg-badge">given goal</span>`
         + `<span class="gg-text">${esc(meta.given_prompt)}</span></div>`

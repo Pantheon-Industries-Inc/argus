@@ -86,7 +86,9 @@ def test_a_recording_of_one_task_reads_as_an_episode_and_one_of_several_task_by_
     one, several, legacy, episode = json.loads(p.stdout)
     assert one['shown'] == 0 and one['bannerLabel'].startswith('Given goal and'), one['bannerLabel']
     assert 'matches given goal' in one['bannerBody']
-    assert several['shown'] == 2 and several['bannerLabel'] == 'Given task and session summary'
+    # B7: a record in the tasks format is no session; its summary is named in the schema's words
+    assert several['shown'] == 2 and several['bannerLabel'] == 'Given task and summary of the tasks'
+    assert 'summary of the tasks<' in several['bannerBody'] and 'session' not in several['bannerBody']
     assert 'matches given goal' in several['bannerBody']
     assert legacy['shown'] == 2 and episode['shown'] == 0
 
@@ -155,3 +157,17 @@ def test_a_verdict_keeps_its_judged_tasks_and_every_claim_reaches_the_banner():
     assert ego['bannerLabel'].startswith("The dataset's timed steps and") and 'matches the dataset' in ego['bannerBody']
     assert "dataset's task for the whole episode" in whole['bannerBody'] and 'spell out CORL' in whole['bannerBody']
     assert whole['shown'] == 0
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='no node')
+def test_a_tasks_record_is_never_called_a_session_and_an_old_session_still_is():
+    """B7: the session mode is gone, so a record in the tasks format with several tasks and no verdict is the summary
+    of its tasks, with or without an instruction; a record labelled in the session mode keeps its own name."""
+    tasks_format = {'episode_prompt': 'wipes the table, then stacks the cups', 'tasks': [TASK, TASK],
+                    'completion': {'task_completed': None, 'from_tasks': 2, 'basis': 'tasks'}}
+    cases = [{'d': tasks_format, 'meta': {'prompt_mode': 'inferred', 'label_schema': 'tasks'}},
+             {'d': {'episode_prompt': 'wipes the table', 'tasks': [TASK, TASK]}, 'meta': {'prompt_mode': 'session'}}]
+    p = subprocess.run(['node', '-e', TASKS_SCRIPT, str(PAGE), json.dumps(cases)], text=True, capture_output=True)
+    assert p.returncode == 0, p.stderr
+    new, old = json.loads(p.stdout)
+    assert new['bannerLabel'] == 'Summary of the tasks' and old['bannerLabel'] == 'Session summary'
