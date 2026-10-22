@@ -114,13 +114,19 @@ def prompt(candidate: dict, times: list[float], cam_labels: list[str]) -> str:
         "The part before the cut ended with this task still under way:\n" + _task_lines(candidate["left"]) + "\n\n"
         "The part after the cut began with this task:\n" + _task_lines(candidate["right"]) + "\n\n"
         "Each description was written by a request that saw only its own side of the cut, so the two can name one "
-        "activity differently, and a new task can also begin right at the cut. Judge from the frames whether the "
-        "activity just before the cut and the activity just after it are the same task carried on across the cut, or "
-        "a different task that begins at the cut.\n\n"
+        "task differently, and a new task can also begin right at the cut. If you answer true, the two become one "
+        "task: the goal the part before the cut wrote, judged by the outcome the part after the cut gave. So the "
+        "question is whether the work on both sides is aimed at the same end state, not whether the hands keep "
+        "moving: the hands nearly always keep moving across a cut.\n"
+        "- true: the work after the cut carries on toward the same end state as the work before it (the same build, "
+        "fill, sort or arrangement, perhaps described more narrowly as what was left).\n"
+        "- false: the end states differ, even with no pause between them (building, then taking it apart; laying "
+        "pieces out, then assembling something new from them; one object finished and set aside, then another "
+        "begun), or the frames show one task ending and another starting near the cut.\n"
+        "- unclear: the frames do not show which.\n\n"
         "Answer with one JSON object and nothing else:\n"
-        '{"same_task": true | false | "unclear", "evidence": "<what the frames show on each side of the cut, in one '
-        'or two sentences>"}\n'
-        'Answer "unclear" when the frames do not show which it is.')
+        '{"same_task": true | false | "unclear", "evidence": "<the end state the work aims at on each side of the '
+        'cut, as the frames show it, in one or two sentences>"}')
 
 
 def settings(result: dict, model: str | None = None, reasoning: str | None = None) -> dict:
