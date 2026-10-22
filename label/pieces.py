@@ -1040,7 +1040,7 @@ def _last_task(task):
     return (task.get("joined_from") or [task])[-1]
 
 
-OFF_GOAL = ("unrelated", "different")      # a part's footage shows other work than asked, the more severe first
+OFF_GOAL =("unrelated", "different")      # a part's footage shows other work than asked, the more severe first
 ON_GOAL = ("narrower", "aligned", "broader")  # it shows the asked work, alone or with more, or a share of it
 
 
@@ -1068,6 +1068,54 @@ def parts_goal_alignment(assessments: list[dict], count: int) -> dict | None:
     notes = [f"Part {i}: {str(g.get('note')).strip()}" for i, g in readings if str(g.get("note") or "").strip()]
     return {"matches_given": matches, "relation": relation, "note": " ".join(notes), "basis": "parts",
             "parts": [{"part": i, "relation": rel[i], "matches_given": g.get("matches_given")} for i, g in readings]}
+
+
+def parts_goal_outcome(assessments: list[dict], missing: list[dict] = ()) -> dict | None:
+    """A head-camera recording's goal_outcome (label/prompts.py EGO_GOAL_OUTCOME) from its parts', or None when no part
+    was asked it (a clip with no annotated goal, or parts labelled before the field existed). The goal names an end
+    state, and only the last part sees the end of the recording, so its outcome is the recording's, with two
+    exceptions that make it unclear: a part gave no reading (it has no labels, or its reply no outcome word), since the
+    end state may have been reached or lost there; or an earlier part saw the end state reached (success) and the last
+    part judges it not held at the end, since the parts cannot tell whether it was undone or judged wrongly. An
+    earlier part that saw no end state (unclear, partial or failure in its own window) never contradicts the last
+    part: it could not see the end. A success keeps the first time the end state was reached, from the earliest part
+    of the run of successes that ends with the last part."""
+    from board.label_projection import goal_outcome_word
+    if not any("goal_outcome" in a for a in assessments):
+        return None
+    read = sorted(((int((a.get("source_piece") or {}).get("index") or n), a.get("goal_outcome"))
+                   for n, a in enumerate(assessments, start=1)), key=lambda x: x[0])
+    words = {i: goal_outcome_word(g) for i, g in read}
+    last_part = max([i for i, _ in read] + [int(g["part"]) for g in missing])
+    parts = [{"part": i, "outcome": words[i]} for i, _ in read]
+    final = dict(read)[last_part] if last_part in words else None
+
+    def unclear(note):
+        return {"outcome": "unclear", "success_predicate": (final or {}).get("success_predicate"),
+                "completed_at_s": None, "note": note, "basis": "parts", "parts": parts}
+    if missing:
+        return unclear("; ".join(f"part {g['part']} has no labels, as {g['why']}" for g in missing))
+    silent = [i for i, w in words.items() if w is None]
+    if silent:
+        return unclear("; ".join(f"part {i} gave no outcome for the goal" for i in silent))
+    outcome = words[last_part]
+    reached = [i for i, w in words.items() if i != last_part and w in ("success", "success_then_undone")]
+    if outcome not in ("success", "success_then_undone") and reached:
+        return unclear(f"part {reached[0]} saw the goal's end state reached and the last part, part {last_part}, "
+                       f"judges it {outcome} at the end")
+    out = {**{k: copy.deepcopy(final.get(k)) for k in ("success_predicate", "completed_at_s", "note")},
+           "outcome": outcome, "basis": "parts", "parts": parts}
+    if outcome == "success":
+        run = [last_part]
+        for i in sorted(words, reverse=True)[1:]:
+            if words[i] != "success":
+                break
+            run.append(i)
+        from label.episode import number
+        times = [number(dict(read)[i].get("completed_at_s")) for i in run]
+        if any(t is not None for t in times):
+            out["completed_at_s"] = min(t for t in times if t is not None)
+    return out
 
 
 def join_scene_objects(objects: list, tasks: list) -> list:
@@ -1564,6 +1612,8 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             'source_piece': dict(owner),
             **{field: copy.deepcopy(lab.get(field)) for field in
                ('task_summary', 'completion', 'performance_review', 'goal_alignment')},
+            # a head-camera clip with an annotated goal: what this part saw of the goal's outcome (parts_goal_outcome)
+            **({'goal_outcome': copy.deepcopy(lab['goal_outcome'])} if 'goal_outcome' in lab else {}),
             'progress': [copy.deepcopy(step) for step in lab['timeline'] if step.get('progress') is not None],
         })
         for step in lab['timeline']:
@@ -1693,7 +1743,15 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
         # more of the work, so then there is no verdict
         steps = len(me.annotation_lines(ep["context"]))
         n = len(L["tasks"])
-        if rig == "ego_head" and (n != 1 or (steps and not instruction) or missing):
+        # a head-camera clip with an annotated goal whose parts were asked the goal's outcome: the recording's outcome
+        # from theirs (parts_goal_outcome), read as one clip's reply is (derive_completion)
+        goal = parts_goal_outcome(L["part_assessments"], missing) if rig == "ego_head" and instruction else None
+        if goal is not None:
+            from board.label_projection import derive_completion
+            L["goal_outcome"] = goal
+            L["completion"] = derive_completion({k: v for k, v in L.items() if k != "completion"}, rig=rig,
+                                                instruction=True)["completion"]
+        elif rig == "ego_head" and (n != 1 or (steps and not instruction) or missing):
             L["completion"] = {**empty, "reason": f"a head-camera clip labelled in {count} requests; each task's "
                                                   "outcome is under tasks" + gaps}
         elif missing:

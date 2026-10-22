@@ -1868,3 +1868,113 @@ def test_stitch_sets_aside_the_events_at_the_frames_each_part_opens_and_closes_o
     assert (3, 'Second collection activity continues at the window boundary') in kept
     assert sum(label == 'Kernels spill from the spoon' for _, label in kept) == 3
     assert sum(label == 'Left gripper acquires the spoon' for _, label in kept) == 3
+
+
+# ---- a long head-camera clip with an annotated goal: the goal's outcome from its parts -------------------------
+
+# the real Gen-HumanEgo reply with an annotated goal (tests/test_task_claims.py TOOTHPICKS, paid check B 82c0fc2,
+# episode_f2fa4df231a64d63abcbace97a4ca8ab), as two parts of a longer clip would answer it: the first part sees the
+# toothpicks gathered and ends before the holder is set down, the second sees it set on the tray
+GOAL = 'Store toothpicks on the tabletop'
+PREDICATE = 'The toothpicks are stored in the holder on the tray.'
+
+
+def _ego_two_parts(tmp_path, monkeypatch, instruction=GOAL):
+    from prepare import formats
+    from test_formats import _clip
+    (tmp_path / "v").mkdir()
+    _clip(tmp_path / "v" / "a.mp4", 90)                      # 3 s at 30 fps
+    ep = tmp_path / "eps" / "episode_f2fa4"
+    formats.video_views_episode(ep, {"exo": ("a", tmp_path / "v" / "a.mp4")}, "ego_head", "genhumanego",
+                                {"instruction": instruction})
+    monkeypatch.setattr(pieces, "piece_max", lambda ctx: 1.6)
+    parts = pieces.write_pieces(ep, tmp_path / "pieces")
+    assert len(parts) == 2
+    return ep, parts, [json.loads((p / 'context.json').read_text()) for p in parts]
+
+
+def _ego_part(p: Path, tasks: list, goal_outcome: dict | None) -> dict:
+    record = _part_result(p, 'The person gathers loose toothpicks into a holder and sets it on a tray.')
+    record['label_schema'] = 'tasks'
+    record['annotation_policy'] = {'version': 1, 'rig': 'ego_head'}
+    record['labels'].pop('completion')
+    record['labels'].update(tasks=tasks, goal_alignment={'matches_given': True, 'relation': 'aligned', 'note': ''})
+    if goal_outcome is not None:
+        record['labels']['goal_outcome'] = goal_outcome
+    return record
+
+
+COLLECT = {'start_s': 0.0, 'end_s': 0.75, 'task': 'Collect the loose tabletop toothpicks into the holder',
+           'objects': ['wooden toothpicks', 'toothpick holder', 'white tissue'], 'outcome': 'success',
+           'success_predicate': 'The loose toothpicks have been transferred into the holder and the tissue is clear.',
+           'completed_at_s': 0.7, 'note': None}
+PLACE = {'start_s': 0.1, 'end_s': 0.6, 'task': 'Place the filled toothpick holder on the tabletop tray',
+         'objects': ['toothpick holder', 'white tray'], 'outcome': 'success',
+         'success_predicate': 'The filled holder rests upright on the tray without hand support.',
+         'completed_at_s': 0.55, 'note': None}
+NOT_YET = {'outcome': 'unclear', 'success_predicate': PREDICATE, 'completed_at_s': None,
+           'note': 'The part ends before the holder is set down.'}
+STORED = {'outcome': 'success', 'success_predicate': PREDICATE, 'completed_at_s': 0.55, 'note': None}
+
+
+def test_a_long_head_camera_clip_with_a_goal_takes_its_verdict_from_the_last_parts_goal_outcome(tmp_path, monkeypatch):
+    """Each part of a long clip with an annotated goal answers the goal's outcome for its own window. The end state is
+    judged at the end, which only the last part sees: the first part's unclear (it ends before the holder is set
+    down) and the second's success give a success against the goal, at the second part's time on the recording's
+    clock. On the branch this builds on, the stitch read the two tasks and gave no verdict."""
+    ep, parts, contexts = _ego_two_parts(tmp_path, monkeypatch)
+    t1 = contexts[1]['piece']['t0_s']
+    records = [_ego_part(parts[0], [COLLECT], NOT_YET), _ego_part(parts[1], [PLACE], STORED)]
+    stitched = pieces.stitch(ep, list(zip(contexts, records)))
+    labels = stitched['labels']
+    goal = labels['goal_outcome']
+    assert (goal['outcome'], goal['basis'], goal['completed_at_s']) == ('success', 'parts', round(t1 + .55, 3))
+    assert goal['parts'] == [{'part': 1, 'outcome': 'unclear'}, {'part': 2, 'outcome': 'success'}]
+    c = labels['completion']
+    assert (c['task_completed'], c['basis'], c['judged_against'], c['completed_at_s'], c['from_tasks']) == (
+        'success', 'instruction', 'instruction', round(t1 + .55, 3), 2)
+    assert c['success_predicate'] == PREDICATE
+    assert [a['goal_outcome']['outcome'] for a in labels['part_assessments']] == ['unclear', 'success']
+    from board.label_projection import verdict_or_tasks
+    from board import to_board
+    d = to_board.convert({**stitched, 'episode_dir': 'episode_f2fa4'}, 'genhumanego')
+    assert verdict_or_tasks(d)[0] == 'success'
+
+
+def test_a_long_head_camera_clips_goal_outcome_is_unclear_when_parts_disagree_or_one_is_missing(tmp_path, monkeypatch):
+    ep, parts, contexts = _ego_two_parts(tmp_path, monkeypatch)
+    pairs = lambda a, b: list(zip(contexts, [_ego_part(parts[0], [COLLECT], a), _ego_part(parts[1], [PLACE], b)]))
+    # the first part saw the end state reached and the last judges it not reached at the end: undone, or judged wrong
+    lost = {**STORED, 'outcome': 'failure', 'completed_at_s': None, 'note': 'The holder is not on the tray.'}
+    c = pieces.stitch(ep, pairs({**STORED, 'completed_at_s': 0.7}, lost))['labels']
+    assert (c['goal_outcome']['outcome'], c['completion']['task_completed']) == ('unclear', 'unclear')
+    assert 'part 1 saw the goal' in c['completion']['reason']
+    # an earlier part that saw no end state never contradicts the last: its failure is its own window's
+    early = {**NOT_YET, 'outcome': 'failure'}
+    assert pieces.stitch(ep, pairs(early, STORED))['labels']['completion']['task_completed'] == 'success'
+    # the end state reached in both parts: reached first in part 1
+    both = pieces.stitch(ep, pairs({**STORED, 'completed_at_s': 0.7}, {**STORED, 'completed_at_s': 0.0}))['labels']
+    assert both['completion']['completed_at_s'] == 0.7
+    # the last part's own failure, partial or unclear is the recording's
+    for word in ('failure', 'partial', 'unclear'):
+        got = pieces.stitch(ep, pairs(NOT_YET, {**STORED, 'outcome': word, 'completed_at_s': None}))['labels']
+        assert got['completion']['task_completed'] == word
+    # a part with no labels, or a reply with no outcome word: unclear, naming the part
+    missing = [{'part': 2, 't0_s': contexts[1]['piece']['t0_s'], 't1_s': contexts[1]['piece']['t1_s'],
+                'why': 'no reply'}]
+    gap = pieces.stitch(ep, pairs(NOT_YET, STORED)[:1], missing)['labels']
+    assert gap['completion']['task_completed'] == 'unclear'
+    assert gap['completion']['reason'] == 'part 2 has no labels, as no reply'
+    silent = pieces.stitch(ep, pairs(NOT_YET, {'outcome': 'done'}))['labels']
+    assert silent['completion']['reason'] == 'part 2 gave no outcome for the goal'
+
+
+def test_a_long_head_camera_clip_whose_parts_were_not_asked_the_goals_outcome_reads_as_before(tmp_path, monkeypatch):
+    """Parts labelled before the field existed, or a clip with no annotated goal: no goal_outcome, and the stitch's
+    reading is the branch's (two tasks, no verdict)."""
+    ep, parts, contexts = _ego_two_parts(tmp_path, monkeypatch)
+    old = pieces.stitch(ep, list(zip(contexts, [_ego_part(parts[0], [COLLECT], None),
+                                                _ego_part(parts[1], [PLACE], None)])))['labels']
+    assert 'goal_outcome' not in old and old['completion']['task_completed'] is None
+    assert all('goal_outcome' not in a for a in old['part_assessments'])
+    assert old['completion']['reason'].startswith('a head-camera clip labelled in 2 requests')
