@@ -1100,9 +1100,11 @@ def join_scene_objects(objects: list, tasks: list) -> list:
 
 
 def _under_way_at_end(task: dict) -> bool:
-    """The part saw no end to the task: no completion, no goal reached and no undo before its last frame."""
+    """The part saw no end to the task: no completion, no goal reached and no undo before its last frame, and no success
+    judged (a success the part judged ended inside it, whether or not it gave the time)."""
     from label.episode import number
-    return all(number(task.get(k)) is None for k in ("completed_at_s", "goal_reached_at_s", "undone_at_s"))
+    return task.get("outcome") not in ("success", "success_then_undone") and \
+        all(number(task.get(k)) is None for k in ("completed_at_s", "goal_reached_at_s", "undone_at_s"))
 
 
 def _first_task(task):

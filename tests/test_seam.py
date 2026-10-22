@@ -159,3 +159,11 @@ def test_rejoining_a_stitched_label_follows_each_verdict():
     assert different['labels']['tasks'][0]['cut_seams'][0]['same_task'] is False
     # without a verdict the tasks are the stitched ones, unchanged
     assert seam.rejoin(result, {})['labels']['tasks'] == result['labels']['tasks']
+
+
+def test_a_task_its_part_judged_a_success_is_never_asked_about_even_without_a_time():
+    # a success the part judged ended inside that part; asking whether it continues past the cut pays for nothing
+    left, right = _halves()
+    done = {**left, 'outcome': 'success', 'completed_at_s': None}
+    assert pieces.seam_candidates([left, right], [CUT]) != []
+    assert pieces.seam_candidates([done, right], [CUT]) == []
