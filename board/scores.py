@@ -56,7 +56,7 @@ OUTCOME_CAPS = {"success": 1.0, "success_then_undone": 0.7, "partial": 0.9, "fai
 EXECUTION_WEIGHTS = {"cleanliness": 0.75, "efficiency": 0.10, "fluency": 0.15}
 # the record fields the scores read, so a board build can hold every episode at once without its whole record
 FIELDS = ("dataset", "episode_prompt", "task_label", "event_labels", "key_events", "operator_mistakes", "recovery",
-          "completion", "goal_alignment", "tasks", "_meta", "_rig", "_stitched")
+          "completion", "goal_alignment", "tasks", "_meta", "_rig", "_stitched", "progress_scope")
 SIMILAR = 0.5                     # two subgoal labels are the same kind of subgoal when they share this share of words
 SAME_TASK = 0.6                   # a one-off wording joins a task whose instruction shares this share of its words
 STOP = {"the", "a", "an", "and", "then", "with", "its", "it", "of", "on", "to", "into", "in", "from", "onto", "by", "at",

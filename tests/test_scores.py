@@ -474,3 +474,31 @@ def test_a_stitched_recordings_failed_task_is_judged_from_its_steps_progress_in_
     s = scores.score_board({"umi.json": rec})["umi.json"]
     assert (s["inputs"]["tasks_total"], s["inputs"]["tasks_judged"], s["inputs"]["tasks_done"]) == (3, 3, 1)
     assert s["outcome"] == round(10 * (1.0 + 0.4 + 0.2) / 3, 1)
+
+
+def test_the_board_build_keeps_every_field_the_scores_read():
+    """The board build scores records cut down to scores.FIELDS (board/build.py add_scores). progress_scope was left
+    out, so a head-camera clip judged on its goal lost the mark that its progress is per task, and a partial goal
+    scored 9.0 on the board from a sub-task's 1.0 while scores.facts on the whole record gave none. Cutting a record
+    down to FIELDS must never change its scores, for any record shape."""
+    import json
+    from board import to_board
+    from label import harness
+    from test_task_claims import CABLES, CABLES_REQUEST
+    records = dict(_board())
+    for outcome in ('partial', 'failure', 'success', 'unclear'):
+        reply = {**CABLES, 'goal_outcome': {'outcome': outcome, 'success_predicate': 'Both cables are stored.',
+                                            'completed_at_s': 46.5 if outcome == 'success' else None,
+                                            'note': None if outcome == 'success' else 'the clip ends first'}}
+        labels, ok = harness.read_reply(json.dumps(reply), CABLES_REQUEST)
+        assert ok
+        records[f'goal_{outcome}.json'] = to_board.convert(
+            {'episode_dir': f'episode_goal_{outcome}', 'parse_ok': True, 'labels': labels, 'label_schema': 'tasks',
+             'given_prompt': CABLES_REQUEST['given_prompt'], 'duration_s': 47.0}, 'genhumanego')
+    labels, ok = harness.read_reply(json.dumps(CABLES), CABLES_REQUEST)
+    records['tasks.json'] = to_board.convert({'episode_dir': 'episode_tasks', 'parse_ok': True, 'labels': labels,
+                                              'label_schema': 'tasks', 'duration_s': 47.0}, 'genhumanego')
+    cut = {f: {k: d.get(k) for k in scores.FIELDS} for f, d in records.items()}
+    assert scores.score_board(cut) == scores.score_board(records)
+    # the partial goal has no progress toward the goal, so the board gives its outcome no score, as facts does
+    assert scores.score_board(cut)['goal_partial.json']['outcome'] is None
