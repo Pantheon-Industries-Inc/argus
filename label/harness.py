@@ -47,6 +47,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import uuid
@@ -2221,6 +2222,8 @@ def _run_batch(episodes: list[Path], out_dir: Path, *, keys: list[str], concurre
                 if failure.exists() and not reserved[0]:
                     with spend_lock:
                         spent['usd'] += episode_cost(json.loads(failure.read_text())) - selection_accounted[0] - prior_cost
+                # the failure line names the error; the stage log keeps where it was raised, which that line cannot say
+                print(f"TRACEBACK {ep.name}:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
                 return ("fail", ep, f"{type(e).__name__}: {e}")
 
     def work(ep):

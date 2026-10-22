@@ -345,3 +345,26 @@ def test_a_partner_that_never_moves_outside_where_the_pair_comes_apart_keeps_bot
     assert sorted(shown) == ["arm", "cmd"] and not left and not _apart_lines(lines)
     monkeypatch.setattr(sg, "apart_instants", real)
     _readout(ep, pl)        # and with the real rule the readout is made, whatever it decides
+
+
+def test_a_row_read_from_a_sent_row_that_is_replaced_is_fitted_again_against_its_new_partner(monkeypatch):
+    """Rows q, t and r, in rank order: t follows q and is read from it, then r follows q later and takes q's place. t is
+    fitted again against r with the instants where those two come apart: read from r with the instants where t and q came
+    apart, its fit had no line (r does not move outside them) and the TypeError stopped a whole teleop episode
+    (robot07-teleop 20260827 episode_172301_db02098f)."""
+    t_s = np.arange(N) / FPS
+    q, t = _path(1), _path(2)
+    r = np.where((t_s > 20) & (t_s < 40), _path(3), 0.0)
+    ep, _ = _case({"q": q})
+    ks = list(range(0, N, FPS))
+    rows = [((3.0 - i, 3.0 - i), name, 0, name, name, ["0"] * len(ks)) for i, name in enumerate("qtr")]
+    series = {("q", 0): q, ("t", 0): t, ("r", 0): r}
+    pairs = {(id(q), id(t)): 3, (id(q), id(r)): -3, (id(r), id(t)): 0}
+    moving = [i for i, k in enumerate(ks) if 19 * FPS <= k <= 41 * FPS]
+    monkeypatch.setattr(sg, "tracking", lambda x, y, ks, fps: ((id(x), id(y)) in pairs, pairs.get((id(x), id(y)), 0)))
+    monkeypatch.setattr(sg, "apart_instants", lambda x, y, ks, lag, fps: moving if (x is q and y is t) else [])
+    sent, tracked = me._drop_tracking(ep, rows, series, ks)
+    assert [s[3] for s in sent] == ["r"] and sorted(row[3] for row, _, _ in tracked) == ["q", "t"]
+    for row, partner, apart in tracked:
+        assert partner[3] == "r"
+        assert me._relation_words(ep, ks, row, partner, series, apart).startswith(f"{row[4]} ≈ ")

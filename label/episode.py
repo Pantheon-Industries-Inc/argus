@@ -1960,9 +1960,22 @@ def _drop_tracking(ep: dict, rows: list, series: dict, ks: list[int]) -> tuple[l
             kept.append(r)
             continue
         if lag < 0:
-            # the new row's values come later: it is the measured side, so it takes the kept row's place
+            # the new row's values come later: it is the measured side, so it takes the kept row's place. A row read
+            # from the kept row is read from the new one only when it follows the new one too, fitted again with the
+            # instants where those two come apart; otherwise it is sent whole
             kept[kept.index(q)] = r
-            tracked = [(t, r if s is q else s, a) for t, s, a in tracked] + [(q, r, apart)]
+            moved = []
+            for t, s, a in tracked:
+                if s is not q:
+                    moved.append((t, s, a))
+                    continue
+                t_same, t_lag = sg.tracking(series[key], series[t[1], t[2]], ks, fps)
+                t_apart = sg.apart_instants(series[key], series[t[1], t[2]], ks, t_lag, fps) if t_same else []
+                if t_same and _relation_fit(ep, ks, t, r, series, t_apart) is not None:
+                    moved.append((t, r, t_apart))
+                else:
+                    kept.append(t)
+            tracked = moved + [(q, r, apart)]
         else:
             tracked.append((r, q, apart))
     sent = {id(r) for r in kept}
