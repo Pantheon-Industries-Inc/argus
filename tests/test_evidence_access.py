@@ -1182,3 +1182,49 @@ def test_inspection_turned_off_makes_no_selection_and_its_coverage_says_so(tmp_p
         assert extra == [] and doc['rounds'] == [] and doc['cost_usd'] == 0 and doc['status'] == 'complete'
         assert doc['limitations'].count(ea.INSPECTION_OFF) == 1
     assert ea.INSPECTION_OFF in json.dumps(ea.Access.coverage_summary(doc))
+
+
+@pytest.mark.parametrize('width', [8, 16, 40])
+def test_extrema_of_many_components_stay_within_the_row_budget_with_every_peak_exact(tmp_path, width):
+    """The RoboMIND drawer re-annotation (audit_2026-10-21 reannotate.md row 4): an extrema request on
+    /puppet-joint-position, 664 rows by 16 joints at 10Hz, from 15 to 48s, failed with "Number of samples, -2, must be
+    non-negative". extrema_rows kept six rows per component (98 for 16), so the uniform context's share of MAX_ROWS
+    went negative and reached np.linspace. The rows now stay within MAX_ROWS for any component count, peaks first,
+    and every component's minimum and maximum stay exact."""
+    rng = np.random.default_rng(width)
+    values = rng.normal(size=(664, width))
+    a = access(tmp_path)
+    a.ep['state'] = np.zeros((664, 0))
+    a.ep['signals']['joint position'] = values
+    a.ep['signal_meta']['joint position'] = {'units': 'rad'}
+    a.refresh()
+    field = next(f for f in a.inventory() if f['name'] == 'joint position')
+    got = a.inspect({'field_id': field['id'], 'mode': 'extrema', 'start_s': 15.0, 'end_s': 48.0})
+    window = np.arange(150, 481)
+    assert 0 < len(got['rows']) <= ea.MAX_ROWS
+    by_column = {s['column']: s for s in got['extrema']}
+    # the response budget may still leave components out, and then says so; each component returned is exact
+    assert sorted(by_column) == got['columns'] and (len(by_column) == width or any(
+        f'of {width} components fit' in note for note in got['limitations']))
+    for col in by_column:
+        part = values[window, col]
+        assert by_column[col]['minimum']['row'] == int(window[np.argmin(part)])
+        assert by_column[col]['maximum']['row'] == int(window[np.argmax(part)])
+    peaks = {s[name]['row'] for s in got['extrema'] for name in ('minimum', 'maximum')}
+    if len(peaks) + 2 <= ea.MAX_ROWS:
+        assert peaks <= set(got['rows'])
+
+
+def test_an_empty_window_is_refused_with_where_the_samples_are(tmp_path):
+    """A window between two samples, or a row window of no rows, holds nothing to inspect; it is refused with a reason
+    the next round can act on, never answered with an empty receipt. A spent row budget gives no positions."""
+    a = access(tmp_path)
+    a.ep['signals']['joint position'] = np.arange(8.).reshape(4, 2)
+    a.refresh()
+    field = next(f for f in a.inventory() if f['name'] == 'joint position')
+    for mode in ('samples', 'extrema'):
+        with pytest.raises(ValueError, match=r'holds no sample of this field; the nearest are at 0\.100s, 0\.200s'):
+            a.inspect({'field_id': field['id'], 'mode': mode, 'start_s': .12, 'end_s': .18})
+        with pytest.raises(ValueError, match='holds no source rows'):
+            a.inspect({'field_id': field['id'], 'mode': mode, 'start_row': 2, 'end_row': 2})
+    assert ea.indices(10, -2).size == 0 and ea.indices(0, 5).size == 0 and list(ea.indices(5, 64)) == [0, 1, 2, 3, 4]

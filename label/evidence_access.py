@@ -450,7 +450,10 @@ def array_rows(path, key, rows, columns=None):
 
 
 def indices(n, limit):
-    return np.unique(np.linspace(0, n - 1, min(n, limit), dtype=int)) if n else np.array([], dtype=int)
+    """At most limit positions spread evenly over n; none when either is zero or less (a window with no rows, or a
+    row budget already spent)."""
+    count = min(n, limit)
+    return np.unique(np.linspace(0, n - 1, count, dtype=int)) if count > 0 else np.array([], dtype=int)
 
 
 def extrema_rows(field, rows, columns):
@@ -509,18 +512,26 @@ def extrema_rows(field, rows, columns):
         for start in range(0, len(selected_rows), 4096):
             wanted = selected_rows[start:start + 4096]
             scan(wanted, values[np.ix_(wanted, columns)])
-    keep = set()
-    if len(rows):
-        keep.update((int(rows[0]), int(rows[-1])))
+    # The rows returned stay within MAX_ROWS for any number of components (16 joints would keep up to 98 rows at six
+    # per component): the first and last rows, then the peak rows, then each peak's neighbours, then uniform context,
+    # each only while rows are left. Every component's minimum and maximum stay exact in stats whatever rows fit.
+    keep = []
+    def add(candidates, budget):
+        fresh = list(dict.fromkeys(int(r) for r in candidates if int(r) not in keep))
+        keep.extend(fresh[k] for k in indices(len(fresh), budget - len(keep)))
+    peaks, neighbours = [], []
     for stat in stats:
         stat['missing_rows'] = len(rows) - stat['valid_rows']
         for name in ('minimum', 'maximum'):
             if stat[name] is not None:
                 position = int(np.searchsorted(rows, stat[name]['row']))
-                keep.update(int(r) for r in rows[max(0, position - 1):position + 2])
-    remaining = MAX_ROWS - len(keep)
-    others = np.asarray([r for r in rows if int(r) not in keep], dtype=int)
-    keep.update(int(r) for r in others[indices(len(others), remaining)])
+                peaks.append(stat[name]['row'])
+                neighbours.extend(rows[max(0, position - 1):position + 2])
+    if len(rows):
+        add((rows[0], rows[-1]), MAX_ROWS)
+    add(peaks, MAX_ROWS)
+    add(neighbours, MAX_ROWS)
+    add(rows, MAX_ROWS)
     return np.asarray(sorted(keep), dtype=int), stats
 
 
@@ -986,6 +997,14 @@ class Access:
             if type(start) is not int or type(end) is not int or not 0 <= start <= end <= n:
                 raise ValueError('source row window is outside the recorded array')
             rows = np.arange(start, end)
+        if not len(rows):
+            # an empty window is refused with where the samples are, never answered with an empty receipt
+            if times is not None and not row_window and len(times):
+                before, after = times[times < low], times[times > high]
+                near = ', '.join(f'{float(t):.3f}s' for t in (before[-1:].tolist() + after[:1].tolist()))
+                raise ValueError(f'the window {low:g} to {high:g}s holds no sample of this field; the nearest are at '
+                                 f'{near}; widen the window')
+            raise ValueError('the window holds no source rows of this field; request at least one row')
         return rows[indices(len(rows), limit)], len(rows)
 
     def inspect(self, request):
