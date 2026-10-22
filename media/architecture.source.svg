@@ -144,7 +144,7 @@ text {font-family:'EB Garamond',Georgia,serif;fill:#292820;font-weight:400}
 <text x="2004.000" y="488" class="body" data-width="268" data-bullet="false">chunks</text>
 <path class="point-marker" d="M1994 510 h5" fill="none" stroke="#625d54" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" /><text x="2004.000" y="516" class="body" data-width="268" data-bullet="true">Separate API cuts from</text>
 <text x="2004.000" y="544" class="body" data-width="268" data-bullet="false">capture defects</text>
-<path class="point-marker" d="M1994 566 h5" fill="none" stroke="#625d54" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" /><text x="2004.000" y="572" class="body" data-width="268" data-bullet="true">Join tasks across cuts</text>
+<path class="point-marker" d="M1994 566 h5" fill="none" stroke="#625d54" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" /><text x="2004.000" y="572" class="body" data-width="268" data-bullet="true">Mark tasks under way at cuts</text>
 <rect id="issues" x="1980" y="628" width="308" height="206" rx="5" fill="#f1f5f7" stroke="#c7c2b9" stroke-width="1.5" />
 <rect id="exports" x="1980" y="862" width="308" height="178" rx="5" fill="#fff" stroke="#c7c2b9" stroke-width="1.5" />
 <text x="1996.000" y="888" class="kind" data-width="276" data-bullet="false">Code</text>
