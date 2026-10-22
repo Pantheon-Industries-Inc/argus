@@ -1040,6 +1040,36 @@ def _last_task(task):
     return (task.get("joined_from") or [task])[-1]
 
 
+OFF_GOAL = ("unrelated", "different")      # a part's footage shows other work than asked, the more severe first
+ON_GOAL = ("narrower", "aligned", "broader")  # it shows the asked work, alone or with more, or a share of it
+
+
+def parts_goal_alignment(assessments: list[dict], count: int) -> dict | None:
+    """The recording's goal_alignment from its parts' own (part_assessments), where the parts establish one, else None.
+    Each part compared the instruction with its own window only. A part whose footage shows other work than asked
+    (relation different or unrelated with matches_given false) shows the recording holds it, so the recording reads
+    unrelated when any such part says unrelated, else different. Otherwise every one of the count parts must have
+    compared its window with the instruction: a part with no labels or no comparison may hold other work, so then
+    there is none. A part reading "broader" saw only a share of the asked work in its window, which a window of a
+    longer recording usually does, so the recording reads narrower when any part saw the asked work and more, aligned
+    when any part saw it whole, and broader only when no part did. The parts' notes are kept, each under its part."""
+    readings = [(int((a.get("source_piece") or {}).get("index") or n), a.get("goal_alignment"))
+                for n, a in enumerate(assessments, start=1)]
+    readings = [(i, g) for i, g in readings if isinstance(g, dict) and isinstance(g.get("relation"), str)]
+    rel = {i: g["relation"].strip().lower() for i, g in readings}
+    off = [i for i, g in readings if rel[i] in OFF_GOAL and g.get("matches_given") is False]
+    if off:
+        relation, matches = next(r for r in OFF_GOAL if any(rel[i] == r for i in off)), False
+    elif len(readings) == count and all(rel[i] in ON_GOAL and g.get("matches_given") is not False
+                                        for i, g in readings):
+        relation, matches = next(r for r in ON_GOAL if r in rel.values()), True
+    else:
+        return None
+    notes = [f"Part {i}: {str(g.get('note')).strip()}" for i, g in readings if str(g.get("note") or "").strip()]
+    return {"matches_given": matches, "relation": relation, "note": " ".join(notes), "basis": "parts",
+            "parts": [{"part": i, "relation": rel[i], "matches_given": g.get("matches_given")} for i, g in readings]}
+
+
 def join_scene_objects(objects: list, tasks: list) -> list:
     """The recording's scene objects from its parts' [(part number, part object)], each part object carrying its own
     source_piece. Parts are labelled by separate requests, so a name proves nothing across them: two parts' "cup" can be
@@ -1577,6 +1607,11 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     uniq = list(dict.fromkeys(summaries))
     L["task_summary"] = uniq[0] if len(uniq) == 1 else " ".join(f"({i}) {s}" for i, s in enumerate(uniq, 1))
     L["performance_review"] = " ".join(reviews)
+    # whether the recording shows the asked work, from what each part saw of it (parts_goal_alignment): the board's
+    # alignment chip, the consistency rules, the gate's align fact and the scores' mislabel test read it
+    alignment = parts_goal_alignment(L["part_assessments"], count)
+    if alignment is not None:
+        L["goal_alignment"] = alignment
     # the output format each part was asked in (label_schema): in the tasks format the recording's completion follows
     # what the recording gives (board/label_projection.py derive_completion), from its tasks joined across the cuts
     # below; a part asked before it was asked in the episode or session mode of its policy, and a mix of the two has

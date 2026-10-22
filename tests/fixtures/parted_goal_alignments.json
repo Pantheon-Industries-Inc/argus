@@ -1,0 +1,257 @@
+{
+ "_source": "part_assessments of the 8 stitched C' teleop records of the one-schema paid check (argus_review_harness/paid_check/results/82c0fc2/out/jobs/*/run_final/out), as the stitch wrote them",
+ "records": [
+  {
+   "episode": "episode_20260914_episode_162358_1b6d49f5",
+   "given_prompt": "Untangle the cables",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 436.44
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 436.44,
+      "t1_s": 834.471
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    },
+    {
+     "source_piece": {
+      "index": 3,
+      "t0_s": 834.471,
+      "t1_s": 1258.442
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    }
+   ]
+  },
+  {
+   "episode": "episode_20260824_episode_165006_fe103dd0",
+   "given_prompt": "Move the items around the table in various ways",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 306.475
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 306.475,
+      "t1_s": 471.948
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    }
+   ]
+  },
+  {
+   "episode": "episode_20261005_episode_183907_fa2afb79",
+   "given_prompt": "(Cyclical) Load items into bussing bin, then unload and arrange items across table",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 331.813
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 331.813,
+      "t1_s": 669.328
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    }
+   ]
+  },
+  {
+   "episode": "episode_20260924_episode_064445_108fa428",
+   "given_prompt": "Pack the office supplies into the organizer",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 205.383
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": "The arms are packing office supplies into the organizer; the supplied part ends while that work is continuing."
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 205.383,
+      "t1_s": 450.977
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    }
+   ]
+  },
+  {
+   "episode": "episode_20261012_episode_182612_1a4be38e",
+   "given_prompt": "(Cyclical) Put toys into basket, then reset",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 221.755
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": "The arms collect the toys into the basket and then begin the instructed reset; the supplied part ends before the reset is finished."
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 221.755,
+      "t1_s": 481.719
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    }
+   ]
+  },
+  {
+   "episode": "episode_20261013_episode_153320_8aefd0dd",
+   "given_prompt": "(Cyclical) Place items into polymailer bag then take out of bag and arrange on table",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 284.335
+     },
+     "goal_alignment": {
+      "matches_given": false,
+      "relation": "different",
+      "note": "The visible work collects mailer envelopes into a rigid plastic bin, rather than putting items into a polymailer bag; the later cyclical activity is outside this supplied window."
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 284.335,
+      "t1_s": 599.212
+     },
+     "goal_alignment": {
+      "matches_given": false,
+      "relation": "different",
+      "note": "The visible receiving container is a rigid plastic bin; the objects being collected and unpacked are padded mailers themselves, not items being put inside a polymailer bag."
+     }
+    }
+   ]
+  },
+  {
+   "episode": "episode_20260824_episode_165232_e502d3be",
+   "given_prompt": "Move the items around the table in various ways",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 212.82
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 212.82,
+      "t1_s": 549.904
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": ""
+     }
+    }
+   ]
+  },
+  {
+   "episode": "episode_20261001_episode_163942_b4c0d44b",
+   "given_prompt": "(Cyclical) Put the dishes into the bin and place them all back onto the table",
+   "part_assessments": [
+    {
+     "source_piece": {
+      "index": 1,
+      "t0_s": 0.0,
+      "t1_s": 343.484
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "broader",
+      "note": "This window shows the dishes being collected into the bin; the requested return-to-table phase is outside the supplied window."
+     }
+    },
+    {
+     "source_piece": {
+      "index": 2,
+      "t0_s": 343.484,
+      "t1_s": 558.024
+     },
+     "goal_alignment": {
+      "matches_given": true,
+      "relation": "aligned",
+      "note": "This window depicts the return-to-table half of the cycle. The bin is already loaded at its first frame; the preceding loading activity is outside this supplied window."
+     }
+    }
+   ]
+  }
+ ]
+}

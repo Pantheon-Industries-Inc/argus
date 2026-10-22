@@ -1710,3 +1710,87 @@ def test_a_job_with_seam_verdicts_joins_the_cut_they_say_is_one_task(tmp_path, m
     assert task['outcome'] == 'success' and len(task['joined_from']) == 2
     assert task['cut_joins'] == [{'cut_s': cut, 'by': 'seam_check', **verdict}]
     assert joined['stitched']['seams'] == {str(cut): verdict}
+
+
+# ---- the recording's goal alignment from its parts ---------------------------------------------------------------
+
+PARTED = {r['episode']: r for r in json.loads(
+    (Path(__file__).parent / 'fixtures' / 'parted_goal_alignments.json').read_text())['records']}
+
+
+def _real_alignments(name: str) -> list[dict]:
+    return [a['goal_alignment'] for a in PARTED[name]['part_assessments']]
+
+
+def test_a_recording_labelled_in_parts_reads_its_goal_alignment_from_what_each_part_saw():
+    """The 8 real C' recordings labelled in parts. Polymailer 153320 shows mailers filed into a rigid bin, and both
+    parts say different: the recording is different, with each part's note. The dishes recording 163942 is loaded in
+    part 1 (broader: its window holds only the loading) and returned to the table in part 2 (aligned): together the
+    parts show the asked cycle, so the recording is aligned, not "only part of the given goal". The other six say
+    aligned in every part."""
+    got = {name: pieces.parts_goal_alignment(r['part_assessments'], len(r['part_assessments']))
+           for name, r in PARTED.items()}
+    poly = got['episode_20261013_episode_153320_8aefd0dd']
+    assert (poly['relation'], poly['matches_given'], poly['basis']) == ('different', False, 'parts')
+    assert poly['note'].startswith('Part 1: The visible work collects mailer envelopes into a rigid plastic bin')
+    assert 'Part 2: The visible receiving container is a rigid plastic bin' in poly['note']
+    assert [p['relation'] for p in poly['parts']] == ['different', 'different']
+    dishes = got['episode_20261001_episode_163942_b4c0d44b']
+    assert (dishes['relation'], dishes['matches_given']) == ('aligned', True)
+    assert [p['relation'] for p in dishes['parts']] == ['broader', 'aligned']
+    assert sorted(g['relation'] for g in got.values()) == ['aligned'] * 7 + ['different']
+
+
+def test_parts_establish_a_goal_alignment_only_when_each_part_compared_or_one_saw_other_work():
+    poly = PARTED['episode_20261013_episode_153320_8aefd0dd']['part_assessments']
+    cables = PARTED['episode_20260914_episode_162358_1b6d49f5']['part_assessments']
+    # a part with no labels may hold other work: the aligned parts alone establish nothing
+    assert pieces.parts_goal_alignment(cables[:2], 3) is None
+    assert pieces.parts_goal_alignment([*cables[:2], {**cables[2], 'goal_alignment': None}], 3) is None
+    # one part showing other work is enough, whatever the others say or whether they gave labels
+    one_off = pieces.parts_goal_alignment([poly[0], cables[1]], 3)
+    assert (one_off['relation'], one_off['matches_given']) == ('different', False)
+    # unrelated (likely mislabelled) outranks different; a part that says different yet matches_given true is no
+    # mismatch, and no reading at all
+    mixed = [poly[0], {**poly[1], 'goal_alignment': {**poly[1]['goal_alignment'], 'relation': 'unrelated'}}]
+    assert pieces.parts_goal_alignment(mixed, 2)['relation'] == 'unrelated'
+    unsure = [{**a, 'goal_alignment': {**a['goal_alignment'], 'matches_given': True}} for a in poly]
+    assert pieces.parts_goal_alignment(unsure, 2) is None
+    # every part saw only a share of the asked work: broader; one saw it and more: narrower
+    share = [{**a, 'goal_alignment': {**a['goal_alignment'], 'relation': 'broader'}} for a in cables]
+    assert pieces.parts_goal_alignment(share, 3)['relation'] == 'broader'
+    more = [*share[:2], {**cables[2], 'goal_alignment': {**cables[2]['goal_alignment'], 'relation': 'narrower'}}]
+    assert pieces.parts_goal_alignment(more, 3)['relation'] == 'narrower'
+
+
+def test_a_stitched_recording_carries_its_parts_goal_alignment_to_every_reader(tmp_path, monkeypatch):
+    """A recording labelled in two parts, each part's reply carrying the real polymailer part's goal_alignment: the
+    stitched record has a recording-level goal_alignment (main wrote none), so the consistency rules, the gate's align
+    fact and the scores' mislabel test read it."""
+    monkeypatch.setattr(pieces, "piece_max", lambda ctx: 1.6)
+    recorder_folder(tmp_path / "upload", n=90, duplicate_stamps=False)
+    rep = f.convert(tmp_path / "upload", "teleop_arms", tmp_path / "eps", "test", 900)
+    src = tmp_path / "eps" / rep["episodes"][0]["episode_id"]
+    parts = pieces.write_pieces(src, tmp_path / "job" / "pieces")
+    assert len(parts) == 2
+    contexts = [json.loads((p / 'context.json').read_text()) for p in parts]
+    poly = _real_alignments('episode_20261013_episode_153320_8aefd0dd')
+    records = []
+    for p, alignment in zip(parts, poly):
+        record = _part_result(p, 'collect the mailers into the bin')
+        record['labels']['goal_alignment'] = alignment
+        records.append(record)
+    labels = pieces.stitch(src, list(zip(contexts, records)))['labels']
+    alignment = labels['goal_alignment']
+    assert (alignment['relation'], alignment['matches_given'], alignment['basis']) == ('different', False, 'parts')
+    assert [a['goal_alignment'] for a in labels['part_assessments']] == poly
+    from board.label_projection import project
+    assert project(labels)[0]['goal_alignment'] == alignment
+    from gate.score import judge
+    assert judge({'align': ['different', 'unrelated']}, labels)[0]
+    from board.scores import task_source
+    assert task_source({'goal_alignment': alignment, '_meta': {'given_prompt': 'Place items into polymailer bag'},
+                        'episode_prompt': 'collect the mailers into the bin'})[1] is False
+    from checks.label_consistency import check
+    reached = {**labels, 'completion': {'task_completed': 'success'}}
+    assert 'outcome_vs_alignment' in {x['rule'] for x in check(reached)}

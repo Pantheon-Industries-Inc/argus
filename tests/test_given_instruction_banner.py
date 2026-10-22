@@ -171,3 +171,21 @@ def test_a_tasks_record_is_never_called_a_session_and_an_old_session_still_is():
     assert p.returncode == 0, p.stderr
     new, old = json.loads(p.stdout)
     assert new['bannerLabel'] == 'Summary of the tasks' and old['bannerLabel'] == 'Session summary'
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='no node')
+def test_a_recording_labelled_in_parts_shows_the_chip_of_what_its_parts_saw_beside_the_instruction():
+    """A parted record's banner is the instruction ("Source task"); with the alignment the stitch wrote from its parts
+    it shows the chip beside it, and with none (an older stitched record) the instruction alone."""
+    off = {'relation': 'different', 'matches_given': False, 'basis': 'parts',
+           'note': 'Part 1: The visible work collects mailer envelopes into a rigid plastic bin.'}
+    meta = {'prompt_mode': 'given', 'given_prompt': '(Cyclical) Place items into polymailer bag'}
+    cases = [{'d': {'progress_scope': 'request_parts', 'goal_alignment': off}, 'meta': meta, 'hasTasks': True},
+             {'d': {'progress_scope': 'request_parts'}, 'meta': meta, 'hasTasks': True}]
+    p = subprocess.run(['node', '-e', SCRIPT, str(PAGE), json.dumps(cases)], text=True, capture_output=True)
+    assert p.returncode == 0, p.stderr
+    chip, bare = json.loads(p.stdout)
+    assert chip['bannerLabel'] == bare['bannerLabel'] == 'Source task'
+    assert chip['bannerBody'].index('polymailer bag') < chip['bannerBody'].index('does not match given goal')
+    assert 'rigid plastic bin' in chip['bannerBody']
+    assert 'align-chip' not in bare['bannerBody'] and 'polymailer bag' in bare['bannerBody']

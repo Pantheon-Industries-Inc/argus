@@ -6734,8 +6734,10 @@ function renderEp(d, opts) {
     alignHtml = `<div class="align-chip ${cls}"><span>${esc(label)}</span>`
       + `${ga.note ? `<span class="ac-note">${esc(ga.note)}</span>` : ''}</div>`;
   }
+  // a recording labelled in parts: the instruction, and the chip of what the parts saw of it (label/pieces.py
+  // parts_goal_alignment)
   const bannerBody = partProgress && meta.given_prompt
-    ? `<div class="text">${esc(meta.given_prompt)}</div>` : stepsOnly
+    ? `<div class="text">${esc(meta.given_prompt)}</div>` + alignHtml : stepsOnly
     ? stepsHtml + `<div class="goal-read"><span class="gr-badge">${whoOwn(who, 'tasks')}</span>`
         + `<span class="gr-text">${esc(readTasks.map(t => t.task).join('; ') || d.episode_prompt || '(empty)')}</span>`
         + `</div>` + alignHtml : givenSession
