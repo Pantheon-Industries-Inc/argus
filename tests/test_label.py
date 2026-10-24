@@ -1086,6 +1086,36 @@ def test_episode_end_to_end_offline(tmp_path, monkeypatch):
     assert board["event_labels"][0]["verb_class"] == "reach" and board["completion"]["task_completed"] == "success"
 
 
+def test_a_model_with_a_smaller_image_cap_is_sent_at_narrower_cells(tmp_path, monkeypatch):
+    """A model whose providers refuse a smaller image payload (MiMo v2.6 Flash, HTTP 413 over about 25 MB of JPEG)
+    has its grids fitted to its own cap; every other model keeps the OpenAI cap and its widest cells."""
+    ep, _ = _packed_episode(tmp_path)
+    assert me.image_limits("xiaomi/mimo-v2.6-flash")[0] / me.image_limits("xiaomi/mimo-v2.6-flash")[1] < 25.1e6
+    for model in (None, "openai/gpt-6-astra", "openai/gpt-6.1-sol", "google/gemini-4-argon"):
+        assert me.image_limits(model) == (me.IMAGE_LIMIT_BYTES, me.IMAGE_SIZE_INFLATION)
+    wide = me.build_request(ep)
+    assert wide["cell"][0] == me.GRID_CELL_W_BY_RIG["teleop_arms"]
+    # a cap that only the narrowest grids fit: the request is sent at the narrowest width instead of being refused
+    monkeypatch.setitem(me.MODEL_IMAGE_LIMITS, "xiaomi/mimo-v2.6-flash", ((1 + me.DETAIL_VIEW_BYTES_MAX) * 1.25, 1.25))
+    narrow = me.build_request(ep, model="xiaomi/mimo-v2.6-flash")
+    assert narrow["cell"][0] == min(me.CELL_W_STEPS) < wide["cell"][0]
+    # the same episode for another model is unchanged
+    assert me.build_request(ep, model="openai/gpt-6-astra")["cell"][0] == wide["cell"][0]
+
+
+def test_the_harness_refuses_a_payload_over_its_models_own_image_cap(tmp_path, monkeypatch):
+    """The harness checks a request against the model's cap before sending, never only the OpenAI cap: a payload
+    the OpenAI cap allows is refused, with no model call, when its model's providers allow less."""
+    ep, _ = _packed_episode(tmp_path)
+    calls = []
+    monkeypatch.setattr(harness, "call_model", lambda *a, **k: calls.append(1))
+    monkeypatch.setitem(me.MODEL_IMAGE_LIMITS, "openai/gpt-6-astra", (1, 1.0))
+    with pytest.raises(RuntimeError, match="exceeds the image-size cap"):
+        harness.label_episode(ep, tmp_path / "out" / "episode_000007.json", model="openai/gpt-6-astra",
+                              reasoning="medium", api_key="sk-or-x", max_tokens=64000, timeout=60)
+    assert calls == []
+
+
 def test_request_body_is_what_the_harness_docstring_says(monkeypatch):
     """The body sent: model, reasoning effort, output limit, JSON mode, a cache breakpoint closing the shared
     instructions and the billed usage; no temperature, top_p, seed or provider pin."""

@@ -74,6 +74,18 @@ DETAIL_VIEW_BYTES_MAX = 2_000_000   # room kept under the cap for the two full-r
 # inflated size is bounded with a margin.
 IMAGE_LIMIT_BYTES = 50 * 1024 * 1024
 IMAGE_SIZE_INFLATION = 1.85
+# Models whose providers refuse a smaller image payload, as (cap, counted bytes per JPEG byte). OpenRouter sends
+# each xiaomi/mimo-v2.6-flash request to one of several providers, and some answer HTTP 413 "Downloaded image
+# content cannot exceed 30MB": on 13 UMI requests at 4 samples per second, one of 25.6 MB of JPEG was refused
+# while others of 25.7 and 26.6 MB went through, and every request of 25.1 MB or less went through. Its images
+# are therefore held to 24 MB of JPEG (30 MB / 1.25).
+MODEL_IMAGE_LIMITS = {"xiaomi/mimo-v2.6-flash": (30_000_000, 1.25)}
+
+
+def image_limits(model: str | None) -> tuple[float, float]:
+    """(the cap on a request's images as the provider counts them, counted bytes per JPEG byte) for this model;
+    the OpenAI cap for any model not in MODEL_IMAGE_LIMITS."""
+    return MODEL_IMAGE_LIMITS.get(model or "") or (IMAGE_LIMIT_BYTES, IMAGE_SIZE_INFLATION)
 # The first and last instant are also sent larger, for small detail (lettering, a display, fine
 # alignment). Image tokens scale with pixel area, so each camera is capped at this width: 768 px is above
 # MolmoAct2's native 640 px (where lettering and displays read fine), while native 1920 px frames would
@@ -2962,8 +2974,8 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     if ep["contacts_shown"]:
         pl["contact"] = []   # the touch signals' own contacts replace the views chosen from the gripper's value
     # An explicit cell width is used as given. The rig's default is the largest width whose grids fit the
-    # request's image-size cap: a long episode at 448 px can exceed it, and is then sent at the next step
-    # down rather than refused. Episodes that fit are unchanged.
+    # request's image-size cap (the model's, image_limits): a long episode at 448 px can exceed it, and is then
+    # sent at the next step down rather than refused. Episodes that fit are unchanged.
     widths = [cell_w] if cell_w else [w for w in CELL_W_STEPS if w <= (max_cell_w or GRID_CELL_W_BY_RIG[rig(ep)])]
     if max(widths) >= CONTACT_BELOW_W:
         pl["contact"] = []   # wide cells already show contact in detail
@@ -3004,7 +3016,8 @@ def build_request(ep_dir: Path, *, detail: str = "high", gate=None, cell_w: int 
     scene_parts, scene_pairing, scene_bytes = sensor_scene.collect(ep, pl['sensor_evidence'],
         shown=pairing_shown, gate=gate, width=max(widths), grid_cols=grid_cols,
         quality=grid_quality, detail=detail)
-    budget = (IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION - DETAIL_VIEW_BYTES_MAX - array_bytes - native_bytes
+    limit_bytes, inflation = image_limits(ep['context']['annotation_policy']['model'])
+    budget = (limit_bytes / inflation - DETAIL_VIEW_BYTES_MAX - array_bytes - native_bytes
               - scene_bytes - sum(len(j) for _, _, j in contact))
     # the blocks follow from the episode and its plan, never from the cell width: found once, for every width and the
     # record

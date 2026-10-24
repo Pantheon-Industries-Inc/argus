@@ -80,8 +80,9 @@ OPENAI_PRICES = {"gpt-6-astra": ((1.0e-5, 1.0e-6, 5.0e-5), (2.0e-5, 2.0e-6, 7.5e
                  "gpt-6.1-sol": ((2.0e-6, 1.0e-7, 1.0e-5), (4.0e-6, 2.0e-7, 1.5e-5))}
 LONG_PROMPT_TOKENS = 272000
 
-# Requests carry at most 500 images, and at most IMAGE_LIMIT_BYTES of images as the provider counts them
-# (label/episode.py steps the cell width down to fit).
+# Requests carry at most 500 images, and at most the model's image cap as the provider counts them
+# (me.image_limits: IMAGE_LIMIT_BYTES unless the model's providers refuse less; label/episode.py steps the cell
+# width down to fit).
 IMAGE_LIMIT_BYTES = me.IMAGE_LIMIT_BYTES
 IMAGE_SIZE_INFLATION = me.IMAGE_SIZE_INFLATION
 MAX_IMAGES = 500
@@ -1457,7 +1458,8 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                 'final_reserved_usd': 0.0})
             raise RuntimeError(reason)
     verify_inputs()
-    if img_bytes * IMAGE_SIZE_INFLATION > IMAGE_LIMIT_BYTES:
+    limit_bytes, inflation = me.image_limits(model)
+    if img_bytes * inflation > limit_bytes:
         raise RuntimeError(f"payload {img_bytes} B exceeds the image-size cap; refusing to send")
     if evidence_access is not None:
         from label import evidence_access as ea
@@ -1506,7 +1508,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                                         reserve_dispatch=selection_dispatch, settle_dispatch=settle_selection,
                                         force_refresh=force_refresh, refresh_id=inspection_refresh_id,
                                         ledger_managed=(callable(reserve_selection) and callable(settle_selection)),
-                                        image_limit=MAX_IMAGES, image_bytes_limit=IMAGE_LIMIT_BYTES / IMAGE_SIZE_INFLATION)
+                                        image_limit=MAX_IMAGES, image_bytes_limit=limit_bytes / inflation)
             except Exception as error:
                 doc = evidence_access.record()
                 if cache.exists():
@@ -1535,7 +1537,7 @@ def _call_and_record(ep_dir: Path, out_path: Path, content: list, img_bytes: int
                     'final_dispatch_outcome': 'not dispatched', 'final_reserved_usd': 0.0})
                 raise SpendCap(reason)
             content, img_bytes, suffix = ea.final_content(content, img_bytes, evidence_access, doc, extra,
-                image_limit=MAX_IMAGES, image_bytes_limit=IMAGE_LIMIT_BYTES, image_inflation=IMAGE_SIZE_INFLATION)
+                image_limit=MAX_IMAGES, image_bytes_limit=limit_bytes, image_inflation=inflation)
             prompt_text += '\n' + suffix
     verify_inputs()
     n_images = sum(1 for c in content if c.get("type") == "image_url")
