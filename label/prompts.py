@@ -115,7 +115,11 @@ def contribution_rules(r: str) -> str:
 SCHEMA = """
 Produce a timeline of what happens, one segment per distinct action
 phase (an approach, a grasp, a transport, a placement, a pour, a
-release, a retreat). Do not collapse a multi-step activity into one
+release, a retreat). Grasping is one way to act on an object, not the
+only one: the end effector also acts through contact without holding,
+with any part of itself, the tips and outer faces of its jaws as well as
+its housing. Such a contact is an action phase like any other, named for what it does to
+the object and judged by where the object ends up. Do not collapse a multi-step activity into one
 segment; TIMELINE GRANULARITY at the end of these instructions says
 exactly how fine to cut.
 
@@ -686,17 +690,19 @@ def what_this_is(r: str) -> str:
                 "  example when a gripper camera points up; that is the surroundings, not a problem by itself.\n")
     return ("- WHAT THIS EPISODE IS: gripper activity annotated with grippers as the acting parts; the profile\n"
             "  alone does not establish human holding, the control method or camera mounting. The recording is\n"
-            "  a demonstration collected to train robots. Gripper bodies and fingers, and people's hands, arms\n"
+            "  a demonstration collected to train robots. Gripper bodies and jaws, and people's hands, arms\n"
             "  and bodies, can appear. Establish participant and device ownership from the pixels and explicit\n"
             "  source claims. When that evidence establishes a handheld demonstration with two grippers, the\n"
             "  other gripper can appear even when only one gripper's footage was sent. A similar housing with\n"
-            "  its own fingers and handle or strap, independent motion and an object held in its fingers are\n"
+            "  its own jaws and handle or strap, independent motion and an object held in its jaws are\n"
             "  useful cues, but resemblance alone does not establish ownership or exclude a task object. When\n"
             "  established as the rig's other gripper, its actions are part of the demonstration. This profile's\n"
-            "  gripper-only execution contract treats the fingers as the acting part, subject to explicit source task or actor rules.\n"
-            "  A task object moved by a bare hand, arm or the gripper's housing outside that contract is worth\n"
-            "  reporting: its change was not made by the declared acting part. This is an annotation contract,\n"
-            "  not an inferred limit of a physical robot. Anyone else touching the scene is reported as usual.\n"
+            "  gripper-only execution contract treats the whole gripper as the acting part, subject to explicit source task or actor rules:\n"
+            "  any part of it a robot carrying the same gripper would also have, its jaws, their tips and outer faces,\n"
+            "  and its housing, acts on objects whether or not it holds them. A task object moved by a\n"
+            "  person's bare hand, arm or body is outside that contract and worth reporting: its change was not made\n"
+            "  by the declared acting part. This is an annotation contract, not an inferred limit of a physical\n"
+            "  robot. Anyone else touching the scene is reported as usual.\n"
             "  The room around the task is sometimes visible; that is the surroundings, not a problem by itself.\n")
 
 
@@ -1063,11 +1069,21 @@ TIMELINE GRANULARITY:
 """
 
 
+# The robot rigs' end effector also acts on objects it does not hold (SCHEMA), and such a contact, repeated or not,
+# is a real event the coarse segmentation must keep. The head camera's prompt is pinned to main's text
+# (tests/test_task_prompt.py), so this sentence reaches the robot rigs only.
+UNHELD_CONTACT_NOTE = (" A contact that moves an object without holding it is\n"
+                       "  such an event: each one is its own segment, and one that leaves the object where it was evidently\n"
+                       "  not meant to be is an error, however brief, even when the same contact is repeated.")
+
+
 def lean(r: str, has_instruction: bool = True) -> str:
     """The note that keeps the timeline at the level of action phases, with the acting part named as the rig
     names it, and the sections it leaves unchanged named as the request asks for them."""
+    robot = _replace_once(LEAN_NOTE, "frames that are the same ongoing action.",
+                          "frames that are the same ongoing action." + UNHELD_CONTACT_NOTE)
     if r == "handheld_gripper":
-        s = _replace_once(LEAN_NOTE, "by ONE arm", "by ONE gripper").replace("acting arm", "acting gripper")
+        s = _replace_once(robot, "by ONE arm", "by ONE gripper").replace("acting arm", "acting gripper")
     elif r == "ego_head":
         s = _replace_once(LEAN_NOTE, "by ONE arm", "by ONE hand").replace("acting arm", "acting hand")
         return _replace_once(s, "(completion, goal_alignment, key_events, data_issues, recovery,\n  state_changes, "
@@ -1075,7 +1091,7 @@ def lean(r: str, has_instruction: bool = True) -> str:
                              "(tasks, goal_alignment, key_events, data_issues, operator_mistakes,\n  recovery, "
                              "state_changes, scene)")
     else:
-        s = LEAN_NOTE
+        s = robot
     return _replace_once(s, "(completion, goal_alignment,", "(completion, tasks, goal_alignment," if has_instruction
                          else "(tasks, goal_alignment,")
 

@@ -1202,7 +1202,7 @@ def _camera_facts(ep: dict, v: str) -> str:
     # said as the name's, so it is checked against the pixels like any other claim
     said = (f"the camera its recorded name {cam['key']} places on the"
             if provenance == 'recorded_name' and cam.get('key') else "the camera mounted on the")
-    return (f"- {cam_name(ep, v)}: {said} {side}{n['gripper_of']}. When its own gripper's fingers "
+    return (f"- {cam_name(ep, v)}: {said} {side}{n['gripper_of']}. When its own gripper's jaws "
             "are in view, they sit in the same place in every frame, usually along the bottom edge, and change only by "
             "opening and closing; "
             "the rest of the image moves whenever the gripper moves.")
@@ -1272,7 +1272,7 @@ def camera_desc(ep: dict, recorded: bool = True) -> str:
         s += (f" In the output, \"left\", \"right\" and \"both\" name the streams: an action is \"left\" when "
               "the left stream's own gripper makes the contact, \"right\" likewise, "
               f"\"both\" when the two act together. The other {n['actor']} often appears inside a view, and an "
-              "object lying between open fingers is not yet held, so neither is a contact of that camera's own. "
+              "object lying between open jaws is not yet held, so neither is a contact of that camera's own. "
               "This naming is bookkeeping only; it does not settle whether the names are right. Whether each "
               "stream really sits on the side its name says is a separate question for the pixels: where the "
               f"other {n['actor']} and the scene appear in it once you have worked out from the frame how that camera "
@@ -2145,12 +2145,12 @@ def _motion_table(ep: dict, pl: dict) -> str:
         f"fact: check it against the video. A camera mounted on {n['an_actor']} shifts when that "
         f"{n['actor']} moves. The gripper value is the recorded jaw position; whether anything is held is "
         "read from the frames, never from the value. A disagreement between the recording and the video is "
-        f"a data issue only when it is clear: {clear}; or fingers that clearly open or close while the value "
-        "stays flat, or a value that swings from open to shut while the fingers stay still. Do not judge "
+        f"a data issue only when it is clear: {clear}; or jaws that clearly open or close while the value "
+        "stays flat, or a value that swings from open to shut while the jaws stay still. Do not judge "
         "whether a recorded motion is too small or too large from how much a view changes: apparent motion "
         "depends on the lens, the distance to the scene and the direction of travel. Likewise never compare "
-        "how open the fingers look with the gripper number: its scale is not a picture of how wide the "
-        "fingers look, so only the timing of a change can be compared with the video.\n"
+        "how open the jaws look with the gripper number: its scale is not a picture of how wide the "
+        "jaws look, so only the timing of a change can be compared with the video.\n"
         + (f"The recorded state covers only {seconds(frame_time(ep, sa))} to {seconds(frame_time(ep, sb - 1))} of "
            "the episode, so the rows stop there and nothing is recorded outside it.\n"
            if (sa, sb) != (0, len(st)) else "")

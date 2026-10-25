@@ -26,11 +26,17 @@ def text(rig, given, recorded=True, steps=False):
 
 
 def main(rig, recorded=True):
-    """main's text with the approved edits every rig shares (MISSED_GRASPS)."""
+    """main's text with the approved edits every rig shares (MISSED_GRASPS), and on the robot rigs the edits for
+    contact without holding (UNHELD_CONTACT)."""
     text = MAIN[f'{rig}/{"recorded" if recorded else "video"}']
     assert text.count(REPETITION) == 1
     actor = {'teleop_arms': 'arm', 'handheld_gripper': 'gripper', 'ego_head': 'hand'}[rig]
-    return text.replace(REPETITION, MISSED_GRASPS.format(actor=actor))
+    text = text.replace(REPETITION, MISSED_GRASPS.format(actor=actor))
+    if rig != 'ego_head':
+        for old, new in UNHELD_CONTACT + (UNHELD_CONTACT_HANDHELD if rig == 'handheld_gripper' else []):
+            assert text.count(old) == 1, old[:60]
+            text = text.replace(old, new)
+    return text
 
 
 # An approved edit to the shared contribution rule (Eric, 2026-10-23): runs of missed grasps on a fine object were
@@ -47,6 +53,44 @@ MISSED_GRASPS = '''  Repeated failed attempts at the same aim are wasteful, but 
   frames never show the object held, each try aimed at holding it failed. Those words fit whenever the object does
   end up where it was evidently meant to be.
 '''
+
+
+# An edit to the robot rigs' prompts (2026-10-24): every example action was a grasp-based phase, and the handheld
+# gripper's contract named the gripper's housing as outside the acting part, so a gripper that pushed, poked or
+# knocked an object it did not hold had no action to label it with. On a DiverseUMI take where the operator knocked a
+# sponge off a cup again and again, Sol 6.1 labelled the span as rubbing the cup and Qwen3.8 Max as reseating the
+# sponge, both as progress. The test holds its own copy, as for the edits above.
+UNHELD_CONTACT = [
+    ('release, a retreat). Do not collapse a multi-step activity into one',
+     '''release, a retreat). Grasping is one way to act on an object, not the
+only one: the end effector also acts through contact without holding,
+with any part of itself, the tips and outer faces of its jaws as well as
+its housing. Such a contact is an action phase like any other, named for what it does to
+the object and judged by where the object ends up. Do not collapse a multi-step activity into one'''),
+    ('  frames that are the same ongoing action.\n',
+     '''  frames that are the same ongoing action. A contact that moves an object without holding it is
+  such an event: each one is its own segment, and one that leaves the object where it was evidently
+  not meant to be is an error, however brief, even when the same contact is repeated.
+'''),
+]
+UNHELD_CONTACT_HANDHELD = [
+    ("  a demonstration collected to train robots. Gripper bodies and fingers, and people's hands, arms\n",
+     "  a demonstration collected to train robots. Gripper bodies and jaws, and people's hands, arms\n"),
+    ("  its own fingers and handle or strap, independent motion and an object held in its fingers are\n",
+     "  its own jaws and handle or strap, independent motion and an object held in its jaws are\n"),
+    ('''  gripper-only execution contract treats the fingers as the acting part, subject to explicit source task or actor rules.
+  A task object moved by a bare hand, arm or the gripper's housing outside that contract is worth
+  reporting: its change was not made by the declared acting part. This is an annotation contract,
+  not an inferred limit of a physical robot. Anyone else touching the scene is reported as usual.
+''',
+     '''  gripper-only execution contract treats the whole gripper as the acting part, subject to explicit source task or actor rules:
+  any part of it a robot carrying the same gripper would also have, its jaws, their tips and outer faces,
+  and its housing, acts on objects whether or not it holds them. A task object moved by a
+  person's bare hand, arm or body is outside that contract and worth reporting: its change was not made
+  by the declared acting part. This is an annotation contract, not an inferred limit of a physical
+  robot. Anyone else touching the scene is reported as usual.
+'''),
+]
 
 
 # The owner's two approved edits to the head camera's prompt: its absolutes softened, so a short clip of one task is
