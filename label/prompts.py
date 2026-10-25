@@ -117,8 +117,8 @@ Produce a timeline of what happens, one segment per distinct action
 phase (an approach, a grasp, a transport, a placement, a pour, a
 release, a retreat). Grasping is one way to act on an object, not the
 only one: the end effector also acts through contact without holding,
-with any part of itself, the tips and outer faces of its jaws as well as
-its housing. Such a contact is an action phase like any other, named for what it does to
+with any part of itself, not only the part that holds. Such a contact
+is an action phase like any other, named for what it does to
 the object and judged by where the object ends up. Do not collapse a multi-step activity into one
 segment; TIMELINE GRANULARITY at the end of these instructions says
 exactly how fine to cut.
@@ -698,8 +698,8 @@ def what_this_is(r: str) -> str:
             "  useful cues, but resemblance alone does not establish ownership or exclude a task object. When\n"
             "  established as the rig's other gripper, its actions are part of the demonstration. This profile's\n"
             "  gripper-only execution contract treats the whole gripper as the acting part, subject to explicit source task or actor rules:\n"
-            "  any part of it a robot carrying the same gripper would also have, its jaws, their tips and outer faces,\n"
-            "  and its housing, acts on objects whether or not it holds them. A task object moved by a\n"
+            "  any part of it a robot carrying the same gripper would also have, such as its jaws, their tips and\n"
+            "  outer faces, or its housing, acts on objects whether or not it holds them. A task object moved by a\n"
             "  person's bare hand, arm or body is outside that contract and worth reporting: its change was not made\n"
             "  by the declared acting part. This is an annotation contract, not an inferred limit of a physical\n"
             "  robot. Anyone else touching the scene is reported as usual.\n"
@@ -1074,7 +1074,7 @@ TIMELINE GRANULARITY:
 # (tests/test_task_prompt.py), so this sentence reaches the robot rigs only.
 UNHELD_CONTACT_NOTE = (" A contact that moves an object without holding it is\n"
                        "  such an event: each one is its own segment, and one that leaves the object where it was evidently\n"
-                       "  not meant to be is an error, however brief, even when the same contact is repeated.")
+                       "  not meant to be is an error, however brief.")
 
 
 def lean(r: str, has_instruction: bool = True) -> str:

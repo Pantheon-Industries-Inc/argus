@@ -64,13 +64,13 @@ UNHELD_CONTACT = [
     ('release, a retreat). Do not collapse a multi-step activity into one',
      '''release, a retreat). Grasping is one way to act on an object, not the
 only one: the end effector also acts through contact without holding,
-with any part of itself, the tips and outer faces of its jaws as well as
-its housing. Such a contact is an action phase like any other, named for what it does to
+with any part of itself, not only the part that holds. Such a contact
+is an action phase like any other, named for what it does to
 the object and judged by where the object ends up. Do not collapse a multi-step activity into one'''),
     ('  frames that are the same ongoing action.\n',
      '''  frames that are the same ongoing action. A contact that moves an object without holding it is
   such an event: each one is its own segment, and one that leaves the object where it was evidently
-  not meant to be is an error, however brief, even when the same contact is repeated.
+  not meant to be is an error, however brief.
 '''),
 ]
 UNHELD_CONTACT_HANDHELD = [
@@ -84,8 +84,8 @@ UNHELD_CONTACT_HANDHELD = [
   not an inferred limit of a physical robot. Anyone else touching the scene is reported as usual.
 ''',
      '''  gripper-only execution contract treats the whole gripper as the acting part, subject to explicit source task or actor rules:
-  any part of it a robot carrying the same gripper would also have, its jaws, their tips and outer faces,
-  and its housing, acts on objects whether or not it holds them. A task object moved by a
+  any part of it a robot carrying the same gripper would also have, such as its jaws, their tips and
+  outer faces, or its housing, acts on objects whether or not it holds them. A task object moved by a
   person's bare hand, arm or body is outside that contract and worth reporting: its change was not made
   by the declared acting part. This is an annotation contract, not an inferred limit of a physical
   robot. Anyone else touching the scene is reported as usual.
