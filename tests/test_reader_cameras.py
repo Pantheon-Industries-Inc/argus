@@ -617,7 +617,7 @@ def test_native_video_profile_intro_does_not_assert_mount_or_control(tmp_path, r
         assert 'gripper-only execution contract' in shared
         assert 'explicit source task or actor rules' in shared
         assert 'has only the gripper' not in shared
-        assert 'other gripper' in shared and 'fingers' in shared and 'handle or strap' in shared
+        assert 'other gripper' in shared and 'jaws' in shared and 'handle or strap' in shared
     else:
         assert 'wearer' not in shared
         assert "person's own left and right hands" in request['prompt']
