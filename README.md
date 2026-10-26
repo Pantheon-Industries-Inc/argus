@@ -113,6 +113,13 @@ Rerunning a review with the same [`--out`](review/__main__.py) folder resumes it
 
 ## Results and further use
 
+> [!IMPORTANT]
+> The board is the canonical dashboard for Argus annotations, QC results and robot-data episodes. When a person or a
+> coding agent is asked for a dashboard, visualizer or HTML page of such data, it serves the data with
+> [`board serve`](board/serve.py) or [`board static site`](board/static.py) and extends the
+> [viewer](board/index.html) where a view is missing. A new page is written from scratch only when someone explicitly
+> asks for one.
+
 Live and static boards share one [viewer](board/index.html), which overlays behavioral and sensor annotations on the footage with the supporting measurements beside it. Below the footage, an episode page lists the outcome and scores, the problems, one table of subgoals and key events with each stretch's mistakes and scores, the sensors and scene, then every check that ran. The same findings export as episode JSON, filtered JSON Lines and static sites. An issue with missing or invalid severity stays visible as unrated and is excluded from severity totals.
 
 For a run in progress, give a dataset's manifest entry a [`target`](board/build.py) such as `{"episodes": 2682, "hours": 101.9}`, and the board shows the episodes and hours labelled so far against it, even before its first episode is labelled. A page open on `board serve` checks for a rebuild every 30s and updates its list and totals in place, keeping the open episode.
