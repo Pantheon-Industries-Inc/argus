@@ -7259,6 +7259,8 @@ function renderEp(d, opts) {
       const severity = String(x.severity || '').trim().toLowerCase();
       const rated = ['low', 'medium', 'high'].includes(severity);
       const minor = rated && !countsIssue(x);
+      // a grouped issue's reports (issueOccurrences): counted here, so a row that is not grouped needs nothing else
+      const reports = Array.isArray(x.occurrences) ? x.occurrences.filter(o => o && typeof o === 'object').length : 0;
       return `
       <div class="di-row ${!rated ? 'unknown' : severity === 'high' ? 'high' : 'low'}${minor ? ' minor'
         : ''}"${t != null ? ` data-t="${esc(t)}"` : ''}>
@@ -7270,8 +7272,8 @@ function renderEp(d, opts) {
             ? famName(x.family) : tagName(x.category, key))}</span>` : ''}${t != null
             ? `<span class="di-t">@ ${esc(fmtT(t))}</span>` : ''}${verifiedChip(x)}${x.derived_from
             ? `<span class="di-cat" title="${esc(x.evidence || '')}">from the model's notes</span>` : ''}${
-            issueOccurrences(x) ? `<span class="di-cat di-grouped">${issueOccurrences(x).length} reports</span>` : ''}</div>
-          ${issueOccurrences(x) ? issueOccurrencesHtml(x) : x.evidence ? `<div class="di-ev">${esc(x.evidence)}</div>`
+            reports >= 2 ? `<span class="di-cat di-grouped">${reports} reports</span>` : ''}</div>
+          ${reports >= 2 ? issueOccurrencesHtml(x) : x.evidence ? `<div class="di-ev">${esc(x.evidence)}</div>`
             + requestNotesClockHtml(d, x) : ''}
         </div>
       </div>`; }).join('');
