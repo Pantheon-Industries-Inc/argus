@@ -69,7 +69,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 VERSION = 1
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 LISTS = ("data_issues", "operator_mistakes")
 ENV = "ARGUS_ISSUE_GROUPS"
 CAP_ENV = "ARGUS_ISSUE_GROUPS_CAP_USD"
@@ -215,7 +215,7 @@ def shown(item: dict, n: int) -> dict:
 
 
 def prompt(category: str, members: list, recording_s: float | None = None, n_parts: int | None = None) -> str:
-    about = ("A long robot-learning recording" + (f" of {recording_s:.0f}s" if recording_s else "")
+    about = ("A long recording" + (f" of {recording_s:.0f}s" if recording_s else "")
              + (f", labelled in {n_parts} parts" if n_parts and n_parts > 1 else ", labelled in parts"))
     return (
         f"ISSUE GROUPING. {about}, each part by its own request that saw only its own stretch of footage. The parts "
@@ -235,7 +235,9 @@ def prompt(category: str, members: list, recording_s: float | None = None, n_par
         "- When unsure, keep issues apart.\n"
         "- The sentence of a group covers everything each of its issues reports. When one issue summarizes several "
         "events (several pauses, several throws) and another reports one of them, the sentence describes the several "
-        "events, never only the one.\n\n"
+        "events, never only the one.\n"
+        "- The sentence states only what its issues state, in their terms: it never adds who or what acts (a robot, a "
+        "person, a hand) or any object, cause or outcome that none of them names.\n\n"
         "Answer with one JSON object and nothing else:\n"
         '{"groups": [{"ids": [<the ids of two or more issues that are one condition or one event>], "issue": "<one '
         'plain sentence describing that condition or event for the whole recording, without times>", "why": "<a '
