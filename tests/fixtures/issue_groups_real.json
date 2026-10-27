@@ -1,0 +1,166 @@
+{
+ "whole_take": {
+  "source": "issues_dump.jsonl: real data_issues of DiverseUMI takes labelled in parts, copied as written",
+  "dataset": "umi-1000h",
+  "take": "fob_319d48-f09920f1-851-26",
+  "seconds": 696.2,
+  "issues": [
+   {
+    "issue": "The two explicitly side-named handheld camera streams appear assigned to opposite physical hands.",
+    "category": "camera_side_mismatch",
+    "severity": "high",
+    "t_s": 0.0,
+    "end_s": 438.27,
+    "evidence": "At 0.00 s, left sees the other gripper on its left and right sees the other gripper on its right. At 62.06 s, exo shows the demonstrator's physical left gripper lifting the green shuttlecock while right moves with that gripper and shows the shuttlecock at its own jaws. At 214.21–215.22 s, exo shows the physical right gripper picking up the purple toy while left follows that pickup and shows the toy in its own jaws. Timeline arm values retain stream names as requested.",
+    "part": 1
+   },
+   {
+    "issue": "The recorded left_wrist and right_wrist side claims appear reversed: the left stream follows the gripper on the demonstrator's right, and the right stream follows the gripper on the demonstrator's left.",
+    "category": "camera_side_mismatch",
+    "severity": "high",
+    "t_s": null,
+    "end_s": null,
+    "evidence": "At 423.36 s the left stream sees the opposite gripper to image-left and the right stream sees it to image-right. At 434.37-437.37 s the right stream moves with the exo image-left gripper reaching for the wrench while the left stream remains with the image-right gripper holding the toy. At 694.63-696.162 s the right stream again follows the image-left gripper withdrawing, while the left stream remains on the toy.",
+    "part": 2
+   }
+  ]
+ },
+ "discrete": {
+  "source": "issues_dump.jsonl: real data_issues of DiverseUMI takes labelled in parts, copied as written",
+  "dataset": "umi-1000h",
+  "take": "fob_0ff0a4-53f8e6ed-1027-20",
+  "seconds": 1353.85,
+  "issues": [
+   {
+    "issue": "Two unsuccessful pinches fail to retain the orange lace before a successful third acquisition.",
+    "category": "failed_grasp",
+    "severity": "medium",
+    "t_s": 411.313,
+    "end_s": 418.323,
+    "recovered": true,
+    "deliberate": "no",
+    "evidence": "left and right at 411.31–417.31 s show closing and reopening beside the card without retained lace; right at 418.32 s shows the acquired loop.",
+    "part": 2
+   },
+   {
+    "issue": "A stitch-grasp attempt ends with the right gripper withdrawing empty.",
+    "category": "failed_grasp",
+    "severity": "medium",
+    "t_s": 426.323,
+    "end_s": 432.333,
+    "recovered": true,
+    "deliberate": "no",
+    "evidence": "left and right at 426.32–429.33 s show the unsuccessful pinch and empty withdrawal; 430.33–432.33 s show the successful retry.",
+    "part": 2
+   },
+   {
+    "issue": "The right gripper fails to retain the lace and must return for another pinch.",
+    "category": "failed_grasp",
+    "severity": "medium",
+    "t_s": 472.373,
+    "end_s": 480.383,
+    "recovered": true,
+    "deliberate": "no",
+    "evidence": "left at 476.37 s shows the opposite gripper open and withdrawn from the stitch; left and right at 477.37–480.38 s show reacquisition and the loop beginning to lift.",
+    "part": 2
+   }
+  ]
+ },
+ "recurring": {
+  "source": "issues_dump.jsonl: real data_issues of DiverseUMI takes labelled in parts, copied as written",
+  "dataset": "umi-1000h",
+  "take": "fob_e9bfb4-f916a2bc-1104-32",
+  "seconds": 1195.13,
+  "issues": [
+   {
+    "issue": "A dark cable intermittently crosses the right camera image and obscures a strip of the workspace.",
+    "category": "camera_fault",
+    "severity": "low",
+    "t_s": 959.257,
+    "end_s": 965.267,
+    "evidence": "Right view at 959.26–965.27 s shows a broad diagonal cable crossing the image; exo and left retain the task state.",
+    "part": 3
+   },
+   {
+    "issue": "The cable again intermittently crosses the right camera during terminal-panel work.",
+    "category": "camera_fault",
+    "severity": "low",
+    "t_s": 1073.367,
+    "end_s": 1091.387,
+    "evidence": "Right view at 1073.37–1081.38 s and 1085.39–1091.39 s shows the diagonal cable; the same placements remain recoverable from exo and left.",
+    "part": 3
+   }
+  ]
+ },
+ "pauses_with_seam_copy": {
+  "source": "issues_dump.jsonl: real data_issues of DiverseUMI takes labelled in parts, copied as written",
+  "dataset": "umi-100h",
+  "take": "fob_c92df4-9697dda9-338-3",
+  "seconds": 1088.39,
+  "issues": [
+   {
+    "issue": "A stationary pause interrupts the sorting activity.",
+    "category": "idle_stretch",
+    "severity": "low",
+    "t_s": 136.14,
+    "end_s": 143.14,
+    "evidence": "All three views at 136.14-143.14 s show the grippers held above the table with no bead or container manipulation.",
+    "part": 1
+   },
+   {
+    "issue": "About ten seconds of inactivity are retained between sorting runs.",
+    "category": "idle_stretch",
+    "severity": "medium",
+    "t_s": 200.2,
+    "end_s": 210.21,
+    "evidence": "Exo, left and right at 200.20-210.21 s show essentially unchanged gripper positions and task objects.",
+    "part": 1
+   },
+   {
+    "issue": "The window begins with about ten seconds of little task activity.",
+    "category": "idle_stretch",
+    "severity": "low",
+    "t_s": 278.178,
+    "end_s": 288.188,
+    "evidence": "All three views show the grippers held near their working positions without object manipulation from 278.18 to 288.19.",
+    "part": 2
+   },
+   {
+    "issue": "Another roughly ten-second idle interval is included before a new pickup attempt.",
+    "category": "idle_stretch",
+    "severity": "medium",
+    "t_s": 278.28,
+    "end_s": 288.29,
+    "evidence": "All three views at 278.28-288.29 s show the grippers paused and the bead arrangement unchanged.",
+    "part": 1
+   },
+   {
+    "issue": "The demonstrator lowers the grippers, changes seated position and pauses before resuming.",
+    "category": "idle_stretch",
+    "severity": "low",
+    "t_s": 452.348,
+    "end_s": 466.368,
+    "evidence": "exo shows both grippers lowered at 452.35-458.36 and then held without task-object contact through 466.37; the wrist views continue changing normally.",
+    "part": 2
+   },
+   {
+    "issue": "An approximately eight-second stationary pause interrupts sorting.",
+    "category": "idle_stretch",
+    "severity": "low",
+    "t_s": 598.498,
+    "end_s": 606.508,
+    "evidence": "exo, left and right show the grippers hovering without object manipulation from 598.50 to 606.51.",
+    "part": 2
+   },
+   {
+    "issue": "An approximately ten-second pause precedes the last pickup.",
+    "category": "idle_stretch",
+    "severity": "low",
+    "t_s": 674.578,
+    "end_s": 684.588,
+    "evidence": "All three views show the completed orange-bowl deposit followed by nearly stationary grippers until the reach beginning after 684.59.",
+    "part": 2
+   }
+  ]
+ }
+}
