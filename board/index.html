@@ -1445,6 +1445,13 @@ h3.section .count {
 .di-verified { font-size: 10px; font-weight: 600; color: var(--fg-2); border: 1px solid var(--border-strong);
   background: rgba(28,28,26,0.05); padding: 1px 6px; border-radius: var(--r-pill); }
 .di-block .di-row[data-t]:hover { background: rgba(127,127,127,0.06); }
+.di-occs { margin-top: 5px; }
+.di-occs > summary { cursor: pointer; font-family: var(--mono); font-size: 10.5px; color: var(--fg-2); }
+.di-occ { border-left: 2px solid var(--row-divider); padding: 4px 0 4px 8px; margin-top: 4px; }
+.di-occ[data-t] { cursor: pointer; }
+.di-occ[data-t]:hover { background: rgba(127,127,127,0.06); }
+.di-occ-h { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.di-occ-i { font-size: 12px; color: var(--fg-2); line-height: 1.4; margin-top: 2px; }
 /* one cause with many entries: a single row naming the cause and its count, opening to its entries */
 .di-group { border-top: 1px solid var(--row-divider); }
 .di-group:first-child { border-top: none; }
@@ -3062,6 +3069,28 @@ function foundWords(c) {
   if (c.status === 'fired') return c.of == null ? 'fired' : c.fired ? `${c.fired} of ${c.of} fired`
     : 'flagged, with none of its own checks listed as fired';
   return 'clear';
+}
+// A grouped issue (label/issue_groups.py: one condition or one event that several parts of a long recording reported)
+// shows its one sentence as any issue does, with how many reports it holds; under it, a fold closed until opened lists
+// every report as its part wrote it, each with its time (click to seek), part and evidence. An issue that holds fewer
+// than two occurrences draws nothing here, and its row is drawn as before.
+function issueOccurrences(x) {
+  const occ = x && Array.isArray(x.occurrences) ? x.occurrences.filter(o => o && typeof o === 'object') : [];
+  return occ.length >= 2 ? occ : null;
+}
+function issueOccurrencesHtml(x) {
+  const occ = issueOccurrences(x);
+  if (!occ) return '';
+  const num = v => v != null && v !== '' && !isNaN(parseFloat(v));
+  const when = o => !num(o.t_s) ? 'untimed' : num(o.end_s) && parseFloat(o.end_s) > parseFloat(o.t_s)
+    ? `${fmtT(parseFloat(o.t_s))} to ${fmtT(parseFloat(o.end_s))}` : fmtT(parseFloat(o.t_s));
+  const rows = occ.map(o => `<div class="di-occ"${num(o.t_s) ? ` data-t="${esc(parseFloat(o.t_s))}"` : ''}>
+      <div class="di-occ-h"><span class="di-t">${esc(when(o))}</span>${o.part != null ? `<span class="di-cat">part `
+        + `${esc(o.part)}</span>` : ''}${o.severity ? `<span class="di-cat">${esc(o.severity)}</span>` : ''}</div>
+      ${o.issue ? `<div class="di-occ-i">${esc(o.issue)}</div>` : ''}
+      ${o.evidence ? `<div class="di-ev">${esc(o.evidence)}</div>` : ''}
+    </div>`).join('');
+  return `<details class="di-occs"><summary>${occ.length} reports, as each part wrote them</summary>${rows}</details>`;
 }
 // What this dataset's rules set aside: each issue a rule moved to _excluded (board/build.py apply_rules, and the
 // issues label/pieces.py stitch set aside at our own cuts), with its text, tag, time and the rule's reason, and each
@@ -7230,6 +7259,8 @@ function renderEp(d, opts) {
       const severity = String(x.severity || '').trim().toLowerCase();
       const rated = ['low', 'medium', 'high'].includes(severity);
       const minor = rated && !countsIssue(x);
+      // a grouped issue's reports (issueOccurrences): counted here, so a row that is not grouped needs nothing else
+      const reports = Array.isArray(x.occurrences) ? x.occurrences.filter(o => o && typeof o === 'object').length : 0;
       return `
       <div class="di-row ${!rated ? 'unknown' : severity === 'high' ? 'high' : 'low'}${minor ? ' minor'
         : ''}"${t != null ? ` data-t="${esc(t)}"` : ''}>
@@ -7240,8 +7271,10 @@ function renderEp(d, opts) {
             : minor ? '<span class="di-minor" title="Below the counting threshold">minor</span>' : ''}${x.family || x.category ? `<span class="di-cat" title="${esc(x.category || '')}">${esc(x.family
             ? famName(x.family) : tagName(x.category, key))}</span>` : ''}${t != null
             ? `<span class="di-t">@ ${esc(fmtT(t))}</span>` : ''}${verifiedChip(x)}${x.derived_from
-            ? `<span class="di-cat" title="${esc(x.evidence || '')}">from the model's notes</span>` : ''}</div>
-          ${x.evidence ? `<div class="di-ev">${esc(x.evidence)}</div>${requestNotesClockHtml(d, x)}` : ''}
+            ? `<span class="di-cat" title="${esc(x.evidence || '')}">from the model's notes</span>` : ''}${
+            reports >= 2 ? `<span class="di-cat di-grouped">${reports} reports</span>` : ''}</div>
+          ${reports >= 2 ? issueOccurrencesHtml(x) : x.evidence ? `<div class="di-ev">${esc(x.evidence)}</div>`
+            + requestNotesClockHtml(d, x) : ''}
         </div>
       </div>`; }).join('');
   const sp = (d.dataset_checks || {}).stream_pairing || null;
@@ -7743,6 +7776,11 @@ function renderEp(d, opts) {
   document.querySelectorAll('.di-block .di-row[data-t]').forEach(r => {
     r.style.cursor = 'pointer';
     r.addEventListener('click', () => seek(r.dataset.t));
+  });
+  // a grouped issue's reports: opening the fold never seeks, and a report seeks to its own time, not the group's
+  document.querySelectorAll('.di-occs > summary').forEach(s => s.addEventListener('click', e => e.stopPropagation()));
+  document.querySelectorAll('.di-occs .di-occ[data-t]').forEach(r => {
+    r.addEventListener('click', e => { e.stopPropagation(); seek(r.dataset.t); });
   });
   if (tl) tl.addEventListener('click', e => {
     if (e.target.closest('.marker')) return;

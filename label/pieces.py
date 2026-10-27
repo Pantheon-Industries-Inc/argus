@@ -705,7 +705,10 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
     reader_issues), and the recording is listed under "incomplete". A recording none of whose parts parsed is still
     written, as a reply that gave no labels, so the board shows its footage, checks and sensors and says why; it is
     listed under "unlabelled". The seam verdicts a seam check wrote for this job (job/seams.json, python -m review seam
-    --out JOB/seams.json) decide the joins at cuts without a shared window (join_across_cuts)."""
+    --out JOB/seams.json) decide the joins at cuts without a shared window (join_across_cuts). The issues of each
+    stitched recording that report one condition or one event several times (each part reporting a whole-take
+    condition, or both parts reporting an event at a cut) are then grouped into one issue that keeps every report
+    (label/issue_groups.py), with the answers kept in job/issue_groups.json; ARGUS_ISSUE_GROUPS=0 turns that off."""
     src = Path(job) / "run" / "out"
     seams = None
     if (Path(job) / "seams.json").is_file():
@@ -742,6 +745,8 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
                                'use an explicit fresh job to label changed inputs')
     out.mkdir(parents=True, exist_ok=True)
     res = {"stitched": 0, "incomplete": [], "unlabelled": []}
+    from label import issue_groups
+    grouping_budget = issue_groups.Budget(issue_groups.cap_usd())
     # A short episode's files are published as the run holds them: each is copied, and one the run no longer holds
     # is removed, so a copy left from an earlier run never stands beside the label that replaced it. Readers choose
     # the active record from the same files in either folder (annotation_record), and a newer receipt beside an
@@ -803,6 +808,10 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
                 float(route.get('cost_usd') or 0) for route in routes)
             result['decode_failed'] += [x for _, r in failed for x in (r or {}).get('decode_failed') or []]
             _carry_part_billing(result, got + failed)
+            if issue_groups.enabled():
+                # issues of one category that report one condition or one event, grouped with every report kept
+                # (label/issue_groups.py); the answers are kept in job/issue_groups.json, so a later stitch reuses them
+                issue_groups.apply_in_stitch(result, Path(job) / "issue_groups.json", grouping_budget)
             write_atomic(out / f"{ep}.json", result, indent=None)
             res["stitched"] += 1
             if missing:
