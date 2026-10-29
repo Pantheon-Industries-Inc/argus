@@ -16,7 +16,7 @@
 
 ## Updates
 
-<details><summary><b>We release DiverseUMI, with 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
+<details><summary><b>We release DiverseUMI, 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
 
 We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
 
