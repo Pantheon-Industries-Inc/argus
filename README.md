@@ -18,6 +18,10 @@
 
 We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
 
+### \* Argus annotations for 5,000 hours of open robot data (October 2026)
+
+Kalyan V. Nadimpalli (TU Munich) released [Argus annotations](https://huggingface.co/datasets/nkalyanv/argus-robot-annotations) (Sol 6.1 Medium) for more than 5,000 hours of public robot data, which covers 290k episodes across ABC-130k, MolmoAct2 YAM, DROID, GM-100 and ABC-Sim. The labels are released under CC-BY-4.0.
+
 ### \* WGO-Bench (October 2026)
 
 Recently, [Midcentury AI](https://www.midcentury.xyz/blog/optimizing-argus) pushed an adaptation of Argus to SOTA (**50.2% semantic F1**) on WGO-Bench. Because this result uses **Sol 6.1 High**, its advantage over older-model baselines cannot be attributed to the harness alone.
