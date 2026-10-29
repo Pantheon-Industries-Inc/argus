@@ -22,7 +22,7 @@ We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI
 
 </details>
 
-<details><summary><b>5,000 hours of public robot data are now labeled with Argus</b> (October 2026)</summary>
+<details><summary><b>A community release brings Argus labels to 5,000 hours of public robot data</b> (October 2026)</summary>
 
 Kalyan V. Nadimpalli (TU Munich) released [Argus annotations](https://huggingface.co/datasets/nkalyanv/argus-robot-annotations) (Sol 6.1 Medium) for more than 5,000 hours of public robot data, which covers 290k episodes across ABC-130k, MolmoAct2 YAM, DROID, GM-100 and ABC-Sim. The labels are released under CC-BY-4.0.
 
