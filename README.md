@@ -1,7 +1,5 @@
 <h1 align="center">Argus</h1>
 
-<p align="center">To my knowledge, Argus is the most advanced open-source robot learning annotation harness (as of 2026).</p>
-
 <p align="center">
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.11-455468" alt="Python 3.11"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-455468" alt="Apache-2.0"></a>
@@ -16,27 +14,39 @@
 > [!IMPORTANT]
 > Argus has many tunable command-line options. Please read [Settings](#settings) in full.
 
-### \* DiverseUMI (October 2026)
+## Updates
+
+<details><summary><b>We release DiverseUMI, 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
 
 We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
 
-### \* Argus annotations for 5,000 hours of open robot data (October 2026)
+</details>
+
+<details><summary><b>TU Munich releases Argus labels for 5,000 hours of DROID, ABC-130k and other robot data</b> (October 2026)</summary>
 
 Kalyan V. Nadimpalli (TU Munich) released [Argus annotations](https://huggingface.co/datasets/nkalyanv/argus-robot-annotations) (Sol 6.1 Medium) for more than 5,000 hours of public robot data, which covers 290k episodes across ABC-130k, MolmoAct2 YAM, DROID, GM-100 and ABC-Sim. The labels are released under CC-BY-4.0.
 
-### \* WGO-Bench (October 2026)
+</details>
+
+<details><summary><b>An adaptation of Argus sets SOTA on WGO-Bench at 50.2% semantic F1</b> (October 2026)</summary>
 
 Recently, [Midcentury AI](https://www.midcentury.xyz/blog/optimizing-argus) pushed an adaptation of Argus to SOTA (**50.2% semantic F1**) on WGO-Bench. Because this result uses **Sol 6.1 High**, its advantage over older-model baselines cannot be attributed to the harness alone.
 
-### \* Argus improvements (October 2026)
+</details>
+
+<details><summary><b>Argus now labels depth, tactile and other modalities and grades how well each episode was executed</b> (October 2026)</summary>
 
 Argus now annotates depth, tactile and other sensor data jointly with video, state and actions. By default the model inspects any recording with depth or a touch sensor and can read any of its fields at full rate. It also inspects any recording with fields the prompt does not carry, such as EgoDex hand poses. A recording with only arm signals and a wrist force/torque sensor is inspected only with [`--inspection all`](#settings), and otherwise its fields reach the model as sampled readings. Inspection reads numeric fields by exact source rows, and by time only when a field's clock is aligned with the video. The response byte budget sets how many components one inspection request returns.
 
 Argus also scores each episode out of 10 for execution and outcome, and each subgoal for execution, deterministically from the annotations. Outcome measures whether the goal was reached and how far progress got, and execution weights cleanliness 75%, steadiness 15% and speed 10% ([`board/scores.py`](board/scores.py) calls them cleanliness, fluency and efficiency). A subgoal is a lasting state change the goal depends on, such as a block placed in the row, never a pick or a grasp.
 
+</details>
+
 ## Overview
 
-Argus is the only harness that combines native multi-format ingestion ([LeRobot's annotation pipeline](https://huggingface.co/docs/lerobot/main/annotation_pipeline), for example, accepts only LeRobot), joint visual/sensor reasoning, dense annotations of **actions, subgoals, outcomes, operator mistakes, recoveries and object-state changes**, and execution and outcome scores for each episode and subgoal. It reads multi-view RGB alongside state/action trajectories, depth, tactile and other recorded fields, and keeps their timing and measurement semantics. For depth and tactile data the VLM can inspect additional samples or image regions to support a finding, and the viewer and JSON exports keep each finding's evidence, confidence and limitations.
+To my knowledge, Argus is the most advanced open-source robot learning annotation harness (as of 2026).
+
+It is the only harness that combines native multi-format ingestion ([LeRobot's annotation pipeline](https://huggingface.co/docs/lerobot/main/annotation_pipeline), for example, accepts only LeRobot), joint visual/sensor reasoning, dense annotations of **actions, subgoals, outcomes, operator mistakes, recoveries and object-state changes**, and execution and outcome scores for each episode and subgoal. It reads multi-view RGB alongside state/action trajectories, depth, tactile and other recorded fields, and keeps their timing and measurement semantics. For depth and tactile data the VLM can inspect additional samples or image regions to support a finding, and the viewer and JSON exports keep each finding's evidence, confidence and limitations.
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Pantheon-Industries-Inc/argus/refs/heads/main/media/architecture.svg?v=a088e8f800e6">
