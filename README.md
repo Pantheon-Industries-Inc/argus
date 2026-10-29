@@ -16,25 +16,25 @@
 
 ## Updates
 
-<details><summary><b>We release DiverseUMI, 99.6 hours of bimanual UMI with dense Argus labels</b> (October 2026)</summary>
+<details><summary><b>We release DiverseUMI, with 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
 
 We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
 
 </details>
 
-<details><summary><b>A community release brings Argus labels to 5,000 hours of public robot data</b> (October 2026)</summary>
+<details><summary><b>TU Munich releases Argus labels for 5,000 hours of DROID, ABC-130k and other robot data</b> (October 2026)</summary>
 
 Kalyan V. Nadimpalli (TU Munich) released [Argus annotations](https://huggingface.co/datasets/nkalyanv/argus-robot-annotations) (Sol 6.1 Medium) for more than 5,000 hours of public robot data, which covers 290k episodes across ABC-130k, MolmoAct2 YAM, DROID, GM-100 and ABC-Sim. The labels are released under CC-BY-4.0.
 
 </details>
 
-<details><summary><b>An adaptation of Argus sets SOTA on WGO-Bench (50.2% semantic F1)</b> (October 2026)</summary>
+<details><summary><b>An adaptation of Argus sets SOTA on WGO-Bench at 50.2% semantic F1</b> (October 2026)</summary>
 
 Recently, [Midcentury AI](https://www.midcentury.xyz/blog/optimizing-argus) pushed an adaptation of Argus to SOTA (**50.2% semantic F1**) on WGO-Bench. Because this result uses **Sol 6.1 High**, its advantage over older-model baselines cannot be attributed to the harness alone.
 
 </details>
 
-<details><summary><b>Argus now labels depth and tactile data and scores every episode</b> (October 2026)</summary>
+<details><summary><b>Argus now labels depth, tactile and other modalities and grades how well each episode was executed</b> (October 2026)</summary>
 
 Argus now annotates depth, tactile and other sensor data jointly with video, state and actions. By default the model inspects any recording with depth or a touch sensor and can read any of its fields at full rate. It also inspects any recording with fields the prompt does not carry, such as EgoDex hand poses. A recording with only arm signals and a wrist force/torque sensor is inspected only with [`--inspection all`](#settings), and otherwise its fields reach the model as sampled readings. Inspection reads numeric fields by exact source rows, and by time only when a field's clock is aligned with the video. The response byte budget sets how many components one inspection request returns.
 
