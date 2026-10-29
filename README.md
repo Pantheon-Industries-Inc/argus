@@ -1,5 +1,7 @@
 <h1 align="center">Argus</h1>
 
+<p align="center">To my knowledge, Argus is the most advanced open-source robot learning annotation harness (as of 2026).</p>
+
 <p align="center">
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.11-455468" alt="Python 3.11"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-455468" alt="Apache-2.0"></a>
@@ -34,9 +36,7 @@ Argus also scores each episode out of 10 for execution and outcome, and each sub
 
 ## Overview
 
-To my knowledge, Argus is the most advanced open-source robot learning annotation harness (as of 2026).
-
-It is the only harness that combines native multi-format ingestion ([LeRobot's annotation pipeline](https://huggingface.co/docs/lerobot/main/annotation_pipeline), for example, accepts only LeRobot), joint visual/sensor reasoning, dense annotations of **actions, subgoals, outcomes, operator mistakes, recoveries and object-state changes**, and execution and outcome scores for each episode and subgoal. It reads multi-view RGB alongside state/action trajectories, depth, tactile and other recorded fields, and keeps their timing and measurement semantics. For depth and tactile data the VLM can inspect additional samples or image regions to support a finding, and the viewer and JSON exports keep each finding's evidence, confidence and limitations.
+Argus is the only harness that combines native multi-format ingestion ([LeRobot's annotation pipeline](https://huggingface.co/docs/lerobot/main/annotation_pipeline), for example, accepts only LeRobot), joint visual/sensor reasoning, dense annotations of **actions, subgoals, outcomes, operator mistakes, recoveries and object-state changes**, and execution and outcome scores for each episode and subgoal. It reads multi-view RGB alongside state/action trajectories, depth, tactile and other recorded fields, and keeps their timing and measurement semantics. For depth and tactile data the VLM can inspect additional samples or image regions to support a finding, and the viewer and JSON exports keep each finding's evidence, confidence and limitations.
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/Pantheon-Industries-Inc/argus/refs/heads/main/media/architecture.svg?v=a088e8f800e6">
