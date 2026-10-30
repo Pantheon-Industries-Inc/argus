@@ -82,6 +82,10 @@ from label import pieces, wording
     ('The cups are not supplied.', False, 'The cups are not supplied.'),
     ('The left stream of water hits the cup.', False, 'The left stream of water hits the cup.'),
     ('Part 1: pick the cup. Part 2: place the cup.', False, 'Pick the cup. Place the cup.'),
+    ('Clean the window at the start of the window cleaning task.', False,
+     'Clean the window at the start of the window cleaning task.'),
+    ('Compare fabric samples between samples of cloth.', False, 'Compare fabric samples between samples of cloth.'),
+    ('The sampled views show the cup moved.', False, 'The sampled views show the cup moved.'),
     # a physical part or clip is not the labelling's
     ('Subsequent work removes, handles and reseats this part.', False,
      'Subsequent work removes, handles and reseats this part.'),

@@ -41,6 +41,7 @@ _PHYS_AFTER = (r'(?!\s*(?:-\s*)?(?:sills?|panes?|ledges?|glass|blinds?|shades?|c
                r'cleaner|wiper|frame\b(?!s?\s+(?:of|in)\s+(?:the|this)\s+(?:part|clip|request))|screen|bay|light|'
                r'(?:end|side|edge|corner)\s+of)\b)')
 _WIN = r'window' + _PHYS_AFTER
+_ENDPHRASE = r'(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|while|when|where|then)\b))'   # a bare window that ends its phrase (not "the window cleaning task")
 _EDGE = r'(?:start|end|beginning|boundary|boundaries|edge|edges|opening|close|closing|cut)'
 _WEDGE = r'(?:start|end|beginning|boundary|boundaries|cut)'     # a real window has an edge, an opening and a close
 _PART_EDGE = r'(?:preparation\s+)?(?:boundary|boundaries|cut)'   # a toy's part has an end and an edge, not these
@@ -65,7 +66,7 @@ _SDET = (r'(?:(?:the|these|those|this|that|two|first|last|final|same|adjacent|co
          r'available|supplied|successive|displayed|one|one-second|[\w-]+-facing)\s+)*')
 # bare "samples" only between samples of the footage: "between the two samples" can be fabric samples
 SAMPLES = (r'(?:between\s+(?:(?:these|those)\s+|(?:the\s+)?(?:(?:first|last|final|adjacent|consecutive|successive|'
-           r'neighbouring|neighboring|displayed|supplied|available|one-second|[\w-]+-facing)\s+)+(?:two\s+)?)?samples\b'
+           r'neighbouring|neighboring|displayed|supplied|available|one-second|[\w-]+-facing)\s+)+(?:two\s+)?)?samples\b(?!\s+of\b)'
            r'|(?:between|within|in|inside|during|across|by|from)\s+' + _SDET + r'(?:sampled\s+(?:frames?|instants?|'
            r'moments?|times?|images?|views?|stills?|interval|intervals|footage)|sampling\s+interval|sample\s+interval)\b'
            r'|(?:in|by|from|within|across)\s+(?:these|those|the\s+adjacent|adjacent|the\s+consecutive|consecutive|'
@@ -112,8 +113,7 @@ ABOUT = re.compile('|'.join([
     r'number|image)s?\b[^.;]{0,120}?\b(?:is|are|was|were)\s+not\s+(?:supplied|provided|given)\b(?!\s+to\b)'
     r'|\bno\s+supplied\b',
     r'\b(?:the|these|this|those|available|adjacent|sparse)\s+(?:sampled|supplied)\s+(?:views?|frames?|images?|instants?|'
-    r'samples?|footage|stills?|interval)\s+(?:do|does|did|show|shows|suggest|cannot|can\'t|never|only|are|is|leave|'
-    r'leaves|resolve|resolves|make|makes|bound|bounds|establish|establishes|settle|settles)\b',
+    r'samples?|footage|stills?|interval)\s+(?:do|does|did|cannot|can\'t|never|leave|leaves|bound|bounds)\b',
     r'\b(?:the|this)\s+(?:last|first|final)\s+(?:supplied|sampled)\s+(?:frames?|views?|images?|samples?|instants?)\b',
     r'\b(?:the\s+)?samples?\s+(?:do|does|did|cannot|can\'t|never)\s+(?:not\s+)?(?:show|resolve|establish|reveal|capture|'
     r'settle|distinguish)\b',
@@ -145,14 +145,14 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     r'(?:during|throughout|within|until|till|beyond|past)\s+(?:(?:all|most|much|the\s+rest|the\s+'
     r'(?:start|end|beginning))\s+of\s+)?the\s+' + _WIN + r'(?:(?:\'s)?\s+' + _WEDGE + r'\b' + _NOTPHYS +
     r'|(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|while|when|where|then)\b)))',
-    r'(?:at|by|near|toward|towards)\s+the\s+(?:start|end|beginning|close)\s+of\s+the\s+' + _WIN + r'\b',
+    r'(?:at|by|near|toward|towards)\s+the\s+(?:start|end|beginning|close)\s+of\s+the\s+' + _WIN + r'\b' + _ENDPHRASE,
     r'(?:early|earlier|late|later)\s+in\s+(?:the|this)\s+(?:(?:supplied|labell?ed|current)\s+)?' + _WIN + r'\b',
     r'(?:at|by|near|toward|towards|through|throughout|during|for)\s+(?:the\s+)?(?:start|end|beginning|close|rest|remainder|'
     r'most|latter\s+part|later\s+part|first\s+part|last\s+part)\s+of\s+(?:the|this)\s+(?:(?:supplied|current|labell?ed|'
-    r'preparation)\s+)?' + _WIN + r'\b',
+    r'preparation)\s+)?' + _WIN + r'\b' + _ENDPHRASE,
     r'(?:at|by|in|on)\s+the\s+window\'s\s+(?:first|last|final|opening|closing)\s+frame\b',
     r'(?:before|by|in|at|until)\s+the\s+next\s+(?:sample|sampled\s+(?:frame|view|image))\b',
-    r'for\s+(?:most|much|all|part|half)\s+of\s+the\s+' + _WIN + r'\b',
+    r'for\s+(?:most|much|all|part|half)\s+of\s+the\s+' + _WIN + r'\b' + _ENDPHRASE,
     r'inside\s+(?:this|the\s+supplied)\s+' + _WIN + r'\b',
     r'by\s+the\s+(?:next|following)\s+(?:sample|sampled\s+(?:frame|view|image))\b',
     r'(?:in|into|of|from)\s+the\s+(?:next|previous|prior|following|preceding)\s+supplied\s+(?:part|clip|window|segment)\b',
