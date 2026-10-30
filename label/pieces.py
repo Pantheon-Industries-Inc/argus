@@ -43,7 +43,7 @@ import numpy as np
 
 from board.label_projection import LABEL_SCHEMA, recording_completion
 from label.atomic import write_atomic
-from label import policy
+from label import policy, wording
 from label.task_claims import claims as task_claims
 from prepare.frame_rate import episode_seconds
 
@@ -756,7 +756,7 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
         for prefix in ('', 'failed_', 'noreply_'):
             target = out / f'{prefix}{name}.json'
             if target.name in held:
-                shutil.copy(src / target.name, target)
+                _publish_reply(src / target.name, target)
             else:
                 target.unlink(missing_ok=True)
     for ep, parts in long_eps.items():
@@ -812,7 +812,8 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
                 # issues of one category that report one condition or one event, grouped with every report kept
                 # (label/issue_groups.py); the answers are kept in job/issue_groups.json, so a later stitch reuses them
                 issue_groups.apply_in_stitch(result, Path(job) / "issue_groups.json", grouping_budget)
-            write_atomic(out / f"{ep}.json", result, indent=None)
+            # last, after every rule that reads what the parts wrote: no wording about the labelling (label/wording.py)
+            write_atomic(out / f"{ep}.json", wording.normalize_result(result), indent=None)
             res["stitched"] += 1
             if missing:
                 res["incomplete"].append(ep)
@@ -820,6 +821,19 @@ def stitch_run(job: Path, eps: Path, long_eps: dict, out: Path) -> dict:
         write_atomic(out / f"{ep}.json", unlabelled(Path(eps) / ep, failed, missing), indent=None)
         res["unlabelled"].append(ep)
     return res
+
+
+def _publish_reply(source: Path, target: Path) -> None:
+    """A short episode's saved reply copied to the published folder, with its labels normalized (label/wording.py) when
+    it has them; the saved reply under run/out is never changed. A file that is not a JSON object is copied as it is."""
+    try:
+        record = json.loads(source.read_text())
+    except ValueError:
+        record = None
+    if isinstance(record, dict) and isinstance(record.get('labels'), dict):
+        write_atomic(target, wording.normalize_result(record), indent=None)
+    else:
+        shutil.copy(source, target)
 
 
 def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: list[dict]) -> dict:

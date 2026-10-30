@@ -149,7 +149,7 @@ def test_stitch_refuses_changed_proven_inputs_before_publishing(tmp_path, part, 
 
 
 def test_stitch_preserves_current_proven_and_legacy_saved_short_results(tmp_path):
-    from label import harness, pieces
+    from label import harness, pieces, wording
     source = tmp_path / "episodes" / "episode_source"
     source.mkdir(parents=True)
     (source / "context.json").write_text(json.dumps({"state_kind": "none", "fps": 10}))
@@ -162,13 +162,16 @@ def test_stitch_preserves_current_proven_and_legacy_saved_short_results(tmp_path
     record = {"parse_ok": True, "labels": {"task_summary": "saved historical claim"}, "input_identity": identity}
     saved.write_text(json.dumps(record))
     final = tmp_path / "final"
+    # published as saved, with only the labels' wording about the labelling taken out (label/wording.py)
+    published = lambda: wording.normalize_result(json.loads(saved.read_text()))
     pieces.stitch_run(tmp_path / "job", source.parent, {}, final)
-    assert (final / saved.name).read_bytes() == saved.read_bytes()
+    assert json.loads((final / saved.name).read_text()) == published()
     record.pop("input_identity")
     saved.write_text(json.dumps(record))
     (source / "context.json").write_text(json.dumps({"state_kind": "none", "instruction": "changed"}))
     pieces.stitch_run(tmp_path / "job", source.parent, {}, final)
-    assert (final / saved.name).read_bytes() == saved.read_bytes()
+    assert json.loads((final / saved.name).read_text()) == published()
+    assert json.loads(saved.read_text()) == record                  # the saved reply itself is never changed
 
 
 @pytest.mark.parametrize("native_names", [False, True])

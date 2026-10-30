@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from label import episode as me
-from label import harness, pieces
+from label import harness, pieces, wording
 from prepare import formats as f
 from test_formats import recorder_folder
 import complete_reply
@@ -747,6 +747,7 @@ def test_a_long_recording_with_a_part_that_failed_is_stitched_from_the_rest_with
     assert r["evidence_inspection"]["parts"][0]["part"] == 2
     pcs = [json.loads((p / "context.json").read_text())["piece"] for p in parts]
     assert r["parse_ok"] is True and [s["action"] for s in r["labels"]["timeline"]] == ["reach", "place"]
+    assert r["text_normalizer"]["version"] == wording.VERSION      # a stitched result is published normalized
     assert r["labels"]["timeline"][1]["start_s"] == round(0.1 + pcs[2]["t0_s"], 3)
     assert r["stitched"]["parts"] == 3 and r["stitched"]["cuts_s"] == [pcs[1]["t0_s"], pcs[2]["t0_s"]]
     (gap,) = r["stitched"]["missing"]
