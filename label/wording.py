@@ -42,7 +42,11 @@ _PHYS_AFTER = (r'(?!\s*(?:-\s*)?(?:sills?|panes?|ledges?|glass|blinds?|shades?|c
                r'(?:end|side|edge|corner)\s+of)\b)')
 _WIN = r'window' + _PHYS_AFTER
 _EDGE = r'(?:start|end|beginning|boundary|boundaries|edge|edges|opening|close|closing|cut)'
+_WEDGE = r'(?:start|end|beginning|boundary|boundaries|cut)'     # a real window has an edge, an opening and a close
 _PART_EDGE = r'(?:preparation\s+)?(?:boundary|boundaries|cut)'   # a toy's part has an end and an edge, not these
+_QW = r'(?:(?:' + _QUAL + r'|internal)[\s-]+)'                    # a word that makes the window or the part the labelling's
+# what follows an edge that is a physical one: "the window end of the table", "the part cut line"
+_NOTPHYS = r'(?!\s+(?:of|line|lines|mark|marks|edge|edges|piece|pieces|end|ends|side|surface)\b)'
 _DET = r'(?:the|this|that|each|its|the\s+current)'
 _ENDS = r'(?:begins|began|starts|started|ends(?!\s+up\b)|ended|cuts\s+off|stops|finishes|is\s+cut)'  # "ends up" is a place
 _OPENS = r'(?:' + _ENDS[3:-1] + r'|opens|opened|closes|closed)'   # a named unit, never a bare window, also opens
@@ -59,7 +63,9 @@ UNIT = (r'(?:' + _DET + r'\s+(?:' + _QUAL + r'[\s-]+)+' + _WIN +
 # a stretch of samples: "between samples", "between these sampled frames", "within the sampled interval"
 _SDET = (r'(?:(?:the|these|those|this|that|two|first|last|final|same|adjacent|consecutive|neighbouring|neighboring|'
          r'available|supplied|successive|displayed|one|one-second|[\w-]+-facing)\s+)*')
-SAMPLES = (r'(?:between\s+' + _SDET + r'samples\b'
+# bare "samples" only between samples of the footage: "between the two samples" can be fabric samples
+SAMPLES = (r'(?:between\s+(?:(?:these|those)\s+|(?:the\s+)?(?:(?:first|last|final|adjacent|consecutive|successive|'
+           r'neighbouring|neighboring|displayed|supplied|available|one-second|[\w-]+-facing)\s+)+(?:two\s+)?)?samples\b'
            r'|(?:between|within|in|inside|during|across|by|from)\s+' + _SDET + r'(?:sampled\s+(?:frames?|instants?|'
            r'moments?|times?|images?|views?|stills?|interval|intervals|footage)|sampling\s+interval|sample\s+interval)\b'
            r'|(?:in|by|from|within|across)\s+(?:these|those|the\s+adjacent|adjacent|the\s+consecutive|consecutive|'
@@ -71,14 +77,15 @@ _TIMING = (r'(?:occurs?|occurred|falls?|fell|happens?|happened|takes?\s+place|to
 
 # clauses about the labelling: dropped from prose, cut from names
 # the unit's edges as an event: "the window begins with", "the supplied part ends before", "Window ends with"
-_EDGE_AS_EVENT = (r'\b(?:' + UNIT + r')\s+' + _OPENS + r'\b|\bthe\s+' + _WIN + r'\s+' + _ENDS + r'\b|^\s*window\s+' +
-                  _OPENS + r'\b')
+_EDGE_AS_EVENT = (r'\b(?:' + UNIT + r')\s+' + _OPENS + r'\b|\bthe\s+' + _WIN + r'\s+' + _ENDS + r'\b|^\s*window\s+(?:' +
+                  _ENDS[3:-1] + r'|(?:opens|closes)\s+(?:during|while|mid|as|before|after)\b)')
 # a task still running at an edge: "is still underway at the request boundary", "continues at the preparation cut"
 _AT_EDGE = (r'\b(?:(?:is|are|was|were|remains?|remained)\s+)?(?:still\s+|already\s+)?(?:under\s*way|in\s+progress|ongoing|'
             r'continuing|continues|continue|active|being\s+worked(?:\s+on)?|held|unfinished|incomplete|not\s+finished|'
             r'not\s+complete|mid[- ]?(?:task|action|activity))\s+(?:at|by|when|as|until|through|across|before)\s+(?:the\s+|this\s+|'
-            r'both\s+)?(?:(?:' + _QUAL + r'|internal)[\s-]+)*(?:(?:' + _WIN + r'|request)(?:\'s)?(?:\s+' + _EDGE +
-            r')?|(?:part|clip)(?:\'s)?\s+' + _PART_EDGE + r'|cut|boundary|boundaries)\b')
+            r'both\s+)?(?:' + _QW + r'+window(?:\'s)?(?:\s+' + _EDGE + r')?|' + _QW + r'*request(?:\'s)?(?:\s+' + _EDGE +
+            r')?|window(?:\'s)?\s+' + _WEDGE + r'|' + _QW + r'*(?:part|clip)(?:\'s)?\s+' + _PART_EDGE +
+            r'|cut|boundary|boundaries)\b' + _NOTPHYS)
 EDGE_EVENT = re.compile(_EDGE_AS_EVENT + '|' + _AT_EDGE, I)
 ABOUT = re.compile('|'.join([
     _EDGE_AS_EVENT,
@@ -98,16 +105,20 @@ ABOUT = re.compile('|'.join([
     r'(?:part|request|window|clip)\b',
     r'\brequest[\s-]+(?:windows?|boundar(?:y|ies)|cuts?|edges?|starts?|ends?)\b',
     # the input, as the model got it: "no instruction is supplied", "the sampled views do not resolve"
-    r'\b(?:no|an?)\s+(?:explicit\s+|written\s+|task\s+|source\s+)*(?:instruction|description|note|dataset\s+note|task)s?\s+'
-    r'(?:is|was|are|were)\s+(?:supplied|provided|given)\b',
-    r'\b(?:is|are|was|were)\s+not\s+(?:supplied|provided|given)\b|\bno\s+supplied\b',
+    # (what a person is given, "no task was given to the second operator", is not the labelling's)
+    r'\bno\s+(?:explicit\s+|written\s+|task\s+|source\s+)*(?:instruction|description|note|dataset\s+note|task)s?\s+'
+    r'(?:is|was|are|were)\s+(?:supplied|provided|given)\b(?!\s+to\b)',
+    r'\b(?:instruction|target|intended|specification|requirement|reference|goal|description|note|part|count|length|'
+    r'number|image)s?\b[^.;]{0,120}?\b(?:is|are|was|were)\s+not\s+(?:supplied|provided|given)\b(?!\s+to\b)'
+    r'|\bno\s+supplied\b',
     r'\b(?:the|these|this|those|available|adjacent|sparse)\s+(?:sampled|supplied)\s+(?:views?|frames?|images?|instants?|'
     r'samples?|footage|stills?|interval)\s+(?:do|does|did|show|shows|suggest|cannot|can\'t|never|only|are|is|leave|'
     r'leaves|resolve|resolves|make|makes|bound|bounds|establish|establishes|settle|settles)\b',
     r'\b(?:the|this)\s+(?:last|first|final)\s+(?:supplied|sampled)\s+(?:frames?|views?|images?|samples?|instants?)\b',
     r'\b(?:the\s+)?samples?\s+(?:do|does|did|cannot|can\'t|never)\s+(?:not\s+)?(?:show|resolve|establish|reveal|capture|'
     r'settle|distinguish)\b',
-    r'\b(?:the|these)\s+samples\s+(?:show|shows|establish|establishes|suggest|suggests|bound|bounds|do\s+not\s+support)\b',
+    r'\bthese\s+samples\s+(?:show|shows|establish|establishes|suggest|suggests|bound|bounds)\b'
+    r'|\b(?:the|these)\s+samples\s+do\s+not\s+support\b',
     r'\b(?:is|are|was|were)\s+not\s+(?:fully\s+|densely\s+)?sampled\b|\bsparsely\s+sampled\b',
     # a time placed only between samples: "release occurs between samples", "grasp inferred within the sampled interval"
     r'\b' + _TIMING + r'\s+' + SAMPLES,
@@ -130,8 +141,10 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     r'(?:\'s)?(?:\s+' + _EDGE + r'\b(?!\s+of\b))?',
     # "throughout the window", "until the window ends": bare "the window" after a temporal preposition ("across the
     # window" and "before the window" can be places, so they are not among them)
+    # Only where the window ends the phrase or has a labelling edge: "until the window is clean" is a real one
     r'(?:during|throughout|within|until|till|beyond|past)\s+(?:(?:all|most|much|the\s+rest|the\s+'
-    r'(?:start|end|beginning))\s+of\s+)?the\s+' + _WIN + r'(?:\'s)?(?:\s+' + _EDGE + r'\b(?!\s+of\b))?',
+    r'(?:start|end|beginning))\s+of\s+)?the\s+' + _WIN + r'(?:(?:\'s)?\s+' + _WEDGE + r'\b' + _NOTPHYS +
+    r'|(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|while|when|where|then)\b)))',
     r'(?:at|by|near|toward|towards)\s+the\s+(?:start|end|beginning|close)\s+of\s+the\s+' + _WIN + r'\b',
     r'(?:early|earlier|late|later)\s+in\s+(?:the|this)\s+(?:(?:supplied|labell?ed|current)\s+)?' + _WIN + r'\b',
     r'(?:at|by|near|toward|towards|through|throughout|during|for)\s+(?:the\s+)?(?:start|end|beginning|close|rest|remainder|'
@@ -147,10 +160,10 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     # preparation boundary" (not "at the part's end", a toy's)
     r'(?:at|by|near|toward|towards|until|till|up\s+to|past|across|around|before|after|over|through|spanning|'
     r'crossing)\s+(?:the\s+|this\s+|'
-    r'that\s+|each\s+|both\s+)?(?:(?:' + _QUAL + r'|internal)[\s-]+)*(?:(?:window|request)(?:\'s)?\s+' + _EDGE +
-    r'|(?:part|clip)(?:\'s)?\s+' + _PART_EDGE + r')\b(?!\s+of\b)',
+    r'that\s+|each\s+|both\s+)?(?:' + _QW + r'+window(?:\'s)?\s+' + _EDGE + r'|' + _QW + r'*request(?:\'s)?\s+' + _EDGE +
+    r'|window(?:\'s)?\s+' + _WEDGE + r'|' + _QW + r'*(?:part|clip)(?:\'s)?\s+' + _PART_EDGE + r')\b' + _NOTPHYS,
     r'(?:at|across|around|past|near|over|before|after|beyond|until|till)\s+(?:the|this|that|an?)\s+(?:internal\s+)?(?:request|part|'
-    r'labell?ing|preparation)\s+cut\b',
+    r'labell?ing|preparation)\s+cut\b' + _NOTPHYS,
     r'(?:in|from|across|within|throughout)\s+(?:all\s+|the\s+|these\s+)?(?:supplied|provided|given|sampled)\s+(?:frames?|'
     r'views?|images?|footage|clip|video|stills?|instants?|samples)\b',
     r'(?:in|of|from)\s+(?:the\s+)?(?:previous|prior|next|earlier|later|following|preceding)\s+(?:request|' + _WIN + r')\b',
@@ -166,7 +179,7 @@ _QTY = (r'(?:most|much|some|all|part|half|the\s+rest|the\s+remainder|the\s+middl
         r'small\s+)?(?:portion|share|fraction))')
 REWRITE = [
     (re.compile(r"\b(left|right)[- ]stream(?:'s)?\s+(grippers?|fingers?|jaws?|pads?|tips?)\b", I), r'\1 \2'),
-    (re.compile(r"\b(left|right|exo|top|scene)[- ]streams?(?:'s)?\b", I), r'\1 view'),
+    (re.compile(r"\b(left|right|exo|top|scene)[- ]streams?(?:'s)?\b(?!\s+of\b)", I), r'\1 view'),   # not "a stream of water"
     (re.compile(r"\b(?:wrist|wrist-camera|gripper|close-view|handheld)\s+streams\b", I), 'wrist views'),
     (re.compile(r"\b(?:wrist|wrist-camera|gripper|close-view|handheld)\s+stream\b", I), 'wrist view'),
     (re.compile(r"\bstream's\s+(fingers|jaws|pads|tips)\b", I), r"gripper's \1"),
@@ -194,6 +207,8 @@ _BARE = re.compile(r'^(?:the\s+)?(?:(?:exact|brief|final|small|fine|right|left|p
 ENUM_KEYS = frozenset({'arm', 'contribution', 'kind', 'outcome', 'category', 'severity', 'deliberate', 'basis', 'list',
                        'excluded_by', 'by', 'side', 'task_completed', 'view', 'content', 'fingerprint', 'signals',
                        'progress_scope', 'id', 'sha256', 'status'})
+# task text stays as Argus wrote it, "in this window" included: a task name names the time window it was labelled in
+TASK_TEXT_KEYS = frozenset({'task', 'task_summary', 'instruction_variants'})
 # subtrees Argus writes itself about its stitching: left as they are
 OWN_KEYS = frozenset({'cut_joins', 'grouped', 'stitched', 'windows'})
 # a field Argus writes itself inside an item it set aside or marked at a cut ("both parts labelled these seconds
@@ -219,7 +234,9 @@ def _cap(s: str) -> str:
 
 
 def _rewritten(s: str) -> str:
-    y = PART_MARK.sub(' ', s) if PART_MARK.search(s) else s
+    y = s
+    if PART_MARK.search(s):          # "Part 1: pick the cup." -> "Pick the cup."
+        y = re.sub(r'(^|[.!?]\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), _tidy(PART_MARK.sub(' ', s)))
     for rx, to in REWRITE:
         y = rx.sub(to, y)
     y = SCOPED.sub(r'\1', y)
@@ -300,7 +317,7 @@ def normalize_labels(labels, counts: dict | None = None, log: list | None = None
     counts = {} if counts is None else counts
 
     def keep(parent, k):
-        return k in OWN_KEYS or k in ENUM_KEYS or (parent, k) in OWN_FIELDS
+        return k in OWN_KEYS or k in ENUM_KEYS or k in TASK_TEXT_KEYS or (parent, k) in OWN_FIELDS
 
     def walk(v, key):
         if isinstance(v, dict):

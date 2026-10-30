@@ -67,6 +67,21 @@ from label import pieces, wording
     ('An extended inactive wait interrupts the task near the end of this window.', False,
      'An extended inactive wait interrupts the task.'),
     ('The nut is already between the tips at the window\'s first frame.', False, 'The nut is already between the tips.'),
+    # a real window, stream, sample or part keeps its words (review of PR 159)
+    ('The arm wipes the window during the window cleaning task.', False,
+     'The arm wipes the window during the window cleaning task.'),
+    ('Wipe the window until the window is clean.', False, 'Wipe the window until the window is clean.'),
+    ('The cloth is still held at the window edge.', False, 'The cloth is still held at the window edge.'),
+    ('Tape held at the window edge', True, 'Tape held at the window edge'),
+    ('The robot places the left part between the two samples.', False,
+     'The robot places the left part between the two samples.'),
+    ('Place the samples in the tray; the samples show color differences.', False,
+     'Place the samples in the tray; the samples show color differences.'),
+    ('Insert the part at the part cut line.', False, 'Insert the part at the part cut line.'),
+    ('No task was given to the second operator.', False, 'No task was given to the second operator.'),
+    ('The cups are not supplied.', False, 'The cups are not supplied.'),
+    ('The left stream of water hits the cup.', False, 'The left stream of water hits the cup.'),
+    ('Part 1: pick the cup. Part 2: place the cup.', False, 'Pick the cup. Place the cup.'),
     # a physical part or clip is not the labelling's
     ('Subsequent work removes, handles and reseats this part.', False,
      'Subsequent work removes, handles and reseats this part.'),
@@ -102,8 +117,8 @@ def test_normalize_labels_keeps_enums_and_argus_records_and_counts_changes():
     assert out['tasks'] == labels['tasks']
     assert out['_excluded'][0]['reason'] == labels['_excluded'][0]['reason']
     assert out['_excluded'][0]['note'] is None
-    assert out['instruction_variants'] == ['Stack the cups', 'Stack the cups']
-    assert counts == {'rewritten': 2, 'dropped': 2} and len(log) == 4
+    assert out['instruction_variants'] == labels['instruction_variants']      # task text stays as Argus wrote it
+    assert counts == {'rewritten': 1, 'dropped': 2} and len(log) == 3
     assert labels['timeline'][0]['notes'] == 'The window ends before the cup lands.'     # the input is not changed
 
 
@@ -111,15 +126,17 @@ def test_a_key_event_that_is_a_parts_edge_leaves_the_list():
     labels = {'key_events': [{'label': 'Window ends with the puzzle border still incomplete', 'kind': 'phase'},
                              {'label': 'Knot work still underway at the request boundary', 'kind': 'phase'},
                              {'label': 'Window opens during screwdriver contact with the board', 'kind': 'phase'},
-                             {'label': 'Release the cup at the window end of the table', 'kind': 'placement'}]}
+                             {'label': 'Release the cup at the window end of the table', 'kind': 'placement'},
+                             {'label': 'Window opens fully', 'kind': 'state_change'}]}
     counts = {}
     out = wording.normalize_labels(labels, counts)
-    assert out['key_events'] == [labels['key_events'][3]] and counts == {'dropped': 3}
+    assert out['key_events'] == labels['key_events'][3:] and counts == {'dropped': 3}
 
 
 def test_normalize_result_records_the_version():
-    r = wording.normalize_result({'labels': {'task_summary': 'Fold the towel in this window.'}})
-    assert r['labels']['task_summary'] == 'Fold the towel.'
+    r = wording.normalize_result({'labels': {'performance_review': 'The towel is folded in this window.',
+                                             'task_summary': 'Fold the towel in this window.'}})
+    assert r['labels'] == {'performance_review': 'The towel is folded.', 'task_summary': 'Fold the towel in this window.'}
     assert r['text_normalizer'] == {'version': wording.VERSION, 'rewritten': 1, 'dropped': 0}
 
 

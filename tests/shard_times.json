@@ -206,5 +206,6 @@
  "tests/test_tasks_format.py": 6.0,
  "tests/test_caption_clock.py": 1.0,
  "tests/test_instruction_structures.py": 4.0,
- "tests/test_task_claims.py": 4.0
+ "tests/test_task_claims.py": 4.0,
+ "tests/test_wording.py": 0.5
 }
