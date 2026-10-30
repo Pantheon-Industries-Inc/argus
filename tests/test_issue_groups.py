@@ -251,7 +251,10 @@ def test_stitch_run_groups_a_long_recordings_issues(monkeypatch, tmp_path):
     assert (job / "issue_groups.json").is_file()
     monkeypatch.setenv(ig.ENV, "0")
     pieces.stitch_run(job, tmp_path / "eps", {"ep": ["ep__p1", "ep__p2"]}, out)
-    assert json.loads((out / "ep.json").read_text())["labels"]["data_issues"] == issues("whole_take")
+    # the issues as the parts reported them, with wording about the labelling taken out (label/wording.py)
+    from label import wording
+    published = wording.normalize_labels({"data_issues": issues("whole_take")})["data_issues"]
+    assert json.loads((out / "ep.json").read_text())["labels"]["data_issues"] == published
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="no node")
