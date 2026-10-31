@@ -298,7 +298,7 @@ TEXT = {
     'tasks': ('task', 'outcome', 'success_predicate', 'note', 'undone_by', 'judged_against', 'own_outcome',
               'own_success_predicate'),
     'recovery': ('failure', 'correction', 'how_to_fix'),
-    'data_issues': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
+    'data_issues': ('issue', 'category', 'severity', 'footage', 'evidence', 'deliberate'),
     'operator_mistakes': ('issue', 'category', 'severity', 'evidence', 'deliberate'),
     'goal_alignment': ('relation', 'reason', 'observed_goal', 'given_goal', 'evidence', 'note'),
     'goal_outcome': ('outcome', 'success_predicate', 'note'),

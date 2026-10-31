@@ -476,6 +476,7 @@ def label_episode(ep_dir: Path, out_path: Path, *, model: str, reasoning: str, a
         # tasks (label_schema), so the recording's completion is derived from them (read_reply)
         "prompt_mode": "given" if req["given_prompt"] else "inferred",
         "label_schema": LABEL_SCHEMA,
+        "issue_schema": ISSUE_SCHEMA,
         "task_prompts": req["task_prompts"],
         "task_label": req["task_label"],
         "sampling": req["sampling"],
@@ -997,6 +998,7 @@ def parse_response(text: str) -> tuple[dict, bool]:
         had_rows = bool(labels.get('timeline'))
         labels = typed_labels(normalize_timeline(labels))
         derive_instruction_mismatch(labels)
+        footage_floor(labels)
         completion = labels.get('completion')
         if isinstance(completion, dict) and completion.get('task_completed') is not None and completion['task_completed'] not in (
                 'success', 'success_then_undone', 'failure', 'partial', 'unclear'):
@@ -1048,6 +1050,52 @@ def derive_instruction_mismatch(labels: dict) -> None:
     labels['data_issues'] = list(issues or []) + [{
         'issue': what, 'category': 'instruction_mismatch', 'severity': 'high', 't_s': None, 'end_s': None,
         'evidence': 'goal_alignment of this reply', 'derived_from': 'goal_alignment'}]
+
+
+# A request records ISSUE_SCHEMA under issue_schema: at 2 its prompt asks every data issue for its footage
+# (label/prompts.py FOOTAGE_TYPES) and grades severity by its consequence for the footage. A label without it, or below
+# 2, was asked by the older prompt, whose severities a reader keeps reading the older way.
+ISSUE_SCHEMA = 2
+SEVERITY_RANK = {'low': 1, 'medium': 2, 'high': 3}
+
+
+def footage_floor(labels: dict) -> None:
+    """The prompt's rule that footage other than task is never usable task data, held in code. A data issue's footage
+    is read as a snake_case word ("Operator Phone" is operator_phone); a footage that is no text becomes null and is
+    listed in _schema_violations. An issue whose footage is a word other than task (label/prompts.py FOOTAGE_TASK, a
+    word the reply coined included) and whose severity is below medium or unrated is raised to medium, its own value
+    kept under severity_raised_from. Running this again on its output changes nothing."""
+    from label.prompts import FOOTAGE_TASK
+    issues = labels.get('data_issues')
+    for index, row in enumerate(issues if isinstance(issues, list) else []):
+        if not isinstance(row, dict) or 'footage' not in row:
+            continue
+        footage = row['footage']
+        if isinstance(footage, str):
+            footage = re.sub(r'[^a-z0-9]+', '_', footage.strip().lower()).strip('_') or None
+        elif footage is not None:
+            labels.setdefault('_schema_violations', []).append(
+                f'data_issues row {index}: footage {footage!r} is not text, kept as null')
+            footage = None
+        row['footage'] = footage
+        severity = row.get('severity')
+        rank = SEVERITY_RANK.get(severity.strip().lower(), 0) if isinstance(severity, str) else 0
+        if footage is not None and footage != FOOTAGE_TASK and rank < SEVERITY_RANK['medium']:
+            row.setdefault('severity_raised_from', severity)
+            row['severity'] = 'medium'
+
+
+def footage_missing(labels: dict, request: dict) -> None:
+    """Under issue_schema 2 every data issue says its footage. One the reply left without it gets footage null, listed
+    in _schema_violations, so a reader can tell an issue the model did not place from an issue asked by the older
+    prompt (no footage key at all)."""
+    if not isinstance(request.get('issue_schema'), int) or request['issue_schema'] < ISSUE_SCHEMA:
+        return
+    issues = labels.get('data_issues')
+    for index, row in enumerate(issues if isinstance(issues, list) else []):
+        if isinstance(row, dict) and 'footage' not in row:
+            row['footage'] = None
+            labels.setdefault('_schema_violations', []).append(f'data_issues row {index}: no footage, kept as null')
 
 
 def json_kind(x) -> str:
@@ -1242,6 +1290,8 @@ def read_reply(text: str, request: dict) -> tuple[dict, bool]:
     labels, with what it lacks under _incomplete, and is not a usable annotation (False). request is the record or
     the request fields it is built from."""
     labels, ok = parse_response(text)
+    if ok:
+        footage_missing(labels, request)
     if ok and request.get('label_schema') == LABEL_SCHEMA:
         # a reply asked for a list of tasks: the recording's completion is the reply's own, against the instruction,
         # when the request gave one to a robot rig, and otherwise derived from the tasks

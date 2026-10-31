@@ -1867,6 +1867,10 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
     # no single reading
     formats = {r.get('label_schema') for _, r in parts}
     tasks_format = formats == {LABEL_SCHEMA}
+    # the data issue schema every part was asked in (label/harness.py ISSUE_SCHEMA); parts asked in different ones
+    # leave it unset, and each issue still says by its footage key which prompt asked it
+    issue_schemas = {r.get('issue_schema') for _, r in parts}
+    issue_schema = next(iter(issue_schemas)) if len(issue_schemas) == 1 else None
     session = any((r.get('annotation_policy') or {}).get('task_mode') == 'session' for _, r in parts)
     gaps = ("; " + "; ".join(f"part {g['part']} has no labels, as {g['why']}" for g in missing)) if missing else ""
     empty = {"task_completed": None, "success_predicate": None, "completed_at_s": None, "goal_reached_at_s": None,
@@ -1985,6 +1989,7 @@ def stitch(ep_dir: Path, parts: list[tuple[dict, dict]], missing: list[dict] = (
             "prompt_mode": ("session" if selected.get('task_mode') == 'session' and not formats & {LABEL_SCHEMA}
                             else "given" if task_claims(ctx)["instruction"] else "inferred"),
             **({"label_schema": LABEL_SCHEMA} if tasks_format else {}),
+            **({"issue_schema": issue_schema} if isinstance(issue_schema, int) else {}),
             "task_label": ctx.get("task_label"), "sampling": first.get("sampling"),
             "arm_still_spans": still, "dataset_checks": pl["checks"], "config": cfg,
             "provider": first.get("provider"), "parse_ok": True, "labels": L, "usage": usage,

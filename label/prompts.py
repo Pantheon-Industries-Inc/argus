@@ -178,6 +178,7 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what is anomalous, in plain words>",
      "category": "<short snake_case tag for the kind of data issue. Reuse one of these when it fits, so the same kind gets the same tag across episodes: <<ISSUE_TAGS>>. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
+     "footage": "<what the span shows: <<FOOTAGE_TYPES>>, or your own snake_case word when none fits>",
      "t_s": <float when it starts, or null if it spans the episode>,
      "end_s": <float when it is over (the last frame it affects), or null if it spans the episode>,
      "evidence": "<which camera and time show it>"}
@@ -421,6 +422,21 @@ DATA_ISSUE_TAGS = ("instruction_mismatch, human_intervention, camera_fault, reco
 OPERATOR_MISTAKE_TAGS = ("failed_grasp, dropped_object, knocked_object, collision, prolonged_struggle, "
                          "hesitation, unnecessary_motion, goal_undone, incomplete_task")
 
+# What a data issue's span shows (its footage), offered by rig. The set is open: a reply may coin its own word, and
+# any word other than FOOTAGE_TASK is not task data, so label/harness.py footage_floor holds such an issue at medium
+# or above. A bare hand is the head camera's acting part and that rig has no grippers, so it is offered neither.
+FOOTAGE_TASK = "task"
+FOOTAGE_TYPES = {
+    "teleop_arms": ("task", "idle", "off_task", "operator_absent", "operator_phone", "rig_handling", "bare_hand"),
+    "handheld_gripper": ("task", "idle", "off_task", "operator_absent", "operator_phone", "rig_handling", "bare_hand",
+                         "grippers_off"),
+    "ego_head": ("task", "idle", "off_task", "operator_absent", "operator_phone", "rig_handling"),
+}
+
+
+def footage_types(r: str) -> str:
+    return " | ".join(FOOTAGE_TYPES[r])
+
 
 def camera_observation_block(views: list[tuple[str, str]]) -> str:
     """Optional pixel-grounded content descriptions using exact supplied view identities."""
@@ -445,7 +461,8 @@ def schema(r: str, recorded: bool = True, has_instruction: bool = True) -> str:
     against it, word for word, and lists its tasks after it; one with no instruction has only the tasks
     (TASKS_WORDING)."""
     tags = DATA_ISSUE_TAGS if recorded else _replace_once(DATA_ISSUE_TAGS, *VIDEO_ONLY_TAG)
-    s = SCHEMA.replace("<<ISSUE_TAGS>>", tags).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
+    s = (SCHEMA.replace("<<ISSUE_TAGS>>", tags).replace("<<MISTAKE_TAGS>>", OPERATOR_MISTAKE_TAGS)
+         .replace("<<FOOTAGE_TYPES>>", footage_types(r)))
     if has_instruction:
         s = _replace_once(s, '    "reason": "<if not a clean success, why>"\n  },\n',
                           '    "reason": "<if not a clean success, why>"\n  },\n'
@@ -527,6 +544,7 @@ Return ONLY JSON with this shape. Each timeline segment is one array whose value
     {"issue": "<what is anomalous, in plain words>",
      "category": "<short snake_case tag for the kind of data issue. Reuse one of these when it fits, so the same kind gets the same tag across episodes: instruction_mismatch, other_person_same_object, camera_fault, recording_fault, observability_loss, setup_change, idle_stretch. Coin your own when none fits.>",
      "severity": "low" | "medium" | "high",
+     "footage": "<what the span shows: <<FOOTAGE_TYPES>>, or your own snake_case word when none fits>",
      "t_s": <float when it starts, or null if it spans the episode>,
      "end_s": <float when it is over (the last frame it affects), or null if it spans the episode>,
      "evidence": "<which camera and time show it>"}
@@ -663,6 +681,7 @@ Rules:
   the activity that fills most of the clip, the kind a
   person might actually say, so a policy is not tied to one wording.
 """
+EGO_SCHEMA = EGO_SCHEMA.replace("<<FOOTAGE_TYPES>>", footage_types("ego_head"))
 
 
 def what_this_is(r: str) -> str:
@@ -808,6 +827,20 @@ _MISTAKES = {
 }
 
 
+# The footage words only some rigs are offered (FOOTAGE_TYPES), each a line of the shared FOOTAGE paragraph.
+_FOOTAGE = {
+    "teleop_arms": (
+        "  bare_hand: a person's bare hand moves or works a task object in the workspace, unless the episode's own\n"
+        "  description makes a person part of the task.\n"),
+    "handheld_gripper": (
+        "  bare_hand: the operator moves or works a task object with a bare hand instead of a gripper; fingers on or\n"
+        "  beside a gripper that hand is holding are how the rig is worn, and are task. grippers_off: both grippers\n"
+        "  are set down with no hand on them while the recording runs; one gripper set down while the other works is\n"
+        "  task.\n"),
+    "ego_head": "",
+}
+
+
 _SLACK_EGO = """- OPERATOR MISTAKES ARE THE FAILURES AND WASTEFUL STRETCHES, GROUPED AND GRADED. Every failure and every
   wasteful stretch in the timeline belongs to exactly one operator mistake, recovered or not, and every
   operator mistake is made of them. One mistake is one incident: the failed tries at one aim and the motion
@@ -850,11 +883,12 @@ def data_contract(r: str, recorded: bool = True) -> str:
     c = _replace_once(c, "<<VISIBILITY>>", _VISIBILITY[r])
     c = _replace_once(c, "<<MAP>>", _MAP["robot" if robot else "ego_head"])
     c = _replace_once(c, "<<MISTAKES>>", _MISTAKES[r])
+    c = _replace_once(c, "<<FOOTAGE>>", _FOOTAGE[r])
     if robot and not recorded:
         for old, new in VIDEO_ONLY_CONTRACT_WORDING:
             c = _replace_once(c, old, new)
     if not robot:
-        slack = c[c.index("- OPERATOR MISTAKES ARE THE FAILURES"):c.index("- SEVERITY IS TRAINING IMPACT")]
+        slack = c[c.index("- OPERATOR MISTAKES ARE THE FAILURES"):c.index("- SEVERITY IS THE CONSEQUENCE")]
         c = _replace_once(c, slack, _SLACK_EGO + "\n")
         for old, new in EGO_CONTRACT_WORDING:
             c = _replace_once(c, old, new)
@@ -896,15 +930,16 @@ _DATA_CONTRACT_BASE = """- WHY YOU ARE LABELLING THIS. These labels decide what 
   incident or lowers its severity. Setup or settling in the first and last few seconds, brief pauses to look
   with nothing in hand, and idle stretches alone are not mistakes; observed failures or demonstrably wasted
   motion within them still follow the shared contribution rule.
-- SEVERITY IS TRAINING IMPACT, not how visible or dramatic something looks, in both lists. It comes from
-  two things together: how much of the episode the problem touches, and how directly it corrupts what a
+- SEVERITY IS THE CONSEQUENCE FOR THE FOOTAGE, not how visible or dramatic something looks, in both lists. It
+  comes from two things together: how much of the episode the problem touches, and how directly it corrupts what a
   model takes from the episode (what the cameras show, what the recorded motion says, what the instruction
-  says, and how the task is done). high: the episode cannot be used as it is; blindly training on it would
-  teach something wrong at its core. A problem that runs through the whole episode and breaks the link
+  says, and how the task is done). high: the episode is unusable, whatever is trimmed; blindly training on it
+  would teach something wrong at its core. A problem that runs through the whole episode and breaks the link
   between what is seen, what is recorded and what is asked is high even when it is subtle to spot, because
-  every frame inherits it. medium: a bounded part of the episode is wrong or wasted, and the rest is good
-  once that part is trimmed, masked or corrected. low: worth knowing, but a model trained on the episode as
-  it is would barely be affected. For operator mistakes the scale grades the incident by what to do with its stretch: low is a
+  every frame inherits it. medium: the span from t_s to end_s is not usable task data and is cut out, and the
+  rest of the episode is good once it is; a medium issue with no time loses the whole episode, so time every
+  bounded problem. low: cosmetic; the footage in the span is still usable task data as it is, and a model
+  trained on it would barely be affected. For operator mistakes the scale grades the incident by what to do with its stretch: low is a
   brief incident over within about two seconds that leaves the scene as it was (a grasp that misses and the
   next one holds); medium is an incident that changes the scene (a drop, a knock, a spill) or lasts longer
   than about three seconds, so its stretch should be trimmed or masked; high is an incident that dominates
@@ -916,6 +951,17 @@ _DATA_CONTRACT_BASE = """- WHY YOU ARE LABELLING THIS. These labels decide what 
   keeps its severity; being fixable is exactly why it must be reported. Do not inflate: preferences about
   style that would not change what a model learns are not issues. Do not deflate: never argue
   a real problem away because some kind of training might tolerate it.
+- FOOTAGE SAYS WHAT EACH DATA ISSUE'S SPAN SHOWS. task: the operator is doing the task, however imperfectly,
+  and the issue is about how it was recorded, framed or labelled. idle: work on every task has stopped for longer
+  than a brief pause to look, think or shift a grip, with nothing in progress. off_task: the operator does
+  something that is not the task, such as eating, drinking or tidying something unrelated. operator_absent: the
+  operator is out of the scene while the recording runs. operator_phone: the operator uses a phone or another
+  personal device. rig_handling: the operator handles the recording equipment instead of the task, such as
+  tapping the recording controller or its screen, starting or stopping the recording, or fixing a camera or
+  strap; a phone-like recording controller in the operator's hand is rig_handling, not operator_phone.
+<<FOOTAGE>>  Another person reaching in while the operator keeps working is task footage, graded like any other
+  issue. When none of these fits, write your own snake_case word. Footage other than task is never usable task
+  data, so its severity is at least medium, and its span is cut from the episode.
 - Each entry in either list carries the concrete evidence (which camera, which time). Leave a list empty
   when nothing belongs in it; a clean, well performed episode with both lists empty is a normal, common
   result.

@@ -36,7 +36,72 @@ def main(rig, recorded=True):
         for old, new in UNHELD_CONTACT + (UNHELD_CONTACT_HANDHELD if rig == 'handheld_gripper' else []):
             assert text.count(old) == 1, old[:60]
             text = text.replace(old, new)
+    for old, new in footage_tiers(rig):
+        assert text.count(old) == 1, old[:60]
+        text = text.replace(old, new)
     return text
+
+
+# An approved edit to every rig (2026-10-31): severity is the consequence for the footage, and every data issue says
+# what its span shows (footage). An operator holding a lit phone for 9s was filed as a low idle_stretch and shipped,
+# since low read as "a model would barely be affected" rather than "the span is still task data". The test holds its
+# own copy of the wording, as for the edits above.
+FOOTAGE_WORDS = {
+    'teleop_arms': 'task | idle | off_task | operator_absent | operator_phone | rig_handling | bare_hand',
+    'handheld_gripper': ('task | idle | off_task | operator_absent | operator_phone | rig_handling | bare_hand | '
+                         'grippers_off'),
+    'ego_head': 'task | idle | off_task | operator_absent | operator_phone | rig_handling',
+}
+FOOTAGE_RIG = {
+    'teleop_arms': """  bare_hand: a person's bare hand moves or works a task object in the workspace, unless the episode's own
+  description makes a person part of the task.
+""",
+    'handheld_gripper': """  bare_hand: the operator moves or works a task object with a bare hand instead of a gripper; fingers on or
+  beside a gripper that hand is holding are how the rig is worn, and are task. grippers_off: both grippers
+  are set down with no hand on them while the recording runs; one gripper set down while the other works is
+  task.
+""",
+    'ego_head': '',
+}
+
+
+def footage_tiers(rig):
+    return [
+        ('     "severity": "low" | "medium" | "high",\n     "t_s": <float when it starts, or null if it spans the episode>,',
+         '     "severity": "low" | "medium" | "high",\n     "footage": "<what the span shows: ' + FOOTAGE_WORDS[rig]
+         + ', or your own snake_case word when none fits>",\n'
+         '     "t_s": <float when it starts, or null if it spans the episode>,'),
+        ("""- SEVERITY IS TRAINING IMPACT, not how visible or dramatic something looks, in both lists. It comes from
+  two things together:""",
+         """- SEVERITY IS THE CONSEQUENCE FOR THE FOOTAGE, not how visible or dramatic something looks, in both lists. It
+  comes from two things together:"""),
+        ("""high: the episode cannot be used as it is; blindly training on it would
+  teach something wrong at its core.""",
+         """high: the episode is unusable, whatever is trimmed; blindly training on it
+  would teach something wrong at its core."""),
+        ("""every frame inherits it. medium: a bounded part of the episode is wrong or wasted, and the rest is good
+  once that part is trimmed, masked or corrected. low: worth knowing, but a model trained on the episode as
+  it is would barely be affected.""",
+         """every frame inherits it. medium: the span from t_s to end_s is not usable task data and is cut out, and the
+  rest of the episode is good once it is; a medium issue with no time loses the whole episode, so time every
+  bounded problem. low: cosmetic; the footage in the span is still usable task data as it is, and a model
+  trained on it would barely be affected."""),
+        ("""  a real problem away because some kind of training might tolerate it.
+""",
+         """  a real problem away because some kind of training might tolerate it.
+- FOOTAGE SAYS WHAT EACH DATA ISSUE'S SPAN SHOWS. task: the operator is doing the task, however imperfectly,
+  and the issue is about how it was recorded, framed or labelled. idle: work on every task has stopped for longer
+  than a brief pause to look, think or shift a grip, with nothing in progress. off_task: the operator does
+  something that is not the task, such as eating, drinking or tidying something unrelated. operator_absent: the
+  operator is out of the scene while the recording runs. operator_phone: the operator uses a phone or another
+  personal device. rig_handling: the operator handles the recording equipment instead of the task, such as
+  tapping the recording controller or its screen, starting or stopping the recording, or fixing a camera or
+  strap; a phone-like recording controller in the operator's hand is rig_handling, not operator_phone.
+""" + FOOTAGE_RIG[rig] + """  Another person reaching in while the operator keeps working is task footage, graded like any other
+  issue. When none of these fits, write your own snake_case word. Footage other than task is never usable task
+  data, so its severity is at least medium, and its span is cut from the episode.
+"""),
+    ]
 
 
 # An approved edit to the shared contribution rule (Eric, 2026-10-23): runs of missed grasps on a fine object were

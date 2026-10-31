@@ -8,7 +8,8 @@ issues of about 2,150 labelled UMI takes, 2,536 of 5,891 (take, category) groups
 those are separate events (failed grasps at 83s, 96s and 104s are three grasps), so a category alone never groups
 anything.
 
-Which issues are asked about. Within one list of one recording, issues of one category are linked when
+Which issues are asked about. Within one list of one recording, issues of one category and one footage (what the span
+shows, label/prompts.py FOOTAGE_TYPES) are linked when
 - one of them reads as a condition rather than an event (condition_signal): it has no time, it spans at least half of
   the part that reported it (WIDE_FRACTION), or its sentence uses words of persistence or recurrence
   (CONDITION_WORDS: again, throughout, persistently, intermittently, ...). Such an issue is linked to every other issue
@@ -31,12 +32,12 @@ never pays for it twice.
 What a group becomes (grouped_issue). One issue that keeps every member verbatim under occurrences, in time order,
 with the model's one sentence as its issue, the members' category, the highest severity of the members, the span from
 the earliest member time to the latest, parts naming every part that reported it, and an evidence text that joins
-each member's evidence under its time. Any other field the members share (recovered, deliberate) is kept. The model
+each member's evidence under its time. Any other field the members share (footage, recovered, deliberate) is kept. The model
 writes only the sentence; nothing a part reported is dropped or reworded. A grouped issue counts once wherever issues
 are counted, at its severity.
 
 The check after grouping (verify). Every original issue appears in exactly one place, on its own or as an
-occurrence, unchanged; every grouped issue holds at least two occurrences of its category and carries their highest
+occurrence, unchanged; every grouped issue holds at least two occurrences of its category and footage and carries their highest
 severity and their span. A group that fails is kept as its members, and a list that fails as a whole is kept as it
 came, each with the reason under the record's fallbacks.
 
@@ -166,15 +167,17 @@ def _near(a: dict, b: dict) -> bool:
 
 def candidates(items: list, part_s: dict, default_s: float) -> list[dict]:
     """[{"category", "rows": [index into items], "signals": {index: why}}] for one list of issues: each connected set
-    of two or more issues of one category, linked as the module docstring says. An issue already grouped (it has
+    of two or more issues of one category and one footage, linked as the module docstring says. Spans that show
+    different footage are never one condition, so a group keeps its members' footage (an issue asked by a prompt
+    before footage, with no footage key, is linked only to others without one). An issue already grouped (it has
     occurrences) is never asked about again."""
     by_category = collections.defaultdict(list)
     for n, item in enumerate(items):
         if (isinstance(item, dict) and isinstance(item.get("issue"), str) and item["issue"].strip()
                 and isinstance(item.get("category"), str) and not isinstance(item.get("occurrences"), list)):
-            by_category[item["category"]].append(n)
+            by_category[(item["category"], "footage" in item, canonical(item.get("footage")))].append(n)
     out = []
-    for category, rows in by_category.items():
+    for (category, _, _), rows in by_category.items():
         if len(rows) < 2:
             continue
         signals = {}
@@ -323,7 +326,8 @@ def grouped_issue(members: list, sentence: str, why: str, key: str) -> dict:
 def verify(before: list, after: list) -> str | None:
     """Why a grouped list is not the original list regrouped, or None when it is: every original issue appears
     exactly once, on its own or as an occurrence, unchanged (its times, evidence and part above all), and every
-    grouped issue holds two or more occurrences of its own category, with their highest severity and their span."""
+    grouped issue holds two or more occurrences of its own category and footage, with their highest severity and
+    their span."""
     flat = []
     for item in after:
         if isinstance(item, dict) and "occurrences" in item and "grouped" in item:
@@ -332,6 +336,8 @@ def verify(before: list, after: list) -> str | None:
                 return "a grouped issue holds fewer than two occurrences"
             if any(not isinstance(m, dict) or m.get("category") != item.get("category") for m in occ):
                 return "a grouped issue holds an occurrence of another category"
+            if any(("footage" in m, m.get("footage")) != ("footage" in item, item.get("footage")) for m in occ):
+                return "a grouped issue's footage is not its occurrences' footage"
             if _rank(item) != max(_rank(m) for m in occ):
                 return "a grouped issue's severity is not the highest of its occurrences"
             if (item.get("t_s"), item.get("end_s")) != _span(occ):
