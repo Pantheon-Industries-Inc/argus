@@ -197,6 +197,16 @@ HANDHELD_SIDES = """- WHICH HAND EACH GRIPPER CAMERA IS ON. Where the dataset na
   views clearly show the opposite of their names across most of the recording, report a data issue tagged
   camera_side_mismatch, with two or three moments as evidence. When unsure, report nothing.
 """
+# An approved edit (2026-10-31) after the handheld check: an operator holding a lit phone for 9s was filed as a low
+# idle_stretch and shipped, and the fob that starts and stops a recording and fingers poking out of a strap are not
+# phone use or bare-hand work. The test holds its own copy, as for the edits above.
+HANDHELD_PHONES = """- PHONES, THE FOB AND BARE HANDS. The operator taking out their own phone and using it is a data issue of at
+  least medium severity over that span. A small phone-like fob on the table starts and stops the recording;
+  pressing it, even with a gripper set down to do so, is normal and never phone use. Bare-hand work is a data
+  issue only when it is plainly visible: a gripper taken off and the bare hand moving task objects, or the
+  fingers clearly fiddling with the objects while the gripper is on. Fingers poking out of the strap are how
+  the rig is worn, including when the wrist cameras face each other during a handoff.
+"""
 
 
 def _robot_expected(rig, recorded, steps):
@@ -205,7 +215,7 @@ def _robot_expected(rig, recorded, steps):
     expected = main(rig, recorded)
     if rig == 'handheld_gripper':
         assert expected.count(HANDHELD_SIDES_AFTER) == 1
-        expected = expected.replace(HANDHELD_SIDES_AFTER, HANDHELD_SIDES_AFTER + HANDHELD_SIDES)
+        expected = expected.replace(HANDHELD_SIDES_AFTER, HANDHELD_SIDES_AFTER + HANDHELD_SIDES + HANDHELD_PHONES)
     end = '    "reason": "<if not a clean success, why>"\n  },\n'
     assert expected.count(end) == 1
     note = '     "note": "<if not a clean success, why>"}'
