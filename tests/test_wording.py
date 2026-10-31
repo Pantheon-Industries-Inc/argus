@@ -16,8 +16,8 @@ from label import pieces, wording
     ('Wipe the window sill with the cloth.', False, 'Wipe the window sill with the cloth.'),
     ('Place the cup near the window.', False, 'Place the cup near the window.'),
     ('Open the window and close it again.', False, 'Open the window and close it again.'),
-    ('The cup stays on the table in this window.', False, 'The cup stays on the table.'),
-    ('Black, open throughout the supplied window', True, 'Black, open'),
+    ('The cup stays on the table in this window.', False, 'The cup stays on the table in this window.'),
+    ('Black, open throughout the supplied window', True, 'Black, open throughout the supplied window'),
     ('The window begins with the lid already open. The right gripper lifts the cup.', False,
      'The window begins with the lid already open. The right gripper lifts the cup.'),
     ('The activity begins before this preparation window. Repeated transfers support a single task.', False,
@@ -65,7 +65,7 @@ from label import pieces, wording
      'Blue separation is achieved, but the yellow outcome lies outside the window.'),
     ('The right view ends before the other supplied views.', False, 'The right view ends before the other views.'),
     ('Completion beyond this preparation cut is unknown.', False, 'Completion beyond this preparation cut is unknown.'),
-    ('Final candidate in this window seated and released', True, 'Final candidate seated and released'),
+    ('Final candidate in this window seated and released', True, 'Final candidate in this window seated and released'),
     ('Placement timing interpolated between supplied frames.', False, 'Placement.'),
     ('Several consecutive supplied samples appear to repeat the same images.', False,
      'Several consecutive frames appear to repeat the same images.'),
@@ -131,8 +131,9 @@ from label import pieces, wording
     ('The cloth is left-stream-supported.', False, 'The cloth is left-stream-supported.'),
     ('The hole is visible in the part.', False, 'The hole is visible in the part.'),
     ('Attach the bracket (part 2) to the frame.', False, 'Attach the bracket (part 2) to the frame.'),
-    ('The pour is still underway at the internal request boundary.', False, 'The pour is still underway.'),
-    ('Cup held in this window.', False, 'Cup held.'),
+    ('The pour is still underway at the internal request boundary.', False,
+     'The pour is still underway at the internal request boundary.'),
+    ('Cup held in this window.', False, 'Cup held in this window.'),
     # review of the under-cut rules: a negation, a real window after "from" or "through", a time after the samples,
     # a real part, a part number
     ('Release does not occur between samples.', False, 'Release does not occur between samples.'),
@@ -144,8 +145,8 @@ from label import pieces, wording
     # an unqualified "this window" is cut only where its phrase ends: a noun after it is a real window's
     ('Scrub the frame in this window corner.', False, 'Scrub the frame in this window corner.'),
     ('Nothing is placed in this window frame.', False, 'Nothing is placed in this window frame.'),
-    ('The bowl stays empty in this window, as before.', False, 'The bowl stays empty, as before.'),
-    ('The towel in this window is folded.', False, 'The towel is folded.'),
+    ('The bowl stays empty in this window, as before.', False, 'The bowl stays empty in this window, as before.'),
+    ('The towel in this window is folded.', False, 'The towel in this window is folded.'),
     ('Grasp does not occur within the sampled interval', True, 'Grasp does not occur'),
     ('The release is not inferred between samples', True, 'The release is not inferred'),
     ('Wipe the sill during this window cleaning task.', False, 'Wipe the sill during this window cleaning task.'),
@@ -267,10 +268,34 @@ def test_a_key_event_that_is_only_a_parts_edge_leaves_the_list():
 
 
 def test_normalize_result_records_the_version():
-    r = wording.normalize_result({'labels': {'performance_review': 'The towel is folded in this window.',
+    r = wording.normalize_result({'labels': {'performance_review': 'The towel is folded between samples.',
                                              'task_summary': 'Fold the towel in this window.'}})
     assert r['labels'] == {'performance_review': 'The towel is folded.', 'task_summary': 'Fold the towel in this window.'}
     assert r['text_normalizer'] == {'version': wording.VERSION, 'rewritten': 1, 'dropped': 0}
+
+
+@pytest.mark.parametrize('s, name, want', [
+    # one recording labelled in one part: a qualified window is the recording, so its scope goes
+    ('Black, open throughout the supplied window', True, 'Black, open'),
+    ('The pour is still underway at the internal request boundary.', False, 'The pour is still underway.'),
+    # an unqualified "this window" can be a real one and stays even here
+    ('Hold the cup in this window.', False, 'Hold the cup in this window.'),
+    ('Place the plant inside this window.', False, 'Place the plant inside this window.'),
+    # in a stitched review a part's scope stays: "throughout this window" is one part's duration
+    ('The lid remains closed throughout this supplied window.', False, 'The lid remains closed.'),
+])
+def test_normalize_text_whole_recording(s, name, want):
+    assert wording.normalize_text(s, name=name, whole=True) == want
+
+
+@pytest.mark.parametrize('s, name', [
+    ('The lid remains closed throughout this supplied window.', False),
+    ('Release is missing in this supplied window.', False),
+    ('Grasp fails in this supplied window', True),
+    ('The operator is idle in this supplied window.', False),
+])
+def test_stitched_review_keeps_a_parts_scope(s, name):
+    assert wording.normalize_text(s, name=name, whole=False) == s
 
 
 def test_stitch_run_publishes_short_replies_normalized_and_keeps_the_saved_reply(tmp_path):

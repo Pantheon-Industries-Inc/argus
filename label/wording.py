@@ -160,15 +160,11 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     # "folding occurred before this window" into "folding occurred" (audit of argus-wording-1, 2026-10-30)
     r'(?:in|within|during|throughout|through|across|over|for|from)\s+'
     r'(?:all\s+of\s+)?' + UNIT_Q + r"(?!'s|\s+" + _EDGE + r'\b)',
-    # "this window" with no qualifier is the labelling's only after a preposition of scope: "light comes in through
-    # that window" and "the cat jumps from this window" are real ones
-    # and only where its phrase ends there: "Scrub the frame in this window corner." names a real corner
-    r'(?:in|within|during|throughout)\s+(?:all\s+of\s+)?(?:this|that|each|the\s+current)\s+' + _WIN +
-    r"(?!'s|\s+" + _EDGE + r'\b)(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|or|while|when|where|then|as|before|after|until|'
-    r'is|are|was|were|does|do|did|remains?|stays?|shows?|appears?|seems?|has|have|had)\b|\w+ed\b))',
+    # "this window" with no qualifier is never cut: "Place the plant in this window.", "Hold the cup in this window."
+    # and "Scrub the frame in this window corner." name a real one, and no rule tells them from the labelling's
     # bare "the window" after "during" or "throughout" is never cut: "Clean throughout the window." is a real one
     r'(?:before|by|in|at|until)\s+the\s+next\s+(?:sample|sampled\s+(?:frame|view|image))\b',
-    r'inside\s+(?:this|the\s+supplied)\s+' + _WIN + r'\b',
+    r'inside\s+the\s+supplied\s+' + _WIN + r'\b',
     r'by\s+the\s+(?:next|following)\s+(?:sample|sampled\s+(?:frame|view|image))\b',
     r'(?:in|of|from)\s+the\s+(?:next|previous|prior|following|preceding)\s+supplied\s+(?:part|clip|window|segment)\b',
     # an edge between two parts, which is never the recording's: "at the internal request boundary", "at the
@@ -326,11 +322,10 @@ def _rest(s: str) -> list[str]:
 _AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can't|will|would|may|might)\s*$", I)
 _NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
 # a name that ends on one of these lost its verb to the cut: "Release isn't inferred between samples"
-# a claim that something did not happen: cutting its scope widens it ("No grasp in this window." in part 1 of a
-# stitched review is not "No grasp." over the recording), and a leading "No" or "Neither" names what did not happen
-_NEG_ANY = re.compile(r"\b(?:not|never|no|nor|neither|none|nothing|nobody|without|cannot|can't|isn't|aren't|wasn't|"
-                      r"weren't|doesn't|don't|didn't|won't|absent|lacks?)\b", I)
-_UNIT_WORD = re.compile(r'\b(?:window|part|clip|request|segment)\b', I)   # a scope that is one part's, not the samples'
+# in a stitched review a part's scope is a fact about that part: "No grasp in this window." or "The lid remains closed
+# throughout this window." in part 1 is not a claim over the recording, so a clause naming a part keeps its wording
+_UNIT_WORD = re.compile(r'\b(?:window|part|clip|request|segment)\b', I)
+# a leading "No" or "Neither" names what did not happen
 _LEAD_NEG = re.compile(r'\s*(?:no|neither|none|nothing|never)\b', I)
 # a thing put somewhere: "Place the plant in this window." names where it went
 _PLACED = re.compile(r'\b(?:plac|put|set|hang|hung|hangs|mount|lean|rest|stand|sit|sat|mov|carr|bring|brought|insert|'
@@ -360,8 +355,7 @@ def _event_name(head: str) -> str | None:
 
 def _clause(c: str, whole: bool = False) -> str | None:
     k = _clause_cut(c)
-    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c) or
-                         (not whole and _NEG_ANY.search(c) and _UNIT_WORD.search(c))):
+    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c) or (not whole and _UNIT_WORD.search(c))):
         return c
     return k
 
@@ -439,7 +433,7 @@ def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | Non
         z = _tidy(CUT.sub('', z)).strip(' ,;:')
         # "Release isn't", "Neither grasp nor release", "Put the cup", one part's "No grasp" in a stitched review
         if z != y and (_HANGING.search(z) or _LEAD_NEG.match(y) or _PLACED.search(y) or
-                       (not whole and _NEG_ANY.search(y) and _UNIT_WORD.search(y))):
+                       (not whole and _UNIT_WORD.search(y))):
             return _late(y)
         return _late(z) if re.search(r'[A-Za-z]{2,}', z) else y
     z = _prose(y, whole)
