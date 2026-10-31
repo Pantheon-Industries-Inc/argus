@@ -147,7 +147,7 @@ from label import pieces, wording
     ('Nothing is placed in this window frame.', False, 'Nothing is placed in this window frame.'),
     ('The bowl stays empty in this window, as before.', False, 'The bowl stays empty in this window, as before.'),
     ('The towel in this window is folded.', False, 'The towel in this window is folded.'),
-    ('Grasp does not occur within the sampled interval', True, 'Grasp does not occur'),
+    ('Grasp does not occur within the sampled interval', True, 'Grasp does not occur within the sampled interval'),
     ('The release is not inferred between samples', True, 'The release is not inferred'),
     ('Wipe the sill during this window cleaning task.', False, 'Wipe the sill during this window cleaning task.'),
     ('Spray cleaner in this window cleaning step', True, 'Spray cleaner in this window cleaning step'),
@@ -309,6 +309,10 @@ def test_stitched_review_keeps_a_parts_scope(s, name):
     ('Only one grasp is seen in every sampled frame.', False, 'Only one grasp is seen in every sampled frame.'),
     ('Only one grasp is seen across the samples.', False, 'Only one grasp is seen across the samples.'),
     ('Only one grasp is seen in the given recording.', False, 'Only one grasp is seen in the given recording.'),
+    ('Only one grasp is seen through the supplied frames.', False, 'Only one grasp is seen through the frames.'),
+    ('Only one grasp is seen within the sampled interval.', False, 'Only one grasp is seen within the sampled interval.'),
+    ('Only one grasp is seen in the supplied excerpt.', False, 'Only one grasp is seen in the supplied excerpt.'),
+    ("Release isn’t inferred between samples", True, "Release isn’t inferred between samples"),
     # a count is never cut from an event name, in either kind of review
     ('Only one grasp occurs between samples.', False, 'Only one grasp occurs between samples.'),
     # a cut never leaves a bracket or a quote mark unpaired or empty

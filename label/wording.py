@@ -183,10 +183,11 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join(_CUT_ALTS) + r')', I)
 # In a stitched review every scope is one part's: "No grasp in this window." or "Only one grasp is seen in the supplied
 # frames." in part 1 is not a claim over the recording. There a cut applies only where the text it takes holds no scope,
 # a preposition of place or extent before the part, its frames, footage, views or samples, whatever words come between;
-# the sampling itself ("between samples", "within the sampled interval", "at the preparation cut") is still cut
-_SCOPE_IN = re.compile(r'\b(?:in|within|inside|across|from|throughout|during|over|for|on|by\s+the\s+end\s+of)\s+'
-                       r'(?:[\w-]+\s+){0,4}?(?:windows?|parts?|clips?|requests?|segments?|excerpts?|portions?|'
-                       r'sections?|frames?|footage|videos?|recordings?|views?|images?|stills?|samples?|instants?)\b', I)
+# the sampling between two samples ("between samples", "at the preparation cut") is still cut
+_SCOPE_IN = re.compile(r'\b(?:in|within|inside|across|from|through|throughout|during|over|for|on|via|by\s+the\s+end\s+of)'
+                       r'\s+(?:[\w-]+\s+){0,4}?(?:windows?|parts?|clips?|requests?|segments?|excerpts?|portions?|'
+                       r'sections?|frames?|footage|videos?|recordings?|views?|images?|stills?|samples?|instants?|'
+                       r'intervals?|spans?|periods?)\b', I)
 
 
 class _Unscoped:
@@ -306,6 +307,7 @@ NAME_KEYS = frozenset({'action', 'object', 'objects', 'destination', 'spatial_re
 
 
 def _tidy(s: str) -> str:
+    s = re.sub(r'\(\s*\)', '', s)
     s = re.sub(r'\s{2,}', ' ', s)
     s = re.sub(r'\s+([.;,:!?)])', r'\1', s)
     s = re.sub(r'\(\s*\)', '', s)
@@ -348,16 +350,16 @@ def _rest(s: str) -> list[str]:
 
 # a negation or an auxiliary before the samples phrase: "Release does not occur between samples" says the release was
 # seen, and "Release does not." would say it never happened
-_AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can't|will|would|may|might)\s*$", I)
-_NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
+_AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can['’]t|will|would|may|might)\s*$", I)
+_NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can['’]t|does|do|did|doesn['’]t|don['’]t|didn['’]t)\b", I)
 # a leading "No" or "Neither" names what did not happen
 _LEAD_NEG = re.compile(r'\s*(?:no|neither|none|nothing|never)\b', I)
 # a thing put somewhere: "Place the plant in this window." names where it went
 _PLACED = re.compile(r'\b(?:plac|put|set|hang|hung|hangs|mount|lean|rest|stand|sit|sat|mov|carr|bring|brought|insert|'
                      r'position|stack|lay|laid|drop|store|leav|left)\w*\b[^.;:]*\b(?:in|into|within|onto|on)\s+'
                      r'(?:this|that|each|the)\s+window\b', I)
-_HANGING = re.compile(r"\b(?:not|never|no|nor|isn't|aren't|wasn't|weren't|doesn't|don't|didn't|can't|cannot|won't|"
-                      r"wouldn't|couldn't|shouldn't|is|are|was|were|be|been|being|can|could|will|would|may|might|"
+_HANGING = re.compile(r"\b(?:not|never|no|nor|isn['’]t|aren['’]t|wasn['’]t|weren['’]t|doesn['’]t|don['’]t|didn['’]t|can['’]t|cannot|won['’]t|"
+                      r"wouldn['’]t|couldn['’]t|shouldn['’]t|is|are|was|were|be|been|being|can|could|will|would|may|might|"
                       r"must|should|does|do|did|has|have|had)\s*$", I)
 
 
