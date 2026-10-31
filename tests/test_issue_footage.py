@@ -96,7 +96,7 @@ def test_a_labelled_episode_records_its_issue_schema_and_its_floored_issues(tmp_
     phone, blur = record['labels']['data_issues']
     assert (phone['footage'], phone['severity'], phone['severity_raised_from']) == ('operator_phone', 'medium', 'low')
     assert blur['footage'] is None and blur['severity'] == 'low'
-    assert 'data_issues row 1: no footage, kept as null' in record['labels']['_schema_violations']
+    assert 'data_issues row 1: footage missing, kept as null' in record['labels']['_schema_violations']
     assert '"footage"' in fixed
     # read again by the current parser (annotation_problems, reparse), the record is unchanged and complete
     assert harness.annotation_problems(record) == []
@@ -160,3 +160,42 @@ def test_the_check_refuses_a_group_that_mixes_footage():
     group = ig.grouped_issue([a, b], 'one', 'test', 'k')
     group['footage'] = 'operator_phone'
     assert ig.verify([a, b], [group]) == "a grouped issue's footage is not its occurrences' footage"
+
+
+# ---- review of PR 162 ----------------------------------------------------------------------------------------------
+
+def test_the_instruction_mismatch_the_parser_adds_is_task_footage_with_no_violation():
+    reply = _reply([TASK], goal_alignment={'matches_given': False, 'relation': 'different', 'note': 'it wipes'})
+    labels, ok = harness.read_reply(json.dumps(reply), {'issue_schema': harness.ISSUE_SCHEMA})
+    (row,) = labels['data_issues']
+    assert ok and row['derived_from'] == 'goal_alignment' and row['footage'] == 'task' and row['severity'] == 'high'
+    assert not labels.get('_schema_violations')
+
+
+def test_a_word_for_no_footage_is_null_and_the_raised_grade_is_normalized():
+    for word in ('none', 'N/A', 'unknown'):
+        (row,) = parsed({**BLUR, 'footage': word})['data_issues']
+        assert row['footage'] is None and row['severity'] == 'low', word
+    (row,) = parsed({**PHONE, 'severity': ' LOW '})['data_issues']
+    assert (row['severity'], row['severity_raised_from']) == ('medium', 'low')
+
+
+def test_a_board_cap_never_lowers_non_task_footage_below_medium():
+    from board.build import _cap
+    idle = {'category': 'idle_stretch', 'severity': 'medium', 'footage': 'idle'}
+    old = {'category': 'idle_stretch', 'severity': 'medium'}
+    assert _cap([idle], ['idle_stretch'], 'low', 'pauses are normal') == [idle]
+    assert _cap([old], ['idle_stretch'], 'low', 'pauses are normal')[0]['severity'] == 'low'
+    high = {**idle, 'severity': 'high'}
+    assert _cap([high], ['idle_stretch'], 'low', 'r')[0]['severity'] == 'medium'
+
+
+def test_the_board_export_says_its_issue_schema(tmp_path, monkeypatch):
+    from board import to_board
+    _, src, parts = _three_parts(tmp_path, monkeypatch)
+    contexts = [json.loads((p / 'context.json').read_text()) for p in parts]
+    records = [_part_result(p, 'paint the bowl') for p in parts]
+    for r in records:
+        r['issue_schema'] = harness.ISSUE_SCHEMA
+    stitched = pieces.stitch(src, list(zip(contexts, records)))
+    assert to_board.convert(stitched, 'demo')['_meta']['issue_schema'] == harness.ISSUE_SCHEMA

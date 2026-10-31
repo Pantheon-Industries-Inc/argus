@@ -878,6 +878,8 @@ def unlabelled(ep_dir: Path, failed: list[tuple[dict, dict | None]], missing: li
             'prompt_mode': ('session' if selected.get('task_mode') == 'session' and not asked & {LABEL_SCHEMA}
                             else 'given' if task_claims(ctx)['instruction'] else 'inferred'),
             **({'label_schema': LABEL_SCHEMA} if asked == {LABEL_SCHEMA} else {}),
+            **({'issue_schema': next(iter(schemas))} if len(schemas := {(r or {}).get('issue_schema') for _, r in failed}) == 1
+               and isinstance(next(iter(schemas)), int) else {}),
             **({'jaw_evidence': jaw_evidence} if jaw_evidence else {}),
             **({'evidence_inspection': inspection} if inspection['parts'] else {}),
             **({'sensor_evidence': sensor} if sensor['sensors'] else {}),

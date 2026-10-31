@@ -1041,7 +1041,7 @@ what a policy learns the instruction means, so it follows the instruction:
   demonstration that reaches the end state the instruction asks for in another way did the given
   task, not a different one: judge the outcome and progress on that end state, choose the relation
   by what was done (aligned, or narrower or broader), and record the difference in manner as an
-  instruction_mismatch whose severity is its training impact. A detail that changes the end state
+  instruction_mismatch whose severity is its consequence for the footage. A detail that changes the end state
   itself (which face of a block is up, which object ends where) is part of the end state, not manner.
   A step whose result already holds at the first frame (a cap already off, a plug already in) is
   part of the end state that holds, not part of the goal that never happened: keep the relation

@@ -338,6 +338,9 @@ def convert(result: dict, dataset: str | None = None) -> dict:
             "prompt_mode": result.get("prompt_mode"),
             # the output format the reply was asked in (board/label_projection.py LABEL_SCHEMA), if its request named one
             **({"label_schema": result["label_schema"]} if result.get("label_schema") else {}),
+            # the data issue schema it was asked in (label/harness.py ISSUE_SCHEMA): from 2, severity is the
+            # consequence for the footage and every issue says its footage
+            **({"issue_schema": result["issue_schema"]} if result.get("issue_schema") else {}),
         },
         "_usage": result.get("usage"),
         **({"_off_schema": off} if off else {}),

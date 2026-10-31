@@ -152,10 +152,19 @@ def episode_seconds(ctx: dict, ep_dir: Path | None = None) -> float | None:
 
 
 def _cap(issues: list, tags: list, cap: str, reason: str) -> list:
-    """Issues with one of these tags above the cap, lowered to it; the model's own severity kept."""
-    return [{**iss, "severity": cap, "model_severity": iss.get("severity"), "capped_by": reason}
-            if (iss or {}).get("category") in tags and iss.get("severity") in SEVERITIES
-            and SEVERITIES.index(iss["severity"]) > SEVERITIES.index(cap) else iss
+    """Issues with one of these tags above the cap, lowered to it; the model's own severity kept. An issue whose
+    footage is not task (label/harness.py footage_floor) is never lowered below medium, since such a span is never
+    usable task data whatever the dataset's rule for its tag."""
+    def floor(iss):
+        footage = iss.get("footage")
+        return "medium" if isinstance(footage, str) and footage != "task" else None
+
+    def lowered(iss):
+        to = cap if floor(iss) is None or SEVERITIES.index(cap) >= SEVERITIES.index("medium") else "medium"
+        return to if SEVERITIES.index(iss["severity"]) > SEVERITIES.index(to) else None
+
+    return [{**iss, "severity": lowered(iss), "model_severity": iss.get("severity"), "capped_by": reason}
+            if (iss or {}).get("category") in tags and iss.get("severity") in SEVERITIES and lowered(iss) else iss
             for iss in issues or []]
 
 

@@ -36,10 +36,16 @@ def main(rig, recorded=True):
         for old, new in UNHELD_CONTACT + (UNHELD_CONTACT_HANDHELD if rig == 'handheld_gripper' else []):
             assert text.count(old) == 1, old[:60]
             text = text.replace(old, new)
-    for old, new in footage_tiers(rig):
+    for old, new in footage_tiers(rig) + ([MANNER_SEVERITY] if rig != 'ego_head' else []):
         assert text.count(old) == 1, old[:60]
         text = text.replace(old, new)
     return text
+
+
+# Part of the same edit: the instruction rules graded a difference in manner by "its training impact", the scale the
+# consequence tiers replaced.
+MANNER_SEVERITY = ('instruction_mismatch whose severity is its training impact. A detail',
+                   'instruction_mismatch whose severity is its consequence for the footage. A detail')
 
 
 # An approved edit to every rig (2026-10-31): severity is the consequence for the footage, and every data issue says

@@ -1057,6 +1057,8 @@ def derive_instruction_mismatch(labels: dict) -> None:
 # 2, was asked by the older prompt, whose severities a reader keeps reading the older way.
 ISSUE_SCHEMA = 2
 SEVERITY_RANK = {'low': 1, 'medium': 2, 'high': 3}
+# words a reply writes for "no footage" rather than a footage: read as null, never as a footage other than task
+FOOTAGE_NONE = frozenset({'none', 'n_a', 'na', 'null', 'unknown', 'unclear', 'not_applicable'})
 
 
 def footage_floor(labels: dict) -> None:
@@ -1073,6 +1075,8 @@ def footage_floor(labels: dict) -> None:
         footage = row['footage']
         if isinstance(footage, str):
             footage = re.sub(r'[^a-z0-9]+', '_', footage.strip().lower()).strip('_') or None
+            if footage in FOOTAGE_NONE:
+                footage = None
         elif footage is not None:
             labels.setdefault('_schema_violations', []).append(
                 f'data_issues row {index}: footage {footage!r} is not text, kept as null')
@@ -1081,21 +1085,28 @@ def footage_floor(labels: dict) -> None:
         severity = row.get('severity')
         rank = SEVERITY_RANK.get(severity.strip().lower(), 0) if isinstance(severity, str) else 0
         if footage is not None and footage != FOOTAGE_TASK and rank < SEVERITY_RANK['medium']:
-            row.setdefault('severity_raised_from', severity)
+            row['severity_raised_from'] = severity.strip().lower() if isinstance(severity, str) else severity
             row['severity'] = 'medium'
 
 
 def footage_missing(labels: dict, request: dict) -> None:
     """Under issue_schema 2 every data issue says its footage. One the reply left without it gets footage null, listed
     in _schema_violations, so a reader can tell an issue the model did not place from an issue asked by the older
-    prompt (no footage key at all)."""
+    prompt (no footage key at all). The instruction mismatch the parser itself adds (derive_instruction_mismatch) is
+    task footage: the operator worked, on other work than the instruction asks."""
+    from label.prompts import FOOTAGE_TASK as FOOTAGE_TASK_WORD
     if not isinstance(request.get('issue_schema'), int) or request['issue_schema'] < ISSUE_SCHEMA:
         return
     issues = labels.get('data_issues')
     for index, row in enumerate(issues if isinstance(issues, list) else []):
-        if isinstance(row, dict) and 'footage' not in row:
-            row['footage'] = None
-            labels.setdefault('_schema_violations', []).append(f'data_issues row {index}: no footage, kept as null')
+        if not isinstance(row, dict) or 'footage' in row:
+            continue
+        if row.get('derived_from') == 'goal_alignment':
+            # the instruction mismatch derive_instruction_mismatch adds: the operator worked, on other work than asked
+            row['footage'] = FOOTAGE_TASK_WORD
+            continue
+        row['footage'] = None
+        labels.setdefault('_schema_violations', []).append(f'data_issues row {index}: footage missing, kept as null')
 
 
 def json_kind(x) -> str:
