@@ -49,7 +49,7 @@ from label import pieces, wording
      'The drawing and pencil grasp predate this supplied window.'),
     ('The small assembly is still held; its final placement is outside this part.', False,
      'The small assembly is still held; its final placement is outside this part.'),
-    ('The finished seam is not shown in this part.', False, 'The finished seam is not shown.'),
+    ('The finished seam is not shown in this part.', False, 'The finished seam is not shown in this part.'),
     ('This is one ongoing knitting activity spanning both request boundaries.', False,
      'This is one ongoing knitting activity spanning both request boundaries.'),
     ('Fine shaping of the layered model is still continuing at the part boundary', True,
@@ -115,7 +115,7 @@ from label import pieces, wording
      'There are two phone-use pauses, but the sampled views do not establish a definite accidental drop.'),
     ('The final supplied frame still shows the cords held and tensioned; a completed knot is not established in this '
      'part.', False, 'The final supplied frame still shows the cords held and tensioned; a completed knot is not '
-     'established.'),
+     'established in this part.'),
     ('The separation appears unintended, although the exact contact falls between samples.', False,
      'The separation appears unintended, although the exact contact falls between samples.'),
     ('Release is inferred between samples and is followed by a regrasp.', False,
@@ -132,7 +132,7 @@ from label import pieces, wording
     ('The hole is visible in the part.', False, 'The hole is visible in the part.'),
     ('Attach the bracket (part 2) to the frame.', False, 'Attach the bracket (part 2) to the frame.'),
     ('The pour is still underway at the internal request boundary.', False,
-     'The pour is still underway at the internal request boundary.'),
+     'The pour is still underway.'),
     ('Cup held in this window.', False, 'Cup held in this window.'),
     # review of the under-cut rules: a negation, a real window after "from" or "through", a time after the samples,
     # a real part, a part number
@@ -304,8 +304,17 @@ def test_stitched_review_keeps_a_parts_scope(s, name):
     ('The operator is idle across the supplied frames.', False, 'The operator is idle across the frames.'),
     ('The cup is never dropped across the sampled views.', False, 'The cup is never dropped across the sampled views.'),
     ('Few drops in the supplied frames', True, 'Few drops in the frames'),
-    # a cut never leaves a bracket unpaired
+    # any preposition and determiner before the part's frames, footage, video, recording, views or samples (round 5)
+    ('Only one grasp is seen in the provided video.', False, 'Only one grasp is seen in the provided video.'),
+    ('Only one grasp is seen in every sampled frame.', False, 'Only one grasp is seen in every sampled frame.'),
+    ('Only one grasp is seen across the samples.', False, 'Only one grasp is seen across the samples.'),
+    ('Only one grasp is seen in the given recording.', False, 'Only one grasp is seen in the given recording.'),
+    # a count is never cut from an event name, in either kind of review
+    ('Only one grasp occurs between samples.', False, 'Only one grasp occurs between samples.'),
+    # a cut never leaves a bracket or a quote mark unpaired or empty
     ('(Release inferred between samples.)', False, '(Release inferred between samples.)'),
+    ('Release "inferred between samples".', False, 'Release "inferred between samples".'),
+    ('Release (inferred between samples.', False, 'Release (inferred between samples.'),
 ])
 def test_stitched_frames_scope_and_brackets_stay(s, name, want):
     assert wording.normalize_text(s, name=name, whole=False) == want

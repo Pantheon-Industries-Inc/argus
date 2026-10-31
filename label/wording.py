@@ -296,7 +296,8 @@ def _rewritten(s: str, whole: bool = False) -> str:
         y = re.sub(r'(^|[.!?]\s+)([a-z])', lambda m: m.group(1) + m.group(2).upper(), _tidy(PART_HEAD.sub(' ', y)))
     for rx, to in REWRITE + (WHOLE_REWRITE if whole else []):
         y = rx.sub(to, y)
-    y = SCOPED.sub(r'\1', y)
+    if whole:                          # in a stitched review "not shown in this part" is one part's claim
+        y = SCOPED.sub(r'\1', y)
     return _tidy(y) if y != s else s
 
 
@@ -322,13 +323,15 @@ def _rest(s: str) -> list[str]:
 _AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can't|will|would|may|might)\s*$", I)
 _NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
 # a name that ends on one of these lost its verb to the cut: "Release isn't inferred between samples"
-# in a stitched review a part's scope is a fact about that part: "No grasp in this window." or "The lid remains closed
-# throughout this window." in part 1 is not a claim over the recording, so a clause naming a part keeps its wording
-# and so are the part's own frames or views as a whole ("in the supplied frames", "across the sampled views"), but not
-# the gap between two samples ("between sampled frames"), which is the labelling's sampling
-_UNIT_WORD = re.compile(r'\b(?:window|part|clip|request|segment)\b|\b(?:in|across|throughout|within|over|from|on)\s+'
-                        r'(?:all\s+of\s+)?(?:the\s+|these\s+|this\s+)?(?:supplied|sampled|provided)\s+'
-                        r'(?:frames?|footage|views?|images?|stills?)\b', I)
+# In a stitched review every scope is one part's: "No grasp in this window.", "Only one grasp is seen in the supplied
+# frames." or "The lid remains closed throughout this part." in part 1 is not a claim over the recording, so there a
+# clause with a scope phrase keeps its wording. The sampling itself ("between samples", "within the sampled interval",
+# "at the preparation cut") is no scope and is still cut
+_SCOPE = re.compile(r'\b(?:in|within|during|throughout|across|over|from|for|on|inside|by\s+the\s+end\s+of)\s+'
+                    r'(?:(?:all|each|every|any|both)\s+(?:of\s+)?)?(?:the\s+|this\s+|these\s+|that\s+|those\s+)?'
+                    r'(?:(?:supplied|sampled|provided|given|current|available|shown)\s+)?'
+                    r'(?:windows?|parts?|clips?|requests?|segments?|frames?|footage|videos?|recordings?|views?|'
+                    r'images?|stills?|samples?)\b', I)
 # a leading "No" or "Neither" names what did not happen
 _LEAD_NEG = re.compile(r'\s*(?:no|neither|none|nothing|never)\b', I)
 # a thing put somewhere: "Place the plant in this window." names where it went
@@ -351,7 +354,10 @@ def _timed_events(c: str) -> re.Match | None:
 
 
 def _event_name(head: str) -> str | None:
-    """The events a phrase names, without their timing words: "Grasp timing is" -> "Grasp"; None when it names none."""
+    """The events a phrase names, without their timing words: "Grasp timing is" -> "Grasp"; None when it names none,
+    or when it counts them ("Only one grasp occurs" is not "One grasp")."""
+    if re.search(r'\b(?:only|just|exactly|merely|solely|single|sole|at\s+least|at\s+most)\b', head, I):
+        return None
     y = _tidy(_TIMING_WORDS.sub(' ', head)).strip(' ,;:')
     y = re.sub(r'^(?:the|an?)\s+', '', y, flags=I)
     return y if any(w in _EVENT_WORDS for w in _rest(y)) else None
@@ -359,7 +365,7 @@ def _event_name(head: str) -> str | None:
 
 def _clause(c: str, whole: bool = False) -> str | None:
     k = _clause_cut(c)
-    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c) or (not whole and _UNIT_WORD.search(c))):
+    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c) or (not whole and _SCOPE.search(c))):
         return c
     return k
 
@@ -421,19 +427,20 @@ def _prose(y: str, whole: bool = False) -> str | None:
 
 
 def _brackets(s: str) -> tuple:
-    return tuple(s.count(c) for c in '()[]')
+    return tuple(s.count(c) for c in '()[]{}"“”')
 
 
 def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | None:
     """s without wording about the labelling. A name (name=True) loses a phrase about the labelling only when the
     phrase holds nothing else, and comes back unchanged when nothing would be left; prose loses each clause that is only
     about the labelling (_clause) and is None when none is left. whole: the recording was labelled in one part, so
-    "most of the window" is "most of the recording". A result whose brackets no longer pair as they did comes back as
+    "most of the window" is "most of the recording". A result whose brackets or quote marks changed comes back as
     written: "(Release inferred between samples.)" never reads "(Release"."""
     out = _normalize_text(s, name, whole)
     if isinstance(out, str) and isinstance(s, str) and out != s:
-        b, a = _brackets(s), _brackets(out)
-        if b[0] - b[1] != a[0] - a[1] or b[2] - b[3] != a[2] - a[3]:
+        b, a = _brackets(s), _brackets(out)   # a cut takes a bracket only with its pair, and leaves none empty
+        if (any(x - y != p - q for x, y, p, q in zip(b[0:6:2], a[0:6:2], b[1:6:2], a[1:6:2])) or (b[6] - a[6]) % 2
+                or b[7] - a[7] != b[8] - a[8] or re.search(r'[(\[{"“]\s*[.,;:!?)\]}]|[(\[{"“]\s*$', out)):
             return s
     return out
 
@@ -451,7 +458,7 @@ def _normalize_text(s: str, name: bool = False, whole: bool = False) -> str | No
         z = _tidy(CUT.sub('', z)).strip(' ,;:')
         # "Release isn't", "Neither grasp nor release", "Put the cup", one part's "No grasp" in a stitched review
         if z != y and (_HANGING.search(z) or _LEAD_NEG.match(y) or _PLACED.search(y) or
-                       (not whole and _UNIT_WORD.search(y))):
+                       (not whole and _SCOPE.search(y))):
             return _late(y)
         return _late(z) if re.search(r'[A-Za-z]{2,}', z) else y
     z = _prose(y, whole)
