@@ -16,6 +16,12 @@
 
 ## Updates
 
+<details><summary><b>Labels now roll up into a task catalog, with the hours of every task a dataset holds</b> (October 2026)</summary>
+
+[`python -m label.catalog`](label/catalog.py) reads a dataset's Argus labels and lists every task its recordings hold in three levels. A task family is a broad kind of activity, a coarse task is one of the few hundred tasks a reader browses, and a specific task is one verb on one specific kind of object, so picking up a rubber duck and picking up a stuffed animal are different tasks. Each row counts its labelled hours, its successful hours and its recordings, and a later catalog grows the earlier one with new recordings while keeping its task names.
+
+</details>
+
 <details><summary><b>We release DiverseUMI, 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
 
 We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
