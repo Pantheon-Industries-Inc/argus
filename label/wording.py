@@ -385,7 +385,7 @@ def _event_name(head: str) -> str | None:
 
 def _clause(c: str, whole: bool = False) -> str | None:
     k = _clause_cut(c) if whole else _clause_cut(c, ABOUT, _CUT_S)
-    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c)):
+    if k and k != c and (_PLACED.search(c) or _LEAD_NEG.match(c) or _HANGING.search(k)):   # "Release must be."
         return c
     return k
 

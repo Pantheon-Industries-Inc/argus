@@ -142,6 +142,7 @@ from label import pieces, wording
     ("Release isn't inferred between samples", True, "Release isn't inferred between samples"),
     ("Release isn't inferred between samples.", True, "Release isn't inferred between samples."),
     ('Release cannot be inferred between samples.', True, 'Release cannot be inferred between samples.'),
+    ('Release must be between samples.', False, 'Release must be between samples.'),
     ('Release cannot be inferred between samples', True, 'Release cannot be inferred between samples'),
     ('No release inferred between samples', True, 'No release inferred between samples'),
     # an unqualified "this window" is cut only where its phrase ends: a noun after it is a real window's
