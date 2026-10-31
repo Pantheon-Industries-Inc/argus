@@ -125,7 +125,7 @@ def test_full_width_partial_rows_keep_paid_content_and_resume(tmp_path, monkeypa
     monkeypatch.setattr(harness.urllib.request, 'urlopen', provider)
     out = tmp_path / 'out'
     args = dict(keys=['sk-or-test'], concurrency=1, force=False, model=harness.DEFAULT_MODEL,
-                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=1.)
+                reasoning='medium', max_tokens=100, timeout=1, cell_w=128, max_spend=2.)  # the handheld prompt with footage words estimates just over $1
     assert harness.run_batch([ep], out, **args) == 0
     target = out / (ep.name + '.json')
     result = json.loads(target.read_text())

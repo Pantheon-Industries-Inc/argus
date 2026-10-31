@@ -90,6 +90,7 @@
  "tests/test_inspection_native_plots.py": 0.1,
  "tests/test_inspection_resume_state.py": 1.2,
  "tests/test_inspection_scene_coverage.py": 0.0,
+ "tests/test_issue_footage.py": 2.9,
  "tests/test_issue_groups.py": 0.5,
  "tests/test_jaws.py": 4.6,
  "tests/test_label.py": 6.7,
