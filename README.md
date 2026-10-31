@@ -141,6 +141,8 @@ Live and static boards share one [viewer](board/index.html), which overlays beha
 
 For a run in progress, give a dataset's manifest entry a [`target`](board/build.py) such as `{"episodes": 2682, "hours": 101.9}`, and the board shows the episodes and hours labelled so far against it, even before its first episode is labelled. A page open on `board serve` checks for a rebuild every 30s and updates its list and totals in place, keeping the open episode.
 
+A task catalog lists which tasks a dataset's recordings hold and how much of each, from the labels alone ([`python -m label.catalog`](label/catalog.py)). Every task in `labels.tasks` gets a task family, a coarse task and a specific task, which is one verb on one specific kind of object, so a rubber duck and a stuffed animal are different specific tasks, and so are sliding a card and picking it up. Each row counts its labelled hours, its hours of successful tasks, its tasks and its recordings. A model names every task sentence on its own, and two specific tasks merge only when their verb and their kind of object are the same in other words. [`--base`](label/catalog.py) grows an earlier catalog with new recordings, keeping its task names and naming only the sentences it has not seen, and [`--check`](label/catalog.py) judges a fixed sample of tasks and merges with a second model.
+
 Below is an excerpt from a pressure glove episode's downloadable JSON. In the list and on the video, the viewer shows a finding's `video_card` text when it has one, otherwise its `list_copy`, otherwise its own headline and detail. Evidence IDs resolve to recorded streams and samples in the full export.
 
 ```json
@@ -311,6 +313,7 @@ Each command runs as `python -m <command>`; `--help` describes its options.
 | [`checks.timebase apply`](checks/timebase.py) | `--timebase`, `--labels` |
 | [`checks.timebase scan`](checks/timebase.py) | `--raw`, `--out`, `--jobs` |
 | [`label`](label/run.py) | `--dataset`, `--episodes`, `--kind`, `--cap`, `--runs`, `--concurrency`, `--note`, `--label`, `--resume`, `--why` |
+| [`label.catalog`](label/catalog.py) | `--label`, `--out`, `--base`, `--cap`, `--model`, `--reasoning`, `--judge-model`, `--check`, `--concurrency`, `--dry-run` |
 | [`label.harness`](label/harness.py) | `--episode-dir`, `--episodes-root`, `--out`, `--out-dir`, `--model`, `--reasoning`, `--sample-fps`, `--dataset-note`, `--inspection`, `--max-tokens`, `--timeout`, `--concurrency`, `--limit`, `--force`, `--retry-received`, `--cell-w`, `--example-dir`, `--route-seeds`, `--max-spend`, `--dry-run` |
 | [`label.issue_groups`](label/issue_groups.py) | `--label`, `--dump`, `--out`, `--takes`, `--seed`, `--cap`, `--model`, `--reasoning`, `--concurrency`, `--dry-run` |
 | [`board build`](board/build.py) | `--no-cache` |
