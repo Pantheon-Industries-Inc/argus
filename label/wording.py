@@ -360,7 +360,7 @@ _PLACED = re.compile(r'\b(?:plac|put|set|hang|hung|hangs|mount|lean|rest|stand|s
                      r'(?:this|that|each|the)\s+window\b', I)
 _HANGING = re.compile(r"\b(?:not|never|no|nor|isn['’]t|aren['’]t|wasn['’]t|weren['’]t|doesn['’]t|don['’]t|didn['’]t|can['’]t|cannot|won['’]t|"
                       r"wouldn['’]t|couldn['’]t|shouldn['’]t|is|are|was|were|be|been|being|can|could|will|would|may|might|"
-                      r"must|should|does|do|did|has|have|had)\s*$", I)
+                      r"must|should|does|do|did|has|have|had)\s*[.!?]*\s*$", I)
 
 
 def _timed_events(c: str) -> re.Match | None:

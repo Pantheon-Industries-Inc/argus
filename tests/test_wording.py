@@ -140,6 +140,8 @@ from label import pieces, wording
     ('Release never occurs between samples', True, 'Release never occurs'),
     # a name the cut would leave on its auxiliary or a leading "No" stays as written (review round 3)
     ("Release isn't inferred between samples", True, "Release isn't inferred between samples"),
+    ("Release isn't inferred between samples.", True, "Release isn't inferred between samples."),
+    ('Release cannot be inferred between samples.', True, 'Release cannot be inferred between samples.'),
     ('Release cannot be inferred between samples', True, 'Release cannot be inferred between samples'),
     ('No release inferred between samples', True, 'No release inferred between samples'),
     # an unqualified "this window" is cut only where its phrase ends: a noun after it is a real window's
