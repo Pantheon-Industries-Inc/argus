@@ -427,10 +427,10 @@ OPERATOR_MISTAKE_TAGS = ("failed_grasp, dropped_object, knocked_object, collisio
 # or above. A bare hand is the head camera's acting part and that rig has no grippers, so it is offered neither.
 FOOTAGE_TASK = "task"
 FOOTAGE_TYPES = {
-    "teleop_arms": ("task", "idle", "off_task", "operator_absent", "operator_phone", "rig_handling", "bare_hand"),
-    "handheld_gripper": ("task", "idle", "off_task", "operator_absent", "operator_phone", "rig_handling", "bare_hand",
+    "teleop_arms": ("task", "idle", "off_task", "operator_absent", "operator_phone", "bare_hand"),
+    "handheld_gripper": ("task", "idle", "off_task", "operator_absent", "operator_phone", "bare_hand",
                          "grippers_off"),
-    "ego_head": ("task", "idle", "off_task", "operator_absent", "operator_phone", "rig_handling"),
+    "ego_head": ("task", "idle", "off_task", "operator_absent", "operator_phone"),
 }
 
 
@@ -833,10 +833,10 @@ _FOOTAGE = {
         "  bare_hand: a person's bare hand moves or works a task object in the workspace, unless the episode's own\n"
         "  description makes a person part of the task.\n"),
     "handheld_gripper": (
-        "  bare_hand: the operator moves or works a task object with a bare hand instead of a gripper; fingers on or\n"
-        "  beside a gripper that hand is holding are how the rig is worn, and are task. grippers_off: both grippers\n"
-        "  are set down with no hand on them while the recording runs; one gripper set down while the other works is\n"
-        "  task.\n"),
+        "  bare_hand: the operator has a gripper off that hand and moves or works a task object with the bare hand;\n"
+        "  fingers on or beside a gripper that hand is holding, even touching or steadying the object, are how the rig\n"
+        "  is worn, and are task. grippers_off: both grippers are set down or taken off while the operator does\n"
+        "  something else with the hands; one gripper set down while the other works is task.\n"),
     "ego_head": "",
 }
 
@@ -955,13 +955,14 @@ _DATA_CONTRACT_BASE = """- WHY YOU ARE LABELLING THIS. These labels decide what 
   and the issue is about how it was recorded, framed or labelled. idle: work on every task has stopped for longer
   than a brief pause to look, think or shift a grip, with nothing in progress. off_task: the operator does
   something that is not the task, such as eating, drinking or tidying something unrelated. operator_absent: the
-  operator is out of the scene while the recording runs. operator_phone: the operator uses a phone or another
-  personal device. rig_handling: the operator handles the recording equipment instead of the task, such as
-  tapping the recording controller or its screen, starting or stopping the recording, or fixing a camera or
-  strap; a phone-like recording controller in the operator's hand is rig_handling, not operator_phone.
-<<FOOTAGE>>  Another person reaching in while the operator keeps working is task footage, graded like any other
-  issue. When none of these fits, write your own snake_case word. Footage other than task is never usable task
-  data, so its severity is at least medium, and its span is cut from the episode.
+  operator is out of the scene while the recording runs. operator_phone: the operator takes out their own phone
+  or another personal device and uses it.
+<<FOOTAGE>>  Pressing the button, fob or remote that starts or stops the recording is how the recording is made, even
+  when the operator sets a gripper down or takes it off to press it and the device looks like a phone: it is not a
+  data issue at all, and a span that shows it is task footage. Another person reaching in while the operator keeps
+  working is task footage too, graded like any other issue. When none of these fits, write your own snake_case
+  word. Footage other than task is never usable task data, so its severity is at least medium, and its span is
+  cut from the episode.
 - Each entry in either list carries the concrete evidence (which camera, which time). Leave a list empty
   when nothing belongs in it; a clean, well performed episode with both lists empty is a normal, common
   result.

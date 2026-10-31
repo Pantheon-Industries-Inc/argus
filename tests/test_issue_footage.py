@@ -2,7 +2,7 @@
 (label/prompts.py FOOTAGE_TYPES). Footage other than task is never usable task data, so the parser holds such an issue
 at medium or above (label/harness.py footage_floor), and a request records the issue schema it was asked in
 (issue_schema), which the stitch carries. The issues below are real DiverseUMI data issues: a lit phone held for 9s
-that a part filed as a low idle_stretch, and a tap on the recording controller."""
+that a part filed as a low idle_stretch, and an operator who set a gripper down and moved a brick with the bare hand."""
 import copy
 import json
 
@@ -15,9 +15,9 @@ from test_tasks_format import TASK, _label, _reply
 PHONE = {'issue': 'Painting pauses while the right gripper is parked and the demonstrator looks at a handheld phone.',
          'category': 'idle_stretch', 'severity': 'low', 'footage': 'operator_phone', 't_s': 112.1, 'end_s': 121.1,
          'evidence': 'exo 112s to 121s'}
-CONTROLLER = {'issue': 'The operator taps the recording controller with the right gripper to stop the recording.',
-              'category': 'setup_change', 'severity': 'low', 'footage': 'rig_handling', 't_s': 640.2, 'end_s': 642.0,
-              'evidence': 'right wrist 640s'}
+BARE = {'issue': 'The operator sets the left gripper down and her bare left hand takes the tan brick from the right jaws.',
+        'category': 'human_intervention', 'severity': 'low', 'footage': 'bare_hand', 't_s': 640.2, 'end_s': 642.0,
+        'evidence': 'right wrist 640s'}
 BLUR = {'issue': 'The left wrist view blurs during a fast reach.', 'category': 'camera_fault', 'severity': 'low',
         'footage': 'task', 't_s': 30.0, 'end_s': 31.0, 'evidence': 'left wrist 30s'}
 
@@ -42,7 +42,11 @@ def test_every_rig_asks_each_data_issue_for_its_footage_from_its_own_words(rig):
     assert text.count('"footage"') == 1 and '<<' not in text
     flat = ' '.join(text.split())
     assert 'Footage other than task is never usable task data, so its severity is at least medium' in flat
-    assert 'a phone-like recording controller in the operator\'s hand is rig_handling, not operator_phone' in flat
+    # pressing the fob that starts or stops the recording is how a recording is made, never an issue (Eric, 2026-10-31)
+    assert ('Pressing the button, fob or remote that starts or stops the recording is how the recording is made, even '
+            'when the operator sets a gripper down or takes it off to press it and the device looks like a phone: it is '
+            'not a data issue at all, and a span that shows it is task footage.') in flat
+    assert 'rig_handling' not in text
     for word in offered[1:]:
         assert f'{word}:' in flat, word
 
@@ -59,9 +63,9 @@ def test_severity_tiers_are_defined_by_what_happens_to_the_footage(rig):
 # ---- the rule in code ----------------------------------------------------------------------------------------------
 
 def test_a_low_issue_whose_footage_is_not_task_is_raised_to_medium():
-    phone, controller, blur = parsed(PHONE, CONTROLLER, BLUR)['data_issues']
+    phone, bare, blur = parsed(PHONE, BARE, BLUR)['data_issues']
     assert (phone['severity'], phone['severity_raised_from']) == ('medium', 'low')
-    assert (controller['severity'], controller['severity_raised_from']) == ('medium', 'low')
+    assert (bare['severity'], bare['severity_raised_from']) == ('medium', 'low')
     assert blur['severity'] == 'low' and 'severity_raised_from' not in blur
 
 
@@ -84,7 +88,7 @@ def test_an_issue_asked_without_footage_is_read_as_it_was_and_the_floor_runs_onc
     old = {k: v for k, v in PHONE.items() if k != 'footage'}
     (row,) = parsed(old)['data_issues']
     assert row == old
-    labels = parsed(PHONE, CONTROLLER)
+    labels = parsed(PHONE, BARE)
     assert harness.parse_response(json.dumps(labels))[0]['data_issues'] == labels['data_issues']
 
 
