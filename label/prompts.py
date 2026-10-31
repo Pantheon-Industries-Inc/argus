@@ -753,12 +753,17 @@ _VISIBILITY = {
         "  one hand makes a clear move there, the view that moves with it is that hand's camera. If both gripper\n"
         "  views clearly show the opposite of their names across most of the recording, report a data issue tagged\n"
         "  camera_side_mismatch, with two or three moments as evidence. When unsure, report nothing.\n"
-        "- PHONES, THE FOB AND BARE HANDS. The operator taking out their own phone and using it is a data issue of at\n"
-        "  least medium severity over that span. A small phone-like fob on the table starts and stops the recording;\n"
-        "  pressing it, even with a gripper set down to do so, is normal and never phone use. Bare-hand work is a data\n"
-        "  issue only when it is plainly visible: a gripper taken off and the bare hand moving task objects, or the\n"
-        "  fingers clearly fiddling with the objects while the gripper is on. Fingers poking out of the strap are how\n"
-        "  the rig is worn, including when the wrist cameras face each other during a handoff."),
+        "- PHONES, THE FOB, BARE HANDS, PARKED GRIPPERS, OTHER PEOPLE AND FACES. Each of these is a data issue over its\n"
+        "  span, reported here even when the timeline already describes it. The operator taking out their own phone and\n"
+        "  using it is at least medium severity. A small phone-like fob on the table starts and stops the recording;\n"
+        "  pressing it at the start or end, even with a gripper set down to do so, is normal and never phone use. A gripper\n"
+        "  set down, parked or taken off while the demonstration goes on (the other gripper or a bare hand keeps working)\n"
+        "  is at least medium severity. Bare-hand work is at least medium severity when it is plainly visible: a gripper\n"
+        "  taken off and the bare hand moving task objects, or the fingers clearly fiddling with the objects while the\n"
+        "  gripper is on. Fingers poking out of the strap are how the rig is worn, including when the wrist cameras face\n"
+        "  each other during a handoff. Another person's hand or body acting on the task objects is at least medium\n"
+        "  severity. A person's face that could be recognised, the operator's or anyone else's, in any camera is high\n"
+        "  severity: the footage carries personal data."),
     "ego_head": (
         "- WHAT KEEPS THE WORK OBSERVABLE. Objects and hands can leave the frame during the work and return later.\n"
         "  The presentation profile alone does not establish camera mounting. The work is observable when\n"
