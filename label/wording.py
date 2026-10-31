@@ -324,7 +324,11 @@ _NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does
 # a name that ends on one of these lost its verb to the cut: "Release isn't inferred between samples"
 # in a stitched review a part's scope is a fact about that part: "No grasp in this window." or "The lid remains closed
 # throughout this window." in part 1 is not a claim over the recording, so a clause naming a part keeps its wording
-_UNIT_WORD = re.compile(r'\b(?:window|part|clip|request|segment)\b', I)
+# and so are the part's own frames or views as a whole ("in the supplied frames", "across the sampled views"), but not
+# the gap between two samples ("between sampled frames"), which is the labelling's sampling
+_UNIT_WORD = re.compile(r'\b(?:window|part|clip|request|segment)\b|\b(?:in|across|throughout|within|over|from|on)\s+'
+                        r'(?:all\s+of\s+)?(?:the\s+|these\s+|this\s+)?(?:supplied|sampled|provided)\s+'
+                        r'(?:frames?|footage|views?|images?|stills?)\b', I)
 # a leading "No" or "Neither" names what did not happen
 _LEAD_NEG = re.compile(r'\s*(?:no|neither|none|nothing|never)\b', I)
 # a thing put somewhere: "Place the plant in this window." names where it went
@@ -416,11 +420,25 @@ def _prose(y: str, whole: bool = False) -> str | None:
     return out[0][1] + ''.join(sep + text for sep, text in out[1:])
 
 
+def _brackets(s: str) -> tuple:
+    return tuple(s.count(c) for c in '()[]')
+
+
 def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | None:
     """s without wording about the labelling. A name (name=True) loses a phrase about the labelling only when the
     phrase holds nothing else, and comes back unchanged when nothing would be left; prose loses each clause that is only
     about the labelling (_clause) and is None when none is left. whole: the recording was labelled in one part, so
-    "most of the window" is "most of the recording"."""
+    "most of the window" is "most of the recording". A result whose brackets no longer pair as they did comes back as
+    written: "(Release inferred between samples.)" never reads "(Release"."""
+    out = _normalize_text(s, name, whole)
+    if isinstance(out, str) and isinstance(s, str) and out != s:
+        b, a = _brackets(s), _brackets(out)
+        if b[0] - b[1] != a[0] - a[1] or b[2] - b[3] != a[2] - a[3]:
+            return s
+    return out
+
+
+def _normalize_text(s: str, name: bool = False, whole: bool = False) -> str | None:
     if not isinstance(s, str) or not s.strip():
         return s
     y = _rewritten(s, whole)

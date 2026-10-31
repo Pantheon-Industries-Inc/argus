@@ -298,6 +298,19 @@ def test_stitched_review_keeps_a_parts_scope(s, name):
     assert wording.normalize_text(s, name=name, whole=False) == s
 
 
+@pytest.mark.parametrize('s, name, want', [
+    # one part's frames, footage or views are that part's scope too ("supplied frames" reads "frames" as anywhere)
+    ('Only one grasp is seen in the supplied frames.', False, 'Only one grasp is seen in the frames.'),
+    ('The operator is idle across the supplied frames.', False, 'The operator is idle across the frames.'),
+    ('The cup is never dropped across the sampled views.', False, 'The cup is never dropped across the sampled views.'),
+    ('Few drops in the supplied frames', True, 'Few drops in the frames'),
+    # a cut never leaves a bracket unpaired
+    ('(Release inferred between samples.)', False, '(Release inferred between samples.)'),
+])
+def test_stitched_frames_scope_and_brackets_stay(s, name, want):
+    assert wording.normalize_text(s, name=name, whole=False) == want
+
+
 def test_stitch_run_publishes_short_replies_normalized_and_keeps_the_saved_reply(tmp_path):
     """A short episode's published reply carries normalized labels and the normalizer version; the reply saved under
     run/out is left as the model's, and a reply with no labels is copied as it is."""
