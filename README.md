@@ -16,12 +16,6 @@
 
 ## Updates
 
-<details><summary><b>Labels now roll up into a task catalog, with the hours of every task a dataset holds</b> (October 2026)</summary>
-
-[`python -m label.catalog`](label/catalog.py) reads a dataset's Argus labels and lists every task its recordings hold in three levels. A task family is a broad kind of activity, a coarse task is one of the few hundred tasks a reader browses, and a specific task is one verb on one specific kind of object, so picking up a rubber duck and picking up a stuffed animal are different tasks. Each row counts its labelled hours, its successful hours and its recordings, and a later catalog grows the earlier one with new recordings while keeping its task names.
-
-</details>
-
 <details><summary><b>We release DiverseUMI, 99.6 hours of bimanual UMI labeled by Argus</b> (October 2026)</summary>
 
 We released [DiverseUMI](https://huggingface.co/datasets/Pantheon-inc/DiverseUMI-sample100), 99.6 hours of bimanual UMI annotated by Argus at Sol 6.1 High. It spans 12,219 episodes across 179 skills, each with dense action, outcome and progress labels, key events, object state changes, scene graphs and operator recoveries, alongside SLAM-tracked wrist poses and gripper actions.
@@ -147,7 +141,7 @@ Live and static boards share one [viewer](board/index.html), which overlays beha
 
 For a run in progress, give a dataset's manifest entry a [`target`](board/build.py) such as `{"episodes": 2682, "hours": 101.9}`, and the board shows the episodes and hours labelled so far against it, even before its first episode is labelled. A page open on `board serve` checks for a rebuild every 30s and updates its list and totals in place, keeping the open episode.
 
-A task catalog lists which tasks a dataset's recordings hold and how much of each, from the labels alone ([`python -m label.catalog`](label/catalog.py)). Every task in `labels.tasks` gets a task family, a coarse task and a specific task, which is one verb on one specific kind of object, so a rubber duck and a stuffed animal are different specific tasks, and so are sliding a card and picking it up. Each row counts its labelled hours, its hours of successful tasks, its tasks and its recordings. A model names every task sentence on its own, and two specific tasks merge only when their verb and their kind of object are the same in other words. [`--base`](label/catalog.py) grows an earlier catalog with new recordings, keeping its task names and naming only the sentences it has not seen, and [`--check`](label/catalog.py) judges a fixed sample of tasks and merges with a second model.
+If you want to know which tasks your labelled data holds and how many hours you have of each, [`python -m label.catalog`](label/catalog.py) builds a task catalog from the labels alone. It sorts every labelled task into a task family, a coarse task and a specific task. A specific task is one verb on one kind of object, so picking up a rubber duck and picking up a stuffed animal count as different tasks. Each row of the catalog gives its labelled hours, the hours in which the task succeeded, and the number of recordings it appears in. When you label more data later, [`--base`](label/catalog.py) adds it to your earlier catalog and keeps its task names, so only the new recordings are named and paid for.
 
 Below is an excerpt from a pressure glove episode's downloadable JSON. In the list and on the video, the viewer shows a finding's `video_card` text when it has one, otherwise its `list_copy`, otherwise its own headline and detail. Evidence IDs resolve to recorded streams and samples in the full export.
 
