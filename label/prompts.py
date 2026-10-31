@@ -704,7 +704,7 @@ def what_this_is(r: str) -> str:
             "  by the declared acting part. This is an annotation contract, not an inferred limit of a physical\n"
             "  robot. Anyone else touching the scene is reported as usual.\n"
             "  The room around the task is sometimes visible; that is the surroundings, not a problem by itself,\n"
-            "  except a face that could be recognised, which is a data issue (FACES, below).\n")
+            "  except a face that could be recognised, which is a data issue (PHONES, BARE HANDS, PARKED GRIPPERS AND FACES, below).\n")
 
 
 _WHY = {

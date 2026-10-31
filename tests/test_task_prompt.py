@@ -199,8 +199,8 @@ HANDHELD_SIDES = """- WHICH HAND EACH GRIPPER CAMERA IS ON. Where the dataset na
 """
 # An approved edit (2026-10-31) after the handheld check: an operator holding a lit phone for 9s was filed as a low
 # idle_stretch and shipped, and the fob that starts and stops a recording and fingers poking out of a strap are not
-# phone use or bare-hand work. Extended the same night (Eric): a parked or removed gripper, another person acting on the
-# task objects and a recognisable face are data issues too, and the timeline describing an event does not replace one
+# phone use or bare-hand work. Extended the same night (Eric): a parked or removed gripper and a recognisable face are
+# data issues too, and the timeline describing an event does not replace one
 # (production labels wrote phone use and parked grippers into timeline text with no data issue). The test holds its own
 # copy, as for the edits above.
 HANDHELD_PHONES = """- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of the following is a data issue over its span
@@ -228,7 +228,7 @@ HANDHELD_EDITS = [
      "  on is still a data issue, above), and observed failures or wasted motion still\n"),
     ("  The room around the task is sometimes visible; that is the surroundings, not a problem by itself.\n",
      "  The room around the task is sometimes visible; that is the surroundings, not a problem by itself,\n"
-     "  except a face that could be recognised, which is a data issue (FACES, below).\n"),
+     "  except a face that could be recognised, which is a data issue (PHONES, BARE HANDS, PARKED GRIPPERS AND FACES, below).\n"),
 ]
 
 
