@@ -69,6 +69,10 @@ UNIT = (r'(?:' + _DET + r'\s+(?:' + _QUAL + r'[\s-]+)+' + _WIN +
         r'|(?:this|that|the\s+current)\s+part\s+of\s+the\s+(?:\w+\s+)?(?:recording|session|footage|video)\b'
         r'|(?:the|this|that)\s+(?:supplied|provided|given|labell?ed|requested)\s+(?:part|clip|segment|excerpt|footage|'
         r'video|frames?|views?|images?|recording)\b)')
+# a labelling unit with a word that makes it the labelling's: "from this window" can be a real window, "from the
+# supplied window" cannot
+UNIT_Q = UNIT.replace(r'|(?:this|that|each|the\s+current)\s+' + _WIN, '')
+assert UNIT_Q != UNIT
 # a stretch of samples: "between samples", "between these sampled frames", "within the sampled interval"
 _SDET = (r'(?:(?:the|these|those|this|that|two|first|last|final|same|adjacent|consecutive|neighbouring|neighboring|'
          r'available|supplied|successive|displayed|one|one-second|[\w-]+-facing)\s+)*')
@@ -81,6 +85,8 @@ SAMPLES = (r'(?:between\s+(?:(?:these|those)\s+|(?:the\s+)?(?:(?:first|last|fina
            r'the\s+displayed)\s+samples\b'
            r'|(?:across|from)\s+the\s+samples\b|in\s+(?:every|each|all)\s+sampled\s+\w+'
            r'|between\s+(?:the\s+)?supplied\s+(?:frames|samples|images|views))')
+# a time or a number after it belongs to the claim: "release occurs between samples at 3.2 s and 4.1 s" is two times
+SAMPLES = r'(?:' + SAMPLES + r')(?!\s*(?:\d|at\s+\d|from\s+\d|\())'
 _TIMING = (r'(?:occurs?|occurred|falls?|fell|happens?|happened|takes?\s+place|took\s+place|lies?|is|are|was|were|'
            r'(?:(?:is|are|was|were)\s+)?(?:inferred|interpolated|estimated))')
 
@@ -121,7 +127,7 @@ _ABOUT_EVIDENCE = [
     # (what a person is given, "no task was given to the second operator", is not the labelling's)
     r'\bno\s+(?:explicit\s+|written\s+|task\s+|source\s+)*(?:instruction|description|note|dataset\s+note|task)s?\s+'
     r'(?:is|was|are|were)\s+(?:supplied|provided|given)\b(?!\s+to\b)',
-    r'\b(?:instruction|target|intended|specification|requirement|reference|goal|description|note|part|count|length|'
+    r'\b(?:instruction|target|intended|specification|requirement|reference|goal|description|note|count|length|'
     r'number|image)s?\b[^.;]{0,120}?\b(?:is|are|was|were)\s+not\s+(?:supplied|provided|given)\b(?!\s+to\b)'
     r'|\bno\s+supplied\b',
     r'\b(?:the|these|this|those|available|adjacent|sparse)\s+(?:sampled|supplied)\s+(?:views?|frames?|images?|instants?|'
@@ -153,10 +159,14 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     # "beyond the preparation cut") is never cut: at the recording's own edge it is a real time, and cutting it turns
     # "folding occurred before this window" into "folding occurred" (audit of argus-wording-1, 2026-10-30)
     r'(?:in|within|during|throughout|through|across|over|for|from)\s+'
-    r'(?:all\s+of\s+)?' + UNIT + r"(?!'s|\s+" + _EDGE + r'\b)',
+    r'(?:all\s+of\s+)?' + UNIT_Q + r"(?!'s|\s+" + _EDGE + r'\b)',
+    # "this window" with no qualifier is the labelling's only after a preposition of scope: "light comes in through
+    # that window" and "the cat jumps from this window" are real ones
+    r'(?:in|within|during|throughout)\s+(?:all\s+of\s+)?(?:this|that|each|the\s+current)\s+' + _WIN +
+    r"(?!'s|\s+" + _EDGE + r'\b)',
     # "throughout the window": bare "the window" after a preposition of scope, only where it ends the phrase
-    # ("until the window is clean" is a real one)
-    r'(?:during|throughout|within)\s+(?:all\s+of\s+)?the\s+' + _WIN +
+    # ("until the window is clean" and "reaches within the window and grabs" are real ones)
+    r'(?:during|throughout)\s+(?:all\s+of\s+)?the\s+' + _WIN +
     r'(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|while|when|where|then)\b))',
     r'(?:before|by|in|at|until)\s+the\s+next\s+(?:sample|sampled\s+(?:frame|view|image))\b',
     r'inside\s+(?:this|the\s+supplied)\s+' + _WIN + r'\b',
@@ -197,20 +207,21 @@ REWRITE = [
 # in a stitched one the window is one part, and "most of the recording" would claim a share of time it does not know.
 # A bare "the window" only where a verb of time follows or precedes it, so "wipe most of the window" stays
 WHOLE_REWRITE = [
-    (re.compile(r'\b(' + _QTY + r')\s+of\s+(?:this|the\s+(?:supplied|labell?ed|current|preparation))\s+(remaining\s+)?'
-                + _WIN, I), r'\1 of the \2recording'),
-    (re.compile(r'\b(' + _QTY + r')\s+of\s+the\s+(remaining\s+)?' + _WIN + r'(?=\s+(?:is|was|consists|goes|involves|'
-                r'shows|features|covers)\b)', I), r'\1 of the \2recording'),
-    (re.compile(r'\b(spends?|spent|spending|occup(?:y|ies|ied|ying)|takes?|took|consum(?:e|es|ed|ing))\s+(' + _QTY +
-                r')\s+of\s+the\s+(remaining\s+)?' + _WIN, I), r'\1 \2 of the \3recording'),
+    (re.compile(r'\b(' + _QTY + r')\s+of\s+(?:this|the)\s+(?:supplied|labell?ed|current|preparation)\s+(remaining\s+)?'
+                + _WIN + r"(?!')", I), r'\1 of the \2recording'),
+    (re.compile(r'\b(' + _QTY + r')\s+of\s+the\s+(remaining\s+)?' + _WIN + r'(?=\s+(?:is\s+spent|was\s+spent|consists|'
+                r'goes)\b)', I), r'\1 of the \2recording'),
+    (re.compile(r'\b(spends?|spent|spending|occup(?:y|ies|ied|ying)|consum(?:e|es|ed|ing))\s+(' + _QTY +
+                r')\s+of\s+the\s+(remaining\s+)?' + _WIN + r"(?!')", I), r'\1 \2 of the \3recording'),
 ]
 # a part's marker after a time: "665.10-690.13s (part 3):" keeps its time. "Part 2:" at a sentence start stays: it is
 # all that tells a stitched review's parts apart, and without it part 1's "no drop is seen" reads as a claim about the
 # whole recording next to part 2's slips
-PART_MARK = re.compile(r'(?<=\d)\s*\((?:request\s+)?part\s+\d+\)|(?<=\ds)\s*\((?:request\s+)?part\s+\d+\)', I)
+PART_MARK = re.compile(r'(?<=\ds)\s*\((?:request\s+)?part\s+\d+\)', I)
 # in a recording labelled in one part, "Part 1:" at a sentence start tells nothing apart, so it goes
 PART_HEAD = re.compile(r'(?:(?<=^)|(?<=[.;!?]\s)|(?<=\n))\s*Part\s+\d+\s*[:.\-]\s*', I)
 SENTENCE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9("\'])')
+SENTENCE_SEP = re.compile(r'((?<=[.!?])\s+(?=[A-Z0-9("\']))')      # the same, keeping each separator (a newline stays)
 CLAUSE = re.compile(r'(?<=;)\s+')
 # The gate on every drop. Measured on 1,000 published lines (2026-10-30), argus-wording-1 dropped whole clauses with a
 # physical fact in them: "Inferred between samples: the bolt is at the opposing tips before and lies unsupported on the
@@ -311,21 +322,26 @@ def _rest(s: str) -> list[str]:
     return [w for w in _WORDS.findall(_LABELLING_CUT.sub(' ', s).lower()) if w not in _LABELLING_WORDS]
 
 
+# a negation or an auxiliary before the samples phrase: "Release does not occur between samples" says the release was
+# seen, and "Release does not." would say it never happened
+_NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
+
+
 def _timed_events(c: str) -> re.Match | None:
     """The samples phrase of a clause that only places named events between samples ("Release inferred between
-    samples"), every event named before it; None for any other clause."""
+    samples"), every event named before it; None for any other clause, a negated one included."""
     m = TIMED.search(c)
     rest = _rest(c)
     if not (m and rest and not _EDGE_ABOUT.search(c) and all(w in _EVENT_WORDS for w in rest)):
         return None
-    return None if _rest(c[m.start():]) else m
+    return None if _rest(c[m.start():]) or _NEGATION.search(c[:m.start()]) else m
 
 
 def _event_name(head: str) -> str | None:
     """The events a phrase names, without their timing words: "Grasp timing is" -> "Grasp"; None when it names none."""
     y = _tidy(_TIMING_WORDS.sub(' ', head)).strip(' ,;:')
     y = re.sub(r'^(?:the|an?)\s+', '', y, flags=I)
-    return _cap(y) if any(w in _EVENT_WORDS for w in _rest(y)) else None
+    return y if any(w in _EVENT_WORDS for w in _rest(y)) else None
 
 
 def _clause(c: str) -> str | None:
@@ -354,27 +370,34 @@ def _clause(c: str) -> str | None:
 
 def _named(y: str) -> str:
     """y, or the events it names when nothing but their timing is left: "Release is bounded" -> "Release"."""
-    if all(w in _EVENT_WORDS for w in _rest(y)) and _TIMING_WORDS.search(y):
+    if all(w in _EVENT_WORDS for w in _rest(y)) and _TIMING_WORDS.search(y) and not _NEGATION.search(y):
         return _event_name(y) or y
     return y
 
 
 def _prose(y: str) -> str | None:
     out = []
-    for sentence in SENTENCE.split(y):
-        s = sentence.strip()
+    parts = SENTENCE_SEP.split(y)
+    for i in range(0, len(parts), 2):
+        s = parts[i].strip()
+        sep = parts[i - 1] if i else ''
         end = s[-1] if s[-1:] in '.!?' else ''
         body = s[:-1] if end else s
-        kept = []
+        kept, first = [], None
         for c in CLAUSE.split(body):
             c = c.rstrip()
             semi = c.endswith(';')
-            k = _clause(c[:-1].rstrip() if semi else c) if c.strip(' ;') else None
+            c = c[:-1].rstrip() if semi else c
+            first = c if first is None else first
+            k = _clause(c) if c.strip(' ;') else None
             if k:
                 kept.append(k)
         if kept:
-            out.append(_cap('; '.join(kept)) + end)
-    return ' '.join(out) or None
+            text = '; '.join(kept)
+            out.append((sep, (text if kept[0] == first else _cap(text)) + end))
+    if not out:
+        return None
+    return out[0][1] + ''.join(sep + text for sep, text in out[1:])
 
 
 def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | None:

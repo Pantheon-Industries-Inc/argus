@@ -133,6 +133,22 @@ from label import pieces, wording
     ('Attach the bracket (part 2) to the frame.', False, 'Attach the bracket (part 2) to the frame.'),
     ('The pour is still underway at the internal request boundary.', False, 'The pour is still underway.'),
     ('Cup held in this window.', False, 'Cup held.'),
+    # review of the under-cut rules: a negation, a real window after "from" or "through", a time after the samples,
+    # a real part, a part number
+    ('Release does not occur between samples.', False, 'Release does not occur between samples.'),
+    ('Release is not bounded by these samples.', False, 'Release is not bounded.'),
+    ('Grasp occurs between samples; release is inferred between samples.', False, 'Grasp; release.'),
+    ('The cat jumps from this window.', False, 'The cat jumps from this window.'),
+    ('Light comes in through that window onto the table.', False, 'Light comes in through that window onto the table.'),
+    ('The arm reaches within the window and grabs the cup.', False, 'The arm reaches within the window and grabs the cup.'),
+    ('Release occurs between samples at 3.2 s and 4.1 s.', False, 'Release occurs between samples at 3.2 s and 4.1 s.'),
+    ('The lid is released between samples at 10 s and 11 s.', False,
+     'The lid is released between samples at 10 s and 11 s.'),
+    ('Spare part is not provided', True, 'Spare part is not provided'),
+    ('The last part is not provided.', False, 'The last part is not provided.'),
+    ('Attach bracket 3 (part 2) to the frame.', False, 'Attach bracket 3 (part 2) to the frame.'),
+    ('Cup lifted.\nRelease between samples.\nCup placed.', False, 'Cup lifted.\nRelease.\nCup placed.'),
+    ('iPad stays on the table. No instruction is supplied.', False, 'iPad stays on the table.'),
     ('The pickup-to-transport transition is partly between samples.', False,
      'The pickup-to-transport transition is partly between samples.'),
     # names argus-wording-1 garbled ("Final hair-fitting pass in retain connection", "remains loose at the")
@@ -175,10 +191,14 @@ def test_normalize_text_leaves_clean_text_unchanged_and_is_idempotent():
     ('The demonstrator spends most of the window on fine wire work.',
      'The demonstrator spends most of the recording on fine wire work.'),
     ('Part 1: pick the cup between samples.', 'Pick the cup.'),
+    ('Wipe most of this window with the cloth.', 'Wipe most of this window with the cloth.'),
+    ('Most of the window is covered in soap.', 'Most of the window is covered in soap.'),
+    ('The squeegee took most of the window\'s grime.', 'The squeegee took most of the window\'s grime.'),
 ])
 def test_a_recording_labelled_in_one_part_reads_its_window_as_the_recording(text, want):
     assert wording.normalize_text(text, whole=True) == want
-    assert wording.normalize_text(text) != want                 # a stitched part's window is not the recording
+    if 'recording' in want or 'Pick' in want:
+        assert wording.normalize_text(text) != want             # a stitched part's window is not the recording
 
 
 def test_normalize_labels_keeps_enums_and_argus_records_and_counts_changes():
