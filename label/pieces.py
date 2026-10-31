@@ -831,7 +831,7 @@ def _publish_reply(source: Path, target: Path) -> None:
     except ValueError:
         record = None
     if isinstance(record, dict) and isinstance(record.get('labels'), dict):
-        write_atomic(target, wording.normalize_result(record), indent=None)
+        write_atomic(target, wording.normalize_result(record, whole=True), indent=None)
     else:
         shutil.copy(source, target)
 
