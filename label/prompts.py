@@ -703,7 +703,8 @@ def what_this_is(r: str) -> str:
             "  person's bare hand, arm or body is outside that contract and worth reporting: its change was not made\n"
             "  by the declared acting part. This is an annotation contract, not an inferred limit of a physical\n"
             "  robot. Anyone else touching the scene is reported as usual.\n"
-            "  The room around the task is sometimes visible; that is the surroundings, not a problem by itself.\n")
+            "  The room around the task is sometimes visible; that is the surroundings, not a problem by itself,\n"
+            "  except a face that could be recognised, which is a data issue (PHONES, BARE HANDS, PARKED GRIPPERS AND FACES, below).\n")
 
 
 _WHY = {
@@ -752,7 +753,20 @@ _VISIBILITY = {
         "  image, and the camera on the right hand toward the left. A top or side camera can also help, since when\n"
         "  one hand makes a clear move there, the view that moves with it is that hand's camera. If both gripper\n"
         "  views clearly show the opposite of their names across most of the recording, report a data issue tagged\n"
-        "  camera_side_mismatch, with two or three moments as evidence. When unsure, report nothing."),
+        "  camera_side_mismatch, with two or three moments as evidence. When unsure, report nothing.\n"
+        "- PHONES, BARE HANDS, PARKED GRIPPERS AND FACES. Each of the following is a data issue over its span\n"
+        "  and goes in data_issues even when the timeline already describes it. These severities are minimums set by what the\n"
+        "  dataset may ship, not by the training-impact scale below; apply them even when a model would learn little wrong\n"
+        "  from the moment. The operator holding or using their own phone is at least medium severity. A gripper set down,\n"
+        "  parked or taken off while the demonstration goes on (the other gripper or a bare hand keeps working) is at least\n"
+        "  medium severity. Bare-hand work is at least medium severity when it is plainly visible: a gripper taken off and the\n"
+        "  bare hand moving task objects, or the fingers clearly fiddling with the objects while the gripper is on. A\n"
+        "  person's face that could be recognised, the operator's or anyone else's, in any camera is high severity: the\n"
+        "  footage carries personal data.\n"
+        "  Not issues: a small phone-like fob on the table starts and stops the recording, and pressing it at the start or\n"
+        "  end, even with a gripper set down to do so, is normal and never phone use. Fingers poking out of the strap are how\n"
+        "  the rig is worn, including when the wrist cameras face each other during a handoff, unless they move a task\n"
+        "  object themselves."),
     "ego_head": (
         "- WHAT KEEPS THE WORK OBSERVABLE. Objects and hands can leave the frame during the work and return later.\n"
         "  The presentation profile alone does not establish camera mounting. The work is observable when\n"
@@ -798,7 +812,8 @@ _MISTAKES = {
         "  (a scene reset after the task is a data issue, above). A person with handheld grippers often waves\n"
         "  a gripper at the start so its tracking can initialise, tests the jaws, shifts their grip on a\n"
         "  handle, sets one gripper down while working with the other, and lowers the grippers or points them\n"
-        "  away at the end; these uses alone are not mistakes, and observed failures or wasted motion still\n"
+        "  away at the end; these uses alone are not mistakes (a gripper set down while the demonstration goes\n"
+        "  on is still a data issue, above), and observed failures or wasted motion still\n"
         "  follow the shared rule. A static view from a gripper that has been set down is not a frozen camera."),
     "ego_head": (
         "work are operator mistakes, and they go in operator_mistakes. Moving a part from one hand to the other,\n"
