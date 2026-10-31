@@ -137,6 +137,15 @@ from label import pieces, wording
     # a real part, a part number
     ('Release does not occur between samples.', False, 'Release does not occur between samples.'),
     ('Release never occurs between samples', True, 'Release never occurs'),
+    # a name the cut would leave on its auxiliary or a leading "No" stays as written (review round 3)
+    ("Release isn't inferred between samples", True, "Release isn't inferred between samples"),
+    ('Release cannot be inferred between samples', True, 'Release cannot be inferred between samples'),
+    ('No release inferred between samples', True, 'No release inferred between samples'),
+    # an unqualified "this window" is cut only where its phrase ends: a noun after it is a real window's
+    ('Scrub the frame in this window corner.', False, 'Scrub the frame in this window corner.'),
+    ('Nothing is placed in this window frame.', False, 'Nothing is placed in this window frame.'),
+    ('The bowl stays empty in this window, as before.', False, 'The bowl stays empty, as before.'),
+    ('The towel in this window is folded.', False, 'The towel is folded.'),
     ('Grasp does not occur within the sampled interval', True, 'Grasp does not occur'),
     ('The release is not inferred between samples', True, 'The release is not inferred'),
     ('Wipe the sill during this window cleaning task.', False, 'Wipe the sill during this window cleaning task.'),

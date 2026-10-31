@@ -162,8 +162,10 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     r'(?:all\s+of\s+)?' + UNIT_Q + r"(?!'s|\s+" + _EDGE + r'\b)',
     # "this window" with no qualifier is the labelling's only after a preposition of scope: "light comes in through
     # that window" and "the cat jumps from this window" are real ones
+    # and only where its phrase ends there: "Scrub the frame in this window corner." names a real corner
     r'(?:in|within|during|throughout)\s+(?:all\s+of\s+)?(?:this|that|each|the\s+current)\s+' + _WIN +
-    r"(?!'s|\s+" + _EDGE + r'\b|\s+(?:\w+ing|task|step|area|unit|frame|sill|pane|glass|ledge|seat)\b)',
+    r"(?!'s|\s+" + _EDGE + r'\b)(?=\s*(?:[.,;:!?)]|$|(?:and|but|so|or|while|when|where|then|as|before|after|until|'
+    r'is|are|was|were|does|do|did|remains?|stays?|shows?|appears?|seems?|has|have|had)\b|\w+ed\b))',
     # "throughout the window": bare "the window" after a preposition of scope, only where it ends the phrase
     # ("until the window is clean" and "reaches within the window and grabs" are real ones)
     r'(?:during|throughout)\s+(?:all\s+of\s+)?the\s+' + _WIN +
@@ -326,6 +328,10 @@ def _rest(s: str) -> list[str]:
 # seen, and "Release does not." would say it never happened
 _AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can't|will|would|may|might)\s*$", I)
 _NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
+# a name that ends on one of these lost its verb to the cut: "Release isn't inferred between samples"
+_HANGING = re.compile(r"\b(?:not|never|no|nor|isn't|aren't|wasn't|weren't|doesn't|don't|didn't|can't|cannot|won't|"
+                      r"wouldn't|couldn't|shouldn't|is|are|was|were|be|been|being|can|could|will|would|may|might|"
+                      r"must|should|does|do|did|has|have|had)\s*$", I)
 
 
 def _timed_events(c: str) -> re.Match | None:
@@ -416,6 +422,8 @@ def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | Non
         z = ABOUT_CUT.sub(lambda m: m.group(0) if _rest(m.group(0)) or _EDGE_ABOUT.search(m.group(0)) or
                           _NEGATION.search(m.group(0)) or _AUX_BEFORE.search(y[:m.start()]) else '', y)
         z = _tidy(CUT.sub('', z)).strip(' ,;:')
+        if z != y and (_HANGING.search(z) or re.match(r'\s*no\b', y, I)):   # "Release isn't", "No release"
+            return _late(y)
         return _late(z) if re.search(r'[A-Za-z]{2,}', z) else y
     z = _prose(y)
     if z and z == _cap(y):          # only a capital letter changed: nothing was cut
