@@ -86,7 +86,7 @@ SAMPLES = (r'(?:between\s+(?:(?:these|those)\s+|(?:the\s+)?(?:(?:first|last|fina
            r'|(?:across|from)\s+the\s+samples\b|in\s+(?:every|each|all)\s+sampled\s+\w+'
            r'|between\s+(?:the\s+)?supplied\s+(?:frames|samples|images|views))')
 # a time or a number after it belongs to the claim: "release occurs between samples at 3.2 s and 4.1 s" is two times
-SAMPLES = r'(?:' + SAMPLES + r')(?!\s*(?:\d|at\s+\d|from\s+\d|\())'
+SAMPLES = r'(?:' + SAMPLES + r')(?!\s*(?:\d|(?:at|from|of|near|around)\s+(?:t\s*=\s*)?\d|t\s*=|\())'
 _TIMING = (r'(?:occurs?|occurred|falls?|fell|happens?|happened|takes?\s+place|took\s+place|lies?|is|are|was|were|'
            r'(?:(?:is|are|was|were)\s+)?(?:inferred|interpolated|estimated))')
 
@@ -163,7 +163,7 @@ CUT = re.compile(r'\s*,?\s*(?:' + '|'.join([
     # "this window" with no qualifier is the labelling's only after a preposition of scope: "light comes in through
     # that window" and "the cat jumps from this window" are real ones
     r'(?:in|within|during|throughout)\s+(?:all\s+of\s+)?(?:this|that|each|the\s+current)\s+' + _WIN +
-    r"(?!'s|\s+" + _EDGE + r'\b)',
+    r"(?!'s|\s+" + _EDGE + r'\b|\s+(?:\w+ing|task|step|area|unit|frame|sill|pane|glass|ledge|seat)\b)',
     # "throughout the window": bare "the window" after a preposition of scope, only where it ends the phrase
     # ("until the window is clean" and "reaches within the window and grabs" are real ones)
     r'(?:during|throughout)\s+(?:all\s+of\s+)?the\s+' + _WIN +
@@ -324,6 +324,7 @@ def _rest(s: str) -> list[str]:
 
 # a negation or an auxiliary before the samples phrase: "Release does not occur between samples" says the release was
 # seen, and "Release does not." would say it never happened
+_AUX_BEFORE = re.compile(r"\b(?:not|never|no|does|do|did|is|are|was|were|can|cannot|can't|will|would|may|might)\s*$", I)
 _NEGATION = re.compile(r"\b(?:not|never|no|nor|neither|without|cannot|can't|does|do|did|doesn't|don't|didn't)\b", I)
 
 
@@ -412,7 +413,8 @@ def normalize_text(s: str, name: bool = False, whole: bool = False) -> str | Non
         return _late(y)
     if name:
         # a part's edge stays in a name: "Window ends with the border incomplete" without "Window ends" loses its time
-        z = ABOUT_CUT.sub(lambda m: '' if not _rest(m.group(0)) and not _EDGE_ABOUT.search(m.group(0)) else m.group(0), y)
+        z = ABOUT_CUT.sub(lambda m: m.group(0) if _rest(m.group(0)) or _EDGE_ABOUT.search(m.group(0)) or
+                          _NEGATION.search(m.group(0)) or _AUX_BEFORE.search(y[:m.start()]) else '', y)
         z = _tidy(CUT.sub('', z)).strip(' ,;:')
         return _late(z) if re.search(r'[A-Za-z]{2,}', z) else y
     z = _prose(y)
