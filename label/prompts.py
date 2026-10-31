@@ -752,7 +752,13 @@ _VISIBILITY = {
         "  image, and the camera on the right hand toward the left. A top or side camera can also help, since when\n"
         "  one hand makes a clear move there, the view that moves with it is that hand's camera. If both gripper\n"
         "  views clearly show the opposite of their names across most of the recording, report a data issue tagged\n"
-        "  camera_side_mismatch, with two or three moments as evidence. When unsure, report nothing."),
+        "  camera_side_mismatch, with two or three moments as evidence. When unsure, report nothing.\n"
+        "- PHONES, THE FOB AND BARE HANDS. The operator taking out their own phone and using it is a data issue of at\n"
+        "  least medium severity over that span. A small phone-like fob on the table starts and stops the recording;\n"
+        "  pressing it, even with a gripper set down to do so, is normal and never phone use. Bare-hand work is a data\n"
+        "  issue only when it is plainly visible: a gripper taken off and the bare hand moving task objects, or the\n"
+        "  fingers clearly fiddling with the objects while the gripper is on. Fingers poking out of the strap are how\n"
+        "  the rig is worn, including when the wrist cameras face each other during a handoff."),
     "ego_head": (
         "- WHAT KEEPS THE WORK OBSERVABLE. Objects and hands can leave the frame during the work and return later.\n"
         "  The presentation profile alone does not establish camera mounting. The work is observable when\n"
